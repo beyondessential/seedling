@@ -35,7 +35,7 @@ let frontend = app.deployment("frontend")
 
 // if you don't need to refer to it, you can leave it unassigned
 app.deployment("api")
-    .image(image("facility"))
+    .image(image.call("facility"))
     .command("serveApi")
     .scale(1..AVAILABLE_THREADS)
 
@@ -48,18 +48,18 @@ app.deployment("api")
     // if you need something more complicated, spin up a custom HTTP server
 
 app.deployment("sync")
-    .image(image("facility"))
+    .image(image.call("facility"))
     .command("startSync")
     .on_update(#{ replace: true })
     .http(4100, sync_api); // not using route() will default to /
 
 app.deployment("tasks")
-    .image(image("facility"))
+    .image(image.call("facility"))
     .command("startTasks")
     .on_update(#{ replace: true });
 
 let migrate = app.job("migrate")
-    .image(image("facility"))
+    .image(image.call("facility"))
     .command("migrate");
 
 // actions are available to operators to run
@@ -97,7 +97,7 @@ on_start(|rt| {
 // they're essentially actions that provide an interactive terminal/shell
 on_shell("node", |_rt| {
     app.job("shell-node")
-        .image(image("central"))
+        .image(image.call("central"))
         .command("shell")
     // a Resource is returned, so beset rt.start()s it and then attaches
 }, #{
@@ -108,13 +108,13 @@ on_shell("node", |_rt| {
 on_shell("db", |rt, attach| {
     // this job is only defined here, so it can't be used outside this block
     let shell = app.job("shell-db")
-        .image(image("toolbox"))
+        .image(image.call("toolbox"))
         .command(["bestool", "t", "p"]);
     rt.start(shell);
     attach(shell); // this "blocks" until the shell exits
 
     rt.run(app.job("shell-db-cleanup")
-        .image(image("toolbox"))
+        .image(image.call("toolbox"))
         .command(["bestool", "t", "p", "-e", "select revert_changes();"]))
 });
 // you don't need to provide a description, but it *is* nicer
@@ -178,7 +178,7 @@ install(|rt, reqs| {
     // because this job is only defined in this block,
     // it will not exist at all on subsequent boots
     let provision = app.job("provisioning")
-        .image(image("central"))
+        .image(image.call("central"))
         .command(["provision", "/prov/isioning.json5"])
         .mount("/prov", {
             // this could be defined in the higher scope,
