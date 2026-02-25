@@ -130,8 +130,8 @@ impl CustomType for HttpService {
 
 #[derive(Debug, Clone)]
 pub struct PartialRoute {
-    http: HttpService,
-    prefix: String,
+    pub(super) http: HttpService,
+    pub(super) prefix: String,
 }
 
 impl CustomType for PartialRoute {

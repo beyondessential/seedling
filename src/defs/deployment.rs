@@ -2,6 +2,8 @@ use std::{collections::BTreeMap, ops::Range, path::PathBuf};
 
 use rhai::{CustomType, TypeBuilder};
 
+use crate::defs::service::HttpService;
+
 use super::{
     Holder,
     app::App,
@@ -73,6 +75,25 @@ impl CustomType for Deployment {
                 );
                 this.clone()
             })
+            .with_fn(
+                "http",
+                |this: &mut Self, port: i64, service: HttpService| {
+                    let port = port as u16; // TODO: error on large ports
+
+                    PartialRoute {
+                        http: service,
+                        prefix: "/".into(),
+                    }
+                    .add_resource(
+                        port,
+                        ResourceId {
+                            kind: ResourceKind::Deployment,
+                            name: this.name.clone(),
+                        },
+                    );
+                    this.clone()
+                },
+            )
             .with_fn("tcp", |this: &mut Self, port: i64, svc: ServicePort| {
                 let port = port as u16; // TODO: error on large ports
 
