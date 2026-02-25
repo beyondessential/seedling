@@ -12,6 +12,7 @@ use super::{
 #[derive(Debug, Clone)]
 pub struct DeploymentDef {
     image: Option<String>,
+    command: Vec<String>,
     scale: Range<u8>,
 }
 
@@ -19,6 +20,7 @@ impl Default for DeploymentDef {
     fn default() -> Self {
         Self {
             image: None,
+            command: Vec::new(),
             scale: 1..255,
         }
     }
@@ -39,15 +41,19 @@ impl CustomType for Deployment {
                 this.def.lock().unwrap().image = Some(image.into());
                 this.clone()
             })
+            .with_fn("command", |this: &mut Self, cmd: &str| {
+                this.def.lock().unwrap().command = vec![cmd.into()];
+                this.clone()
+            })
             .with_fn("scale", |this: &mut Self, scale: i64| {
-                let s = if scale < 0 {
-                    0
-                } else if scale > u8::MAX as _ {
-                    u8::MAX
-                } else {
-                    scale as u8
-                };
+                let s = clamp_scale(scale);
                 this.def.lock().unwrap().scale = s..s;
+                this.clone()
+            })
+            .with_fn("scale", |this: &mut Self, scale: Range<i64>| {
+                let min = clamp_scale(scale.start);
+                let max = clamp_scale(scale.end);
+                this.def.lock().unwrap().scale = min..max;
                 this.clone()
             })
             .with_fn("http", |this: &mut Self, port: i64, route: PartialRoute| {
@@ -114,5 +120,15 @@ impl CustomType for Deployment {
                 );
                 this.clone()
             });
+    }
+}
+
+fn clamp_scale(n: i64) -> u8 {
+    if n < 0 {
+        0
+    } else if n > u8::MAX as _ {
+        u8::MAX
+    } else {
+        n as u8
     }
 }
