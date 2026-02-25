@@ -5,15 +5,20 @@ use std::{
 
 use rhai::{CustomType, TypeBuilder};
 
-pub type Holder<T> = Arc<Mutex<T>>;
+type Holder<T> = Arc<Mutex<T>>;
 
 #[derive(Debug, Default, Clone)]
 pub struct App(Holder<AppDef>);
+impl App {
+    fn hold(def: AppDef) -> Self {
+        Self(Arc::new(Mutex::new(def)))
+    }
+}
 
 #[derive(Debug, Default, Clone)]
 pub struct AppDef {
     pub params: BTreeSet<String>,
-    pub resources: BTreeMap<ResourceId, Holder<ResourceDef>>,
+    pub resources: BTreeMap<ResourceId, Resource>,
     pub actions: BTreeMap<String, Holder<ActionDef>>,
     pub install: Option<Holder<InstallDef>>,
 }
@@ -23,7 +28,10 @@ impl CustomType for App {
         builder
             .with_name("App")
             .with_fn("param", |app: &mut Self, name: &str| {
-                Arc::clone(&app.0).lock().unwrap().add_param(name);
+                app.0.lock().unwrap().add_param(name)
+            })
+            .with_fn("service", |app: &mut Self, name: &str| {
+                app.0.lock().unwrap().add_service(name)
             });
     }
 }
@@ -34,8 +42,19 @@ impl AppDef {
         "<placeholder>"
     }
 
-    fn add_service(&mut self, name: &str) -> Arc<ActionDef> {
-        todo!()
+    fn add_service(&mut self, name: &str) -> Service {
+        let Resource::Service(service) = self
+            .resources
+            .entry(ResourceId {
+                kind: ResourceKind::Service,
+                name: name.into(),
+            })
+            .or_insert_with(|| Resource::Service(Service::default()))
+        else {
+            unreachable!()
+        };
+
+        service.clone()
     }
 }
 
@@ -56,8 +75,9 @@ pub enum ResourceKind {
 }
 
 #[derive(Debug, Clone)]
-pub enum ResourceDef {
-    Service(ServiceDef),
+pub enum Resource {
+    Service(Service),
+    Ingress(Ingress),
     // Ingress(IngressDef),
     // Deployment(DeploymentDef),
     // Job(JobDef),
@@ -69,11 +89,19 @@ pub type ServicePort = (ServiceProtocol, u16);
 pub type ResourcePort = (ResourceId, u16);
 pub type ServiceHttpRoute = (u16, String);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct ServiceDef {
     pub protocol: ServiceProtocol,
     pub port_map: BTreeMap<ServicePort, Vec<ResourcePort>>,
     pub http_routes: Option<BTreeMap<ServiceHttpRoute, Vec<ResourcePort>>>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct Service(Holder<ServiceDef>);
+impl Service {
+    fn hold(def: ServiceDef) -> Self {
+        Self(Arc::new(Mutex::new(def)))
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -82,6 +110,17 @@ pub enum ServiceProtocol {
     Tcp,
     Udp,
     Http,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct IngressDef {}
+
+#[derive(Debug, Default, Clone)]
+pub struct Ingress(Holder<IngressDef>);
+impl Ingress {
+    fn hold(def: IngressDef) -> Self {
+        Self(Arc::new(Mutex::new(def)))
+    }
 }
 
 #[derive(Debug, Clone)]
