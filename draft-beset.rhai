@@ -37,14 +37,20 @@ let frontend = app.deployment("frontend")
     // if the service-side port isn't given, it defaults to the deployment-side port
     .tcp(8080, control);
 
+// grab an external volume
+// this is like a param, but the control plane has to provide a volume instead of a string
+let pg_socket = app.external_volume("postgres-unix-socket");
+
 // if you don't need to refer to it, you can leave it unassigned
 app.deployment("api")
     .image(image.call("facility"))
     .command("serveApi")
     .scale(1..AVAILABLE_THREADS)
 
+    .mount("/var/run/postgres", pg_socket)
+
     // mount is not just for volumes
-    .mount("localhost:4000", sync_api)
+    .mount(sync_api.port(4100))
 
     // HTTP path routes will match by segment length, not definition order
     .http(3000, traffic.route("/api"))
@@ -54,17 +60,23 @@ app.deployment("api")
 app.deployment("sync")
     .image(image.call("facility"))
     .command("startSync")
-    .on_update(#{ replace: true })
-    .http(4100, sync_api); // not using route() will default to /
+    .mount("/var/run/postgres", pg_socket)
+
+    .http(4100, sync_api) // not using route() will default to /
+
+    // shut down the existing process before starting the new one
+    .on_update(#{ replace: true });
 
 app.deployment("tasks")
     .image(image.call("facility"))
     .command("startTasks")
+    .mount("/var/run/postgres", pg_socket)
     .on_update(#{ replace: true });
 
 let migrate = app.job("migrate")
     .image(image.call("facility"))
-    .command("migrate");
+    .command("migrate")
+    .mount("/var/run/postgres", pg_socket);
 
 // actions are available to operators to run
 on_action("migrate", |rt| {
