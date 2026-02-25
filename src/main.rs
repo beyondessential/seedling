@@ -12,13 +12,7 @@ fn main() -> Result<(), Box<EvalAltResult>> {
     );
 
     let mut engine = Engine::new();
-
-    engine.build_type::<defs::app::App>();
-    engine.build_type::<defs::service::Service>();
-    engine.build_type::<defs::ingress::Ingress>();
-    engine.build_type::<defs::deployment::Deployment>();
-    engine.register_fn("__app", || defs::app::App::default());
-    dbg!(engine.gen_fn_signatures(false));
+    defs::register(&mut engine);
 
     let mut scope = Scope::new();
     let _ = engine.run_with_scope(&mut scope, "let app = __app();");

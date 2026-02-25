@@ -1,9 +1,13 @@
+use std::sync::Arc;
+
 use super::{deployment::Deployment, ingress::Ingress, service::Service};
+
+pub type ResourceName = Arc<String>;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ResourceId {
     pub kind: ResourceKind,
-    pub name: String,
+    pub name: ResourceName,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

@@ -1,16 +1,32 @@
 use rhai::{CustomType, TypeBuilder};
 
-use super::{Holder, service::ServiceDef};
+use super::{Holder, service::Service};
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct IngressDef {
     pub host: Option<String>,
     pub tls: bool,
-    pub service: ServiceDef,
+    pub service: Service,
 }
 
-#[derive(Debug, Default, Clone)]
+impl IngressDef {
+    pub(super) fn new(service: Service) -> Self {
+        Self {
+            host: None,
+            tls: false,
+            service,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Ingress(Holder<IngressDef>);
+
+impl Ingress {
+    pub(super) fn new(def: IngressDef) -> Self {
+        Self(Holder::new(def.into()))
+    }
+}
 
 impl CustomType for Ingress {
     fn build(mut builder: TypeBuilder<Self>) {
@@ -22,10 +38,6 @@ impl CustomType for Ingress {
             })
             .with_fn("tls", |this: &mut Self| {
                 this.0.lock().unwrap().tls = true;
-                this.clone()
-            })
-            .with_fn("http", |this: &mut Self| {
-                this.0.lock().unwrap().service.make_http();
                 this.clone()
             });
     }

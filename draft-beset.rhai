@@ -14,10 +14,11 @@ let image = |name| `ghcr.io/beyondessential/tamanu-${name}:${version}`;
 let control = app.service("frontend-control");
 
 // specialising a service as http() enables path routing and other goodies
-let sync_api = app.service("sync-api").http();
+let sync_api = app.service("sync-api").http(4100);
 
 // an ingress is a publicly routable service
-let traffic = app.ingress("public").host(domain).tls().http();
+let traffic = app.service("public").http(); // HTTP port defaults to 80
+traffic.ingress().host(domain).tls();
 
 // defining something doesn't start it immediately, see actions (on_...) below
 let frontend = app.deployment("frontend")
@@ -31,6 +32,9 @@ let frontend = app.deployment("frontend")
     .http(3000, traffic.route("/"))
 
     // tcp/udp traffic can only be routed by port
+    .tcp(2525, control.port(25))
+
+    // if the service-side port isn't given, it defaults to the deployment-side port
     .tcp(8080, control);
 
 // if you don't need to refer to it, you can leave it unassigned

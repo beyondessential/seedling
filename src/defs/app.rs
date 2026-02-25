@@ -2,18 +2,19 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rhai::{CustomType, TypeBuilder};
 
+use crate::defs::resource::ResourceName;
+
 use super::{
     Holder,
     action::ActionDef,
     deployment::Deployment,
-    ingress::Ingress,
     install::InstallDef,
     resource::{Resource, ResourceId, ResourceKind},
     service::Service,
 };
 
 #[derive(Debug, Default, Clone)]
-pub struct App(Holder<AppDef>);
+pub struct App(pub(super) Holder<AppDef>);
 
 #[derive(Debug, Default, Clone)]
 pub struct AppDef {
@@ -28,68 +29,55 @@ impl CustomType for App {
         builder
             .with_name("App")
             .with_fn("param", |this: &mut Self, name: &str| {
-                this.0.lock().unwrap().add_param(name)
+                let mut this = this.0.lock().unwrap();
+                this.params.insert(name.into());
+                "<placeholder>"
             })
             .with_fn("service", |this: &mut Self, name: &str| {
-                this.0.lock().unwrap().add_service(name)
-            })
-            .with_fn("ingress", |this: &mut Self, name: &str| {
-                this.0.lock().unwrap().add_ingress(name)
+                let name = ResourceName::new(name.into());
+                let app = this.clone();
+                let mut this = this.0.lock().unwrap();
+                let Resource::Service(service) = this
+                    .resources
+                    .entry(ResourceId {
+                        kind: ResourceKind::Service,
+                        name: name.clone(),
+                    })
+                    .or_insert_with(|| {
+                        Resource::Service(Service {
+                            app,
+                            name,
+                            def: Default::default(),
+                        })
+                    })
+                else {
+                    unreachable!()
+                };
+
+                service.clone()
             })
             .with_fn("deployment", |this: &mut Self, name: &str| {
-                this.0.lock().unwrap().add_deployment(name)
+                let name = ResourceName::new(name.into());
+                let app = this.clone();
+                let mut this = this.0.lock().unwrap();
+                let Resource::Deployment(deployment) = this
+                    .resources
+                    .entry(ResourceId {
+                        kind: ResourceKind::Deployment,
+                        name: name.clone(),
+                    })
+                    .or_insert_with(|| {
+                        Resource::Deployment(Deployment {
+                            app,
+                            name,
+                            def: Default::default(),
+                        })
+                    })
+                else {
+                    unreachable!()
+                };
+
+                deployment.clone()
             });
-    }
-}
-
-impl AppDef {
-    fn add_param(&mut self, name: &str) -> &'static str {
-        self.params.insert(name.into());
-        "<placeholder>"
-    }
-
-    fn add_service(&mut self, name: &str) -> Service {
-        let Resource::Service(service) = self
-            .resources
-            .entry(ResourceId {
-                kind: ResourceKind::Service,
-                name: name.into(),
-            })
-            .or_insert_with(|| Resource::Service(Service::default()))
-        else {
-            unreachable!()
-        };
-
-        service.clone()
-    }
-
-    fn add_ingress(&mut self, name: &str) -> Ingress {
-        let Resource::Ingress(ingress) = self
-            .resources
-            .entry(ResourceId {
-                kind: ResourceKind::Ingress,
-                name: name.into(),
-            })
-            .or_insert_with(|| Resource::Ingress(Ingress::default()))
-        else {
-            unreachable!()
-        };
-
-        ingress.clone()
-    }
-
-    fn add_deployment(&mut self, name: &str) -> Deployment {
-        let Resource::Deployment(deployment) = self
-            .resources
-            .entry(ResourceId {
-                kind: ResourceKind::Deployment,
-                name: name.into(),
-            })
-            .or_insert_with(|| Resource::Deployment(Deployment::default()))
-        else {
-            unreachable!()
-        };
-
-        deployment.clone()
     }
 }
