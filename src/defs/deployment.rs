@@ -53,6 +53,7 @@ impl DeploymentStrategy {
 
 #[derive(Debug, Clone)]
 pub struct Deployment {
+    #[expect(dead_code, reason = "not yet used")]
     pub app: App,
     pub name: ResourceName,
     pub def: Holder<DeploymentDef>,

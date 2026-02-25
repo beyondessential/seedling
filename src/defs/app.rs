@@ -22,7 +22,9 @@ pub struct AppDef {
     pub params: BTreeSet<String>,
     pub external_volumes: BTreeSet<String>,
     pub resources: BTreeMap<ResourceId, Resource>,
+    #[expect(dead_code, reason = "not yet used")]
     pub actions: BTreeMap<String, Holder<ActionDef>>,
+    #[expect(dead_code, reason = "not yet used")]
     pub install: Option<Holder<InstallDef>>,
 }
 

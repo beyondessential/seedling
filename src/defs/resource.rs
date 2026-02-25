@@ -15,9 +15,9 @@ pub enum ResourceKind {
     Service,
     Ingress,
     Deployment,
-    Job,
-    CronJob,
-    Volume,
+    // Job,
+    // CronJob,
+    // Volume,
 }
 
 #[derive(Debug, Clone)]

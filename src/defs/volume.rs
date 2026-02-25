@@ -7,8 +7,11 @@ pub struct VolumeDef {}
 
 #[derive(Debug, Clone)]
 pub struct Volume {
+    #[expect(dead_code, reason = "not yet used")]
     pub app: App,
+    #[expect(dead_code, reason = "not yet used")]
     pub name: ResourceName,
+    #[expect(dead_code, reason = "not yet used")]
     pub def: Holder<VolumeDef>,
 }
 

@@ -6,6 +6,7 @@ use super::{Holder, service::Service};
 pub struct IngressDef {
     pub host: Option<String>,
     pub tls: bool,
+    #[expect(dead_code, reason = "not yet used")]
     pub service: Service,
 }
 

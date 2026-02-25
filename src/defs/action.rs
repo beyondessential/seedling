@@ -1,4 +1,5 @@
 #[derive(Debug, Clone)]
+#[expect(dead_code, reason = "not yet used")]
 pub struct ActionDef {
     pub arguments: Vec<ActionArgumentDef>,
     pub rhai_closure: (),
@@ -6,6 +7,7 @@ pub struct ActionDef {
 }
 
 impl ActionDef {
+    #[expect(dead_code, reason = "not yet used")]
     pub fn is_shell(&self) -> bool {
         self.arguments
             .iter()
@@ -14,6 +16,7 @@ impl ActionDef {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[expect(dead_code, reason = "not yet used")]
 pub enum ActionArgumentDef {
     Runtime,
     ShellAttach,
