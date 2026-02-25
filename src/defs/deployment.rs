@@ -1,35 +1,26 @@
-use std::{collections::BTreeMap, ops::Range, path::PathBuf};
+use std::ops::Range;
 
 use rhai::{CustomType, Dynamic, Map, TypeBuilder};
-
-use crate::defs::service::HttpService;
 
 use super::{
     Holder,
     app::App,
+    pod::PodDef,
     resource::{ResourceId, ResourceKind, ResourceName},
-    service::{PartialRoute, Service, ServicePort, ServiceProtocol},
-    volume::Volume,
 };
 
 #[derive(Debug, Clone)]
 pub struct DeploymentDef {
-    image: Option<String>,
-    command: Vec<String>,
+    pod: Holder<PodDef>,
     scale: Range<u8>,
-    mounted_volumes: BTreeMap<PathBuf, Volume>,
-    mounted_services: BTreeMap<u16, Service>,
     strategy: DeploymentStrategy,
 }
 
 impl Default for DeploymentDef {
     fn default() -> Self {
         Self {
-            image: None,
-            command: Vec::new(),
+            pod: Holder::default(),
             scale: 1..255,
-            mounted_volumes: BTreeMap::new(),
-            mounted_services: BTreeMap::new(),
             strategy: DeploymentStrategy::default(),
         }
     }
@@ -61,16 +52,16 @@ pub struct Deployment {
 
 impl CustomType for Deployment {
     fn build(mut builder: TypeBuilder<Self>) {
+        PodDef::mixin(
+            &mut builder,
+            move |this| this.def.lock().pod.clone(),
+            |this| ResourceId {
+                kind: ResourceKind::Deployment,
+                name: this.name.clone(),
+            },
+        );
         builder
             .with_name("Deployment")
-            .with_fn("image", |this: &mut Self, image: &str| {
-                this.def.lock().image = Some(image.into());
-                this.clone()
-            })
-            .with_fn("command", |this: &mut Self, cmd: &str| {
-                this.def.lock().command = vec![cmd.into()];
-                this.clone()
-            })
             .with_fn("scale", |this: &mut Self, scale: i64| {
                 let s = clamp_scale(scale);
                 this.def.lock().scale = s..s;
@@ -82,100 +73,6 @@ impl CustomType for Deployment {
                 this.def.lock().scale = min..max;
                 this.clone()
             })
-            .with_fn("http", |this: &mut Self, port: i64, route: PartialRoute| {
-                let port = port as u16; // TODO: error on large ports
-
-                route.add_resource(
-                    port,
-                    ResourceId {
-                        kind: ResourceKind::Deployment,
-                        name: this.name.clone(),
-                    },
-                );
-                this.clone()
-            })
-            .with_fn(
-                "http",
-                |this: &mut Self, port: i64, service: HttpService| {
-                    let port = port as u16; // TODO: error on large ports
-
-                    PartialRoute {
-                        http: service,
-                        prefix: "/".into(),
-                    }
-                    .add_resource(
-                        port,
-                        ResourceId {
-                            kind: ResourceKind::Deployment,
-                            name: this.name.clone(),
-                        },
-                    );
-                    this.clone()
-                },
-            )
-            .with_fn("tcp", |this: &mut Self, port: i64, svc: ServicePort| {
-                let port = port as u16; // TODO: error on large ports
-
-                svc.add_resource(
-                    ServiceProtocol::Tcp,
-                    port,
-                    ResourceId {
-                        kind: ResourceKind::Deployment,
-                        name: this.name.clone(),
-                    },
-                );
-                this.clone()
-            })
-            .with_fn("tcp", |this: &mut Self, port: i64, svc: Service| {
-                let port = port as u16; // TODO: error on large ports
-
-                svc.make_port(port).add_resource(
-                    ServiceProtocol::Tcp,
-                    port,
-                    ResourceId {
-                        kind: ResourceKind::Deployment,
-                        name: this.name.clone(),
-                    },
-                );
-                this.clone()
-            })
-            .with_fn("udp", |this: &mut Self, port: i64, svc: ServicePort| {
-                let port = port as u16; // TODO: error on large ports
-
-                svc.add_resource(
-                    ServiceProtocol::Udp,
-                    port,
-                    ResourceId {
-                        kind: ResourceKind::Deployment,
-                        name: this.name.clone(),
-                    },
-                );
-                this.clone()
-            })
-            .with_fn("udp", |this: &mut Self, port: i64, svc: Service| {
-                let port = port as u16; // TODO: error on large ports
-
-                svc.make_port(port).add_resource(
-                    ServiceProtocol::Udp,
-                    port,
-                    ResourceId {
-                        kind: ResourceKind::Deployment,
-                        name: this.name.clone(),
-                    },
-                );
-                this.clone()
-            })
-            .with_fn("mount", |this: &mut Self, path: &str, volume: Volume| {
-                this.def.lock().mounted_volumes.insert(path.into(), volume);
-                this.clone()
-            })
-            .with_fn(
-                "mount",
-                |this: &mut Self, ServicePort { service, port }: ServicePort| {
-                    this.def.lock().mounted_services.insert(port, service);
-                    this.clone()
-                },
-            )
             .with_fn(
                 "strategy",
                 |this: &mut Self, strategy: DeploymentStrategy| {
