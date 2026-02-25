@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use rhai::Engine;
+use rhai::{Engine, Scope};
 
 type Holder<T> = Arc<Mutex<T>>;
 
@@ -23,6 +23,13 @@ pub fn register(engine: &mut Engine) {
     engine.build_type::<ingress::Ingress>();
     engine.build_type::<deployment::Deployment>();
     engine.build_type::<volume::Volume>();
-    engine.register_fn("__app", || app::App::default());
     dbg!(engine.gen_fn_signatures(false));
+}
+
+pub fn scope() -> (Scope<'static>, app::App) {
+    let mut scope = Scope::new();
+    let app = app::App::default();
+    scope.push("app", app.clone());
+    scope.push_constant("AVAILABLE_THREADS", 16_i64); // TODO
+    (scope, app)
 }

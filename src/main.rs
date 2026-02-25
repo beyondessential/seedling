@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use rhai::{Engine, EvalAltResult, Scope};
+use rhai::{Engine, EvalAltResult};
 
 mod defs;
 
@@ -14,12 +14,8 @@ fn main() -> Result<(), Box<EvalAltResult>> {
     let mut engine = Engine::new();
     defs::register(&mut engine);
 
-    let mut scope = Scope::new();
-    scope.push_constant("AVAILABLE_THREADS", 16_i64); // TODO
-    let _ = engine.run_with_scope(&mut scope, "let app = __app();");
-
-    let res = engine.eval_file_with_scope::<()>(&mut scope, filepath);
-    let app: defs::app::App = engine.eval_with_scope(&mut scope, "app")?;
+    let (mut scope, app) = defs::scope();
+    let res = engine.run_file_with_scope(&mut scope, filepath);
     dbg!(app);
     if let Err(err) = res {
         eprintln!("{err}");
