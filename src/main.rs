@@ -15,6 +15,7 @@ fn main() -> Result<(), Box<EvalAltResult>> {
     defs::register(&mut engine);
 
     let mut scope = Scope::new();
+    scope.push_constant("AVAILABLE_THREADS", 16_i64); // TODO
     let _ = engine.run_with_scope(&mut scope, "let app = __app();");
 
     let res = engine.eval_file_with_scope::<()>(&mut scope, filepath);
