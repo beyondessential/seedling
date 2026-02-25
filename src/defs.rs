@@ -11,6 +11,7 @@ pub mod ingress;
 pub mod install;
 pub mod resource;
 pub mod service;
+pub mod volume;
 
 pub fn register(engine: &mut Engine) {
     engine.build_type::<app::App>();
@@ -20,6 +21,7 @@ pub fn register(engine: &mut Engine) {
     engine.build_type::<service::ServicePort>();
     engine.build_type::<ingress::Ingress>();
     engine.build_type::<deployment::Deployment>();
+    engine.build_type::<volume::Volume>();
     engine.register_fn("__app", || app::App::default());
     dbg!(engine.gen_fn_signatures(false));
 }

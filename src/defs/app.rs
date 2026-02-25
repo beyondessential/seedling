@@ -11,6 +11,7 @@ use super::{
     install::InstallDef,
     resource::{Resource, ResourceId, ResourceKind},
     service::Service,
+    volume::Volume,
 };
 
 #[derive(Debug, Default, Clone)]
@@ -19,6 +20,7 @@ pub struct App(pub(super) Holder<AppDef>);
 #[derive(Debug, Default, Clone)]
 pub struct AppDef {
     pub params: BTreeSet<String>,
+    pub external_volumes: BTreeSet<String>,
     pub resources: BTreeMap<ResourceId, Resource>,
     pub actions: BTreeMap<String, Holder<ActionDef>>,
     pub install: Option<Holder<InstallDef>>,
@@ -32,6 +34,17 @@ impl CustomType for App {
                 let mut this = this.0.lock().unwrap();
                 this.params.insert(name.into());
                 "<placeholder>"
+            })
+            .with_fn("external_volume", |this: &mut Self, name: &str| {
+                let app = this.clone();
+                let mut this = this.0.lock().unwrap();
+                this.external_volumes.insert(name.into());
+                let name = ResourceName::new(name.into());
+                Volume {
+                    app,
+                    name,
+                    def: Default::default(),
+                }
             })
             .with_fn("service", |this: &mut Self, name: &str| {
                 let name = ResourceName::new(name.into());
