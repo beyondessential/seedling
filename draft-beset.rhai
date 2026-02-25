@@ -210,13 +210,13 @@ install(|rt, reqs| {
     admin_user_email: #{
         // ...but if a default_value is given, then that's prepopulated
         default_value: "admin@tamanu.app",
-        type: "email",
+        kind: "email",
         description: "The login for the superadmin user",
     },
     admin_user_password: #{
-        // ...and if type=password, then Beset will generate a random one
-        type: "password",
+        // ...and if kind=password, then Beset will generate a random one
+        kind: "password",
         description: "Initial password for the superadmin user",
-        // ...and restrict weak passwords, unless type="weak-password" is set
+        // ...and restrict weak passwords, unless kind="weak-password" is set
     },
 });
