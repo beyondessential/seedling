@@ -27,6 +27,12 @@ impl CustomType for App {
             })
             .with_fn("service", |this: &mut Self, name: &str| {
                 this.0.lock().unwrap().add_service(name)
+            })
+            .with_fn("ingress", |this: &mut Self, name: &str| {
+                this.0.lock().unwrap().add_ingress(name)
+            })
+            .with_fn("deployment", |this: &mut Self, name: &str| {
+                this.0.lock().unwrap().add_deployment(name)
             });
     }
 }
@@ -51,6 +57,36 @@ impl AppDef {
 
         service.clone()
     }
+
+    fn add_ingress(&mut self, name: &str) -> Ingress {
+        let Resource::Ingress(ingress) = self
+            .resources
+            .entry(ResourceId {
+                kind: ResourceKind::Ingress,
+                name: name.into(),
+            })
+            .or_insert_with(|| Resource::Ingress(Ingress::default()))
+        else {
+            unreachable!()
+        };
+
+        ingress.clone()
+    }
+
+    fn add_deployment(&mut self, name: &str) -> Deployment {
+        let Resource::Deployment(deployment) = self
+            .resources
+            .entry(ResourceId {
+                kind: ResourceKind::Deployment,
+                name: name.into(),
+            })
+            .or_insert_with(|| Resource::Deployment(Deployment::default()))
+        else {
+            unreachable!()
+        };
+
+        deployment.clone()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -73,8 +109,7 @@ pub enum ResourceKind {
 pub enum Resource {
     Service(Service),
     Ingress(Ingress),
-    // Ingress(IngressDef),
-    // Deployment(DeploymentDef),
+    Deployment(Deployment),
     // Job(JobDef),
     // CronJob(CronJobDef),
     // Volume(VolumeDef),
@@ -108,6 +143,7 @@ impl CustomType for Service {
             .with_name("Service")
             .with_fn("http", |this: &mut Self| {
                 this.0.lock().unwrap().make_http();
+                this.clone()
             });
     }
 }
@@ -123,10 +159,51 @@ impl ServiceDef {
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct IngressDef {}
+pub struct IngressDef {
+    pub host: Option<String>,
+    pub tls: bool,
+    pub service: ServiceDef,
+}
 
 #[derive(Debug, Default, Clone)]
 pub struct Ingress(Holder<IngressDef>);
+
+impl CustomType for Ingress {
+    fn build(mut builder: TypeBuilder<Self>) {
+        builder
+            .with_name("Ingress")
+            .with_fn("host", |this: &mut Self, host: &str| {
+                this.0.lock().unwrap().host = Some(host.into());
+                this.clone()
+            })
+            .with_fn("tls", |this: &mut Self| {
+                this.0.lock().unwrap().tls = true;
+                this.clone()
+            })
+            .with_fn("http", |this: &mut Self| {
+                this.0.lock().unwrap().service.make_http();
+                this.clone()
+            });
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct DeploymentDef {}
+
+#[derive(Debug, Default, Clone)]
+pub struct Deployment(Holder<DeploymentDef>);
+
+impl CustomType for Deployment {
+    fn build(mut builder: TypeBuilder<Self>) {
+        builder
+            .with_name("Deployment")
+            // .with_fn("host", |this: &mut Self, host: &str| {
+            //     this.0.lock().unwrap().host = Some(host.into());
+            //     this.clone()
+            // })
+        ;
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ActionDef {
