@@ -1,0 +1,222 @@
+// Beset is a control-plane and DSL that defines how to run an application
+// but also how to upgrade it, how to debug it, perform actions on it, etc
+// and it works the same way on a single Linux container host or a Kubernetes
+
+// grab a parameter from the control plane, specific to this app
+let domain = app.param("domain");
+// `app` is a pre-established reference to the App you're defining
+
+// you can use closures to make yourself little helpers
+let version = app.param("version");
+let image = |name| `ghcr.io/beyondessential/tamanu-${name}:${version}`;
+
+// a service is a network endpoint that operators and other resources can access
+let control = app.service("frontend-control");
+
+// specialising a service as http() enables path routing and other goodies
+let sync_api = app.service("sync-api").http();
+
+// an ingress is a publicly routable service
+let traffic = app.ingress("public").host(domain).tls().http();
+
+// defining something doesn't start it immediately, see actions (on_...) below
+let frontend = app.deployment("frontend")
+    .image(image("frontend"))
+
+    // this will ensure that there's always 2 instances
+    // if one dies, another will start, if there's ever 3, beset will end one
+    .scale(2)
+
+    // http traffic can be routed by path
+    .http(3000, traffic.route("/"))
+
+    // tcp/udp traffic can only be routed by port
+    .tcp(8080, control);
+
+// if you don't need to refer to it, you can leave it unassigned
+app.deployment("api")
+    .image(image("facility"))
+    .command("serveApi")
+    .scale(1..AVAILABLE_THREADS)
+
+    // mount is not just for volumes
+    .mount("localhost:4000", sync_api)
+
+    // HTTP path routes will match by segment length, not definition order
+    .http(3000, traffic.route("/api"))
+    .http(3000, traffic.route("/v1"));
+    // if you need something more complicated, spin up a custom HTTP server
+
+app.deployment("sync")
+    .image(image("facility"))
+    .command("startSync")
+    .on_update(#{ replace: true })
+    .http(4100, sync_api); // not using route() will default to /
+
+app.deployment("tasks")
+    .image(image("facility"))
+    .command("startTasks")
+    .on_update(#{ replace: true });
+
+let migrate = app.job("migrate")
+    .image(image("facility"))
+    .command("migrate");
+
+// actions are available to operators to run
+on_action("migrate", |rt| {
+    // `rt` is the "runtime", and is how you control resources
+    // (vs defining them or selecting them)
+    rt.run(migrate);
+    // run() will setup the job, start its container,
+    // wait until it's successfully done, and "block" until then
+}, #{
+    description: "Migrate the database",
+});
+
+// some actions are special, so they have first-class syntax,
+// but are also equivalent to something like:
+// on_action("start", |rt| { ... }, #{ description: "Start the app" })
+on_start(|rt| {
+    // start the networking
+    rt.start([traffic, control]);
+
+    rt.start(frontend); // start the frontend
+    // start "blocks" until things are properly started
+
+    // with select(), you can search for resources instead of matching exactly
+    rt.start(app.select(#{ kinds: ["deployment"], name: ["sync", "tasks"] }));
+
+    // you'll notice we didn't explicitly start sync_api:
+    // as it's referenced by a mount() on "sync", it gets started on-demand
+
+    // start everything else
+    rt.start(app);
+});
+
+// shells are available to operators to debug
+// they're essentially actions that provide an interactive terminal/shell
+on_shell("node", |_rt| {
+    app.job("shell-node")
+        .image(image("central"))
+        .command("shell")
+    // a Resource is returned, so beset rt.start()s it and then attaches
+}, #{
+    description: "A Node.js shell in the Tamanu app context",
+});
+
+// for more control including cleanup
+on_shell("db", |rt, attach| {
+    // this job is only defined here, so it can't be used outside this block
+    let shell = app.job("shell-db")
+        .image(image("toolbox"))
+        .command(["bestool", "t", "p"]);
+    rt.start(shell);
+    attach(shell); // this "blocks" until the shell exits
+
+    rt.run(app.job("shell-db-cleanup")
+        .image(image("toolbox"))
+        .command(["bestool", "t", "p", "-e", "select revert_changes();"]))
+});
+// you don't need to provide a description, but it *is* nicer
+
+// technically equivalent too, but this one has the extra `old` argument
+// while on_action("upgrade", ...) doesn't
+on_upgrade(|rt, old| {
+    // this starts a new version of the control service
+    rt.start(control);
+
+    // this instead matches up the old ingress and merges new and old together
+    // it will transfer control of the actual underlying resources (sockets etc)
+    // and make sure everything is configured as per the new spec as things come online
+    // but it won't drop traffic to the old resources until they stop
+    rt.reconcile(old.ingress("public"), traffic);
+
+    // given an array, it stops all in parallel
+    rt.stop([
+        old.deployment("sync"),
+        old.deployment("tasks"),
+        old.deployment("api"),
+
+        // you can also pass a ResourceSelection as if it was a single Resource
+        old.select(#{ kinds: ["deployment"], name_pattern: "fhir-*" }),
+        old.select(#{ kinds: ["cronjob"] }),
+    ]);
+
+    // run()ing a job waits until it's done, but start()ing doesn't
+    let migration = rt.start(migrate);
+
+    // the above could also be written like this:
+    // rt.stop(old.except(old.deployment("frontend")));
+
+    rt.start(frontend);
+    rt.stop(old.deployment("frontend"));
+
+    rt.stop(old);
+
+    // wait until the migration job is done
+    rt.wait(migration);
+
+    rt.start(app);
+});
+
+// if the host crashes or power was lost...
+on_crash_recovery(|rt, history| {
+    // ...and we were in an upgrade...
+    if history.was_upgrading() {
+        // ...then migrate and...
+        rt.run(migrate);
+    }
+
+    // ...then do a normal start
+    rt.action("start");
+    // (if the "crash_recovery" action isn't set, it defaults to calling "start")
+});
+
+// on first install, we can have a special sequence of events
+// and we can also require/prompt the user for information
+install(|rt, reqs| {
+    // because this job is only defined in this block,
+    // it will not exist at all on subsequent boots
+    let provision = app.job("provisioning")
+        .image(image("central"))
+        .command(["provision", "/prov/isioning.json5"])
+        .mount("/prov", {
+            // this could be defined in the higher scope,
+            // but it's often cleaner to have the entire setup contained
+
+            let vol = rt.make_empty_volume();
+
+            let users = #{};
+            users[reqs.admin_user_email] = #{
+                role: "admin",
+                password: reqs.admin_user_password,
+                displayName: "Super Admin",
+            };
+
+            vol.write("/isioning.json5", #{
+                users: users,
+            }.to_json());
+
+            vol
+        });
+
+    rt.start(frontend);
+    rt.run(migrate);
+    rt.run(provision);
+    rt.start(app);
+}, #{
+    // here, we ask for the credentials of the first (superadmin) user:
+    // all values are required unless `required: false` is set...
+    admin_user_email: #{
+        // ...but if a default_value is given, then that's prepopulated
+        default_value: "admin@tamanu.app",
+        type: "email",
+        description: "The login for the superadmin user",
+    },
+    admin_user_password: #{
+        // ...and if type=password, then Beset will generate a random one
+        type: "password",
+        description: "Initial password for the superadmin user",
+        // ...and restrict weak passwords, unless type="weak-password" is set
+    },
+});
