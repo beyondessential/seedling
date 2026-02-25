@@ -1,11 +1,42 @@
-use std::collections::BTreeMap;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{Arc, Mutex},
+};
 
-#[derive(Debug, Clone)]
+use rhai::{CustomType, TypeBuilder};
+
+pub type Holder<T> = Arc<Mutex<T>>;
+
+#[derive(Debug, Default, Clone)]
+pub struct App(Holder<AppDef>);
+
+#[derive(Debug, Default, Clone)]
 pub struct AppDef {
-    pub params: Vec<String>,
-    pub resources: BTreeMap<ResourceId, ResourceDef>,
-    pub actions: BTreeMap<String, ActionDef>,
-    pub install: Option<InstallDef>,
+    pub params: BTreeSet<String>,
+    pub resources: BTreeMap<ResourceId, Holder<ResourceDef>>,
+    pub actions: BTreeMap<String, Holder<ActionDef>>,
+    pub install: Option<Holder<InstallDef>>,
+}
+
+impl CustomType for App {
+    fn build(mut builder: TypeBuilder<Self>) {
+        builder
+            .with_name("App")
+            .with_fn("param", |app: &mut Self, name: &str| {
+                Arc::clone(&app.0).lock().unwrap().add_param(name);
+            });
+    }
+}
+
+impl AppDef {
+    fn add_param(&mut self, name: &str) -> &'static str {
+        self.params.insert(name.into());
+        "<placeholder>"
+    }
+
+    fn add_service(&mut self, name: &str) -> Arc<ActionDef> {
+        todo!()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
