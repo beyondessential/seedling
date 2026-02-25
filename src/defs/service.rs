@@ -121,6 +121,9 @@ impl CustomType for HttpService {
             .with_fn("route", |this: &mut Self, prefix: &str| PartialRoute {
                 http: this.clone(),
                 prefix: prefix.into(),
+            })
+            .with_fn("port", |this: &mut Self, port: i64| {
+                this.service.clone().make_port(port as _) // TODO: error on large ports
             });
     }
 }
