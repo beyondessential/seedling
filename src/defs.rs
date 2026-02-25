@@ -28,8 +28,13 @@ pub fn register(engine: &mut Engine) {
 
 pub fn scope() -> (Scope<'static>, app::App) {
     let mut scope = Scope::new();
+    scope.push_constant("AVAILABLE_THREADS", 16_i64); // TODO
+    scope.push_constant(
+        "DeploymentStrategy",
+        deployment::DeploymentStrategy::rhai_constant(),
+    );
+
     let app = app::App::default();
     scope.push("app", app.clone());
-    scope.push_constant("AVAILABLE_THREADS", 16_i64); // TODO
     (scope, app)
 }

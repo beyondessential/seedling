@@ -65,13 +65,13 @@ app.deployment("sync")
     .http(4100, sync_api) // not using route() will default to /
 
     // shut down the existing process before starting the new one
-    .on_update(#{ replace: true });
+    .strategy(DeploymentStrategy.Replace);
 
 app.deployment("tasks")
     .image(image.call("facility"))
     .command("startTasks")
     .mount("/var/run/postgres", pg_socket)
-    .on_update(#{ replace: true });
+    .strategy(DeploymentStrategy.Replace);
 
 let migrate = app.job("migrate")
     .image(image.call("facility"))
@@ -79,7 +79,7 @@ let migrate = app.job("migrate")
     .mount("/var/run/postgres", pg_socket);
 
 // actions are available to operators to run
-on_action("migrate", |rt| {
+app.on_action("migrate", |rt| {
     // `rt` is the "runtime", and is how you control resources
     // (vs defining them or selecting them)
     rt.run(migrate);
@@ -92,7 +92,7 @@ on_action("migrate", |rt| {
 // some actions are special, so they have first-class syntax,
 // but are also equivalent to something like:
 // on_action("start", |rt| { ... }, #{ description: "Start the app" })
-on_start(|rt| {
+app.on_start(|rt| {
     // start the networking
     rt.start([traffic, control]);
 
@@ -111,7 +111,7 @@ on_start(|rt| {
 
 // shells are available to operators to debug
 // they're essentially actions that provide an interactive terminal/shell
-on_shell("node", |_rt| {
+app.on_shell("node", |_rt| {
     app.job("shell-node")
         .image(image.call("central"))
         .command("shell")
@@ -121,7 +121,7 @@ on_shell("node", |_rt| {
 });
 
 // for more control including cleanup
-on_shell("db", |rt, attach| {
+app.on_shell("db", |rt, attach| {
     // this job is only defined here, so it can't be used outside this block
     let shell = app.job("shell-db")
         .image(image.call("toolbox"))
@@ -137,7 +137,7 @@ on_shell("db", |rt, attach| {
 
 // technically equivalent too, but this one has the extra `old` argument
 // while on_action("upgrade", ...) doesn't
-on_upgrade(|rt, old| {
+app.on_upgrade(|rt, old| {
     // this starts a new version of the control service
     rt.start(control);
 
@@ -176,7 +176,7 @@ on_upgrade(|rt, old| {
 });
 
 // if the host crashes or power was lost...
-on_crash_recovery(|rt, history| {
+app.on_crash_recovery(|rt, history| {
     // ...and we were in an upgrade...
     if history.was_upgrading() {
         // ...then migrate and...
@@ -190,7 +190,7 @@ on_crash_recovery(|rt, history| {
 
 // on first install, we can have a special sequence of events
 // and we can also require/prompt the user for information
-install(|rt, reqs| {
+app.on_install(|rt, reqs| {
     // because this job is only defined in this block,
     // it will not exist at all on subsequent boots
     let provision = app.job("provisioning")

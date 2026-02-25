@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, ops::Range, path::PathBuf};
 
-use rhai::{CustomType, TypeBuilder};
+use rhai::{CustomType, Dynamic, Map, TypeBuilder};
 
 use crate::defs::service::HttpService;
 
@@ -19,6 +19,7 @@ pub struct DeploymentDef {
     scale: Range<u8>,
     mounted_volumes: BTreeMap<PathBuf, Volume>,
     mounted_services: BTreeMap<u16, Service>,
+    strategy: DeploymentStrategy,
 }
 
 impl Default for DeploymentDef {
@@ -29,7 +30,24 @@ impl Default for DeploymentDef {
             scale: 1..255,
             mounted_volumes: BTreeMap::new(),
             mounted_services: BTreeMap::new(),
+            strategy: DeploymentStrategy::default(),
         }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub enum DeploymentStrategy {
+    #[default]
+    Rolling,
+    Replace,
+}
+
+impl DeploymentStrategy {
+    pub(super) fn rhai_constant() -> Map {
+        let mut map = Map::new();
+        map.insert("Rolling".into(), Dynamic::from(Self::Rolling));
+        map.insert("Replace".into(), Dynamic::from(Self::Replace));
+        map
     }
 }
 
@@ -154,6 +172,13 @@ impl CustomType for Deployment {
                 "mount",
                 |this: &mut Self, ServicePort { service, port }: ServicePort| {
                     this.def.lock().mounted_services.insert(port, service);
+                    this.clone()
+                },
+            )
+            .with_fn(
+                "strategy",
+                |this: &mut Self, strategy: DeploymentStrategy| {
+                    this.def.lock().strategy = strategy;
                     this.clone()
                 },
             );
