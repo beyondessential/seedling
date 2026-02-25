@@ -21,7 +21,7 @@ let traffic = app.ingress("public").host(domain).tls().http();
 
 // defining something doesn't start it immediately, see actions (on_...) below
 let frontend = app.deployment("frontend")
-    .image(image("frontend"))
+    .image(image.call("frontend"))
 
     // this will ensure that there's always 2 instances
     // if one dies, another will start, if there's ever 3, beset will end one
