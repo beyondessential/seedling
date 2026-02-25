@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use rhai::{CustomType, TypeBuilder};
 
@@ -15,8 +15,8 @@ pub type ServiceHttpRoute = (u16, String);
 
 #[derive(Debug, Default, Clone)]
 pub struct ServiceDef {
-    pub port_map: BTreeMap<(ServiceProtocol, u16), Vec<ResourcePort>>,
-    pub http_routes: Option<BTreeMap<ServiceHttpRoute, Vec<ResourcePort>>>,
+    pub port_map: BTreeMap<(ServiceProtocol, u16), BTreeSet<ResourcePort>>,
+    pub http_routes: Option<BTreeMap<ServiceHttpRoute, BTreeSet<ResourcePort>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -102,8 +102,8 @@ impl ServicePort {
         service
             .port_map
             .entry((protocol, self.port))
-            .or_insert(Vec::new())
-            .push((resource, port));
+            .or_insert(Default::default())
+            .insert((resource, port));
     }
 }
 
@@ -143,7 +143,12 @@ impl PartialRoute {
         let routes = service.http_routes.as_mut().unwrap();
         routes
             .entry((self.http.port, self.prefix.clone()))
-            .or_insert(Vec::new())
-            .push((resource, port));
+            .or_insert(Default::default())
+            .insert((resource.clone(), port));
+        service
+            .port_map
+            .entry((ServiceProtocol::Tcp, self.http.port))
+            .or_insert(Default::default())
+            .insert((resource.clone(), port));
     }
 }
