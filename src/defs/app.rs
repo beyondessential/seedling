@@ -31,13 +31,13 @@ impl CustomType for App {
         builder
             .with_name("App")
             .with_fn("param", |this: &mut Self, name: &str| {
-                let mut this = this.0.lock().unwrap();
+                let mut this = this.0.lock();
                 this.params.insert(name.into());
                 "<placeholder>"
             })
             .with_fn("external_volume", |this: &mut Self, name: &str| {
                 let app = this.clone();
-                let mut this = this.0.lock().unwrap();
+                let mut this = this.0.lock();
                 this.external_volumes.insert(name.into());
                 let name = ResourceName::new(name.into());
                 Volume {
@@ -49,7 +49,7 @@ impl CustomType for App {
             .with_fn("service", |this: &mut Self, name: &str| {
                 let name = ResourceName::new(name.into());
                 let app = this.clone();
-                let mut this = this.0.lock().unwrap();
+                let mut this = this.0.lock();
                 let Resource::Service(service) = this
                     .resources
                     .entry(ResourceId {
@@ -72,7 +72,7 @@ impl CustomType for App {
             .with_fn("deployment", |this: &mut Self, name: &str| {
                 let name = ResourceName::new(name.into());
                 let app = this.clone();
-                let mut this = this.0.lock().unwrap();
+                let mut this = this.0.lock();
                 let Resource::Deployment(deployment) = this
                     .resources
                     .entry(ResourceId {

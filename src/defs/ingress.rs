@@ -33,11 +33,11 @@ impl CustomType for Ingress {
         builder
             .with_name("Ingress")
             .with_fn("host", |this: &mut Self, host: &str| {
-                this.0.lock().unwrap().host = Some(host.into());
+                this.0.lock().host = Some(host.into());
                 this.clone()
             })
             .with_fn("tls", |this: &mut Self| {
-                this.0.lock().unwrap().tls = true;
+                this.0.lock().tls = true;
                 this.clone()
             });
     }

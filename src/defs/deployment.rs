@@ -45,22 +45,22 @@ impl CustomType for Deployment {
         builder
             .with_name("Deployment")
             .with_fn("image", |this: &mut Self, image: &str| {
-                this.def.lock().unwrap().image = Some(image.into());
+                this.def.lock().image = Some(image.into());
                 this.clone()
             })
             .with_fn("command", |this: &mut Self, cmd: &str| {
-                this.def.lock().unwrap().command = vec![cmd.into()];
+                this.def.lock().command = vec![cmd.into()];
                 this.clone()
             })
             .with_fn("scale", |this: &mut Self, scale: i64| {
                 let s = clamp_scale(scale);
-                this.def.lock().unwrap().scale = s..s;
+                this.def.lock().scale = s..s;
                 this.clone()
             })
             .with_fn("scale", |this: &mut Self, scale: Range<i64>| {
                 let min = clamp_scale(scale.start);
                 let max = clamp_scale(scale.end);
-                this.def.lock().unwrap().scale = min..max;
+                this.def.lock().scale = min..max;
                 this.clone()
             })
             .with_fn("http", |this: &mut Self, port: i64, route: PartialRoute| {
@@ -147,21 +147,13 @@ impl CustomType for Deployment {
                 this.clone()
             })
             .with_fn("mount", |this: &mut Self, path: &str, volume: Volume| {
-                this.def
-                    .lock()
-                    .unwrap()
-                    .mounted_volumes
-                    .insert(path.into(), volume);
+                this.def.lock().mounted_volumes.insert(path.into(), volume);
                 this.clone()
             })
             .with_fn(
                 "mount",
                 |this: &mut Self, ServicePort { service, port }: ServicePort| {
-                    this.def
-                        .lock()
-                        .unwrap()
-                        .mounted_services
-                        .insert(port, service);
+                    this.def.lock().mounted_services.insert(port, service);
                     this.clone()
                 },
             );

@@ -1,5 +1,6 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use parking_lot::Mutex;
 use rhai::Engine;
 
 type Holder<T> = Arc<Mutex<T>>;

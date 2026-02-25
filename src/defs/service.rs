@@ -34,7 +34,7 @@ pub enum ServiceProtocol {
 
 impl Service {
     fn make_ingress(&mut self) -> Ingress {
-        let mut app = self.app.0.lock().unwrap();
+        let mut app = self.app.0.lock();
         let Resource::Ingress(ingress) = app
             .resources
             .entry(ResourceId {
@@ -62,7 +62,7 @@ impl CustomType for Service {
         builder
             .with_name("Service")
             .with_fn("http", |this: &mut Self| {
-                this.def.lock().unwrap().http_routes = Some(Default::default());
+                this.def.lock().http_routes = Some(Default::default());
                 HttpService {
                     service: this.clone(),
                     port: 80,
@@ -74,7 +74,7 @@ impl CustomType for Service {
             .with_fn("http", |this: &mut Self, port: i64| {
                 let port = port as u16; // TODO: error on large ports
 
-                this.def.lock().unwrap().http_routes = Some(Default::default());
+                this.def.lock().http_routes = Some(Default::default());
                 HttpService {
                     service: this.clone(),
                     port,
@@ -98,7 +98,7 @@ impl CustomType for ServicePort {
 
 impl ServicePort {
     pub(super) fn add_resource(&self, protocol: ServiceProtocol, port: u16, resource: ResourceId) {
-        let mut service = self.service.def.lock().unwrap();
+        let mut service = self.service.def.lock();
         service
             .port_map
             .entry((protocol, self.port))
@@ -142,7 +142,7 @@ impl CustomType for PartialRoute {
 
 impl PartialRoute {
     pub(super) fn add_resource(&self, port: u16, resource: ResourceId) {
-        let mut service = self.http.service.def.lock().unwrap();
+        let mut service = self.http.service.def.lock();
         let routes = service.http_routes.as_mut().unwrap();
         routes
             .entry((self.http.port, self.prefix.clone()))
