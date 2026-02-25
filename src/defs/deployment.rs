@@ -1,4 +1,4 @@
-use std::ops::Range;
+use std::{collections::BTreeMap, ops::Range, path::PathBuf};
 
 use rhai::{CustomType, TypeBuilder};
 
@@ -7,6 +7,7 @@ use super::{
     app::App,
     resource::{ResourceId, ResourceKind, ResourceName},
     service::{PartialRoute, Service, ServicePort, ServiceProtocol},
+    volume::Volume,
 };
 
 #[derive(Debug, Clone)]
@@ -14,6 +15,8 @@ pub struct DeploymentDef {
     image: Option<String>,
     command: Vec<String>,
     scale: Range<u8>,
+    mounted_volumes: BTreeMap<PathBuf, Volume>,
+    mounted_services: BTreeMap<u16, Service>,
 }
 
 impl Default for DeploymentDef {
@@ -22,6 +25,8 @@ impl Default for DeploymentDef {
             image: None,
             command: Vec::new(),
             scale: 1..255,
+            mounted_volumes: BTreeMap::new(),
+            mounted_services: BTreeMap::new(),
         }
     }
 }
@@ -119,7 +124,26 @@ impl CustomType for Deployment {
                     },
                 );
                 this.clone()
-            });
+            })
+            .with_fn("mount", |this: &mut Self, path: &str, volume: Volume| {
+                this.def
+                    .lock()
+                    .unwrap()
+                    .mounted_volumes
+                    .insert(path.into(), volume);
+                this.clone()
+            })
+            .with_fn(
+                "mount",
+                |this: &mut Self, ServicePort { service, port }: ServicePort| {
+                    this.def
+                        .lock()
+                        .unwrap()
+                        .mounted_services
+                        .insert(port, service);
+                    this.clone()
+                },
+            );
     }
 }
 

@@ -86,8 +86,8 @@ impl CustomType for Service {
 
 #[derive(Debug, Clone)]
 pub struct ServicePort {
-    service: Service,
-    port: u16,
+    pub(super) service: Service,
+    pub(super) port: u16,
 }
 
 impl CustomType for ServicePort {
