@@ -14,6 +14,7 @@ fn main() -> Result<(), Box<EvalAltResult>> {
     let mut engine = Engine::new();
 
     engine.build_type::<defs::App>();
+    engine.build_type::<defs::Service>();
     engine.register_fn("__app", || defs::App::default());
     dbg!(engine.gen_fn_signatures(false));
 

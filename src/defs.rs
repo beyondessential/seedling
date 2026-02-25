@@ -9,11 +9,6 @@ type Holder<T> = Arc<Mutex<T>>;
 
 #[derive(Debug, Default, Clone)]
 pub struct App(Holder<AppDef>);
-impl App {
-    fn hold(def: AppDef) -> Self {
-        Self(Arc::new(Mutex::new(def)))
-    }
-}
 
 #[derive(Debug, Default, Clone)]
 pub struct AppDef {
@@ -27,11 +22,11 @@ impl CustomType for App {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
             .with_name("App")
-            .with_fn("param", |app: &mut Self, name: &str| {
-                app.0.lock().unwrap().add_param(name)
+            .with_fn("param", |this: &mut Self, name: &str| {
+                this.0.lock().unwrap().add_param(name)
             })
-            .with_fn("service", |app: &mut Self, name: &str| {
-                app.0.lock().unwrap().add_service(name)
+            .with_fn("service", |this: &mut Self, name: &str| {
+                this.0.lock().unwrap().add_service(name)
             });
     }
 }
@@ -98,11 +93,6 @@ pub struct ServiceDef {
 
 #[derive(Debug, Default, Clone)]
 pub struct Service(Holder<ServiceDef>);
-impl Service {
-    fn hold(def: ServiceDef) -> Self {
-        Self(Arc::new(Mutex::new(def)))
-    }
-}
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ServiceProtocol {
@@ -112,16 +102,31 @@ pub enum ServiceProtocol {
     Http,
 }
 
+impl CustomType for Service {
+    fn build(mut builder: TypeBuilder<Self>) {
+        builder
+            .with_name("Service")
+            .with_fn("http", |this: &mut Self| {
+                this.0.lock().unwrap().make_http();
+            });
+    }
+}
+
+impl ServiceDef {
+    pub fn is_http(&self) -> bool {
+        self.http_routes.is_some()
+    }
+
+    fn make_http(&mut self) {
+        self.http_routes = Some(Default::default());
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct IngressDef {}
 
 #[derive(Debug, Default, Clone)]
 pub struct Ingress(Holder<IngressDef>);
-impl Ingress {
-    fn hold(def: IngressDef) -> Self {
-        Self(Arc::new(Mutex::new(def)))
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct ActionDef {
