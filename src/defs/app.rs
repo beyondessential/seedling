@@ -9,6 +9,7 @@ use super::{
     action::ActionDef,
     deployment::Deployment,
     install::InstallDef,
+    job::Job,
     resource::{Resource, ResourceId, ResourceKind},
     service::Service,
     volume::Volume,
@@ -73,7 +74,6 @@ impl CustomType for App {
             })
             .with_fn("deployment", |this: &mut Self, name: &str| {
                 let name = ResourceName::new(name.into());
-                let app = this.clone();
                 let mut this = this.0.lock();
                 let Resource::Deployment(deployment) = this
                     .resources
@@ -83,7 +83,6 @@ impl CustomType for App {
                     })
                     .or_insert_with(|| {
                         Resource::Deployment(Deployment {
-                            app,
                             name,
                             def: Default::default(),
                         })
@@ -93,6 +92,27 @@ impl CustomType for App {
                 };
 
                 deployment.clone()
+            })
+            .with_fn("job", |this: &mut Self, name: &str| {
+                let name = ResourceName::new(name.into());
+                let mut this = this.0.lock();
+                let Resource::Job(job) = this
+                    .resources
+                    .entry(ResourceId {
+                        kind: ResourceKind::Job,
+                        name: name.clone(),
+                    })
+                    .or_insert_with(|| {
+                        Resource::Job(Job {
+                            name,
+                            def: Default::default(),
+                        })
+                    })
+                else {
+                    unreachable!()
+                };
+
+                job.clone()
             });
     }
 }

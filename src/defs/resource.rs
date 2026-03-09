@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::{deployment::Deployment, ingress::Ingress, service::Service};
+use super::{deployment::Deployment, ingress::Ingress, job::Job, service::Service};
 
 pub type ResourceName = Arc<String>;
 
@@ -15,7 +15,7 @@ pub enum ResourceKind {
     Service,
     Ingress,
     Deployment,
-    // Job,
+    Job,
     // CronJob,
     // Volume,
 }
@@ -25,7 +25,7 @@ pub enum Resource {
     Service(Service),
     Ingress(Ingress),
     Deployment(Deployment),
-    // Job(Job),
+    Job(Job),
     // CronJob(CronJob),
     // Volume(Volume),
 }

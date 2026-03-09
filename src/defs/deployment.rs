@@ -4,7 +4,6 @@ use rhai::{CustomType, Dynamic, Map, TypeBuilder};
 
 use super::{
     Holder,
-    app::App,
     pod::PodDef,
     resource::{ResourceId, ResourceKind, ResourceName},
 };
@@ -44,8 +43,6 @@ impl DeploymentStrategy {
 
 #[derive(Debug, Clone)]
 pub struct Deployment {
-    #[expect(dead_code, reason = "not yet used")]
-    pub app: App,
     pub name: ResourceName,
     pub def: Holder<DeploymentDef>,
 }

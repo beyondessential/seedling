@@ -11,11 +11,13 @@ pub mod container;
 pub mod deployment;
 pub mod ingress;
 pub mod install;
+pub mod job;
 pub mod pod;
 pub mod resource;
 pub mod service;
 pub mod volume;
 
+// r[impl lang.syntax]
 pub fn register(engine: &mut Engine) {
     engine.build_type::<app::App>();
     engine.build_type::<service::Service>();
