@@ -1,0 +1,336 @@
+# Beset Scripting Language
+
+Beset Scripting Language, or BSL for short, is a DSL (Domain Specific Language).
+It is used to define and manage an application running on a Beset node in an autonomous way and provide administrative controls to operators.
+
+The terminology used in BSL closely resembles that used for [Kubernetes](https://kubernetes.io), but some of the semantics are different.
+
+r[lang.syntax]
+BSL is written in [Rhai](https://rhai.rs).
+
+r[lang.script]
+A BSL script is one or more code listings ("files") which share a [scope](#r--lang.scope), and come together to define a Beset Application.
+
+r[lang.scope]
+The runtime must use a distinct [Rhai Scope](https://rhai.rs/book/engine/scope.html) for each BSL script.
+
+> r[lang.phases]
+> A BSL script is executed several times, in different phases.
+>
+> - `dphase`: Definition Phase. In this phase, static resource definitions are created by the BSL, parameter names are collected, and actions are registered. Many methods and functions will return special [placeholder values](#r--lang.placeholder) during this phase, as the real values are not yet known.
+
+> r[lang.placeholder]
+> A placeholder value is a special value which is returned from a method or function during [definition phase](#r--lang.dphase).
+> Placeholder values must not be used for real effects.
+> Some placeholders are special opaque instances of a type, others are predefined values which are guaranteed never to appear in other phases.
+>
+> Predefined values for non-opaque types:
+> - string placeholder: `"<placeholder>"`
+
+> r[lang.builder]
+> Some methods and functions return "builders", which are types that have further methods which configure one instance of the type piece by piece, rather than all at once.
+>
+> They have **builder methods** which modify the instance and return the builder for chaining, and may have **instance methods** which create different types from the builder state.
+
+## App
+
+> r[lang.app]
+> `app` is a global variable available to every BSL script at the top level (and below).
+
+> r[lang.app.type]
+> The `app` global variable is of type `App`.
+
+> r[lang.app.constructor]
+> The `App` type is not constructible within a BSL.
+
+## Parameter
+
+> r[lang.param]
+> A Parameter is a string provided by the Beset control plane to a BSL script, at a particular name.
+>
+> Parameters are defined using the `app.param(name: string)` method, which returns their value when available.
+
+> r[lang.param.dphase]
+> In [definition phase](#r--lang.phases), `app.param()` returns the [placeholder string](#r--lang.placeholder).
+
+## Service
+
+> r[lang.service]
+> A Service is a network endpoint that operators and other resources can access.
+> 
+> Services are defined using the `app.service(name: string)` method, which returns a [builder](#r--lang.builder).
+
+> r[lang.service.port]
+> A Service Port is a particular port on a Service.
+>
+> Service Ports are defined using the `service.port(port: number)` instance method, which returns a `ServicePort`. The `port` argument must be a non-zero positive integer less than 65535.
+>
+> The port number is "endpoint-side": connecting to the Service at that port number reaches the configured Service Port, but that might be _mapped_ to a different port number "pod-side".
+
+### HTTP Service
+
+> r[lang.service.http]
+> A Service can be _specialised_ into an HTTP Service, using the `service.http(port?: number)` instance method, which returns an `HttpService`.
+>
+> The `port` argument is optional and defaults to `80`.
+> The method must reject if `port` is `0` or larger than a `u16` can fit.
+
+> r[lang.service.http.route]
+> An HTTP Service Route serves a URL prefix.
+>
+> HTTP Service Routes are defined using the `http.route(prefix: string)` instance method, which returns an `HttpServiceRoute`. The `prefix` argument must be a non-empty string starting with `/`.
+>
+> The URL prefix is _not_ stripped for the pod: `GET /api/books` routed through a `route("/api")` will appear as `GET /api/books` to the container.
+>
+> Prefix-matching is done by length: for any given URL, the longest matching prefix is selected. If more complicated logic is required, an application should embed an HTTP "reverse proxy" container of its choice.
+
+## Ingress
+
+> r[lang.ingress]
+> An Ingress is an externally-accessible endpoint to the application.
+>
+> Ingresses are created from [Services](#r--lang.service) using the `service.ingress()` instance method, which returns a [builder](#r--lang.builder).
+
+> r[lang.ingress.host]
+> The `ingress.host(hostname: string)` builder method sets a hostname which must be matched for traffic to be directed to this Ingress.
+
+> r[lang.ingress.tls]
+> The `ingress.tls()` builder method enables TLS for this ingress. Certificates will be automatically obtained whenever possible for the ingress's hostnames, and TLS will be terminated by Beset. The application will not have access to the key material.
+
+## Deployment
+
+> r[lang.deployment]
+> A Deployment is a long-lived instance of a container workload. It describes how to run a single container image and associated configuration, and will manage updates to the underlying resource (the running container) from its declarative configuration.
+>
+> Deployments are defined using the `app.deployment(name: string)` method, which returns a [builder](#r--lang.builder).
+
+> r[lang.deployment.pod]
+> Deployment implements the [Pod](#r--lang.pod) interface.
+
+> r[lang.deployment.scale]
+> The `deployment.scale(fixed: number)` or `deployment.scale(scalable: range)` builder method defines the scale ("replicas" in Kubernetes terms) of a Deployment.
+>
+> A fixed-scale Deployment will try to always keep that amount of container copies alive as long as the Deployment is running, not more or less. It is equivalent to `scale(fixed..fixed)`.
+> The `fixed` number must be a positive non-zero integer.
+>
+> A scalable Deployment is defined from a lower and upper bound (represented as a range of positive integers). The Deployment will try to keep at least the lower bound and at most the upper bound of containers running, and operators or the Beset control plane may modify the scale of the Deployment within the defined range. The lower bound may be zero. The upper bound must be non-zero.
+
+> r[lang.deployment.strategy]
+> The `deployment.strategy(strategy: DeploymentStrategy)` builder method defines the strategy used when an update is applied to a Deployment.
+> The default is `DeploymentStrategy.Rolling`.
+> `DeploymentStrategy` is an opaque enum type, and in the script scope, is a constant object map of names to opaque values of type `DeploymentStrategy`.
+
+> r[lang.deployment.strategy.rolling]
+> The `DeploymentStrategy.Rolling` strategy first starts at least one _new_ container, waits until it becomes ready, then stops the same amount of _old_ containers, and repeats until all containers in the Deployment have been rotated to new versions.
+
+> r[lang.deployment.strategy.replace]
+> The `DeploymentStrategy.Replace` strategy stops all _old_ containers, even if that violates the Deployment's [scale lower bound](#r--lang.deployment.scale), and only then starts the _new_ versions.
+
+## Job
+
+> r[lang.job]
+> A Job is a short-lived, one-off instance of a container workload.
+>
+> Jobs are defined using the `app.job(name: string)` method, which returns a [builder](#r--lang.builder).
+
+> r[lang.job.container]
+> Job implements the [Container](#r--lang.container) interface.
+
+## Container
+
+> r[lang.container]
+> Container is an interface (you can't obtain a `Container`-typed value) for the common builder methods, instance methods, and semantics of container workload definitions.
+
+> r[lang.container.image]
+> The `container.image(uri: string)` builder method sets the URI of the container image to be used for using this container.
+> Image URIs are interpreted by the underlying container runtime provider, which may be [Podman](https://docs.podman.io/en/latest/markdown/podman-pull.1.html#source) or [Kubernetes](https://kubernetes.io/docs/concepts/containers/images/#image-names).
+>
+> A container without an `image` set may be inoperable.
+
+> r[lang.container.command]
+> The `container.command(name: string)` or `container.command(entrypoint: string[])` builder method sets the container entrypoint and arguments passed to the image.
+> The `command(name: string)` form is equivalent to `command([name])`.
+
+> r[lang.container.arg]
+> The `container.arg(var: string)` or `container.arg(vars: string[])` builder method sets the container arguments passed to the image.
+> The `arg(var: string)` form is equivalent to `arg([var])`.
+
+> r[lang.container.env]
+> The `container.env(name: string, value: string)` or `container.env(#{ name: string, value: string }[])` builder method inserts variables into the environment of the container.
+> The `env(name: string, value: string)` form is equivalent to `env(#{ name: name, value: value })`.
+>
+> Environment variables set with the same name as previous variables override the earlier ones. That is, `.env("MANUKA", "honey").env("MANUKA", "branch")` is equivalent to `.env("MANUKA", "branch")`.
+
+> r[lang.container.mount-volume]
+> The `container.mount(mountpoint: string, volume: Volume)` builder method binds a volume into the filesystem of the container at a given `mountpoint`.
+>
+> Mounts bound to a mountpoint identical to a previous mount override the earlier one.
+>
+> The `mountpoint` argument must be a unix-style path.
+
+## Pod
+
+> r[lang.pod]
+> Pod is an interface (you can't obtain a `Pod`-typed value) for the common builder methods, instance methods, and semantics of pod definitions.
+>
+> - Container has an image, a filesystem namespace, and runs the command;
+> - Pod has a network namespace, and holds the Container.
+>
+> Not all things that implement Container implement Pod, but all things that implement Pod also implement Container.
+
+> r[lang.pod.mount-serviceport]
+> The `pod.mount(svc: ServicePort)` builder method binds a ServicePort into the network of the pod. This makes the Service available at a particular port on `localhost` for the container.
+
+> r[lang.pod.http]
+> The `pod.http(port: number, svc: HttpServiceRoute)` or `pod.http(port: number, svc: HttpService)` builder method attaches a `port` of the pod to an [HTTP Service Route](#r--lang.service.http.route).
+> The `http(port, svc: HttpService)` form is equivalent to `http(port, svc.route("/"))`.
+>
+> HTTP traffic to the HTTP Service Route will be routed to (and back from) the port on the pod.
+
+> r[lang.pod.tcp]
+> The `pod.tcp(port: number, svc: ServicePort)` or `pod.tcp(port: number, svc: Service)` builder method attaches a `port` of the pod to a [Service Port](#r--lang.service.port).
+> The `tcp(port, svc: Service)` form is equivalent to `tcp(port, svc.port(port))`.
+>
+> TCP traffic to the Service Port will be routed to (and back from) the port on the pod.
+
+> r[lang.pod.udp]
+> The `pod.udp(port: number, svc: ServicePort)` or `pod.udp(port: number, svc: Service)` builder method attaches a `port` of the pod to a [Service Port](#r--lang.service.port).
+> The `udp(port, svc: Service)` form is equivalent to `udp(port, svc.port(port))`.
+>
+> UDP traffic to the Service Port will be routed to (and back from) the port on the pod.
+
+## External Volume
+
+> r[lang.external-volume]
+> An External Volume is a Volume provided by the Beset control plane to a BSL script, at a particular name.
+>
+> External Volumes are defined using the `app.external_volume(name: string)` method, which returns a `Volume`.
+
+> r[lang.external-volume.dphase]
+> In [definition phase](#r--lang.phases), `app.external_volume()` returns a [placeholder](#r--lang.placeholder).
+
+## Action
+
+> r[lang.action]
+> An Action is a mechanism made available to operators (and in some cases, used autonomously by the Beset control plane) to perform a structured task on an application.
+>
+> Actions are defined using the `app.on_action(name: string, fn: closure, options?: object)` method.
+>
+> The `fn` closure may take one argument, the [Runtime Instance](#r--lang.rt), typically named `rt`. Specialised Actions may have access to more arguments.
+>
+> The `options` [object map](https://rhai.rs/book/language/object-maps.html)'s available properties are described below:
+
+> r[lang.action.option-description]
+> An Action's `description` option is free-form text provided to operators. It may describe what the action does or is for.
+
+### Start Action
+
+> r[lang.action.start]
+> The specialised Start Action is used to define how the application is started. It is used autonomously by the Beset control plane.
+>
+> It may be defined using the `app.on_action()` method with a `name` of `"start"`, or with the shorthand `app.on_start(fn: closure, options?: object)`.
+>
+> If it is not defined, it defaults to the equivalent of:
+> ```rhai
+> rt.start(app);
+> ```
+
+### Upgrade Action
+
+> r[lang.action.upgrade]
+> The specialised Upgrade Action is used to define how the application is upgraded. It is used autonomously by the Beset control plane.
+>
+> It may be defined using the `app.on_action()` method with a `name` of `"upgrade"`, or with the shorthand `app.on_upgrade(fn: closure, options?: object)`.
+>
+> Its `fn` closure may take up to two arguments: the [Runtime Instance](#r--lang.rt) (typically named `rt`) and the `App` instance being replaced (typically named `old`).
+>
+> If it is not defined, it defaults to the equivalent of:
+> ```rhai
+> rt.stop(old);
+> rt.action(app, "start");
+> ```
+> which is usually safe but incurs downtime.
+
+### Crash Recovery Action
+
+> r[lang.action.crash-recovery]
+> The specialised Crash Recovery Action is used to define how the application recovers from a Beset Node crash. It is used autonomously by the Beset control plane.
+>
+> A crash in this context is not an application failure, but a crash and restart of the entire node, usually caused by an unplanned power failure or some kind of system panic. If an application was in the middle of an upgrade, it may want to attempt to finish the upgrade, and/or run data integrity checks.
+>
+> It may be defined using the `app.on_action()` method with a `name` of `"crash_recovery"`, or with the shorthand `app.on_crash_recovery(fn: closure, options?: object)`.
+>
+> Its `fn` closure may take up to two arguments: the [Runtime Instance](#r--lang.rt) (typically named `rt`) and the [Application History](#r--lang.history) (typically named `history`).
+>
+> If it is not defined, it defaults to the equivalent of:
+> ```rhai
+> rt.action(app, "start");
+> ```
+
+### Shell Action
+
+> r[lang.action.shell]
+> A Shell Action is a specialised _kind_ of Action, which provide an interactive terminal session to an operator. Shells are never used autonomously by the Beset control plane.
+>
+> Shells must be defined using the `app.on_shell(name: string, fn: closure, options?: object)` method, and cannot be defined using `on_action()`.
+>
+> Shells exist in a separate namespace as other actions: their names do not conflict.
+>
+> The `fn` closure must either:
+> - take up to one argument (the [Runtime Instance](#r--lang.rt), `rt`), and return a [Job](#r--lang.job); or
+> - take exactly two arguments, the [Runtime Instance](#r--lang.rt) (typically named `rt`) and the [Shell Attacher](#r--lang.action.shell.attach) (typically named `attach`), and return nothing.
+>
+> The first form is equivalent to using the second form and calling `attach` on the first form's return value. A Shell Action which does not call `attach` (implicitly via return or explicitly) is invalid, and may be unavailable for use.
+
+> r[lang.action.shell.attach]
+> The Shell Attacher is the second argument of the Shell Action. It is a host function which bridges the operator to the [Job](#r--lang.job) provided as argument, attaching the operator's input/output to that of the Job.
+>
+> The Shell Attacher returns once the operator closes the shell, or if the connection is interrupted in some other way.
+> <!-- TODO: consider a return value to indicate how it exited -->
+
+### Install Action
+
+> r[lang.action.install]
+> The specialised Install Action is used to define how the application is first set up. It is used autonomously by the Beset control plane.
+>
+> It must be defined using the `app.on_install(fn: closure, requirements?: object)` method, and cannot be defined using `on_action()`. It also does not take the `options` argument.
+>
+> Its `fn` closure may take up to two arguments: the [Runtime Instance](#r--lang.rt) (typically named `rt`) and the [Install Requirements](#r--lang.action.install.requirements) (typically named `reqs`).
+>
+> If it is not defined, it defaults to the equivalent of:
+> ```rhai
+> rt.action(app, "start");
+> ```
+
+> r[lang.action.install.requirements]
+> The Install Action can define special parameters which are only requested from the operator when installation is requested. The values of the Requirements are only known to Beset for the duration of the Install process, and are discarded afterwards.
+>
+> The Requirements Definition (the second argument to `on_install()`) is an object map of requirement key => definition.
+>
+> The Requirements Object (the second argument of the `fn` _closure_) is an object map of requirement key => string value.
+>
+> The definition has these fields:
+> - `kind` (optional): how to present/validate the field, defaults to `"text"`;
+> - `required` (optional): boolean, defaults to `true`;
+> - `description` (optional): free-form text, for the operator to understand what the required value is or is for;
+> - `default_value` (optional): string, the value to use if none is provided.
+> 
+> If `default_value` is set and `required` is `true`, then the default value is pre-populated in the field input (but the field is still mandatory / cannot be submitted empty).
+
+> r[lang.action.install.requirements.kind-text]
+> A requirement kind of `"text"` is a free-form text field.
+> No validation is applied.
+
+> r[lang.action.install.requirements.kind-email]
+> A requirement kind of `"email"` is an email address field.
+> Basic validation is applied, and hints may be provided for more outlandish values ([for example](https://en.wikipedia.org/wiki/Email_address#Valid_email_addresses), `" "@example.org` is a valid email address, but probably not what an user meant).
+
+> r[lang.action.install.requirements.kind-password]
+> A requirement kind of `"password"` is a strong password field.
+> Weak passwords must not be accepted (what makes a weak password is implementation-defined, but should be something like [zxcvbn](https://lowe.github.io/tryzxcvbn/)).
+> The field should have a strong password generator available.
+
+> r[lang.action.install.requirements.kind-weak-password]
+> A requirement kind of `"weak-password"` is a free-form password field.
+> Password strength should be hinted, but must not restrict submission.
+> The field should have a strong password generator available.

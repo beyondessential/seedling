@@ -1,0 +1,18 @@
+@schema {id crate:tracey-config@1, cli tracey}
+
+specs (
+    {
+        name beset
+        source_url https://github.com/beyondessential/beset
+        include (docs/spec/**/*.md)
+        impls (
+            {
+                name main
+                include (
+                    src/*.rs
+                    src/**/*.rs
+                )
+            }
+        )
+    }
+)
