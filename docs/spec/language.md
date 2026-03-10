@@ -37,7 +37,7 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 > Unless otherwise specified, names are ASCII alphanumeric with hyphens, must not start with a number, must not start nor end with a hyphen, and must be between 3 and 63 characters long inclusive.
 > Names are case-sensitive.
 >
-> The regular expression `^[a-zA-Z][a-Z0-9-]{1,60}[a-zA-Z0-9]$` may be used to validate a name.
+> The regular expression `^[a-zA-Z][a-zA-Z0-9-]{1,60}[a-zA-Z0-9]$` may be used to validate a name.
 
 > l[bsl.port]
 > Various methods and resources use port numbers.
@@ -151,8 +151,13 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 
 > l[app.collection]
 > `App` implements [`Collection`](#l--bsl.collection) thus:
-> - all `Deployments`
-
+> - all Deployments
+> - all Services, including subtypes
+> - all Volumes, including subtypes
+> - all Ingresses
+>
+> It does not include Jobs.
+> These must be started deliberately.
 
 # Parameter
 
@@ -203,7 +208,7 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 > An External Service is a Service provided by the Beset control plane to a BSL script, at a particular name.
 >
 > External Services are defined using the `app.external_service(name: string)` method, which returns a `ExternalService`.
-> When the volume is not yet available, `app.external_service()` returns a [placeholder](#l--bsl.placeholder).
+> When the service is not yet available, `app.external_service()` returns a [placeholder](#l--bsl.placeholder).
 >
 > External Services can't be modified, only [mounted](#l--pod.mount-service).
 
