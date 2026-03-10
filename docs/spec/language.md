@@ -320,8 +320,8 @@ These are not guaranteed to be constant forever, only for the duration of one sc
 >
 > Jobs are defined using the `app.job(name: string)` method, which returns a [builder](#l--bsl.builder).
 
-> l[job.container]
-> Job implements the [Container](#l--container.interface) interface.
+> l[job.pod]
+> Job implements the [Pod](#l--pod.interface) interface.
 
 # Container
 
@@ -364,7 +364,7 @@ These are not guaranteed to be constant forever, only for the duration of one sc
 > - Container has an image, a filesystem namespace, and runs the command;
 > - Pod has a network namespace, and holds the Container.
 >
-> Not all things that implement Container implement Pod, but all things that implement Pod also implement Container.
+> Not all things that implement Container implement Pod, but all things that implement Pod also implement Container. (Non-normative: this is not true of the current version of the spec, but the distinction is here for future expansions.)
 
 > l[pod.mount-serviceport]
 > The `pod.mount(svc: ServicePort)` builder method binds a ServicePort into the network of the pod. This makes the Service available at a particular port on `localhost` for the container.
