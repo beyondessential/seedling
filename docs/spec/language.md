@@ -51,8 +51,10 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 > - A list of instances of a resource type is known as a _collection_
 > - A single instance of a resource type is called a _resource_
 
-> l[bsl.collection]
-> A `Collection` is an abstract trait of things that can be one or more Resources.
+# Collection
+
+> l[collection.interface]
+> A `Collection` is an abstract interface of things that can be zero or more Resources.
 > Workload control methods often operate on or with Collections.
 > Collections can hold different resource types, and can hold Collections.
 > Order within a collection is not defined.
@@ -60,6 +62,60 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 > All Resources are themselves a Collection of the resource itself and all resources that are contained (not references) in it.
 >
 > An array of Collections is a Collection of the contents.
+
+> l[collection.one]
+> `col.one()` is a method which returns any one Resource from the collection (or null if the collection is empty).
+>
+> This is most useful for collections which have zero or one resources within.
+
+> l[collection.only]
+> `col.only(other: Collection)` is a method which returns a Collection of all resources in this Collection that are present in the `other` collection.
+
+> l[collection.except]
+> `col.except(other: Collection)` is a method which returns a Collection of all resources in this Collection that are _not_ present in the `other` collection.
+
+> l[collection.select]
+> `col.select(criterion: object)` is a method which returns a Collection of all the resources within this Collection that match the `criterion`.
+>
+> The criterion is an object map where all keys are optional. Resources must match all keys to be selected. All possible keys are defined in this spec.
+
+> l[collection.select.types]
+> `types`: must match one of an array of [ResourceTypes](#l--const.resource-type.enum).
+
+> l[collection.select.names]
+> `names`: must match one of an array of resource names
+
+> l[collection.select.name-patterns]
+> `name_patterns`: must match at least one glob pattern
+
+# Constants
+
+## DeploymentStrategy
+
+> l[const.deployment-strategy.enum]
+> `DeploymentStrategy` is an opaque enum type, and in the script scope, is a constant object map of names to opaque values of type `DeploymentStrategy`.
+
+> l[const.deployment-strategy.rolling]
+> The `DeploymentStrategy.Rolling` strategy first starts at least one _new_ container, waits until it becomes ready, then stops the same amount of _old_ containers, and repeats until all containers in the Deployment have been rotated to new versions.
+
+> l[const.deployment-strategy.replace]
+> The `DeploymentStrategy.Replace` strategy stops all _old_ containers, even if that violates the Deployment's [scale lower bound](#l--deployment.scale), and only then starts the _new_ versions.
+
+## ResourceType
+
+> l[const.resource-type.enum]
+> `ResourceType` is an opaque enum type, and in the script scope, is a constant object map of names to opaque values of type `ResourceType`.
+>
+> - `Parameter`
+> - `Service`
+> - `HttpService`
+> - `ExternalService`
+> - `Ingress`
+> - `Deployment`
+> - `Job`
+> - `Volume`
+> - `ExternalVolume`
+
 
 # App global
 
@@ -96,6 +152,7 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 > l[app.collection]
 > `App` implements [`Collection`](#l--bsl.collection) thus:
 > - all `Deployments`
+
 
 # Parameter
 
@@ -242,13 +299,6 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 > l[deployment.strategy]
 > The `deployment.strategy(strategy: DeploymentStrategy)` builder method defines the strategy used when an update is applied to a Deployment.
 > The default is `DeploymentStrategy.Rolling`.
-> `DeploymentStrategy` is an opaque enum type, and in the script scope, is a constant object map of names to opaque values of type `DeploymentStrategy`.
-
-> l[deployment.strategy.rolling]
-> The `DeploymentStrategy.Rolling` strategy first starts at least one _new_ container, waits until it becomes ready, then stops the same amount of _old_ containers, and repeats until all containers in the Deployment have been rotated to new versions.
-
-> l[deployment.strategy.replace]
-> The `DeploymentStrategy.Replace` strategy stops all _old_ containers, even if that violates the Deployment's [scale lower bound](#l--deployment.scale), and only then starts the _new_ versions.
 
 # Job
 
@@ -552,3 +602,14 @@ This spec defines the semantics of the Runtime Instance as far as BSL is concern
 > ```
 >
 > Note that this does not support Collections, it's specifically one Resource to one Resource.
+
+# History
+
+> l[history.type]
+> `History` is a log of actions taken against and events recorded for this application.
+
+> l[history.var]
+> `history` is a snapshot of the `History` log taken at a particular moment.
+
+> l[history.was-upgrading]
+> `history.was_upgrading()` returns `true` if the History stopped in the middle of an upgrade.

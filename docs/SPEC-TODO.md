@@ -17,7 +17,7 @@ Methods like `rt.start(app)`, `rt.stop(old)`, and `rt.action(app, "start")` are 
 
 This is the single largest gap — actions are the "verbs" of the language, and the runtime is how they act on the world.
 
-## 2. Application History (`lang.history`) — Referenced but never defined
+## 2. ~~Application History (`lang.history`) — Referenced but never defined~~
 
 The crash recovery action references it:
 
@@ -99,7 +99,7 @@ The `App` type is referenced with many methods scattered throughout (`app.param(
 
 Several types document their dphase behavior (`r[lang.param.dphase]`, `r[lang.external-volume.dphase]`), but `Deployment`, `Service`, `Job`, `Container`, `Pod`, `Ingress`, and `Action` have no dphase requirements. Are builders valid in all phases? Presumably definitions only happen in dphase, but this is unspecified.
 
-## 13. The `old` app in Upgrade Action
+## 13. ~~The `old` app in Upgrade Action~~
 
 ```beset/docs/spec/language.md#L243-L244
 > Its `fn` closure may take up to two arguments: the [Runtime Instance](#r--lang.rt) (typically named `rt`) and the `App` instance being replaced (typically named `old`).

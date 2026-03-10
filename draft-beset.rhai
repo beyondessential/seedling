@@ -147,27 +147,20 @@ app.on_upgrade(|rt, old| {
     // it will transfer control of the actual underlying resources (sockets etc)
     // and make sure everything is configured as per the new spec as things come online
     // but it won't drop traffic to the old resources until they stop
-    rt.reconcile(old.ingress("public"), traffic);
+    rt.reconcile(old.select(#{ kinds: [ResourceType.Ingress], names: ["public"] }).one(), traffic);
 
     // given an array, it stops all in parallel
     rt.stop([
-        old.deployment("sync"),
-        old.deployment("tasks"),
-        old.deployment("api"),
-
-        // you can also pass a ResourceSelection as if it was a single Resource
-        old.select(#{ kinds: ["deployment"], name_pattern: "fhir-*" }),
-        old.select(#{ kinds: ["cronjob"] }),
+        old.select(#{ kinds: [ResourceType.Deployment], names: ["sync", "tasks", "api"] }),
+        old.select(#{ kinds: [ResourceType.Deployment], name_patterns: "fhir-*" }),
+        old.select(#{ kinds: [ResourceType.CronJob] }),
     ]);
 
     // run()ing a job waits until it's done, but start()ing doesn't
     let migration = rt.start(migrate);
 
-    // the above could also be written like this:
-    // rt.stop(old.except(old.deployment("frontend")));
-
     rt.start(frontend);
-    rt.stop(old.deployment("frontend"));
+    rt.stop(old.select(#{ kinds: [ResourceType.Deployment], names: ["frontend"] }));
 
     rt.stop(old);
 
