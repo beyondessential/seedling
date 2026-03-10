@@ -21,7 +21,7 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 > l[bsl.placeholder]
 > A placeholder value is a special value which is returned from a method or function when its real value is not yet known.
 > Placeholder values must not be used for real effects.
-> Some placeholders are special opaque instances of a type, others are predefined values which are guaranteed never to appear in other phases.
+> Some placeholders are special opaque instances of a type, others are predefined values.
 >
 > Predefined values for non-opaque types:
 > - string placeholder: `"<placeholder>"`
