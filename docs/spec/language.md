@@ -31,6 +31,14 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 >
 > They have **builder methods** which modify the instance and return the builder for chaining, and may have **instance methods** which create different types from the builder state.
 
+> l[bsl.name]
+> Various methods and resources are defined using a `name`.
+>
+> Unless otherwise specified, names are ASCII alphanumeric with hyphens, must not start with a number, must not start nor end with a hyphen, and must be between 3 and 63 characters long inclusive.
+> Names are case-sensitive.
+>
+> The regular expression `^[a-zA-Z][a-Z0-9-]{1,60}[a-zA-Z0-9]$` may be used to validate a name.
+
 ## App
 
 > l[app.var]
