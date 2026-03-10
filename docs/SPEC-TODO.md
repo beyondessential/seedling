@@ -1,6 +1,6 @@
 Here's my review of the BSL specification in `language.md`, identifying areas that appear missing or incomplete for the spec to be considered complete. I've organized them from most significant to least.
 
-## 1. Runtime Instance (`lang.rt`) — Referenced but never defined
+## 1. ~~Runtime Instance (`lang.rt`) — Referenced but never defined~~
 
 The spec references `rt` (the "Runtime Instance") extensively across actions:
 
@@ -27,7 +27,7 @@ The crash recovery action references it:
 
 There is no `r[lang.history]` requirement defining what the history object contains or what methods it exposes.
 
-## 3. Only one phase defined
+## 3. ~~Only one phase defined~~
 
 The phases section declares:
 
@@ -39,21 +39,21 @@ The phases section declares:
 
 Only **definition phase** is listed, but the spec says "several times, in different phases" (plural). What are the other phases? An "execution phase" or "action phase" is implied by the existence of actions and runtime instances, but never specified. This matters because the behavior of many functions changes by phase (e.g., `app.param()` returns placeholders in dphase — what does it return in other phases?).
 
-## 4. Volume type — never defined
+## 4. ~~Volume type — never defined~~
 
 `r[lang.container.mount-volume]` references `Volume` and `r[lang.external-volume]` returns a `Volume`, but:
 - There is no `r[lang.volume]` defining the `Volume` type
 - Can volumes be created within BSL (e.g., ephemeral/scratch volumes), or only obtained externally?
 - What properties does a `Volume` have?
 
-## 5. Error handling and validation semantics
+## 5. ~~Error handling and validation semantics~~
 
 The spec describes what arguments "must" be (e.g., port must be non-zero, prefix must start with `/`), but doesn't specify:
 - What happens when validation fails — does the script abort? Is an error value returned? Is an exception thrown?
 - How Rhai exceptions interact with BSL (Rhai has `try`/`catch`)
 - Whether errors in definition phase vs. execution phase behave differently
 
-## 6. Deployment lifecycle and state machine
+## 6. ~~Deployment lifecycle and state machine~~
 
 The spec defines what a Deployment *is* and its update strategies, but doesn't cover:
 - **Health checks / readiness** — `r[lang.deployment.strategy.rolling]` mentions waiting until a container "becomes ready," but there's no requirement for how readiness is defined or configured
@@ -63,7 +63,7 @@ The spec defines what a Deployment *is* and its update strategies, but doesn't c
 ## 7. Job lifecycle
 
 `r[lang.job]` says a Job is "short-lived, one-off" and implements Container, but:
-- How is a Job started? (Only via `rt` in an action?)
+- ~~How is a Job started? (Only via `rt` in an action?)~~
 - What happens when a Job finishes (success vs. failure)?
 - Can a Job's exit code / output be observed?
 - Is there a timeout mechanism?
@@ -71,8 +71,8 @@ The spec defines what a Deployment *is* and its update strategies, but doesn't c
 ## 8. Service discovery and networking model
 
 - How do pods/containers discover services? Is it always `localhost` via `pod.mount(svc)`?
-- Can services communicate across apps?
-- What happens when a service has no backing pod (e.g., during an upgrade with `Replace` strategy)?
+- ~~Can services communicate across apps?~~
+- ~~What happens when a service has no backing pod (e.g., during an upgrade with `Replace` strategy)?~~
 
 ## 9. ~~Resource naming constraints~~
 
@@ -86,7 +86,7 @@ Several methods take `name: string` (`app.deployment(name)`, `app.service(name)`
 
 The `App` type is referenced with many methods scattered throughout (`app.param()`, `app.service()`, `app.deployment()`, `app.job()`, `app.external_volume()`, `app.on_action()`, `app.on_start()`, `app.on_upgrade()`, `app.on_crash_recovery()`, `app.on_shell()`, `app.on_install()`), but there's no single requirement enumerating the full API surface. It's unclear whether this is the exhaustive list.
 
-## 11. Ingress — incomplete builder
+## 11. ~~Ingress — incomplete builder~~
 
 `r[lang.ingress]` defines `.host()` and `.tls()` but:
 - Is `.host()` required or optional?
@@ -95,7 +95,7 @@ The `App` type is referenced with many methods scattered throughout (`app.param(
 - How does path-based routing interact with the HTTP service route prefixes?
 - Is there any way to configure HTTP→HTTPS redirect behavior?
 
-## 12. Deployment `scale` — missing definition phase behavior
+## 12. ~~Deployment `scale` — missing definition phase behavior~~
 
 Several types document their dphase behavior (`r[lang.param.dphase]`, `r[lang.external-volume.dphase]`), but `Deployment`, `Service`, `Job`, `Container`, `Pod`, `Ingress`, and `Action` have no dphase requirements. Are builders valid in all phases? Presumably definitions only happen in dphase, but this is unspecified.
 

@@ -17,8 +17,10 @@ let control = app.service("frontend-control");
 let sync_api = app.service("sync-api").http(4100);
 
 // an ingress is a publicly routable service
-let traffic = app.service("public").http(); // HTTP port defaults to 80
-traffic.ingress().host(domain).tls();
+let traffic = app.service("public")
+    .ingress(domain, 443).http() // terminate HTTPS for the domain, and output HTTP/1.1
+    .service() // get the service instance back
+    .http(80); // specialise to get path routing
 
 // defining something doesn't start it immediately, see actions (on_...) below
 let frontend = app.deployment("frontend")
@@ -200,7 +202,7 @@ app.on_install(|rt, reqs| {
             // this could be defined in the higher scope,
             // but it's often cleaner to have the entire setup contained
 
-            let vol = rt.make_empty_volume();
+            let vol = app.volume();
 
             let users = #{};
             users[reqs.admin_user_email] = #{

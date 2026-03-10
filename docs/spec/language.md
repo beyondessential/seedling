@@ -39,7 +39,29 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 >
 > The regular expression `^[a-zA-Z][a-Z0-9-]{1,60}[a-zA-Z0-9]$` may be used to validate a name.
 
-# App
+> l[bsl.port]
+> Various methods and resources use port numbers.
+>
+> Unless otherwise specified, a port number must be a non-zero positive integer below 65535.
+> If an invalid port is provided, the method must throw.
+
+> l[bsl.resource]
+> The term Resource is using a similar definition [as Kubernetes](https://kubernetes.io/docs/reference/using-api/api-concepts/#standard-api-terminology):
+> - A _resource type_ is the name used in the spec (Service, Deployment, Job)
+> - A list of instances of a resource type is known as a _collection_
+> - A single instance of a resource type is called a _resource_
+
+> l[bsl.collection]
+> A `Collection` is an abstract trait of things that can be one or more Resources.
+> Workload control methods often operate on or with Collections.
+> Collections can hold different resource types, and can hold Collections.
+> Order within a collection is not defined.
+>
+> All Resources are themselves a Collection of the resource itself and all resources that are contained (not references) in it.
+>
+> An array of Collections is a Collection of the contents.
+
+# App global
 
 > l[app.var]
 > `app` is a global variable available to every BSL script at the top level (and below).
@@ -52,6 +74,28 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 
 > l[app.methods]
 > All the methods of `app` are defined in this spec.
+>
+> Methods are either **resource methods**, which define resources, or **query methods**, which query the `App` state.
+
+> l[app.resources]
+> An `app` holds [Resources](#l--bsl.resource) defined against it.
+
+> l[app.resources.static]
+> Resources that are defined at the top level (outside of all actions) are said to be **static**.
+
+> l[app.resources.names]
+> Most resources are defined with a name.
+> If two methods use the _same name_, the methods return (a different handle to) the _same resource_.
+>
+> ```rhai
+> let a = app.volume("data");
+> let b = app.volume("data");
+> // these are the same volume
+> ```
+
+> l[app.collection]
+> `App` implements [`Collection`](#l--bsl.collection) thus:
+> - all `Deployments`
 
 # Parameter
 
@@ -71,9 +115,14 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 > l[service.port]
 > A Service Port is a particular port on a Service.
 >
-> Service Ports are defined using the `service.port(port: number)` instance method, which returns a `ServicePort`. The `port` argument must be a non-zero positive integer less than 65535.
+> Service Ports are defined using the `service.port(port: number)` instance method, which returns a `ServicePort`.
 >
 > The port number is "endpoint-side": connecting to the Service at that port number reaches the configured Service Port, but that might be _mapped_ to a different port number "pod-side".
+
+> l[service.routing]
+> Services accept TCP and UDP traffic as long as they have places to route it to.
+> If there is no target for some traffic, it is dropped or rejected (implementation-defined).
+> If there are multiple targets for the same traffic, it is distributed round-robin.
 
 ## HTTP Service
 
@@ -81,7 +130,6 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 > A Service can be _specialised_ into an HTTP Service, using the `service.http(port?: number)` instance method, which returns an `HttpService`.
 >
 > The `port` argument is optional and defaults to `80`.
-> The method must reject if `port` is `0` or larger than a `u16` can fit.
 
 > l[service.http.route]
 > An HTTP Service Route serves a URL prefix.
@@ -92,40 +140,86 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 >
 > Prefix-matching is done by length: for any given URL, the longest matching prefix is selected. If more complicated logic is required, an application should embed an HTTP "reverse proxy" container of its choice.
 
+## External Service
+
+> l[service.external]
+> An External Service is a Service provided by the Beset control plane to a BSL script, at a particular name.
+>
+> External Services are defined using the `app.external_service(name: string)` method, which returns a `ExternalService`.
+> When the volume is not yet available, `app.external_service()` returns a [placeholder](#l--bsl.placeholder).
+>
+> External Services can't be modified, only [mounted](#l--pod.mount-service).
+
+> l[service.external.port]
+> `extsvc.port(port: number)` returns a [ServicePort](#l--service.port) _if the port is defined_ by the control plane on the external service.
+> If the port is not defined, this will throw.
+
 # Ingress
 
 > l[ingress.type]
 > An Ingress is an externally-accessible endpoint to the application.
 >
-> Ingresses are created from [Services](#l--service.type) using the `service.ingress()` instance method, which returns a [builder](#l--bsl.builder).
+> Ingresses are created from [Services](#l--service.type) using the `service.ingress(hostname: string, port: number)` instance method, which returns a [builder](#l--bsl.builder).
 >
-> Traffic from an Ingress is sent to the associated Service.
+> Traffic from an Ingress is matched by the hostname and port, and sent to the associated Service at the same port.
+>
 > There can be multiple ingresses for a Service.
 
-> l[ingress.host]
-> The `ingress.host(hostname: string)` builder method adds a hostname which must be matched for traffic to be directed to this Ingress.
->
-> There can be multiple hostnames per Ingress.
->
-> If more than one Ingress matches the same hostname...
+> l[ingress.conflicts]
+> If more than one ingress matches the same (hostname, port) tuple...
 > - ...within the same application: the latter definition in execution order will throw, and not be registered against the ingress. This can be caught (with `try..catch`) and handled.
 > - ...between two or more applications: this is a control plane concern.
 
 > l[ingress.certificates]
 > This rule applies to all ingress spec rules that deal with certificates.
 >
-> Certificates will be automatically obtained whenever possible for the ingress's hostnames, and TLS will be terminated by Beset. The application will not have access to the key material.
+> Certificates will be automatically obtained whenever possible for the ingress's hostnames. The application will not have access to the key material.
+
+> l[ingress.service]
+> The `ingress.service()` instance method returns the Service that the ingress was created from.
 
 > l[ingress.tls]
 > The `ingress.tls()` builder method terminates TLS for the TCP traffic to this ingress.
 >
 > The Ingress only terminates TLS, it does not interact with the TCP traffic.
-> If non-TLS TCP traffic is sent to the ingress, it will be forwarded as-is.
+> If non-TLS TCP traffic is sent to the ingress, it is rejected.
+
+> l[ingress.dtls]
+> The `ingress.dtls()` builder method terminates DTLS for the UDP traffic to this ingress.
+>
+> The Ingress only terminates DTLS, it does not interact with the UDP traffic.
+> If non-DTLS UDP traffic is sent to the ingress, it is rejected.
 
 > l[ingress.quic]
 > The `ingress.quic()` builder method terminates QUIC for the UDP traffic to this ingress.
 >
-> The Ingress only terminates TLS, it does not interact with the TCP traffic.
+> The Ingress only terminates QUIC, it does not interact with the application traffic.
+> The traffic is re-emitted _as QUIC_ with another certificate which must be ignored.
+> If non-QUIC UDP traffic is sent to the ingress, it is rejected.
+>
+> If you want HTTP/3 termination, use [`ingress.http()`](#l--ingress.http).
+
+> l[ingress.http]
+> The `ingress.http()` builder method terminates HTTPS (HTTP/1.1 and HTTP/2 for TCP, HTTP/3 for UDP) traffic for this ingress.
+>
+> The Ingress only terminates HTTPS, it does not interact with the application traffic.
+> The traffic is re-emitted as plaintext HTTP/1.1.
+> If non-HTTP traffic is sent to the ingress, it is rejected.
+
+> l[ingress.http2]
+> The `ingress.http2()` builder method terminates HTTPS (HTTP/1.1 and HTTP/2 for TCP, HTTP/3 for UDP) traffic for this ingress.
+>
+> The Ingress only terminates HTTPS, it does not interact with the application traffic.
+> The traffic is re-emitted as plaintext HTTP/2 (`h2c`).
+> If non-HTTP traffic is sent to the ingress, it is rejected.
+
+> l[ingress.redirect]
+> The `ingress.redirect(port?: number, code?: number)` builder method emits an HTTP redirect on the `port` given if and when the ingress has obtained a TLS certificate for one of the HTTP terminations.
+>
+> The `port` defaults to 80.
+> The `code` defaults to 307 ([Temporary Redirect](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/307)).
+>
+> Calling this on an ingress _not_ configured for HTTPS termination throws.
 
 # Deployment
 
@@ -192,7 +286,8 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 > Environment variables set with the same name as previous variables override the earlier ones. That is, `.env("MANUKA", "honey").env("MANUKA", "branch")` is equivalent to `.env("MANUKA", "branch")`.
 
 > l[container.mount-volume]
-> The `container.mount(mountpoint: string, volume: Volume)` builder method binds a volume into the filesystem of the container at a given `mountpoint`.
+> The `container.mount(mountpoint: string, volume: Volume)` builder method binds a [volume](#l--volume.type) into the filesystem of the container at a given `mountpoint`.
+> An [External Volume](#l--volume.external) can also be used.
 >
 > Mounts bound to a mountpoint identical to a previous mount override the earlier one.
 >
@@ -229,13 +324,32 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 >
 > UDP traffic to the Service Port will be routed to (and back from) the port on the pod.
 
-# External Volume
+# Volume
 
-> l[external-volume.type]
+> l[volume.type]
+> A Volume is a directory containing data.
+>
+> Volumes are defined using the `app.volume(name?: string)` method, which returns a [builder](#l--bsl.builder). The `name` argument is optional: if it's not provided, the volume is anonymous.
+>
+> Volumes can be [mounted](#l--container.mount-volume) to a container's filesystem.
+
+> l[volume.readonly]
+> `volume.readonly()` is a builder method which declares this volume to be read-only.
+> A read-only volume cannot be written to.
+
+> l[volume.write]
+> `volume.write(path: string, contents: string)` is an instance method which writes some data to the volume at `path`.
+> Any existing content at `path` is discarded or shadowed.
+
+## External Volume
+
+> l[volume.external]
 > An External Volume is a Volume provided by the Beset control plane to a BSL script, at a particular name.
 >
-> External Volumes are defined using the `app.external_volume(name: string)` method, which returns a `Volume`.
+> External Volumes are defined using the `app.external_volume(name: string)` method, which returns an `ExternalVolume`.
 > When the volume is not yet available, `app.external_volume()` returns a [placeholder](#l--bsl.placeholder).
+>
+> External Volumes can't be modified or configured further, only [mounted](#l--container.mount-volume).
 
 # Action
 
@@ -362,3 +476,79 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 > A requirement kind of `"weak-password"` is a free-form password field.
 > Password strength should be hinted, but must not restrict submission.
 > The field should have a strong password generator available.
+
+# Runtime Instance
+
+The Runtime Instance is a handle to the Beset runtime for an application.
+It's how the script actually controls the containers in the "outside world".
+
+This spec defines the semantics of the Runtime Instance as far as BSL is concerned; the exact implementation and control plane semantics are defined in other places, and must not be relied upon by BSL scripts.
+
+> l[rt.var]
+> `rt` is a variable available within actions (usually as the first argument of the closure).
+
+> l[rt.type]
+> The `rt` variable is of type `RuntimeInstance`.
+
+> l[rt.constructor]
+> The `rt` type is not constructible within a BSL.
+
+> l[rt.methods]
+> All the methods of `rt` are defined in this spec.
+
+> l[rt.scheduled]
+> `Scheduled` is an opaque type representing a Collection of scheduled resources.
+
+> l[rt.lifecyle]
+> - _Scheduling_: the resource is set up "in the world" (on the node or cluster).
+> - _Ready_: the resource is ready to be used.
+> - _Terminating_: termination has been initiated by the runtime.
+> - _Terminated_: the resource has terminated.
+> - _Unscheduled_: the resource has been cleaned up.
+>
+> It's the runtime's concern as to how the scheduling and other lifecycle actions and events work for each resource type.
+>
+> Note that a resource can transition directly from _Ready_ to _Terminated_, for example when it exits on its own.
+
+## Workload control
+
+> l[rt.start]
+> The `rt.start(resources: Collection)` method schedules the resources in the Collection and blocks until all become ready. It returns a [Scheduled](#l--rt.scheduled).
+>
+> Ordering is undefined within the Collection.
+
+> l[rt.stop]
+> The `rt.stop(resources: Collection)` method unschedules the resources in the Collection and blocks until all terminate.
+>
+> Ordering is undefined within the Collection.
+
+> l[rt.run]
+> The `rt.run(resources: Collection)` method schedules the resources in the Collection and blocks until all terminate.
+>
+> Ordering is undefined within the Collection.
+>
+> This is primarily useful for [Jobs](#l--job.type), which are expected to terminate.
+
+> l[rt.wait]
+> The `rt.wait(resources: Scheduled)` method blocks until the [Scheduled](#l--rt.scheduled) terminates.
+>
+> Ordering is undefined for the scheduled resources.
+>
+> This is primarily useful for [Jobs](#l--job.type), to be able to [start](#l--rt.start) a Job and then do other things while it's running, and then synchronise on it ending.
+
+> l[rt.action]
+> The `rt.action(app: App, name: string)` method invokes an Action, and blocks until it completes.
+
+> l[rt.reconcile]
+> The `rt.reconcile(old: Resource, new: Resource)` method converts one Resource into another, and blocks until that process is done.
+>
+> How exactly that happens is defined by the runtime (not in this spec).
+> Non-normatively, an example is reconciling an [Ingress](#l--ingress.type) into another, which will happen without dropping traffic.
+>
+> If a reconciliation is not implemented for the pair of resources, this is equivalent to:
+> ```rhai
+> rt.stop(old);
+> rt.start(new);
+> ```
+>
+> Note that this does not support Collections, it's specifically one Resource to one Resource.
