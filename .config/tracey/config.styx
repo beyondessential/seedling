@@ -2,9 +2,9 @@
 
 specs (
     {
-        name beset
+        name language
         source_url https://github.com/beyondessential/beset
-        include (docs/spec/**/*.md)
+        include (docs/spec/language.md)
         impls (
             {
                 name main
