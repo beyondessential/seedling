@@ -3,6 +3,8 @@ It is used to define and manage an application running on a Beset node in an aut
 
 The terminology used in BSL closely resembles that used for [Kubernetes](https://kubernetes.io), but some of the semantics are different.
 
+Absent specification bugs, anything that is not defined here is either defined in another spec document (e.g. the control plane, the runtime), or is implicitly not allowed.
+
 > l[bsl.syntax]
 > BSL is written in [Rhai](https://rhai.rs).
 
