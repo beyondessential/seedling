@@ -39,7 +39,7 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 >
 > The regular expression `^[a-zA-Z][a-Z0-9-]{1,60}[a-zA-Z0-9]$` may be used to validate a name.
 
-## App
+# App
 
 > l[app.var]
 > `app` is a global variable available to every BSL script at the top level (and below).
@@ -53,7 +53,7 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 > l[app.methods]
 > All the methods of `app` are defined in this spec.
 
-## Parameter
+# Parameter
 
 > l[param.type]
 > A Parameter is a string provided by the Beset control plane to a BSL script, at a particular name.
@@ -61,7 +61,7 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 > Parameters are defined using the `app.param(name: string)` method, which returns their value when known.
 > When the value is not yet known, `app.param()` returns the [placeholder string](#l--bsl.placeholder).
 
-## Service
+# Service
 
 > l[service.type]
 > A Service is a network endpoint that operators and other resources can access.
@@ -75,7 +75,7 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 >
 > The port number is "endpoint-side": connecting to the Service at that port number reaches the configured Service Port, but that might be _mapped_ to a different port number "pod-side".
 
-### HTTP Service
+## HTTP Service
 
 > l[service.http]
 > A Service can be _specialised_ into an HTTP Service, using the `service.http(port?: number)` instance method, which returns an `HttpService`.
@@ -92,7 +92,7 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 >
 > Prefix-matching is done by length: for any given URL, the longest matching prefix is selected. If more complicated logic is required, an application should embed an HTTP "reverse proxy" container of its choice.
 
-## Ingress
+# Ingress
 
 > l[ingress.type]
 > An Ingress is an externally-accessible endpoint to the application.
@@ -127,7 +127,7 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 >
 > The Ingress only terminates TLS, it does not interact with the TCP traffic.
 
-## Deployment
+# Deployment
 
 > l[deployment.type]
 > A Deployment is a long-lived instance of a container workload. It describes how to run a single container image and associated configuration, and will manage updates to the underlying resource (the running container) from its declarative configuration.
@@ -156,7 +156,7 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 > l[deployment.strategy.replace]
 > The `DeploymentStrategy.Replace` strategy stops all _old_ containers, even if that violates the Deployment's [scale lower bound](#l--deployment.scale), and only then starts the _new_ versions.
 
-## Job
+# Job
 
 > l[job.type]
 > A Job is a short-lived, one-off instance of a container workload.
@@ -166,7 +166,7 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 > l[job.container]
 > Job implements the [Container](#l--container.interface) interface.
 
-## Container
+# Container
 
 > l[container.interface]
 > Container is an interface (you can't obtain a `Container`-typed value) for the common builder methods, instance methods, and semantics of container workload definitions.
@@ -198,7 +198,7 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 >
 > The `mountpoint` argument must be a unix-style path.
 
-## Pod
+# Pod
 
 > l[pod.interface]
 > Pod is an interface (you can't obtain a `Pod`-typed value) for the common builder methods, instance methods, and semantics of pod definitions.
@@ -229,7 +229,7 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 >
 > UDP traffic to the Service Port will be routed to (and back from) the port on the pod.
 
-## External Volume
+# External Volume
 
 > l[external-volume.type]
 > An External Volume is a Volume provided by the Beset control plane to a BSL script, at a particular name.
@@ -237,7 +237,7 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 > External Volumes are defined using the `app.external_volume(name: string)` method, which returns a `Volume`.
 > When the volume is not yet available, `app.external_volume()` returns a [placeholder](#l--bsl.placeholder).
 
-## Action
+# Action
 
 > l[action.type]
 > An Action is a mechanism made available to operators (and in some cases, used autonomously by the Beset control plane) to perform a structured task on an application.
@@ -251,7 +251,7 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 > l[action.option-description]
 > An Action's `description` option is free-form text provided to operators. It may describe what the action does or is for.
 
-### Start Action
+## Start Action
 
 > l[action.start]
 > The specialised Start Action is used to define how the application is started. It is used autonomously by the Beset control plane.
@@ -263,7 +263,7 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 > rt.start(app);
 > ```
 
-### Upgrade Action
+## Upgrade Action
 
 > l[action.upgrade]
 > The specialised Upgrade Action is used to define how the application is upgraded. It is used autonomously by the Beset control plane.
@@ -279,7 +279,7 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 > ```
 > which is usually safe but incurs downtime.
 
-### Crash Recovery Action
+## Crash Recovery Action
 
 > l[action.crash-recovery]
 > The specialised Crash Recovery Action is used to define how the application recovers from a Beset Node crash. It is used autonomously by the Beset control plane.
@@ -295,7 +295,7 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 > rt.action(app, "start");
 > ```
 
-### Shell Action
+## Shell Action
 
 > l[action.shell]
 > A Shell Action is a specialised _kind_ of Action, which provide an interactive terminal session to an operator. Shells are never used autonomously by the Beset control plane.
@@ -316,7 +316,7 @@ The terminology used in BSL closely resembles that used for [Kubernetes](https:/
 > The Shell Attacher returns once the operator closes the shell, or if the connection is interrupted in some other way.
 > <!-- TODO: consider a return value to indicate how it exited -->
 
-### Install Action
+## Install Action
 
 > l[action.install]
 > The specialised Install Action is used to define how the application is first set up. It is used autonomously by the Beset control plane.

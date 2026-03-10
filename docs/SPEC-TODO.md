@@ -74,7 +74,7 @@ The spec defines what a Deployment *is* and its update strategies, but doesn't c
 - Can services communicate across apps?
 - What happens when a service has no backing pod (e.g., during an upgrade with `Replace` strategy)?
 
-## 9. Resource naming constraints
+## 9. ~~Resource naming constraints~~
 
 Several methods take `name: string` (`app.deployment(name)`, `app.service(name)`, `app.job(name)`, etc.) but the spec never defines:
 - What characters are valid in names
