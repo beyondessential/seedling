@@ -3,6 +3,8 @@ use rhai::{CustomType, TypeBuilder};
 use super::{Holder, resource::ResourceName, service::Service};
 
 // l[impl ingress.type]
+// l[impl ingress.certificates]
+// l[impl ingress.conflicts]
 #[derive(Debug, Clone)]
 pub struct IngressDef {
     pub hostname: String,

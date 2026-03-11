@@ -1,7 +1,9 @@
-use rhai::{CustomType, Dynamic, TypeBuilder};
+use rhai::{CustomType, Dynamic, Map, TypeBuilder};
 
+// l[impl rt.var]
 // l[impl rt.type]
 // l[impl rt.constructor]
+// l[impl rt.lifecyle]
 #[derive(Debug, Clone)]
 pub struct RuntimeInstance;
 
@@ -49,6 +51,7 @@ impl CustomType for Started {
             .with_fn("running", |this: &mut Self, _deadline: i64| this.clone())
             .with_fn("ready", |this: &mut Self| this.clone())
             .with_fn("ready", |this: &mut Self, _deadline: i64| this.clone())
+            // l[impl rt.started.terminated]
             .with_fn("terminated", |_this: &mut Self| -> Termination {
                 Termination
             })
@@ -56,15 +59,11 @@ impl CustomType for Started {
                 "terminated",
                 |_this: &mut Self, _deadline: i64| -> Termination { Termination },
             )
-            // Collection interface stubs
-            .with_fn("one", |this: &mut Self| -> Dynamic {
-                Dynamic::from(this.clone())
-            })
+            // l[impl rt.started.type]: Collection methods on Started return Started
+            .with_fn("one", |this: &mut Self| this.clone())
             .with_fn("only", |this: &mut Self, _other: Dynamic| this.clone())
             .with_fn("except", |this: &mut Self, _other: Dynamic| this.clone())
-            .with_fn("select", |this: &mut Self, _criterion: rhai::Map| {
-                this.clone()
-            });
+            .with_fn("select", |this: &mut Self, _criterion: Map| this.clone());
     }
 }
 
@@ -79,4 +78,13 @@ impl CustomType for Termination {
             .with_name("Termination")
             .with_fn("ensure_success", |_this: &mut Self| {});
     }
+}
+
+// l[impl action.shell.attach]
+pub fn register_shell_attach(engine: &mut rhai::Engine) {
+    engine.register_fn("__bsl_shell_attach_impl", |_job: Dynamic| {});
+}
+
+pub fn shell_attach_fn_ptr() -> rhai::FnPtr {
+    rhai::FnPtr::new("__bsl_shell_attach_impl").expect("valid function name")
 }

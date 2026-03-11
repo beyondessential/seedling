@@ -5,6 +5,7 @@ use rhai::{CustomType, Dynamic, FnPtr, Map, TypeBuilder};
 use super::{
     Holder,
     action::{Action, ActionDef, ShellDef},
+    collection::Collection,
     deployment::Deployment,
     install::{InstallDef, InstallRequirementDef, InstallRequirementKind},
     job::Job,
@@ -183,33 +184,21 @@ impl CustomType for App {
         // creation directly through the service, but the Ingress resource is created
         // lazily. For now, we also provide a way to "finish" an IngressBuilder.
 
-        // l[impl collection.interface]
-        // l[impl collection.select]
-        // l[impl collection.select.types]
-        // l[impl collection.select.names]
-        // l[impl collection.select.name-patterns]
-        builder.with_fn("select", |this: &mut Self, criterion: Map| -> Dynamic {
-            let _ = (this, criterion);
-            Dynamic::UNIT
+        builder.with_fn(
+            "select",
+            |_this: &mut Self, _criterion: Map| -> Collection { Collection },
+        );
+
+        builder.with_fn("one", |_this: &mut Self| -> Collection { Collection });
+
+        builder.with_fn("only", |_this: &mut Self, _other: Dynamic| -> Collection {
+            Collection
         });
 
-        // l[impl collection.one]
-        builder.with_fn("one", |this: &mut Self| -> Dynamic {
-            let _ = this;
-            Dynamic::UNIT
-        });
-
-        // l[impl collection.only]
-        builder.with_fn("only", |this: &mut Self, _other: Dynamic| -> Dynamic {
-            let _ = this;
-            Dynamic::UNIT
-        });
-
-        // l[impl collection.except]
-        builder.with_fn("except", |this: &mut Self, _other: Dynamic| -> Dynamic {
-            let _ = this;
-            Dynamic::UNIT
-        });
+        builder.with_fn(
+            "except",
+            |_this: &mut Self, _other: Dynamic| -> Collection { Collection },
+        );
 
         // l[impl action.type]
         // l[impl action.option-description]

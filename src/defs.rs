@@ -7,6 +7,7 @@ type Holder<T> = Arc<Mutex<T>>;
 
 pub mod action;
 pub mod app;
+pub mod collection;
 pub mod container;
 pub mod deployment;
 pub mod enums;
@@ -21,6 +22,12 @@ pub mod service;
 pub mod volume;
 
 // l[impl bsl.syntax]
+// l[impl bsl.builder]
+// l[impl bsl.errors]
+// l[impl bsl.name]
+// l[impl bsl.resource]
+// l[impl bsl.script]
+// l[impl bsl.placeholder]
 pub fn register(engine: &mut Engine) {
     engine.build_type::<app::App>();
     engine.build_type::<service::Service>();
@@ -38,6 +45,8 @@ pub fn register(engine: &mut Engine) {
     engine.build_type::<runtime::Started>();
     engine.build_type::<runtime::Termination>();
     engine.build_type::<history::History>();
+    engine.build_type::<collection::Collection>();
+    runtime::register_shell_attach(engine);
 }
 
 // l[impl bsl.scope]
