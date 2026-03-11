@@ -329,6 +329,8 @@ This is currently the only value.
 > The `fixed` number must be a positive non-zero integer.
 >
 > A scalable Deployment is defined from a lower and upper bound (represented as a range of positive integers). The Deployment will try to keep at least the lower bound and at most the upper bound of containers running, and operators or the Beset control plane may modify the scale of the Deployment within the defined range. The lower bound may be zero. The upper bound must be non-zero.
+>
+> If a Deployment has a lower bound scale of zero it will be scheduled with zero containers initially.
 
 > l[deployment.on-update]
 > The `deployment.on_update(strategy: OnUpdate)` builder method defines the strategy used when an update is applied to a Deployment.
