@@ -18,7 +18,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Enums are not a native Rhai feature. In BSL, enums are defined as being two things simultaneously at the same name:
 >
 > - an opaque type, used to describe the enum in type signatures
-> - a constant object map, with its keys being the names of the enum variants, and its values being opaque of the opaque enum type.
+> - a constant object map, with its keys being the names of the enum variants, and its values being opaque values of the opaque enum type.
 >
 > All enums available to BSL are defined in the [Constants](#constants) section.
 
