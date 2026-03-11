@@ -27,3 +27,4 @@ mod bsl;
 mod app;
 mod constants;
 mod service;
+mod ingress;
