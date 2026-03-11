@@ -26,3 +26,4 @@ pub fn exercise(source: &str) {
 mod bsl;
 mod app;
 mod constants;
+mod service;
