@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use rhai::{CustomType, Dynamic, FnPtr, Map, TypeBuilder};
+use rhai::{CustomType, Dynamic, EvalAltResult, FnPtr, Map, TypeBuilder};
 
 use super::{
     Holder,
@@ -383,13 +383,17 @@ impl CustomType for App {
             })
             .with_fn(
                 "on_install",
-                |this: &mut Self, closure: FnPtr, requirements: Map| {
-                    let reqs = parse_install_requirements(&requirements);
+                |this: &mut Self,
+                 closure: FnPtr,
+                 requirements: Map|
+                 -> Result<(), Box<EvalAltResult>> {
+                    let reqs = parse_install_requirements(&requirements)?;
                     let mut def = this.0.lock();
                     def.install = Some(InstallDef {
                         closure,
                         requirements: reqs,
                     });
+                    Ok(())
                 },
             );
 
@@ -407,15 +411,22 @@ impl CustomType for App {
     }
 }
 
-fn parse_install_requirements(map: &Map) -> BTreeMap<String, InstallRequirementDef> {
+// l[impl action.install.requirements.kind-unknown]
+fn parse_install_requirements(
+    map: &Map,
+) -> Result<BTreeMap<String, InstallRequirementDef>, Box<EvalAltResult>> {
     let mut reqs = BTreeMap::new();
     for (key, value) in map {
         if let Some(req_map) = value.read_lock::<Map>() {
-            let kind = req_map
+            let kind = match req_map
                 .get("kind")
                 .and_then(|v| v.clone().into_string().ok())
-                .and_then(|s| InstallRequirementKind::from_str(&s))
-                .unwrap_or_default();
+            {
+                Some(s) => InstallRequirementKind::from_str(&s).ok_or_else(|| {
+                    Box::<EvalAltResult>::from(format!("unknown install requirement kind: \"{s}\""))
+                })?,
+                None => InstallRequirementKind::default(),
+            };
 
             let required = req_map
                 .get("required")
@@ -441,5 +452,5 @@ fn parse_install_requirements(map: &Map) -> BTreeMap<String, InstallRequirementD
             );
         }
     }
-    reqs
+    Ok(reqs)
 }

@@ -292,6 +292,20 @@ fn exercise_install_action() {
     );
 }
 
+// l[verify action.install.requirements.kind-unknown]
+#[test]
+fn install_requirement_unknown_kind_throws() {
+    run_test_script_err(
+        r#"
+        app.on_install(|rt, reqs| {}, #{
+            field: #{
+                kind: "banana",
+            },
+        });
+    "#,
+    );
+}
+
 // l[verify action.upgrade]
 #[test]
 fn exercise_upgrade_action() {

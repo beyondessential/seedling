@@ -591,6 +591,9 @@ This is currently the only value.
 > Password strength should be hinted, but must not restrict submission.
 > The field should have a strong password generator available.
 
+> l[action.install.requirements.kind-unknown]
+> If a requirement `kind` is provided but does not match any of the defined kinds, `on_install()` must throw.
+
 # Runtime Instance
 
 The Runtime Instance is a handle to the Beset runtime for an application.

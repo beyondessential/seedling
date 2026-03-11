@@ -23,17 +23,18 @@ pub fn exercise(source: &str) {
     exercise_actions(&engine, &mut scope, &app, &ast);
 }
 
-mod bsl;
+mod action;
 mod app;
+mod bsl;
+mod collection;
 mod constants;
-mod service;
-mod ingress;
 mod container;
 mod deployment;
+mod history;
+mod ingress;
+mod integration;
 mod job;
 mod pod;
-mod volume;
-mod collection;
-mod action;
 mod runtime;
-mod history;
+mod service;
+mod volume;
