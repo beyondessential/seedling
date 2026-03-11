@@ -1,5 +1,5 @@
 <llm-rules>
-- This repo uses jujutsu. Describe changes incrementally as you work.
+- This repo uses jujutsu. Commit changes incrementally as you work.
 - Never write documentation files or readmes.
 - Use conventional commit/describe messages.
 - Never write useless comments that only repeat the code.
