@@ -31,3 +31,4 @@ mod ingress;
 mod container;
 mod deployment;
 mod job;
+mod pod;
