@@ -32,3 +32,4 @@ mod container;
 mod deployment;
 mod job;
 mod pod;
+mod volume;
