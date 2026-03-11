@@ -67,13 +67,13 @@ app.deployment("sync")
     .http(4100, sync_api) // not using route() will default to /
 
     // shut down the existing process before starting the new one
-    .strategy(DeploymentStrategy.Replace);
+    .on_update(OnUpdate.Replace);
 
 app.deployment("tasks")
     .image(image.call("facility"))
     .command("startTasks")
     .mount("/var/run/postgres", pg_socket)
-    .strategy(DeploymentStrategy.Replace);
+    .on_update(OnUpdate.Replace);
 
 // this is a closure, so the migrate Job is not static
 // and is instead defined when the closure is called
@@ -83,7 +83,7 @@ let migrate = || app.job("migrate")
     .mount("/var/run/postgres", pg_socket);
 
 // actions are available to operators to run
-let start_action = app.on_action("migrate", |rt| {
+let migrate_action = app.on_action("migrate", |rt| {
     // `rt` is the "runtime", and is how you control resources
     // (vs defining them or selecting them)
 
@@ -113,7 +113,7 @@ app.on_start(|rt| {
                       // they may be just starting to pull their image
 
     // with select(), you can search for resources instead of matching exactly
-    rt.start(app.select(#{ kinds: ["deployment"], name: ["sync", "tasks"] }))
+    rt.start(app.select(#{ types: [ResourceType.Deployment], names: ["sync", "tasks"] }))
         .running(); // running() waits until the resources are actually running
 
     // start everything else
@@ -138,7 +138,7 @@ app.on_shell("db", |rt, attach| {
         .image(image.call("toolbox"))
         .command(["bestool", "t", "p"]);
     rt.start(shell).running();
-    attach(shell); // this "blocks" until the shell exits
+    attach.call(shell); // this "blocks" until the shell exits
 
     rt.start(app.job("shell-db-cleanup")
         .image(image.call("toolbox"))
@@ -157,20 +157,19 @@ app.on_upgrade(|rt, old| {
     // it will transfer control of the actual underlying resources (sockets etc)
     // and make sure everything is configured as per the new spec as things come online
     // but it won't drop traffic to the old resources until they stop
-    rt.reconcile(old.select(#{ kinds: [ResourceType.Ingress], names: ["public"] }).one(), traffic);
+    rt.reconcile(old.select(#{ types: [ResourceType.Ingress], names: ["public"] }).one(), traffic);
 
     // given an array, it stops all in parallel
     rt.stop([
-        old.select(#{ kinds: [ResourceType.Deployment], names: ["sync", "tasks", "api"] }),
-        old.select(#{ kinds: [ResourceType.Deployment], name_patterns: "fhir-*" }),
-        old.select(#{ kinds: [ResourceType.CronJob] }),
+        old.select(#{ types: [ResourceType.Deployment], names: ["sync", "tasks", "api"] }),
+        old.select(#{ types: [ResourceType.Deployment], name_patterns: ["fhir-*"] }),
     ]);
 
-    // run()ing a job waits until it's done, but start()ing doesn't
+    // start()ing a job doesn't wait until it's done
     let migration = rt.start(migrate.call());
 
     rt.start(frontend);
-    rt.stop(old.select(#{ kinds: [ResourceType.Deployment], names: ["frontend"] }));
+    rt.stop(old.select(#{ types: [ResourceType.Deployment], names: ["frontend"] }));
 
     rt.stop(old);
 
@@ -194,7 +193,7 @@ app.on_crash_recovery(|rt, history| {
     }
 
     // ...then do a normal start
-    rt.start(start_action);
+    rt.start(app.select(#{ types: [ResourceType.Action], names: ["start"] }));
     // (if the "crash_recovery" action isn't set, it defaults to calling the start action)
 });
 
@@ -229,7 +228,7 @@ app.on_install(|rt, reqs| {
     rt.start(frontend).ready();
     rt.start(migrate.call()).terminated();
     rt.start(provision).terminated().ensure_success();
-    rt.start(app.find(#{ types: [ResourceType.Action], name: "start" }));
+    rt.start(app.select(#{ types: [ResourceType.Action], names: ["start"] }));
 }, #{
     // here, we ask for the credentials of the first (superadmin) user:
     // all values are required unless `required: false` is set...

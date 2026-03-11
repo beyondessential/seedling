@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
-use rhai::{Array, TypeBuilder};
+use rhai::{Array, Dynamic, TypeBuilder};
 
 use super::{
     Holder,
@@ -90,14 +90,14 @@ impl ContainerDef {
                 let holder = ext(this);
                 let mut def = holder.lock();
                 for item in vars {
-                    if let Ok(map) = item.try_cast::<rhai::Map>() {
+                    if let Some(map) = item.try_cast::<rhai::Map>() {
                         let name = map
                             .get("name")
-                            .and_then(|v| v.clone().into_string().ok())
+                            .and_then(|v: &Dynamic| v.clone().into_string().ok())
                             .unwrap_or_default();
                         let value = map
                             .get("value")
-                            .and_then(|v| v.clone().into_string().ok())
+                            .and_then(|v: &Dynamic| v.clone().into_string().ok())
                             .unwrap_or_default();
                         if let Some(pos) = def.env.iter().position(|(k, _)| k == &name) {
                             def.env[pos].1 = value;

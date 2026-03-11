@@ -1,26 +1,28 @@
+use rhai::{CustomType, FnPtr, TypeBuilder};
+
+// r[action.type]
 #[derive(Debug, Clone)]
-#[expect(dead_code, reason = "not yet used")]
 pub struct ActionDef {
-    pub arguments: Vec<ActionArgumentDef>,
-    pub rhai_closure: (),
+    pub name: String,
+    pub closure: FnPtr,
     pub description: Option<String>,
 }
 
-impl ActionDef {
-    #[expect(dead_code, reason = "not yet used")]
-    pub fn is_shell(&self) -> bool {
-        self.arguments
-            .iter()
-            .any(|arg| matches!(arg, ActionArgumentDef::ShellAttach))
+#[derive(Debug, Clone)]
+pub struct Action {
+    pub name: String,
+}
+
+impl CustomType for Action {
+    fn build(mut builder: TypeBuilder<Self>) {
+        builder.with_name("Action");
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-#[expect(dead_code, reason = "not yet used")]
-pub enum ActionArgumentDef {
-    Runtime,
-    ShellAttach,
-    OldAppDef,
-    AppHistory,
-    InstallRequirements,
+// r[action.shell]
+#[derive(Debug, Clone)]
+pub struct ShellDef {
+    pub name: String,
+    pub closure: FnPtr,
+    pub description: Option<String>,
 }

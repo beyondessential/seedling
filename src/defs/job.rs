@@ -6,15 +6,18 @@ use super::{
     resource::{ResourceId, ResourceKind, ResourceName},
 };
 
+// r[job.type]
 #[derive(Debug, Clone)]
 pub struct JobDef {
-    pod: Holder<PodDef>,
+    pub pod: Holder<PodDef>,
+    pub deadline: Option<u64>,
 }
 
 impl Default for JobDef {
     fn default() -> Self {
         Self {
             pod: Holder::default(),
+            deadline: None,
         }
     }
 }
@@ -25,6 +28,8 @@ pub struct Job {
     pub def: Holder<JobDef>,
 }
 
+// r[job.pod]
+// r[job.deadline]
 impl CustomType for Job {
     fn build(mut builder: TypeBuilder<Self>) {
         builder.with_name("Job");
@@ -36,5 +41,12 @@ impl CustomType for Job {
                 name: this.name.clone(),
             },
         );
+        builder.with_fn("deadline", |this: &mut Self, seconds: i64| {
+            if seconds <= 0 {
+                panic!("deadline must be a positive number of seconds");
+            }
+            this.def.lock().deadline = Some(seconds as u64);
+            this.clone()
+        });
     }
 }

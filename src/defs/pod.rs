@@ -1,18 +1,32 @@
-use std::collections::BTreeMap;
-
 use rhai::TypeBuilder;
 
 use super::{
     Holder,
     container::ContainerDef,
     resource::ResourceId,
-    service::{HttpService, PartialRoute, Service, ServicePort, ServiceProtocol},
+    service::{HttpService, HttpServiceRoute, Service, ServicePort},
 };
 
+// r[pod.interface]
 #[derive(Debug, Default, Clone)]
 pub struct PodDef {
-    container: Holder<ContainerDef>,
-    service_mounts: BTreeMap<u16, Service>,
+    pub container: Holder<ContainerDef>,
+    pub service_mounts: Vec<ServicePort>,
+    pub http_bindings: Vec<HttpBinding>,
+    pub tcp_bindings: Vec<TcpUdpBinding>,
+    pub udp_bindings: Vec<TcpUdpBinding>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HttpBinding {
+    pub pod_port: u16,
+    pub route: HttpServiceRoute,
+}
+
+#[derive(Debug, Clone)]
+pub struct TcpUdpBinding {
+    pub pod_port: u16,
+    pub service_port: ServicePort,
 }
 
 impl PodDef {
@@ -26,61 +40,83 @@ impl PodDef {
             move |this| ext(this).lock().container.clone(),
             resource,
         );
-        builder
-            .with_fn(
-                "http",
-                move |this: &mut T, port: i64, route: PartialRoute| {
-                    let port = port as u16; // TODO: error on large ports
 
-                    route.add_resource(port, resource(this));
-                    this.clone()
-                },
-            )
-            .with_fn(
-                "http",
-                move |this: &mut T, port: i64, service: HttpService| {
-                    let port = port as u16; // TODO: error on large ports
+        // r[pod.mount-serviceport]
+        builder.with_fn("mount", move |this: &mut T, svc: ServicePort| {
+            ext(this).lock().service_mounts.push(svc);
+            this.clone()
+        });
 
-                    PartialRoute {
-                        http: service,
-                        prefix: "/".into(),
-                    }
-                    .add_resource(port, resource(this));
-                    this.clone()
-                },
-            )
-            .with_fn("tcp", move |this: &mut T, port: i64, svc: ServicePort| {
-                let port = port as u16; // TODO: error on large ports
-
-                svc.add_resource(ServiceProtocol::Tcp, port, resource(this));
+        // r[pod.http] — route form
+        builder.with_fn(
+            "http",
+            move |this: &mut T, port: i64, route: HttpServiceRoute| {
+                let port = port as u16;
+                ext(this).lock().http_bindings.push(HttpBinding {
+                    pod_port: port,
+                    route,
+                });
                 this.clone()
-            })
-            .with_fn("tcp", move |this: &mut T, port: i64, svc: Service| {
-                let port = port as u16; // TODO: error on large ports
+            },
+        );
 
-                svc.make_port(port)
-                    .add_resource(ServiceProtocol::Tcp, port, resource(this));
+        // r[pod.http] — HttpService form (defaults to route("/"))
+        builder.with_fn(
+            "http",
+            move |this: &mut T, port: i64, service: HttpService| {
+                let port = port as u16;
+                let route = HttpServiceRoute {
+                    http: service,
+                    prefix: "/".into(),
+                };
+                ext(this).lock().http_bindings.push(HttpBinding {
+                    pod_port: port,
+                    route,
+                });
                 this.clone()
-            })
-            .with_fn("udp", move |this: &mut T, port: i64, svc: ServicePort| {
-                let port = port as u16; // TODO: error on large ports
+            },
+        );
 
-                svc.add_resource(ServiceProtocol::Udp, port, resource(this));
-                this.clone()
-            })
-            .with_fn("udp", move |this: &mut T, port: i64, svc: Service| {
-                let port = port as u16; // TODO: error on large ports
+        // r[pod.tcp] — ServicePort form
+        builder.with_fn("tcp", move |this: &mut T, port: i64, svc: ServicePort| {
+            let port = port as u16;
+            ext(this).lock().tcp_bindings.push(TcpUdpBinding {
+                pod_port: port,
+                service_port: svc,
+            });
+            this.clone()
+        });
 
-                svc.make_port(port)
-                    .add_resource(ServiceProtocol::Udp, port, resource(this));
-                this.clone()
-            })
-            .with_fn(
-                "mount",
-                move |this: &mut T, ServicePort { service, port }: ServicePort| {
-                    ext(this).lock().service_mounts.insert(port, service);
-                    this.clone()
-                },
-            );
+        // r[pod.tcp] — Service form (defaults to svc.port(port))
+        builder.with_fn("tcp", move |this: &mut T, port: i64, svc: Service| {
+            let port = port as u16;
+            let service_port = ServicePort { service: svc, port };
+            ext(this).lock().tcp_bindings.push(TcpUdpBinding {
+                pod_port: port,
+                service_port,
+            });
+            this.clone()
+        });
+
+        // r[pod.udp] — ServicePort form
+        builder.with_fn("udp", move |this: &mut T, port: i64, svc: ServicePort| {
+            let port = port as u16;
+            ext(this).lock().udp_bindings.push(TcpUdpBinding {
+                pod_port: port,
+                service_port: svc,
+            });
+            this.clone()
+        });
+
+        // r[pod.udp] — Service form (defaults to svc.port(port))
+        builder.with_fn("udp", move |this: &mut T, port: i64, svc: Service| {
+            let port = port as u16;
+            let service_port = ServicePort { service: svc, port };
+            ext(this).lock().udp_bindings.push(TcpUdpBinding {
+                pod_port: port,
+                service_port,
+            });
+            this.clone()
+        });
     }
 }

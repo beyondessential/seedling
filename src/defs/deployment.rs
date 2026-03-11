@@ -1,43 +1,31 @@
 use std::ops::Range;
 
-use rhai::{CustomType, Dynamic, Map, TypeBuilder};
+use rhai::{CustomType, TypeBuilder};
 
 use super::{
     Holder,
+    enums::{OnTerminate, OnUpdate},
     pod::PodDef,
     resource::{ResourceId, ResourceKind, ResourceName},
 };
 
+// r[deployment.type]
 #[derive(Debug, Clone)]
 pub struct DeploymentDef {
-    pod: Holder<PodDef>,
-    scale: Range<u8>,
-    strategy: DeploymentStrategy,
+    pub pod: Holder<PodDef>,
+    pub scale: Range<u16>,
+    pub on_update: OnUpdate,
+    pub on_terminate: OnTerminate,
 }
 
 impl Default for DeploymentDef {
     fn default() -> Self {
         Self {
             pod: Holder::default(),
-            scale: 1..255,
-            strategy: DeploymentStrategy::default(),
+            scale: 1..1,
+            on_update: OnUpdate::default(),
+            on_terminate: OnTerminate::default(),
         }
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub enum DeploymentStrategy {
-    #[default]
-    Rolling,
-    Replace,
-}
-
-impl DeploymentStrategy {
-    pub(super) fn rhai_constant() -> Map {
-        let mut map = Map::new();
-        map.insert("Rolling".into(), Dynamic::from(Self::Rolling));
-        map.insert("Replace".into(), Dynamic::from(Self::Replace));
-        map
     }
 }
 
@@ -47,6 +35,10 @@ pub struct Deployment {
     pub def: Holder<DeploymentDef>,
 }
 
+// r[deployment.pod]
+// r[deployment.scale]
+// r[deployment.on-update]
+// r[deployment.on-terminate]
 impl CustomType for Deployment {
     fn build(mut builder: TypeBuilder<Self>) {
         PodDef::mixin(
@@ -70,22 +62,23 @@ impl CustomType for Deployment {
                 this.def.lock().scale = min..max;
                 this.clone()
             })
-            .with_fn(
-                "strategy",
-                |this: &mut Self, strategy: DeploymentStrategy| {
-                    this.def.lock().strategy = strategy;
-                    this.clone()
-                },
-            );
+            .with_fn("on_update", |this: &mut Self, strategy: OnUpdate| {
+                this.def.lock().on_update = strategy;
+                this.clone()
+            })
+            .with_fn("on_terminate", |this: &mut Self, strategy: OnTerminate| {
+                this.def.lock().on_terminate = strategy;
+                this.clone()
+            });
     }
 }
 
-fn clamp_scale(n: i64) -> u8 {
+fn clamp_scale(n: i64) -> u16 {
     if n < 0 {
         0
-    } else if n > u8::MAX as _ {
-        u8::MAX
+    } else if n > u16::MAX as i64 {
+        u16::MAX
     } else {
-        n as u8
+        n as u16
     }
 }

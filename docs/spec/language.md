@@ -468,7 +468,7 @@ This is currently the only value.
 > l[action.type]
 > An Action is a mechanism made available to operators (and in some cases, used autonomously by the Beset control plane) to perform a structured task on an application.
 >
-> Actions are defined using the `app.on_action(name: string, fn: closure, options?: object)` method.
+> Actions are defined using the `app.on_action(name: string, fn: closure, options?: object)` method, which returns an `Action`.
 >
 > Action implements [Collection](#l--collection.interface), the Action is treated as an opaque Resource.
 >
@@ -484,7 +484,7 @@ This is currently the only value.
 > l[action.start]
 > The specialised Start Action is used to define how the application is started. It is used autonomously by the Beset control plane.
 >
-> It may be defined using the `app.on_action()` method with a `name` of `"start"`, or with the shorthand `app.on_start(fn: closure, options?: object)`.
+> It may be defined using the `app.on_action()` method with a `name` of `"start"`, or with the shorthand `app.on_start(fn: closure, options?: object)`, which returns an `Action`.
 >
 > If it is not defined, it defaults to the equivalent of:
 > ```rhai
@@ -496,7 +496,7 @@ This is currently the only value.
 > l[action.upgrade]
 > The specialised Upgrade Action is used to define how the application is upgraded. It is used autonomously by the Beset control plane.
 >
-> It may be defined using the `app.on_action()` method with a `name` of `"upgrade"`, or with the shorthand `app.on_upgrade(fn: closure, options?: object)`.
+> It may be defined using the `app.on_action()` method with a `name` of `"upgrade"`, or with the shorthand `app.on_upgrade(fn: closure, options?: object)`, which returns an `Action`.
 >
 > Its `fn` closure may take up to two arguments: the [Runtime Instance](#l--rt.var) (typically named `rt`) and the `App` instance being replaced (typically named `old`).
 >
@@ -514,7 +514,7 @@ This is currently the only value.
 >
 > A crash in this context is not an application failure, but a crash and restart of the entire node, usually caused by an unplanned power failure or some kind of system panic. If an application was in the middle of an upgrade, it may want to attempt to finish the upgrade, and/or run data integrity checks.
 >
-> It may be defined using the `app.on_action()` method with a `name` of `"crash_recovery"`, or with the shorthand `app.on_crash_recovery(fn: closure, options?: object)`.
+> It may be defined using the `app.on_action()` method with a `name` of `"crash_recovery"`, or with the shorthand `app.on_crash_recovery(fn: closure, options?: object)`, which returns an `Action`.
 >
 > Its `fn` closure may take up to two arguments: the [Runtime Instance](#l--rt.var) (typically named `rt`) and the [Application History](#l--history.var) (typically named `history`).
 >

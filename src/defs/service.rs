@@ -1,6 +1,6 @@
 use rhai::{CustomType, TypeBuilder};
 
-use super::{Holder, resource::ResourceName};
+use super::{Holder, ingress::Ingress, resource::ResourceName};
 
 pub type ResourcePort = (ResourceName, u16);
 pub type ServiceHttpRoute = (u16, String);
@@ -57,11 +57,7 @@ impl CustomType for Service {
             })
             .with_fn("ingress", |this: &mut Self, hostname: &str, port: i64| {
                 validate_port(port);
-                IngressBuilder {
-                    service: this.clone(),
-                    hostname: hostname.into(),
-                    port: port as u16,
-                }
+                Ingress::new(this.clone(), hostname.into(), port as u16)
             });
     }
 }
@@ -144,20 +140,6 @@ impl CustomType for ExternalService {
                     port: port as u16,
                 }
             });
-    }
-}
-
-// r[ingress.type]
-#[derive(Debug, Clone)]
-pub struct IngressBuilder {
-    pub service: Service,
-    pub hostname: String,
-    pub port: u16,
-}
-
-impl CustomType for IngressBuilder {
-    fn build(mut builder: TypeBuilder<Self>) {
-        builder.with_name("IngressBuilder");
     }
 }
 
