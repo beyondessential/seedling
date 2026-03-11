@@ -1,4 +1,4 @@
-use rhai::{CustomType, TypeBuilder};
+use rhai::{CustomType, EvalAltResult, TypeBuilder};
 
 use super::{
     Holder,
@@ -32,12 +32,15 @@ impl CustomType for Job {
                 name: this.name.clone(),
             },
         );
-        builder.with_fn("deadline", |this: &mut Self, seconds: i64| {
-            if seconds <= 0 {
-                panic!("deadline must be a positive number of seconds");
-            }
-            this.def.lock().deadline = Some(seconds as u64);
-            this.clone()
-        });
+        builder.with_fn(
+            "deadline",
+            |this: &mut Self, seconds: i64| -> Result<Job, Box<EvalAltResult>> {
+                if seconds <= 0 {
+                    return Err("deadline must be a positive number of seconds".into());
+                }
+                this.def.lock().deadline = Some(seconds as u64);
+                Ok(this.clone())
+            },
+        );
     }
 }

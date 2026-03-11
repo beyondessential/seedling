@@ -1,4 +1,4 @@
-use rhai::{CustomType, TypeBuilder};
+use rhai::{CustomType, EvalAltResult, TypeBuilder};
 
 use super::{Holder, resource::ResourceName, service::Service};
 
@@ -57,6 +57,13 @@ impl Ingress {
     }
 }
 
+fn require_https(def: &IngressDef) -> Result<(), Box<EvalAltResult>> {
+    if def.http_terminate.is_none() {
+        return Err("redirect() requires an HTTPS termination (http() or http2())".into());
+    }
+    Ok(())
+}
+
 // l[impl ingress.tls]
 // l[impl ingress.dtls]
 // l[impl ingress.quic]
@@ -96,45 +103,39 @@ impl CustomType for Ingress {
                 }
                 this.clone()
             })
-            .with_fn("redirect", |this: &mut Self| {
-                let def = this.def.lock();
-                if def.http_terminate.is_none() {
-                    drop(def);
-                    panic!("redirect() requires an HTTPS termination (http() or http2())");
-                }
-                drop(def);
-                this.def.lock().redirect = Some(RedirectDef {
-                    port: 80,
-                    code: 307,
-                });
-                this.clone()
-            })
-            .with_fn("redirect", |this: &mut Self, port: i64| {
-                let def = this.def.lock();
-                if def.http_terminate.is_none() {
-                    drop(def);
-                    panic!("redirect() requires an HTTPS termination (http() or http2())");
-                }
-                drop(def);
-                this.def.lock().redirect = Some(RedirectDef {
-                    port: port as u16,
-                    code: 307,
-                });
-                this.clone()
-            })
-            .with_fn("redirect", |this: &mut Self, port: i64, code: i64| {
-                let def = this.def.lock();
-                if def.http_terminate.is_none() {
-                    drop(def);
-                    panic!("redirect() requires an HTTPS termination (http() or http2())");
-                }
-                drop(def);
-                this.def.lock().redirect = Some(RedirectDef {
-                    port: port as u16,
-                    code: code as u16,
-                });
-                this.clone()
-            })
+            .with_fn(
+                "redirect",
+                |this: &mut Self| -> Result<Ingress, Box<EvalAltResult>> {
+                    require_https(&this.def.lock())?;
+                    this.def.lock().redirect = Some(RedirectDef {
+                        port: 80,
+                        code: 307,
+                    });
+                    Ok(this.clone())
+                },
+            )
+            .with_fn(
+                "redirect",
+                |this: &mut Self, port: i64| -> Result<Ingress, Box<EvalAltResult>> {
+                    require_https(&this.def.lock())?;
+                    this.def.lock().redirect = Some(RedirectDef {
+                        port: port as u16,
+                        code: 307,
+                    });
+                    Ok(this.clone())
+                },
+            )
+            .with_fn(
+                "redirect",
+                |this: &mut Self, port: i64, code: i64| -> Result<Ingress, Box<EvalAltResult>> {
+                    require_https(&this.def.lock())?;
+                    this.def.lock().redirect = Some(RedirectDef {
+                        port: port as u16,
+                        code: code as u16,
+                    });
+                    Ok(this.clone())
+                },
+            )
             .with_fn("service", |this: &mut Self| this.service.clone());
     }
 }

@@ -1,4 +1,4 @@
-use rhai::{CustomType, TypeBuilder};
+use rhai::{CustomType, EvalAltResult, TypeBuilder};
 
 use super::{Holder, ingress::Ingress, resource::ResourceName};
 
@@ -30,13 +30,16 @@ impl CustomType for Service {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
             .with_name("Service")
-            .with_fn("port", |this: &mut Self, port: i64| {
-                validate_port(port);
-                ServicePort {
-                    service: this.clone(),
-                    port: port as u16,
-                }
-            })
+            .with_fn(
+                "port",
+                |this: &mut Self, port: i64| -> Result<ServicePort, Box<EvalAltResult>> {
+                    validate_port(port)?;
+                    Ok(ServicePort {
+                        service: this.clone(),
+                        port: port as u16,
+                    })
+                },
+            )
             .with_fn("http", |this: &mut Self| {
                 this.def.lock().http.get_or_insert_default();
                 HttpService {
@@ -44,18 +47,27 @@ impl CustomType for Service {
                     port: 80,
                 }
             })
-            .with_fn("http", |this: &mut Self, port: i64| {
-                validate_port(port);
-                this.def.lock().http.get_or_insert_default();
-                HttpService {
-                    service: this.clone(),
-                    port: port as u16,
-                }
-            })
-            .with_fn("ingress", |this: &mut Self, hostname: &str, port: i64| {
-                validate_port(port);
-                Ingress::new(this.clone(), hostname.into(), port as u16)
-            });
+            .with_fn(
+                "http",
+                |this: &mut Self, port: i64| -> Result<HttpService, Box<EvalAltResult>> {
+                    validate_port(port)?;
+                    this.def.lock().http.get_or_insert_default();
+                    Ok(HttpService {
+                        service: this.clone(),
+                        port: port as u16,
+                    })
+                },
+            )
+            .with_fn(
+                "ingress",
+                |this: &mut Self,
+                 hostname: &str,
+                 port: i64|
+                 -> Result<Ingress, Box<EvalAltResult>> {
+                    validate_port(port)?;
+                    Ok(Ingress::new(this.clone(), hostname.into(), port as u16))
+                },
+            );
     }
 }
 
@@ -87,22 +99,30 @@ impl CustomType for HttpService {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
             .with_name("HttpService")
-            .with_fn("route", |this: &mut Self, prefix: &str| {
-                if prefix.is_empty() || !prefix.starts_with('/') {
-                    panic!("route prefix must be a non-empty string starting with '/'");
-                }
-                HttpServiceRoute {
-                    http: this.clone(),
-                    prefix: prefix.into(),
-                }
-            })
-            .with_fn("port", |this: &mut Self, port: i64| {
-                validate_port(port);
-                ServicePort {
-                    service: this.service.clone(),
-                    port: port as u16,
-                }
-            });
+            .with_fn(
+                "route",
+                |this: &mut Self, prefix: &str| -> Result<HttpServiceRoute, Box<EvalAltResult>> {
+                    if prefix.is_empty() || !prefix.starts_with('/') {
+                        return Err(
+                            "route prefix must be a non-empty string starting with '/'".into()
+                        );
+                    }
+                    Ok(HttpServiceRoute {
+                        http: this.clone(),
+                        prefix: prefix.into(),
+                    })
+                },
+            )
+            .with_fn(
+                "port",
+                |this: &mut Self, port: i64| -> Result<ServicePort, Box<EvalAltResult>> {
+                    validate_port(port)?;
+                    Ok(ServicePort {
+                        service: this.service.clone(),
+                        port: port as u16,
+                    })
+                },
+            );
     }
 }
 
@@ -128,21 +148,24 @@ pub struct ExternalService {
 // l[impl service.external.port]
 impl CustomType for ExternalService {
     fn build(mut builder: TypeBuilder<Self>) {
-        builder
-            .with_name("ExternalService")
-            .with_fn("port", |this: &mut Self, port: i64| {
-                validate_port(port);
-                ServicePort {
+        builder.with_name("ExternalService").with_fn(
+            "port",
+            |this: &mut Self, port: i64| -> Result<ServicePort, Box<EvalAltResult>> {
+                validate_port(port)?;
+                Ok(ServicePort {
                     service: Service::new(this.name.clone()),
                     port: port as u16,
-                }
-            });
+                })
+            },
+        );
     }
 }
 
 // l[impl bsl.port]
-fn validate_port(port: i64) {
+fn validate_port(port: i64) -> Result<(), Box<EvalAltResult>> {
     if port <= 0 || port >= 65535 {
-        panic!("port must be a non-zero positive integer below 65535, got {port}");
+        Err(format!("port must be a non-zero positive integer below 65535, got {port}").into())
+    } else {
+        Ok(())
     }
 }

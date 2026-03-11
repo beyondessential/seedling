@@ -1,5 +1,6 @@
 <llm-rules>
 - This repo uses jujutsu. Commit changes incrementally as you work.
+- Remember to use --no-pager for jj commands.
 - Never write documentation files or readmes.
 - Use conventional commit/describe messages.
 - Never write useless comments that only repeat the code.
