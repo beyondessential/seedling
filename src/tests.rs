@@ -33,3 +33,4 @@ mod deployment;
 mod job;
 mod pod;
 mod volume;
+mod collection;
