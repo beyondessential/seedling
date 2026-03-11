@@ -103,7 +103,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 These are not guaranteed to be constant forever, only for the duration of one script execution.
 
 > l[const.available-threads]
-> `AVAILABLE_THREADS` is a positive non-zero number representing the amount of compute threads available to the application.
+> `AVAILABLE_THREADS` is a positive non-zero number.
+> It is the amount of compute threads available to the application.
 > It may be thought of as the number of cores available on the node, but the exact value is a concern for the control plane.
 
 ## OnUpdate
