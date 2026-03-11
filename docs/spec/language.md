@@ -14,6 +14,14 @@ Absent specification bugs, anything that is not defined here is either defined i
 > l[bsl.scope]
 > The runtime must use a distinct [Rhai Scope](https://rhai.rs/book/engine/scope.html) for each BSL script.
 
+> l[bsl.enums]
+> Enums are not a native Rhai feature. In BSL, enums are defined as being two things simultaneously at the same name:
+>
+> - an opaque type, used to describe the enum in type signatures
+> - a constant object map, with its keys being the names of the enum variants, and its values being opaque of the opaque enum type.
+>
+> All enums available to BSL are defined in the [Constants](#constants) section.
+
 > l[bsl.errors]
 > Some methods throw exceptions under some circumstances.
 > The `try..catch` Rhai construct may be used to handle those exceptions and recover.
@@ -98,16 +106,37 @@ These are not guaranteed to be constant forever, only for the duration of one sc
 > `AVAILABLE_THREADS` is a positive non-zero number representing the amount of compute threads available to the application.
 > It may be thought of as the number of cores available on the node, but the exact value is a concern for the control plane.
 
-## DeploymentStrategy
+## OnUpdate
 
-> l[const.deployment-strategy.enum]
-> `DeploymentStrategy` is an opaque enum type, and in the script scope, is a constant object map of names to opaque values of type `DeploymentStrategy`.
+`OnUpdate` defines strategies for when [Deployments](#l--deployment.type) update.
 
-> l[const.deployment-strategy.rolling]
-> The `DeploymentStrategy.Rolling` strategy first starts at least one _new_ container, waits until it becomes ready, then stops the same amount of _old_ containers, and repeats until all containers in the Deployment have been rotated to new versions.
+> l[const.on-update.rolling]
+> The `OnUpdate.Rolling` strategy first starts at least one _new_ container, waits until it becomes ready, then stops the same amount of _old_ containers, and repeats until all containers in the Deployment have been rotated to new versions.
 
-> l[const.deployment-strategy.replace]
-> The `DeploymentStrategy.Replace` strategy stops all _old_ containers, even if that violates the Deployment's [scale lower bound](#l--deployment.scale), and only then starts the _new_ versions.
+> l[const.on-update.replace]
+> The `OnUpdate.Replace` strategy stops all _old_ containers, even if that violates the Deployment's [scale lower bound](#l--deployment.scale), and only then starts the _new_ versions.
+
+## OnTerminate
+
+`OnTerminate` defines strategies for when [Containers](#l--container.interface) within [Deployments](#l--deployment.type) terminate.
+
+> l[const.on-terminate.recreate]
+> The `OnTerminate.Recreate` strategy always recreates the container when it terminates.
+
+This is currently the only value.
+
+## OnExit
+
+`OnExit` defines strategies for when commands within [Containers](#l--container.interface) exit.
+
+> l[const.on-exit.restart]
+> The `OnExit.Restart` strategy always restarts the container when its command exits.
+
+> l[const.on-exit.terminate]
+> The `OnExit.Terminate` strategy always terminates the container when its command exits.
+
+> l[const.on-exit.restart-on-failure]
+> The `OnExit.RestartOnFailure` strategy restarts the container when its command exits with a non-zero exit status, and terminates it otherwise.
 
 ## ResourceType
 
@@ -309,9 +338,13 @@ These are not guaranteed to be constant forever, only for the duration of one sc
 >
 > A scalable Deployment is defined from a lower and upper bound (represented as a range of positive integers). The Deployment will try to keep at least the lower bound and at most the upper bound of containers running, and operators or the Beset control plane may modify the scale of the Deployment within the defined range. The lower bound may be zero. The upper bound must be non-zero.
 
-> l[deployment.strategy]
-> The `deployment.strategy(strategy: DeploymentStrategy)` builder method defines the strategy used when an update is applied to a Deployment.
-> The default is `DeploymentStrategy.Rolling`.
+> l[deployment.on-update]
+> The `deployment.on_update(strategy: OnUpdate)` builder method defines the strategy used when an update is applied to a Deployment.
+> The default is [`OnUpdate.Rolling`](#l--const.on-update.rolling).
+
+> l[deployment.on-terminate]
+> The `deployment.on_terminate(strategy: OnTerminate)` builder method defines the strategy used when the controlled container terminates within a Deployment.
+> The default is [`OnTerminate.Recreate`](#l--const.on-terminate.recreate).
 
 # Job
 
@@ -355,6 +388,10 @@ These are not guaranteed to be constant forever, only for the duration of one sc
 > Mounts bound to a mountpoint identical to a previous mount override the earlier one.
 >
 > The `mountpoint` argument must be a unix-style path.
+
+> l[container.on-exit]
+> The `container.on_exit(strategy: OnExit)` builder method defines the strategy used when the command exits.
+> The default is [`OnExit.Restart`](#l--const.on-exit.restart).
 
 # Pod
 
