@@ -60,17 +60,18 @@ The spec defines what a Deployment *is* and its update strategies, but doesn't c
 - **Deployment states** — running, stopped, updating, failed, etc.
 - **What happens when a container crashes** during normal operation (not node crash) — restart policy?
 
-## 7. Job lifecycle
+## 7. ~~Job lifecycle~~
 
 `r[lang.job]` says a Job is "short-lived, one-off" and implements Container, but:
 - ~~How is a Job started? (Only via `rt` in an action?)~~
-- What happens when a Job finishes (success vs. failure)?
-- Can a Job's exit code / output be observed?
-- Is there a timeout mechanism?
+- ~~What happens when a Job finishes (success vs. failure)?~~
+- ~~Can a Job's exit code / output be observed?~~
+- ~~Is there a timeout mechanism?~~
 
-## 8. Service discovery and networking model
+## 8. ~~Service discovery and networking model~~
 
 - How do pods/containers discover services? Is it always `localhost` via `pod.mount(svc)`?
+  - No service discovery, everything must be defined.
 - ~~Can services communicate across apps?~~
 - ~~What happens when a service has no backing pod (e.g., during an upgrade with `Replace` strategy)?~~
 
@@ -107,15 +108,20 @@ Several types document their dphase behavior (`r[lang.param.dphase]`, `r[lang.ex
 
 What can you do with the `old` app? Is it the same `App` type? Can you inspect its parameters, deployments, services? Can you diff it against the new app?
 
-## 14. Concurrency and ordering
+## 14. ~~Concurrency and ordering~~
 
 - If multiple deployments are defined, are they started in order or concurrently?
+  - Definition doesn't start anything, and actions control that.
 - Can actions run concurrently?
+  - Yes, but not within the same instance of the script
 - Is BSL single-threaded (Rhai is)?
+  - Yes, but multiple instances of the script might be run independently simultaneously by the runtime.
 
-## 15. Missing built-in functions / global scope
+## 15. ~~Missing built-in functions / global scope~~
 
 Beyond `app`, `DeploymentStrategy`, and the types returned by builders, what else is in the global scope? Are there utility functions, logging, sleep/delay, or assertion capabilities?
+
+- Everything in Rhai standard library, but nothing more yet.
 
 ---
 

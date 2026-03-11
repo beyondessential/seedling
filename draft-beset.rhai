@@ -83,12 +83,20 @@ let migrate = || app.job("migrate")
     .mount("/var/run/postgres", pg_socket);
 
 // actions are available to operators to run
-app.on_action("migrate", |rt| {
+let start_action = app.on_action("migrate", |rt| {
     // `rt` is the "runtime", and is how you control resources
     // (vs defining them or selecting them)
-    rt.run(migrate.call());
-    // run() will setup the job, start its container,
-    // wait until it's successfully done, and "block" until then
+
+    // we dynamically create a "migrate" job
+    let job = migrate.call();
+
+    let waiter = rt.start(job); // we schedule the job; beset will eventually start its container
+
+    // wait until it's terminated, and "block" until then
+    waiter.terminated();
+
+    // this could also be written like this:
+    // rt.start(migrate.call()).terminated();
 }, #{
     description: "Migrate the database",
 });
@@ -100,17 +108,16 @@ app.on_start(|rt| {
     // start the networking
     rt.start([traffic, control]);
 
-    rt.start(frontend); // start the frontend
-    // start "blocks" until things are properly started
+    rt.start(frontend) // start the frontend
+        .scheduled(); // scheduled() only waits until the containers are allocated
+                      // they may be just starting to pull their image
 
     // with select(), you can search for resources instead of matching exactly
-    rt.start(app.select(#{ kinds: ["deployment"], name: ["sync", "tasks"] }));
-
-    // you'll notice we didn't explicitly start sync_api:
-    // as it's referenced by a mount() on "sync", it gets started on-demand
+    rt.start(app.select(#{ kinds: ["deployment"], name: ["sync", "tasks"] }))
+        .running(); // running() waits until the resources are actually running
 
     // start everything else
-    rt.start(app);
+    rt.start(app).ready(); // ready() waits until things are ready to be used
 });
 
 // shells are available to operators to debug
@@ -119,7 +126,7 @@ app.on_shell("node", |_rt| {
     app.job("shell-node")
         .image(image.call("central"))
         .command("shell")
-    // a Resource is returned, so beset rt.start()s it and then attaches
+    // a Resource is returned, so beset rt.start()s it and then attaches when ready()
 }, #{
     description: "A Node.js shell in the Tamanu app context",
 });
@@ -130,12 +137,13 @@ app.on_shell("db", |rt, attach| {
     let shell = app.job("shell-db")
         .image(image.call("toolbox"))
         .command(["bestool", "t", "p"]);
-    rt.start(shell);
+    rt.start(shell).running();
     attach(shell); // this "blocks" until the shell exits
 
-    rt.run(app.job("shell-db-cleanup")
+    rt.start(app.job("shell-db-cleanup")
         .image(image.call("toolbox"))
-        .command(["bestool", "t", "p", "-e", "select revert_changes();"]))
+        .command(["bestool", "t", "p", "-e", "select revert_changes();"])
+    ).terminated();
 });
 // you don't need to provide a description, but it *is* nicer
 
@@ -166,10 +174,15 @@ app.on_upgrade(|rt, old| {
 
     rt.stop(old);
 
-    // wait until the migration job is done
-    rt.wait(migration);
+    try {
+        // wait until the migration job is done successfully
+        migration.terminated().ensure_success();
+    } catch (_err) {
+        // retry once before hard-failing
+        rt.start(migrate.call()).terminated().ensure_success();
+    }
 
-    rt.start(app);
+    rt.start(app).ready();
 });
 
 // if the host crashes or power was lost...
@@ -177,7 +190,7 @@ app.on_crash_recovery(|rt, history| {
     // ...and we were in an upgrade...
     if history.was_upgrading() {
         // ...then migrate and...
-        rt.run(migrate.call());
+        rt.start(migrate.call()).terminated();
     }
 
     // ...then do a normal start
@@ -213,10 +226,10 @@ app.on_install(|rt, reqs| {
             vol
         });
 
-    rt.start(frontend);
-    rt.run(migrate.call());
-    rt.run(provision);
-    rt.start(app);
+    rt.start(frontend).ready();
+    rt.start(migrate.call()).terminated();
+    rt.start(provision).terminated().ensure_success();
+    rt.start(app.find(#{ types: [ResourceType.Action], name: "start" }));
 }, #{
     // here, we ask for the credentials of the first (superadmin) user:
     // all values are required unless `required: false` is set...

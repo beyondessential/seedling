@@ -107,6 +107,11 @@ These are not guaranteed to be constant forever, only for the duration of one sc
 > It is the amount of compute threads available to the application.
 > It may be thought of as the number of cores available on the node, but the exact value is a concern for the control plane.
 
+> l[const.default-deadline]
+> `DEFAULT_DEADLINE` is a positive non-zero number.
+> It is the default deadline in seconds.
+> The value is set by the control plane, and is not specified here.
+
 ## OnUpdate
 
 `OnUpdate` defines strategies for when [Deployments](#l--deployment.type) update.
@@ -591,11 +596,10 @@ This spec defines the semantics of the Runtime Instance as far as BSL is concern
 > l[rt.methods]
 > All the methods of `rt` are defined in this spec.
 
-> l[rt.scheduled]
-> `Scheduled` is an opaque type representing a Collection of scheduled resources.
-
 > l[rt.lifecyle]
-> - _Scheduling_: the resource is set up "in the world" (on the node or cluster).
+> - _Pending_: the resource is active in the runtime state, but not yet scheduled.
+> - _Scheduled_: the resource is set up "in the world" (on the node or cluster).
+> - _Running_: the resource is running, but may not yet be ready.
 > - _Ready_: the resource is ready to be used.
 > - _Terminating_: termination has been initiated by the runtime.
 > - _Terminated_: the resource has terminated.
@@ -603,41 +607,24 @@ This spec defines the semantics of the Runtime Instance as far as BSL is concern
 >
 > It's the runtime's concern as to how the scheduling and other lifecycle actions and events work for each resource type.
 >
-> Note that a resource can transition directly from _Ready_ to _Terminated_, for example when it exits on its own.
+> Note that a resource can transition directly from _Running_ or _Ready_ to _Terminated_, for example when it exits on its own.
 
 ## Workload control
 
 > l[rt.start]
-> The `rt.start(resources: Collection)` method schedules the resources in the Collection and blocks until all become ready. It returns a [Scheduled](#l--rt.scheduled).
->
-> Ordering is undefined within the Collection.
+> The `rt.start(resources: Collection)` method schedules the resources in the Collection. It returns a [Started](#l--rt.started).
 
 > l[rt.stop]
-> The `rt.stop(resources: Collection)` method unschedules the resources in the Collection and blocks until all terminate.
->
-> Ordering is undefined within the Collection.
+> The `rt.stop(resources: Collection, deadline?: number)` method unschedules the resources in the Collection and blocks until all terminate.
+> `deadline` is interpreted the same as for [Started](#l--rt.started.state-methods).
 
-> l[rt.run]
-> The `rt.run(resources: Collection)` method schedules the resources in the Collection and blocks until all terminate.
->
-> Ordering is undefined within the Collection.
->
-> This is primarily useful for [Jobs](#l--job.type), which are expected to terminate.
-
-> l[rt.wait]
-> The `rt.wait(resources: Scheduled)` method blocks until the [Scheduled](#l--rt.scheduled) terminates.
->
-> Ordering is undefined for the scheduled resources.
->
-> This is primarily useful for [Jobs](#l--job.type), to be able to [start](#l--rt.start) a Job and then do other things while it's running, and then synchronise on it ending.
-
-> l[rt.action]
-> The `rt.action(app: App, name: string)` method invokes an Action, and blocks until it completes.
+> l[rt.query]
+> The `rt.query(resources: Collection)` method returns a [Started](#l--rt.started) _without_ scheduling the resources.
 
 > l[rt.reconcile]
-> The `rt.reconcile(old: Resource, new: Resource)` method converts one Resource into another, and blocks until that process is done.
+> The `rt.reconcile(old: Resource, new: Resource)` method converts one Resource into another, and returns a [Started](#l--rt.started).
 >
-> How exactly that happens is defined by the runtime (not in this spec).
+> How exactly that happens, and which resource pairs are supported, is defined by the runtime (not in this spec).
 > Non-normatively, an example is reconciling an [Ingress](#l--ingress.type) into another, which will happen without dropping traffic.
 >
 > If a reconciliation is not implemented for the pair of resources, this is equivalent to:
@@ -647,6 +634,31 @@ This spec defines the semantics of the Runtime Instance as far as BSL is concern
 > ```
 >
 > Note that this does not support Collections, it's specifically one Resource to one Resource.
+
+## Waiting on resource state
+
+> l[rt.started.type]
+> `Started` is an opaque type representing some resources that have been started.
+>
+> `Started` implements [Collection](#l--collection.interface), except that all the resources returned by Collection's methods return `Started`s corresponding to the resources, instead of the original resources.
+
+> l[rt.started.state-methods]
+> `Started` has a number of methods of the form `started.<state>(deadline?: number)` which block until all resources have entered the state `<state>` (one of `scheduled`, `running`, `ready`, `terminated`).
+>
+> The argument `deadline` must be a positive integer number of seconds; if it's zero or absent, the default deadline [`DEFAULT_DEADLINE`](#l--const.default-deadline) is used.
+>
+> If the deadline is reached before the method returns, an exception is thrown.
+
+> l[rt.started.terminated]
+> The `started.terminated()` state method returns a [Termination](#l--rt.termination.type).
+
+> l[rt.termination.type]
+> `Termination` is an opaque type representing the termination state of a resource.
+
+> l[rt.termination.ensure-success]
+> The `termination.ensure_success()` method throws if the resource terminated without succeeding.
+
+<!-- TODO: more Termination methods -->
 
 # History
 
