@@ -69,9 +69,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Collections can hold different resource types, and can hold Collections.
 > Order within a collection is not defined.
 >
-> All Resources are themselves a Collection of the resource itself and all resources that are contained (not references) in it.
->
 > An array of Collections is a Collection of the contents.
+>
+> All Resources are a Collection of the resource itself and all resources that are contained (not references) in it.
 
 > l[collection.one]
 > `col.one()` is a method which returns any one Resource from the collection (or null if the collection is empty).
@@ -185,16 +185,8 @@ This is currently the only value.
 > let b = app.volume("data");
 > // these are the same volume
 > ```
-
-> l[app.collection]
-> `App` implements [`Collection`](#l--bsl.collection) thus:
-> - all Deployments
-> - all Services, including subtypes
-> - all Volumes, including subtypes
-> - all Ingresses
 >
-> It does not include Jobs.
-> These must be started deliberately.
+> Names are also used to select resources using the Collection methods.
 
 # Parameter
 

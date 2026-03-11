@@ -75,7 +75,9 @@ app.deployment("tasks")
     .mount("/var/run/postgres", pg_socket)
     .strategy(DeploymentStrategy.Replace);
 
-let migrate = app.job("migrate")
+// this is a closure, so the migrate Job is not static
+// and is instead defined when the closure is called
+let migrate = || app.job("migrate")
     .image(image.call("facility"))
     .command("migrate")
     .mount("/var/run/postgres", pg_socket);
@@ -84,7 +86,7 @@ let migrate = app.job("migrate")
 app.on_action("migrate", |rt| {
     // `rt` is the "runtime", and is how you control resources
     // (vs defining them or selecting them)
-    rt.run(migrate);
+    rt.run(migrate.call());
     // run() will setup the job, start its container,
     // wait until it's successfully done, and "block" until then
 }, #{
@@ -157,7 +159,7 @@ app.on_upgrade(|rt, old| {
     ]);
 
     // run()ing a job waits until it's done, but start()ing doesn't
-    let migration = rt.start(migrate);
+    let migration = rt.start(migrate.call());
 
     rt.start(frontend);
     rt.stop(old.select(#{ kinds: [ResourceType.Deployment], names: ["frontend"] }));
@@ -175,7 +177,7 @@ app.on_crash_recovery(|rt, history| {
     // ...and we were in an upgrade...
     if history.was_upgrading() {
         // ...then migrate and...
-        rt.run(migrate);
+        rt.run(migrate.call());
     }
 
     // ...then do a normal start
@@ -212,7 +214,7 @@ app.on_install(|rt, reqs| {
         });
 
     rt.start(frontend);
-    rt.run(migrate);
+    rt.run(migrate.call());
     rt.run(provision);
     rt.start(app);
 }, #{
