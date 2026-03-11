@@ -361,6 +361,13 @@ This is currently the only value.
 > l[job.pod]
 > Job implements the [Pod](#l--pod.interface) interface.
 
+> l[job.deadline]
+> The `job.deadline(seconds: number)` builder method specifies how long the job can run for until it is terminated.
+>
+> This starts counting from when the Job enters the `Running` state.
+>
+> If there is no deadline, the job runs indefinitely.
+
 # Container
 
 > l[container.interface]
