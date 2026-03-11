@@ -194,8 +194,8 @@ app.on_crash_recovery(|rt, history| {
     }
 
     // ...then do a normal start
-    rt.action("start");
-    // (if the "crash_recovery" action isn't set, it defaults to calling "start")
+    rt.start(start_action);
+    // (if the "crash_recovery" action isn't set, it defaults to calling the start action)
 });
 
 // on first install, we can have a special sequence of events

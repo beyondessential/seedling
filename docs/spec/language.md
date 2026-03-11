@@ -158,7 +158,7 @@ This is currently the only value.
 > - `Job`
 > - `Volume`
 > - `ExternalVolume`
-
+> - `Action`
 
 # App global
 
@@ -463,6 +463,8 @@ This is currently the only value.
 >
 > Actions are defined using the `app.on_action(name: string, fn: closure, options?: object)` method.
 >
+> Action implements [Collection](#l--collection.interface), the Action is treated as an opaque Resource.
+>
 > The `fn` closure may take one argument, the [Runtime Instance](#l--rt.var), typically named `rt`. Specialised Actions may have access to more arguments.
 >
 > The `options` [object map](https://rhai.rs/book/language/object-maps.html)'s available properties are described below:
@@ -675,3 +677,5 @@ This spec defines the semantics of the Runtime Instance as far as BSL is concern
 
 > l[history.was-upgrading]
 > `history.was_upgrading()` returns `true` if the History stopped in the middle of an upgrade.
+
+<!-- TODO: more History methods -->
