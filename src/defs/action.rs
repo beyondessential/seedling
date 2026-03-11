@@ -1,6 +1,6 @@
 use rhai::{CustomType, FnPtr, TypeBuilder};
 
-// r[action.type]
+// l[impl action.type]
 #[derive(Debug, Clone)]
 pub struct ActionDef {
     pub name: String,
@@ -19,7 +19,7 @@ impl CustomType for Action {
     }
 }
 
-// r[action.shell]
+// l[impl action.shell]
 #[derive(Debug, Clone)]
 pub struct ShellDef {
     pub name: String,

@@ -2,7 +2,7 @@ use rhai::{CustomType, TypeBuilder};
 
 use super::{Holder, resource::ResourceName};
 
-// r[volume.type]
+// l[impl volume.type]
 #[derive(Debug, Default, Clone)]
 pub struct VolumeDef {
     pub read_only: bool,
@@ -24,8 +24,8 @@ impl Volume {
     }
 }
 
-// r[volume.readonly]
-// r[volume.write]
+// l[impl volume.readonly]
+// l[impl volume.write]
 impl CustomType for Volume {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
@@ -41,7 +41,7 @@ impl CustomType for Volume {
     }
 }
 
-// r[volume.external]
+// l[impl volume.external]
 #[derive(Debug, Clone)]
 pub struct ExternalVolume {
     pub name: ResourceName,

@@ -7,7 +7,7 @@ use super::{
     service::{HttpService, HttpServiceRoute, Service, ServicePort},
 };
 
-// r[pod.interface]
+// l[impl pod.interface]
 #[derive(Debug, Default, Clone)]
 pub struct PodDef {
     pub container: Holder<ContainerDef>,
@@ -41,13 +41,13 @@ impl PodDef {
             resource,
         );
 
-        // r[pod.mount-serviceport]
+        // l[impl pod.mount-serviceport]
         builder.with_fn("mount", move |this: &mut T, svc: ServicePort| {
             ext(this).lock().service_mounts.push(svc);
             this.clone()
         });
 
-        // r[pod.http] — route form
+        // l[impl pod.http] — route form
         builder.with_fn(
             "http",
             move |this: &mut T, port: i64, route: HttpServiceRoute| {
@@ -60,7 +60,7 @@ impl PodDef {
             },
         );
 
-        // r[pod.http] — HttpService form (defaults to route("/"))
+        // l[impl pod.http] — HttpService form (defaults to route("/"))
         builder.with_fn(
             "http",
             move |this: &mut T, port: i64, service: HttpService| {
@@ -77,7 +77,7 @@ impl PodDef {
             },
         );
 
-        // r[pod.tcp] — ServicePort form
+        // l[impl pod.tcp] — ServicePort form
         builder.with_fn("tcp", move |this: &mut T, port: i64, svc: ServicePort| {
             let port = port as u16;
             ext(this).lock().tcp_bindings.push(TcpUdpBinding {
@@ -87,7 +87,7 @@ impl PodDef {
             this.clone()
         });
 
-        // r[pod.tcp] — Service form (defaults to svc.port(port))
+        // l[impl pod.tcp] — Service form (defaults to svc.port(port))
         builder.with_fn("tcp", move |this: &mut T, port: i64, svc: Service| {
             let port = port as u16;
             let service_port = ServicePort { service: svc, port };
@@ -98,7 +98,7 @@ impl PodDef {
             this.clone()
         });
 
-        // r[pod.udp] — ServicePort form
+        // l[impl pod.udp] — ServicePort form
         builder.with_fn("udp", move |this: &mut T, port: i64, svc: ServicePort| {
             let port = port as u16;
             ext(this).lock().udp_bindings.push(TcpUdpBinding {
@@ -108,7 +108,7 @@ impl PodDef {
             this.clone()
         });
 
-        // r[pod.udp] — Service form (defaults to svc.port(port))
+        // l[impl pod.udp] — Service form (defaults to svc.port(port))
         builder.with_fn("udp", move |this: &mut T, port: i64, svc: Service| {
             let port = port as u16;
             let service_port = ServicePort { service: svc, port };

@@ -2,7 +2,7 @@ use rhai::{CustomType, TypeBuilder};
 
 use super::{Holder, resource::ResourceName, service::Service};
 
-// r[ingress.type]
+// l[impl ingress.type]
 #[derive(Debug, Clone)]
 pub struct IngressDef {
     pub hostname: String,
@@ -55,13 +55,13 @@ impl Ingress {
     }
 }
 
-// r[ingress.tls]
-// r[ingress.dtls]
-// r[ingress.quic]
-// r[ingress.http]
-// r[ingress.http2]
-// r[ingress.redirect]
-// r[ingress.service]
+// l[impl ingress.tls]
+// l[impl ingress.dtls]
+// l[impl ingress.quic]
+// l[impl ingress.http]
+// l[impl ingress.http2]
+// l[impl ingress.redirect]
+// l[impl ingress.service]
 impl CustomType for Ingress {
     fn build(mut builder: TypeBuilder<Self>) {
         builder

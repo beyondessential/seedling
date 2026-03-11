@@ -2,14 +2,14 @@ use std::collections::BTreeMap;
 
 use rhai::FnPtr;
 
-// r[action.install]
+// l[impl action.install]
 #[derive(Debug, Clone)]
 pub struct InstallDef {
     pub closure: FnPtr,
     pub requirements: BTreeMap<String, InstallRequirementDef>,
 }
 
-// r[action.install.requirements]
+// l[impl action.install.requirements]
 #[derive(Debug, Clone)]
 pub struct InstallRequirementDef {
     pub kind: InstallRequirementKind,
@@ -18,10 +18,10 @@ pub struct InstallRequirementDef {
     pub description: Option<String>,
 }
 
-// r[action.install.requirements.kind-text]
-// r[action.install.requirements.kind-email]
-// r[action.install.requirements.kind-password]
-// r[action.install.requirements.kind-weak-password]
+// l[impl action.install.requirements.kind-text]
+// l[impl action.install.requirements.kind-email]
+// l[impl action.install.requirements.kind-password]
+// l[impl action.install.requirements.kind-weak-password]
 #[derive(Debug, Default, Clone, Copy)]
 pub enum InstallRequirementKind {
     #[default]

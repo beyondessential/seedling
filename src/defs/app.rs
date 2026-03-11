@@ -13,9 +13,9 @@ use super::{
     volume::{ExternalVolume, Volume},
 };
 
-// r[app.type]
-// r[app.var]
-// r[app.constructor]
+// l[impl app.type]
+// l[impl app.var]
+// l[impl app.constructor]
 #[derive(Debug, Default, Clone)]
 pub struct App(pub Holder<AppDef>);
 
@@ -34,16 +34,16 @@ fn extract_description(options: &Map) -> Option<String> {
         .and_then(|v| v.clone().into_string().ok())
 }
 
-// r[app.methods]
-// r[app.resources]
-// r[app.resources.names]
-// r[app.resources.static]
-// r[app.resources.dynamic]
+// l[impl app.methods]
+// l[impl app.resources]
+// l[impl app.resources.names]
+// l[impl app.resources.static]
+// l[impl app.resources.dynamic]
 impl CustomType for App {
     fn build(mut builder: TypeBuilder<Self>) {
         builder.with_name("App");
 
-        // r[param.type]
+        // l[impl param.type]
         builder.with_fn("param", |this: &mut Self, name: &str| -> Dynamic {
             let mut def = this.0.lock();
             let value = def
@@ -54,7 +54,7 @@ impl CustomType for App {
             Dynamic::from(value)
         });
 
-        // r[service.type]
+        // l[impl service.type]
         builder.with_fn("service", |this: &mut Self, name: &str| -> Service {
             let name = ResourceName::new(name.into());
             let mut def = this.0.lock();
@@ -72,7 +72,7 @@ impl CustomType for App {
             }
         });
 
-        // r[service.external]
+        // l[impl service.external]
         builder.with_fn(
             "external_service",
             |this: &mut Self, name: &str| -> Dynamic {
@@ -93,7 +93,7 @@ impl CustomType for App {
             },
         );
 
-        // r[deployment.type]
+        // l[impl deployment.type]
         builder.with_fn("deployment", |this: &mut Self, name: &str| -> Deployment {
             let name = ResourceName::new(name.into());
             let mut def = this.0.lock();
@@ -113,7 +113,7 @@ impl CustomType for App {
             }
         });
 
-        // r[job.type]
+        // l[impl job.type]
         builder.with_fn("job", |this: &mut Self, name: &str| -> Job {
             let name = ResourceName::new(name.into());
             let mut def = this.0.lock();
@@ -133,7 +133,7 @@ impl CustomType for App {
             }
         });
 
-        // r[volume.type] — named volume
+        // l[impl volume.type] — named volume
         builder.with_fn("volume", |this: &mut Self, name: &str| -> Volume {
             let rname = ResourceName::new(name.into());
             let mut def = this.0.lock();
@@ -151,10 +151,10 @@ impl CustomType for App {
             }
         });
 
-        // r[volume.type] — anonymous volume
+        // l[impl volume.type] — anonymous volume
         builder.with_fn("volume", |_this: &mut Self| -> Volume { Volume::new(None) });
 
-        // r[volume.external]
+        // l[impl volume.external]
         builder.with_fn(
             "external_volume",
             |this: &mut Self, name: &str| -> Dynamic {
@@ -183,36 +183,36 @@ impl CustomType for App {
         // creation directly through the service, but the Ingress resource is created
         // lazily. For now, we also provide a way to "finish" an IngressBuilder.
 
-        // r[collection.interface]
-        // r[collection.select]
-        // r[collection.select.types]
-        // r[collection.select.names]
-        // r[collection.select.name-patterns]
+        // l[impl collection.interface]
+        // l[impl collection.select]
+        // l[impl collection.select.types]
+        // l[impl collection.select.names]
+        // l[impl collection.select.name-patterns]
         builder.with_fn("select", |this: &mut Self, criterion: Map| -> Dynamic {
             let _ = (this, criterion);
             Dynamic::UNIT
         });
 
-        // r[collection.one]
+        // l[impl collection.one]
         builder.with_fn("one", |this: &mut Self| -> Dynamic {
             let _ = this;
             Dynamic::UNIT
         });
 
-        // r[collection.only]
+        // l[impl collection.only]
         builder.with_fn("only", |this: &mut Self, _other: Dynamic| -> Dynamic {
             let _ = this;
             Dynamic::UNIT
         });
 
-        // r[collection.except]
+        // l[impl collection.except]
         builder.with_fn("except", |this: &mut Self, _other: Dynamic| -> Dynamic {
             let _ = this;
             Dynamic::UNIT
         });
 
-        // r[action.type]
-        // r[action.option-description]
+        // l[impl action.type]
+        // l[impl action.option-description]
         builder
             .with_fn(
                 "on_action",
@@ -246,7 +246,7 @@ impl CustomType for App {
                 },
             );
 
-        // r[action.start]
+        // l[impl action.start]
         builder
             .with_fn("on_start", |this: &mut Self, closure: FnPtr| -> Action {
                 let mut def = this.0.lock();
@@ -281,7 +281,7 @@ impl CustomType for App {
                 },
             );
 
-        // r[action.upgrade]
+        // l[impl action.upgrade]
         builder
             .with_fn("on_upgrade", |this: &mut Self, closure: FnPtr| -> Action {
                 let mut def = this.0.lock();
@@ -316,7 +316,7 @@ impl CustomType for App {
                 },
             );
 
-        // r[action.crash-recovery]
+        // l[impl action.crash-recovery]
         builder
             .with_fn(
                 "on_crash_recovery",
@@ -354,7 +354,7 @@ impl CustomType for App {
                 },
             );
 
-        // r[action.shell]
+        // l[impl action.shell]
         builder
             .with_fn("on_shell", |this: &mut Self, name: &str, closure: FnPtr| {
                 let mut def = this.0.lock();
@@ -383,7 +383,7 @@ impl CustomType for App {
                 },
             );
 
-        // r[action.install]
+        // l[impl action.install]
         builder
             .with_fn("on_install", |this: &mut Self, closure: FnPtr| {
                 let mut def = this.0.lock();

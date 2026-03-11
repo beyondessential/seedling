@@ -9,7 +9,7 @@ use super::{
     resource::{ResourceId, ResourceKind, ResourceName},
 };
 
-// r[deployment.type]
+// l[impl deployment.type]
 #[derive(Debug, Clone)]
 pub struct DeploymentDef {
     pub pod: Holder<PodDef>,
@@ -35,10 +35,10 @@ pub struct Deployment {
     pub def: Holder<DeploymentDef>,
 }
 
-// r[deployment.pod]
-// r[deployment.scale]
-// r[deployment.on-update]
-// r[deployment.on-terminate]
+// l[impl deployment.pod]
+// l[impl deployment.scale]
+// l[impl deployment.on-update]
+// l[impl deployment.on-terminate]
 impl CustomType for Deployment {
     fn build(mut builder: TypeBuilder<Self>) {
         PodDef::mixin(

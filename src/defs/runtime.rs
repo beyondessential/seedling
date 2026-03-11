@@ -1,15 +1,15 @@
 use rhai::{CustomType, Dynamic, TypeBuilder};
 
-// r[rt.type]
-// r[rt.constructor]
+// l[impl rt.type]
+// l[impl rt.constructor]
 #[derive(Debug, Clone)]
 pub struct RuntimeInstance;
 
-// r[rt.start]
-// r[rt.stop]
-// r[rt.query]
-// r[rt.reconcile]
-// r[rt.methods]
+// l[impl rt.start]
+// l[impl rt.stop]
+// l[impl rt.query]
+// l[impl rt.reconcile]
+// l[impl rt.methods]
 impl CustomType for RuntimeInstance {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
@@ -34,8 +34,8 @@ impl CustomType for RuntimeInstance {
     }
 }
 
-// r[rt.started.type]
-// r[rt.started.state-methods]
+// l[impl rt.started.type]
+// l[impl rt.started.state-methods]
 #[derive(Debug, Clone)]
 pub struct Started;
 
@@ -68,8 +68,8 @@ impl CustomType for Started {
     }
 }
 
-// r[rt.termination.type]
-// r[rt.termination.ensure-success]
+// l[impl rt.termination.type]
+// l[impl rt.termination.ensure-success]
 #[derive(Debug, Clone)]
 pub struct Termination;
 

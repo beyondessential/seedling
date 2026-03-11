@@ -9,7 +9,7 @@ use super::{
     volume::{ExternalVolume, Volume},
 };
 
-// r[container.interface]
+// l[impl container.interface]
 #[derive(Debug, Default, Clone)]
 pub struct ContainerDef {
     pub image: Option<String>,
@@ -32,13 +32,13 @@ impl ContainerDef {
         ext: impl Fn(&mut T) -> Holder<Self> + Copy + 'static,
         _resource: impl Fn(&mut T) -> ResourceId + Copy + 'static,
     ) {
-        // r[container.image]
+        // l[impl container.image]
         builder.with_fn("image", move |this: &mut T, image: &str| {
             ext(this).lock().image = Some(image.into());
             this.clone()
         });
 
-        // r[container.command]
+        // l[impl container.command]
         builder
             .with_fn("command", move |this: &mut T, cmd: &str| {
                 ext(this).lock().command = Some(vec![cmd.into()]);
@@ -54,7 +54,7 @@ impl ContainerDef {
                 this.clone()
             });
 
-        // r[container.arg]
+        // l[impl container.arg]
         builder
             .with_fn("arg", move |this: &mut T, arg: &str| {
                 ext(this)
@@ -74,7 +74,7 @@ impl ContainerDef {
                 this.clone()
             });
 
-        // r[container.env]
+        // l[impl container.env]
         builder
             .with_fn("env", move |this: &mut T, name: &str, value: &str| {
                 let holder = ext(this);
@@ -109,7 +109,7 @@ impl ContainerDef {
                 this.clone()
             });
 
-        // r[container.mount-volume]
+        // l[impl container.mount-volume]
         builder
             .with_fn("mount", move |this: &mut T, path: &str, volume: Volume| {
                 ext(this)
@@ -129,7 +129,7 @@ impl ContainerDef {
                 },
             );
 
-        // r[container.on-exit]
+        // l[impl container.on-exit]
         builder.with_fn("on_exit", move |this: &mut T, strategy: OnExit| {
             ext(this).lock().on_exit = strategy;
             this.clone()

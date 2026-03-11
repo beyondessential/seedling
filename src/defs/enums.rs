@@ -1,7 +1,7 @@
 use rhai::{Dynamic, Map};
 
-// r[const.on-update.rolling]
-// r[const.on-update.replace]
+// l[impl const.on-update.rolling]
+// l[impl const.on-update.replace]
 #[derive(Debug, Default, Clone, Copy)]
 pub enum OnUpdate {
     #[default]
@@ -18,7 +18,7 @@ impl OnUpdate {
     }
 }
 
-// r[const.on-terminate.recreate]
+// l[impl const.on-terminate.recreate]
 #[derive(Debug, Default, Clone, Copy)]
 pub enum OnTerminate {
     #[default]
@@ -33,9 +33,9 @@ impl OnTerminate {
     }
 }
 
-// r[const.on-exit.restart]
-// r[const.on-exit.terminate]
-// r[const.on-exit.restart-on-failure]
+// l[impl const.on-exit.restart]
+// l[impl const.on-exit.terminate]
+// l[impl const.on-exit.restart-on-failure]
 #[derive(Debug, Default, Clone, Copy)]
 pub enum OnExit {
     #[default]

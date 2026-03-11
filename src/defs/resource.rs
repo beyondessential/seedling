@@ -18,7 +18,7 @@ pub struct ResourceId {
     pub name: ResourceName,
 }
 
-// r[const.resource-type.enum]
+// l[impl const.resource-type.enum]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ResourceKind {
     Parameter,

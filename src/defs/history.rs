@@ -1,11 +1,11 @@
 use rhai::{CustomType, TypeBuilder};
 
-// r[history.type]
-// r[history.var]
+// l[impl history.type]
+// l[impl history.var]
 #[derive(Debug, Clone)]
 pub struct History;
 
-// r[history.was-upgrading]
+// l[impl history.was-upgrading]
 impl CustomType for History {
     fn build(mut builder: TypeBuilder<Self>) {
         builder

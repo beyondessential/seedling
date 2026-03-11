@@ -2,10 +2,7 @@ use rhai::{CustomType, TypeBuilder};
 
 use super::{Holder, ingress::Ingress, resource::ResourceName};
 
-pub type ResourcePort = (ResourceName, u16);
-pub type ServiceHttpRoute = (u16, String);
-
-// r[service.type]
+// l[impl service.type]
 #[derive(Debug, Default, Clone)]
 pub struct ServiceDef {
     pub http: Option<HttpServiceDef>,
@@ -26,9 +23,9 @@ impl Service {
     }
 }
 
-// r[service.port]
-// r[service.http]
-// r[service.routing]
+// l[impl service.port]
+// l[impl service.http]
+// l[impl service.routing]
 impl CustomType for Service {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
@@ -62,7 +59,7 @@ impl CustomType for Service {
     }
 }
 
-// r[service.port]
+// l[impl service.port]
 #[derive(Debug, Clone)]
 pub struct ServicePort {
     pub service: Service,
@@ -75,7 +72,7 @@ impl CustomType for ServicePort {
     }
 }
 
-// r[service.http]
+// l[impl service.http]
 #[derive(Debug, Default, Clone)]
 pub struct HttpServiceDef {}
 
@@ -85,7 +82,7 @@ pub struct HttpService {
     pub port: u16,
 }
 
-// r[service.http.route]
+// l[impl service.http.route]
 impl CustomType for HttpService {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
@@ -109,7 +106,7 @@ impl CustomType for HttpService {
     }
 }
 
-// r[service.http.route]
+// l[impl service.http.route]
 #[derive(Debug, Clone)]
 pub struct HttpServiceRoute {
     pub http: HttpService,
@@ -122,13 +119,13 @@ impl CustomType for HttpServiceRoute {
     }
 }
 
-// r[service.external]
+// l[impl service.external]
 #[derive(Debug, Clone)]
 pub struct ExternalService {
     pub name: ResourceName,
 }
 
-// r[service.external.port]
+// l[impl service.external.port]
 impl CustomType for ExternalService {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
@@ -143,7 +140,7 @@ impl CustomType for ExternalService {
     }
 }
 
-// r[bsl.port]
+// l[impl bsl.port]
 fn validate_port(port: i64) {
     if port <= 0 || port >= 65535 {
         panic!("port must be a non-zero positive integer below 65535, got {port}");
