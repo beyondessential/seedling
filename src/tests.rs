@@ -30,3 +30,4 @@ mod service;
 mod ingress;
 mod container;
 mod deployment;
+mod job;
