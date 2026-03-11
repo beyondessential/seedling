@@ -1,0 +1,321 @@
+use super::*;
+
+// l[verify action.type]
+// l[verify action.option-description]
+#[test]
+fn on_action_registers_and_returns_action() {
+    let app = run_test_script_app(
+        r#"
+        let a = app.on_action("migrate", |rt| {}, #{
+            description: "Run migrations",
+        });
+    "#,
+    );
+    let def = app.0.lock();
+    let action = def.actions.get("migrate").expect("action should exist");
+    assert_eq!(action.description.as_deref(), Some("Run migrations"));
+}
+
+// l[verify action.type]
+#[test]
+fn on_action_without_options() {
+    let app = run_test_script_app(
+        r#"
+        app.on_action("cleanup", |rt| {});
+    "#,
+    );
+    let def = app.0.lock();
+    let action = def.actions.get("cleanup").expect("action should exist");
+    assert!(action.description.is_none());
+}
+
+// l[verify action.start]
+#[test]
+fn on_start_registers_start_action() {
+    let app = run_test_script_app(
+        r#"
+        app.on_start(|rt| {});
+    "#,
+    );
+    let def = app.0.lock();
+    assert!(def.actions.contains_key("start"));
+}
+
+// l[verify action.start]
+#[test]
+fn on_start_with_options() {
+    let app = run_test_script_app(
+        r#"
+        app.on_start(|rt| {}, #{
+            description: "Start the application",
+        });
+    "#,
+    );
+    let def = app.0.lock();
+    let action = def.actions.get("start").expect("start action should exist");
+    assert_eq!(action.description.as_deref(), Some("Start the application"));
+}
+
+// l[verify action.upgrade]
+#[test]
+fn on_upgrade_registers_upgrade_action() {
+    let app = run_test_script_app(
+        r#"
+        app.on_upgrade(|rt, old| {});
+    "#,
+    );
+    let def = app.0.lock();
+    assert!(def.actions.contains_key("upgrade"));
+}
+
+// l[verify action.crash-recovery]
+#[test]
+fn on_crash_recovery_registers() {
+    let app = run_test_script_app(
+        r#"
+        app.on_crash_recovery(|rt, history| {});
+    "#,
+    );
+    let def = app.0.lock();
+    assert!(def.actions.contains_key("crash_recovery"));
+}
+
+// l[verify action.shell]
+#[test]
+fn on_shell_registers_shell() {
+    let app = run_test_script_app(
+        r#"
+        app.on_shell("node", |rt| {
+            app.job("shell-node").image("node:20").command("node")
+        }, #{
+            description: "Node REPL",
+        });
+    "#,
+    );
+    let def = app.0.lock();
+    let shell = def.shells.get("node").expect("shell should exist");
+    assert_eq!(shell.description.as_deref(), Some("Node REPL"));
+}
+
+// l[verify action.shell]
+#[test]
+fn on_shell_without_options() {
+    let app = run_test_script_app(
+        r#"
+        app.on_shell("db", |rt| {
+            app.job("shell-db").image("psql").command("psql")
+        });
+    "#,
+    );
+    let def = app.0.lock();
+    let shell = def.shells.get("db").expect("shell should exist");
+    assert!(shell.description.is_none());
+}
+
+// l[verify action.shell]
+#[test]
+fn shells_in_separate_namespace_from_actions() {
+    let app = run_test_script_app(
+        r#"
+        app.on_action("debug", |rt| {});
+        app.on_shell("debug", |rt| {
+            app.job("shell-debug").image("tools").command("sh")
+        });
+    "#,
+    );
+    let def = app.0.lock();
+    assert!(def.actions.contains_key("debug"));
+    assert!(def.shells.contains_key("debug"));
+}
+
+// l[verify action.shell.attach]
+#[test]
+fn exercise_shell_with_attach() {
+    exercise(
+        r#"
+        app.on_shell("db", |rt, attach| {
+            let shell = app.job("shell-db")
+                .image("tools")
+                .command("psql");
+            rt.start(shell).running();
+            attach.call(shell);
+        });
+    "#,
+    );
+}
+
+// l[verify action.shell]
+#[test]
+fn exercise_shell_return_job() {
+    exercise(
+        r#"
+        app.on_shell("node", |rt| {
+            app.job("shell-node").image("node:20").command("node")
+        });
+    "#,
+    );
+}
+
+// l[verify action.install]
+// l[verify action.install.requirements]
+// l[verify action.install.requirements.kind-email]
+// l[verify action.install.requirements.kind-password]
+#[test]
+fn on_install_with_requirements() {
+    let app = run_test_script_app(
+        r#"
+        app.on_install(|rt, reqs| {}, #{
+            admin_email: #{
+                kind: "email",
+                description: "Admin email",
+                default_value: "admin@example.com",
+            },
+            admin_password: #{
+                kind: "password",
+                description: "Admin password",
+            },
+        });
+    "#,
+    );
+    let def = app.0.lock();
+    let install = def.install.as_ref().expect("install should exist");
+    assert_eq!(install.requirements.len(), 2);
+    let email_req = &install.requirements["admin_email"];
+    assert!(matches!(
+        email_req.kind,
+        defs::install::InstallRequirementKind::Email
+    ));
+    assert_eq!(
+        email_req.default_value.as_deref(),
+        Some("admin@example.com")
+    );
+    let pw_req = &install.requirements["admin_password"];
+    assert!(matches!(
+        pw_req.kind,
+        defs::install::InstallRequirementKind::Password
+    ));
+    assert!(pw_req.default_value.is_none());
+}
+
+// l[verify action.install]
+#[test]
+fn on_install_without_requirements() {
+    let app = run_test_script_app(
+        r#"
+        app.on_install(|rt, reqs| {});
+    "#,
+    );
+    let def = app.0.lock();
+    let install = def.install.as_ref().expect("install should exist");
+    assert!(install.requirements.is_empty());
+}
+
+// l[verify action.install.requirements.kind-text]
+#[test]
+fn install_requirement_kind_text() {
+    let app = run_test_script_app(
+        r#"
+        app.on_install(|rt, reqs| {}, #{
+            site_name: #{
+                kind: "text",
+                description: "Site name",
+            },
+        });
+    "#,
+    );
+    let def = app.0.lock();
+    let install = def.install.as_ref().unwrap();
+    let req = &install.requirements["site_name"];
+    assert!(matches!(
+        req.kind,
+        defs::install::InstallRequirementKind::Text
+    ));
+}
+
+// l[verify action.install.requirements.kind-text]
+#[test]
+fn install_requirement_kind_defaults_to_text() {
+    let app = run_test_script_app(
+        r#"
+        app.on_install(|rt, reqs| {}, #{
+            site_name: #{
+                description: "Site name",
+            },
+        });
+    "#,
+    );
+    let def = app.0.lock();
+    let install = def.install.as_ref().unwrap();
+    let req = &install.requirements["site_name"];
+    assert!(matches!(
+        req.kind,
+        defs::install::InstallRequirementKind::Text
+    ));
+}
+
+// l[verify action.install.requirements.kind-weak-password]
+#[test]
+fn install_requirement_kind_weak_password() {
+    let app = run_test_script_app(
+        r#"
+        app.on_install(|rt, reqs| {}, #{
+            api_key: #{
+                kind: "weak-password",
+                description: "API key",
+            },
+        });
+    "#,
+    );
+    let def = app.0.lock();
+    let install = def.install.as_ref().unwrap();
+    let req = &install.requirements["api_key"];
+    assert!(matches!(
+        req.kind,
+        defs::install::InstallRequirementKind::WeakPassword
+    ));
+}
+
+// l[verify action.install]
+#[test]
+fn exercise_install_action() {
+    exercise(
+        r#"
+        app.on_install(|rt, reqs| {
+            rt.start(app.deployment("web").image("nginx")).ready();
+        }, #{
+            admin_email: #{
+                kind: "email",
+                description: "Admin email",
+            },
+        });
+    "#,
+    );
+}
+
+// l[verify action.upgrade]
+#[test]
+fn exercise_upgrade_action() {
+    exercise(
+        r#"
+        app.on_upgrade(|rt, old| {
+            rt.start(app.deployment("web").image("nginx:2"));
+            rt.stop(old);
+        });
+    "#,
+    );
+}
+
+// l[verify action.crash-recovery]
+#[test]
+fn exercise_crash_recovery_action() {
+    exercise(
+        r#"
+        app.on_crash_recovery(|rt, history| {
+            if history.was_upgrading() {
+                rt.start(app.job("fixup").image("tools").command("repair")).terminated();
+            }
+            rt.start(app.deployment("web").image("nginx"));
+        });
+    "#,
+    );
+}
