@@ -182,6 +182,10 @@ This is currently the only value.
 > l[app.resources.static]
 > Resources that are defined at the top level (outside of all actions) are said to be **static**.
 
+> l[app.resources.dynamic]
+> Resources that are not static are said to be **dynamic**.
+> Dynamic resources become anonymous when their scope ends.
+
 > l[app.resources.names]
 > Most resources are defined with a name.
 > If two methods use the _same name_, the methods return (a different handle to) the _same resource_.
@@ -193,6 +197,7 @@ This is currently the only value.
 > ```
 >
 > Names are also used to select resources using the Collection methods.
+> Anonymous resources (those that don't have a name) never conflict and can't be selected by name.
 
 # Parameter
 
