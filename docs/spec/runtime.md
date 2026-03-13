@@ -179,17 +179,25 @@ Absent specification bugs, anything that is not defined here is either defined i
 > It is a single execution (possibly interrupted and replayed) of an action closure.
 
 > r[operation.lifecycle.single]
-> At most one lifecycle operation may be in progress at any time.
-> If a new lifecycle-initiating event arrives while an operation is in progress, it must be rejected.
+> At most one lifecycle operation may be in progress across all applications on a node at any time.
+
+> r[operation.lifecycle.single.intra-app]
+> If a lifecycle operation is requested for an application that already has one in progress, the request must be rejected immediately.
+
+> r[operation.lifecycle.single.inter-app]
+> If a lifecycle operation is requested for an application while a different application's operation is in progress, the request must be queued.
+> There may be at most one queued operation per application.
+> If an operation is already queued for that application, the new request must be rejected.
+> Queued operations are started in request order once the current operation completes.
 
 > r[operation.lifecycle.events]
 > Lifecycle operations are initiated by these events:
 >
-> - **First boot** (no prior state exists): the `install` action, if defined; otherwise the `start` action.
+> - **First boot** (no prior state exists): the runtime must wait for an operator to initiate the `install` action (or another action). It must not start the application autonomously.
 > - **Normal boot** (prior state exists, no interrupted operation): the `start` action.
 > - **Restart with interrupted operation**: replay of the interrupted operation.
 > - **Version change**: the `upgrade` action.
-> - **Operator request**: the named action.
+> - **Operator request**: a named action, including `install`.
 
 > r[operation.lifecycle.completion]
 > When a lifecycle operation completes (the action closure returns), the full [desired state](#r--desired-state.steady) takes effect and the reconciler maintains it autonomously.

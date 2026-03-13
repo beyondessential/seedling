@@ -75,19 +75,27 @@ The reconciler only manages resources that the operation has handed over so far.
 ## Lifecycle Operations
 
 A lifecycle operation is the top-level unit of scripted orchestration.
-There is at most one in progress at any time.
+There is at most one in progress across all applications on a node at any time.
+
+A single node can host multiple applications, each with its own BSL script and AppDef.
+The single-operation constraint applies globally:
+
+- **Intra-app**: if an operation is requested for an app that already has one in progress, the request is **rejected**. This is semantically meaningless (you can't upgrade while already upgrading).
+- **Inter-app**: if an operation is requested for a different app while another app's operation is in progress, the request is **queued**. There can be at most one queued operation per app; a second queue attempt for the same app is rejected. Queued operations start in request order once the current operation completes.
+
+This constraint may be relaxed in the future to allow concurrent operations on different applications.
 
 Lifecycle operations are initiated by external events:
 
 | Event | Operation |
 |---|---|
-| First boot (no prior state) | `install` action |
+| First boot (no prior state) | Wait for operator to initiate `install` (or another action) |
 | Normal boot (prior state, no interrupted operation) | `start` action |
+| Restart with interrupted operation | Replay of the interrupted operation |
 | Version change | `upgrade` action |
-| Operator request | named action |
+| Operator request | Named action, including `install` |
 
-If a lifecycle operation is in progress when a new initiating event arrives, the new event is rejected.
-An upgrade during an install is meaningless; an operator action during an upgrade must wait.
+See the scheduling rules above for how concurrent requests are handled.
 
 ### Action Composition
 
