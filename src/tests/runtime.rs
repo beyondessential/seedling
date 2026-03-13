@@ -112,9 +112,9 @@ fn exercise_query() {
 fn exercise_reconcile() {
     exercise(
         r#"
-        app.on_upgrade(|rt, old| {
+        app.on_action("test-reconcile", |rt| {
             let svc = app.service("public");
-            rt.reconcile(old, svc);
+            rt.reconcile(app, svc);
         });
     "#,
     );

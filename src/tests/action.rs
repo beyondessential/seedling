@@ -56,18 +56,6 @@ fn on_start_with_options() {
     assert_eq!(action.description.as_deref(), Some("Start the application"));
 }
 
-// l[verify action.upgrade]
-#[test]
-fn on_upgrade_registers_upgrade_action() {
-    let app = run_test_script_app(
-        r#"
-        app.on_upgrade(|rt, old| {});
-    "#,
-    );
-    let def = app.0.lock();
-    assert!(def.actions.contains_key("upgrade"));
-}
-
 // l[verify action.shell]
 #[test]
 fn on_shell_registers_shell() {
@@ -289,19 +277,6 @@ fn install_requirement_unknown_kind_throws() {
             field: #{
                 kind: "banana",
             },
-        });
-    "#,
-    );
-}
-
-// l[verify action.upgrade]
-#[test]
-fn exercise_upgrade_action() {
-    exercise(
-        r#"
-        app.on_upgrade(|rt, old| {
-            rt.start(app.deployment("web").image("nginx:2"));
-            rt.stop(old);
         });
     "#,
     );

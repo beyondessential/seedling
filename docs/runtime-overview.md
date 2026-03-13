@@ -92,7 +92,7 @@ Lifecycle operations are initiated by external events:
 | First boot (no prior state) | Wait for operator to initiate `install` (or another action) |
 | Normal boot (prior state, no interrupted operation) | `start` action |
 | Restart with interrupted operation | Replay of the interrupted operation |
-| Version change | `upgrade` action |
+| Param change | The `on_change` handler registered on that parameter |
 | Operator request | Named action, including `install` |
 
 See the scheduling rules above for how concurrent requests are handled.

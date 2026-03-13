@@ -195,8 +195,13 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > - **Normal boot** (prior state exists, no interrupted operation): the `start` action.
 > - **Boot, interrupted operation exists**: replay of the interrupted operation.
-> - **Version change**: the `upgrade` action.
+> - **Param change**: the `on_change` handler registered on the parameter that changed.
 > - **Operator request**: a named action, including `install`.
+
+> r[operation.lifecycle.param-change]
+> A param change is a lifecycle operation.
+> It is subject to the same [concurrency restrictions](#r--operation.lifecycle.single) as all other lifecycle operations.
+> Only one parameter may be changed at a time.
 
 > r[operation.lifecycle.completion]
 > When a lifecycle operation completes (the action closure returns), the full [desired state](#r--desired-state.steady) takes effect and the reconciler maintains it autonomously.

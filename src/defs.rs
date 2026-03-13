@@ -14,6 +14,7 @@ pub mod enums;
 pub mod ingress;
 pub mod install;
 pub mod job;
+pub mod param;
 pub mod pod;
 pub mod resource;
 pub mod runtime;
@@ -29,6 +30,7 @@ pub mod volume;
 // l[impl bsl.placeholder]
 pub fn register(engine: &mut Engine) {
     engine.build_type::<app::App>();
+    engine.build_type::<param::Param>();
     engine.build_type::<service::Service>();
     engine.build_type::<service::HttpService>();
     engine.build_type::<service::HttpServiceRoute>();
@@ -45,6 +47,26 @@ pub fn register(engine: &mut Engine) {
     engine.build_type::<runtime::Termination>();
     engine.build_type::<collection::Collection>();
     runtime::register_shell_attach(engine);
+
+    engine.register_fn("+", |p: param::Param, s: &str| -> String {
+        format!("{}{}", p.value, s)
+    });
+    engine.register_fn("+", |s: &str, p: param::Param| -> String {
+        format!("{}{}", s, p.value)
+    });
+
+    engine.register_fn(
+        "ingress",
+        |svc: service::Service,
+         hostname: param::Param,
+         port: i64|
+         -> Result<ingress::Ingress, Box<rhai::EvalAltResult>> {
+            if port < 1 || port > 65534 {
+                return Err(format!("port {port} out of valid range 1..65534").into());
+            }
+            Ok(ingress::Ingress::new(svc, hostname.value, port as u16))
+        },
+    );
 }
 
 // l[impl bsl.scope]

@@ -27,6 +27,7 @@ pub struct AppDef {
     pub actions: BTreeMap<String, ActionDef>,
     pub shells: BTreeMap<String, ShellDef>,
     pub install: Option<InstallDef>,
+    pub param_changes: BTreeMap<String, FnPtr>,
 }
 
 fn extract_description(options: &Map) -> Option<String> {
@@ -45,15 +46,21 @@ impl CustomType for App {
         builder.with_name("App");
 
         // l[impl param.type]
-        builder.with_fn("param", |this: &mut Self, name: &str| -> Dynamic {
-            let mut def = this.0.lock();
-            let value = def
-                .params
-                .entry(name.into())
-                .or_insert_with(|| "<placeholder>".into())
-                .clone();
-            Dynamic::from(value)
-        });
+        builder.with_fn(
+            "param",
+            |this: &mut Self, name: &str| -> super::param::Param {
+                let mut def = this.0.lock();
+                let value = def
+                    .params
+                    .entry(name.into())
+                    .or_insert_with(|| "<placeholder>".into())
+                    .clone();
+                super::param::Param {
+                    name: name.into(),
+                    value,
+                }
+            },
+        );
 
         // l[impl service.type]
         builder.with_fn("service", |this: &mut Self, name: &str| -> Service {
@@ -266,41 +273,6 @@ impl CustomType for App {
                     );
                     Action {
                         name: "start".into(),
-                    }
-                },
-            );
-
-        // l[impl action.upgrade]
-        builder
-            .with_fn("on_upgrade", |this: &mut Self, closure: FnPtr| -> Action {
-                let mut def = this.0.lock();
-                def.actions.insert(
-                    "upgrade".into(),
-                    ActionDef {
-                        name: "upgrade".into(),
-                        closure,
-                        description: None,
-                    },
-                );
-                Action {
-                    name: "upgrade".into(),
-                }
-            })
-            .with_fn(
-                "on_upgrade",
-                |this: &mut Self, closure: FnPtr, options: Map| -> Action {
-                    let desc = extract_description(&options);
-                    let mut def = this.0.lock();
-                    def.actions.insert(
-                        "upgrade".into(),
-                        ActionDef {
-                            name: "upgrade".into(),
-                            closure,
-                            description: desc,
-                        },
-                    );
-                    Action {
-                        name: "upgrade".into(),
                     }
                 },
             );

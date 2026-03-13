@@ -147,25 +147,16 @@ app.on_shell("db", |rt, attach| {
 });
 // you don't need to provide a description, but it *is* nicer
 
-// technically equivalent too, but this one has the extra `old` argument
-// while on_action("upgrade", ...) doesn't
-app.on_upgrade(|rt, old| {
-    // this starts a new version of the control service
+version.on_change(|rt, old| {
     rt.start(control);
 
-    // this instead matches up the old ingress and merges new and old together
-    // it will transfer control of the actual underlying resources (sockets etc)
-    // and make sure everything is configured as per the new spec as things come online
-    // but it won't drop traffic to the old resources until they stop
     rt.reconcile(old.select(#{ types: [ResourceType.Ingress], names: ["public"] }).one(), traffic);
 
-    // given an array, it stops all in parallel
     rt.stop([
         old.select(#{ types: [ResourceType.Deployment], names: ["sync", "tasks", "api"] }),
         old.select(#{ types: [ResourceType.Deployment], name_patterns: ["fhir-*"] }),
     ]);
 
-    // start()ing a job doesn't wait until it's done
     let migration = rt.start(migrate.call());
 
     rt.start(frontend);
@@ -174,10 +165,8 @@ app.on_upgrade(|rt, old| {
     rt.stop(old);
 
     try {
-        // wait until the migration job is done successfully
         migration.terminated().ensure_success();
     } catch (_err) {
-        // retry once before hard-failing
         rt.start(migrate.call()).terminated().ensure_success();
     }
 

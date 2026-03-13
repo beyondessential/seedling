@@ -202,10 +202,22 @@ This is currently the only value.
 # Parameter
 
 > l[param.type]
-> A Parameter is a string provided by the Beset control plane to a BSL script, at a particular name.
+> A Parameter is a value provided by the Beset control plane to a BSL script, at a particular name.
 >
-> Parameters are defined using the `app.param(name: string)` method, which returns their value when known.
-> When the value is not yet known, `app.param()` returns the [placeholder string](#l--bsl.placeholder).
+> Parameters are defined using the `app.param(name: string)` method, which returns a `Param`.
+
+> l[param.value]
+> The `Param` type can be used anywhere a string is expected (e.g. in string interpolation, as arguments to methods that accept strings).
+> When the value is not yet known, it behaves as the [placeholder string](#l--bsl.placeholder).
+
+> l[param.on-change]
+> `param.on_change(fn: closure)` registers a handler that is called when the parameter's value changes.
+>
+> The `fn` closure may take up to two arguments: the [Runtime Instance](#l--rt.var) (typically named `rt`) and the previous `App` instance (typically named `old`).
+> `old.param(name)` returns the previous value of any parameter.
+>
+> `on_change` may only be called at the top level of the script (statically). Calling it from within an action closure must throw.
+> Calling `on_change` more than once on the same parameter must throw.
 
 # Service
 
@@ -490,22 +502,6 @@ This is currently the only value.
 > ```rhai
 > rt.start(app);
 > ```
-
-## Upgrade Action
-
-> l[action.upgrade]
-> The specialised Upgrade Action is used to define how the application is upgraded. It is used autonomously by the Beset control plane.
->
-> It may be defined using the `app.on_action()` method with a `name` of `"upgrade"`, or with the shorthand `app.on_upgrade(fn: closure, options?: object)`, which returns an `Action`.
->
-> Its `fn` closure may take up to two arguments: the [Runtime Instance](#l--rt.var) (typically named `rt`) and the `App` instance being replaced (typically named `old`).
->
-> If it is not defined, it defaults to the equivalent of:
-> ```rhai
-> rt.stop(old);
-> rt.action(app, "start");
-> ```
-> which is usually safe but incurs downtime.
 
 ## Shell Action
 

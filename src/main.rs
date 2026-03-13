@@ -20,7 +20,6 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
 
     let rt = defs::runtime::RuntimeInstance;
     let attach = defs::runtime::shell_attach_fn_ptr();
-    let old_app = defs::app::App::default();
 
     let actions: Vec<_> = def
         .actions
@@ -36,18 +35,19 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
         let reqs_map = build_install_reqs_map(i);
         (i.closure.clone(), reqs_map)
     });
+    let param_changes: Vec<_> = def
+        .param_changes
+        .iter()
+        .map(|(name, closure)| (name.clone(), closure.clone()))
+        .collect();
 
     drop(def);
 
     for (name, closure) in &actions {
         scope.push("__bsl_rt", rt.clone());
         scope.push("__bsl_closure", closure.clone());
-        scope.push("__bsl_old_app", old_app.clone());
 
-        let call_script = match name.as_str() {
-            "upgrade" => "__bsl_closure.call(__bsl_rt, __bsl_old_app)",
-            _ => "__bsl_closure.call(__bsl_rt)",
-        };
+        let call_script = "__bsl_closure.call(__bsl_rt)";
 
         println!("exercising action: {name}");
         match eval_merged(engine, scope, script_ast, call_script) {
@@ -57,7 +57,6 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
 
         let _ = scope.remove::<Dynamic>("__bsl_rt");
         let _ = scope.remove::<Dynamic>("__bsl_closure");
-        let _ = scope.remove::<Dynamic>("__bsl_old_app");
     }
 
     for (name, closure) in &shells {
@@ -99,6 +98,26 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
         let _ = scope.remove::<Dynamic>("__bsl_rt");
         let _ = scope.remove::<Dynamic>("__bsl_closure");
         let _ = scope.remove::<Dynamic>("__bsl_reqs");
+    }
+
+    if !param_changes.is_empty() {
+        let old_app = defs::app::App::default();
+        for (name, closure) in &param_changes {
+            scope.push("__bsl_rt", rt.clone());
+            scope.push("__bsl_closure", closure.clone());
+            scope.push("__bsl_old_app", old_app.clone());
+
+            println!("exercising param change: {name}");
+            let call_script = "__bsl_closure.call(__bsl_rt, __bsl_old_app)";
+            match eval_merged(engine, scope, script_ast, call_script) {
+                Ok(_) => println!("  ok"),
+                Err(err) => println!("  error: {err}"),
+            }
+
+            let _ = scope.remove::<Dynamic>("__bsl_rt");
+            let _ = scope.remove::<Dynamic>("__bsl_closure");
+            let _ = scope.remove::<Dynamic>("__bsl_old_app");
+        }
     }
 }
 
