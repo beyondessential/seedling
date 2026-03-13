@@ -15,4 +15,18 @@ specs (
             }
         )
     }
+    {
+        name runtime
+        source_url https://github.com/beyondessential/beset
+        include (docs/spec/runtime.md)
+        impls (
+            {
+                name main
+                include (
+                    src/*.rs
+                    src/**/*.rs
+                )
+            }
+        )
+    }
 )
