@@ -193,9 +193,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[operation.lifecycle.events]
 > Lifecycle operations are initiated by these events:
 >
-> - **First boot** (no prior state exists): the runtime must wait for an operator to initiate the `install` action (or another action). It must not start the application autonomously.
 > - **Normal boot** (prior state exists, no interrupted operation): the `start` action.
-> - **Restart with interrupted operation**: replay of the interrupted operation.
+> - **Boot, interrupted operation exists**: replay of the interrupted operation.
 > - **Version change**: the `upgrade` action.
 > - **Operator request**: a named action, including `install`.
 
