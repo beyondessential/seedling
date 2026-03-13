@@ -68,18 +68,6 @@ fn on_upgrade_registers_upgrade_action() {
     assert!(def.actions.contains_key("upgrade"));
 }
 
-// l[verify action.crash-recovery]
-#[test]
-fn on_crash_recovery_registers() {
-    let app = run_test_script_app(
-        r#"
-        app.on_crash_recovery(|rt, history| {});
-    "#,
-    );
-    let def = app.0.lock();
-    assert!(def.actions.contains_key("crash_recovery"));
-}
-
 // l[verify action.shell]
 #[test]
 fn on_shell_registers_shell() {
@@ -314,21 +302,6 @@ fn exercise_upgrade_action() {
         app.on_upgrade(|rt, old| {
             rt.start(app.deployment("web").image("nginx:2"));
             rt.stop(old);
-        });
-    "#,
-    );
-}
-
-// l[verify action.crash-recovery]
-#[test]
-fn exercise_crash_recovery_action() {
-    exercise(
-        r#"
-        app.on_crash_recovery(|rt, history| {
-            if history.was_upgrading() {
-                rt.start(app.job("fixup").image("tools").command("repair")).terminated();
-            }
-            rt.start(app.deployment("web").image("nginx"));
         });
     "#,
     );

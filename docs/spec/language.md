@@ -507,22 +507,6 @@ This is currently the only value.
 > ```
 > which is usually safe but incurs downtime.
 
-## Crash Recovery Action
-
-> l[action.crash-recovery]
-> The specialised Crash Recovery Action is used to define how the application recovers from a Beset Node crash. It is used autonomously by the Beset control plane.
->
-> A crash in this context is not an application failure, but a crash and restart of the entire node, usually caused by an unplanned power failure or some kind of system panic. If an application was in the middle of an upgrade, it may want to attempt to finish the upgrade, and/or run data integrity checks.
->
-> It may be defined using the `app.on_action()` method with a `name` of `"crash_recovery"`, or with the shorthand `app.on_crash_recovery(fn: closure, options?: object)`, which returns an `Action`.
->
-> Its `fn` closure may take up to two arguments: the [Runtime Instance](#l--rt.var) (typically named `rt`) and the [Application History](#l--history.var) (typically named `history`).
->
-> If it is not defined, it defaults to the equivalent of:
-> ```rhai
-> rt.action(app, "start");
-> ```
-
 ## Shell Action
 
 > l[action.shell]
@@ -677,15 +661,4 @@ This spec defines the semantics of the Runtime Instance as far as BSL is concern
 
 <!-- TODO: more Termination methods -->
 
-# History
 
-> l[history.type]
-> `History` is a log of actions taken against and events recorded for this application.
-
-> l[history.var]
-> `history` is a snapshot of the `History` log taken at a particular moment.
-
-> l[history.was-upgrading]
-> `history.was_upgrading()` returns `true` if the History stopped in the middle of an upgrade.
-
-<!-- TODO: more History methods -->

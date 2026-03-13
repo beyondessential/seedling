@@ -11,7 +11,6 @@ pub mod collection;
 pub mod container;
 pub mod deployment;
 pub mod enums;
-pub mod history;
 pub mod ingress;
 pub mod install;
 pub mod job;
@@ -44,7 +43,6 @@ pub fn register(engine: &mut Engine) {
     engine.build_type::<runtime::RuntimeInstance>();
     engine.build_type::<runtime::Started>();
     engine.build_type::<runtime::Termination>();
-    engine.build_type::<history::History>();
     engine.build_type::<collection::Collection>();
     runtime::register_shell_attach(engine);
 }

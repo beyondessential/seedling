@@ -29,7 +29,6 @@ fn app_methods_are_defined() {
         app.on_action("act", |rt| {});
         app.on_start(|rt| {});
         app.on_upgrade(|rt, old| {});
-        app.on_crash_recovery(|rt, history| {});
         app.on_shell("sh", |rt| { app.job("sh").command("sh") });
         app.on_install(|rt, reqs| {});
     "#,

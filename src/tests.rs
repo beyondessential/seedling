@@ -30,7 +30,6 @@ mod collection;
 mod constants;
 mod container;
 mod deployment;
-mod history;
 mod ingress;
 mod integration;
 mod job;

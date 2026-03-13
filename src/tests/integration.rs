@@ -17,7 +17,6 @@ fn draft_script_runs_and_exercises() {
     assert!(def.params.contains_key("version"));
     assert!(def.actions.contains_key("start"));
     assert!(def.actions.contains_key("upgrade"));
-    assert!(def.actions.contains_key("crash_recovery"));
     assert!(def.actions.contains_key("migrate"));
     assert!(def.shells.contains_key("node"));
     assert!(def.shells.contains_key("db"));

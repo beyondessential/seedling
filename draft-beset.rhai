@@ -184,19 +184,6 @@ app.on_upgrade(|rt, old| {
     rt.start(app).ready();
 });
 
-// if the host crashes or power was lost...
-app.on_crash_recovery(|rt, history| {
-    // ...and we were in an upgrade...
-    if history.was_upgrading() {
-        // ...then migrate and...
-        rt.start(migrate.call()).terminated();
-    }
-
-    // ...then do a normal start
-    rt.start(app.select(#{ types: [ResourceType.Action], names: ["start"] }));
-    // (if the "crash_recovery" action isn't set, it defaults to calling the start action)
-});
-
 // on first install, we can have a special sequence of events
 // and we can also require/prompt the user for information
 app.on_install(|rt, reqs| {

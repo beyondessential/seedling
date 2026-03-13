@@ -305,44 +305,6 @@ impl CustomType for App {
                 },
             );
 
-        // l[impl action.crash-recovery]
-        builder
-            .with_fn(
-                "on_crash_recovery",
-                |this: &mut Self, closure: FnPtr| -> Action {
-                    let mut def = this.0.lock();
-                    def.actions.insert(
-                        "crash_recovery".into(),
-                        ActionDef {
-                            name: "crash_recovery".into(),
-                            closure,
-                            description: None,
-                        },
-                    );
-                    Action {
-                        name: "crash_recovery".into(),
-                    }
-                },
-            )
-            .with_fn(
-                "on_crash_recovery",
-                |this: &mut Self, closure: FnPtr, options: Map| -> Action {
-                    let desc = extract_description(&options);
-                    let mut def = this.0.lock();
-                    def.actions.insert(
-                        "crash_recovery".into(),
-                        ActionDef {
-                            name: "crash_recovery".into(),
-                            closure,
-                            description: desc,
-                        },
-                    );
-                    Action {
-                        name: "crash_recovery".into(),
-                    }
-                },
-            );
-
         // l[impl action.shell]
         builder
             .with_fn("on_shell", |this: &mut Self, name: &str, closure: FnPtr| {

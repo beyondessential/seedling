@@ -20,7 +20,6 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
 
     let rt = defs::runtime::RuntimeInstance;
     let attach = defs::runtime::shell_attach_fn_ptr();
-    let history = defs::history::History;
     let old_app = defs::app::App::default();
 
     let actions: Vec<_> = def
@@ -44,11 +43,9 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
         scope.push("__bsl_rt", rt.clone());
         scope.push("__bsl_closure", closure.clone());
         scope.push("__bsl_old_app", old_app.clone());
-        scope.push("__bsl_history", history.clone());
 
         let call_script = match name.as_str() {
             "upgrade" => "__bsl_closure.call(__bsl_rt, __bsl_old_app)",
-            "crash_recovery" => "__bsl_closure.call(__bsl_rt, __bsl_history)",
             _ => "__bsl_closure.call(__bsl_rt)",
         };
 
@@ -61,7 +58,6 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
         let _ = scope.remove::<Dynamic>("__bsl_rt");
         let _ = scope.remove::<Dynamic>("__bsl_closure");
         let _ = scope.remove::<Dynamic>("__bsl_old_app");
-        let _ = scope.remove::<Dynamic>("__bsl_history");
     }
 
     for (name, closure) in &shells {
