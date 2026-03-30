@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use rhai::{AST, Dynamic, Engine, Scope};
 
 mod defs;
+mod runtime;
 use defs::install::InstallDef;
 
 #[cfg(test)]
@@ -18,7 +19,7 @@ fn setup() -> (Engine, Scope<'static>, defs::app::App) {
 fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, script_ast: &AST) {
     let def = app.0.lock();
 
-    let rt = defs::runtime::RuntimeInstance;
+    let rt = defs::runtime::RuntimeInstance::stub();
     let attach = defs::runtime::shell_attach_fn_ptr();
 
     let actions: Vec<_> = def

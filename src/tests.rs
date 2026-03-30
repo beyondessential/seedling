@@ -25,6 +25,7 @@ pub fn exercise(source: &str) {
 
 mod action;
 mod app;
+mod barrier;
 mod bsl;
 mod collection;
 mod constants;

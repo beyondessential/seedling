@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use rhai::{Dynamic, Map};
+use serde::{Deserialize, Serialize};
 
 use super::{
     deployment::Deployment,
@@ -19,7 +20,7 @@ pub struct ResourceId {
 }
 
 // l[impl const.resource-type.enum]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ResourceKind {
     Parameter,
     Service,
