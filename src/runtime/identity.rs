@@ -11,7 +11,6 @@ pub struct ResourceInstance {
 }
 
 impl ResourceInstance {
-    #[cfg_attr(not(test), expect(dead_code, reason = "todo"))]
     pub fn named(app: impl Into<String>, kind: ResourceKind, name: impl Into<String>) -> Self {
         Self {
             app: app.into(),
@@ -21,7 +20,6 @@ impl ResourceInstance {
         }
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "todo"))]
     pub fn scaled(
         app: impl Into<String>,
         kind: ResourceKind,
@@ -36,7 +34,6 @@ impl ResourceInstance {
         }
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "todo"))]
     pub fn anonymous(app: impl Into<String>, kind: ResourceKind) -> Self {
         Self {
             app: app.into(),

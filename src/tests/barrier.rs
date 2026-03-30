@@ -4,7 +4,7 @@ use crate::defs::resource::ResourceKind;
 use crate::{
     defs,
     runtime::{
-        LifecycleState, ResourceInstance, TestWorldOracle,
+        ActionLog, LifecycleState, ResourceInstance, TestWorldOracle,
         barrier::OperationId,
         barrier::replay::{InMemoryActionLog, OperationResult, run_operation},
     },
