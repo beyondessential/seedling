@@ -18,6 +18,7 @@ fn now_ms() -> i64 {
 // World observations
 // ---------------------------------------------------------------------------
 
+// r[impl history.world]
 pub struct WorldObservation {
     pub id: i64,
     pub recorded_at: i64,
@@ -26,6 +27,7 @@ pub struct WorldObservation {
     pub payload: serde_json::Value,
 }
 
+// r[impl history.world.entries]
 pub fn insert_observation(
     db: &Db,
     resource: &ResourceInstance,
@@ -49,6 +51,7 @@ pub fn insert_observation(
     Ok(())
 }
 
+// r[impl history.world.state-derivation]
 pub fn query_observations(
     db: &Db,
     resource: &ResourceInstance,
@@ -84,6 +87,7 @@ pub fn query_observations(
 // Autonomous operations
 // ---------------------------------------------------------------------------
 
+// r[impl history.operations]
 pub struct AutonomousOperation {
     pub id: i64,
     pub recorded_at: i64,
@@ -94,11 +98,13 @@ pub struct AutonomousOperation {
     pub completed_at: Option<i64>,
 }
 
+// r[impl history.operations.provenance]
 pub struct Provenance {
     pub observation_ids: Vec<i64>,
     pub rule: String,
 }
 
+// r[impl history.operations.entries]
 pub fn insert_autonomous_operation(
     db: &Db,
     resource: &ResourceInstance,
@@ -171,6 +177,8 @@ pub fn query_autonomous_operations(
 // Action log
 // ---------------------------------------------------------------------------
 
+// r[impl history.action-log]
+// r[impl history.action-log.entries]
 pub fn insert_action_log_entry(
     db: &Db,
     operation_id: &OperationId,
@@ -213,6 +221,7 @@ pub fn insert_action_log_entry(
     Ok(())
 }
 
+// r[impl history.action-log.replay]
 pub fn load_action_log(
     db: &Db,
     operation_id: &OperationId,

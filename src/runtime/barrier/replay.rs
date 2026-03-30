@@ -34,6 +34,7 @@ pub trait ActionLog: Send + Sync {
 // InMemoryActionLog
 // ---------------------------------------------------------------------------
 
+// r[impl history.action-log]
 #[derive(Debug, Default)]
 pub struct InMemoryActionLog {
     entries: Mutex<Vec<ActionLogEntry>>,
@@ -52,6 +53,7 @@ impl ActionLog for InMemoryActionLog {
 
     fn commit(&self, new_entries: &[ActionLogEntry]) {
         let mut entries = self.entries.lock();
+        // r[impl reconciliation.idempotency]
         for entry in new_entries {
             if let Some(existing) = entries
                 .iter_mut()
@@ -75,6 +77,7 @@ impl ActionLog for InMemoryActionLog {
 // DbActionLog
 // ---------------------------------------------------------------------------
 
+// r[impl history.action-log]
 pub struct DbActionLog {
     db: Mutex<Db>,
     operation_id: super::OperationId,
@@ -106,6 +109,7 @@ impl ActionLog for DbActionLog {
 
     fn commit(&self, entries: &[super::ActionLogEntry]) {
         let db = self.db.lock();
+        // r[impl reconciliation.idempotency]
         for entry in entries {
             let _ = history::insert_action_log_entry(
                 &db,
@@ -122,6 +126,7 @@ impl ActionLog for DbActionLog {
 // OperationResult
 // ---------------------------------------------------------------------------
 
+// r[impl operation.lifecycle]
 pub enum OperationResult {
     /// The closure ran to completion.
     Completed,
@@ -145,6 +150,8 @@ pub enum OperationResult {
 ///
 /// The `log` carries committed entries across calls; pass the same `log`
 /// instance for all passes of the same operation to enable replay.
+// r[impl history.action-log.replay]
+// r[impl barrier.replay]
 pub fn run_operation<W>(
     engine: &Engine,
     scope: &mut Scope,

@@ -1,6 +1,8 @@
 use rusqlite::{Connection, Result as SqlResult};
 use std::path::Path;
 
+// r[impl history.persistence]
+// r[impl history.storage]
 pub struct Db {
     pub conn: Connection,
 }
@@ -23,12 +25,14 @@ impl Db {
 
     fn migrate(&self) -> SqlResult<()> {
         self.conn.execute_batch(
-            "
-            CREATE TABLE IF NOT EXISTS schema_version (
+            "CREATE TABLE IF NOT EXISTS schema_version (
                 version INTEGER NOT NULL
-            );
+            );",
+        )?;
 
-            CREATE TABLE IF NOT EXISTS world_observations (
+        // r[impl history.world.entries]
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS world_observations (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 recorded_at INTEGER NOT NULL,
                 app         TEXT    NOT NULL,
@@ -37,9 +41,12 @@ impl Db {
                 ordinal     INTEGER NOT NULL DEFAULT 0,
                 obs_kind    TEXT    NOT NULL,
                 payload     TEXT    NOT NULL
-            );
+            );",
+        )?;
 
-            CREATE TABLE IF NOT EXISTS autonomous_operations (
+        // r[impl history.operations.entries]
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS autonomous_operations (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 recorded_at  INTEGER NOT NULL,
                 app          TEXT    NOT NULL,
@@ -50,9 +57,12 @@ impl Db {
                 provenance   TEXT    NOT NULL,
                 outcome      TEXT,
                 completed_at INTEGER
-            );
+            );",
+        )?;
 
-            CREATE TABLE IF NOT EXISTS action_log (
+        // r[impl history.action-log.entries]
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS action_log (
                 id                 INTEGER PRIMARY KEY AUTOINCREMENT,
                 recorded_at        INTEGER NOT NULL,
                 operation_id       TEXT    NOT NULL,
@@ -66,9 +76,10 @@ impl Db {
                 barrier_satisfied  INTEGER,
                 barrier_started_at INTEGER,
                 UNIQUE (operation_id, call_index)
-            );
-            ",
-        )
+            );",
+        )?;
+
+        Ok(())
     }
 }
 

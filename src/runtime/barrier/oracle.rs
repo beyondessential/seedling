@@ -6,6 +6,8 @@ use crate::defs::resource::ResourceKind;
 use crate::runtime::history::WorldObservation;
 use crate::runtime::{LifecycleState, ResourceInstance};
 
+// r[impl lifecycle.derivation]
+// r[impl history.world.state-derivation]
 pub trait WorldStateOracle: Send + Sync {
     fn lifecycle_state(&self, resource: &ResourceInstance) -> LifecycleState;
 }
@@ -85,6 +87,7 @@ impl WorldStateOracle for DbWorldOracle {
 // Lifecycle derivation
 // ---------------------------------------------------------------------------
 
+// r[impl lifecycle.derivation]
 /// Derive the current lifecycle state for a resource from its observation history.
 ///
 /// Observations must be provided in chronological order (ascending `recorded_at`).
@@ -103,6 +106,7 @@ pub fn derive_lifecycle_state(
     }
 }
 
+// r[impl lifecycle.container]
 fn derive_container_lifecycle_state(observations: &[WorldObservation]) -> LifecycleState {
     let mut state = LifecycleState::Pending;
 

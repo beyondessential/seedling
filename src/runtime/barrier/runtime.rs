@@ -123,6 +123,7 @@ impl RuntimeInstance {
         Self { ctx: Some(ctx) }
     }
 
+    // r[impl desired-state.during-operation]
     fn do_start(
         &mut self,
         resources: Vec<ResourceInstance>,
@@ -167,6 +168,7 @@ impl RuntimeInstance {
         })
     }
 
+    // r[impl barrier.replay.rt-stop]
     fn do_stop(
         &mut self,
         resources: Vec<ResourceInstance>,
@@ -296,6 +298,8 @@ impl CustomType for RuntimeInstance {
                 },
             )
             // l[impl rt.reconcile]
+            // r[impl reconcile.operation]
+            // r[impl reconcile.supported-pairs]
             .with_fn(
                 "reconcile",
                 |this: &mut Self,
@@ -318,6 +322,7 @@ pub struct Started {
 }
 
 impl Started {
+    // r[impl barrier.suspension]
     fn check_barrier(
         &mut self,
         required: LifecycleState,
@@ -339,6 +344,7 @@ impl Started {
         let mut g = ctx.lock();
         let now = (g.now_secs)();
 
+        // r[impl barrier.replay]
         // Check if this barrier was already satisfied in the committed log.
         let already_satisfied = g.committed.iter().any(|e| {
             e.resources == self.resources
@@ -363,6 +369,7 @@ impl Started {
             })
             .and_then(|e| e.barrier.as_ref()?.started_at_secs);
 
+        // r[impl barrier.deadline]
         if let Some(started_at) = started_at {
             if now.saturating_sub(started_at) >= deadline_secs {
                 return Err(Box::new(EvalAltResult::ErrorRuntime(
@@ -383,6 +390,7 @@ impl Started {
                 .iter()
                 .all(|r| g.world.lifecycle_state(r).has_reached(required));
 
+        // r[impl barrier.resume]
         if all_reached {
             // Mark the relevant pending entry's barrier as satisfied.
             for e in g.pending.iter_mut() {

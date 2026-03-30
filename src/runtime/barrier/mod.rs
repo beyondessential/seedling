@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::Arc;
 
+// r[impl operation.lifecycle]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct OperationId(pub String);
 
@@ -23,6 +24,7 @@ impl Default for OperationId {
     }
 }
 
+// r[impl barrier.condition]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BarrierCondition {
     pub resources: Vec<ResourceInstance>,
@@ -38,6 +40,7 @@ pub enum CallKind {
     Query,
 }
 
+// r[impl history.action-log.entries]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionLogEntry {
     pub call_index: usize,
@@ -46,6 +49,7 @@ pub struct ActionLogEntry {
     pub barrier: Option<BarrierRecord>,
 }
 
+// r[impl barrier.deadline]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BarrierRecord {
     pub required_state: LifecycleState,
@@ -54,6 +58,7 @@ pub struct BarrierRecord {
     pub started_at_secs: Option<u64>,
 }
 
+// r[impl barrier.replay]
 pub struct ReplayContext {
     pub operation_id: OperationId,
     pub call_index: usize,

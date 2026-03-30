@@ -2,6 +2,8 @@ use crate::defs::resource::ResourceKind;
 use serde::{Deserialize, Serialize};
 
 /// A stable identity for one concrete instance of a BSL resource.
+// r[impl identity.stable]
+// r[impl identity.components]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ResourceInstance {
     pub app: String,
@@ -20,6 +22,7 @@ impl ResourceInstance {
         }
     }
 
+    // r[impl identity.scaled]
     pub fn scaled(
         app: impl Into<String>,
         kind: ResourceKind,
@@ -34,6 +37,7 @@ impl ResourceInstance {
         }
     }
 
+    // r[impl identity.anonymous]
     pub fn anonymous(app: impl Into<String>, kind: ResourceKind) -> Self {
         Self {
             app: app.into(),

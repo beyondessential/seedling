@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 // l[impl rt.lifecyle]
+// r[impl lifecycle.states]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum LifecycleState {
     Pending,
@@ -13,6 +14,7 @@ pub enum LifecycleState {
 }
 
 impl LifecycleState {
+    // r[impl lifecycle.transitions]
     pub fn can_transition_to(self, next: LifecycleState) -> bool {
         use LifecycleState::*;
         matches!(
@@ -28,6 +30,7 @@ impl LifecycleState {
         )
     }
 
+    // r[impl lifecycle.derivation]
     /// Returns true if self has reached or passed `required` in the lifecycle order.
     pub fn has_reached(self, required: LifecycleState) -> bool {
         fn ordinal(s: LifecycleState) -> u8 {
