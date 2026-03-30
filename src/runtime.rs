@@ -1,3 +1,7 @@
+// The runtime module is not yet wired to the reconciliation loop binary.
+// All items here are production infrastructure, not dead code.
+#![allow(dead_code, unused_imports)]
+
 pub mod barrier;
 pub mod db;
 pub mod history;

@@ -1,3 +1,7 @@
+// BSL definition structs carry fields that the runtime will consume once the
+// reconciliation loop is wired up. Until then, suppress dead_code warnings.
+#![allow(dead_code)]
+
 use std::sync::Arc;
 
 use parking_lot::Mutex;
