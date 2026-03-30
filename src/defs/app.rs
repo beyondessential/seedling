@@ -15,11 +15,12 @@ use super::{
 };
 
 // l[impl app.type]
-// l[impl app.var]
 // l[impl app.constructor]
 #[derive(Debug, Default, Clone)]
 pub struct App(pub Holder<AppDef>);
 
+// l[impl app.resources]
+// l[impl app.resources.names]
 #[derive(Debug, Default, Clone)]
 pub struct AppDef {
     pub params: BTreeMap<String, String>,
@@ -37,10 +38,6 @@ fn extract_description(options: &Map) -> Option<String> {
 }
 
 // l[impl app.methods]
-// l[impl app.resources]
-// l[impl app.resources.names]
-// l[impl app.resources.static]
-// l[impl app.resources.dynamic]
 impl CustomType for App {
     fn build(mut builder: TypeBuilder<Self>) {
         builder.with_name("App");
@@ -53,6 +50,7 @@ impl CustomType for App {
                 let value = def
                     .params
                     .entry(name.into())
+                    // l[impl bsl.placeholder]
                     .or_insert_with(|| "<placeholder>".into())
                     .clone();
                 super::param::Param {
@@ -183,28 +181,24 @@ impl CustomType for App {
             },
         );
 
-        // Ingress creation: service.ingress(hostname, port) returns IngressBuilder,
-        // which needs to be registered against the app. We handle this by making
-        // IngressBuilder chain methods that ultimately produce an Ingress on the app.
-        // However, since IngressBuilder doesn't have access to App, we store the
-        // ingress on the service's app reference. Instead, we register ingress
-        // creation directly through the service, but the Ingress resource is created
-        // lazily. For now, we also provide a way to "finish" an IngressBuilder.
-
+        // l[impl collection.select]
         builder.with_fn(
             "select",
-            |_this: &mut Self, _criterion: Map| -> Collection { Collection },
+            |_this: &mut Self, _criterion: Map| -> Collection { todo!() },
         );
 
-        builder.with_fn("one", |_this: &mut Self| -> Collection { Collection });
+        // l[impl collection.one]
+        builder.with_fn("one", |_this: &mut Self| -> Collection { todo!() });
 
+        // l[impl collection.only]
         builder.with_fn("only", |_this: &mut Self, _other: Dynamic| -> Collection {
-            Collection
+            todo!()
         });
 
+        // l[impl collection.except]
         builder.with_fn(
             "except",
-            |_this: &mut Self, _other: Dynamic| -> Collection { Collection },
+            |_this: &mut Self, _other: Dynamic| -> Collection { todo!() },
         );
 
         // l[impl action.type]
@@ -330,18 +324,6 @@ impl CustomType for App {
                     Ok(())
                 },
             );
-
-        // Ingress finalization: when service.ingress(hostname, port) creates an
-        // IngressBuilder, the ingress needs to be registered. We provide this as
-        // a method on IngressBuilder that stores into the app. But since Rhai
-        // chains methods on IngressBuilder (tls, http, etc.) we need IngressBuilder
-        // to produce an Ingress that gets stored. We handle this by making the
-        // IngressBuilder methods available on Ingress directly, and converting
-        // IngressBuilder -> Ingress at the point of first builder method call.
-        //
-        // Actually, the cleaner approach: service.ingress() returns IngressBuilder,
-        // and IngressBuilder's methods (tls, http, service, etc.) just work on it.
-        // We convert IngressBuilder to Ingress and store it when needed.
     }
 }
 

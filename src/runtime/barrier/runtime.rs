@@ -109,7 +109,6 @@ fn extract_instances(resources: Dynamic) -> Vec<ResourceInstance> {
 // l[impl rt.var]
 // l[impl rt.type]
 // l[impl rt.constructor]
-// l[impl rt.lifecyle]
 #[derive(Debug, Clone)]
 pub struct RuntimeInstance {
     pub ctx: Option<SharedContext>,
@@ -257,15 +256,12 @@ impl RuntimeInstance {
     }
 }
 
-// l[impl rt.start]
-// l[impl rt.stop]
-// l[impl rt.query]
-// l[impl rt.reconcile]
 // l[impl rt.methods]
 impl CustomType for RuntimeInstance {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
             .with_name("RuntimeInstance")
+            // l[impl rt.start]
             .with_fn(
                 "start",
                 |this: &mut Self, resources: Dynamic| -> Result<Started, Box<EvalAltResult>> {
@@ -273,6 +269,7 @@ impl CustomType for RuntimeInstance {
                     this.do_start(instances)
                 },
             )
+            // l[impl rt.stop]
             .with_fn(
                 "stop",
                 |this: &mut Self, resources: Dynamic| -> Result<(), Box<EvalAltResult>> {
@@ -290,6 +287,7 @@ impl CustomType for RuntimeInstance {
                     this.do_stop(instances, deadline.max(0) as u64)
                 },
             )
+            // l[impl rt.query]
             .with_fn(
                 "query",
                 |this: &mut Self, resources: Dynamic| -> Result<Started, Box<EvalAltResult>> {
@@ -297,6 +295,7 @@ impl CustomType for RuntimeInstance {
                     this.do_start(instances)
                 },
             )
+            // l[impl rt.reconcile]
             .with_fn(
                 "reconcile",
                 |this: &mut Self,
@@ -312,7 +311,6 @@ impl CustomType for RuntimeInstance {
 // ---------------------------------------------------------------------------
 
 // l[impl rt.started.type]
-// l[impl rt.started.state-methods]
 #[derive(Debug, Clone)]
 pub struct Started {
     pub ctx: Option<SharedContext>,
@@ -445,6 +443,7 @@ impl CustomType for Started {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
             .with_name("Started")
+            // l[impl rt.started.state-methods]
             .with_fn(
                 "scheduled",
                 |this: &mut Self| -> Result<Started, Box<EvalAltResult>> {
@@ -509,7 +508,6 @@ impl CustomType for Started {
 // ---------------------------------------------------------------------------
 
 // l[impl rt.termination.type]
-// l[impl rt.termination.ensure-success]
 #[derive(Debug, Clone)]
 pub struct Termination {
     pub success: bool,
@@ -517,19 +515,22 @@ pub struct Termination {
 
 impl CustomType for Termination {
     fn build(mut builder: TypeBuilder<Self>) {
-        builder.with_name("Termination").with_fn(
-            "ensure_success",
-            |this: &mut Self| -> Result<(), Box<EvalAltResult>> {
-                if this.success {
-                    Ok(())
-                } else {
-                    Err(Box::new(EvalAltResult::ErrorRuntime(
-                        "Resource did not terminate successfully".into(),
-                        rhai::Position::NONE,
-                    )))
-                }
-            },
-        );
+        builder
+            .with_name("Termination")
+            // l[impl rt.termination.ensure-success]
+            .with_fn(
+                "ensure_success",
+                |this: &mut Self| -> Result<(), Box<EvalAltResult>> {
+                    if this.success {
+                        Ok(())
+                    } else {
+                        Err(Box::new(EvalAltResult::ErrorRuntime(
+                            "Resource did not terminate successfully".into(),
+                            rhai::Position::NONE,
+                        )))
+                    }
+                },
+            );
     }
 }
 
@@ -539,7 +540,7 @@ impl CustomType for Termination {
 
 // l[impl action.shell.attach]
 pub fn register_shell_attach(engine: &mut rhai::Engine) {
-    engine.register_fn("__bsl_shell_attach_impl", |_job: Dynamic| {});
+    engine.register_fn("__bsl_shell_attach_impl", |_job: Dynamic| -> () { todo!() });
 }
 
 pub fn shell_attach_fn_ptr() -> rhai::FnPtr {

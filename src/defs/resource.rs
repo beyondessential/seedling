@@ -54,6 +54,7 @@ impl ResourceKind {
     }
 }
 
+// l[impl bsl.resource]
 #[derive(Debug, Clone)]
 pub enum Resource {
     Service(Service),

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+// l[impl rt.lifecyle]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum LifecycleState {
     Pending,

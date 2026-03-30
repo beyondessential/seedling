@@ -27,12 +27,7 @@ pub mod service;
 pub mod volume;
 
 // l[impl bsl.syntax]
-// l[impl bsl.builder]
-// l[impl bsl.errors]
-// l[impl bsl.name]
-// l[impl bsl.resource]
 // l[impl bsl.script]
-// l[impl bsl.placeholder]
 pub fn register(engine: &mut Engine) {
     engine.build_type::<app::App>();
     engine.build_type::<param::Param>();
@@ -101,6 +96,7 @@ pub fn scope() -> (Scope<'static>, app::App) {
     scope.push_constant("ResourceType", resource::ResourceKind::rhai_constant());
 
     let app = app::App::default();
+    // l[impl app.var]
     scope.push("app", app.clone());
     (scope, app)
 }

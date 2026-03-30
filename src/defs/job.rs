@@ -19,11 +19,10 @@ pub struct Job {
     pub def: Holder<JobDef>,
 }
 
-// l[impl job.pod]
-// l[impl job.deadline]
 impl CustomType for Job {
     fn build(mut builder: TypeBuilder<Self>) {
         builder.with_name("Job");
+        // l[impl job.pod]
         PodDef::mixin(
             &mut builder,
             move |this| this.def.lock().pod.clone(),
@@ -32,6 +31,7 @@ impl CustomType for Job {
                 name: this.name.clone(),
             },
         );
+        // l[impl job.deadline]
         builder.with_fn(
             "deadline",
             |this: &mut Self, seconds: i64| -> Result<Job, Box<EvalAltResult>> {

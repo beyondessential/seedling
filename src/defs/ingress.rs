@@ -2,9 +2,6 @@ use rhai::{CustomType, EvalAltResult, TypeBuilder};
 
 use super::{Holder, resource::ResourceName, service::Service};
 
-// l[impl ingress.type]
-// l[impl ingress.certificates]
-// l[impl ingress.conflicts]
 #[derive(Debug, Clone)]
 pub struct IngressDef {
     pub hostname: String,
@@ -28,6 +25,7 @@ pub struct RedirectDef {
     pub code: u16,
 }
 
+// l[impl ingress.type]
 #[derive(Debug, Clone)]
 pub struct Ingress {
     pub name: ResourceName,
@@ -64,29 +62,26 @@ fn require_https(def: &IngressDef) -> Result<(), Box<EvalAltResult>> {
     Ok(())
 }
 
-// l[impl ingress.tls]
-// l[impl ingress.dtls]
-// l[impl ingress.quic]
-// l[impl ingress.http]
-// l[impl ingress.http2]
-// l[impl ingress.redirect]
-// l[impl ingress.service]
 impl CustomType for Ingress {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
             .with_name("Ingress")
+            // l[impl ingress.tls]
             .with_fn("tls", |this: &mut Self| {
                 this.def.lock().tls = true;
                 this.clone()
             })
+            // l[impl ingress.dtls]
             .with_fn("dtls", |this: &mut Self| {
                 this.def.lock().dtls = true;
                 this.clone()
             })
+            // l[impl ingress.quic]
             .with_fn("quic", |this: &mut Self| {
                 this.def.lock().quic = true;
                 this.clone()
             })
+            // l[impl ingress.http]
             .with_fn("http", |this: &mut Self| {
                 {
                     let mut def = this.def.lock();
@@ -95,6 +90,7 @@ impl CustomType for Ingress {
                 }
                 this.clone()
             })
+            // l[impl ingress.http2]
             .with_fn("http2", |this: &mut Self| {
                 {
                     let mut def = this.def.lock();
@@ -103,6 +99,7 @@ impl CustomType for Ingress {
                 }
                 this.clone()
             })
+            // l[impl ingress.redirect]
             .with_fn(
                 "redirect",
                 |this: &mut Self| -> Result<Ingress, Box<EvalAltResult>> {
@@ -136,6 +133,7 @@ impl CustomType for Ingress {
                     Ok(this.clone())
                 },
             )
+            // l[impl ingress.service]
             .with_fn("service", |this: &mut Self| this.service.clone());
     }
 }

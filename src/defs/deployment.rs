@@ -35,12 +35,9 @@ pub struct Deployment {
     pub def: Holder<DeploymentDef>,
 }
 
-// l[impl deployment.pod]
-// l[impl deployment.scale]
-// l[impl deployment.on-update]
-// l[impl deployment.on-terminate]
 impl CustomType for Deployment {
     fn build(mut builder: TypeBuilder<Self>) {
+        // l[impl deployment.pod]
         PodDef::mixin(
             &mut builder,
             move |this| this.def.lock().pod.clone(),
@@ -51,6 +48,7 @@ impl CustomType for Deployment {
         );
         builder
             .with_name("Deployment")
+            // l[impl deployment.scale]
             .with_fn("scale", |this: &mut Self, scale: i64| {
                 let s = clamp_scale(scale);
                 this.def.lock().scale = s..s;
@@ -62,10 +60,12 @@ impl CustomType for Deployment {
                 this.def.lock().scale = min..max;
                 this.clone()
             })
+            // l[impl deployment.on-update]
             .with_fn("on_update", |this: &mut Self, strategy: OnUpdate| {
                 this.def.lock().on_update = strategy;
                 this.clone()
             })
+            // l[impl deployment.on-terminate]
             .with_fn("on_terminate", |this: &mut Self, strategy: OnTerminate| {
                 this.def.lock().on_terminate = strategy;
                 this.clone()

@@ -23,13 +23,11 @@ impl Service {
     }
 }
 
-// l[impl service.port]
-// l[impl service.http]
-// l[impl service.routing]
 impl CustomType for Service {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
             .with_name("Service")
+            // l[impl service.port]
             .with_fn(
                 "port",
                 |this: &mut Self, port: i64| -> Result<ServicePort, Box<EvalAltResult>> {
@@ -40,6 +38,7 @@ impl CustomType for Service {
                     })
                 },
             )
+            // l[impl service.http]
             .with_fn("http", |this: &mut Self| {
                 this.def.lock().http.get_or_insert_default();
                 HttpService {
@@ -65,6 +64,9 @@ impl CustomType for Service {
                  port: i64|
                  -> Result<Ingress, Box<EvalAltResult>> {
                     validate_port(port)?;
+                    // l[impl ingress.conflicts]
+                    // TODO: check for duplicate (hostname, port) in the app's ingress
+                    // registry and throw if a conflict is found.
                     Ok(Ingress::new(this.clone(), hostname.into(), port as u16))
                 },
             );
@@ -94,11 +96,11 @@ pub struct HttpService {
     pub port: u16,
 }
 
-// l[impl service.http.route]
 impl CustomType for HttpService {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
             .with_name("HttpService")
+            // l[impl service.http.route]
             .with_fn(
                 "route",
                 |this: &mut Self, prefix: &str| -> Result<HttpServiceRoute, Box<EvalAltResult>> {
@@ -145,19 +147,21 @@ pub struct ExternalService {
     pub name: ResourceName,
 }
 
-// l[impl service.external.port]
 impl CustomType for ExternalService {
     fn build(mut builder: TypeBuilder<Self>) {
-        builder.with_name("ExternalService").with_fn(
-            "port",
-            |this: &mut Self, port: i64| -> Result<ServicePort, Box<EvalAltResult>> {
-                validate_port(port)?;
-                Ok(ServicePort {
-                    service: Service::new(this.name.clone()),
-                    port: port as u16,
-                })
-            },
-        );
+        builder
+            .with_name("ExternalService")
+            // l[impl service.external.port]
+            .with_fn(
+                "port",
+                |this: &mut Self, port: i64| -> Result<ServicePort, Box<EvalAltResult>> {
+                    validate_port(port)?;
+                    Ok(ServicePort {
+                        service: Service::new(this.name.clone()),
+                        port: port as u16,
+                    })
+                },
+            );
     }
 }
 
