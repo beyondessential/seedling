@@ -271,7 +271,7 @@ fn exercise_install_action() {
 // l[verify action.install.requirements.kind-unknown]
 #[test]
 fn install_requirement_unknown_kind_throws() {
-    run_test_script_err(
+    let _ = run_test_script_err(
         r#"
         app.on_install(|rt, reqs| {}, #{
             field: #{

@@ -12,6 +12,7 @@ pub enum LifecycleState {
 }
 
 impl LifecycleState {
+    #[cfg_attr(not(test), expect(dead_code, reason = "todo"))]
     pub fn can_transition_to(self, next: LifecycleState) -> bool {
         use LifecycleState::*;
         matches!(

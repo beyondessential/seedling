@@ -1,6 +1,7 @@
-use std::collections::HashMap;
-
+#[cfg(test)]
 use parking_lot::Mutex;
+#[cfg(test)]
+use std::collections::HashMap;
 
 use crate::runtime::{LifecycleState, ResourceInstance};
 
@@ -8,10 +9,12 @@ pub trait WorldStateOracle: Send + Sync {
     fn lifecycle_state(&self, resource: &ResourceInstance) -> LifecycleState;
 }
 
+#[cfg(test)]
 pub struct TestWorldOracle {
     states: Mutex<HashMap<ResourceInstance, LifecycleState>>,
 }
 
+#[cfg(test)]
 impl TestWorldOracle {
     pub fn new() -> Self {
         Self {
@@ -24,12 +27,14 @@ impl TestWorldOracle {
     }
 }
 
+#[cfg(test)]
 impl Default for TestWorldOracle {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(test)]
 impl WorldStateOracle for TestWorldOracle {
     fn lifecycle_state(&self, resource: &ResourceInstance) -> LifecycleState {
         let states = self.states.lock();

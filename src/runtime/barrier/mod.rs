@@ -77,6 +77,7 @@ impl fmt::Debug for ReplayContext {
 }
 
 impl ReplayContext {
+    #[cfg_attr(not(test), expect(dead_code, reason = "todo"))]
     pub fn new(
         operation_id: OperationId,
         committed: Vec<ActionLogEntry>,
@@ -106,6 +107,7 @@ impl ReplayContext {
         self.committed.get(self.call_index)
     }
 
+    #[cfg_attr(not(test), expect(dead_code, reason = "todo"))]
     pub fn take_pending(&mut self) -> Vec<ActionLogEntry> {
         std::mem::take(&mut self.pending)
     }

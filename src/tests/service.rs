@@ -27,8 +27,8 @@ fn service_port_creates_service_port() {
 // l[verify service.port]
 #[test]
 fn service_port_rejects_invalid() {
-    run_test_script_err(r#"app.service("web").port(0);"#);
-    run_test_script_err(r#"app.service("web").port(65535);"#);
+    let _ = run_test_script_err(r#"app.service("web").port(0);"#);
+    let _ = run_test_script_err(r#"app.service("web").port(65535);"#);
 }
 
 // l[verify service.routing]
@@ -89,7 +89,7 @@ fn http_service_route() {
 // l[verify service.http.route]
 #[test]
 fn http_service_route_rejects_empty() {
-    run_test_script_err(
+    let _ = run_test_script_err(
         r#"
         let h = app.service("web").http(80);
         h.route("");
@@ -100,7 +100,7 @@ fn http_service_route_rejects_empty() {
 // l[verify service.http.route]
 #[test]
 fn http_service_route_rejects_no_slash() {
-    run_test_script_err(
+    let _ = run_test_script_err(
         r#"
         let h = app.service("web").http(80);
         h.route("api");
@@ -138,5 +138,5 @@ fn external_service_port() {
 // l[verify service.external.port]
 #[test]
 fn external_service_port_rejects_invalid() {
-    run_test_script_err(r#"app.external_service("redis").port(0);"#);
+    let _ = run_test_script_err(r#"app.external_service("redis").port(0);"#);
 }

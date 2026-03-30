@@ -86,7 +86,7 @@ fn ingress_redirect_custom_port_and_code() {
 // l[verify ingress.redirect]
 #[test]
 fn ingress_redirect_without_https_throws() {
-    run_test_script_err(
+    let _ = run_test_script_err(
         r#"
         app.service("web").ingress("example.com", 443).tls().redirect();
     "#,
@@ -96,7 +96,7 @@ fn ingress_redirect_without_https_throws() {
 // l[verify ingress.certificates]
 #[test]
 fn ingress_certificates_implied_by_http() {
-    run_test_script_app(
+    let _ = run_test_script_app(
         r#"
         app.service("web").ingress("example.com", 443).http();
     "#,
@@ -106,7 +106,7 @@ fn ingress_certificates_implied_by_http() {
 // l[verify ingress.conflicts]
 #[test]
 fn ingress_conflict_within_app_is_catchable() {
-    run_test_script_app(
+    let _ = run_test_script_app(
         r#"
         let svc = app.service("web");
         svc.ingress("example.com", 443).http();

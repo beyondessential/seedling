@@ -3,6 +3,8 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use rhai::{Engine, Scope};
 
+use crate::runtime::barrier::runtime;
+
 type Holder<T> = Arc<Mutex<T>>;
 
 pub mod action;
@@ -17,7 +19,6 @@ pub mod job;
 pub mod param;
 pub mod pod;
 pub mod resource;
-pub mod runtime;
 pub mod service;
 pub mod volume;
 

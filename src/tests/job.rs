@@ -71,7 +71,7 @@ fn job_implements_pod_interface() {
 // l[verify job.deadline]
 #[test]
 fn job_deadline_rejects_zero() {
-    run_test_script_err(
+    let _ = run_test_script_err(
         r#"
         app.job("bad").deadline(0);
     "#,
@@ -81,7 +81,7 @@ fn job_deadline_rejects_zero() {
 // l[verify job.deadline]
 #[test]
 fn job_deadline_rejects_negative() {
-    run_test_script_err(
+    let _ = run_test_script_err(
         r#"
         app.job("bad").deadline(-10);
     "#,

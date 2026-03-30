@@ -63,7 +63,7 @@ fn errors_can_be_caught_with_try_catch() {
 // l[verify bsl.errors]
 #[test]
 fn uncaught_error_fails_script() {
-    run_test_script_err(r#"throw "deliberate failure";"#);
+    let _ = run_test_script_err(r#"throw "deliberate failure";"#);
 }
 
 // l[verify bsl.name]
@@ -81,19 +81,19 @@ fn name_rules_accepted() {
 // l[verify bsl.port]
 #[test]
 fn port_validation_rejects_zero() {
-    run_test_script_err(r#"app.service("web").port(0);"#);
+    let _ = run_test_script_err(r#"app.service("web").port(0);"#);
 }
 
 // l[verify bsl.port]
 #[test]
 fn port_validation_rejects_upper_bound() {
-    run_test_script_err(r#"app.service("web").port(65535);"#);
+    let _ = run_test_script_err(r#"app.service("web").port(65535);"#);
 }
 
 // l[verify bsl.port]
 #[test]
 fn port_validation_rejects_negative() {
-    run_test_script_err(r#"app.service("web").port(-1);"#);
+    let _ = run_test_script_err(r#"app.service("web").port(-1);"#);
 }
 
 // l[verify bsl.port]

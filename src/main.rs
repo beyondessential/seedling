@@ -2,9 +2,10 @@ use std::path::PathBuf;
 
 use rhai::{AST, Dynamic, Engine, Scope};
 
-mod defs;
-mod runtime;
-use defs::install::InstallDef;
+use crate::defs::install::InstallDef;
+
+pub(crate) mod defs;
+pub(crate) mod runtime;
 
 #[cfg(test)]
 mod tests;
@@ -19,8 +20,8 @@ fn setup() -> (Engine, Scope<'static>, defs::app::App) {
 fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, script_ast: &AST) {
     let def = app.0.lock();
 
-    let rt = defs::runtime::RuntimeInstance::stub();
-    let attach = defs::runtime::shell_attach_fn_ptr();
+    let rt = runtime::barrier::runtime::RuntimeInstance::stub();
+    let attach = runtime::barrier::runtime::shell_attach_fn_ptr();
 
     let actions: Vec<_> = def
         .actions
@@ -145,6 +146,7 @@ fn build_install_reqs_map(install: &InstallDef) -> rhai::Map {
     map
 }
 
+#[cfg(test)]
 fn run_script(
     engine: &Engine,
     scope: &mut Scope,

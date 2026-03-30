@@ -12,7 +12,7 @@ use crate::runtime::barrier::{ActionLogEntry, BarrierCondition, OperationId, Rep
 // In-memory action log (used for tests; production will use SQLite)
 // ---------------------------------------------------------------------------
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct InMemoryActionLog {
     entries: Mutex<Vec<ActionLogEntry>>,
 }
