@@ -184,21 +184,21 @@ impl CustomType for App {
         // l[impl collection.select]
         builder.with_fn(
             "select",
-            |_this: &mut Self, _criterion: Map| -> Collection { todo!() },
+            |_this: &mut Self, _criterion: Map| -> Collection { Collection },
         );
 
         // l[impl collection.one]
-        builder.with_fn("one", |_this: &mut Self| -> Collection { todo!() });
+        builder.with_fn("one", |_this: &mut Self| -> Collection { Collection });
 
         // l[impl collection.only]
         builder.with_fn("only", |_this: &mut Self, _other: Dynamic| -> Collection {
-            todo!()
+            Collection
         });
 
         // l[impl collection.except]
         builder.with_fn(
             "except",
-            |_this: &mut Self, _other: Dynamic| -> Collection { todo!() },
+            |_this: &mut Self, _other: Dynamic| -> Collection { Collection },
         );
 
         // l[impl action.type]

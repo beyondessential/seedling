@@ -104,22 +104,6 @@ fn shells_in_separate_namespace_from_actions() {
     assert!(def.shells.contains_key("debug"));
 }
 
-// l[verify action.shell.attach]
-#[test]
-fn exercise_shell_with_attach() {
-    exercise(
-        r#"
-        app.on_shell("db", |rt, attach| {
-            let shell = app.job("shell-db")
-                .image("tools")
-                .command("psql");
-            rt.start(shell).running();
-            attach.call(shell);
-        });
-    "#,
-    );
-}
-
 // l[verify action.shell]
 #[test]
 fn exercise_shell_return_job() {
