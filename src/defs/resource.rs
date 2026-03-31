@@ -80,4 +80,33 @@ impl Resource {
             Self::ExternalVolume(_) => ResourceKind::ExternalVolume,
         }
     }
+
+    pub fn name(&self) -> &ResourceName {
+        match self {
+            Self::Service(s) => &s.name,
+            Self::HttpService(h) => &h.service.name,
+            Self::ExternalService(s) => &s.name,
+            Self::Ingress(i) => &i.name,
+            Self::Deployment(d) => &d.name,
+            Self::Job(j) => &j.name,
+            Self::Volume(v) => v
+                .name
+                .as_ref()
+                .expect("volumes stored in AppDef always have a name"),
+            Self::ExternalVolume(v) => &v.name,
+        }
+    }
+
+    pub fn to_dynamic(&self) -> Dynamic {
+        match self {
+            Self::Service(s) => Dynamic::from(s.clone()),
+            Self::HttpService(h) => Dynamic::from(h.clone()),
+            Self::ExternalService(s) => Dynamic::from(s.clone()),
+            Self::Ingress(i) => Dynamic::from(i.clone()),
+            Self::Deployment(d) => Dynamic::from(d.clone()),
+            Self::Job(j) => Dynamic::from(j.clone()),
+            Self::Volume(v) => Dynamic::from(v.clone()),
+            Self::ExternalVolume(v) => Dynamic::from(v.clone()),
+        }
+    }
 }

@@ -1,11 +1,12 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use rhai::{CustomType, Dynamic, EvalAltResult, FnPtr, Map, TypeBuilder};
 
 use super::{
     Holder,
     action::{Action, ActionDef, ShellDef},
-    collection::Collection,
+    collection::{AppBag, Collection},
     deployment::Deployment,
     install::{InstallDef, InstallRequirementDef, InstallRequirementKind},
     job::Job,
@@ -182,24 +183,24 @@ impl CustomType for App {
         );
 
         // l[impl collection.select]
-        builder.with_fn(
-            "select",
-            |_this: &mut Self, _criterion: Map| -> Collection { Collection },
-        );
+        builder.with_fn("select", |this: &mut Self, criterion: Map| -> Collection {
+            Collection::from_bag(Arc::new(AppBag(this.clone()))).select(&criterion)
+        });
 
         // l[impl collection.one]
-        builder.with_fn("one", |_this: &mut Self| -> Collection { Collection });
+        builder.with_fn("one", |this: &mut Self| -> Dynamic {
+            Collection::from_bag(Arc::new(AppBag(this.clone()))).one()
+        });
 
         // l[impl collection.only]
-        builder.with_fn("only", |_this: &mut Self, _other: Dynamic| -> Collection {
-            Collection
+        builder.with_fn("only", |this: &mut Self, other: Dynamic| -> Collection {
+            Collection::from_bag(Arc::new(AppBag(this.clone()))).only(other)
         });
 
         // l[impl collection.except]
-        builder.with_fn(
-            "except",
-            |_this: &mut Self, _other: Dynamic| -> Collection { Collection },
-        );
+        builder.with_fn("except", |this: &mut Self, other: Dynamic| -> Collection {
+            Collection::from_bag(Arc::new(AppBag(this.clone()))).except(other)
+        });
 
         // l[impl action.type]
         // l[impl action.option-description]

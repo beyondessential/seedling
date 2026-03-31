@@ -1,4 +1,6 @@
-use rhai::{CustomType, Dynamic, FnPtr, TypeBuilder};
+use rhai::{CustomType, Dynamic, FnPtr, Map, TypeBuilder};
+
+use super::collection::{Collection, col};
 
 #[derive(Debug, Clone)]
 pub struct ActionDef {
@@ -18,20 +20,21 @@ impl CustomType for Action {
         builder
             .with_name("Action")
             // l[impl collection.one]
-            .with_fn("one", |_this: &mut Self| -> Dynamic { todo!() })
+            .with_fn("one", |this: &mut Self| -> Dynamic {
+                col(Dynamic::from(this.clone())).one()
+            })
             // l[impl collection.only]
-            .with_fn("only", |_this: &mut Self, _other: Dynamic| -> Dynamic {
-                todo!()
+            .with_fn("only", |this: &mut Self, other: Dynamic| -> Collection {
+                col(Dynamic::from(this.clone())).only(other)
             })
             // l[impl collection.except]
-            .with_fn("except", |_this: &mut Self, _other: Dynamic| -> Dynamic {
-                todo!()
+            .with_fn("except", |this: &mut Self, other: Dynamic| -> Collection {
+                col(Dynamic::from(this.clone())).except(other)
             })
             // l[impl collection.select]
-            .with_fn(
-                "select",
-                |_this: &mut Self, _criterion: rhai::Map| -> Dynamic { todo!() },
-            );
+            .with_fn("select", |this: &mut Self, criterion: Map| -> Collection {
+                col(Dynamic::from(this.clone())).select(&criterion)
+            });
     }
 }
 
