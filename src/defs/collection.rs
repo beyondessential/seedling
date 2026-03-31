@@ -1,10 +1,17 @@
 use std::collections::HashSet;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use rhai::{CustomType, Dynamic, Map, TypeBuilder};
 
+use super::action::Action;
 use super::app::App;
+use super::deployment::Deployment;
+use super::ingress::Ingress;
+use super::job::Job;
 use super::resource::{ResourceId, ResourceKind};
+use super::service::{ExternalService, HttpService, Service};
+use super::volume::{ExternalVolume, Volume};
 
 // ---------------------------------------------------------------------------
 // ResourceBag — source of resource identity and value data
@@ -22,13 +29,26 @@ pub(crate) struct AppBag(pub App);
 
 impl ResourceBag for AppBag {
     fn ids(&self) -> Vec<ResourceId> {
-        // Scaffolding — filled in next commit.
-        vec![]
+        let def = self.0.0.lock();
+        let resource_ids = def.resources.keys().cloned();
+        let action_ids = def.actions.keys().map(|name| ResourceId {
+            kind: ResourceKind::Action,
+            name: Arc::new(name.clone()),
+        });
+        resource_ids.chain(action_ids).collect()
     }
 
-    fn fetch(&self, _id: &ResourceId) -> Option<Dynamic> {
-        // Scaffolding — filled in next commit.
-        None
+    fn fetch(&self, id: &ResourceId) -> Option<Dynamic> {
+        let def = self.0.0.lock();
+        if id.kind == ResourceKind::Action {
+            def.actions.get(id.name.as_str()).map(|_| {
+                Dynamic::from(Action {
+                    name: (*id.name).clone(),
+                })
+            })
+        } else {
+            def.resources.get(id).map(|r| r.to_dynamic())
+        }
     }
 }
 
@@ -54,7 +74,7 @@ impl ResourceBag for ItemBag {
 // ---------------------------------------------------------------------------
 
 #[derive(Clone)]
-pub struct ResourceHandle(pub Arc<dyn ResourceBag>, pub ResourceId);
+pub struct ResourceHandle(pub Rc<dyn ResourceBag>, pub ResourceId);
 
 impl ResourceHandle {
     pub fn kind(&self) -> ResourceKind {
@@ -81,14 +101,14 @@ pub trait Collectable {
 }
 
 // All resources from one bag (e.g. an entire App).
-struct BagCollection(Arc<dyn ResourceBag>);
+struct BagCollection(Rc<dyn ResourceBag>);
 
 impl Collectable for BagCollection {
     fn resolve(&self) -> Vec<ResourceHandle> {
         self.0
             .ids()
             .into_iter()
-            .map(|id| ResourceHandle(Arc::clone(&self.0), id))
+            .map(|id| ResourceHandle(Rc::clone(&self.0), id))
             .collect()
     }
 }
@@ -101,7 +121,11 @@ struct Select {
 
 impl Collectable for Select {
     fn resolve(&self) -> Vec<ResourceHandle> {
-        todo!("Select::resolve")
+        self.inner
+            .resolve()
+            .into_iter()
+            .filter(|h| self.selector.matches(h))
+            .collect()
     }
 }
 
@@ -113,7 +137,17 @@ struct Only {
 
 impl Collectable for Only {
     fn resolve(&self) -> Vec<ResourceHandle> {
-        todo!("Only::resolve")
+        let right_keys: HashSet<(ResourceKind, String)> = self
+            .right
+            .resolve()
+            .into_iter()
+            .map(|h| (h.kind(), h.name().to_owned()))
+            .collect();
+        self.left
+            .resolve()
+            .into_iter()
+            .filter(|h| right_keys.contains(&(h.kind(), h.name().to_owned())))
+            .collect()
     }
 }
 
@@ -125,7 +159,17 @@ struct Except {
 
 impl Collectable for Except {
     fn resolve(&self) -> Vec<ResourceHandle> {
-        todo!("Except::resolve")
+        let right_keys: HashSet<(ResourceKind, String)> = self
+            .right
+            .resolve()
+            .into_iter()
+            .map(|h| (h.kind(), h.name().to_owned()))
+            .collect();
+        self.left
+            .resolve()
+            .into_iter()
+            .filter(|h| !right_keys.contains(&(h.kind(), h.name().to_owned())))
+            .collect()
     }
 }
 
@@ -136,7 +180,7 @@ struct Union {
 
 impl Collectable for Union {
     fn resolve(&self) -> Vec<ResourceHandle> {
-        todo!("Union::resolve")
+        self.parts.iter().flat_map(|p| p.resolve()).collect()
     }
 }
 
@@ -161,18 +205,64 @@ pub struct Selector {
 }
 
 impl Selector {
+    // l[impl collection.select.types]
+    // l[impl collection.select.names]
+    // l[impl collection.select.name-patterns]
     pub fn from_map(map: &Map) -> Self {
-        // Scaffolding — will parse `types`, `names`, `name_patterns` keys.
-        let _ = map;
-        Selector::default()
+        let types = map.get("types").and_then(|v| {
+            v.clone().try_cast::<rhai::Array>().map(|arr| {
+                arr.into_iter()
+                    .filter_map(|item| item.try_cast::<ResourceKind>())
+                    .collect()
+            })
+        });
+
+        let names = map.get("names").and_then(|v| {
+            v.clone().try_cast::<rhai::Array>().map(|arr| {
+                arr.into_iter()
+                    .filter_map(|item| item.into_string().ok())
+                    .collect()
+            })
+        });
+
+        let name_patterns = map.get("name_patterns").and_then(|v| {
+            v.clone().try_cast::<rhai::Array>().map(|arr| {
+                arr.into_iter()
+                    .filter_map(|item| item.into_string().ok())
+                    .collect()
+            })
+        });
+
+        Selector {
+            types,
+            names,
+            name_patterns,
+        }
     }
 
+    // l[impl collection.select.types]
+    // l[impl collection.select.names]
+    // l[impl collection.select.name-patterns]
     pub fn matches(&self, handle: &ResourceHandle) -> bool {
-        todo!(
-            "Selector::matches — kind={:?} name={}",
-            handle.kind(),
-            handle.name()
-        )
+        if let Some(types) = &self.types
+            && !types.contains(&handle.kind())
+        {
+            return false;
+        }
+
+        if let Some(names) = &self.names
+            && !names.contains(handle.name())
+        {
+            return false;
+        }
+
+        if let Some(patterns) = &self.name_patterns
+            && !patterns.iter().any(|p| glob_matches(p, handle.name()))
+        {
+            return false;
+        }
+
+        true
     }
 }
 
@@ -182,15 +272,15 @@ impl Selector {
 
 // l[impl collection.interface]
 #[derive(Clone)]
-pub struct Collection(pub(crate) Arc<dyn Collectable>);
+pub struct Collection(pub(crate) Rc<dyn Collectable>);
 
 impl Collection {
     pub fn empty() -> Self {
-        Self(Arc::new(Empty))
+        Self(Rc::new(Empty))
     }
 
-    pub fn from_bag(bag: Arc<dyn ResourceBag>) -> Self {
-        Self(Arc::new(BagCollection(bag)))
+    pub fn from_bag(bag: Rc<dyn ResourceBag>) -> Self {
+        Self(Rc::new(BagCollection(bag)))
     }
 
     pub fn resolve(&self) -> Vec<ResourceHandle> {
@@ -208,7 +298,7 @@ impl Collection {
 
     // l[impl collection.only]
     pub fn only(self, other: Dynamic) -> Self {
-        Self(Arc::new(Only {
+        Self(Rc::new(Only {
             left: self,
             right: col(other),
         }))
@@ -216,7 +306,7 @@ impl Collection {
 
     // l[impl collection.except]
     pub fn except(self, other: Dynamic) -> Self {
-        Self(Arc::new(Except {
+        Self(Rc::new(Except {
             left: self,
             right: col(other),
         }))
@@ -224,7 +314,7 @@ impl Collection {
 
     // l[impl collection.select]
     pub fn select(self, criterion: &Map) -> Self {
-        Self(Arc::new(Select {
+        Self(Rc::new(Select {
             inner: self,
             selector: Selector::from_map(criterion),
         }))
@@ -256,27 +346,129 @@ impl CustomType for Collection {
 // col() — coerce any value into a Collection
 // ---------------------------------------------------------------------------
 
-/// Coerces any Collection-like value into a `Collection`.
+/// Coerces any Collection-like value into a [`Collection`].
 ///
-/// - `Collection` is returned as-is.
-/// - `App` is wrapped in an [`AppBag`].
-/// - Individual resource types (Deployment, Service, …) are wrapped in an
-///   [`ItemBag`] — handled in the implementation commit.
-/// - A Rhai array is collapsed into a [`Union`] — handled in the
-///   implementation commit.
-/// - Everything else yields an empty collection.
+/// Handles `Collection`, `App`, all named resource types, and Rhai arrays
+/// (which are flattened into a [`Union`]). Anonymous volumes and unknown
+/// types yield an empty collection.
 // l[impl collection.interface]
 pub fn col(val: Dynamic) -> Collection {
     if let Some(c) = val.clone().try_cast::<Collection>() {
         return c;
     }
 
-    if let Some(app) = val.try_cast::<App>() {
-        return Collection::from_bag(Arc::new(AppBag(app)));
+    if let Some(app) = val.clone().try_cast::<App>() {
+        return Collection::from_bag(Rc::new(AppBag(app)));
     }
 
-    // TODO: Deployment, Service, Job, Action, Ingress, Volume,
-    //       ExternalService, ExternalVolume, Array — next commit.
+    if let Some(dep) = val.clone().try_cast::<Deployment>() {
+        let id = ResourceId {
+            kind: ResourceKind::Deployment,
+            name: dep.name.clone(),
+        };
+        return Collection::from_bag(Rc::new(ItemBag {
+            id,
+            value: Dynamic::from(dep),
+        }));
+    }
+
+    if let Some(svc) = val.clone().try_cast::<Service>() {
+        let id = ResourceId {
+            kind: ResourceKind::Service,
+            name: svc.name.clone(),
+        };
+        return Collection::from_bag(Rc::new(ItemBag {
+            id,
+            value: Dynamic::from(svc),
+        }));
+    }
+
+    if let Some(h) = val.clone().try_cast::<HttpService>() {
+        let id = ResourceId {
+            kind: ResourceKind::HttpService,
+            name: h.service.name.clone(),
+        };
+        return Collection::from_bag(Rc::new(ItemBag {
+            id,
+            value: Dynamic::from(h),
+        }));
+    }
+
+    if let Some(job) = val.clone().try_cast::<Job>() {
+        let id = ResourceId {
+            kind: ResourceKind::Job,
+            name: job.name.clone(),
+        };
+        return Collection::from_bag(Rc::new(ItemBag {
+            id,
+            value: Dynamic::from(job),
+        }));
+    }
+
+    if let Some(action) = val.clone().try_cast::<Action>() {
+        let id = ResourceId {
+            kind: ResourceKind::Action,
+            name: Arc::new(action.name.clone()),
+        };
+        return Collection::from_bag(Rc::new(ItemBag {
+            id,
+            value: Dynamic::from(action),
+        }));
+    }
+
+    if let Some(ingress) = val.clone().try_cast::<Ingress>() {
+        let id = ResourceId {
+            kind: ResourceKind::Ingress,
+            name: ingress.name.clone(),
+        };
+        return Collection::from_bag(Rc::new(ItemBag {
+            id,
+            value: Dynamic::from(ingress),
+        }));
+    }
+
+    if let Some(vol) = val.clone().try_cast::<Volume>() {
+        // Anonymous volumes have no ResourceId and cannot participate in collections.
+        if let Some(name) = vol.name.clone() {
+            let id = ResourceId {
+                kind: ResourceKind::Volume,
+                name,
+            };
+            return Collection::from_bag(Rc::new(ItemBag {
+                id,
+                value: Dynamic::from(vol),
+            }));
+        }
+        return Collection::empty();
+    }
+
+    if let Some(ext) = val.clone().try_cast::<ExternalService>() {
+        let id = ResourceId {
+            kind: ResourceKind::ExternalService,
+            name: ext.name.clone(),
+        };
+        return Collection::from_bag(Rc::new(ItemBag {
+            id,
+            value: Dynamic::from(ext),
+        }));
+    }
+
+    if let Some(vol) = val.clone().try_cast::<ExternalVolume>() {
+        let id = ResourceId {
+            kind: ResourceKind::ExternalVolume,
+            name: vol.name.clone(),
+        };
+        return Collection::from_bag(Rc::new(ItemBag {
+            id,
+            value: Dynamic::from(vol),
+        }));
+    }
+
+    if let Some(arr) = val.try_cast::<rhai::Array>() {
+        let parts = arr.into_iter().map(col).collect();
+        return Collection(Rc::new(Union { parts }));
+    }
+
     Collection::empty()
 }
 
@@ -286,6 +478,25 @@ pub fn col(val: Dynamic) -> Collection {
 
 /// Returns true if `text` matches `pattern`, where `*` matches any sequence
 /// of characters and `?` matches exactly one character.
-fn glob_matches(_pattern: &str, _text: &str) -> bool {
-    todo!("glob_matches")
+fn glob_matches(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let t: Vec<char> = text.chars().collect();
+    let (m, n) = (p.len(), t.len());
+    let mut dp = vec![vec![false; n + 1]; m + 1];
+    dp[0][0] = true;
+    for i in 1..=m {
+        if p[i - 1] == '*' {
+            dp[i][0] = dp[i - 1][0];
+        }
+    }
+    for i in 1..=m {
+        for j in 1..=n {
+            if p[i - 1] == '*' {
+                dp[i][j] = dp[i - 1][j] || dp[i][j - 1];
+            } else if p[i - 1] == '?' || p[i - 1] == t[j - 1] {
+                dp[i][j] = dp[i - 1][j - 1];
+            }
+        }
+    }
+    dp[m][n]
 }

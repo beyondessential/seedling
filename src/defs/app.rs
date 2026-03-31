@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use rhai::{CustomType, Dynamic, EvalAltResult, FnPtr, Map, TypeBuilder};
 
@@ -184,22 +184,22 @@ impl CustomType for App {
 
         // l[impl collection.select]
         builder.with_fn("select", |this: &mut Self, criterion: Map| -> Collection {
-            Collection::from_bag(Arc::new(AppBag(this.clone()))).select(&criterion)
+            Collection::from_bag(Rc::new(AppBag(this.clone()))).select(&criterion)
         });
 
         // l[impl collection.one]
         builder.with_fn("one", |this: &mut Self| -> Dynamic {
-            Collection::from_bag(Arc::new(AppBag(this.clone()))).one()
+            Collection::from_bag(Rc::new(AppBag(this.clone()))).one()
         });
 
         // l[impl collection.only]
         builder.with_fn("only", |this: &mut Self, other: Dynamic| -> Collection {
-            Collection::from_bag(Arc::new(AppBag(this.clone()))).only(other)
+            Collection::from_bag(Rc::new(AppBag(this.clone()))).only(other)
         });
 
         // l[impl collection.except]
         builder.with_fn("except", |this: &mut Self, other: Dynamic| -> Collection {
-            Collection::from_bag(Arc::new(AppBag(this.clone()))).except(other)
+            Collection::from_bag(Rc::new(AppBag(this.clone()))).except(other)
         });
 
         // l[impl action.type]
