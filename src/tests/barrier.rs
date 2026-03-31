@@ -27,8 +27,8 @@ fn dep(name: &str) -> ResourceInstance {
     ResourceInstance::named("test-app", ResourceKind::Deployment, name)
 }
 
-// r[barrier.suspension]
-// r[barrier.condition]
+// r[verify barrier.suspension]
+// r[verify barrier.condition]
 #[test]
 fn barrier_satisfied_on_first_pass() {
     let (engine, mut scope, app, ast) = setup_with_script(
@@ -48,8 +48,8 @@ fn barrier_satisfied_on_first_pass() {
     assert!(matches!(result, OperationResult::Completed));
 }
 
-// r[barrier.suspension]
-// r[barrier.resume]
+// r[verify barrier.suspension]
+// r[verify barrier.resume]
 #[test]
 fn barrier_suspends_then_resumes() {
     let (engine, mut scope, app, ast) = setup_with_script(
@@ -94,8 +94,9 @@ fn barrier_suspends_then_resumes() {
     assert!(matches!(r, OperationResult::Completed));
 }
 
-// r[barrier.suspension]
-// r[barrier.resume]
+// r[verify barrier.suspension]
+// r[verify barrier.resume]
+// r[verify barrier.condition]
 #[test]
 fn sequential_barriers() {
     let (engine, mut scope, app, ast) = setup_with_script(
@@ -155,7 +156,7 @@ fn sequential_barriers() {
     assert!(matches!(r, OperationResult::Completed));
 }
 
-// r[barrier.deadline]
+// r[verify barrier.deadline]
 #[test]
 fn barrier_deadline_zero_expires_on_second_pass() {
     let (engine, mut scope, app, ast) = setup_with_script(
@@ -197,7 +198,9 @@ fn barrier_deadline_zero_expires_on_second_pass() {
     assert!(matches!(r, OperationResult::Failed(_)));
 }
 
-// r[barrier.replay]
+// r[verify barrier.replay]
+// r[verify reconciliation.idempotency]
+// r[verify history.action-log.replay]
 #[test]
 fn replay_idempotency() {
     let (engine, mut scope, app, ast) = setup_with_script(
@@ -258,7 +261,7 @@ fn replay_idempotency() {
     );
 }
 
-// r[barrier.replay.rt-stop]
+// r[verify barrier.replay.rt-stop]
 #[test]
 fn rt_stop_acts_as_barrier() {
     let (engine, mut scope, app, ast) = setup_with_script(
@@ -304,7 +307,7 @@ fn rt_stop_acts_as_barrier() {
     assert!(matches!(r, OperationResult::Completed));
 }
 
-// r[barrier.suspension] — existing language tests still pass with stub rt
+// r[verify barrier.suspension]
 #[test]
 fn stub_runtime_still_passes_language_tests() {
     // The existing exercise() helper uses RuntimeInstance::stub() (no context),

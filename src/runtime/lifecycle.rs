@@ -52,6 +52,7 @@ impl LifecycleState {
 mod tests {
     use super::LifecycleState::*;
 
+    // r[verify lifecycle.transitions]
     #[test]
     fn valid_transitions() {
         assert!(Pending.can_transition_to(Scheduled));
@@ -62,6 +63,7 @@ mod tests {
         assert!(Terminated.can_transition_to(Unscheduled));
     }
 
+    // r[verify lifecycle.transitions]
     #[test]
     fn skip_transitions() {
         assert!(Running.can_transition_to(Terminated));
@@ -71,6 +73,7 @@ mod tests {
         assert!(Terminating.can_transition_to(Unscheduled));
     }
 
+    // r[verify lifecycle.transitions]
     #[test]
     fn invalid_transitions() {
         assert!(!Unscheduled.can_transition_to(Running));
@@ -80,6 +83,8 @@ mod tests {
         assert!(!Running.can_transition_to(Pending));
     }
 
+    // r[verify lifecycle.derivation]
+    // r[verify lifecycle.states]
     #[test]
     fn has_reached() {
         assert!(!Pending.has_reached(Running));

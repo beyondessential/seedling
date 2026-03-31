@@ -53,6 +53,7 @@ mod tests {
     use super::*;
     use crate::defs::resource::ResourceKind;
 
+    // r[verify identity.components]
     #[test]
     fn different_names_not_equal() {
         let a = ResourceInstance::named("app", ResourceKind::Deployment, "a");
@@ -60,6 +61,8 @@ mod tests {
         assert_ne!(a, b);
     }
 
+    // r[verify identity.stable]
+    // r[verify identity.components]
     #[test]
     fn same_components_equal() {
         let a = ResourceInstance::named("app", ResourceKind::Deployment, "web");
@@ -67,6 +70,7 @@ mod tests {
         assert_eq!(a, b);
     }
 
+    // r[verify identity.scaled]
     #[test]
     fn different_ordinals_not_equal() {
         let a = ResourceInstance::scaled("app", ResourceKind::Deployment, "web", 0);
@@ -74,12 +78,14 @@ mod tests {
         assert_ne!(a, b);
     }
 
+    // r[verify identity.anonymous]
     #[test]
     fn anonymous_has_no_name() {
         let a = ResourceInstance::anonymous("app", ResourceKind::Deployment);
         assert!(a.name.is_none());
     }
 
+    // r[verify identity.stable]
     #[test]
     fn serde_roundtrip() {
         let r = ResourceInstance::named("app", ResourceKind::Deployment, "web");

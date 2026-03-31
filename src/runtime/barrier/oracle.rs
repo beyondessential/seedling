@@ -164,6 +164,8 @@ mod tests {
 
     // --- derive_lifecycle_state (pure) ---
 
+    // r[verify lifecycle.derivation]
+    // r[verify lifecycle.states]
     #[test]
     fn empty_observations_gives_pending() {
         let resource = dep("app", "web");
@@ -171,6 +173,8 @@ mod tests {
         assert_eq!(state, LifecycleState::Pending);
     }
 
+    // r[verify lifecycle.container]
+    // r[verify lifecycle.derivation]
     #[test]
     fn container_created_gives_scheduled() {
         let resource = dep("app", "web");
@@ -178,6 +182,7 @@ mod tests {
         assert_eq!(state, LifecycleState::Scheduled);
     }
 
+    // r[verify lifecycle.container]
     #[test]
     fn image_pull_started_gives_scheduled() {
         let resource = dep("app", "web");
@@ -185,6 +190,8 @@ mod tests {
         assert_eq!(state, LifecycleState::Scheduled);
     }
 
+    // r[verify lifecycle.container]
+    // r[verify lifecycle.derivation]
     #[test]
     fn container_running_gives_running() {
         let resource = dep("app", "web");
@@ -192,6 +199,7 @@ mod tests {
         assert_eq!(state, LifecycleState::Running);
     }
 
+    // r[verify lifecycle.container]
     #[test]
     fn health_check_pass_gives_ready() {
         let resource = dep("app", "web");
@@ -202,6 +210,8 @@ mod tests {
         assert_eq!(state, LifecycleState::Ready);
     }
 
+    // r[verify lifecycle.container]
+    // r[verify lifecycle.transitions]
     #[test]
     fn container_exited_gives_terminated_skipping_terminating() {
         let resource = dep("app", "web");
@@ -212,6 +222,8 @@ mod tests {
         assert_eq!(state, LifecycleState::Terminated);
     }
 
+    // r[verify lifecycle.container]
+    // r[verify lifecycle.transitions]
     #[test]
     fn stop_sent_then_exited_gives_terminated_via_terminating() {
         let resource = dep("app", "web");
@@ -226,6 +238,8 @@ mod tests {
         assert_eq!(state, LifecycleState::Terminated);
     }
 
+    // r[verify lifecycle.container]
+    // r[verify lifecycle.transitions]
     #[test]
     fn container_removed_gives_unscheduled() {
         let resource = dep("app", "web");
@@ -240,6 +254,8 @@ mod tests {
         assert_eq!(state, LifecycleState::Unscheduled);
     }
 
+    // r[verify lifecycle.derivation]
+    // r[verify reconciliation.idempotency]
     #[test]
     fn duplicate_running_observations_do_not_regress() {
         let resource = dep("app", "web");
@@ -251,6 +267,7 @@ mod tests {
         assert_eq!(state, LifecycleState::Running);
     }
 
+    // r[verify lifecycle.derivation]
     #[test]
     fn unknown_obs_kind_is_ignored() {
         let resource = dep("app", "web");
@@ -261,6 +278,7 @@ mod tests {
         assert_eq!(state, LifecycleState::Running);
     }
 
+    // r[verify lifecycle.service]
     #[test]
     fn service_kind_returns_pending() {
         let resource = ResourceInstance::named("app", ResourceKind::Service, "web");
@@ -270,6 +288,7 @@ mod tests {
 
     // --- DbWorldOracle (DB-backed) ---
 
+    // r[verify history.world.state-derivation]
     #[test]
     fn db_oracle_empty_gives_pending() {
         let db = Db::open_in_memory().expect("open");
@@ -278,6 +297,8 @@ mod tests {
         assert_eq!(oracle.lifecycle_state(&resource), LifecycleState::Pending);
     }
 
+    // r[verify history.world.state-derivation]
+    // r[verify lifecycle.derivation]
     #[test]
     fn db_oracle_derives_from_observations() {
         let db = Db::open_in_memory().expect("open");
@@ -292,6 +313,9 @@ mod tests {
         assert_eq!(oracle.lifecycle_state(&resource), LifecycleState::Running);
     }
 
+    // r[verify history.world.state-derivation]
+    // r[verify lifecycle.container]
+    // r[verify lifecycle.transitions]
     #[test]
     fn db_oracle_full_sequence_to_terminated() {
         let db = Db::open_in_memory().expect("open");
@@ -308,6 +332,8 @@ mod tests {
         );
     }
 
+    // r[verify history.world.state-derivation]
+    // r[verify lifecycle.derivation]
     #[test]
     fn db_oracle_uses_query_observations_from_history() {
         // Ensure the DB oracle is consistent with direct query_observations calls.

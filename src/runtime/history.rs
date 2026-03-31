@@ -307,6 +307,9 @@ mod tests {
 
     // --- World observations ---
 
+    // r[verify history.world]
+    // r[verify history.world.entries]
+    // r[verify history.world.state-derivation]
     #[test]
     fn insert_and_retrieve_observation() {
         let db = Db::open_in_memory().expect("open");
@@ -323,6 +326,7 @@ mod tests {
         assert_eq!(obs[0].resource, resource);
     }
 
+    // r[verify history.world.state-derivation]
     #[test]
     fn observations_ordered_by_recorded_at() {
         let db = Db::open_in_memory().expect("open");
@@ -339,6 +343,7 @@ mod tests {
         assert_eq!(obs[1].obs_kind, "container_running");
     }
 
+    // r[verify history.world.entries]
     #[test]
     fn observations_scoped_to_resource() {
         let db = Db::open_in_memory().expect("open");
@@ -359,6 +364,7 @@ mod tests {
         assert_eq!(api_obs[0].obs_kind, "container_running");
     }
 
+    // r[verify history.world.state-derivation]
     #[test]
     fn observations_empty_for_unknown_resource() {
         let db = Db::open_in_memory().expect("open");
@@ -369,6 +375,9 @@ mod tests {
 
     // --- Autonomous operations ---
 
+    // r[verify history.operations]
+    // r[verify history.operations.entries]
+    // r[verify history.operations.provenance]
     #[test]
     fn insert_and_retrieve_autonomous_operation() {
         let db = Db::open_in_memory().expect("open");
@@ -390,6 +399,7 @@ mod tests {
         assert_eq!(ops[0].id, id);
     }
 
+    // r[verify history.operations.entries]
     #[test]
     fn complete_autonomous_operation_sets_outcome() {
         let db = Db::open_in_memory().expect("open");
@@ -408,6 +418,7 @@ mod tests {
         assert!(ops[0].completed_at.is_some());
     }
 
+    // r[verify history.operations.entries]
     #[test]
     fn complete_autonomous_operation_with_error() {
         let db = Db::open_in_memory().expect("open");
@@ -425,6 +436,7 @@ mod tests {
         assert_eq!(ops[0].outcome.as_deref(), Some("err:timeout"));
     }
 
+    // r[verify history.operations.entries]
     #[test]
     fn autonomous_operations_scoped_to_resource() {
         let db = Db::open_in_memory().expect("open");
@@ -445,6 +457,8 @@ mod tests {
 
     // --- Action log ---
 
+    // r[verify history.action-log]
+    // r[verify history.action-log.entries]
     #[test]
     fn insert_and_load_action_log_entry_without_barrier() {
         let db = Db::open_in_memory().expect("open");
@@ -468,6 +482,7 @@ mod tests {
         assert!(loaded[0].barrier.is_none());
     }
 
+    // r[verify history.action-log.entries]
     #[test]
     fn insert_and_load_action_log_entry_with_barrier() {
         let db = Db::open_in_memory().expect("open");
@@ -501,6 +516,8 @@ mod tests {
         assert!(b.started_at_secs.is_none());
     }
 
+    // r[verify history.action-log.replay]
+    // r[verify reconciliation.idempotency]
     #[test]
     fn barrier_satisfaction_update_via_replace() {
         let db = Db::open_in_memory().expect("open");
@@ -542,6 +559,8 @@ mod tests {
         assert!(b.satisfied);
     }
 
+    // r[verify history.action-log.replay]
+    // r[verify history.action-log.entries]
     #[test]
     fn action_log_multiple_entries_ordered_by_call_index() {
         let db = Db::open_in_memory().expect("open");
@@ -581,6 +600,8 @@ mod tests {
         assert_eq!(b.started_at_secs, Some(2000));
     }
 
+    // r[verify history.action-log]
+    // r[verify operation.lifecycle]
     #[test]
     fn action_log_scoped_to_operation_id() {
         let db = Db::open_in_memory().expect("open");

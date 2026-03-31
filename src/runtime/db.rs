@@ -87,6 +87,8 @@ impl Db {
 mod tests {
     use super::*;
 
+    // r[verify history.persistence]
+    // r[verify history.storage]
     #[test]
     fn open_in_memory_succeeds() {
         let db = Db::open_in_memory().expect("in-memory DB should open");
@@ -98,6 +100,7 @@ mod tests {
         assert_eq!(n, 0);
     }
 
+    // r[verify history.persistence]
     #[test]
     fn migrate_twice_is_idempotent() {
         let db = Db::open_in_memory().expect("open");
@@ -105,6 +108,9 @@ mod tests {
         db.migrate().expect("second migration should not error");
     }
 
+    // r[verify history.world.entries]
+    // r[verify history.operations.entries]
+    // r[verify history.action-log.entries]
     #[test]
     fn all_tables_exist_after_migration() {
         let db = Db::open_in_memory().expect("open");
@@ -128,6 +134,7 @@ mod tests {
         }
     }
 
+    // r[verify reconciliation.idempotency]
     #[test]
     fn action_log_has_unique_constraint() {
         let db = Db::open_in_memory().expect("open");
