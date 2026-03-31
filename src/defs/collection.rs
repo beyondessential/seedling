@@ -58,23 +58,23 @@ impl Collection {
     // l[impl collection.only]
     pub fn only(self, other: Dynamic) -> Self {
         Self(Rc::new(Only {
-            left: self.0,
-            right: col(other).0,
+            left: self,
+            right: col(other),
         }))
     }
 
     // l[impl collection.except]
     pub fn except(self, other: Dynamic) -> Self {
         Self(Rc::new(Except {
-            left: self.0,
-            right: col(other).0,
+            left: self,
+            right: col(other),
         }))
     }
 
     // l[impl collection.select]
     pub fn select(self, criterion: &Map) -> Self {
         Self(Rc::new(Select {
-            inner: self.0,
+            inner: self,
             selector: Selector::from_map(criterion),
         }))
     }
@@ -218,7 +218,7 @@ pub fn col(val: Dynamic) -> Collection {
     }
 
     if let Some(arr) = val.try_cast::<rhai::Array>() {
-        let parts = arr.into_iter().map(|v| col(v).0).collect();
+        let parts = arr.into_iter().map(col).collect();
         return Collection(Rc::new(Union { parts }));
     }
 

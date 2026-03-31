@@ -3,6 +3,7 @@ use std::rc::Rc;
 
 use crate::defs::resource::ResourceKind;
 
+use super::Collection;
 use super::bag::ResourceBag;
 use super::handle::ResourceHandle;
 use super::selector::Selector;
@@ -24,7 +25,7 @@ impl Collectable for BagCollection {
 }
 
 pub(super) struct Select {
-    pub inner: Rc<dyn Collectable>,
+    pub inner: Collection,
     pub selector: Selector,
 }
 
@@ -39,8 +40,8 @@ impl Collectable for Select {
 }
 
 pub(super) struct Only {
-    pub left: Rc<dyn Collectable>,
-    pub right: Rc<dyn Collectable>,
+    pub left: Collection,
+    pub right: Collection,
 }
 
 impl Collectable for Only {
@@ -60,8 +61,8 @@ impl Collectable for Only {
 }
 
 pub(super) struct Except {
-    pub left: Rc<dyn Collectable>,
-    pub right: Rc<dyn Collectable>,
+    pub left: Collection,
+    pub right: Collection,
 }
 
 impl Collectable for Except {
@@ -81,7 +82,7 @@ impl Collectable for Except {
 }
 
 pub(super) struct Union {
-    pub parts: Vec<Rc<dyn Collectable>>,
+    pub parts: Vec<Collection>,
 }
 
 impl Collectable for Union {
