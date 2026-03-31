@@ -207,10 +207,8 @@ pub struct Selector {
 }
 
 impl Selector {
-    // l[impl collection.select.types]
-    // l[impl collection.select.names]
-    // l[impl collection.select.name-patterns]
     pub fn from_map(map: &Map) -> Self {
+        // l[impl collection.select.types]
         let types = map.get("types").and_then(|v| {
             v.clone().try_cast::<rhai::Array>().map(|arr| {
                 arr.into_iter()
@@ -219,6 +217,7 @@ impl Selector {
             })
         });
 
+        // l[impl collection.select.names]
         let names = map.get("names").and_then(|v| {
             v.clone().try_cast::<rhai::Array>().map(|arr| {
                 arr.into_iter()
@@ -227,6 +226,7 @@ impl Selector {
             })
         });
 
+        // l[impl collection.select.name-patterns]
         let name_patterns = map.get("name_patterns").and_then(|v| {
             v.clone().try_cast::<rhai::Array>().map(|arr| {
                 arr.into_iter()
@@ -242,24 +242,26 @@ impl Selector {
         }
     }
 
-    // l[impl collection.select.types]
-    // l[impl collection.select.names]
-    // l[impl collection.select.name-patterns]
     pub fn matches(&self, handle: &ResourceHandle) -> bool {
+        // l[impl collection.select.types]
         if let Some(types) = &self.types
             && !types.contains(&handle.kind())
         {
             return false;
         }
 
+        // l[impl collection.select.names]
         if let Some(names) = &self.names
             && !names.contains(handle.name())
         {
             return false;
         }
 
+        // l[impl collection.select.name-patterns]
         if let Some(patterns) = &self.name_patterns
-            && !patterns.iter().any(|p| glob_matches(p, handle.name()))
+            && !patterns
+                .iter()
+                .any(|p| WildMatch::new(p).matches(handle.name()))
         {
             return false;
         }
@@ -472,12 +474,4 @@ pub fn col(val: Dynamic) -> Collection {
     }
 
     Collection::empty()
-}
-
-// ---------------------------------------------------------------------------
-// Glob matching (used by Selector::matches)
-// ---------------------------------------------------------------------------
-
-fn glob_matches(pattern: &str, text: &str) -> bool {
-    WildMatch::new(pattern).matches(text)
 }
