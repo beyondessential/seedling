@@ -98,6 +98,17 @@ Absent specification bugs, anything that is not defined here is either defined i
 > l[collection.select.name-patterns]
 > `name_patterns`: must match at least one glob pattern
 
+> l[collection.col]
+> `col(val)` is a free function that coerces any value into a `Collection`.
+>
+> The following values are accepted:
+> - A `Collection` — returned as-is.
+> - An `App` — yields a Collection of all its named resources and actions.
+> - Any named Resource (Deployment, Service, HttpService, ExternalService, Job, Ingress, named Volume, ExternalVolume, Action) — yields a Collection of that single resource.
+> - An array — yields a Collection of all elements coerced the same way (a union).
+> - An anonymous Volume (without a name) — yields an empty Collection.
+> - Any other value — yields an empty Collection.
+
 # Constants
 
 These are not guaranteed to be constant forever, only for the duration of one script execution.

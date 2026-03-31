@@ -107,3 +107,64 @@ fn collection_select_multiple_criteria() {
     "#,
     );
 }
+
+// l[verify collection.col]
+#[test]
+fn col_from_collection_is_identity() {
+    run_test_script_app(
+        r#"
+        app.service("web");
+        let c = col(app);
+        let c2 = col(c);
+    "#,
+    );
+}
+
+// l[verify collection.col]
+#[test]
+fn col_from_app_yields_all_resources() {
+    run_test_script_app(
+        r#"
+        app.service("web");
+        app.deployment("api");
+        let c = col(app);
+        let item = c.one();
+    "#,
+    );
+}
+
+// l[verify collection.col]
+#[test]
+fn col_from_resource_yields_single_item() {
+    run_test_script_app(
+        r#"
+        let svc = app.service("web");
+        let c = col(svc);
+        let item = c.one();
+    "#,
+    );
+}
+
+// l[verify collection.col]
+#[test]
+fn col_from_array_yields_union() {
+    run_test_script_app(
+        r#"
+        let svc = app.service("web");
+        let dep = app.deployment("api");
+        let c = col([svc, dep]);
+        let item = c.one();
+    "#,
+    );
+}
+
+// l[verify collection.col]
+#[test]
+fn col_from_unknown_yields_empty() {
+    run_test_script_app(
+        r#"
+        let c = col(42);
+        let item = c.one();
+    "#,
+    );
+}

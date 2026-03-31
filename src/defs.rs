@@ -48,6 +48,9 @@ pub fn register(engine: &mut Engine) {
     engine.build_type::<collection::Collection>();
     runtime::register_shell_attach(engine);
 
+    // l[impl collection.col]
+    engine.register_fn("col", collection::col);
+
     engine.register_fn("+", |p: param::Param, s: &str| -> String {
         format!("{}{}", p.value, s)
     });
