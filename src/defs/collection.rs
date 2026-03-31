@@ -2,6 +2,8 @@ use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use wildmatch::WildMatch;
+
 use rhai::{CustomType, Dynamic, Map, TypeBuilder};
 
 use super::action::Action;
@@ -476,27 +478,6 @@ pub fn col(val: Dynamic) -> Collection {
 // Glob matching (used by Selector::matches)
 // ---------------------------------------------------------------------------
 
-/// Returns true if `text` matches `pattern`, where `*` matches any sequence
-/// of characters and `?` matches exactly one character.
 fn glob_matches(pattern: &str, text: &str) -> bool {
-    let p: Vec<char> = pattern.chars().collect();
-    let t: Vec<char> = text.chars().collect();
-    let (m, n) = (p.len(), t.len());
-    let mut dp = vec![vec![false; n + 1]; m + 1];
-    dp[0][0] = true;
-    for i in 1..=m {
-        if p[i - 1] == '*' {
-            dp[i][0] = dp[i - 1][0];
-        }
-    }
-    for i in 1..=m {
-        for j in 1..=n {
-            if p[i - 1] == '*' {
-                dp[i][j] = dp[i - 1][j] || dp[i][j - 1];
-            } else if p[i - 1] == '?' || p[i - 1] == t[j - 1] {
-                dp[i][j] = dp[i - 1][j - 1];
-            }
-        }
-    }
-    dp[m][n]
+    WildMatch::new(pattern).matches(text)
 }
