@@ -1,0 +1,640 @@
+use std::collections::VecDeque;
+use std::fmt;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use crate::runtime::barrier::OperationId;
+use crate::runtime::history::AutonomousOperation;
+use crate::runtime::identity::ResourceInstance;
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+// r[impl operation.lifecycle]
+#[derive(Debug, Clone)]
+pub struct ActiveOperation {
+    pub app: String,
+    pub action: String,
+    pub operation_id: OperationId,
+}
+
+// r[impl operation.lifecycle]
+#[derive(Debug, Clone)]
+pub struct QueuedOperation {
+    pub app: String,
+    pub action: String,
+    pub operation_id: OperationId,
+}
+
+// r[impl operation.lifecycle.single]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScheduleResult {
+    /// The operation was accepted: either started immediately or queued.
+    Accepted,
+    /// The request was rejected.
+    Rejected(RejectReason),
+}
+
+// r[impl operation.lifecycle.single.intra-app]
+// r[impl operation.lifecycle.single.inter-app]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RejectReason {
+    /// A lifecycle operation for this application is already in progress.
+    SameAppOperationInProgress,
+    /// A lifecycle operation for this application is already queued.
+    SameAppAlreadyQueued,
+}
+
+// r[impl operation.composition.cycles]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CycleError {
+    /// The action whose invocation would form a cycle.
+    pub action: String,
+    /// The call stack at the point the cycle was detected.
+    pub stack: Vec<String>,
+}
+
+impl fmt::Display for CycleError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "action '{}' forms a cycle in the call stack {:?}",
+            self.action, self.stack
+        )
+    }
+}
+
+impl std::error::Error for CycleError {}
+
+// ---------------------------------------------------------------------------
+// Scheduler
+// ---------------------------------------------------------------------------
+
+/// Enforces the single-active-operation rule, per-app queuing, and cycle
+/// detection for action composition. The scheduler tracks policy only; it
+/// does not execute operations.
+// r[impl operation.lifecycle.single]
+#[derive(Debug, Default)]
+pub struct Scheduler {
+    active: Option<ActiveOperation>,
+    /// Pending operations in insertion (request) order; at most one per app.
+    queue: VecDeque<QueuedOperation>,
+    /// Inline action invocation chain for the active operation.
+    call_stack: Vec<String>,
+}
+
+impl Scheduler {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The currently active operation, if any.
+    pub fn active(&self) -> Option<&ActiveOperation> {
+        self.active.as_ref()
+    }
+
+    /// Request a lifecycle operation for `app` / `action`.
+    ///
+    /// - If no operation is active: the operation starts immediately.
+    /// - If a different app is active and this app is not yet queued: queued.
+    /// - If this app is active or already queued: rejected.
+    // r[impl operation.lifecycle.single]
+    // r[impl operation.lifecycle.single.intra-app]
+    // r[impl operation.lifecycle.single.inter-app]
+    pub fn request(&mut self, app: &str, action: &str) -> ScheduleResult {
+        match &self.active {
+            None => {
+                // No active operation — start immediately.
+                self.call_stack.clear();
+                self.active = Some(ActiveOperation {
+                    app: app.to_owned(),
+                    action: action.to_owned(),
+                    operation_id: OperationId::new(),
+                });
+                ScheduleResult::Accepted
+            }
+            Some(active) if active.app == app => {
+                // r[impl operation.lifecycle.single.intra-app]
+                ScheduleResult::Rejected(RejectReason::SameAppOperationInProgress)
+            }
+            Some(_) => {
+                // r[impl operation.lifecycle.single.inter-app]
+                if self.queue.iter().any(|q| q.app == app) {
+                    return ScheduleResult::Rejected(RejectReason::SameAppAlreadyQueued);
+                }
+                self.queue.push_back(QueuedOperation {
+                    app: app.to_owned(),
+                    action: action.to_owned(),
+                    operation_id: OperationId::new(),
+                });
+                ScheduleResult::Accepted
+            }
+        }
+    }
+
+    /// Mark the current operation as complete and dequeue the next one, if any.
+    ///
+    /// Returns the newly-started operation so the caller knows what to run.
+    // r[impl operation.lifecycle.completion]
+    pub fn complete_current(&mut self) -> Option<QueuedOperation> {
+        self.active = None;
+        self.call_stack.clear();
+
+        let next = self.queue.pop_front()?;
+        self.active = Some(ActiveOperation {
+            app: next.app.clone(),
+            action: next.action.clone(),
+            operation_id: next.operation_id.clone(),
+        });
+        Some(next)
+    }
+
+    /// Push an action name onto the composition call stack.
+    ///
+    /// Returns `Err(CycleError)` if `action_name` is already on the stack,
+    /// which means this invocation would form a direct or transitive cycle.
+    // r[impl operation.composition]
+    // r[impl operation.composition.cycles]
+    pub fn push_call(&mut self, action_name: &str) -> Result<(), CycleError> {
+        if self.call_stack.iter().any(|a| a == action_name) {
+            return Err(CycleError {
+                action: action_name.to_owned(),
+                stack: self.call_stack.clone(),
+            });
+        }
+        self.call_stack.push(action_name.to_owned());
+        Ok(())
+    }
+
+    /// Pop the most recent action name from the composition call stack.
+    ///
+    /// Called when an invoked action closure returns.
+    pub fn pop_call(&mut self) {
+        self.call_stack.pop();
+    }
+
+    /// The current composition call stack (most-recently-pushed is last).
+    pub fn call_stack(&self) -> &[String] {
+        &self.call_stack
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Backoff
+// ---------------------------------------------------------------------------
+
+const BASE_BACKOFF_SECS: u64 = 5;
+const MAX_BACKOFF_SECS: u64 = 300;
+
+/// Decide whether an autonomous operation should be deferred due to backoff.
+///
+/// Filters `recent_ops` to those matching `resource` + `operation`, then
+/// applies exponential backoff: `BASE * 2^(n-1)`, capped at `MAX_BACKOFF_SECS`.
+///
+/// Returns `Some(remaining_wait)` if the operation should be deferred, or
+/// `None` if it should proceed now. The backoff counter resets automatically
+/// when the gap since the last matching operation exceeds `MAX_BACKOFF_SECS`.
+// r[impl history.operations.rate-limiting]
+pub fn should_back_off(
+    resource: &ResourceInstance,
+    operation: &str,
+    recent_ops: &[AutonomousOperation],
+    now: SystemTime,
+) -> Option<Duration> {
+    let matching: Vec<_> = recent_ops
+        .iter()
+        .filter(|op| &op.resource == resource && op.operation == operation)
+        .collect();
+
+    if matching.is_empty() {
+        return None;
+    }
+
+    let now_ms = now
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+
+    // Safe: matching is non-empty.
+    let last_ms = matching.iter().map(|op| op.recorded_at).max().unwrap();
+    let elapsed_secs = ((now_ms - last_ms).max(0) as u64) / 1000;
+
+    // Gap large enough to reset the backoff counter entirely.
+    if elapsed_secs >= MAX_BACKOFF_SECS {
+        return None;
+    }
+
+    let n = matching.len() as u32;
+    // BASE * 2^(n-1); saturating to avoid overflow for very large n.
+    let backoff_secs = BASE_BACKOFF_SECS
+        .saturating_mul(2u64.saturating_pow(n.saturating_sub(1)))
+        .min(MAX_BACKOFF_SECS);
+
+    if elapsed_secs >= backoff_secs {
+        // Already waited long enough — proceed.
+        None
+    } else {
+        Some(Duration::from_secs(backoff_secs - elapsed_secs))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    use super::*;
+    use crate::defs::resource::ResourceKind;
+    use crate::runtime::identity::ResourceInstance;
+
+    // -----------------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------------
+
+    fn dep(app: &str, name: &str) -> ResourceInstance {
+        ResourceInstance::named(app, ResourceKind::Deployment, name)
+    }
+
+    /// Build an AutonomousOperation recorded at `ms` milliseconds since epoch.
+    fn op_at(resource: &ResourceInstance, operation: &str, ms: i64) -> AutonomousOperation {
+        AutonomousOperation {
+            id: 0,
+            recorded_at: ms,
+            resource: resource.clone(),
+            operation: operation.to_owned(),
+            provenance: serde_json::Value::Null,
+            outcome: Some("ok".to_owned()),
+            completed_at: None,
+        }
+    }
+
+    fn now_from_ms(ms: i64) -> SystemTime {
+        UNIX_EPOCH + Duration::from_millis(ms as u64)
+    }
+
+    // -----------------------------------------------------------------------
+    // Scheduler — single-app behaviour
+    // -----------------------------------------------------------------------
+
+    // r[verify operation.lifecycle.single]
+    #[test]
+    fn empty_scheduler_accepts_first_request() {
+        let mut s = Scheduler::new();
+        assert_eq!(s.request("app1", "start"), ScheduleResult::Accepted);
+        let active = s.active().expect("should be active");
+        assert_eq!(active.app, "app1");
+        assert_eq!(active.action, "start");
+    }
+
+    // r[verify operation.lifecycle.single.intra-app]
+    #[test]
+    fn same_app_second_request_rejected() {
+        let mut s = Scheduler::new();
+        s.request("app1", "start");
+        assert_eq!(
+            s.request("app1", "start"),
+            ScheduleResult::Rejected(RejectReason::SameAppOperationInProgress)
+        );
+    }
+
+    // r[verify operation.lifecycle.single.intra-app]
+    #[test]
+    fn same_app_different_action_still_rejected() {
+        let mut s = Scheduler::new();
+        s.request("app1", "start");
+        assert_eq!(
+            s.request("app1", "deploy"),
+            ScheduleResult::Rejected(RejectReason::SameAppOperationInProgress)
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Scheduler — inter-app queuing
+    // -----------------------------------------------------------------------
+
+    // r[verify operation.lifecycle.single.inter-app]
+    #[test]
+    fn different_app_request_is_queued() {
+        let mut s = Scheduler::new();
+        s.request("app1", "start");
+        assert_eq!(s.request("app2", "start"), ScheduleResult::Accepted);
+        // app2 is queued, not yet active.
+        assert_eq!(s.active().unwrap().app, "app1");
+        assert_eq!(s.queue.len(), 1);
+        assert_eq!(s.queue[0].app, "app2");
+    }
+
+    // r[verify operation.lifecycle.single.inter-app]
+    #[test]
+    fn already_queued_app_is_rejected() {
+        let mut s = Scheduler::new();
+        s.request("app1", "start");
+        s.request("app2", "start"); // queued
+        assert_eq!(
+            s.request("app2", "start"),
+            ScheduleResult::Rejected(RejectReason::SameAppAlreadyQueued)
+        );
+    }
+
+    // r[verify operation.lifecycle.single.inter-app]
+    #[test]
+    fn two_different_apps_can_both_queue() {
+        let mut s = Scheduler::new();
+        s.request("app1", "start");
+        assert_eq!(s.request("app2", "start"), ScheduleResult::Accepted);
+        assert_eq!(s.request("app3", "start"), ScheduleResult::Accepted);
+        assert_eq!(s.queue.len(), 2);
+    }
+
+    // r[verify operation.lifecycle.single.inter-app]
+    #[test]
+    fn queued_app_rejected_regardless_of_action_name() {
+        let mut s = Scheduler::new();
+        s.request("app1", "start");
+        s.request("app2", "start");
+        assert_eq!(
+            s.request("app2", "deploy"),
+            ScheduleResult::Rejected(RejectReason::SameAppAlreadyQueued)
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Scheduler — completion and dequeue
+    // -----------------------------------------------------------------------
+
+    // r[verify operation.lifecycle.completion]
+    #[test]
+    fn complete_current_with_empty_queue_clears_active() {
+        let mut s = Scheduler::new();
+        s.request("app1", "start");
+        let next = s.complete_current();
+        assert!(next.is_none());
+        assert!(s.active().is_none());
+    }
+
+    // r[verify operation.lifecycle.completion]
+    // r[verify operation.lifecycle.single.inter-app]
+    #[test]
+    fn complete_current_dequeues_next_and_makes_it_active() {
+        let mut s = Scheduler::new();
+        s.request("app1", "start");
+        s.request("app2", "deploy");
+
+        let next = s.complete_current().expect("should dequeue app2");
+        assert_eq!(next.app, "app2");
+        assert_eq!(next.action, "deploy");
+
+        let active = s.active().expect("app2 should now be active");
+        assert_eq!(active.app, "app2");
+        assert_eq!(active.operation_id, next.operation_id);
+    }
+
+    // r[verify operation.lifecycle.completion]
+    // r[verify operation.lifecycle.single.inter-app]
+    #[test]
+    fn queue_is_drained_in_fifo_order() {
+        let mut s = Scheduler::new();
+        s.request("app1", "start");
+        s.request("app2", "start");
+        s.request("app3", "start");
+
+        let first = s.complete_current().expect("app2");
+        assert_eq!(first.app, "app2");
+
+        let second = s.complete_current().expect("app3");
+        assert_eq!(second.app, "app3");
+
+        let none = s.complete_current();
+        assert!(none.is_none());
+        assert!(s.active().is_none());
+    }
+
+    // r[verify operation.lifecycle.completion]
+    #[test]
+    fn after_complete_same_app_can_be_requested_again() {
+        let mut s = Scheduler::new();
+        s.request("app1", "start");
+        s.complete_current();
+        // No active operation; app1 should be accepted again.
+        assert_eq!(s.request("app1", "start"), ScheduleResult::Accepted);
+    }
+
+    // -----------------------------------------------------------------------
+    // Scheduler — call stack and cycle detection
+    // -----------------------------------------------------------------------
+
+    // r[verify operation.composition]
+    #[test]
+    fn push_call_with_no_cycle_succeeds() {
+        let mut s = Scheduler::new();
+        s.request("app1", "start");
+        assert!(s.push_call("start").is_ok());
+        assert!(s.push_call("setup").is_ok());
+        assert!(s.push_call("configure").is_ok());
+    }
+
+    // r[verify operation.composition.cycles]
+    #[test]
+    fn push_call_detects_direct_cycle() {
+        let mut s = Scheduler::new();
+        s.request("app1", "start");
+        s.push_call("start").unwrap();
+        let err = s.push_call("start").unwrap_err();
+        assert_eq!(err.action, "start");
+        assert_eq!(err.stack, vec!["start"]);
+    }
+
+    // r[verify operation.composition.cycles]
+    #[test]
+    fn push_call_detects_transitive_cycle() {
+        let mut s = Scheduler::new();
+        s.request("app1", "start");
+        s.push_call("start").unwrap();
+        s.push_call("setup").unwrap();
+        s.push_call("configure").unwrap();
+        let err = s.push_call("start").unwrap_err();
+        assert_eq!(err.action, "start");
+        assert_eq!(err.stack, vec!["start", "setup", "configure"]);
+    }
+
+    // r[verify operation.composition]
+    #[test]
+    fn pop_call_allows_reuse_of_action_name() {
+        let mut s = Scheduler::new();
+        s.request("app1", "start");
+        s.push_call("setup").unwrap();
+        s.pop_call();
+        // After popping "setup", pushing it again must not be a cycle.
+        assert!(s.push_call("setup").is_ok());
+    }
+
+    // r[verify operation.lifecycle.completion]
+    #[test]
+    fn complete_current_clears_call_stack() {
+        let mut s = Scheduler::new();
+        s.request("app1", "start");
+        s.request("app2", "start");
+        s.push_call("start").unwrap();
+        s.push_call("setup").unwrap();
+
+        s.complete_current();
+        assert!(s.call_stack().is_empty());
+    }
+
+    // r[verify operation.composition]
+    #[test]
+    fn call_stack_is_empty_at_start_of_new_operation() {
+        let mut s = Scheduler::new();
+        s.request("app1", "start");
+        // Immediately after the very first request, stack is empty.
+        assert!(s.call_stack().is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Backoff
+    // -----------------------------------------------------------------------
+
+    // r[verify history.operations.rate-limiting]
+    #[test]
+    fn no_ops_means_no_backoff() {
+        let resource = dep("app", "web");
+        let result = should_back_off(&resource, "start_container", &[], SystemTime::now());
+        assert!(result.is_none());
+    }
+
+    // r[verify history.operations.rate-limiting]
+    #[test]
+    fn single_recent_op_backs_off_for_base_period() {
+        let resource = dep("app", "web");
+        // Op recorded 1 second ago; backoff for n=1 is 5s; remaining = 4s.
+        let now_ms: i64 = 1_700_000_000_000;
+        let ops = [op_at(&resource, "start_container", now_ms - 1_000)];
+        let result = should_back_off(&resource, "start_container", &ops, now_from_ms(now_ms));
+        assert_eq!(result, Some(Duration::from_secs(4)));
+    }
+
+    // r[verify history.operations.rate-limiting]
+    #[test]
+    fn two_recent_ops_back_off_longer() {
+        let resource = dep("app", "web");
+        // n=2 → backoff = 5 * 2 = 10s; elapsed = 1s; remaining = 9s.
+        let now_ms: i64 = 1_700_000_000_000;
+        let ops = [
+            op_at(&resource, "start_container", now_ms - 2_000),
+            op_at(&resource, "start_container", now_ms - 1_000),
+        ];
+        let result = should_back_off(&resource, "start_container", &ops, now_from_ms(now_ms));
+        assert_eq!(result, Some(Duration::from_secs(9)));
+    }
+
+    // r[verify history.operations.rate-limiting]
+    #[test]
+    fn backoff_duration_increases_with_op_count() {
+        let resource = dep("app", "web");
+        let now_ms: i64 = 1_700_000_000_000;
+        let now = now_from_ms(now_ms);
+
+        let make_ops = |n: usize| -> Vec<AutonomousOperation> {
+            (0..n)
+                .map(|i| {
+                    op_at(
+                        &resource,
+                        "start_container",
+                        now_ms - (i as i64 + 1) * 1_000,
+                    )
+                })
+                .collect()
+        };
+
+        let wait1 = should_back_off(&resource, "start_container", &make_ops(1), now)
+            .expect("should back off");
+        let wait2 = should_back_off(&resource, "start_container", &make_ops(2), now)
+            .expect("should back off");
+        let wait3 = should_back_off(&resource, "start_container", &make_ops(3), now)
+            .expect("should back off");
+
+        assert!(wait2 > wait1, "backoff should grow: {wait2:?} > {wait1:?}");
+        assert!(wait3 > wait2, "backoff should grow: {wait3:?} > {wait2:?}");
+    }
+
+    // r[verify history.operations.rate-limiting]
+    #[test]
+    fn backoff_caps_at_maximum() {
+        let resource = dep("app", "web");
+        // With 100 ops, 2^99 overflows — must still cap at MAX_BACKOFF_SECS.
+        let now_ms: i64 = 1_700_000_000_000;
+        let ops: Vec<_> = (0..100)
+            .map(|i| op_at(&resource, "start_container", now_ms - (i + 1) * 1_000))
+            .collect();
+        let result = should_back_off(&resource, "start_container", &ops, now_from_ms(now_ms));
+        // Should be capped; remaining = MAX - elapsed(1s) = 299s.
+        assert_eq!(result, Some(Duration::from_secs(299)));
+    }
+
+    // r[verify history.operations.rate-limiting]
+    #[test]
+    fn waited_full_backoff_period_proceeds() {
+        let resource = dep("app", "web");
+        // n=1, backoff=5s, but 5 seconds have elapsed — should proceed.
+        let now_ms: i64 = 1_700_000_000_000;
+        let ops = [op_at(&resource, "start_container", now_ms - 5_000)];
+        let result = should_back_off(&resource, "start_container", &ops, now_from_ms(now_ms));
+        assert!(result.is_none());
+    }
+
+    // r[verify history.operations.rate-limiting]
+    #[test]
+    fn gap_since_last_op_resets_backoff() {
+        let resource = dep("app", "web");
+        // Many ops, but the last one was 400 seconds ago — gap > MAX_BACKOFF_SECS.
+        let now_ms: i64 = 1_700_000_000_000;
+        let ops: Vec<_> = (0..10)
+            .map(|i| op_at(&resource, "start_container", now_ms - 400_000 - i * 1_000))
+            .collect();
+        let result = should_back_off(&resource, "start_container", &ops, now_from_ms(now_ms));
+        assert!(result.is_none(), "backoff should reset after gap");
+    }
+
+    // r[verify history.operations.rate-limiting]
+    #[test]
+    fn ops_for_different_resource_are_ignored() {
+        let resource = dep("app", "web");
+        let other = dep("app", "api");
+        let now_ms: i64 = 1_700_000_000_000;
+        // Only ops for "api", not "web".
+        let ops = [op_at(&other, "start_container", now_ms - 1_000)];
+        let result = should_back_off(&resource, "start_container", &ops, now_from_ms(now_ms));
+        assert!(result.is_none());
+    }
+
+    // r[verify history.operations.rate-limiting]
+    #[test]
+    fn ops_for_different_operation_are_ignored() {
+        let resource = dep("app", "web");
+        let now_ms: i64 = 1_700_000_000_000;
+        // Op is "rebuild_proxy", not "start_container".
+        let ops = [op_at(&resource, "rebuild_proxy", now_ms - 1_000)];
+        let result = should_back_off(&resource, "start_container", &ops, now_from_ms(now_ms));
+        assert!(result.is_none());
+    }
+
+    // r[verify history.operations.rate-limiting]
+    #[test]
+    fn mixed_ops_only_matching_ones_contribute_to_backoff() {
+        let resource = dep("app", "web");
+        let other = dep("app", "api");
+        let now_ms: i64 = 1_700_000_000_000;
+
+        // One matching op for "web" and one non-matching for "api".
+        // Only the "web" op should count → n=1, backoff=5s, elapsed=1s → Some(4s).
+        let ops = [
+            op_at(&resource, "start_container", now_ms - 1_000),
+            op_at(&other, "start_container", now_ms - 500),
+        ];
+        let result = should_back_off(&resource, "start_container", &ops, now_from_ms(now_ms));
+        assert_eq!(result, Some(Duration::from_secs(4)));
+    }
+}
