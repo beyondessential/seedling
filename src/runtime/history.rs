@@ -278,6 +278,55 @@ pub fn load_action_log(
     rows.collect()
 }
 
+// ---------------------------------------------------------------------------
+// Current operation tracking
+// ---------------------------------------------------------------------------
+
+/// Persists the identity of the one in-progress lifecycle operation so that
+/// a runtime restart can detect it and replay rather than starting fresh.
+// r[impl operation.lifecycle.events]
+// r[impl barrier.replay]
+pub struct CurrentOperation {
+    pub operation_id: OperationId,
+    pub app: String,
+    pub action_name: String,
+}
+
+/// Record (or overwrite) the current in-progress operation.
+// r[impl operation.lifecycle.events]
+// r[impl barrier.replay]
+pub fn save_current_operation(db: &Db, op: &CurrentOperation) -> rusqlite::Result<()> {
+    db.conn.execute(
+        "INSERT OR REPLACE INTO current_operation (singleton, operation_id, app, action_name)
+         VALUES (1, ?1, ?2, ?3)",
+        params![op.operation_id.0, op.app, op.action_name],
+    )?;
+    Ok(())
+}
+
+/// Return the recorded in-progress operation, if any.
+// r[impl barrier.replay]
+pub fn load_current_operation(db: &Db) -> rusqlite::Result<Option<CurrentOperation>> {
+    let mut stmt = db.conn.prepare(
+        "SELECT operation_id, app, action_name FROM current_operation WHERE singleton = 1",
+    )?;
+    let mut rows = stmt.query_map([], |row| {
+        Ok(CurrentOperation {
+            operation_id: OperationId(row.get(0)?),
+            app: row.get(1)?,
+            action_name: row.get(2)?,
+        })
+    })?;
+    rows.next().transpose()
+}
+
+/// Clear the current operation record once the operation has completed.
+// r[impl operation.lifecycle.completion]
+pub fn clear_current_operation(db: &Db) -> rusqlite::Result<()> {
+    db.conn.execute("DELETE FROM current_operation", [])?;
+    Ok(())
+}
+
 fn parse_lifecycle_state(s: &str) -> LifecycleState {
     match s {
         "Pending" => LifecycleState::Pending,
@@ -298,6 +347,73 @@ fn parse_lifecycle_state(s: &str) -> LifecycleState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // r[verify operation.lifecycle.events]
+    // r[verify barrier.replay]
+    #[test]
+    fn save_and_load_current_operation() {
+        let db = Db::open_in_memory().expect("open");
+        let op = CurrentOperation {
+            operation_id: crate::runtime::barrier::OperationId("test-op-id".into()),
+            app: "myapp".into(),
+            action_name: "start".into(),
+        };
+        save_current_operation(&db, &op).expect("save");
+        let loaded = load_current_operation(&db)
+            .expect("load")
+            .expect("should exist");
+        assert_eq!(loaded.operation_id.0, "test-op-id");
+        assert_eq!(loaded.app, "myapp");
+        assert_eq!(loaded.action_name, "start");
+    }
+
+    // r[verify operation.lifecycle.events]
+    #[test]
+    fn load_current_operation_returns_none_when_empty() {
+        let db = Db::open_in_memory().expect("open");
+        let result = load_current_operation(&db).expect("load");
+        assert!(result.is_none());
+    }
+
+    // r[verify operation.lifecycle.completion]
+    #[test]
+    fn clear_current_operation_removes_record() {
+        let db = Db::open_in_memory().expect("open");
+        let op = CurrentOperation {
+            operation_id: crate::runtime::barrier::OperationId("op".into()),
+            app: "app".into(),
+            action_name: "start".into(),
+        };
+        save_current_operation(&db, &op).expect("save");
+        clear_current_operation(&db).expect("clear");
+        let result = load_current_operation(&db).expect("load");
+        assert!(result.is_none());
+    }
+
+    // r[verify operation.lifecycle.events]
+    // r[verify barrier.replay]
+    #[test]
+    fn save_overwrites_previous_current_operation() {
+        let db = Db::open_in_memory().expect("open");
+        let op1 = CurrentOperation {
+            operation_id: crate::runtime::barrier::OperationId("op1".into()),
+            app: "app".into(),
+            action_name: "start".into(),
+        };
+        let op2 = CurrentOperation {
+            operation_id: crate::runtime::barrier::OperationId("op2".into()),
+            app: "app".into(),
+            action_name: "deploy".into(),
+        };
+        save_current_operation(&db, &op1).expect("save op1");
+        save_current_operation(&db, &op2).expect("save op2");
+        let loaded = load_current_operation(&db)
+            .expect("load")
+            .expect("should exist");
+        assert_eq!(loaded.operation_id.0, "op2");
+        assert_eq!(loaded.action_name, "deploy");
+    }
+
     use crate::defs::resource::ResourceKind;
     use crate::runtime::db::Db;
 

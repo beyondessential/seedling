@@ -1,8 +1,21 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use rhai::{AST, Dynamic, Engine, Scope};
+#[cfg(test)]
+use rhai::Dynamic;
+use rhai::{AST, Engine, Scope};
 
+use crate::defs::app::App;
+#[cfg(test)]
 use crate::defs::install::InstallDef;
+use crate::runtime::barrier::OperationId;
+use crate::runtime::barrier::oracle::DbWorldOracle;
+use crate::runtime::barrier::replay::{DbActionLog, OperationResult, run_operation};
+use crate::runtime::db::Db;
+use crate::runtime::history::{
+    CurrentOperation, clear_current_operation, load_current_operation, save_current_operation,
+};
+use crate::runtime::scheduler::{RejectReason, ScheduleResult, Scheduler};
 
 pub(crate) mod defs;
 pub(crate) mod runtime;
@@ -17,6 +30,7 @@ fn setup() -> (Engine, Scope<'static>, defs::app::App) {
     (engine, scope, app)
 }
 
+#[cfg(test)]
 fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, script_ast: &AST) {
     let def = app.0.lock();
 
@@ -123,6 +137,7 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
     }
 }
 
+#[cfg(test)]
 fn eval_merged(
     engine: &Engine,
     scope: &mut Scope,
@@ -134,6 +149,7 @@ fn eval_merged(
     engine.eval_ast_with_scope(scope, &merged)
 }
 
+#[cfg(test)]
 fn build_install_reqs_map(install: &InstallDef) -> rhai::Map {
     let mut map = rhai::Map::new();
     for (key, req) in &install.requirements {
@@ -167,35 +183,190 @@ fn run_file(
     Ok(ast)
 }
 
+fn parse_args() -> (PathBuf, PathBuf) {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.is_empty() {
+        eprintln!("usage: seedling <SCRIPT.rhai> [--data-dir <DIR>]");
+        std::process::exit(1);
+    }
+    let script_path = PathBuf::from(&args[0]);
+
+    let mut data_dir: Option<PathBuf> = None;
+    let mut i = 1;
+    while i < args.len() {
+        if args[i] == "--data-dir" {
+            match args.get(i + 1) {
+                Some(dir) => {
+                    data_dir = Some(PathBuf::from(dir));
+                    i += 2;
+                }
+                None => {
+                    eprintln!("error: --data-dir requires an argument");
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    let data_dir = data_dir.unwrap_or_else(|| {
+        script_path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."))
+            .to_owned()
+    });
+
+    (script_path, data_dir)
+}
+
+// r[impl operation.lifecycle.events]
+// r[impl barrier.replay]
+fn find_or_create_operation(db: &Db, app: &App, app_name: &str) -> Option<CurrentOperation> {
+    match load_current_operation(db).unwrap_or_else(|e| {
+        eprintln!("error: failed to query current operation: {e}");
+        std::process::exit(1);
+    }) {
+        Some(op) => {
+            eprintln!(
+                "resuming interrupted '{}/{}' [{}]",
+                op.app, op.action_name, op.operation_id.0
+            );
+            Some(op)
+        }
+        None => {
+            let has_start = app.0.lock().actions.contains_key("start");
+            if !has_start {
+                eprintln!("no interrupted operation and no 'start' action — nothing to do");
+                return None;
+            }
+            let op = CurrentOperation {
+                operation_id: OperationId::new(),
+                app: app_name.to_owned(),
+                action_name: "start".to_owned(),
+            };
+            save_current_operation(db, &op).unwrap_or_else(|e| {
+                eprintln!("error: failed to save current operation: {e}");
+                std::process::exit(1);
+            });
+            eprintln!(
+                "starting '{}/{}' [{}]",
+                op.app, op.action_name, op.operation_id.0
+            );
+            Some(op)
+        }
+    }
+}
+
 fn main() {
-    let filepath = PathBuf::from(
-        std::env::args_os()
-            .nth(1)
-            .expect("Usage: seedling <RHAI FILE>"),
-    );
+    let (script_path, data_dir) = parse_args();
+
+    std::fs::create_dir_all(&data_dir).unwrap_or_else(|e| {
+        eprintln!(
+            "error: cannot create data directory {}: {e}",
+            data_dir.display()
+        );
+        std::process::exit(1);
+    });
+
+    let db_path = data_dir.join("seedling.db");
+    let db = Db::open(&db_path).unwrap_or_else(|e| {
+        eprintln!("error: cannot open database {}: {e}", db_path.display());
+        std::process::exit(1);
+    });
 
     let (engine, mut scope, app) = setup();
+    let ast = run_file(&engine, &mut scope, script_path.clone()).unwrap_or_else(|e| {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    });
 
-    let ast = match run_file(&engine, &mut scope, filepath) {
-        Ok(ast) => ast,
-        Err(err) => {
-            eprintln!("{err}");
-            std::process::exit(1);
+    let app_name = script_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("app")
+        .to_owned();
+
+    {
+        let def = app.0.lock();
+        eprintln!("app: {app_name}");
+        eprintln!("  resources: {}", def.resources.len());
+        for id in def.resources.keys() {
+            eprintln!("    {:?} {:?}", id.kind, id.name);
         }
+        eprintln!("  actions: {:?}", def.actions.keys().collect::<Vec<_>>());
+    }
+
+    let Some(current_op) = find_or_create_operation(&db, &app, &app_name) else {
+        return;
     };
 
-    let def = app.0.lock();
-    println!("params: {:?}", def.params.keys().collect::<Vec<_>>());
-    println!("resources: {}", def.resources.len());
-    for id in def.resources.keys() {
-        println!("  {:?} {:?}", id.kind, id.name);
+    // Register with the scheduler for the single-active-operation invariant.
+    // We use the persisted operation_id for the action log and run_operation;
+    // the scheduler's internally-generated id is used only for concurrency tracking.
+    let mut scheduler = Scheduler::new();
+    match scheduler.request(&current_op.app, &current_op.action_name) {
+        ScheduleResult::Accepted => {}
+        ScheduleResult::Rejected(reason) => {
+            let msg = match reason {
+                RejectReason::SameAppOperationInProgress => "operation already in progress",
+                RejectReason::SameAppAlreadyQueued => "operation already queued",
+            };
+            eprintln!("internal error: scheduler rejected boot operation: {msg}");
+            std::process::exit(1);
+        }
     }
-    println!("actions: {:?}", def.actions.keys().collect::<Vec<_>>());
-    println!("shells: {:?}", def.shells.keys().collect::<Vec<_>>());
-    println!("install: {}", def.install.is_some());
-    drop(def);
 
-    println!();
-    println!("--- exercising actions ---");
-    exercise_actions(&engine, &mut scope, &app, &ast);
+    let oracle = Arc::new(DbWorldOracle::new(Db::open(&db_path).unwrap_or_else(|e| {
+        eprintln!("error: cannot open oracle database: {e}");
+        std::process::exit(1);
+    })));
+    let log = DbActionLog::new(
+        Db::open(&db_path).unwrap_or_else(|e| {
+            eprintln!("error: cannot open log database: {e}");
+            std::process::exit(1);
+        }),
+        current_op.operation_id.clone(),
+        &current_op.app,
+        &current_op.action_name,
+    );
+
+    match run_operation(
+        &engine,
+        &mut scope,
+        &ast,
+        current_op.operation_id.clone(),
+        &app,
+        &current_op.action_name,
+        &log,
+        Arc::clone(&oracle),
+    ) {
+        OperationResult::Completed => {
+            eprintln!("completed.");
+            clear_current_operation(&db).unwrap_or_else(|e| {
+                eprintln!("warning: failed to clear current operation record: {e}");
+            });
+            scheduler.complete_current();
+        }
+        OperationResult::Suspended(cond) => {
+            let names: Vec<_> = cond
+                .resources
+                .iter()
+                .map(|r| r.name.as_deref().unwrap_or("<anonymous>"))
+                .collect();
+            eprintln!(
+                "suspended — waiting for {names:?} to reach {:?} (deadline {}s)",
+                cond.required_state, cond.deadline_secs,
+            );
+            eprintln!("operation state saved; run again to resume.");
+        }
+        OperationResult::Failed(err) => {
+            eprintln!("operation failed: {err}");
+            clear_current_operation(&db).unwrap_or_else(|e| {
+                eprintln!("warning: failed to clear current operation record: {e}");
+            });
+            std::process::exit(1);
+        }
+    }
 }

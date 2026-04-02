@@ -79,6 +79,19 @@ impl Db {
             );",
         )?;
 
+        // r[impl operation.lifecycle.events]
+        // r[impl barrier.replay]
+        // Singleton row (id=1) records the one in-progress lifecycle operation so
+        // that a restart can detect it and replay rather than starting fresh.
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS current_operation (
+                singleton    INTEGER PRIMARY KEY DEFAULT 1 CHECK (singleton = 1),
+                operation_id TEXT    NOT NULL,
+                app          TEXT    NOT NULL,
+                action_name  TEXT    NOT NULL
+            );",
+        )?;
+
         Ok(())
     }
 }
