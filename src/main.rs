@@ -15,6 +15,7 @@ use crate::runtime::db::Db;
 use crate::runtime::history::{
     CurrentOperation, clear_current_operation, load_current_operation, save_current_operation,
 };
+use crate::runtime::registry::DbInstanceRegistry;
 use crate::runtime::scheduler::{RejectReason, ScheduleResult, Scheduler};
 
 pub(crate) mod defs;
@@ -310,6 +311,8 @@ fn main() {
         .unwrap_or("app")
         .to_owned();
 
+    app.0.lock().name = app_name.clone();
+
     {
         let def = app.0.lock();
         eprintln!("app: {app_name}");
@@ -354,6 +357,13 @@ fn main() {
         &current_op.action_name,
     );
 
+    let registry = Arc::new(DbInstanceRegistry::new(Db::open(&db_path).unwrap_or_else(
+        |e| {
+            eprintln!("error: cannot open registry database: {e}");
+            std::process::exit(1);
+        },
+    )));
+
     match run_operation(
         &engine,
         &mut scope,
@@ -363,6 +373,7 @@ fn main() {
         &current_op.action_name,
         &log,
         Arc::clone(&oracle),
+        registry,
     ) {
         OperationResult::Completed => {
             eprintln!("completed.");

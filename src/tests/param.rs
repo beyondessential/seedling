@@ -123,7 +123,7 @@ fn on_change_inside_action_closure_throws() {
     );
     let oracle = Arc::new(TestWorldOracle::new());
     oracle.set(
-        crate::runtime::ResourceInstance::named(
+        crate::runtime::ResourceInstance::new_singleton(
             "test",
             crate::defs::resource::ResourceKind::Deployment,
             "x",
@@ -140,6 +140,7 @@ fn on_change_inside_action_closure_throws() {
         "start",
         &log,
         oracle,
+        std::sync::Arc::new(crate::runtime::EphemeralInstanceRegistry::new()),
     );
     assert!(
         matches!(result, OperationResult::Failed(_)),

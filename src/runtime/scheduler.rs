@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::runtime::barrier::OperationId;
 use crate::runtime::history::AutonomousOperation;
-use crate::runtime::identity::ResourceInstance;
+use crate::runtime::identity::InstanceId;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -196,14 +196,14 @@ const MAX_BACKOFF_SECS: u64 = 300;
 /// when the gap since the last matching operation exceeds `MAX_BACKOFF_SECS`.
 // r[impl history.operations.rate-limiting]
 pub fn should_back_off(
-    resource: &ResourceInstance,
+    resource_id: InstanceId,
     operation: &str,
     recent_ops: &[AutonomousOperation],
     now: SystemTime,
 ) -> Option<Duration> {
     let matching: Vec<_> = recent_ops
         .iter()
-        .filter(|op| &op.resource == resource && op.operation == operation)
+        .filter(|op| op.resource_id == resource_id && op.operation == operation)
         .collect();
 
     if matching.is_empty() {
@@ -247,23 +247,22 @@ mod tests {
     use std::time::{Duration, UNIX_EPOCH};
 
     use super::*;
-    use crate::defs::resource::ResourceKind;
-    use crate::runtime::identity::ResourceInstance;
+    use crate::runtime::identity::InstanceId;
 
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
 
-    fn dep(app: &str, name: &str) -> ResourceInstance {
-        ResourceInstance::named(app, ResourceKind::Deployment, name)
+    fn dep_id() -> InstanceId {
+        InstanceId::generate()
     }
 
     /// Build an AutonomousOperation recorded at `ms` milliseconds since epoch.
-    fn op_at(resource: &ResourceInstance, operation: &str, ms: i64) -> AutonomousOperation {
+    fn op_at(resource_id: InstanceId, operation: &str, ms: i64) -> AutonomousOperation {
         AutonomousOperation {
             id: 0,
             recorded_at: ms,
-            resource: resource.clone(),
+            resource_id,
             operation: operation.to_owned(),
             provenance: serde_json::Value::Null,
             outcome: Some("ok".to_owned()),
@@ -500,61 +499,55 @@ mod tests {
     // r[verify history.operations.rate-limiting]
     #[test]
     fn no_ops_means_no_backoff() {
-        let resource = dep("app", "web");
-        let result = should_back_off(&resource, "start_container", &[], SystemTime::now());
+        let id = dep_id();
+        let result = should_back_off(id, "start_container", &[], SystemTime::now());
         assert!(result.is_none());
     }
 
     // r[verify history.operations.rate-limiting]
     #[test]
     fn single_recent_op_backs_off_for_base_period() {
-        let resource = dep("app", "web");
+        let id = dep_id();
         // Op recorded 1 second ago; backoff for n=1 is 5s; remaining = 4s.
         let now_ms: i64 = 1_700_000_000_000;
-        let ops = [op_at(&resource, "start_container", now_ms - 1_000)];
-        let result = should_back_off(&resource, "start_container", &ops, now_from_ms(now_ms));
+        let ops = [op_at(id, "start_container", now_ms - 1_000)];
+        let result = should_back_off(id, "start_container", &ops, now_from_ms(now_ms));
         assert_eq!(result, Some(Duration::from_secs(4)));
     }
 
     // r[verify history.operations.rate-limiting]
     #[test]
     fn two_recent_ops_back_off_longer() {
-        let resource = dep("app", "web");
+        let id = dep_id();
         // n=2 → backoff = 5 * 2 = 10s; elapsed = 1s; remaining = 9s.
         let now_ms: i64 = 1_700_000_000_000;
         let ops = [
-            op_at(&resource, "start_container", now_ms - 2_000),
-            op_at(&resource, "start_container", now_ms - 1_000),
+            op_at(id, "start_container", now_ms - 2_000),
+            op_at(id, "start_container", now_ms - 1_000),
         ];
-        let result = should_back_off(&resource, "start_container", &ops, now_from_ms(now_ms));
+        let result = should_back_off(id, "start_container", &ops, now_from_ms(now_ms));
         assert_eq!(result, Some(Duration::from_secs(9)));
     }
 
     // r[verify history.operations.rate-limiting]
     #[test]
     fn backoff_duration_increases_with_op_count() {
-        let resource = dep("app", "web");
+        let id = dep_id();
         let now_ms: i64 = 1_700_000_000_000;
         let now = now_from_ms(now_ms);
 
         let make_ops = |n: usize| -> Vec<AutonomousOperation> {
             (0..n)
-                .map(|i| {
-                    op_at(
-                        &resource,
-                        "start_container",
-                        now_ms - (i as i64 + 1) * 1_000,
-                    )
-                })
+                .map(|i| op_at(id, "start_container", now_ms - (i as i64 + 1) * 1_000))
                 .collect()
         };
 
-        let wait1 = should_back_off(&resource, "start_container", &make_ops(1), now)
-            .expect("should back off");
-        let wait2 = should_back_off(&resource, "start_container", &make_ops(2), now)
-            .expect("should back off");
-        let wait3 = should_back_off(&resource, "start_container", &make_ops(3), now)
-            .expect("should back off");
+        let wait1 =
+            should_back_off(id, "start_container", &make_ops(1), now).expect("should back off");
+        let wait2 =
+            should_back_off(id, "start_container", &make_ops(2), now).expect("should back off");
+        let wait3 =
+            should_back_off(id, "start_container", &make_ops(3), now).expect("should back off");
 
         assert!(wait2 > wait1, "backoff should grow: {wait2:?} > {wait1:?}");
         assert!(wait3 > wait2, "backoff should grow: {wait3:?} > {wait2:?}");
@@ -563,13 +556,13 @@ mod tests {
     // r[verify history.operations.rate-limiting]
     #[test]
     fn backoff_caps_at_maximum() {
-        let resource = dep("app", "web");
+        let id = dep_id();
         // With 100 ops, 2^99 overflows — must still cap at MAX_BACKOFF_SECS.
         let now_ms: i64 = 1_700_000_000_000;
         let ops: Vec<_> = (0..100)
-            .map(|i| op_at(&resource, "start_container", now_ms - (i + 1) * 1_000))
+            .map(|i| op_at(id, "start_container", now_ms - (i + 1) * 1_000))
             .collect();
-        let result = should_back_off(&resource, "start_container", &ops, now_from_ms(now_ms));
+        let result = should_back_off(id, "start_container", &ops, now_from_ms(now_ms));
         // Should be capped; remaining = MAX - elapsed(1s) = 299s.
         assert_eq!(result, Some(Duration::from_secs(299)));
     }
@@ -577,64 +570,64 @@ mod tests {
     // r[verify history.operations.rate-limiting]
     #[test]
     fn waited_full_backoff_period_proceeds() {
-        let resource = dep("app", "web");
+        let id = dep_id();
         // n=1, backoff=5s, but 5 seconds have elapsed — should proceed.
         let now_ms: i64 = 1_700_000_000_000;
-        let ops = [op_at(&resource, "start_container", now_ms - 5_000)];
-        let result = should_back_off(&resource, "start_container", &ops, now_from_ms(now_ms));
+        let ops = [op_at(id, "start_container", now_ms - 5_000)];
+        let result = should_back_off(id, "start_container", &ops, now_from_ms(now_ms));
         assert!(result.is_none());
     }
 
     // r[verify history.operations.rate-limiting]
     #[test]
     fn gap_since_last_op_resets_backoff() {
-        let resource = dep("app", "web");
+        let id = dep_id();
         // Many ops, but the last one was 400 seconds ago — gap > MAX_BACKOFF_SECS.
         let now_ms: i64 = 1_700_000_000_000;
         let ops: Vec<_> = (0..10)
-            .map(|i| op_at(&resource, "start_container", now_ms - 400_000 - i * 1_000))
+            .map(|i| op_at(id, "start_container", now_ms - 400_000 - i * 1_000))
             .collect();
-        let result = should_back_off(&resource, "start_container", &ops, now_from_ms(now_ms));
+        let result = should_back_off(id, "start_container", &ops, now_from_ms(now_ms));
         assert!(result.is_none(), "backoff should reset after gap");
     }
 
     // r[verify history.operations.rate-limiting]
     #[test]
     fn ops_for_different_resource_are_ignored() {
-        let resource = dep("app", "web");
-        let other = dep("app", "api");
+        let web = dep_id();
+        let api = dep_id();
         let now_ms: i64 = 1_700_000_000_000;
-        // Only ops for "api", not "web".
-        let ops = [op_at(&other, "start_container", now_ms - 1_000)];
-        let result = should_back_off(&resource, "start_container", &ops, now_from_ms(now_ms));
+        // Only ops for api, not web.
+        let ops = [op_at(api, "start_container", now_ms - 1_000)];
+        let result = should_back_off(web, "start_container", &ops, now_from_ms(now_ms));
         assert!(result.is_none());
     }
 
     // r[verify history.operations.rate-limiting]
     #[test]
     fn ops_for_different_operation_are_ignored() {
-        let resource = dep("app", "web");
+        let id = dep_id();
         let now_ms: i64 = 1_700_000_000_000;
         // Op is "rebuild_proxy", not "start_container".
-        let ops = [op_at(&resource, "rebuild_proxy", now_ms - 1_000)];
-        let result = should_back_off(&resource, "start_container", &ops, now_from_ms(now_ms));
+        let ops = [op_at(id, "rebuild_proxy", now_ms - 1_000)];
+        let result = should_back_off(id, "start_container", &ops, now_from_ms(now_ms));
         assert!(result.is_none());
     }
 
     // r[verify history.operations.rate-limiting]
     #[test]
     fn mixed_ops_only_matching_ones_contribute_to_backoff() {
-        let resource = dep("app", "web");
-        let other = dep("app", "api");
+        let web = dep_id();
+        let api = dep_id();
         let now_ms: i64 = 1_700_000_000_000;
 
-        // One matching op for "web" and one non-matching for "api".
-        // Only the "web" op should count → n=1, backoff=5s, elapsed=1s → Some(4s).
+        // One matching op for web and one non-matching for api.
+        // Only the web op should count → n=1, backoff=5s, elapsed=1s → Some(4s).
         let ops = [
-            op_at(&resource, "start_container", now_ms - 1_000),
-            op_at(&other, "start_container", now_ms - 500),
+            op_at(web, "start_container", now_ms - 1_000),
+            op_at(api, "start_container", now_ms - 500),
         ];
-        let result = should_back_off(&resource, "start_container", &ops, now_from_ms(now_ms));
+        let result = should_back_off(web, "start_container", &ops, now_from_ms(now_ms));
         assert_eq!(result, Some(Duration::from_secs(4)));
     }
 }

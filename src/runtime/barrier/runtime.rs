@@ -5,6 +5,7 @@ use rhai::{CustomType, Dynamic, EvalAltResult, Map, TypeBuilder};
 use crate::runtime::barrier::{
     ActionLogEntry, BarrierCondition, BarrierRecord, CallKind, SharedContext,
 };
+use crate::runtime::registry::InstanceRegistry;
 use crate::runtime::{LifecycleState, ResourceInstance};
 
 // ---------------------------------------------------------------------------
@@ -89,49 +90,6 @@ pub fn extract_barrier_hit(err: &EvalAltResult) -> Option<BarrierCondition> {
 // Resource extraction from Rhai Dynamic
 // ---------------------------------------------------------------------------
 
-/// Extract ResourceInstance values from a Rhai Dynamic argument passed to
-/// rt.start() / rt.stop() / etc.  We recognise the concrete resource types
-/// registered with the engine; anything else yields an empty vec (the stub
-/// behaviour, which leaves barriers trivially satisfied — fine for language
-/// tests that use RuntimeInstance::stub()).
-fn extract_instances(resources: Dynamic) -> Vec<ResourceInstance> {
-    use crate::defs::deployment::Deployment;
-    use crate::defs::job::Job;
-    use crate::defs::resource::ResourceKind;
-    use crate::defs::service::Service;
-
-    // Deployment
-    if let Some(dep) = resources.clone().try_cast::<Deployment>() {
-        return vec![ResourceInstance {
-            app: String::new(),
-            kind: ResourceKind::Deployment,
-            name: Some((*dep.name).clone()),
-            ordinal: 0,
-        }];
-    }
-    // Job
-    if let Some(job) = resources.clone().try_cast::<Job>() {
-        return vec![ResourceInstance {
-            app: String::new(),
-            kind: ResourceKind::Job,
-            name: Some((*job.name).clone()),
-            ordinal: 0,
-        }];
-    }
-    // Service
-    if let Some(svc) = resources.clone().try_cast::<Service>() {
-        return vec![ResourceInstance {
-            app: String::new(),
-            kind: ResourceKind::Service,
-            name: Some((*svc.name).clone()),
-            ordinal: 0,
-        }];
-    }
-
-    // Unknown / Collection stub — no resources to track
-    vec![]
-}
-
 // ---------------------------------------------------------------------------
 // RuntimeInstance
 // ---------------------------------------------------------------------------
@@ -139,18 +97,80 @@ fn extract_instances(resources: Dynamic) -> Vec<ResourceInstance> {
 // l[impl rt.var]
 // l[impl rt.type]
 // l[impl rt.constructor]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RuntimeInstance {
     pub ctx: Option<SharedContext>,
+    pub app_name: String,
+    pub registry: Arc<dyn InstanceRegistry>,
+}
+
+impl std::fmt::Debug for RuntimeInstance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RuntimeInstance")
+            .field("ctx", &self.ctx)
+            .field("app_name", &self.app_name)
+            .finish_non_exhaustive()
+    }
 }
 
 impl RuntimeInstance {
     pub fn stub() -> Self {
-        Self { ctx: None }
+        use crate::runtime::registry::EphemeralInstanceRegistry;
+        Self {
+            ctx: None,
+            app_name: String::new(),
+            registry: Arc::new(EphemeralInstanceRegistry::new()),
+        }
     }
 
-    pub fn with_context(ctx: SharedContext) -> Self {
-        Self { ctx: Some(ctx) }
+    pub fn with_context(
+        ctx: SharedContext,
+        app_name: impl Into<String>,
+        registry: Arc<dyn InstanceRegistry>,
+    ) -> Self {
+        Self {
+            ctx: Some(ctx),
+            app_name: app_name.into(),
+            registry,
+        }
+    }
+
+    /// Extract ResourceInstance values from a Rhai Dynamic argument.
+    ///
+    /// Recognises the concrete resource types registered with the engine and
+    /// resolves them through the instance registry so the returned instances
+    /// carry stable UUIDs.  Unknown types yield an empty vec (stub behaviour
+    /// that leaves barriers trivially satisfied in language-only tests).
+    fn extract_instances(&self, resources: Dynamic) -> Vec<ResourceInstance> {
+        use crate::defs::deployment::Deployment;
+        use crate::defs::job::Job;
+        use crate::defs::resource::ResourceKind;
+        use crate::defs::service::Service;
+
+        if let Some(dep) = resources.clone().try_cast::<Deployment>() {
+            return vec![self.registry.get_or_create_singleton(
+                &self.app_name,
+                ResourceKind::Deployment,
+                Some(&dep.name),
+            )];
+        }
+        if let Some(job) = resources.clone().try_cast::<Job>() {
+            return vec![self.registry.get_or_create_singleton(
+                &self.app_name,
+                ResourceKind::Job,
+                Some(&job.name),
+            )];
+        }
+        if let Some(svc) = resources.clone().try_cast::<Service>() {
+            return vec![self.registry.get_or_create_singleton(
+                &self.app_name,
+                ResourceKind::Service,
+                Some(&svc.name),
+            )];
+        }
+
+        // Unknown / Collection stub — no resources to track.
+        vec![]
     }
 
     // r[impl desired-state.during-operation]
@@ -297,7 +317,7 @@ impl CustomType for RuntimeInstance {
             .with_fn(
                 "start",
                 |this: &mut Self, resources: Dynamic| -> Result<Started, Box<EvalAltResult>> {
-                    let instances = extract_instances(resources);
+                    let instances = this.extract_instances(resources);
                     this.do_start(instances)
                 },
             )
@@ -305,7 +325,7 @@ impl CustomType for RuntimeInstance {
             .with_fn(
                 "stop",
                 |this: &mut Self, resources: Dynamic| -> Result<(), Box<EvalAltResult>> {
-                    let instances = extract_instances(resources);
+                    let instances = this.extract_instances(resources);
                     this.do_stop(instances, 30)
                 },
             )
@@ -315,7 +335,7 @@ impl CustomType for RuntimeInstance {
                  resources: Dynamic,
                  deadline: i64|
                  -> Result<(), Box<EvalAltResult>> {
-                    let instances = extract_instances(resources);
+                    let instances = this.extract_instances(resources);
                     this.do_stop(instances, deadline.max(0) as u64)
                 },
             )
@@ -323,7 +343,7 @@ impl CustomType for RuntimeInstance {
             .with_fn(
                 "query",
                 |this: &mut Self, resources: Dynamic| -> Result<Started, Box<EvalAltResult>> {
-                    let instances = extract_instances(resources);
+                    let instances = this.extract_instances(resources);
                     this.do_start(instances)
                 },
             )

@@ -313,14 +313,20 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[identity.components]
 > A resource identity consists of:
 >
+> - A randomly-generated opaque instance ID, assigned once at creation and never changed.
 > - The application name.
 > - The resource type.
 > - The resource name (if not anonymous).
-> - The instance ordinal (for scaled resources).
+> - Whether the instance is a singleton or one of a scaled group.
 
 > r[identity.scaled]
 > Scaled resources (e.g. a Deployment with `scale(N)`) produce N instances.
-> Each instance must have a distinct, stable ordinal so the runtime can track instances independently across restarts and scaling events.
+> Each instance must have a distinct, stable opaque identifier so the runtime can track
+> instances independently across restarts and scaling events.
+> Instance identifiers must not imply ordering or position; a random value must be used
+> so that removing one instance does not make the remaining identifiers appear discontinuous.
+> A human-readable display name for each instance is derived at creation time from the
+> instance ID and stored stably alongside the identity.
 
 > r[identity.anonymous]
 > Anonymous resources (those without a name) must receive a runtime-assigned identity that is stable for the lifetime of the resource but does not conflict with named resources.

@@ -24,6 +24,7 @@ pub struct App(pub Holder<AppDef>);
 // l[impl app.resources.names]
 #[derive(Debug, Default, Clone)]
 pub struct AppDef {
+    pub name: String,
     pub params: BTreeMap<String, String>,
     pub resources: BTreeMap<ResourceId, Resource>,
     pub actions: BTreeMap<String, ActionDef>,

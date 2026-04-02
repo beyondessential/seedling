@@ -107,7 +107,7 @@ fn compute_steady(app_name: &str, app_def: &AppDef) -> DesiredState {
         .resources
         .iter()
         .map(|(id, resource)| DesiredResource {
-            instance: ResourceInstance::named(app_name, id.kind, id.name.as_str()),
+            instance: ResourceInstance::new_singleton(app_name, id.kind, id.name.as_str()),
             desired: LifecycleState::Ready,
             definition: resource.clone(),
         })
@@ -183,7 +183,7 @@ mod tests {
     }
 
     fn dep(app: &str, name: &str) -> ResourceInstance {
-        ResourceInstance::named(app, ResourceKind::Deployment, name)
+        ResourceInstance::new_singleton(app, ResourceKind::Deployment, name)
     }
 
     fn log_entry(call_kind: CallKind, resources: Vec<ResourceInstance>) -> ActionLogEntry {
@@ -295,9 +295,10 @@ mod tests {
     #[test]
     fn stop_after_start_overrides_to_unscheduled() {
         let app_def = make_app_def(&["web"]);
+        let web = dep("myapp", "web");
         let mut progress = OperationProgress::new();
-        progress.started(dep("myapp", "web"));
-        progress.stopped(dep("myapp", "web"));
+        progress.started(web.clone());
+        progress.stopped(web);
 
         let state = compute("myapp", &app_def, Some(&progress));
 
@@ -372,9 +373,10 @@ mod tests {
     #[test]
     fn from_log_later_entry_overrides_earlier_for_same_resource() {
         let app_def = make_app_def(&["web"]);
+        let web = dep("myapp", "web");
         let entries = [
-            log_entry(CallKind::Start, vec![dep("myapp", "web")]),
-            log_entry(CallKind::Stop, vec![dep("myapp", "web")]),
+            log_entry(CallKind::Start, vec![web.clone()]),
+            log_entry(CallKind::Stop, vec![web]),
         ];
         let progress = OperationProgress::from_log(&entries);
 

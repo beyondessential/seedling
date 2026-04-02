@@ -30,15 +30,47 @@ impl Db {
             );",
         )?;
 
+        let version: i64 = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+
+        if version < 2 {
+            // Identity overhaul: drop old tables that used (app, kind, name, ordinal)
+            // columns; they will be recreated below with instance_id references.
+            self.conn.execute_batch(
+                "DROP TABLE IF EXISTS world_observations;
+                 DROP TABLE IF EXISTS autonomous_operations;
+                 DELETE FROM schema_version;",
+            )?;
+        }
+
+        // r[impl identity.stable]
+        // r[impl identity.components]
+        // The instance registry is the authoritative list of all resource instances.
+        // Each row is created once; the id (32-char hex InstanceId) never changes.
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS resource_instances (
+                id           TEXT    PRIMARY KEY,
+                app          TEXT    NOT NULL,
+                kind         TEXT    NOT NULL,
+                name         TEXT,
+                is_scaled    INTEGER NOT NULL DEFAULT 0,
+                display_name TEXT    NOT NULL UNIQUE,
+                created_at   INTEGER NOT NULL
+            );",
+        )?;
+
         // r[impl history.world.entries]
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS world_observations (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 recorded_at INTEGER NOT NULL,
-                app         TEXT    NOT NULL,
-                kind        TEXT    NOT NULL,
-                name        TEXT,
-                ordinal     INTEGER NOT NULL DEFAULT 0,
+                instance_id TEXT    NOT NULL,
                 obs_kind    TEXT    NOT NULL,
                 payload     TEXT    NOT NULL
             );",
@@ -49,10 +81,7 @@ impl Db {
             "CREATE TABLE IF NOT EXISTS autonomous_operations (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 recorded_at  INTEGER NOT NULL,
-                app          TEXT    NOT NULL,
-                kind         TEXT    NOT NULL,
-                name         TEXT,
-                ordinal      INTEGER NOT NULL DEFAULT 0,
+                instance_id  TEXT    NOT NULL,
                 operation    TEXT    NOT NULL,
                 provenance   TEXT    NOT NULL,
                 outcome      TEXT,
@@ -92,6 +121,11 @@ impl Db {
             );",
         )?;
 
+        if version < 2 {
+            self.conn
+                .execute_batch("INSERT INTO schema_version VALUES (2);")?;
+        }
+
         Ok(())
     }
 }
@@ -110,7 +144,7 @@ mod tests {
             .conn
             .query_row("SELECT COUNT(*) FROM schema_version", [], |r| r.get(0))
             .expect("schema_version should exist");
-        assert_eq!(n, 0);
+        assert_eq!(n, 1);
     }
 
     // r[verify history.persistence]

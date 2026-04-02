@@ -13,10 +13,13 @@ pub trait WorldStateOracle: Send + Sync {
     fn lifecycle_state(&self, resource: &ResourceInstance) -> LifecycleState;
 }
 
-/// A simple in-memory oracle. Useful in tests, but also as the initial
-/// implementation before a real observation-history-backed oracle exists.
+/// A simple in-memory oracle for tests.
+///
+/// Keyed by `(ResourceKind, Option<name>)` so that test code setting state via
+/// a helper `dep("web")` and runtime code querying a freshly-created instance
+/// of the same resource (with a different UUID) still match correctly.
 pub struct TestWorldOracle {
-    states: Mutex<HashMap<ResourceInstance, LifecycleState>>,
+    states: Mutex<HashMap<(ResourceKind, Option<String>), LifecycleState>>,
 }
 
 impl TestWorldOracle {
@@ -27,7 +30,9 @@ impl TestWorldOracle {
     }
 
     pub fn set(&self, resource: ResourceInstance, state: LifecycleState) {
-        self.states.lock().insert(resource, state);
+        self.states
+            .lock()
+            .insert((resource.kind, resource.name), state);
     }
 }
 
@@ -39,23 +44,11 @@ impl Default for TestWorldOracle {
 
 impl WorldStateOracle for TestWorldOracle {
     fn lifecycle_state(&self, resource: &ResourceInstance) -> LifecycleState {
-        let states = self.states.lock();
-
-        // Try exact match first.
-        if let Some(&s) = states.get(resource) {
-            return s;
-        }
-
-        // Fallback: match by kind + name + ordinal, ignoring the app field.
-        // This allows callers that key the oracle with one app name to match
-        // resources the runtime extracted with a different (or empty) app name.
-        for (k, &v) in states.iter() {
-            if k.kind == resource.kind && k.name == resource.name && k.ordinal == resource.ordinal {
-                return v;
-            }
-        }
-
-        LifecycleState::Pending
+        self.states
+            .lock()
+            .get(&(resource.kind, resource.name.clone()))
+            .copied()
+            .unwrap_or(LifecycleState::Pending)
     }
 }
 
@@ -227,19 +220,19 @@ mod tests {
     use crate::runtime::history::{WorldObservation, insert_observation, query_observations};
 
     fn dep(app: &str, name: &str) -> ResourceInstance {
-        ResourceInstance::named(app, ResourceKind::Deployment, name)
+        ResourceInstance::new_singleton(app, ResourceKind::Deployment, name)
     }
 
     fn svc(name: &str) -> ResourceInstance {
-        ResourceInstance::named("app", ResourceKind::Service, name)
+        ResourceInstance::new_singleton("app", ResourceKind::Service, name)
     }
 
     fn ing(name: &str) -> ResourceInstance {
-        ResourceInstance::named("app", ResourceKind::Ingress, name)
+        ResourceInstance::new_singleton("app", ResourceKind::Ingress, name)
     }
 
     fn vol(name: &str) -> ResourceInstance {
-        ResourceInstance::named("app", ResourceKind::Volume, name)
+        ResourceInstance::new_singleton("app", ResourceKind::Volume, name)
     }
 
     /// Build a `WorldObservation` with `recorded_at = 0` for testing the pure

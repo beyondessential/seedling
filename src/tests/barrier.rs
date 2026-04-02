@@ -4,7 +4,7 @@ use crate::defs::resource::ResourceKind;
 use crate::{
     defs,
     runtime::{
-        ActionLog, LifecycleState, ResourceInstance, TestWorldOracle,
+        ActionLog, EphemeralInstanceRegistry, LifecycleState, ResourceInstance, TestWorldOracle,
         barrier::OperationId,
         barrier::replay::{InMemoryActionLog, OperationResult, run_operation},
     },
@@ -24,7 +24,11 @@ fn setup_with_script(
 }
 
 fn dep(name: &str) -> ResourceInstance {
-    ResourceInstance::named("test-app", ResourceKind::Deployment, name)
+    ResourceInstance::new_singleton("test-app", ResourceKind::Deployment, name)
+}
+
+fn registry() -> Arc<dyn crate::runtime::InstanceRegistry> {
+    Arc::new(EphemeralInstanceRegistry::new())
 }
 
 // r[verify barrier.suspension]
@@ -44,7 +48,17 @@ fn barrier_satisfied_on_first_pass() {
 
     let log = InMemoryActionLog::new();
     let op = OperationId::new();
-    let result = run_operation(&engine, &mut scope, &ast, op, &app, "start", &log, oracle);
+    let result = run_operation(
+        &engine,
+        &mut scope,
+        &ast,
+        op,
+        &app,
+        "start",
+        &log,
+        oracle,
+        registry(),
+    );
     assert!(matches!(result, OperationResult::Completed));
 }
 
@@ -64,6 +78,8 @@ fn barrier_suspends_then_resumes() {
     let log = InMemoryActionLog::new();
     let op = OperationId::new();
 
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
+
     // Pass 1: web is Pending → suspend
     let r = run_operation(
         &engine,
@@ -74,6 +90,7 @@ fn barrier_suspends_then_resumes() {
         "start",
         &log,
         Arc::clone(&oracle),
+        Arc::clone(&reg),
     );
     assert!(matches!(r, OperationResult::Suspended(_)));
 
@@ -90,6 +107,7 @@ fn barrier_suspends_then_resumes() {
         "start",
         &log,
         Arc::clone(&oracle),
+        Arc::clone(&reg),
     );
     assert!(matches!(r, OperationResult::Completed));
 }
@@ -111,6 +129,7 @@ fn sequential_barriers() {
     let oracle = Arc::new(TestWorldOracle::new());
     let log = InMemoryActionLog::new();
     let op = OperationId::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
 
     // Pass 1: frontend not Scheduled → suspend
     let r = run_operation(
@@ -122,6 +141,7 @@ fn sequential_barriers() {
         "start",
         &log,
         Arc::clone(&oracle),
+        Arc::clone(&reg),
     );
     assert!(matches!(r, OperationResult::Suspended(_)));
 
@@ -137,6 +157,7 @@ fn sequential_barriers() {
         "start",
         &log,
         Arc::clone(&oracle),
+        Arc::clone(&reg),
     );
     assert!(matches!(r, OperationResult::Suspended(_)));
 
@@ -152,6 +173,7 @@ fn sequential_barriers() {
         "start",
         &log,
         Arc::clone(&oracle),
+        Arc::clone(&reg),
     );
     assert!(matches!(r, OperationResult::Completed));
 }
@@ -170,6 +192,7 @@ fn barrier_deadline_zero_expires_on_second_pass() {
     let oracle = Arc::new(TestWorldOracle::new());
     let log = InMemoryActionLog::new();
     let op = OperationId::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
 
     // Pass 1: not ready → suspend
     let r = run_operation(
@@ -181,6 +204,7 @@ fn barrier_deadline_zero_expires_on_second_pass() {
         "start",
         &log,
         Arc::clone(&oracle),
+        Arc::clone(&reg),
     );
     assert!(matches!(r, OperationResult::Suspended(_)));
 
@@ -194,6 +218,7 @@ fn barrier_deadline_zero_expires_on_second_pass() {
         "start",
         &log,
         Arc::clone(&oracle),
+        Arc::clone(&reg),
     );
     assert!(matches!(r, OperationResult::Failed(_)));
 }
@@ -215,6 +240,7 @@ fn replay_idempotency() {
     let oracle = Arc::new(TestWorldOracle::new());
     let log = InMemoryActionLog::new();
     let op = OperationId::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
 
     // Pass 1: b not ready → suspend
     let r = run_operation(
@@ -226,6 +252,7 @@ fn replay_idempotency() {
         "start",
         &log,
         Arc::clone(&oracle),
+        Arc::clone(&reg),
     );
     assert!(matches!(r, OperationResult::Suspended(_)));
 
@@ -241,6 +268,7 @@ fn replay_idempotency() {
         "start",
         &log,
         Arc::clone(&oracle),
+        Arc::clone(&reg),
     );
     assert!(matches!(r, OperationResult::Completed));
 
@@ -277,6 +305,7 @@ fn rt_stop_acts_as_barrier() {
     let oracle = Arc::new(TestWorldOracle::new());
     let log = InMemoryActionLog::new();
     let op = OperationId::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
 
     // Pass 1: dep not Terminated → stop suspends
     let r = run_operation(
@@ -288,6 +317,7 @@ fn rt_stop_acts_as_barrier() {
         "start",
         &log,
         Arc::clone(&oracle),
+        Arc::clone(&reg),
     );
     assert!(matches!(r, OperationResult::Suspended(_)));
 
@@ -303,6 +333,7 @@ fn rt_stop_acts_as_barrier() {
         "start",
         &log,
         Arc::clone(&oracle),
+        Arc::clone(&reg),
     );
     assert!(matches!(r, OperationResult::Completed));
 }

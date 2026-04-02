@@ -12,6 +12,7 @@ use crate::runtime::barrier::runtime::{
     ActionClosureGuard, RuntimeInstance, clear_barrier_hit, extract_barrier_hit,
 };
 use crate::runtime::barrier::{ActionLogEntry, BarrierCondition, OperationId, ReplayContext};
+use crate::runtime::registry::InstanceRegistry;
 
 // ---------------------------------------------------------------------------
 // ActionLog trait
@@ -163,6 +164,7 @@ pub fn run_operation<W>(
     action_name: &str,
     log: &dyn ActionLog,
     world: Arc<W>,
+    registry: Arc<dyn InstanceRegistry>,
 ) -> OperationResult
 where
     W: WorldStateOracle + 'static,
@@ -178,7 +180,8 @@ where
     // Clear the thread-local barrier-hit flag at the start of each pass.
     clear_barrier_hit();
 
-    let rt = RuntimeInstance::with_context(Arc::clone(&ctx));
+    let app_name = app.0.lock().name.clone();
+    let rt = RuntimeInstance::with_context(Arc::clone(&ctx), app_name, registry);
 
     // Look up the action closure.
     let (closure, is_param_change) = {
@@ -255,7 +258,7 @@ mod tests {
     use crate::runtime::lifecycle::LifecycleState;
 
     fn dep(name: &str) -> ResourceInstance {
-        ResourceInstance::named("test-app", ResourceKind::Deployment, name)
+        ResourceInstance::new_singleton("test-app", ResourceKind::Deployment, name)
     }
 
     // r[barrier.suspension]
@@ -281,6 +284,8 @@ mod tests {
 
         let oracle = Arc::new(TestWorldOracle::new());
         let op = OperationId::new();
+        let reg: Arc<dyn crate::runtime::registry::InstanceRegistry> =
+            Arc::new(crate::runtime::registry::EphemeralInstanceRegistry::new());
 
         let make_log = || {
             DbActionLog::new(
@@ -293,7 +298,7 @@ mod tests {
 
         // Pass 1: web is Pending → suspend
         let log = make_log();
-        let r = run_operation(
+        let result = run_operation(
             &engine,
             &mut scope,
             &ast,
@@ -302,8 +307,9 @@ mod tests {
             "start",
             &log,
             Arc::clone(&oracle),
+            Arc::clone(&reg),
         );
-        assert!(matches!(r, OperationResult::Suspended(_)));
+        assert!(matches!(result, OperationResult::Suspended(_)));
 
         // Verify the entry was persisted
         let entries = log.load();
@@ -327,6 +333,7 @@ mod tests {
             "start",
             &log,
             Arc::clone(&oracle),
+            Arc::clone(&reg),
         );
         assert!(matches!(r, OperationResult::Completed));
 
@@ -360,6 +367,8 @@ mod tests {
 
         let oracle = Arc::new(TestWorldOracle::new());
         let op = OperationId::new();
+        let reg: Arc<dyn crate::runtime::registry::InstanceRegistry> =
+            Arc::new(crate::runtime::registry::EphemeralInstanceRegistry::new());
         let log = DbActionLog::new(
             Db::open_in_memory().expect("in-memory DB"),
             op.clone(),
@@ -377,6 +386,7 @@ mod tests {
             "start",
             &log,
             Arc::clone(&oracle),
+            Arc::clone(&reg),
         );
         assert!(matches!(r, OperationResult::Suspended(_)));
 
@@ -392,6 +402,7 @@ mod tests {
             "start",
             &log,
             Arc::clone(&oracle),
+            Arc::clone(&reg),
         );
         assert!(matches!(r, OperationResult::Suspended(_)));
 
@@ -407,6 +418,7 @@ mod tests {
             "start",
             &log,
             Arc::clone(&oracle),
+            Arc::clone(&reg),
         );
         assert!(matches!(r, OperationResult::Completed));
 

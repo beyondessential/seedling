@@ -8,6 +8,7 @@ pub mod desired;
 pub mod history;
 pub mod identity;
 pub mod lifecycle;
+pub mod registry;
 pub mod scheduler;
 
 pub use barrier::oracle::{DbWorldOracle, TestWorldOracle, WorldStateOracle};
@@ -15,8 +16,9 @@ pub use barrier::replay::{
     ActionLog, DbActionLog, InMemoryActionLog, OperationResult, run_operation,
 };
 pub use desired::{DesiredResource, DesiredState, OperationProgress, compute};
-pub use identity::ResourceInstance;
+pub use identity::{InstanceId, InstanceVariant, ResourceInstance};
 pub use lifecycle::LifecycleState;
+pub use registry::{DbInstanceRegistry, EphemeralInstanceRegistry, InstanceRegistry};
 pub use scheduler::{
     ActiveOperation, CycleError, QueuedOperation, RejectReason, ScheduleResult, Scheduler,
     should_back_off,
