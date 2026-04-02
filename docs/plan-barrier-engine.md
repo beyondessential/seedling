@@ -5,7 +5,7 @@ This plan covers the barrier/suspension engine: the mechanism by which `rt.start
 barrier methods on `Started` become real, blocking-from-the-script's-perspective
 operations, implemented via replay rather than VM suspension.
 
-This is the core of what makes Beset a runtime rather than a script validator.
+This is the core of what makes Seedling a runtime rather than a script validator.
 
 ---
 

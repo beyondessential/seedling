@@ -1,5 +1,5 @@
-Beset Scripting Language, or BSL for short, is a DSL (Domain Specific Language).
-It is used to define and manage an application running on a Beset node in an autonomous way and provide administrative controls to operators.
+BES Seedling Language, or BSL for short, is a DSL (Domain Specific Language).
+It is used to define and manage an application running on a Seedling node in an autonomous way and provide administrative controls to operators.
 
 The terminology used in BSL closely resembles that used for [Kubernetes](https://kubernetes.io), but some of the semantics are different.
 
@@ -9,7 +9,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > BSL is written in [Rhai](https://rhai.rs).
 
 > l[bsl.script]
-> A BSL script is one or more code listings ("files") which share a [scope](#l--bsl.scope), and come together to define a Beset Application.
+> A BSL script is one or more code listings ("files") which share a [scope](#l--bsl.scope), and come together to define a Seedling Application.
 
 > l[bsl.scope]
 > The runtime must use a distinct [Rhai Scope](https://rhai.rs/book/engine/scope.html) for each BSL script.
@@ -213,7 +213,7 @@ This is currently the only value.
 # Parameter
 
 > l[param.type]
-> A Parameter is a value provided by the Beset control plane to a BSL script, at a particular name.
+> A Parameter is a value provided by the Seedling control plane to a BSL script, at a particular name.
 >
 > Parameters are defined using the `app.param(name: string)` method, which returns a `Param`.
 
@@ -268,7 +268,7 @@ This is currently the only value.
 ## External Service
 
 > l[service.external]
-> An External Service is a Service provided by the Beset control plane to a BSL script, at a particular name.
+> An External Service is a Service provided by the Seedling control plane to a BSL script, at a particular name.
 >
 > External Services are defined using the `app.external_service(name: string)` method, which returns a `ExternalService`.
 > When the service is not yet available, `app.external_service()` returns a [placeholder](#l--bsl.placeholder).
@@ -362,7 +362,7 @@ This is currently the only value.
 > A fixed-scale Deployment will try to always keep that amount of container copies alive as long as the Deployment is running, not more or less. It is equivalent to `scale(fixed..fixed)`.
 > The `fixed` number must be a positive non-zero integer.
 >
-> A scalable Deployment is defined from a lower and upper bound (represented as a range of positive integers). The Deployment will try to keep at least the lower bound and at most the upper bound of containers running, and operators or the Beset control plane may modify the scale of the Deployment within the defined range. The lower bound may be zero. The upper bound must be non-zero.
+> A scalable Deployment is defined from a lower and upper bound (represented as a range of positive integers). The Deployment will try to keep at least the lower bound and at most the upper bound of containers running, and operators or the Seedling control plane may modify the scale of the Deployment within the defined range. The lower bound may be zero. The upper bound must be non-zero.
 >
 > If a Deployment has a lower bound scale of zero it will be scheduled with zero containers initially.
 
@@ -479,7 +479,7 @@ This is currently the only value.
 ## External Volume
 
 > l[volume.external]
-> An External Volume is a Volume provided by the Beset control plane to a BSL script, at a particular name.
+> An External Volume is a Volume provided by the Seedling control plane to a BSL script, at a particular name.
 >
 > External Volumes are defined using the `app.external_volume(name: string)` method, which returns an `ExternalVolume`.
 > When the volume is not yet available, `app.external_volume()` returns a [placeholder](#l--bsl.placeholder).
@@ -489,7 +489,7 @@ This is currently the only value.
 # Action
 
 > l[action.type]
-> An Action is a mechanism made available to operators (and in some cases, used autonomously by the Beset control plane) to perform a structured task on an application.
+> An Action is a mechanism made available to operators (and in some cases, used autonomously by the Seedling control plane) to perform a structured task on an application.
 >
 > Actions are defined using the `app.on_action(name: string, fn: closure, options?: object)` method, which returns an `Action`.
 >
@@ -505,7 +505,7 @@ This is currently the only value.
 ## Start Action
 
 > l[action.start]
-> The specialised Start Action is used to define how the application is started. It is used autonomously by the Beset control plane.
+> The specialised Start Action is used to define how the application is started. It is used autonomously by the Seedling control plane.
 >
 > It may be defined using the `app.on_action()` method with a `name` of `"start"`, or with the shorthand `app.on_start(fn: closure, options?: object)`, which returns an `Action`.
 >
@@ -517,7 +517,7 @@ This is currently the only value.
 ## Shell Action
 
 > l[action.shell]
-> A Shell Action is a specialised _kind_ of Action, which provide an interactive terminal session to an operator. Shells are never used autonomously by the Beset control plane.
+> A Shell Action is a specialised _kind_ of Action, which provide an interactive terminal session to an operator. Shells are never used autonomously by the Seedling control plane.
 >
 > Shells must be defined using the `app.on_shell(name: string, fn: closure, options?: object)` method, and cannot be defined using `on_action()`.
 >
@@ -538,7 +538,7 @@ This is currently the only value.
 ## Install Action
 
 > l[action.install]
-> The specialised Install Action is used to define how the application is first set up. It is used autonomously by the Beset control plane.
+> The specialised Install Action is used to define how the application is first set up. It is used autonomously by the Seedling control plane.
 >
 > It must be defined using the `app.on_install(fn: closure, requirements?: object)` method, and cannot be defined using `on_action()`. It also does not take the `options` argument.
 >
@@ -550,7 +550,7 @@ This is currently the only value.
 > ```
 
 > l[action.install.requirements]
-> The Install Action can define special parameters which are only requested from the operator when installation is requested. The values of the Requirements are only known to Beset for the duration of the Install process, and are discarded afterwards.
+> The Install Action can define special parameters which are only requested from the operator when installation is requested. The values of the Requirements are only known to Seedling for the duration of the Install process, and are discarded afterwards.
 >
 > The Requirements Definition (the second argument to `on_install()`) is an object map of requirement key => definition.
 >
@@ -587,7 +587,7 @@ This is currently the only value.
 
 # Runtime Instance
 
-The Runtime Instance is a handle to the Beset runtime for an application.
+The Runtime Instance is a handle to the Seedling runtime for an application.
 It's how the script actually controls the containers in the "outside world".
 
 This spec defines the semantics of the Runtime Instance as far as BSL is concerned; the exact implementation and control plane semantics are defined in other places, and must not be relied upon by BSL scripts.

@@ -171,7 +171,7 @@ fn main() {
     let filepath = PathBuf::from(
         std::env::args_os()
             .nth(1)
-            .expect("Usage: beset <RHAI FILE>"),
+            .expect("Usage: seedling <RHAI FILE>"),
     );
 
     let (engine, mut scope, app) = setup();

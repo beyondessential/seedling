@@ -1,4 +1,4 @@
-// Beset is a control-plane and DSL that defines how to run an application
+// Seedling is a control-plane and DSL that defines how to run an application
 // but also how to upgrade it, how to debug it, perform actions on it, etc
 // and it works the same way on a single Linux container host or a Kubernetes
 
@@ -27,7 +27,7 @@ let frontend = app.deployment("frontend")
     .image(image.call("frontend"))
 
     // this will ensure that there's always 2 instances
-    // if one dies, another will start, if there's ever 3, beset will end one
+    // if one dies, another will start, if there's ever 3, seedling will end one
     .scale(2)
 
     // http traffic can be routed by path
@@ -90,7 +90,7 @@ let migrate_action = app.on_action("migrate", |rt| {
     // we dynamically create a "migrate" job
     let job = migrate.call();
 
-    let waiter = rt.start(job); // we schedule the job; beset will eventually start its container
+    let waiter = rt.start(job); // we schedule the job; seedling will eventually start its container
 
     // wait until it's terminated, and "block" until then
     waiter.terminated();
@@ -126,7 +126,7 @@ app.on_shell("node", |_rt| {
     app.job("shell-node")
         .image(image.call("central"))
         .command("shell")
-    // a Resource is returned, so beset rt.start()s it and then attaches when ready()
+    // a Resource is returned, so seedling rt.start()s it and then attaches when ready()
 }, #{
     description: "A Node.js shell in the Tamanu app context",
 });
@@ -215,7 +215,7 @@ app.on_install(|rt, reqs| {
         description: "The login for the superadmin user",
     },
     admin_user_password: #{
-        // ...and if kind=password, then Beset will generate a random one
+        // ...and if kind=password, then Seedling will generate a random one
         kind: "password",
         description: "Initial password for the superadmin user",
         // ...and restrict weak passwords, unless kind="weak-password" is set

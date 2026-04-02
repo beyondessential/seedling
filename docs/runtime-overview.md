@@ -1,6 +1,6 @@
-# Beset Runtime Overview
+# Seedling Runtime Overview
 
-Beset is a runtime for single-node application orchestration.
+Seedling is a runtime for single-node application orchestration.
 A BSL script declares an application's resources (containers, services, ingress, volumes) and defines imperative action closures that control how those resources are brought up, upgraded, and managed.
 The runtime takes that declaration, observes the real world, and continuously reconciles the two.
 

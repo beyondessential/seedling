@@ -3,7 +3,7 @@
 specs (
     {
         name language
-        source_url https://github.com/beyondessential/beset
+        source_url https://github.com/beyondessential/seedling
         include (docs/spec/language.md)
         impls (
             {
@@ -17,7 +17,7 @@ specs (
     }
     {
         name runtime
-        source_url https://github.com/beyondessential/beset
+        source_url https://github.com/beyondessential/seedling
         include (docs/spec/runtime.md)
         impls (
             {
