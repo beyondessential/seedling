@@ -29,6 +29,36 @@ fn is_barrier_hit_pending() -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Thread-local flag: set while an action closure is executing so that
+// top-level-only registrations (e.g. param.on_change) can detect misuse.
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    static IN_ACTION_CLOSURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub fn is_in_action_closure() -> bool {
+    IN_ACTION_CLOSURE.with(|b| b.get())
+}
+
+/// RAII guard that sets the in-action-closure flag on construction and clears
+/// it on drop, ensuring the flag is always cleaned up even on early return.
+pub struct ActionClosureGuard;
+
+impl ActionClosureGuard {
+    pub fn new() -> Self {
+        IN_ACTION_CLOSURE.with(|b| b.set(true));
+        Self
+    }
+}
+
+impl Drop for ActionClosureGuard {
+    fn drop(&mut self) {
+        IN_ACTION_CLOSURE.with(|b| b.set(false));
+    }
+}
+
+// ---------------------------------------------------------------------------
 // BarrierHit — the internal control-flow exception
 // ---------------------------------------------------------------------------
 

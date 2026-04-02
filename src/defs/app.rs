@@ -57,6 +57,7 @@ impl CustomType for App {
                 super::param::Param {
                     name: name.into(),
                     value,
+                    app: this.clone(),
                 }
             },
         );

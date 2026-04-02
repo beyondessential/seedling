@@ -66,7 +66,11 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
         let call_script = "__bsl_closure.call(__bsl_rt)";
 
         println!("exercising action: {name}");
-        match eval_merged(engine, scope, script_ast, call_script) {
+        let result = {
+            let _guard = runtime::barrier::runtime::ActionClosureGuard::new();
+            eval_merged(engine, scope, script_ast, call_script)
+        };
+        match result {
             Ok(_) => println!("  ok"),
             Err(err) => println!("  error: {err}"),
         }
@@ -83,15 +87,25 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
         println!("exercising shell: {name}");
         let two_arg = "__bsl_closure.call(__bsl_rt, __bsl_attach)";
         let one_arg = "__bsl_closure.call(__bsl_rt)";
-        match eval_merged(engine, scope, script_ast, two_arg) {
+        let result_two = {
+            let _guard = runtime::barrier::runtime::ActionClosureGuard::new();
+            eval_merged(engine, scope, script_ast, two_arg)
+        };
+        match result_two {
             Ok(_) => println!("  ok (two-arg)"),
-            Err(err_two) => match eval_merged(engine, scope, script_ast, one_arg) {
-                Ok(_) => println!("  ok (one-arg)"),
-                Err(err_one) => {
-                    println!("  error (two-arg): {err_two}");
-                    println!("  error (one-arg): {err_one}");
+            Err(err_two) => {
+                let result_one = {
+                    let _guard = runtime::barrier::runtime::ActionClosureGuard::new();
+                    eval_merged(engine, scope, script_ast, one_arg)
+                };
+                match result_one {
+                    Ok(_) => println!("  ok (one-arg)"),
+                    Err(err_one) => {
+                        println!("  error (two-arg): {err_two}");
+                        println!("  error (one-arg): {err_one}");
+                    }
                 }
-            },
+            }
         }
 
         let _ = scope.remove::<Dynamic>("__bsl_rt");
@@ -106,7 +120,11 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
 
         println!("exercising install");
         let call_script = "__bsl_closure.call(__bsl_rt, __bsl_reqs)";
-        match eval_merged(engine, scope, script_ast, call_script) {
+        let result = {
+            let _guard = runtime::barrier::runtime::ActionClosureGuard::new();
+            eval_merged(engine, scope, script_ast, call_script)
+        };
+        match result {
             Ok(_) => println!("  ok"),
             Err(err) => println!("  error: {err}"),
         }
@@ -125,7 +143,11 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
 
             println!("exercising param change: {name}");
             let call_script = "__bsl_closure.call(__bsl_rt, __bsl_old_app)";
-            match eval_merged(engine, scope, script_ast, call_script) {
+            let result = {
+                let _guard = runtime::barrier::runtime::ActionClosureGuard::new();
+                eval_merged(engine, scope, script_ast, call_script)
+            };
+            match result {
                 Ok(_) => println!("  ok"),
                 Err(err) => println!("  error: {err}"),
             }

@@ -8,7 +8,9 @@ use crate::runtime::history;
 
 use crate::defs::app::App;
 use crate::runtime::barrier::oracle::WorldStateOracle;
-use crate::runtime::barrier::runtime::{RuntimeInstance, clear_barrier_hit, extract_barrier_hit};
+use crate::runtime::barrier::runtime::{
+    ActionClosureGuard, RuntimeInstance, clear_barrier_hit, extract_barrier_hit,
+};
 use crate::runtime::barrier::{ActionLogEntry, BarrierCondition, OperationId, ReplayContext};
 
 // ---------------------------------------------------------------------------
@@ -155,7 +157,7 @@ pub enum OperationResult {
 pub fn run_operation<W>(
     engine: &Engine,
     scope: &mut Scope,
-    script_ast: &AST,
+    _script_ast: &AST,
     operation_id: OperationId,
     app: &App,
     action_name: &str,
@@ -206,7 +208,18 @@ where
         "__bsl_closure.call(__bsl_rt)"
     };
 
-    let result = eval_merged(engine, scope, script_ast, call_script);
+    // Evaluate only the closure call — do NOT re-execute the script body.
+    // The closure already captured its entire environment (app, resources,
+    // params, etc.) at creation time during run_file.  Re-executing the script
+    // here would run top-level statements such as param.on_change() inside the
+    // ActionClosureGuard, which incorrectly triggers the in-closure guard check.
+    let call_ast = engine
+        .compile(call_script)
+        .expect("static call script must compile");
+    let result = {
+        let _guard = ActionClosureGuard::new();
+        engine.eval_ast_with_scope::<Dynamic>(scope, &call_ast)
+    };
 
     let _ = scope.remove::<Dynamic>("__bsl_rt");
     let _ = scope.remove::<Dynamic>("__bsl_closure");
@@ -403,15 +416,4 @@ mod tests {
         assert_eq!(entries[0].call_index, 0);
         assert_eq!(entries[1].call_index, 1);
     }
-}
-
-fn eval_merged(
-    engine: &Engine,
-    scope: &mut Scope,
-    script_ast: &AST,
-    call_source: &str,
-) -> Result<Dynamic, Box<EvalAltResult>> {
-    let call_ast = engine.compile(call_source)?;
-    let merged = script_ast.merge(&call_ast);
-    engine.eval_ast_with_scope(scope, &merged)
 }

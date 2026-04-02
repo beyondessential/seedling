@@ -34,6 +34,7 @@ mod deployment;
 mod ingress;
 mod integration;
 mod job;
+mod param;
 mod pod;
 mod runtime;
 mod service;
