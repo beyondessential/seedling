@@ -1,3 +1,5 @@
 /target
 .tracey/
 TODO.txt
+*.db
+*.db-*
