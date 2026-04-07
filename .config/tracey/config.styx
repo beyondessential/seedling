@@ -29,4 +29,18 @@ specs (
             }
         )
     }
+    {
+        name interface
+        source_url https://github.com/beyondessential/seedling
+        include (docs/spec/interface.md)
+        impls (
+            {
+                name main
+                include (
+                    src/*.rs
+                    src/**/*.rs
+                )
+            }
+        )
+    }
 )
