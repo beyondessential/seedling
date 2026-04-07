@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use ipnet::Ipv6Net;
 use tracing::error;
@@ -14,6 +14,20 @@ use crate::{
 
 use super::RunningPod;
 
+/// Returned from `observe_and_actuate` so the `Reconciler` can maintain the
+/// bridge-name map without giving this module a mutable reference to it.
+pub(super) struct PodActuationUpdate {
+    pub running: Vec<RunningPod>,
+    /// Networks created this tick: `(network_name, bridge_interface_name)`.
+    pub new_bridges: Vec<(String, String)>,
+    /// Network names removed this tick (the pod was stopped).
+    pub removed_networks: Vec<String>,
+}
+
+fn pod_network_name(instance: &crate::runtime::identity::ResourceInstance) -> String {
+    format!("seedling-{}", instance.display_name)
+}
+
 // r[observe.deployment]
 // r[actuate.deployment.start]
 // r[actuate.deployment.stop]
@@ -24,8 +38,10 @@ pub(super) async fn observe_and_actuate(
     driver: &Arc<System>,
     desired: &DesiredState,
     node_prefix: &Ipv6Net,
-) -> Vec<RunningPod> {
-    let mut running_pods = Vec::new();
+) -> PodActuationUpdate {
+    let mut running = Vec::new();
+    let mut new_bridges = Vec::new();
+    let mut removed_networks = Vec::new();
 
     for dr in &desired.resources {
         match &dr.definition {
@@ -63,7 +79,7 @@ pub(super) async fn observe_and_actuate(
                 Ok(Some(state)) => {
                     if let Some(pod_ip) = state.pod_addr {
                         let pod_prefix = pod_network_prefix(node_prefix, &dr.instance);
-                        running_pods.push(RunningPod {
+                        running.push(RunningPod {
                             instance: dr.instance.clone(),
                             pod_prefix,
                             pod_ip,
@@ -85,26 +101,41 @@ pub(super) async fn observe_and_actuate(
         // Decide and actuate.
         match dr.desired {
             LifecycleState::Ready if !is_running => {
-                if let Err(e) = actuator.start(&dr.instance, &dr.definition).await {
-                    error!(
-                        instance = %dr.instance.display_name,
-                        error = %e,
-                        "pods: start failed"
-                    );
+                match actuator.start(&dr.instance, &dr.definition).await {
+                    Ok(Some(bridge_name)) => {
+                        new_bridges.push((pod_network_name(&dr.instance), bridge_name));
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        error!(
+                            instance = %dr.instance.display_name,
+                            error = %e,
+                            "pods: start failed"
+                        );
+                    }
                 }
             }
             LifecycleState::Unscheduled if is_running || unit_active => {
-                if let Err(e) = actuator.stop(&dr.instance, &dr.definition).await {
-                    error!(
-                        instance = %dr.instance.display_name,
-                        error = %e,
-                        "pods: stop failed"
-                    );
+                match actuator.stop(&dr.instance, &dr.definition).await {
+                    Ok(()) => {
+                        removed_networks.push(pod_network_name(&dr.instance));
+                    }
+                    Err(e) => {
+                        error!(
+                            instance = %dr.instance.display_name,
+                            error = %e,
+                            "pods: stop failed"
+                        );
+                    }
                 }
             }
             _ => {}
         }
     }
 
-    running_pods
+    PodActuationUpdate {
+        running,
+        new_bridges,
+        removed_networks,
+    }
 }

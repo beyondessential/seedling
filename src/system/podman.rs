@@ -24,7 +24,7 @@ use crate::system::{
     BoxError, BoxFuture, ContainerRuntime,
     types::{
         ContainerFilter, ContainerHealth, ContainerState, ContainerStatus, ContainerSummary,
-        ExecHandle, ExecSpec,
+        ExecHandle, ExecSpec, NetworkSummary,
     },
 };
 
@@ -228,7 +228,11 @@ impl PodmanRuntime {
         }
     }
 
-    async fn create_network_impl(&self, name: &str, prefix: Ipv6Net) -> Result<(), PodmanError> {
+    async fn create_network_impl(
+        &self,
+        name: &str,
+        prefix: Ipv6Net,
+    ) -> Result<String, PodmanError> {
         let net_addr = prefix.network();
         let mut gw_bytes = net_addr.octets();
         gw_bytes[15] = 1;
@@ -300,7 +304,29 @@ impl PodmanRuntime {
                 source: Box::new(e),
             })?;
 
-        Ok(())
+        Ok(bridge_name)
+    }
+
+    async fn list_networks_impl(&self, prefix: &str) -> Result<Vec<NetworkSummary>, PodmanError> {
+        let networks = self
+            .client
+            .v5()
+            .networks()
+            .network_list_libpod(None)
+            .await
+            .map_err(map_api_err)?;
+
+        Ok(networks
+            .into_iter()
+            .filter_map(|n| {
+                let name = n.name?;
+                if !name.starts_with(prefix) {
+                    return None;
+                }
+                let bridge_name = n.network_interface?;
+                Some(NetworkSummary { name, bridge_name })
+            })
+            .collect())
     }
 
     async fn remove_network_impl(&self, name: &str) -> Result<(), PodmanError> {
@@ -467,12 +493,19 @@ impl ContainerRuntime for PodmanRuntime {
         &'a self,
         name: &'a str,
         prefix: Ipv6Net,
-    ) -> BoxFuture<'a, Result<(), BoxError>> {
+    ) -> BoxFuture<'a, Result<String, BoxError>> {
         Box::pin(async move {
             self.create_network_impl(name, prefix)
                 .await
                 .map_err(Into::into)
         })
+    }
+
+    fn list_networks<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<NetworkSummary>, BoxError>> {
+        Box::pin(async move { self.list_networks_impl(prefix).await.map_err(Into::into) })
     }
 
     fn remove_network<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {

@@ -178,7 +178,7 @@ pub(crate) async fn ensure_caddy_running(
         .await
         .map_err(|e| CaddyStartupError::Container { source: e })?
     {
-        container
+        let _ = container
             .create_network(PROXY_NETWORK, proxy_prefix)
             .await
             .map_err(|e| CaddyStartupError::Container { source: e })?;

@@ -100,7 +100,7 @@ impl Actuator {
         &self,
         instance: &ResourceInstance,
         resource: &Resource,
-    ) -> Result<(), ActuateError> {
+    ) -> Result<Option<String>, ActuateError> {
         match resource {
             Resource::Deployment(dep) => {
                 let (image, raw_mounts, restart) = {
@@ -182,11 +182,11 @@ impl Actuator {
                 }
                 // Volume writes (populating files into the volume) are not yet
                 // implemented; they require running a helper container.
-                Ok(())
+                Ok(None)
             }
-            Resource::ExternalVolume(_) | Resource::ExternalService(_) => Ok(()),
-            Resource::Service(_) | Resource::HttpService(_) => Ok(()),
-            Resource::Ingress(_) => Ok(()),
+            Resource::ExternalVolume(_) | Resource::ExternalService(_) => Ok(None),
+            Resource::Service(_) | Resource::HttpService(_) => Ok(None),
+            Resource::Ingress(_) => Ok(None),
         }
     }
 
@@ -271,7 +271,7 @@ impl Actuator {
         raw_mounts: &[ServicePort],
         restart: TransientRestart,
         build_argv: impl FnOnce(String, Ipv6Net, &[(u16, std::net::Ipv6Addr, u16)]) -> Vec<String>,
-    ) -> Result<(), ActuateError> {
+    ) -> Result<Option<String>, ActuateError> {
         // Ensure the container image is available.
         if !self
             .driver
@@ -290,19 +290,23 @@ impl Actuator {
         // Ensure the pod network exists.
         let net_name = pod_network_name(instance);
         let net_prefix = pod_network_prefix(&self.node_prefix, instance);
-        if !self
+        let bridge_name = if !self
             .driver
             .container
             .network_exists(&net_name)
             .await
             .map_err(|e| ActuateError::Container { source: e })?
         {
-            self.driver
-                .container
-                .create_network(&net_name, net_prefix)
-                .await
-                .map_err(|e| ActuateError::Container { source: e })?;
-        }
+            Some(
+                self.driver
+                    .container
+                    .create_network(&net_name, net_prefix)
+                    .await
+                    .map_err(|e| ActuateError::Container { source: e })?,
+            )
+        } else {
+            None
+        };
 
         // Skip if the unit is already active.
         let unit = unit_name(instance);
@@ -314,7 +318,7 @@ impl Actuator {
             .map_err(|e| ActuateError::Process { source: e })?
             && matches!(state.active, ActiveState::Active | ActiveState::Activating)
         {
-            return Ok(());
+            return Ok(bridge_name);
         }
 
         // Resolve service mounts and build the argv.
@@ -332,7 +336,7 @@ impl Actuator {
             .await
             .map_err(|e| ActuateError::Process { source: e })?;
 
-        Ok(())
+        Ok(bridge_name)
     }
 
     async fn stop_pod_instance(&self, instance: &ResourceInstance) -> Result<(), ActuateError> {

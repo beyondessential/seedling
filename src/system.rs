@@ -4,7 +4,7 @@ use ipnet::Ipv6Net;
 
 use crate::system::types::{
     ContainerFilter, ContainerState, ContainerSummary, DataPlaneRules, ExecHandle, ExecSpec,
-    ProxyConfig, ServiceRoute, TransientUnitSpec, UnitState, UnitSummary,
+    NetworkSummary, ProxyConfig, ServiceRoute, TransientUnitSpec, UnitState, UnitSummary,
 };
 
 pub mod actuator;
@@ -59,12 +59,19 @@ pub trait ContainerRuntime: Send + Sync + 'static {
     // Networks — one IPv6 /64 per pod instance.
     // The host bridge is assigned ::1 (gateway) and ::2 (mount endpoint).
     fn network_exists<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<bool, BoxError>>;
+    /// Returns the Linux bridge interface name assigned to the network.
     fn create_network<'a>(
         &'a self,
         name: &'a str,
         prefix: Ipv6Net,
-    ) -> BoxFuture<'a, Result<(), BoxError>>;
+    ) -> BoxFuture<'a, Result<String, BoxError>>;
     fn remove_network<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>>;
+    /// List all networks whose name starts with `prefix`.
+    /// Returns the name and bridge interface name for each.
+    fn list_networks<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<NetworkSummary>, BoxError>>;
 
     // Volumes
     fn volume_exists<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<bool, BoxError>>;

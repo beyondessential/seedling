@@ -195,17 +195,19 @@ async fn main() {
     // rather than always falling back to steady state between ticks.
     let active_progress: Arc<RwLock<Option<OperationProgress>>> = Arc::new(RwLock::new(None));
 
-    let reconciler = Reconciler::new(
+    let mut reconciler = Reconciler::new(
         app_name.clone(),
         app.clone(),
         Arc::clone(&active_progress),
         Arc::clone(&driver),
         node_prefix,
         Arc::clone(&registry),
-        HashMap::new(), // bridge_names: populated by future bridge-address check
+        HashMap::new(), // bridge_names: populated by populate_bridge_names below
         caddy_admin_addr,
         data_dir.clone(),
     );
+
+    reconciler.populate_bridge_names().await;
 
     tokio::spawn(async move {
         let mut r = reconciler;

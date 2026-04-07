@@ -54,6 +54,14 @@ pub struct ContainerFilter<'a> {
     pub name_prefix: Option<&'a str>,
 }
 
+/// Returned by `ContainerRuntime::list_networks`; carries the bridge
+/// interface name needed by the startup bridge-address check.
+#[derive(Debug, Clone)]
+pub struct NetworkSummary {
+    pub name: String,
+    pub bridge_name: String,
+}
+
 // ---------------------------------------------------------------------------
 // Container spec
 // ---------------------------------------------------------------------------

@@ -6,6 +6,8 @@ use std::{
     time::Duration,
 };
 
+use rtnetlink::Handle as NetlinkHandle;
+
 use parking_lot::Mutex;
 
 use sha2::{Digest, Sha256};
@@ -24,6 +26,7 @@ use crate::{
     system::{System, actuator::Actuator, caddy, observer::Observer},
 };
 
+pub mod bridge;
 pub mod pods;
 pub mod proxy;
 pub mod routes;
@@ -41,7 +44,10 @@ pub mod volumes;
 /// assigned and will appear in routes only on the next tick. This one-tick
 /// lag is intentional and idempotent; the next tick will pick it up.
 pub(crate) struct RunningPod {
-    #[expect(dead_code, reason = "used by future Phase 7 and external consumers")]
+    #[expect(
+        dead_code,
+        reason = "set by pods phase; available for future consumers"
+    )]
     pub instance: crate::runtime::identity::ResourceInstance,
     pub pod_prefix: Ipv6Net,
     pub pod_ip: std::net::Ipv6Addr,
@@ -67,9 +73,12 @@ pub struct Reconciler {
     node_prefix: Ipv6Net,
     registry: Arc<dyn InstanceRegistry>,
     /// Network-name → bridge-interface-name map. Populated at startup via
-    /// `list_networks`; consulted by the future Phase 7 bridge-address check.
-    #[expect(dead_code, reason = "populated at startup, consumed by future Phase 7")]
+    /// `list_networks` and maintained during normal operation. Used by the
+    /// bridge-address check on every tick.
     bridge_names: HashMap<String, String>,
+    /// rtnetlink handle for the bridge-address check.  `None` until
+    /// `populate_bridge_names` is called.
+    netlink: Option<NetlinkHandle>,
     /// The Caddy admin API address, updated atomically during blue/green
     /// Caddy upgrades. Phases 5 and 6 read this to obtain Caddy's container
     /// IPv6 address; if the address is not yet IPv6, those phases are skipped.
@@ -107,8 +116,40 @@ impl Reconciler {
             node_prefix,
             registry,
             bridge_names,
+            netlink: None,
             caddy_admin_addr,
             data_dir,
+        }
+    }
+
+    /// Populate `bridge_names` from existing `seedling-` networks and open
+    /// the rtnetlink connection used by the bridge-address check.
+    ///
+    /// Call this once before entering the reconciliation loop so that pod
+    /// bridges that survived a restart are immediately tracked.
+    pub async fn populate_bridge_names(&mut self) {
+        let (connection, handle, _) = match rtnetlink::new_connection() {
+            Ok(c) => c,
+            Err(e) => {
+                error!(
+                    error = %e,
+                    "failed to open rtnetlink connection for bridge address checks"
+                );
+                return;
+            }
+        };
+        tokio::spawn(connection);
+        self.netlink = Some(handle);
+
+        match self.driver.container.list_networks("seedling-").await {
+            Ok(networks) => {
+                for net in networks {
+                    self.bridge_names.insert(net.name, net.bridge_name);
+                }
+            }
+            Err(e) => {
+                error!(error = %e, "failed to list pod networks for bridge-name map");
+            }
         }
     }
 
@@ -125,7 +166,7 @@ impl Reconciler {
         let (desired, snapshot) = self.snapshot_desired();
 
         // Observe and actuate Deployments and Jobs.
-        let running_pods = pods::observe_and_actuate(
+        let pod_update = pods::observe_and_actuate(
             &self.observer,
             &self.actuator,
             &self.driver,
@@ -133,6 +174,23 @@ impl Reconciler {
             &self.node_prefix,
         )
         .await;
+
+        // Maintain bridge_names from this tick's pod actuations.
+        for (net_name, bridge_name) in pod_update.new_bridges {
+            self.bridge_names.insert(net_name, bridge_name);
+        }
+        for net_name in pod_update.removed_networks {
+            self.bridge_names.remove(&net_name);
+        }
+        let running_pods = pod_update.running;
+
+        // Bridge ::2 address check — re-add mount endpoint addresses that
+        // were lost due to a crash between create_network and the initial
+        // rtnetlink assignment.
+        if let Some(ref handle) = self.netlink {
+            bridge::ensure_mount_endpoints(handle, &self.bridge_names, &desired, &self.node_prefix)
+                .await;
+        }
 
         // Observe and actuate Volumes.
         volumes::observe_and_actuate(&self.observer, &self.actuator, &desired).await;
