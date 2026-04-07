@@ -1,5 +1,7 @@
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
-use std::{collections::BTreeMap, str::FromStr as _};
+use std::str::FromStr as _;
 
 use rhai::{CustomType, Dynamic, EvalAltResult, FnPtr, Map, TypeBuilder};
 
@@ -15,10 +17,15 @@ use super::{
     volume::{ExternalVolume, Volume},
 };
 
-// l[impl app.type]
-// l[impl app.constructor]
-#[derive(Debug, Default, Clone)]
-pub struct App(pub Holder<AppDef>);
+/// Rhai closures registered by the BSL script. Lives only in `App`; never
+/// stored in `AppDef` so that `AppDef` stays `Send`.
+#[derive(Default, Clone)]
+pub(crate) struct ClosureStore {
+    pub actions: BTreeMap<String, FnPtr>,
+    pub shells: BTreeMap<String, FnPtr>,
+    pub install: Option<FnPtr>,
+    pub param_changes: BTreeMap<String, FnPtr>,
+}
 
 // l[impl app.resources]
 // l[impl app.resources.names]
@@ -30,13 +37,29 @@ pub struct AppDef {
     pub actions: BTreeMap<String, ActionDef>,
     pub shells: BTreeMap<String, ShellDef>,
     pub install: Option<InstallDef>,
-    pub param_changes: BTreeMap<String, FnPtr>,
+    pub param_changes: BTreeSet<String>,
 }
 
 fn extract_description(options: &Map) -> Option<String> {
     options
         .get("description")
         .and_then(|v| v.clone().into_string().ok())
+}
+
+// l[impl app.type]
+// l[impl app.constructor]
+#[derive(Clone, Default)]
+pub struct App {
+    pub def: Holder<AppDef>,
+    pub(crate) closures: Rc<RefCell<ClosureStore>>,
+}
+
+impl std::fmt::Debug for App {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("App")
+            .field("def", &self.def)
+            .finish_non_exhaustive()
+    }
 }
 
 // l[impl app.methods]
@@ -48,7 +71,7 @@ impl CustomType for App {
         builder.with_fn(
             "param",
             |this: &mut Self, name: &str| -> super::param::Param {
-                let mut def = this.0.lock();
+                let mut def = this.def.lock();
                 let value = def
                     .params
                     .entry(name.into())
@@ -66,7 +89,7 @@ impl CustomType for App {
         // l[impl service.type]
         builder.with_fn("service", |this: &mut Self, name: &str| -> Service {
             let name = ResourceName::new(name.into());
-            let mut def = this.0.lock();
+            let mut def = this.def.lock();
             let id = ResourceId {
                 kind: ResourceKind::Service,
                 name: name.clone(),
@@ -86,7 +109,7 @@ impl CustomType for App {
             "external_service",
             |this: &mut Self, name: &str| -> Dynamic {
                 let rname = ResourceName::new(name.into());
-                let mut def = this.0.lock();
+                let mut def = this.def.lock();
                 let id = ResourceId {
                     kind: ResourceKind::ExternalService,
                     name: rname.clone(),
@@ -105,7 +128,7 @@ impl CustomType for App {
         // l[impl deployment.type]
         builder.with_fn("deployment", |this: &mut Self, name: &str| -> Deployment {
             let name = ResourceName::new(name.into());
-            let mut def = this.0.lock();
+            let mut def = this.def.lock();
             let id = ResourceId {
                 kind: ResourceKind::Deployment,
                 name: name.clone(),
@@ -125,7 +148,7 @@ impl CustomType for App {
         // l[impl job.type]
         builder.with_fn("job", |this: &mut Self, name: &str| -> Job {
             let name = ResourceName::new(name.into());
-            let mut def = this.0.lock();
+            let mut def = this.def.lock();
             let id = ResourceId {
                 kind: ResourceKind::Job,
                 name: name.clone(),
@@ -145,7 +168,7 @@ impl CustomType for App {
         // l[impl volume.type] — named volume
         builder.with_fn("volume", |this: &mut Self, name: &str| -> Volume {
             let rname = ResourceName::new(name.into());
-            let mut def = this.0.lock();
+            let mut def = this.def.lock();
             let id = ResourceId {
                 kind: ResourceKind::Volume,
                 name: rname.clone(),
@@ -168,7 +191,7 @@ impl CustomType for App {
             "external_volume",
             |this: &mut Self, name: &str| -> Dynamic {
                 let rname = ResourceName::new(name.into());
-                let mut def = this.0.lock();
+                let mut def = this.def.lock();
                 let id = ResourceId {
                     kind: ResourceKind::ExternalVolume,
                     name: rname.clone(),
@@ -210,15 +233,17 @@ impl CustomType for App {
             .with_fn(
                 "on_action",
                 |this: &mut Self, name: &str, closure: FnPtr| -> Action {
-                    let mut def = this.0.lock();
-                    def.actions.insert(
+                    this.def.lock().actions.insert(
                         name.into(),
                         ActionDef {
                             name: name.into(),
-                            closure,
                             description: None,
                         },
                     );
+                    this.closures
+                        .borrow_mut()
+                        .actions
+                        .insert(name.into(), closure);
                     Action { name: name.into() }
                 },
             )
@@ -226,15 +251,17 @@ impl CustomType for App {
                 "on_action",
                 |this: &mut Self, name: &str, closure: FnPtr, options: Map| -> Action {
                     let desc = extract_description(&options);
-                    let mut def = this.0.lock();
-                    def.actions.insert(
+                    this.def.lock().actions.insert(
                         name.into(),
                         ActionDef {
                             name: name.into(),
-                            closure,
                             description: desc,
                         },
                     );
+                    this.closures
+                        .borrow_mut()
+                        .actions
+                        .insert(name.into(), closure);
                     Action { name: name.into() }
                 },
             );
@@ -242,15 +269,17 @@ impl CustomType for App {
         // l[impl action.start]
         builder
             .with_fn("on_start", |this: &mut Self, closure: FnPtr| -> Action {
-                let mut def = this.0.lock();
-                def.actions.insert(
+                this.def.lock().actions.insert(
                     "start".into(),
                     ActionDef {
                         name: "start".into(),
-                        closure,
                         description: None,
                     },
                 );
+                this.closures
+                    .borrow_mut()
+                    .actions
+                    .insert("start".into(), closure);
                 Action {
                     name: "start".into(),
                 }
@@ -259,15 +288,17 @@ impl CustomType for App {
                 "on_start",
                 |this: &mut Self, closure: FnPtr, options: Map| -> Action {
                     let desc = extract_description(&options);
-                    let mut def = this.0.lock();
-                    def.actions.insert(
+                    this.def.lock().actions.insert(
                         "start".into(),
                         ActionDef {
                             name: "start".into(),
-                            closure,
                             description: desc,
                         },
                     );
+                    this.closures
+                        .borrow_mut()
+                        .actions
+                        .insert("start".into(), closure);
                     Action {
                         name: "start".into(),
                     }
@@ -277,40 +308,43 @@ impl CustomType for App {
         // l[impl action.shell]
         builder
             .with_fn("on_shell", |this: &mut Self, name: &str, closure: FnPtr| {
-                let mut def = this.0.lock();
-                def.shells.insert(
+                this.def.lock().shells.insert(
                     name.into(),
                     ShellDef {
                         name: name.into(),
-                        closure,
                         description: None,
                     },
                 );
+                this.closures
+                    .borrow_mut()
+                    .shells
+                    .insert(name.into(), closure);
             })
             .with_fn(
                 "on_shell",
                 |this: &mut Self, name: &str, closure: FnPtr, options: Map| {
                     let desc = extract_description(&options);
-                    let mut def = this.0.lock();
-                    def.shells.insert(
+                    this.def.lock().shells.insert(
                         name.into(),
                         ShellDef {
                             name: name.into(),
-                            closure,
                             description: desc,
                         },
                     );
+                    this.closures
+                        .borrow_mut()
+                        .shells
+                        .insert(name.into(), closure);
                 },
             );
 
         // l[impl action.install]
         builder
             .with_fn("on_install", |this: &mut Self, closure: FnPtr| {
-                let mut def = this.0.lock();
-                def.install = Some(InstallDef {
-                    closure,
+                this.def.lock().install = Some(InstallDef {
                     requirements: BTreeMap::new(),
                 });
+                this.closures.borrow_mut().install = Some(closure);
             })
             .with_fn(
                 "on_install",
@@ -319,11 +353,8 @@ impl CustomType for App {
                  requirements: Map|
                  -> Result<(), Box<EvalAltResult>> {
                     let reqs = parse_install_requirements(&requirements)?;
-                    let mut def = this.0.lock();
-                    def.install = Some(InstallDef {
-                        closure,
-                        requirements: reqs,
-                    });
+                    this.def.lock().install = Some(InstallDef { requirements: reqs });
+                    this.closures.borrow_mut().install = Some(closure);
                     Ok(())
                 },
             );

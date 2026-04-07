@@ -9,7 +9,7 @@ fn volume_named() {
         let v = app.volume("data");
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     assert!(
         def.resources
             .keys()
@@ -35,7 +35,7 @@ fn volume_readonly() {
         let v = app.volume("cfg").readonly();
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let id = def
         .resources
         .keys()
@@ -57,7 +57,7 @@ fn volume_write() {
         v.write("/app.conf", "key=value");
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let id = def
         .resources
         .keys()
@@ -82,7 +82,7 @@ fn volume_write_multiple() {
         v.write("/b.conf", "bbb");
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let id = def
         .resources
         .keys()
@@ -104,7 +104,7 @@ fn external_volume_creates_resource() {
         let v = app.external_volume("pg-socket");
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     assert!(
         def.resources
             .keys()

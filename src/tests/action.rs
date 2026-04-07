@@ -11,7 +11,7 @@ fn on_action_registers_and_returns_action() {
         });
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let action = def.actions.get("migrate").expect("action should exist");
     assert_eq!(action.description.as_deref(), Some("Run migrations"));
 }
@@ -24,7 +24,7 @@ fn on_action_without_options() {
         app.on_action("cleanup", |rt| {});
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let action = def.actions.get("cleanup").expect("action should exist");
     assert!(action.description.is_none());
 }
@@ -37,7 +37,7 @@ fn on_start_registers_start_action() {
         app.on_start(|rt| {});
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     assert!(def.actions.contains_key("start"));
 }
 
@@ -51,7 +51,7 @@ fn on_start_with_options() {
         });
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let action = def.actions.get("start").expect("start action should exist");
     assert_eq!(action.description.as_deref(), Some("Start the application"));
 }
@@ -68,7 +68,7 @@ fn on_shell_registers_shell() {
         });
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let shell = def.shells.get("node").expect("shell should exist");
     assert_eq!(shell.description.as_deref(), Some("Node REPL"));
 }
@@ -83,7 +83,7 @@ fn on_shell_without_options() {
         });
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let shell = def.shells.get("db").expect("shell should exist");
     assert!(shell.description.is_none());
 }
@@ -99,7 +99,7 @@ fn shells_in_separate_namespace_from_actions() {
         });
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     assert!(def.actions.contains_key("debug"));
     assert!(def.shells.contains_key("debug"));
 }
@@ -137,7 +137,7 @@ fn on_install_with_requirements() {
         });
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let install = def.install.as_ref().expect("install should exist");
     assert_eq!(install.requirements.len(), 2);
     let email_req = &install.requirements["admin_email"];
@@ -165,7 +165,7 @@ fn on_install_without_requirements() {
         app.on_install(|rt, reqs| {});
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let install = def.install.as_ref().expect("install should exist");
     assert!(install.requirements.is_empty());
 }
@@ -183,7 +183,7 @@ fn install_requirement_kind_text() {
         });
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let install = def.install.as_ref().unwrap();
     let req = &install.requirements["site_name"];
     assert!(matches!(
@@ -204,7 +204,7 @@ fn install_requirement_kind_defaults_to_text() {
         });
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let install = def.install.as_ref().unwrap();
     let req = &install.requirements["site_name"];
     assert!(matches!(
@@ -226,7 +226,7 @@ fn install_requirement_kind_weak_password() {
         });
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let install = def.install.as_ref().unwrap();
     let req = &install.requirements["api_key"];
     assert!(matches!(

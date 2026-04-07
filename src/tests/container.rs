@@ -29,7 +29,7 @@ fn container_image_sets_uri() {
         app.deployment("web").image("nginx:latest");
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let id = def
         .resources
         .keys()
@@ -53,7 +53,7 @@ fn container_command_string() {
         app.job("task").command("run");
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let id = def
         .resources
         .keys()
@@ -78,7 +78,7 @@ fn container_command_array() {
             .command(["bash", "-c", "echo hello"]);
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let id = def
         .resources
         .keys()
@@ -105,7 +105,7 @@ fn container_arg_single() {
         app.job("task").command("run").arg("--verbose");
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let id = def
         .resources
         .keys()
@@ -132,7 +132,7 @@ fn container_arg_array() {
         app.job("task").command("run").arg(["--verbose", "--dry-run"]);
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let id = def
         .resources
         .keys()
@@ -162,7 +162,7 @@ fn container_env_override() {
             .env("KEY", "new");
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let id = def
         .resources
         .keys()
@@ -215,7 +215,7 @@ fn container_on_exit_strategy() {
             .on_exit(OnExit.Terminate);
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let id = def
         .resources
         .keys()

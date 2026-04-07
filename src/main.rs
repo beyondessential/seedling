@@ -1,22 +1,35 @@
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-
-use rhai::{AST, Engine, Scope};
-use seedling::defs::app::App;
-use seedling::runtime::{
-    barrier::{
-        OperationId,
-        oracle::DbWorldOracle,
-        replay::{DbActionLog, OperationResult, run_operation},
-    },
-    db::Db,
-    history::{
-        CurrentOperation, clear_current_operation, load_current_operation, save_current_operation,
-    },
-    registry::DbInstanceRegistry,
-    scheduler::{RejectReason, ScheduleResult, Scheduler},
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
 };
-use seedling::setup_language;
+
+use parking_lot::RwLock;
+use rhai::{AST, Engine, Scope};
+use seedling::{
+    defs::app::App,
+    runtime::{
+        InstanceRegistry, OperationProgress,
+        barrier::{
+            OperationId,
+            oracle::DbWorldOracle,
+            replay::{ActionLog, DbActionLog, OperationResult, run_operation},
+        },
+        db::Db,
+        history::{
+            CurrentOperation, clear_current_operation, load_current_operation,
+            save_current_operation,
+        },
+        registry::DbInstanceRegistry,
+        scheduler::{RejectReason, ScheduleResult, Scheduler},
+    },
+    setup_language,
+    system::{
+        System,
+        reconcile::{Reconciler, node_prefix_from_machine_id},
+    },
+};
 
 fn run_file(
     engine: &Engine,
@@ -81,9 +94,8 @@ fn find_or_create_operation(db: &Db, app: &App, app_name: &str) -> Option<Curren
             Some(op)
         }
         None => {
-            let has_start = app.0.lock().actions.contains_key("start");
+            let has_start = app.def.lock().actions.contains_key("start");
             if !has_start {
-                eprintln!("no interrupted operation and no 'start' action — nothing to do");
                 return None;
             }
             let op = CurrentOperation {
@@ -104,7 +116,8 @@ fn find_or_create_operation(db: &Db, app: &App, app_name: &str) -> Option<Curren
     }
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let (script_path, data_dir) = parse_args();
 
     std::fs::create_dir_all(&data_dir).unwrap_or_else(|e| {
@@ -133,10 +146,10 @@ fn main() {
         .unwrap_or("app")
         .to_owned();
 
-    app.0.lock().name = app_name.clone();
+    app.def.lock().name = app_name.clone();
 
     {
-        let def = app.0.lock();
+        let def = app.def.lock();
         eprintln!("app: {app_name}");
         eprintln!("  resources: {}", def.resources.len());
         for id in def.resources.keys() {
@@ -145,13 +158,76 @@ fn main() {
         eprintln!("  actions: {:?}", def.actions.keys().collect::<Vec<_>>());
     }
 
+    // ---------------------------------------------------------------------------
+    // System backends
+    // ---------------------------------------------------------------------------
+
+    let node_prefix = node_prefix_from_machine_id().unwrap_or_else(|e| {
+        eprintln!("error: cannot derive node prefix from machine-id: {e}");
+        std::process::exit(1);
+    });
+
+    let (driver, caddy_admin_addr) =
+        System::setup(node_prefix, &data_dir)
+            .await
+            .unwrap_or_else(|e| {
+                eprintln!("error: system setup failed: {e}");
+                std::process::exit(1);
+            });
+
+    // ---------------------------------------------------------------------------
+    // Instance registry (shared between reconciler and operation runner)
+    // ---------------------------------------------------------------------------
+
+    let registry: Arc<dyn InstanceRegistry> = Arc::new(DbInstanceRegistry::new(
+        Db::open(&db_path).unwrap_or_else(|e| {
+            eprintln!("error: cannot open registry database: {e}");
+            std::process::exit(1);
+        }),
+    ));
+
+    // ---------------------------------------------------------------------------
+    // Reconciler
+    // ---------------------------------------------------------------------------
+
+    // TODO: wire active_progress to the operation runner so the reconciler
+    // tracks mid-operation desired state (live rt.start() / rt.stop() calls)
+    // rather than always falling back to steady state between ticks.
+    let active_progress: Arc<RwLock<Option<OperationProgress>>> = Arc::new(RwLock::new(None));
+
+    let reconciler = Reconciler::new(
+        app_name.clone(),
+        app.clone(),
+        Arc::clone(&active_progress),
+        Arc::clone(&driver),
+        node_prefix,
+        Arc::clone(&registry),
+        HashMap::new(), // bridge_names: populated by future bridge-address check
+        caddy_admin_addr,
+        data_dir.clone(),
+    );
+
+    tokio::spawn(async move {
+        let mut r = reconciler;
+        let mut interval = tokio::time::interval(Duration::from_secs(5));
+        // Skip missed ticks rather than firing a burst of them on resume.
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            r.tick().await;
+        }
+    });
+
+    // ---------------------------------------------------------------------------
+    // Operation runner
+    // ---------------------------------------------------------------------------
+
     let Some(current_op) = find_or_create_operation(&db, &app, &app_name) else {
+        eprintln!("no pending operation; reconciler running in steady state. Ctrl-C to exit.");
+        tokio::signal::ctrl_c().await.ok();
         return;
     };
 
-    // Register with the scheduler for the single-active-operation invariant.
-    // We use the persisted operation_id for the action log and run_operation;
-    // the scheduler's internally-generated id is used only for concurrency tracking.
     let mut scheduler = Scheduler::new();
     match scheduler.request(&current_op.app, &current_op.action_name) {
         ScheduleResult::Accepted => {}
@@ -179,24 +255,36 @@ fn main() {
         &current_op.action_name,
     );
 
-    let registry = Arc::new(DbInstanceRegistry::new(Db::open(&db_path).unwrap_or_else(
-        |e| {
-            eprintln!("error: cannot open registry database: {e}");
-            std::process::exit(1);
-        },
-    )));
+    // Seed active_progress from any already-committed log entries so the
+    // reconciler has a reasonable view of in-flight resources when resuming
+    // an interrupted operation. Mid-operation updates are not yet wired.
+    {
+        let entries = log.load();
+        if !entries.is_empty() {
+            *active_progress.write() = Some(OperationProgress::from_log(&entries));
+        }
+    }
 
-    match run_operation(
-        &engine,
-        &mut scope,
-        &ast,
-        current_op.operation_id.clone(),
-        &app,
-        &current_op.action_name,
-        &log,
-        Arc::clone(&oracle),
-        registry,
-    ) {
+    // run_operation is synchronous and uses Rhai types that are not Send;
+    // block_in_place runs it on the current thread without moving anything.
+    let result = tokio::task::block_in_place(|| {
+        run_operation(
+            &engine,
+            &mut scope,
+            &ast,
+            current_op.operation_id.clone(),
+            &app,
+            &current_op.action_name,
+            &log,
+            oracle,
+            Arc::clone(&registry),
+        )
+    });
+
+    // Operation finished — return to steady state.
+    *active_progress.write() = None;
+
+    match result {
         OperationResult::Completed => {
             eprintln!("completed.");
             clear_current_operation(&db).unwrap_or_else(|e| {
@@ -224,4 +312,9 @@ fn main() {
             std::process::exit(1);
         }
     }
+
+    // Keep the reconciler alive after the operation so it maintains steady
+    // state without requiring a restart. Ctrl-C for clean exit.
+    eprintln!("reconciler running in steady state. Ctrl-C to exit.");
+    tokio::signal::ctrl_c().await.ok();
 }

@@ -121,7 +121,7 @@ fn resource_types_exist() {
         let vol = app.volume("data");
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     assert!(
         def.resources
             .keys()
@@ -162,6 +162,6 @@ fn builder_methods_chain() {
 #[test]
 fn placeholder_string_value() {
     let app = run_test_script_app(r#"let x = app.param("foo");"#);
-    let def = app.0.lock();
+    let def = app.def.lock();
     assert_eq!(def.params["foo"], "<placeholder>");
 }

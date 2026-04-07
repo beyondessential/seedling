@@ -15,7 +15,7 @@ pub(crate) struct AppBag(pub App);
 
 impl ResourceBag for AppBag {
     fn ids(&self) -> Vec<ResourceId> {
-        let def = self.0.0.lock();
+        let def = self.0.def.lock();
         let resource_ids = def.resources.keys().cloned();
         let action_ids = def.actions.keys().map(|name| ResourceId {
             kind: ResourceKind::Action,
@@ -25,7 +25,7 @@ impl ResourceBag for AppBag {
     }
 
     fn fetch(&self, id: &ResourceId) -> Option<Dynamic> {
-        let def = self.0.0.lock();
+        let def = self.0.def.lock();
         if id.kind == ResourceKind::Action {
             def.actions.get(id.name.as_str()).map(|_| {
                 Dynamic::from(Action {

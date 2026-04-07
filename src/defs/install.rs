@@ -1,11 +1,8 @@
 use std::collections::BTreeMap;
 
-use rhai::FnPtr;
-
 // l[impl action.install]
 #[derive(Debug, Clone)]
 pub struct InstallDef {
-    pub closure: FnPtr,
     pub requirements: BTreeMap<String, InstallRequirementDef>,
 }
 

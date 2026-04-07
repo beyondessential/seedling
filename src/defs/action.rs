@@ -1,11 +1,10 @@
-use rhai::{CustomType, Dynamic, FnPtr, Map, TypeBuilder};
+use rhai::{CustomType, Dynamic, Map, TypeBuilder};
 
 use super::collection::{Collection, col};
 
 #[derive(Debug, Clone)]
 pub struct ActionDef {
     pub name: String,
-    pub closure: FnPtr,
     pub description: Option<String>,
 }
 
@@ -41,6 +40,5 @@ impl CustomType for Action {
 #[derive(Debug, Clone)]
 pub struct ShellDef {
     pub name: String,
-    pub closure: FnPtr,
     pub description: Option<String>,
 }

@@ -14,7 +14,7 @@ fn job_with_deadline() {
             .deadline(300);
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let id = def
         .resources
         .keys()
@@ -42,7 +42,7 @@ fn job_implements_pod_interface() {
             .tcp(9090, svc);
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let id = def
         .resources
         .keys()

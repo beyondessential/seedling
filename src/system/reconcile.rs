@@ -6,6 +6,8 @@ use std::{
     time::Duration,
 };
 
+use parking_lot::Mutex;
+
 use sha2::{Digest, Sha256};
 
 use ipnet::Ipv6Net;
@@ -14,7 +16,7 @@ use tokio::sync::RwLock as AsyncRwLock;
 use tracing::{error, warn};
 
 use crate::{
-    defs::app::App,
+    defs::app::{App, AppDef},
     runtime::{
         InstanceRegistry,
         desired::{DesiredState, OperationProgress, compute},
@@ -54,7 +56,7 @@ pub(crate) struct RunningPod {
 
 pub struct Reconciler {
     app_name: String,
-    app: App,
+    app: Arc<Mutex<AppDef>>,
     /// Shared desired-state override. `None` = steady state (all resources
     /// desired at `Ready`). Set to `Some` while a lifecycle operation is
     /// in progress.
@@ -97,7 +99,7 @@ impl Reconciler {
         let actuator = Actuator::new(Arc::clone(&driver), node_prefix, Arc::clone(&registry));
         Self {
             app_name,
-            app,
+            app: app.def,
             active_progress,
             observer,
             actuator,
@@ -221,7 +223,7 @@ impl Reconciler {
     /// snapshot, then drops both locks before any async work begins.
     fn snapshot_desired(&self) -> (DesiredState, crate::defs::app::AppDef) {
         let progress = self.active_progress.read();
-        let app_def = self.app.0.lock();
+        let app_def = self.app.lock();
         let desired = compute(&self.app_name, &app_def, (*progress).as_ref());
         let snapshot = app_def.clone();
         (desired, snapshot)

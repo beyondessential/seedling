@@ -25,7 +25,7 @@ fn param_value_used_in_string_interpolation() {
         app.deployment("web").image(tag);
         "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let dep = def.resources.values().next().expect("one resource");
     // The image is constructed during script eval; we just verify no panic.
     let _ = dep;
@@ -35,7 +35,7 @@ fn param_value_used_in_string_interpolation() {
 #[test]
 fn param_to_string_returns_value() {
     let app = run_test_script_app(r#"let _host = app.param("host");"#);
-    let def = app.0.lock();
+    let def = app.def.lock();
     assert_eq!(
         def.params.get("host").map(String::as_str),
         Some("<placeholder>")
@@ -55,9 +55,9 @@ fn on_change_registers_handler_in_app_def() {
         p.on_change(|rt| {});
         "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     assert!(
-        def.param_changes.contains_key("version"),
+        def.param_changes.contains("version"),
         "on_change should register handler in AppDef.param_changes",
     );
 }
@@ -71,8 +71,8 @@ fn on_change_two_arg_closure_registers() {
         p.on_change(|rt, old| {});
         "#,
     );
-    let def = app.0.lock();
-    assert!(def.param_changes.contains_key("domain"));
+    let def = app.def.lock();
+    assert!(def.param_changes.contains("domain"));
 }
 
 // l[verify param.on-change]
@@ -84,9 +84,9 @@ fn on_change_different_params_each_register() {
         app.param("domain").on_change(|rt| {});
         "#,
     );
-    let def = app.0.lock();
-    assert!(def.param_changes.contains_key("version"));
-    assert!(def.param_changes.contains_key("domain"));
+    let def = app.def.lock();
+    assert!(def.param_changes.contains("version"));
+    assert!(def.param_changes.contains("domain"));
 }
 
 // -----------------------------------------------------------------------

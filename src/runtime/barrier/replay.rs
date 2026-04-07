@@ -181,23 +181,23 @@ where
     // Clear the thread-local barrier-hit flag at the start of each pass.
     clear_barrier_hit();
 
-    let app_name = app.0.lock().name.clone();
+    let app_name = app.def.lock().name.clone();
     let rt = RuntimeInstance::with_context(Arc::clone(&ctx), app_name, registry);
 
-    // Look up the action closure.
+    // Look up the action closure from ClosureStore.
     let (closure, is_param_change) = {
-        let def = app.0.lock();
-        let closure = match def.actions.get(action_name) {
-            Some(a) => a.closure.clone(),
-            None => {
-                return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
-                    format!("Action '{}' not found", action_name).into(),
-                    rhai::Position::NONE,
-                )));
-            }
-        };
-        let is_param_change = def.param_changes.contains_key(action_name);
-        (closure, is_param_change)
+        let closures = app.closures.borrow();
+        if let Some(c) = closures.actions.get(action_name) {
+            let is_pc = app.def.lock().param_changes.contains(action_name);
+            (c.clone(), is_pc)
+        } else if let Some(c) = closures.param_changes.get(action_name) {
+            (c.clone(), true)
+        } else {
+            return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
+                format!("Action '{}' not found", action_name).into(),
+                rhai::Position::NONE,
+            )));
+        }
     };
 
     let old_app = App::default();

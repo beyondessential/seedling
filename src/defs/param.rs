@@ -34,15 +34,22 @@ impl CustomType for Param {
                         )
                         .into());
                     }
-                    let mut def = this.app.0.lock();
-                    if def.param_changes.contains_key(&this.name) {
-                        return Err(format!(
-                            "on_change already registered for parameter '{}'",
-                            this.name
-                        )
-                        .into());
+                    {
+                        let mut def = this.app.def.lock();
+                        if def.param_changes.contains(&this.name) {
+                            return Err(format!(
+                                "on_change already registered for parameter '{}'",
+                                this.name
+                            )
+                            .into());
+                        }
+                        def.param_changes.insert(this.name.clone());
                     }
-                    def.param_changes.insert(this.name.clone(), closure);
+                    this.app
+                        .closures
+                        .borrow_mut()
+                        .param_changes
+                        .insert(this.name.clone(), closure);
                     Ok(())
                 },
             );

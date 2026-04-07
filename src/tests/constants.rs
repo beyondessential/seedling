@@ -41,7 +41,7 @@ fn on_update_rolling() {
             .on_update(OnUpdate.Rolling);
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let id = def
         .resources
         .keys()
@@ -64,7 +64,7 @@ fn on_update_replace() {
             .on_update(OnUpdate.Replace);
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let id = def
         .resources
         .keys()
@@ -87,7 +87,7 @@ fn on_terminate_recreate() {
             .on_terminate(OnTerminate.Recreate);
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let id = def
         .resources
         .keys()
@@ -114,7 +114,7 @@ fn on_exit_restart() {
             .on_exit(OnExit.Restart);
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let id = def
         .resources
         .keys()
@@ -140,7 +140,7 @@ fn on_exit_terminate() {
             .on_exit(OnExit.Terminate);
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let id = def
         .resources
         .keys()
@@ -166,7 +166,7 @@ fn on_exit_restart_on_failure() {
             .on_exit(OnExit.RestartOnFailure);
     "#,
     );
-    let def = app.0.lock();
+    let def = app.def.lock();
     let id = def
         .resources
         .keys()

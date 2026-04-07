@@ -1,5 +1,4 @@
-use std::sync::Arc;
-use std::time::Duration;
+use std::{net::SocketAddr, path::Path, sync::Arc, time::Duration};
 
 use ipnet::Ipv6Net;
 
@@ -153,4 +152,38 @@ pub struct System {
     pub process: Arc<dyn ProcessManager>,
     pub proxy: Arc<dyn NetworkProxy>,
     pub data_plane: Arc<dyn DataPlane>,
+}
+
+impl System {
+    // r[infra.proxy.startup]
+    /// Initialize all system backends, ensure Caddy is running, and return the
+    /// assembled `System` handle alongside the Caddy admin API address handle.
+    ///
+    /// Errors from individual backends are returned as boxed trait objects so
+    /// callers do not need to depend on internal error types.
+    pub async fn setup(
+        node_prefix: Ipv6Net,
+        data_dir: &Path,
+    ) -> Result<
+        (Arc<Self>, Arc<tokio::sync::RwLock<SocketAddr>>),
+        Box<dyn std::error::Error + Send + Sync>,
+    > {
+        let container: Arc<dyn ContainerRuntime> = Arc::new(podman::PodmanRuntime::new().await?);
+        let process: Arc<dyn ProcessManager> = Arc::new(systemd::SystemdManager::connect().await?);
+        let data_plane_arc: Arc<dyn DataPlane> = Arc::new(data_plane::NftablesDataPlane::new()?);
+
+        let initial_addr =
+            caddy::ensure_caddy_running(&*container, &*process, &node_prefix, data_dir).await?;
+        let caddy_proxy = Arc::new(caddy::CaddyProxy::new(initial_addr));
+        let caddy_admin_addr = caddy_proxy.admin_addr_handle();
+        let proxy: Arc<dyn NetworkProxy> = caddy_proxy;
+
+        let system = Arc::new(Self {
+            container,
+            process,
+            proxy,
+            data_plane: data_plane_arc,
+        });
+        Ok((system, caddy_admin_addr))
+    }
 }

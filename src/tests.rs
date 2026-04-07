@@ -43,32 +43,42 @@ pub fn exercise(source: &str) {
 }
 
 fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, script_ast: &AST) {
-    let def = app.0.lock();
-
     let rt = RuntimeInstance::stub();
     let attach = shell_attach_fn_ptr();
 
-    let actions: Vec<_> = def
-        .actions
-        .iter()
-        .map(|(name, a)| (name.clone(), a.closure.clone()))
-        .collect();
-    let shells: Vec<_> = def
-        .shells
-        .iter()
-        .map(|(name, s)| (name.clone(), s.closure.clone()))
-        .collect();
-    let install = def.install.as_ref().map(|i| {
-        let reqs_map = build_install_reqs_map(i);
-        (i.closure.clone(), reqs_map)
-    });
-    let param_changes: Vec<_> = def
-        .param_changes
-        .iter()
-        .map(|(name, closure)| (name.clone(), closure.clone()))
-        .collect();
+    let (actions, shells, install, param_changes) = {
+        let closures = app.closures.borrow();
+        let def = app.def.lock();
 
-    drop(def);
+        let actions: Vec<_> = def
+            .actions
+            .keys()
+            .filter_map(|name| {
+                closures
+                    .actions
+                    .get(name)
+                    .map(|c| (name.clone(), c.clone()))
+            })
+            .collect();
+        let shells: Vec<_> = def
+            .shells
+            .keys()
+            .filter_map(|name| closures.shells.get(name).map(|c| (name.clone(), c.clone())))
+            .collect();
+        let install = def.install.as_ref().and_then(|i| {
+            closures
+                .install
+                .clone()
+                .map(|c| (c, build_install_reqs_map(i)))
+        });
+        let param_changes: Vec<_> = closures
+            .param_changes
+            .iter()
+            .map(|(name, closure)| (name.clone(), closure.clone()))
+            .collect();
+
+        (actions, shells, install, param_changes)
+    };
 
     for (name, closure) in &actions {
         scope.push("__bsl_rt", rt.clone());
