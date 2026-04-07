@@ -865,10 +865,10 @@ handling beyond what the existing migration infrastructure provides.
 
 ## nftables port forwarder (`src/system/nftables.rs`)
 
-- Crate: `nftables` (v0.6+) with the `tokio` feature. The crate shells out to
-  the `nft` binary in JSON mode (`nft -j`), providing a typed Rust API over the
-  nftables JSON schema without hand-written text parsing. The `nft` binary must
-  be installed on the host; this is a hard runtime dependency.
+- Crate: `nftables` (v0.6+) with the `tokio` feature. Seedling calls the
+  crate's typed Rust API; the crate internally drives the `nft` binary in JSON
+  mode (`nft -j`). The `nft` binary must be present on the host — this is a
+  runtime dependency of the crate, not of seedling's code directly.
 - Manages a dedicated nftables table: `table inet seedling_ingress {}`.
 - All DNAT rules live in a single chain within that table, making cleanup
   (`clear_rules`) a simple table flush.
