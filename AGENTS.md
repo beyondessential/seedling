@@ -1,4 +1,5 @@
 <llm-rules>
+- You might be running in a sandbox. In that case, commands might be in /run/host/usr/bin.
 - This repo uses jujutsu. Commit changes incrementally as you work.
 - Use `jj commit` over `jj describe` so that new changes can be applied as a new description easily; we can always squash to put history together where it makes sense.
 - Remember to use --no-pager for jj commands.
