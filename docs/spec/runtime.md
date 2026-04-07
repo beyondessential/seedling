@@ -282,6 +282,34 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[autonomous.provenance-required]
 > Every autonomous operation must record [provenance](#r--history.operations.provenance) before execution.
 
+# Observation
+
+> r[observe.facts]
+> The runtime must collect timestamped observation facts for each resource instance by inspecting the backing system primitives.
+
+> r[observe.deployment]
+> For Deployment and Job resource instances, the runtime must observe pod network presence, container lifecycle state (missing, created, running, or exited), and systemd unit state.
+
+> r[observe.volume]
+> For Volume resource instances, the runtime must observe whether the named volume exists.
+
+> r[observe.ingress]
+> For Ingress resource instances, the runtime must observe whether the proxy is reachable.
+
+# Actuation
+
+> r[actuate.deployment.start]
+> Starting a Deployment or Job instance must ensure the pod network exists for the instance, ensure the container image is present (pulling if absent), and start the container under process supervision.
+
+> r[actuate.deployment.stop]
+> Stopping a Deployment or Job instance must stop the supervised container process and, once stopped, remove the pod network.
+
+> r[actuate.volume.start]
+> Starting a Volume instance must create the named volume if it does not already exist.
+
+> r[actuate.volume.stop]
+> Stopping a Volume instance must remove the named volume.
+
 # Fault Handling
 
 > r[fault.definition]

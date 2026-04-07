@@ -1,9 +1,23 @@
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
+
+use ipnet::Ipv6Net;
 use snafu::Snafu;
 
 use crate::{
-    defs::resource::{Resource, ResourceKind},
-    runtime::identity::ResourceInstance,
-    system::{ContainerRuntime, DataPlane, NetworkProxy, ProcessManager, SystemDriver},
+    defs::{
+        enums::OnExit,
+        resource::{Resource, ResourceKind},
+        service::ServicePort,
+    },
+    runtime::{identity::ResourceInstance, registry::InstanceRegistry},
+    system::{
+        ContainerRuntime, DataPlane, NetworkProxy, ProcessManager, SystemDriver,
+        translate::{
+            container::{deployment_spec, job_spec, podman_args},
+            proxy::{instance_ipv6, pod_network_prefix},
+        },
+        types::{ActiveState, TransientRestart, TransientUnitSpec},
+    },
 };
 
 // ---------------------------------------------------------------------------
@@ -37,11 +51,33 @@ pub enum ActuateError {
 }
 
 // ---------------------------------------------------------------------------
+// Naming helpers
+// ---------------------------------------------------------------------------
+
+fn pod_network_name(instance: &ResourceInstance) -> String {
+    format!("seedling-{}", instance.display_name)
+}
+
+fn unit_name(instance: &ResourceInstance) -> String {
+    format!("seedling-{}.service", instance.display_name)
+}
+
+fn map_on_exit(on_exit: OnExit) -> TransientRestart {
+    match on_exit {
+        OnExit::Restart => TransientRestart::Always,
+        OnExit::Terminate => TransientRestart::No,
+        OnExit::RestartOnFailure => TransientRestart::OnFailure,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Actuator
 // ---------------------------------------------------------------------------
 
 pub struct Actuator<C, P, N, D> {
     driver: SystemDriver<C, P, N, D>,
+    node_prefix: Ipv6Net,
+    registry: Arc<dyn InstanceRegistry>,
 }
 
 impl<C, P, N, D> Actuator<C, P, N, D>
@@ -51,26 +87,171 @@ where
     N: NetworkProxy,
     D: DataPlane,
 {
-    pub fn new(driver: SystemDriver<C, P, N, D>) -> Self {
-        Self { driver }
+    pub fn new(
+        driver: SystemDriver<C, P, N, D>,
+        node_prefix: Ipv6Net,
+        registry: Arc<dyn InstanceRegistry>,
+    ) -> Self {
+        Self {
+            driver,
+            node_prefix,
+            registry,
+        }
     }
 
+    // r[impl actuate.deployment.start]
+    // r[impl actuate.volume.start]
     /// Ensure all primitives for this instance exist and are running.
     pub async fn start(
         &self,
-        _instance: &ResourceInstance,
-        _resource: &Resource,
+        instance: &ResourceInstance,
+        resource: &Resource,
     ) -> Result<(), ActuateError> {
-        todo!("actuator start: not yet implemented")
+        match resource {
+            Resource::Deployment(dep) => {
+                let (image, raw_mounts, restart) = {
+                    let def = dep.def.lock();
+                    let pod = def.pod.lock();
+                    let container = pod.container.lock();
+                    let image = container.image.clone().unwrap_or_default();
+                    let raw_mounts = pod.service_mounts.clone();
+                    let restart = map_on_exit(container.on_exit);
+                    (image, raw_mounts, restart)
+                };
+                self.start_pod_instance(
+                    instance,
+                    &image,
+                    &raw_mounts,
+                    restart,
+                    |net_name, net_prefix, mounts| {
+                        let guard = dep.def.lock();
+                        let spec = deployment_spec(
+                            &guard,
+                            instance,
+                            &BTreeMap::new(),
+                            &(net_name, net_prefix),
+                            mounts,
+                        );
+                        podman_args(&spec)
+                    },
+                )
+                .await
+            }
+            Resource::Job(job) => {
+                let (image, raw_mounts, restart) = {
+                    let def = job.def.lock();
+                    let pod = def.pod.lock();
+                    let container = pod.container.lock();
+                    let image = container.image.clone().unwrap_or_default();
+                    let raw_mounts = pod.service_mounts.clone();
+                    let restart = map_on_exit(container.on_exit);
+                    (image, raw_mounts, restart)
+                };
+                self.start_pod_instance(
+                    instance,
+                    &image,
+                    &raw_mounts,
+                    restart,
+                    |net_name, net_prefix, mounts| {
+                        let guard = job.def.lock();
+                        let spec = job_spec(
+                            &guard,
+                            instance,
+                            &BTreeMap::new(),
+                            &(net_name, net_prefix),
+                            mounts,
+                        );
+                        podman_args(&spec)
+                    },
+                )
+                .await
+            }
+            Resource::Volume(v) => {
+                let name = v
+                    .name
+                    .as_ref()
+                    .map(|n| n.as_str())
+                    .unwrap_or(&instance.display_name)
+                    .to_owned();
+                if !self
+                    .driver
+                    .container
+                    .volume_exists(&name)
+                    .await
+                    .map_err(|e| ActuateError::Container {
+                        source: Box::new(e),
+                    })?
+                {
+                    self.driver
+                        .container
+                        .create_volume(&name)
+                        .await
+                        .map_err(|e| ActuateError::Container {
+                            source: Box::new(e),
+                        })?;
+                }
+                // Volume writes (populating files into the volume) are not yet
+                // implemented; they require running a helper container.
+                Ok(())
+            }
+            Resource::ExternalVolume(_) | Resource::ExternalService(_) => Ok(()),
+            Resource::Service(_) | Resource::HttpService(_) => {
+                todo!(
+                    "actuate start: Service/HttpService DataPlane coordination not yet implemented"
+                )
+            }
+            Resource::Ingress(_) => {
+                todo!("actuate start: Ingress proxy/DataPlane coordination not yet implemented")
+            }
+        }
     }
 
+    // r[impl actuate.deployment.stop]
+    // r[impl actuate.volume.stop]
     /// Stop and remove all primitives for this instance.
     pub async fn stop(
         &self,
-        _instance: &ResourceInstance,
-        _resource: &Resource,
+        instance: &ResourceInstance,
+        resource: &Resource,
     ) -> Result<(), ActuateError> {
-        todo!("actuator stop: not yet implemented")
+        match resource {
+            Resource::Deployment(_) | Resource::Job(_) => self.stop_pod_instance(instance).await,
+            Resource::Volume(v) => {
+                let name = v
+                    .name
+                    .as_ref()
+                    .map(|n| n.as_str())
+                    .unwrap_or(&instance.display_name)
+                    .to_owned();
+                if self
+                    .driver
+                    .container
+                    .volume_exists(&name)
+                    .await
+                    .map_err(|e| ActuateError::Container {
+                        source: Box::new(e),
+                    })?
+                {
+                    self.driver
+                        .container
+                        .remove_volume(&name)
+                        .await
+                        .map_err(|e| ActuateError::Container {
+                            source: Box::new(e),
+                        })?;
+                }
+                Ok(())
+            }
+            Resource::ExternalVolume(_) | Resource::ExternalService(_) => Ok(()),
+            Resource::Service(_) | Resource::HttpService(_) => {
+                todo!(
+                    "actuate stop: Service/HttpService DataPlane coordination not yet implemented"
+                )
+            }
+            Resource::Ingress(_) => {
+                todo!("actuate stop: Ingress proxy/DataPlane coordination not yet implemented")
+            }
+        }
     }
 
     /// In-place update (e.g. rolling a container to a new image or config).
@@ -81,5 +262,174 @@ where
         _new: &Resource,
     ) -> Result<(), ActuateError> {
         todo!("actuator update: not yet implemented")
+    }
+
+    // ---------------------------------------------------------------------------
+    // Helpers
+    // ---------------------------------------------------------------------------
+
+    /// Resolves `service_mounts` declared on a pod to `(mount_port, service_ip,
+    /// service_port)` tuples, computing each service's stable IPv6 address from
+    /// the node prefix and the service's persisted instance identity.
+    fn resolve_service_mounts(
+        &self,
+        instance: &ResourceInstance,
+        mounts: &[ServicePort],
+    ) -> Vec<(u16, std::net::Ipv6Addr, u16)> {
+        mounts
+            .iter()
+            .map(|sp| {
+                let svc_instance = self.registry.get_or_create_singleton(
+                    &instance.app,
+                    ResourceKind::Service,
+                    Some(sp.service.name.as_str()),
+                );
+                let service_ip = instance_ipv6(&self.node_prefix, &svc_instance);
+                (sp.port, service_ip, sp.port)
+            })
+            .collect()
+    }
+
+    async fn start_pod_instance(
+        &self,
+        instance: &ResourceInstance,
+        image: &str,
+        raw_mounts: &[ServicePort],
+        restart: TransientRestart,
+        build_argv: impl FnOnce(String, Ipv6Net, &[(u16, std::net::Ipv6Addr, u16)]) -> Vec<String>,
+    ) -> Result<(), ActuateError> {
+        // Ensure the container image is available.
+        if !self
+            .driver
+            .container
+            .image_exists(image)
+            .await
+            .map_err(|e| ActuateError::Container {
+                source: Box::new(e),
+            })?
+        {
+            self.driver.container.pull_image(image).await.map_err(|_| {
+                ActuateError::ImageUnavailable {
+                    reference: image.to_owned(),
+                }
+            })?;
+        }
+
+        // Ensure the pod network exists.
+        let net_name = pod_network_name(instance);
+        let net_prefix = pod_network_prefix(&self.node_prefix, instance);
+        if !self
+            .driver
+            .container
+            .network_exists(&net_name)
+            .await
+            .map_err(|e| ActuateError::Container {
+                source: Box::new(e),
+            })?
+        {
+            self.driver
+                .container
+                .create_network(&net_name, net_prefix)
+                .await
+                .map_err(|e| ActuateError::Container {
+                    source: Box::new(e),
+                })?;
+        }
+
+        // Skip if the unit is already active.
+        let unit = unit_name(instance);
+        if let Some(state) =
+            self.driver
+                .process
+                .unit_state(&unit)
+                .await
+                .map_err(|e| ActuateError::Process {
+                    source: Box::new(e),
+                })?
+            && matches!(state.active, ActiveState::Active | ActiveState::Activating)
+        {
+            return Ok(());
+        }
+
+        // Resolve service mounts and build the argv.
+        let mounts = self.resolve_service_mounts(instance, raw_mounts);
+        let argv = build_argv(net_name, net_prefix, &mounts);
+
+        self.driver
+            .process
+            .start_transient(TransientUnitSpec {
+                name: unit,
+                description: format!("seedling container {}", instance.display_name),
+                exec_start: argv,
+                restart,
+            })
+            .await
+            .map_err(|e| ActuateError::Process {
+                source: Box::new(e),
+            })?;
+
+        Ok(())
+    }
+
+    async fn stop_pod_instance(&self, instance: &ResourceInstance) -> Result<(), ActuateError> {
+        let unit = unit_name(instance);
+
+        // Stop the unit if it exists, then wait for it to terminate.
+        if self
+            .driver
+            .process
+            .unit_state(&unit)
+            .await
+            .map_err(|e| ActuateError::Process {
+                source: Box::new(e),
+            })?
+            .is_some()
+        {
+            self.driver
+                .process
+                .stop_unit(&unit)
+                .await
+                .map_err(|e| ActuateError::Process {
+                    source: Box::new(e),
+                })?;
+            self.driver
+                .process
+                .wait_unit_stopped(&unit, Duration::from_secs(30))
+                .await
+                .map_err(|e| ActuateError::Process {
+                    source: Box::new(e),
+                })?;
+        }
+
+        // Force-remove the container in case it outlived the unit.
+        self.driver
+            .container
+            .remove_container(&instance.display_name, true)
+            .await
+            .map_err(|e| ActuateError::Container {
+                source: Box::new(e),
+            })?;
+
+        // Remove the pod network.
+        let net_name = pod_network_name(instance);
+        if self
+            .driver
+            .container
+            .network_exists(&net_name)
+            .await
+            .map_err(|e| ActuateError::Container {
+                source: Box::new(e),
+            })?
+        {
+            self.driver
+                .container
+                .remove_network(&net_name)
+                .await
+                .map_err(|e| ActuateError::Container {
+                    source: Box::new(e),
+                })?;
+        }
+
+        Ok(())
     }
 }
