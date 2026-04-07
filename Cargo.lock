@@ -2625,6 +2625,7 @@ dependencies = [
  "serde_json",
  "snafu",
  "tokio",
+ "tracing",
  "uuid",
  "wildmatch",
  "zbus",
