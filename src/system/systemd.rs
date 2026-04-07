@@ -180,7 +180,7 @@ impl ProcessManager for SystemdManager {
     type Error = SystemdError;
 
     async fn start_transient(&self, spec: TransientUnitSpec) -> Result<(), Self::Error> {
-        let proxy = Systemd1ManagerProxy::new(&*self.conn)
+        let proxy = Systemd1ManagerProxy::new(&self.conn)
             .await
             .map_err(|e| SystemdError::DBus { source: e })?;
 
@@ -205,7 +205,7 @@ impl ProcessManager for SystemdManager {
     }
 
     async fn stop_unit(&self, name: &str) -> Result<(), Self::Error> {
-        let proxy = Systemd1ManagerProxy::new(&*self.conn)
+        let proxy = Systemd1ManagerProxy::new(&self.conn)
             .await
             .map_err(|e| SystemdError::DBus { source: e })?;
         proxy
@@ -235,7 +235,7 @@ impl ProcessManager for SystemdManager {
     }
 
     async fn unit_state(&self, name: &str) -> Result<Option<UnitState>, Self::Error> {
-        let proxy = Systemd1ManagerProxy::new(&*self.conn)
+        let proxy = Systemd1ManagerProxy::new(&self.conn)
             .await
             .map_err(|e| SystemdError::DBus { source: e })?;
 
@@ -250,7 +250,7 @@ impl ProcessManager for SystemdManager {
             }
         };
 
-        let unit_proxy = Systemd1UnitProxy::builder(&*self.conn)
+        let unit_proxy = Systemd1UnitProxy::builder(&self.conn)
             .destination("org.freedesktop.systemd1")
             .map_err(|e| SystemdError::DBus { source: e })?
             .path(unit_path)
@@ -275,7 +275,7 @@ impl ProcessManager for SystemdManager {
     }
 
     async fn list_units(&self, prefix: &str) -> Result<Vec<UnitSummary>, Self::Error> {
-        let proxy = Systemd1ManagerProxy::new(&*self.conn)
+        let proxy = Systemd1ManagerProxy::new(&self.conn)
             .await
             .map_err(|e| SystemdError::DBus { source: e })?;
 
@@ -317,7 +317,7 @@ impl ProcessManager for SystemdManager {
     }
 
     async fn daemon_reload(&self) -> Result<(), Self::Error> {
-        let proxy = Systemd1ManagerProxy::new(&*self.conn)
+        let proxy = Systemd1ManagerProxy::new(&self.conn)
             .await
             .map_err(|e| SystemdError::DBus { source: e })?;
         proxy
@@ -328,7 +328,7 @@ impl ProcessManager for SystemdManager {
     }
 
     async fn start_unit(&self, name: &str) -> Result<(), Self::Error> {
-        let proxy = Systemd1ManagerProxy::new(&*self.conn)
+        let proxy = Systemd1ManagerProxy::new(&self.conn)
             .await
             .map_err(|e| SystemdError::DBus { source: e })?;
         proxy

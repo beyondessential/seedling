@@ -299,7 +299,7 @@ mod tests {
         let config = ProxyConfig::default();
         let json = build_caddy_config(&config);
         let servers = &json["apps"]["http"]["servers"];
-        assert!(servers.as_object().map_or(true, |m| m.is_empty()));
+        assert!(servers.as_object().is_none_or(|m| m.is_empty()));
     }
 
     #[test]
@@ -342,7 +342,7 @@ mod tests {
 
         // https server should have proxy routes
         let https_routes = &servers["seedling_https"]["routes"];
-        assert!(https_routes.as_array().map_or(false, |r| !r.is_empty()));
+        assert!(https_routes.as_array().is_some_and(|r| !r.is_empty()));
 
         // http server should have redirect route
         let http_routes = &servers["seedling_http"]["routes"];

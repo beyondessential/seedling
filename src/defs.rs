@@ -64,7 +64,7 @@ pub fn register(engine: &mut Engine) {
          hostname: param::Param,
          port: i64|
          -> Result<ingress::Ingress, Box<rhai::EvalAltResult>> {
-            if port < 1 || port > 65534 {
+            if !(1..=65534).contains(&port) {
                 return Err(format!("port {port} out of valid range 1..65534").into());
             }
             Ok(ingress::Ingress::new(svc, hostname.value, port as u16))

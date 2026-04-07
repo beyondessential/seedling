@@ -46,6 +46,12 @@ pub fn is_in_action_closure() -> bool {
 /// it on drop, ensuring the flag is always cleaned up even on early return.
 pub struct ActionClosureGuard;
 
+impl Default for ActionClosureGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ActionClosureGuard {
     pub fn new() -> Self {
         IN_ACTION_CLOSURE.with(|b| b.set(true));
@@ -178,13 +184,11 @@ impl RuntimeInstance {
         &mut self,
         resources: Vec<ResourceInstance>,
     ) -> Result<Started, Box<EvalAltResult>> {
-        if is_barrier_hit_pending() {
-            if let Some(ctx) = &self.ctx {
-                if let Some(cond) = ctx.lock().pending_barrier.clone() {
+        if is_barrier_hit_pending()
+            && let Some(ctx) = &self.ctx
+                && let Some(cond) = ctx.lock().pending_barrier.clone() {
                     return Err(make_barrier_error(cond));
                 }
-            }
-        }
 
         let ctx = match &self.ctx {
             None => {
@@ -224,13 +228,11 @@ impl RuntimeInstance {
         resources: Vec<ResourceInstance>,
         deadline_secs: u64,
     ) -> Result<(), Box<EvalAltResult>> {
-        if is_barrier_hit_pending() {
-            if let Some(ctx) = &self.ctx {
-                if let Some(cond) = ctx.lock().pending_barrier.clone() {
+        if is_barrier_hit_pending()
+            && let Some(ctx) = &self.ctx
+                && let Some(cond) = ctx.lock().pending_barrier.clone() {
                     return Err(make_barrier_error(cond));
                 }
-            }
-        }
 
         let ctx = match &self.ctx {
             None => return Ok(()),
@@ -244,7 +246,7 @@ impl RuntimeInstance {
             let already = g
                 .committed_entry()
                 .and_then(|e| e.barrier.as_ref())
-                .map_or(false, |b| b.satisfied);
+                .is_some_and(|b| b.satisfied);
             g.call_index += 1;
             if already {
                 return Ok(());
@@ -378,13 +380,11 @@ impl Started {
         required: LifecycleState,
         deadline_secs: u64,
     ) -> Result<Self, Box<EvalAltResult>> {
-        if is_barrier_hit_pending() {
-            if let Some(ctx) = &self.ctx {
-                if let Some(cond) = ctx.lock().pending_barrier.clone() {
+        if is_barrier_hit_pending()
+            && let Some(ctx) = &self.ctx
+                && let Some(cond) = ctx.lock().pending_barrier.clone() {
                     return Err(make_barrier_error(cond));
                 }
-            }
-        }
 
         let ctx = match &self.ctx {
             None => return Ok(self.clone()),
@@ -400,7 +400,7 @@ impl Started {
             e.resources == self.resources
                 && e.barrier
                     .as_ref()
-                    .map_or(false, |b| b.required_state == required && b.satisfied)
+                    .is_some_and(|b| b.required_state == required && b.satisfied)
         });
         if already_satisfied {
             return Ok(self.clone());
@@ -415,13 +415,13 @@ impl Started {
                 e.resources == self.resources
                     && e.barrier
                         .as_ref()
-                        .map_or(false, |b| b.required_state == required && !b.satisfied)
+                        .is_some_and(|b| b.required_state == required && !b.satisfied)
             })
             .and_then(|e| e.barrier.as_ref()?.started_at_secs);
 
         // r[impl barrier.deadline]
-        if let Some(started_at) = started_at {
-            if now.saturating_sub(started_at) >= deadline_secs {
+        if let Some(started_at) = started_at
+            && now.saturating_sub(started_at) >= deadline_secs {
                 return Err(Box::new(EvalAltResult::ErrorRuntime(
                     format!(
                         "Barrier deadline of {}s exceeded waiting for {:?}",
@@ -431,7 +431,6 @@ impl Started {
                     rhai::Position::NONE,
                 )));
             }
-        }
 
         // Check if condition is currently satisfied.
         let all_reached = !self.resources.is_empty()
@@ -444,13 +443,11 @@ impl Started {
         if all_reached {
             // Mark the relevant pending entry's barrier as satisfied.
             for e in g.pending.iter_mut() {
-                if e.resources == self.resources {
-                    if let Some(b) = e.barrier.as_mut() {
-                        if b.required_state == required {
+                if e.resources == self.resources
+                    && let Some(b) = e.barrier.as_mut()
+                        && b.required_state == required {
                             b.satisfied = true;
                         }
-                    }
-                }
             }
             return Ok(self.clone());
         }

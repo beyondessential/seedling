@@ -63,12 +63,11 @@ impl ActionLog for InMemoryActionLog {
                 .find(|e| e.call_index == entry.call_index)
             {
                 // Update satisfaction status if it changed.
-                if let (Some(nb), Some(eb)) = (&entry.barrier, &mut existing.barrier) {
-                    if nb.satisfied {
+                if let (Some(nb), Some(eb)) = (&entry.barrier, &mut existing.barrier)
+                    && nb.satisfied {
                         eb.satisfied = true;
                         eb.started_at_secs = nb.started_at_secs.or(eb.started_at_secs);
                     }
-                }
             } else {
                 entries.push(entry.clone());
             }
