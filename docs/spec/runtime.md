@@ -396,3 +396,10 @@ Absent specification bugs, anything that is not defined here is either defined i
 > be applied to a replacement container during an upgrade before the traffic cutover occurs,
 > ensuring no window exists where the new container receives traffic without a valid
 > configuration.
+
+> r[infra.dataplane.output-nat]
+> The runtime must install DNAT rules in an nftables `output` chain (in addition to the
+> `prerouting` chain) so that host-originated traffic directed at ingress ports on any
+> local address is redirected to the proxy. The output rules must be restricted to
+> locally-destined packets (`fib daddr type local`) and to the IPv6 address family, and
+> must mirror the port and protocol set of the prerouting ingress rules.
