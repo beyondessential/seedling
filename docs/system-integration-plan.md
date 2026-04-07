@@ -677,13 +677,17 @@ systemd has no role in external port binding. Its responsibilities are:
   and does not go through the normal `Actuator` start/stop path. Seedling
   manages Caddy's container and transient unit directly at startup as
   infrastructure, distinct from user-declared BSL resources.
-- Caddy is attached to the stable `seedling-proxy` network with a fixed IP
-  (e.g. `10.88.0.2`). As pods start and stop, Caddy is also dynamically
-  connected to and disconnected from each pod's network.
+- Caddy is attached to the stable `seedling-proxy` network. Its IP on that
+  network is **dynamic**: podman assigns it at container start time and seedling
+  discovers it by inspecting the container. No fixed IP is pre-assigned.
+- As pods start and stop, Caddy is also dynamically connected to and
+  disconnected from each pod's network.
 - Caddy listens on `::` (all interfaces) for the ports declared in
   `ProxyConfig.listeners`, making it reachable from every attached network.
-- The admin API is accessed at `http://10.88.0.2:2019`. The admin API port is
-  not exposed to the host; it is only reachable on the `seedling-proxy` network.
+- The admin API is accessed at `http://<current-caddy-ip>:2019`. `CaddyProxy`
+  holds the current IP in an `Arc<RwLock<SocketAddr>>` that is updated
+  whenever the active Caddy container changes. The admin API port is not
+  exposed to the host; it is only reachable on the `seedling-proxy` network.
 
 Caddy's JSON config API supports adding new server blocks with new listener
 addresses hot, without process restart. When an ingress is added on a new port,
@@ -702,31 +706,42 @@ seedling's own configuration, not the BSL script. It is versioned and
 distributed alongside seedling itself — upgrading Caddy means upgrading
 seedling's config or the seedling binary, not editing a BSL script.
 
-At startup, seedling runs a **Caddy reconciliation** pass before entering the
-main loop:
+Upgrades use a **blue/green strategy**: the new container is fully prepared and
+configured before traffic is cut over, and the cutover is an atomic kernel-level
+DNAT rule replacement with no gap for new connections.
+
+**Upgrade sequence:**
+
+1. Pull the new image while the old Caddy container continues serving traffic.
+2. Start the new Caddy container on `seedling-proxy`; podman assigns it an IP.
+3. Inspect the new container to discover its IP on `seedling-proxy`.
+4. Connect the new container to every currently active pod network.
+5. Apply the full `ProxyConfig` to the new container via its admin API.
+   (The new container is reachable but not yet receiving external traffic.)
+6. Atomically replace the DNAT ruleset in `seedling_ingress` so all rules
+   point to the new container's IP. New connections are now routed to the new
+   container. The kernel's conntrack table preserves established connections to
+   the old container, allowing them to drain naturally.
+7. Update `CaddyProxy`'s internal `SocketAddr` to the new container's admin
+   API address. Subsequent config updates go to the new container.
+8. Send SIGTERM to the old transient unit and wait for it to stop (or force
+   after a timeout). The old container is removed by `--rm`.
+
+**Startup reconciliation:**
+
+At startup, seedling runs a Caddy reconciliation pass before entering the main
+loop:
 
 1. Inspect the running Caddy container (if any) and read its image digest.
 2. Compare against the configured digest.
-3. If they match and Caddy is healthy: apply the current `ProxyConfig` and
-   proceed. No restart needed.
-4. If they differ (upgrade) or Caddy is absent/unhealthy:
-   a. Pull the new image (while the old container, if any, keeps running).
-   b. Stop the old transient unit gracefully.
-   c. Start a new transient unit with the new image and the same fixed IP.
-   d. Re-connect Caddy to every currently active pod network (pod network
-      connections are not part of the container spec and are lost on
-      recreation).
-   e. Apply the full `ProxyConfig` via the admin API (new Caddy starts with
-      no routing config).
+3. If they match and Caddy is healthy: discover its current IP, update
+   `CaddyProxy`, apply the current `ProxyConfig`, and proceed.
+4. If they differ or Caddy is absent/unhealthy: run the upgrade sequence above.
+   If no old container exists, steps 6 and 8 are skipped.
 
-The DNAT rules in `seedling_ingress` are unaffected by Caddy container
-replacement — they point to the fixed IP, which the new container inherits
-immediately. Traffic is interrupted only during the stop→start gap, which is
-minimised by pre-pulling the image in step (a).
-
-This same reconciliation path handles crash recovery: if Caddy's container is
-found absent on any reconciliation tick (not just startup), seedling restarts
-it and re-converges its state via steps (c)–(e) above.
+This same path handles crash recovery: if Caddy's container is found absent on
+any reconciliation tick, seedling treats it as a missing-old-container upgrade
+and re-converges via steps 2–5 of the upgrade sequence.
 
 ---
 
@@ -791,10 +806,7 @@ Note: UDP DNAT at port 443 is required for QUIC (HTTP/3) support when Caddy's
 - **`async fn` in traits + `Send` bounds**: use `trait-variant` (idiomatic,
   minimal) or `async_trait` (heavier but widely understood). Decide when adding
   the tokio dependency.
-- **Caddy fixed IP**: the address `10.88.0.2` is illustrative; the actual
-  value should be configurable or derived from the `seedling-proxy` network's
-  subnet. Podman assigns subnets to user-defined networks automatically; decide
-  whether to pin the subnet or inspect the network after creation.
+
 - **ip_forward**: nftables DNAT requires `net.ipv4.ip_forward=1` (and the
   IPv6 equivalent). Rootful podman typically sets this already; confirm and
   document the assumption.
