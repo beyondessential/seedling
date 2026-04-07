@@ -1070,6 +1070,25 @@ The complete DataPlane and proxy state is recomputed and reapplied from scratch
 on every tick — it is never accumulated across ticks, so the loop is
 inherently idempotent.
 
+### File structure
+
+Each phase lives in its own file, with `src/system/reconcile.rs` as the
+coordinating top module (using the `foo.rs` / `foo/sub.rs` convention):
+
+```
+src/system/reconcile.rs                — Reconciler struct, tick() coordination,
+                                         node_prefix_from_machine_id()
+src/system/reconcile/phase2_pods.rs   — Observe + actuate Deployments/Jobs
+src/system/reconcile/phase3_volumes.rs — Observe + actuate Volumes
+src/system/reconcile/phase4_routes.rs  — Service route computation
+src/system/reconcile/phase5_rules.rs   — DataPlane nftables rules
+src/system/reconcile/phase6_proxy.rs   — Proxy config (Caddy)
+```
+
+Phase 1 (desired state snapshot) is a single `compute()` call and lives
+directly in `reconcile.rs`. Phase 7 (bridge `::2` check) is deferred pending
+the bridge name persistence prerequisite described below.
+
 ### Phase 1 — Desired state snapshot
 
 Under a brief lock on the App, compute the desired state:
@@ -1103,6 +1122,12 @@ For each Deployment or Job instance in the desired state:
    observation, before any actuation this tick), call `container.inspect()` to
    obtain its IPv6 address on the pod network. Build a `running_pods` list of
    `(instance, pod_prefix, pod_ip)` for use in Phases 4 and 5.
+
+Running pod IPs are intentionally collected from the pre-actuation observation.
+A container started during this tick will not yet have a SLAAC address assigned
+and will appear in routes only on the next tick. This one-tick lag is expected
+behaviour and must be documented with a comment at the collection site in the
+code.
 
 Errors for individual instances are logged and skipped; they do not abort
 the tick or affect other instances.
@@ -1170,6 +1195,10 @@ For each `Ingress` resource in the AppDef snapshot:
    `tcp_binding` or `http_binding` that references this service; use
    `pod_port` (the port the container actually listens on). Fall back to
    the ingress's declared port if no binding is found.
+   With pure L3 ECMP routing there is no port translation between the service
+   port and the pod port — packets arrive at the pod with the destination port
+   unchanged. The code must assert `pod_port == service_port.port` with a TODO
+   message noting that port translation is not yet supported.
 4. Build a `ServiceUpstream { service_ip, service_port: upstream_port }`.
 
 Pass all `(ingress_def, upstream)` pairs to `build_proxy_config()`, then
@@ -1182,10 +1211,44 @@ For each pod instance whose network is known to exist, verify that
 absent (e.g. after a crash between `create_network` and the rtnetlink
 assignment), re-add it via rtnetlink.
 
-This is required to close the crash-recovery gap described in the network
-topology section. It is noted here but is not yet implemented — the
-`create_network` path in `PodmanRuntime` must be extended to record bridge
-interface names so this check can look them up.
+**This phase depends on a prerequisite that is not yet implemented** — see
+"Bridge name persistence" below. Phase 7 must not be coded until that
+prerequisite is in place.
+
+### Prerequisite: bridge name persistence
+
+When Podman creates a network, its API response includes the Linux bridge
+interface name (the `network_interface` field in the libpod response). This
+name is needed by Phase 7 to look up the bridge and check whether `::2` is
+assigned.
+
+Required changes:
+
+1. **`ContainerRuntime::create_network`** — change return type from `()` to
+   `String`, where the returned value is the bridge interface name as reported
+   by the Podman API. Update `PodmanRuntime::create_network_impl` to extract
+   and return this field. Update the trait signature accordingly.
+
+2. **New DB table** — add `pod_bridges` at schema version 3:
+   ```sql
+   CREATE TABLE IF NOT EXISTS pod_bridges (
+       network_name TEXT PRIMARY KEY,
+       bridge_name  TEXT NOT NULL
+   );
+   ```
+   `network_name` is the seedling pod network name (e.g. `seedling-app-web`);
+   `bridge_name` is the Linux interface name returned by the Podman API.
+
+3. **Storage on creation** — when `Actuator::start` calls `create_network`,
+   it must store the returned bridge name in `pod_bridges` immediately after
+   the call succeeds, before any other step.
+
+4. **Cleanup on removal** — when `Actuator::stop` calls `remove_network`, it
+   must delete the corresponding row from `pod_bridges`.
+
+5. **Phase 7 lookup** — the reconciler reads `pod_bridges` to find the bridge
+   interface name for each known pod network, then checks and assigns `::2`
+   via rtnetlink as needed.
 
 ### Error handling across phases
 
