@@ -160,13 +160,8 @@ impl Actuator {
                 )
                 .await
             }
-            Resource::Volume(v) => {
-                let name = v
-                    .name
-                    .as_ref()
-                    .map(|n| n.as_str())
-                    .unwrap_or(&instance.display_name)
-                    .to_owned();
+            Resource::Volume(_) => {
+                let name = instance.display_name.clone();
                 if !self
                     .driver
                     .container
@@ -199,13 +194,8 @@ impl Actuator {
     ) -> Result<(), ActuateError> {
         match resource {
             Resource::Deployment(_) | Resource::Job(_) => self.stop_pod_instance(instance).await,
-            Resource::Volume(v) => {
-                let name = v
-                    .name
-                    .as_ref()
-                    .map(|n| n.as_str())
-                    .unwrap_or(&instance.display_name)
-                    .to_owned();
+            Resource::Volume(_) => {
+                let name = instance.display_name.clone();
                 if self
                     .driver
                     .container

@@ -80,13 +80,9 @@ impl Observer {
             Resource::Deployment(_) | Resource::Job(_) => {
                 self.observe_pod_instance(instance, now, &mut facts).await?;
             }
-            Resource::Volume(v) => {
+            Resource::Volume(_) => {
                 // r[impl observe.volume]
-                let name = v
-                    .name
-                    .as_ref()
-                    .map(|n| n.as_str())
-                    .unwrap_or(&instance.display_name);
+                let name = &instance.display_name;
                 let exists = self
                     .driver
                     .container
