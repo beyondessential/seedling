@@ -12,8 +12,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > i[transport.local]
 > In local operation mode, the OI endpoint listens on a loopback address configured at startup.
-> The server presents an ephemeral self-signed certificate.
-> Clients in local mode must not verify the server certificate.
+> The server authenticates using an RFC 7250 raw public key (SPKI).
+> The server's key pair is generated at first startup and persisted to the data directory so that clients can pin the SPKI fingerprint across restarts.
+> Clients verify the server by its SPKI fingerprint; certificate chain validation is not used.
 
 > i[transport.remote]
 > Remote operation mode — binding to a non-loopback address, with client authentication and PKI — is reserved for a future extension of this spec.

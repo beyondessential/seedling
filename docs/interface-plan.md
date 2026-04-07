@@ -91,8 +91,8 @@ The single-script CLI argument should be removed.
 ## Phase 1 — QUIC server skeleton
 
 Add `quinn` to `Cargo.toml` via `cargo add quinn` (record the full version).
-Add `rustls` for the self-signed certificate (already likely transitive; confirm).
-Add `rcgen` for ephemeral cert generation.
+`rustls` is a transitive dependency of `quinn`; confirm it is accessible directly and at a
+version that includes `AlwaysResolvesServerRawPublicKeys` (rustls 0.23+).
 
 ### Module layout
 
@@ -105,8 +105,18 @@ Create `src/oi/` with:
 ### Listener
 
 Bind a QUIC endpoint on `[::1]` at a configurable port (default TBD; pick something in the
-ephemeral range and document it as the default). Generate an ephemeral self-signed certificate
-on startup using `rcgen`. The `ServerConfig` must set `client_auth` to `NoClientAuth`.
+ephemeral range and document it as the default).
+
+Configure the server to use an RFC 7250 raw public key via
+`rustls::server::AlwaysResolvesServerRawPublicKeys`. On first startup, generate a key pair
+(Ed25519 or ECDSA P-256) and persist it to `<data_dir>/oi.key`. On subsequent startups, load
+the existing key. Print the SPKI fingerprint (SHA-256, hex-encoded) to stderr at startup so
+operators can pin it in their clients.
+
+Implement a client-side `rustls::client::ServerCertVerifier` that accepts a raw public key
+and verifies it matches a configured SPKI fingerprint. For the initial dev/test path, also
+provide a verifier that accepts any raw public key without checking the fingerprint, gated
+behind an explicit opt-in flag.
 
 Accept connections in a loop. For each connection, spawn a task that reads incoming streams.
 Identify stream type:
