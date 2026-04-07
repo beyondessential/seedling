@@ -1212,43 +1212,49 @@ absent (e.g. after a crash between `create_network` and the rtnetlink
 assignment), re-add it via rtnetlink.
 
 **This phase depends on a prerequisite that is not yet implemented** — see
-"Bridge name persistence" below. Phase 7 must not be coded until that
+"Bridge name in-memory map" below. Phase 7 must not be coded until that
 prerequisite is in place.
 
-### Prerequisite: bridge name persistence
+### Prerequisite: bridge name in-memory map
 
 When Podman creates a network, its API response includes the Linux bridge
 interface name (the `network_interface` field in the libpod response). This
 name is needed by Phase 7 to look up the bridge and check whether `::2` is
-assigned.
+assigned. Bridge names are kept in a `HashMap<String, String>` (network name
+→ bridge interface name) held directly on the `Reconciler`. No DB table is
+needed.
 
 Required changes:
 
-1. **`ContainerRuntime::create_network`** — change return type from `()` to
-   `String`, where the returned value is the bridge interface name as reported
-   by the Podman API. Update `PodmanRuntime::create_network_impl` to extract
-   and return this field. Update the trait signature accordingly.
-
-2. **New DB table** — add `pod_bridges` at schema version 3:
-   ```sql
-   CREATE TABLE IF NOT EXISTS pod_bridges (
-       network_name TEXT PRIMARY KEY,
-       bridge_name  TEXT NOT NULL
-   );
+1. **`ContainerRuntime::list_networks`** — add a new trait method:
+   ```rust
+   fn list_networks<'a>(&'a self, prefix: &'a str)
+       -> BoxFuture<'a, Result<Vec<NetworkSummary>, BoxError>>;
    ```
-   `network_name` is the seedling pod network name (e.g. `seedling-app-web`);
-   `bridge_name` is the Linux interface name returned by the Podman API.
+   where `NetworkSummary` (a new type in `types.rs`) carries at minimum:
+   ```rust
+   pub struct NetworkSummary {
+       pub name: String,
+       pub bridge_name: String,
+   }
+   ```
+   `PodmanRuntime` implements this by calling `network_list_libpod` filtered
+   to names starting with `prefix`, extracting `network_interface` from each
+   result.
 
-3. **Storage on creation** — when `Actuator::start` calls `create_network`,
-   it must store the returned bridge name in `pod_bridges` immediately after
-   the call succeeds, before any other step.
+2. **Startup population** — before entering the reconciliation loop, call
+   `list_networks("seedling-")` and populate the `Reconciler`'s
+   `bridge_names` map from the result. This recovers bridge names for any pod
+   networks that survived a crash or restart.
 
-4. **Cleanup on removal** — when `Actuator::stop` calls `remove_network`, it
-   must delete the corresponding row from `pod_bridges`.
+3. **Map maintenance during normal operation** — `create_network` returns the
+   bridge name (change return type from `()` to `String`); the reconciler
+   inserts the entry into its map immediately after a successful
+   `Actuator::start`. When `Actuator::stop` calls `remove_network`, the
+   reconciler removes the corresponding entry.
 
-5. **Phase 7 lookup** — the reconciler reads `pod_bridges` to find the bridge
-   interface name for each known pod network, then checks and assigns `::2`
-   via rtnetlink as needed.
+4. **Phase 7 lookup** — Phase 7 reads bridge names directly from the
+   `Reconciler`'s in-memory map.
 
 ### Error handling across phases
 
@@ -1283,8 +1289,8 @@ Required changes:
 9. **`src/system/actuator.rs`** — `Actuator`; implement `start` and `stop` for
    `Deployment` and `Volume` first, then `Service`/`Ingress` (which coordinate
    DataPlane state updates).
-10. Wire the Caddy startup reconciliation path in `main`.
-11. Wire the full reconciliation loop in `main` using the real `SystemDriver`.
+10. Implement the reconciliation loop.
+11. Implement the real main.rs.
 
 ---
 
