@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
 use rhai::{AST, Dynamic, Engine, EvalAltResult, Scope};
+use tokio::sync::Notify;
 
 use crate::runtime::db::Db;
 use crate::runtime::desired::OperationProgress;
@@ -168,6 +169,7 @@ pub fn run_operation<W>(
     world: Arc<W>,
     registry: Arc<dyn InstanceRegistry>,
     active_progress: Option<Arc<RwLock<Option<OperationProgress>>>>,
+    tick_notify: Option<Arc<Notify>>,
 ) -> OperationResult
 where
     W: WorldStateOracle + 'static,
@@ -251,6 +253,9 @@ where
     log.commit(&pending);
     if let Some(ap) = &active_progress {
         *ap.write() = Some(OperationProgress::from_log(&log.load()));
+    }
+    if let Some(notify) = &tick_notify {
+        notify.notify_one();
     }
 
     match result {
@@ -365,6 +370,7 @@ mod tests {
             Arc::clone(&oracle),
             Arc::clone(&reg),
             None,
+            None,
         );
         assert!(matches!(result, OperationResult::Suspended(_)));
 
@@ -391,6 +397,7 @@ mod tests {
             &log,
             Arc::clone(&oracle),
             Arc::clone(&reg),
+            None,
             None,
         );
         assert!(matches!(r, OperationResult::Completed));
@@ -446,6 +453,7 @@ mod tests {
             Arc::clone(&oracle),
             Arc::clone(&reg),
             None,
+            None,
         );
         assert!(matches!(r, OperationResult::Suspended(_)));
 
@@ -463,6 +471,7 @@ mod tests {
             Arc::clone(&oracle),
             Arc::clone(&reg),
             None,
+            None,
         );
         assert!(matches!(r, OperationResult::Suspended(_)));
 
@@ -479,6 +488,7 @@ mod tests {
             &log,
             Arc::clone(&oracle),
             Arc::clone(&reg),
+            None,
             None,
         );
         assert!(matches!(r, OperationResult::Completed));

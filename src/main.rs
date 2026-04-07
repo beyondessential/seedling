@@ -30,6 +30,7 @@ use seedling::{
         reconcile::{Reconciler, node_prefix_from_machine_id},
     },
 };
+use tokio::sync::Notify;
 
 fn run_file(
     engine: &Engine,
@@ -212,14 +213,22 @@ async fn main() {
 
     reconciler.populate_bridge_names().await;
 
-    tokio::spawn(async move {
-        let mut r = reconciler;
-        let mut interval = tokio::time::interval(Duration::from_secs(5));
-        // Skip missed ticks rather than firing a burst of them on resume.
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            interval.tick().await;
-            r.tick().await;
+    let tick_notify = Arc::new(Notify::new());
+
+    tokio::spawn({
+        let notify = Arc::clone(&tick_notify);
+        async move {
+            let mut r = reconciler;
+            let mut interval = tokio::time::interval(Duration::from_secs(5));
+            // Skip missed ticks rather than firing a burst of them on resume.
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {},
+                    _ = notify.notified() => {},
+                }
+                r.tick().await;
+            }
         }
     });
 
@@ -282,11 +291,13 @@ async fn main() {
             oracle,
             Arc::clone(&registry),
             Some(Arc::clone(&active_progress)),
+            Some(Arc::clone(&tick_notify)),
         )
     });
 
-    // Operation finished — return to steady state.
+    // Operation finished — return to steady state and trigger an immediate tick.
     *active_progress.write() = None;
+    tick_notify.notify_one();
 
     match result {
         OperationResult::Completed => {
