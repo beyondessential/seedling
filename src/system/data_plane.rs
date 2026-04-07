@@ -6,7 +6,7 @@ use std::{
 use futures_util::StreamExt;
 use nftables::{
     batch::Batch,
-    expr::{Expression, NamedExpression, Payload, PayloadField, Prefix},
+    expr::{Expression, Meta, MetaKey, NamedExpression, Payload, PayloadField, Prefix},
     helper,
     schema::{Chain, FlushObject, NfCmd, NfListObject, Rule, Table},
     stmt::{Match, NAT, NATFamily, Operator, Statement},
@@ -28,6 +28,12 @@ const CHAIN_PRE: &str = "prerouting";
 const CHAIN_FWD: &str = "forward";
 const PRIO_DSTNAT: i32 = -100;
 const PRIO_FILTER: i32 = 0;
+
+/// Netfilter protocol number for IPv6 (`NFPROTO_IPV6`).
+/// Used to guard inet-table ingress rules so they only match IPv6 packets.
+/// IPv4 ingress support requires a dual-stack `seedling-proxy` network and
+/// is deferred (NAT64 / NAT46 out of scope for the initial implementation).
+const NFPROTO_IPV6: u32 = 10;
 
 #[derive(Debug, Snafu)]
 pub(crate) enum DataPlaneError {
@@ -267,6 +273,17 @@ fn match_eq(left: Expression<'static>, right: Expression<'static>) -> Statement<
     })
 }
 
+/// Produces `meta nfproto <num>` — used to restrict inet-table rules to a
+/// single address family without splitting the table by family.
+fn match_nfproto(proto_num: u32) -> Statement<'static> {
+    match_eq(
+        Expression::Named(NamedExpression::Meta(Meta {
+            key: MetaKey::Nfproto,
+        })),
+        Expression::Number(proto_num),
+    )
+}
+
 fn dnat_ip6(addr: String, port: u16) -> Statement<'static> {
     Statement::DNAT(Some(NAT {
         addr: Some(Expression::String(Cow::Owned(addr))),
@@ -284,8 +301,15 @@ fn ingress_rule_stmts(rule: &IngressRule) -> Vec<Vec<Statement<'static>>> {
     let caddy_port = rule.caddy_addr.port();
     let ext_port = rule.external_port as u32;
 
+    // Guard with `meta nfproto ipv6` so that in the inet (dual-stack) table
+    // the DNAT statement only evaluates for IPv6 packets. IPv4 packets
+    // matching the same dport would otherwise reach `dnat ip6 to`, which
+    // nftables silently skips for IPv4 — leaving IPv4 callers unserved with
+    // no clear signal. The explicit guard makes the IPv6-only behaviour
+    // intentional and visible in `nft list ruleset` output.
     let make = |proto: &'static str| {
         vec![
+            match_nfproto(NFPROTO_IPV6),
             match_eq(payload_expr(proto, "dport"), Expression::Number(ext_port)),
             dnat_ip6(caddy_ip.clone(), caddy_port),
         ]

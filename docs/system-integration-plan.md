@@ -1115,9 +1115,19 @@ migration infrastructure provides.
   addresses via `inspect`. Confirm podman's SLAAC behaviour with IPv6-only
   networks and whether `--ip6` can be used for deterministic assignment.
 
-- **`::2` reservation on pod bridges**: the `create_network` implementation
-  must add `::2` to the pod bridge explicitly. Confirm this does not conflict
-  with podman's own bridge management or SLAAC address assignment.
+- **`::2` reservation on pod bridges**: ~~resolved~~. `create_network` assigns
+  `<prefix>::2/64` to the bridge via rtnetlink immediately after the podman
+  `network_create_libpod` call returns (the response includes
+  `network_interface`, the bridge name). Linux supports multiple addresses per
+  interface; netavark assigns `::1` and seedling independently assigns `::2` —
+  no conflict. **Residual crash-recovery gap**: a crash between the podman API
+  call succeeding and the rtnetlink `address().add()` call leaves a network
+  that exists without `::2`. Because `network_exists` returns `true` for that
+  network, `create_network` is not re-entered on the next startup and `::2`
+  remains absent. The startup reconciliation pass (step 8/9) must check for
+  `::2` on every known pod bridge — readable via `handle.address().get()`
+  filtered by interface index — and assign it if missing, as part of repairing
+  `NetworkPresent` state.
 
 - **Client IP visibility**: with DNAT for ingress, Caddy sees the original
   client IP (conntrack handles reverse translation). Verify this holds with the
