@@ -439,7 +439,7 @@ This is currently the only value.
 > Not all things that implement Container implement Pod, but all things that implement Pod also implement Container. (Non-normative: this is not true of the current version of the spec, but the distinction is here for future expansions.)
 
 > l[pod.mount-serviceport]
-> The `pod.mount(svc: ServicePort)` builder method binds a ServicePort into the network of the pod. This makes the Service available at a particular port on `localhost` for the container.
+> The `pod.mount(svc: ServicePort)` builder method binds a ServicePort into the network of the pod. This makes the Service reachable at the declared port number from within the container, without the application needing to perform service discovery. The address at which the service is reachable is implementation-defined.
 
 > l[pod.http]
 > The `pod.http(port: number, svc: HttpServiceRoute)` or `pod.http(port: number, svc: HttpService)` builder method attaches a `port` of the pod to an [HTTP Service Route](#l--service.http.route).
