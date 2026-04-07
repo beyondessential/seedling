@@ -1,5 +1,5 @@
-use std::collections::BTreeMap;
 use std::rc::Rc;
+use std::{collections::BTreeMap, str::FromStr as _};
 
 use rhai::{CustomType, Dynamic, EvalAltResult, FnPtr, Map, TypeBuilder};
 
@@ -341,7 +341,7 @@ fn parse_install_requirements(
                 .get("kind")
                 .and_then(|v| v.clone().into_string().ok())
             {
-                Some(s) => InstallRequirementKind::from_str(&s).ok_or_else(|| {
+                Some(s) => InstallRequirementKind::from_str(&s).map_err(|_| {
                     Box::<EvalAltResult>::from(format!("unknown install requirement kind: \"{s}\""))
                 })?,
                 None => InstallRequirementKind::default(),

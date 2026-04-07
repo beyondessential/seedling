@@ -28,6 +28,8 @@ pub trait InstanceRegistry: Send + Sync {
 // EphemeralInstanceRegistry
 // ---------------------------------------------------------------------------
 
+type InstanceRegistryKey = (String, ResourceKind, Option<String>);
+
 /// Generates UUIDs on first use and caches them for the lifetime of this
 /// registry instance.  Repeated calls for the same `(app, kind, name)` return
 /// the same `ResourceInstance`, which is required for barrier replay to work
@@ -38,7 +40,7 @@ pub trait InstanceRegistry: Send + Sync {
 /// `ResourceInstance`, the UUIDs never cause spurious mismatches when the
 /// oracle is keyed with a separately-created instance.
 pub struct EphemeralInstanceRegistry {
-    cache: Mutex<HashMap<(String, ResourceKind, Option<String>), ResourceInstance>>,
+    cache: Mutex<HashMap<InstanceRegistryKey, ResourceInstance>>,
 }
 
 impl EphemeralInstanceRegistry {
@@ -62,7 +64,7 @@ impl InstanceRegistry for EphemeralInstanceRegistry {
         kind: ResourceKind,
         name: Option<&str>,
     ) -> ResourceInstance {
-        let key = (app.to_owned(), kind, name.map(|s| s.to_owned()));
+        let key: InstanceRegistryKey = (app.to_owned(), kind, name.map(|s| s.to_owned()));
         let mut cache = self.cache.lock();
         if let Some(instance) = cache.get(&key) {
             return instance.clone();

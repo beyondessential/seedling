@@ -64,10 +64,11 @@ impl ActionLog for InMemoryActionLog {
             {
                 // Update satisfaction status if it changed.
                 if let (Some(nb), Some(eb)) = (&entry.barrier, &mut existing.barrier)
-                    && nb.satisfied {
-                        eb.satisfied = true;
-                        eb.started_at_secs = nb.started_at_secs.or(eb.started_at_secs);
-                    }
+                    && nb.satisfied
+                {
+                    eb.satisfied = true;
+                    eb.started_at_secs = nb.started_at_secs.or(eb.started_at_secs);
+                }
             } else {
                 entries.push(entry.clone());
             }
@@ -154,6 +155,7 @@ pub enum OperationResult {
 /// instance for all passes of the same operation to enable replay.
 // r[impl history.action-log.replay]
 // r[impl barrier.replay]
+#[expect(clippy::too_many_arguments, reason = "FIXME(prototyping)")]
 pub fn run_operation<W>(
     engine: &Engine,
     scope: &mut Scope,

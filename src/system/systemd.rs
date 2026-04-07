@@ -33,6 +33,20 @@ pub(crate) enum SystemdError {
 // D-Bus proxy — systemd Manager interface
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, serde::Deserialize, zbus::zvariant::Type)]
+struct ListedUnit {
+    name: String,
+    description: String,
+    load_state: String,
+    active_state: String,
+    sub_state: String,
+    following: String,
+    unit_path: OwnedObjectPath,
+    job_id: u32,
+    job_type: String,
+    job_path: OwnedObjectPath,
+}
+
 #[zbus::proxy(
     interface = "org.freedesktop.systemd1.Manager",
     default_service = "org.freedesktop.systemd1",
@@ -58,22 +72,7 @@ trait Systemd1Manager {
     fn reload(&self) -> zbus::Result<()>;
 
     /// `ListUnits` returns `a(ssssssouso)`.
-    fn list_units(
-        &self,
-    ) -> zbus::Result<
-        Vec<(
-            String,          // unit name
-            String,          // description
-            String,          // load state
-            String,          // active state
-            String,          // sub state
-            String,          // following
-            OwnedObjectPath, // unit object path
-            u32,             // job id
-            String,          // job type
-            OwnedObjectPath, // job object path
-        )>,
-    >;
+    fn list_units(&self) -> zbus::Result<Vec<ListedUnit>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -286,12 +285,12 @@ impl ProcessManager for SystemdManager {
 
         let result = raw
             .into_iter()
-            .filter(|(name, ..)| name.starts_with(prefix))
-            .map(|(name, _, _, active, sub, ..)| UnitSummary {
-                name,
+            .filter(|u| u.name.starts_with(prefix))
+            .map(|u| UnitSummary {
+                name: u.name,
                 state: UnitState {
-                    active: parse_active_state(&active),
-                    sub,
+                    active: parse_active_state(&u.active_state),
+                    sub: u.sub_state,
                 },
             })
             .collect();

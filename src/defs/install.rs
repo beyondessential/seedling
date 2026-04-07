@@ -18,27 +18,29 @@ pub struct InstallRequirementDef {
     pub description: Option<String>,
 }
 
-// l[impl action.install.requirements.kind-text]
-// l[impl action.install.requirements.kind-email]
-// l[impl action.install.requirements.kind-password]
-// l[impl action.install.requirements.kind-weak-password]
 #[derive(Debug, Default, Clone, Copy)]
 pub enum InstallRequirementKind {
+    // l[impl action.install.requirements.kind-text]
     #[default]
     Text,
+    // l[impl action.install.requirements.kind-email]
     Email,
+    // l[impl action.install.requirements.kind-password]
     Password,
+    // l[impl action.install.requirements.kind-weak-password]
     WeakPassword,
 }
 
-impl InstallRequirementKind {
-    pub fn from_str(s: &str) -> Option<Self> {
+impl std::str::FromStr for InstallRequirementKind {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "text" => Some(Self::Text),
-            "email" => Some(Self::Email),
-            "password" => Some(Self::Password),
-            "weak-password" => Some(Self::WeakPassword),
-            _ => None,
+            "text" => Ok(Self::Text),
+            "email" => Ok(Self::Email),
+            "password" => Ok(Self::Password),
+            "weak-password" => Ok(Self::WeakPassword),
+            _ => Err(()),
         }
     }
 }

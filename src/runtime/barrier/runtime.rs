@@ -186,9 +186,10 @@ impl RuntimeInstance {
     ) -> Result<Started, Box<EvalAltResult>> {
         if is_barrier_hit_pending()
             && let Some(ctx) = &self.ctx
-                && let Some(cond) = ctx.lock().pending_barrier.clone() {
-                    return Err(make_barrier_error(cond));
-                }
+            && let Some(cond) = ctx.lock().pending_barrier.clone()
+        {
+            return Err(make_barrier_error(cond));
+        }
 
         let ctx = match &self.ctx {
             None => {
@@ -230,9 +231,10 @@ impl RuntimeInstance {
     ) -> Result<(), Box<EvalAltResult>> {
         if is_barrier_hit_pending()
             && let Some(ctx) = &self.ctx
-                && let Some(cond) = ctx.lock().pending_barrier.clone() {
-                    return Err(make_barrier_error(cond));
-                }
+            && let Some(cond) = ctx.lock().pending_barrier.clone()
+        {
+            return Err(make_barrier_error(cond));
+        }
 
         let ctx = match &self.ctx {
             None => return Ok(()),
@@ -382,9 +384,10 @@ impl Started {
     ) -> Result<Self, Box<EvalAltResult>> {
         if is_barrier_hit_pending()
             && let Some(ctx) = &self.ctx
-                && let Some(cond) = ctx.lock().pending_barrier.clone() {
-                    return Err(make_barrier_error(cond));
-                }
+            && let Some(cond) = ctx.lock().pending_barrier.clone()
+        {
+            return Err(make_barrier_error(cond));
+        }
 
         let ctx = match &self.ctx {
             None => return Ok(self.clone()),
@@ -421,16 +424,17 @@ impl Started {
 
         // r[impl barrier.deadline]
         if let Some(started_at) = started_at
-            && now.saturating_sub(started_at) >= deadline_secs {
-                return Err(Box::new(EvalAltResult::ErrorRuntime(
-                    format!(
-                        "Barrier deadline of {}s exceeded waiting for {:?}",
-                        deadline_secs, required
-                    )
-                    .into(),
-                    rhai::Position::NONE,
-                )));
-            }
+            && now.saturating_sub(started_at) >= deadline_secs
+        {
+            return Err(Box::new(EvalAltResult::ErrorRuntime(
+                format!(
+                    "Barrier deadline of {}s exceeded waiting for {:?}",
+                    deadline_secs, required
+                )
+                .into(),
+                rhai::Position::NONE,
+            )));
+        }
 
         // Check if condition is currently satisfied.
         let all_reached = !self.resources.is_empty()
@@ -445,9 +449,10 @@ impl Started {
             for e in g.pending.iter_mut() {
                 if e.resources == self.resources
                     && let Some(b) = e.barrier.as_mut()
-                        && b.required_state == required {
-                            b.satisfied = true;
-                        }
+                    && b.required_state == required
+                {
+                    b.satisfied = true;
+                }
             }
             return Ok(self.clone());
         }
