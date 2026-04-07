@@ -23,6 +23,10 @@ use crate::{
 
 // r[autonomous.ingress]
 // r[fault.non-blocking]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "fixme(prototyping): simplify/pass a struct"
+)]
 pub(super) async fn apply(
     driver: &System,
     snapshot: &AppDef,

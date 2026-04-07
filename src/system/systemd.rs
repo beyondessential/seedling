@@ -48,14 +48,25 @@ struct AuxUnit<'a> {
 #[derive(Debug, serde::Deserialize, zbus::zvariant::Type)]
 struct ListedUnit {
     name: String,
+
+    // unused here, still needs to be present to deserialize correctly
+    #[expect(dead_code, reason = "unused here")]
     description: String,
+    #[expect(dead_code, reason = "unused here")]
     load_state: String,
+
     active_state: String,
     sub_state: String,
+
+    #[expect(dead_code, reason = "unused here")]
     following: String,
+    #[expect(dead_code, reason = "unused here")]
     unit_path: OwnedObjectPath,
+    #[expect(dead_code, reason = "unused here")]
     job_id: u32,
+    #[expect(dead_code, reason = "unused here")]
     job_type: String,
+    #[expect(dead_code, reason = "unused here")]
     job_path: OwnedObjectPath,
 }
 

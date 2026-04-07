@@ -49,10 +49,6 @@ pub(crate) enum DataPlaneError {
     Netlink {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
-    #[snafu(display("I/O error: {source}"))]
-    Io { source: std::io::Error },
-    #[snafu(display("spawn_blocking task panicked"))]
-    JoinError { source: tokio::task::JoinError },
 }
 
 pub(crate) struct NftablesDataPlane {
