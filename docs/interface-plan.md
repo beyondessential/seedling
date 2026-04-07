@@ -9,6 +9,10 @@ phases can proceed in order once it is done.
 
 The spec is in docs/spec/interface.md. The rule prefix is i[...].
 
+A basic CLI client (`seedling-ctl`) is built in Phase 1.5, immediately after the QUIC
+skeleton, so every subsequent server phase can be exercised end-to-end from the command line
+as it lands.
+
 ---
 
 ## Phase 0 — Multi-app architecture
@@ -134,6 +138,67 @@ as `{ result }` or `{ error: { code, message } }` and write it, then close the s
 Implement `ListApps` and `DescribeApp`. These require only read access to the `AppRegistry`
 and can be done without any of the write-path work from later phases. Use them to confirm
 that the QUIC plumbing, JSON framing, and registry reads are all working end-to-end.
+
+---
+
+## Phase 1.5 — Basic CLI client (`seedling-ctl`)
+
+Add a second binary at `src/bin/seedling_ctl.rs`. It connects to a running Seedling OI
+endpoint and exposes each API method as a subcommand.
+
+### Dependencies
+
+Add to `Cargo.toml`:
+- `clap` with `derive` feature — argument parsing.
+- `quinn` — shared with the server (same version).
+- `crossterm` — terminal raw mode and resize events for the shell subcommand.
+
+### Connection setup
+
+Shared QUIC client logic lives in `src/oi/client.rs`:
+- Accept `--endpoint` (default `[::1]:<default port>`) and `--fingerprint <hex-sha256>`
+  flags, plus `--trust-any` for development use that skips fingerprint verification entirely.
+- Implement the `rustls::client::ServerCertVerifier` counterpart to the server's raw public
+  key setup: extract the SPKI from the presented key, compare against the pinned fingerprint.
+- Open a QUIC connection and expose a `request(method, params) -> Result<Value>` helper that
+  opens a bidi stream, writes the JSON request, half-closes, reads the response, and returns
+  the parsed result or surfaces the error code.
+
+### Subcommands
+
+| Subcommand | Maps to |
+|---|---|
+| `list-apps` | `ListApps` |
+| `describe-app <name>` | `DescribeApp` |
+| `register-app <name> <script-file>` | `RegisterApp` (reads file, sends content) |
+| `deregister-app <name>` | `DeregisterApp` |
+| `update-app <name> <script-file>` | `UpdateApp` (reads file, sends content) |
+| `set-param <app> <name> <value>` | `SetParam` |
+| `invoke-action <app> <name>` | `InvokeAction` |
+| `invoke-install <app> [--req key=value]…` | `InvokeInstall` |
+| `list-faults [--app <name>]` | `ListFaults` |
+| `subscribe` | `Subscribe` — streams events to stdout, one JSON object per line |
+| `open-shell <app> <name>` | `OpenShell` — interactive terminal session |
+
+All subcommands print the `result` object as pretty-printed JSON on success, or print the
+error code and message to stderr and exit non-zero on failure.
+
+### `open-shell` terminal handling
+
+This subcommand has more moving parts than the others:
+
+1. Send `OpenShell` with the current terminal dimensions (`crossterm::terminal::size()`).
+2. Receive `{ session_id, stdout_stream_id, stderr_stream_id }` from the session stream.
+3. Put the terminal into raw mode (`crossterm::terminal::enable_raw_mode()`).
+4. Spawn three concurrent tasks:
+   - Read stdin bytes and write to the session stream's client-to-server direction.
+   - Read stdout stream and write to the process stdout.
+   - Read stderr stream and write to the process stderr.
+5. Listen for `SIGWINCH` (terminal resize) using a signal handler; on receipt, send a
+   `ResizeShell` request with the new dimensions.
+6. When the server writes the final `{ "exit_code": N }` JSON frame to the session stream's
+   server-to-client direction, restore the terminal, and exit with that code.
+7. Restore the terminal on any error path (use a drop guard).
 
 ---
 
