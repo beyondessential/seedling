@@ -371,3 +371,15 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[reconcile.ingress]
 > Reconciling one Ingress into another must not drop in-flight traffic.
 > The runtime must update the ingress configuration atomically, transitioning backends from old to new as new backends become available.
+
+# Infrastructure
+
+> r[infra.node.prefix]
+> The runtime must derive a stable per-node /48 IPv6 prefix from the host machine identity.
+> The prefix follows the ULA format `fd5e:edXX:XXXX::/48`, where the 24-bit host portion is
+> derived from `/etc/machine-id`.
+
+> r[infra.proxy.startup]
+> The runtime must ensure the network proxy is running and healthy before beginning the
+> reconciliation loop. On each startup, the runtime verifies proxy health and restarts the
+> proxy if necessary.
