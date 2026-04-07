@@ -380,6 +380,10 @@ Extend the stream dispatcher to handle the `"forward"` key per `i[stream.dispatc
    Include it in the response. For TCP forwards, set it to `null`.
 5. Keep the control stream open. When it closes (client disconnect or `StopForward`), tear
    down all active tunneled connections for this forward and remove from the registry.
+
+When a new AppDef takes effect for an app (via `UpdateApp` or at an evaluation boundary),
+iterate the `ForwardRegistry` for that app and tear down any forward whose service name or
+port is absent from the new AppDef, per `i[forward.script-update]`.
 6. Emit `ForwardStarted` event.
 
 ### `StopForward`

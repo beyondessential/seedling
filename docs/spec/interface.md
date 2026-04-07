@@ -259,6 +259,12 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - The client closes the control stream.
 > - The client sends `StopForward { forward_id }` on a new control stream.
 > - The connection is lost.
+> - The forwarded service or port is no longer present in the app's AppDef after a script update takes effect (see [forward.script-update](#i--forward.script-update)).
+
+> i[forward.script-update]
+> When a new AppDef takes effect for an app (either immediately on `UpdateApp` or at the next evaluation boundary if an operation was in progress), the server must check all active forwards for that app.
+> Any forward whose target service name or port is no longer declared in the new AppDef must be torn down: all tunneled connections are closed, the control stream is closed, and a `ForwardStopped` event is emitted.
+> Forwards whose target service and port still exist in the new AppDef are unaffected.
 
 > i[forward.stop]
 > `StopForward { forward_id }` explicitly tears down an active port forward, closing all of its tunneled connections.
