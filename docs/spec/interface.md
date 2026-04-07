@@ -221,12 +221,26 @@ Absent specification bugs, anything that is not defined here is either defined i
 > `ResizeShell { session_id, rows, cols }` updates the terminal dimensions for the running session.
 > Returns `{}` on success, or `not_found` if the session does not exist.
 
+> i[shell.record]
+> A shell record contains the following fields: `session_id`, `app`, `name`, and `opened_at` (RFC 3339).
+
+> i[shell.list]
+> `ListShells { app? }` returns an array of shell records for all currently active shell sessions.
+> If `app` is provided, only sessions for that app are returned; otherwise all active sessions across all apps are returned.
+
+> i[shell.stop]
+> `StopShell { session_id }` forcibly terminates an active shell session.
+> Any operator may stop any session regardless of which connection opened it.
+> The session ends as per [shell.close](#i--shell.close), with the job terminated and dynamic resources cleaned up.
+> Returns `{}` on success, or `not_found` if the session does not exist.
+
 > i[shell.close]
 > A session ends when any of the following occur:
 >
 > - The shell's Job terminates.
 > - The client closes its write-end of the session stream (EOF on stdin).
 > - The connection is lost.
+> - An operator calls `StopShell`.
 >
 > On session end, the server closes its write-ends of the stdout and stderr streams.
 
