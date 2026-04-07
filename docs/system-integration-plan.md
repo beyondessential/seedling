@@ -626,30 +626,19 @@ pub fn build_proxy_config(
 
 ## Podman libpod API (`src/system/podman.rs`)
 
-- Socket: `/run/podman/podman.sock` (rootful).
-- HTTP client: `reqwest` or `hyper-util` with a unix socket connector.
-- API path prefix: `/v5.0/libpod/` (libpod-specific endpoints, not Docker compat).
+- Crate: `podman-rest-client` (v0.13+), with features `uds` only (no `ssh`).
+- Socket: `/run/podman/podman.sock` (rootful); use `Config::guess()` or
+  supply the path explicitly.
+- The crate is generated from the official podman v5 swagger file and exposes
+  libpod-specific methods (e.g. `container_inspect_libpod`,
+  `network_connect_libpod`) rather than the Docker-compat equivalents.
 - Authentication: none (unix socket, permissions enforced by the OS).
 
-Key endpoints used:
-
-| Operation            | Method | Path                                   |
-|----------------------|--------|----------------------------------------|
-| Inspect container    | GET    | `/libpod/containers/{name}/json`       |
-| List containers      | GET    | `/libpod/containers/json`              |
-| Remove container     | DELETE | `/libpod/containers/{name}`            |
-| Check image          | GET    | `/libpod/images/{reference}/exists`    |
-| Pull image           | POST   | `/libpod/images/pull`                  |
-| Check network        | GET    | `/libpod/networks/{name}/exists`       |
-| Create network       | POST   | `/libpod/networks/create`              |
-| Remove network       | DELETE | `/libpod/networks/{name}`              |
-| Connect container    | POST   | `/libpod/networks/{name}/connect`      |
-| Disconnect container | POST   | `/libpod/networks/{name}/disconnect`   |
-| Check volume         | GET    | `/libpod/volumes/{name}/exists`        |
-| Create volume        | POST   | `/libpod/volumes/create`               |
-| Remove volume        | DELETE | `/libpod/volumes/{name}`               |
-| Exec create          | POST   | `/libpod/containers/{name}/exec`       |
-| Exec start           | POST   | `/libpod/exec/{id}/start`              |
+`PodmanRuntime` wraps a `PodmanRestClient` and translates between the crate's
+generated request/response types and the `ContainerRuntime` trait types defined
+in `src/system/types.rs`. This translation layer is intentionally thin; the
+trait types exist so the rest of the codebase never imports
+`podman-rest-client` types directly.
 
 ---
 
