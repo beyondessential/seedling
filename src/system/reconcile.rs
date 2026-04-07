@@ -1,7 +1,9 @@
 use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr},
+    path::PathBuf,
     sync::Arc,
+    time::Duration,
 };
 
 use sha2::{Digest, Sha256};
@@ -9,7 +11,7 @@ use sha2::{Digest, Sha256};
 use ipnet::Ipv6Net;
 use parking_lot::RwLock;
 use tokio::sync::RwLock as AsyncRwLock;
-use tracing::warn;
+use tracing::{error, warn};
 
 use crate::{
     defs::app::App,
@@ -17,7 +19,7 @@ use crate::{
         InstanceRegistry,
         desired::{DesiredState, OperationProgress, compute},
     },
-    system::{System, actuator::Actuator, observer::Observer},
+    system::{System, actuator::Actuator, caddy, observer::Observer},
 };
 
 pub mod phase2_pods;
@@ -70,6 +72,9 @@ pub struct Reconciler {
     /// Caddy upgrades. Phases 5 and 6 read this to obtain Caddy's container
     /// IPv6 address; if the address is not yet IPv6, those phases are skipped.
     caddy_admin_addr: Arc<AsyncRwLock<SocketAddr>>,
+    /// Data directory passed to `ensure_caddy_running` on every tick so the
+    /// reconciler can recover Caddy if it crashes after startup.
+    data_dir: PathBuf,
 }
 
 impl Reconciler {
@@ -86,6 +91,7 @@ impl Reconciler {
         registry: Arc<dyn InstanceRegistry>,
         bridge_names: HashMap<String, String>,
         caddy_admin_addr: Arc<AsyncRwLock<SocketAddr>>,
+        data_dir: PathBuf,
     ) -> Self {
         let observer = Observer::new(Arc::clone(&driver));
         let actuator = Actuator::new(Arc::clone(&driver), node_prefix, Arc::clone(&registry));
@@ -100,6 +106,7 @@ impl Reconciler {
             registry,
             bridge_names,
             caddy_admin_addr,
+            data_dir,
         }
     }
 
@@ -139,9 +146,38 @@ impl Reconciler {
         )
         .await;
 
-        // Phases 5 and 6 require a valid IPv6 Caddy admin address. The
-        // address is not IPv6 until Caddy has started and its address has
-        // been written into the shared handle by `ensure_caddy_running`.
+        // Caddy health check — ensure Caddy is running before phases 5 and 6.
+        //
+        // `ensure_caddy_running` is idempotent: it returns immediately when
+        // Caddy is already healthy, and starts/restarts it otherwise. A
+        // 10-second timeout prevents a slow startup from stalling the tick;
+        // if the timeout fires, phases 5 and 6 are skipped this tick and the
+        // next tick will try again.
+        // r[autonomous.ingress]
+        match tokio::time::timeout(
+            Duration::from_secs(10),
+            caddy::ensure_caddy_running(
+                &*self.driver.container,
+                &*self.driver.process,
+                &self.node_prefix,
+                &self.data_dir,
+            ),
+        )
+        .await
+        {
+            Ok(Ok(addr)) => {
+                *self.caddy_admin_addr.write().await = addr;
+            }
+            Ok(Err(e)) => {
+                error!(error = %e, "caddy health check failed; skipping phases 5 and 6 this tick");
+                return;
+            }
+            Err(_) => {
+                warn!("caddy health check timed out; skipping phases 5 and 6 this tick");
+                return;
+            }
+        }
+
         let caddy_addr = *self.caddy_admin_addr.read().await;
         let caddy_ip = match caddy_addr.ip() {
             IpAddr::V6(ip) => ip,
