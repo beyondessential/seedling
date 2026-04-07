@@ -7,7 +7,7 @@ use zbus::{
 };
 
 use crate::system::{
-    ProcessManager,
+    BoxError, BoxFuture, ProcessManager,
     types::{ActiveState, TransientRestart, TransientUnitSpec, UnitState, UnitSummary},
 };
 
@@ -121,6 +121,184 @@ impl SystemdManager {
             conn: Arc::new(conn),
         })
     }
+
+    async fn start_transient_impl(&self, spec: TransientUnitSpec) -> Result<(), SystemdError> {
+        let proxy = Systemd1ManagerProxy::new(&self.conn)
+            .await
+            .map_err(|e| SystemdError::DBus { source: e })?;
+
+        let exec_value = build_exec_start(&spec.exec_start)?;
+        let restart = restart_str(spec.restart);
+
+        let props = vec![
+            UnitProperty {
+                name: "Description",
+                value: Value::from(spec.description.as_str()),
+            },
+            UnitProperty {
+                name: "ExecStart",
+                value: exec_value,
+            },
+            UnitProperty {
+                name: "Restart",
+                value: Value::from(restart),
+            },
+            UnitProperty {
+                name: "StandardOutput",
+                value: Value::from("journal"),
+            },
+            UnitProperty {
+                name: "StandardError",
+                value: Value::from("journal"),
+            },
+        ];
+        let aux: Vec<AuxUnit<'_>> = vec![];
+
+        proxy
+            .start_transient_unit(&spec.name, "fail", props, aux)
+            .await
+            .map_err(|e| SystemdError::DBus { source: e })?;
+
+        Ok(())
+    }
+
+    async fn stop_unit_impl(&self, name: &str) -> Result<(), SystemdError> {
+        let proxy = Systemd1ManagerProxy::new(&self.conn)
+            .await
+            .map_err(|e| SystemdError::DBus { source: e })?;
+        proxy
+            .stop_unit(name, "replace")
+            .await
+            .map_err(|e| SystemdError::DBus { source: e })?;
+        Ok(())
+    }
+
+    async fn wait_unit_stopped_impl(
+        &self,
+        name: &str,
+        timeout: Duration,
+    ) -> Result<(), SystemdError> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if tokio::time::Instant::now() >= deadline {
+                return Err(SystemdError::WaitTimeout {
+                    name: name.to_string(),
+                });
+            }
+            match self.unit_state_impl(name).await? {
+                None => return Ok(()),
+                Some(state) => match state.active {
+                    ActiveState::Inactive | ActiveState::Failed => return Ok(()),
+                    _ => {}
+                },
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
+    async fn unit_state_impl(&self, name: &str) -> Result<Option<UnitState>, SystemdError> {
+        let proxy = Systemd1ManagerProxy::new(&self.conn)
+            .await
+            .map_err(|e| SystemdError::DBus { source: e })?;
+
+        let unit_path = match proxy.get_unit(name).await {
+            Ok(p) => p,
+            Err(e) => {
+                let msg = e.to_string().to_lowercase();
+                if msg.contains("no such unit") || msg.contains("not loaded") {
+                    return Ok(None);
+                }
+                return Err(SystemdError::DBus { source: e });
+            }
+        };
+
+        let unit_proxy = Systemd1UnitProxy::builder(&self.conn)
+            .destination("org.freedesktop.systemd1")
+            .map_err(|e| SystemdError::DBus { source: e })?
+            .path(unit_path)
+            .map_err(|e| SystemdError::DBus { source: e })?
+            .build()
+            .await
+            .map_err(|e| SystemdError::DBus { source: e })?;
+
+        let active = unit_proxy
+            .active_state()
+            .await
+            .map_err(|e| SystemdError::DBus { source: e })?;
+        let sub = unit_proxy
+            .sub_state()
+            .await
+            .map_err(|e| SystemdError::DBus { source: e })?;
+
+        Ok(Some(UnitState {
+            active: parse_active_state(&active),
+            sub,
+        }))
+    }
+
+    async fn list_units_impl(&self, prefix: &str) -> Result<Vec<UnitSummary>, SystemdError> {
+        let proxy = Systemd1ManagerProxy::new(&self.conn)
+            .await
+            .map_err(|e| SystemdError::DBus { source: e })?;
+
+        let raw = proxy
+            .list_units()
+            .await
+            .map_err(|e| SystemdError::DBus { source: e })?;
+
+        let result = raw
+            .into_iter()
+            .filter(|u| u.name.starts_with(prefix))
+            .map(|u| UnitSummary {
+                name: u.name,
+                state: UnitState {
+                    active: parse_active_state(&u.active_state),
+                    sub: u.sub_state,
+                },
+            })
+            .collect();
+
+        Ok(result)
+    }
+
+    async fn write_unit_impl(&self, name: &str, content: &str) -> Result<(), SystemdError> {
+        let path = std::path::Path::new(UNIT_DIR).join(name);
+        tokio::fs::write(&path, content)
+            .await
+            .map_err(|e| SystemdError::Io { source: e })?;
+        Ok(())
+    }
+
+    async fn remove_unit_impl(&self, name: &str) -> Result<(), SystemdError> {
+        let path = std::path::Path::new(UNIT_DIR).join(name);
+        match tokio::fs::remove_file(&path).await {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(SystemdError::Io { source: e }),
+        }
+    }
+
+    async fn daemon_reload_impl(&self) -> Result<(), SystemdError> {
+        let proxy = Systemd1ManagerProxy::new(&self.conn)
+            .await
+            .map_err(|e| SystemdError::DBus { source: e })?;
+        proxy
+            .reload()
+            .await
+            .map_err(|e| SystemdError::DBus { source: e })?;
+        Ok(())
+    }
+
+    async fn start_unit_impl(&self, name: &str) -> Result<(), SystemdError> {
+        let proxy = Systemd1ManagerProxy::new(&self.conn)
+            .await
+            .map_err(|e| SystemdError::DBus { source: e })?;
+        proxy
+            .start_unit(name, "replace")
+            .await
+            .map_err(|e| SystemdError::DBus { source: e })?;
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -188,179 +366,64 @@ fn build_exec_start(exec_start: &[String]) -> Result<Value<'static>, SystemdErro
 // ---------------------------------------------------------------------------
 
 impl ProcessManager for SystemdManager {
-    type Error = SystemdError;
-
-    async fn start_transient(&self, spec: TransientUnitSpec) -> Result<(), Self::Error> {
-        let proxy = Systemd1ManagerProxy::new(&self.conn)
-            .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
-
-        let exec_value = build_exec_start(&spec.exec_start)?;
-        let restart = restart_str(spec.restart);
-
-        let props = vec![
-            UnitProperty {
-                name: "Description",
-                value: Value::from(spec.description.as_str()),
-            },
-            UnitProperty {
-                name: "ExecStart",
-                value: exec_value,
-            },
-            UnitProperty {
-                name: "Restart",
-                value: Value::from(restart),
-            },
-            UnitProperty {
-                name: "StandardOutput",
-                value: Value::from("journal"),
-            },
-            UnitProperty {
-                name: "StandardError",
-                value: Value::from("journal"),
-            },
-        ];
-        let aux: Vec<AuxUnit<'_>> = vec![];
-
-        proxy
-            .start_transient_unit(&spec.name, "fail", props, aux)
-            .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
-
-        Ok(())
+    fn start_transient<'a>(
+        &'a self,
+        spec: TransientUnitSpec,
+    ) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move { self.start_transient_impl(spec).await.map_err(Into::into) })
     }
 
-    async fn stop_unit(&self, name: &str) -> Result<(), Self::Error> {
-        let proxy = Systemd1ManagerProxy::new(&self.conn)
-            .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
-        proxy
-            .stop_unit(name, "replace")
-            .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
-        Ok(())
+    fn stop_unit<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move { self.stop_unit_impl(name).await.map_err(Into::into) })
     }
 
-    async fn wait_unit_stopped(&self, name: &str, timeout: Duration) -> Result<(), Self::Error> {
-        let deadline = tokio::time::Instant::now() + timeout;
-        loop {
-            if tokio::time::Instant::now() >= deadline {
-                return Err(SystemdError::WaitTimeout {
-                    name: name.to_string(),
-                });
-            }
-            match self.unit_state(name).await? {
-                None => return Ok(()),
-                Some(state) => match state.active {
-                    ActiveState::Inactive | ActiveState::Failed => return Ok(()),
-                    _ => {}
-                },
-            }
-            tokio::time::sleep(Duration::from_millis(250)).await;
-        }
+    fn wait_unit_stopped<'a>(
+        &'a self,
+        name: &'a str,
+        timeout: Duration,
+    ) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move {
+            self.wait_unit_stopped_impl(name, timeout)
+                .await
+                .map_err(Into::into)
+        })
     }
 
-    async fn unit_state(&self, name: &str) -> Result<Option<UnitState>, Self::Error> {
-        let proxy = Systemd1ManagerProxy::new(&self.conn)
-            .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
-
-        let unit_path = match proxy.get_unit(name).await {
-            Ok(p) => p,
-            Err(e) => {
-                let msg = e.to_string().to_lowercase();
-                if msg.contains("no such unit") || msg.contains("not loaded") {
-                    return Ok(None);
-                }
-                return Err(SystemdError::DBus { source: e });
-            }
-        };
-
-        let unit_proxy = Systemd1UnitProxy::builder(&self.conn)
-            .destination("org.freedesktop.systemd1")
-            .map_err(|e| SystemdError::DBus { source: e })?
-            .path(unit_path)
-            .map_err(|e| SystemdError::DBus { source: e })?
-            .build()
-            .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
-
-        let active = unit_proxy
-            .active_state()
-            .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
-        let sub = unit_proxy
-            .sub_state()
-            .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
-
-        Ok(Some(UnitState {
-            active: parse_active_state(&active),
-            sub,
-        }))
+    fn unit_state<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<UnitState>, BoxError>> {
+        Box::pin(async move { self.unit_state_impl(name).await.map_err(Into::into) })
     }
 
-    async fn list_units(&self, prefix: &str) -> Result<Vec<UnitSummary>, Self::Error> {
-        let proxy = Systemd1ManagerProxy::new(&self.conn)
-            .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
-
-        let raw = proxy
-            .list_units()
-            .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
-
-        let result = raw
-            .into_iter()
-            .filter(|u| u.name.starts_with(prefix))
-            .map(|u| UnitSummary {
-                name: u.name,
-                state: UnitState {
-                    active: parse_active_state(&u.active_state),
-                    sub: u.sub_state,
-                },
-            })
-            .collect();
-
-        Ok(result)
+    fn list_units<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<UnitSummary>, BoxError>> {
+        Box::pin(async move { self.list_units_impl(prefix).await.map_err(Into::into) })
     }
 
-    async fn write_unit(&self, name: &str, content: &str) -> Result<(), Self::Error> {
-        let path = std::path::Path::new(UNIT_DIR).join(name);
-        tokio::fs::write(&path, content)
-            .await
-            .map_err(|e| SystemdError::Io { source: e })?;
-        Ok(())
+    fn write_unit<'a>(
+        &'a self,
+        name: &'a str,
+        content: &'a str,
+    ) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move {
+            self.write_unit_impl(name, content)
+                .await
+                .map_err(Into::into)
+        })
     }
 
-    async fn remove_unit(&self, name: &str) -> Result<(), Self::Error> {
-        let path = std::path::Path::new(UNIT_DIR).join(name);
-        match tokio::fs::remove_file(&path).await {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(SystemdError::Io { source: e }),
-        }
+    fn remove_unit<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move { self.remove_unit_impl(name).await.map_err(Into::into) })
     }
 
-    async fn daemon_reload(&self) -> Result<(), Self::Error> {
-        let proxy = Systemd1ManagerProxy::new(&self.conn)
-            .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
-        proxy
-            .reload()
-            .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
-        Ok(())
+    fn daemon_reload<'a>(&'a self) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move { self.daemon_reload_impl().await.map_err(Into::into) })
     }
 
-    async fn start_unit(&self, name: &str) -> Result<(), Self::Error> {
-        let proxy = Systemd1ManagerProxy::new(&self.conn)
-            .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
-        proxy
-            .start_unit(name, "replace")
-            .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
-        Ok(())
+    fn start_unit<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move { self.start_unit_impl(name).await.map_err(Into::into) })
     }
 }

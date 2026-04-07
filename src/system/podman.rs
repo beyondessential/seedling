@@ -21,7 +21,7 @@ use rtnetlink::{Handle, new_connection};
 use snafu::Snafu;
 
 use crate::system::{
-    ContainerRuntime,
+    BoxError, BoxFuture, ContainerRuntime,
     types::{
         ContainerFilter, ContainerHealth, ContainerState, ContainerStatus, ContainerSummary,
         ExecHandle, ExecSpec,
@@ -77,82 +77,8 @@ impl PodmanRuntime {
             route_handle,
         })
     }
-}
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn map_api_err(e: podman_rest_client::Error) -> PodmanError {
-    PodmanError::Api {
-        source: Box::new(e),
-    }
-}
-
-fn is_not_found(e: &podman_rest_client::Error) -> bool {
-    matches!(
-        e,
-        podman_rest_client::Error::Api { code, .. } if code.as_u16() == 404
-    )
-}
-
-fn parse_container_status(s: &str) -> ContainerStatus {
-    match s {
-        "created" | "configured" => ContainerStatus::Created,
-        "running" => ContainerStatus::Running,
-        "paused" => ContainerStatus::Paused,
-        "exited" | "stopped" | "dead" => ContainerStatus::Exited,
-        _ => ContainerStatus::Unknown,
-    }
-}
-
-fn parse_health(s: &str) -> ContainerHealth {
-    match s {
-        "starting" => ContainerHealth::Starting,
-        "healthy" => ContainerHealth::Healthy,
-        "unhealthy" => ContainerHealth::Unhealthy,
-        _ => ContainerHealth::None,
-    }
-}
-
-fn parse_rfc3339(s: &str) -> Option<SystemTime> {
-    if s.is_empty() || s.starts_with("0001-01-01") {
-        return None;
-    }
-    let dt = DateTime::parse_from_rfc3339(s).ok()?;
-    let secs = dt.timestamp();
-    if secs < 0 {
-        return None;
-    }
-    SystemTime::UNIX_EPOCH.checked_add(std::time::Duration::new(
-        secs as u64,
-        dt.timestamp_subsec_nanos(),
-    ))
-}
-
-fn build_filters(filter: &ContainerFilter<'_>) -> Option<String> {
-    let mut map: HashMap<&str, Vec<String>> = HashMap::new();
-    if let Some((key, val)) = filter.label {
-        map.insert("label", vec![format!("{}={}", key, val)]);
-    }
-    if let Some(prefix) = filter.name_prefix {
-        map.insert("name", vec![format!("^{}", prefix)]);
-    }
-    if map.is_empty() {
-        None
-    } else {
-        serde_json::to_string(&map).ok()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// ContainerRuntime impl
-// ---------------------------------------------------------------------------
-
-impl ContainerRuntime for PodmanRuntime {
-    type Error = PodmanError;
-
-    async fn inspect(&self, name: &str) -> Result<Option<ContainerState>, Self::Error> {
+    async fn inspect_impl(&self, name: &str) -> Result<Option<ContainerState>, PodmanError> {
         let data = match self
             .client
             .v5()
@@ -217,10 +143,10 @@ impl ContainerRuntime for PodmanRuntime {
         }))
     }
 
-    async fn list(
+    async fn list_impl(
         &self,
         filter: ContainerFilter<'_>,
-    ) -> Result<Vec<ContainerSummary>, Self::Error> {
+    ) -> Result<Vec<ContainerSummary>, PodmanError> {
         let filters_json = build_filters(&filter);
         let params = ContainerListLibpod {
             all: Some(true),
@@ -260,7 +186,7 @@ impl ContainerRuntime for PodmanRuntime {
         Ok(summaries)
     }
 
-    async fn image_exists(&self, reference: &str) -> Result<bool, Self::Error> {
+    async fn image_exists_impl(&self, reference: &str) -> Result<bool, PodmanError> {
         match self
             .client
             .v5()
@@ -274,7 +200,7 @@ impl ContainerRuntime for PodmanRuntime {
         }
     }
 
-    async fn pull_image(&self, reference: &str) -> Result<(), Self::Error> {
+    async fn pull_image_impl(&self, reference: &str) -> Result<(), PodmanError> {
         let params = ImagePullLibpod {
             reference: Some(reference),
             ..Default::default()
@@ -288,7 +214,7 @@ impl ContainerRuntime for PodmanRuntime {
         Ok(())
     }
 
-    async fn network_exists(&self, name: &str) -> Result<bool, Self::Error> {
+    async fn network_exists_impl(&self, name: &str) -> Result<bool, PodmanError> {
         match self
             .client
             .v5()
@@ -302,7 +228,7 @@ impl ContainerRuntime for PodmanRuntime {
         }
     }
 
-    async fn create_network(&self, name: &str, prefix: Ipv6Net) -> Result<(), Self::Error> {
+    async fn create_network_impl(&self, name: &str, prefix: Ipv6Net) -> Result<(), PodmanError> {
         let net_addr = prefix.network();
         let mut gw_bytes = net_addr.octets();
         gw_bytes[15] = 1;
@@ -377,7 +303,7 @@ impl ContainerRuntime for PodmanRuntime {
         Ok(())
     }
 
-    async fn remove_network(&self, name: &str) -> Result<(), Self::Error> {
+    async fn remove_network_impl(&self, name: &str) -> Result<(), PodmanError> {
         let params = NetworkDeleteLibpod { force: Some(false) };
         self.client
             .v5()
@@ -388,7 +314,7 @@ impl ContainerRuntime for PodmanRuntime {
         Ok(())
     }
 
-    async fn volume_exists(&self, name: &str) -> Result<bool, Self::Error> {
+    async fn volume_exists_impl(&self, name: &str) -> Result<bool, PodmanError> {
         match self.client.v5().volumes().volume_exists_libpod(name).await {
             Ok(()) => Ok(true),
             Err(ref e) if is_not_found(e) => Ok(false),
@@ -396,7 +322,7 @@ impl ContainerRuntime for PodmanRuntime {
         }
     }
 
-    async fn create_volume(&self, name: &str) -> Result<(), Self::Error> {
+    async fn create_volume_impl(&self, name: &str) -> Result<(), PodmanError> {
         let body = VolumeCreateOptions {
             name: Some(name.to_string()),
             ..Default::default()
@@ -410,7 +336,7 @@ impl ContainerRuntime for PodmanRuntime {
         Ok(())
     }
 
-    async fn remove_volume(&self, name: &str) -> Result<(), Self::Error> {
+    async fn remove_volume_impl(&self, name: &str) -> Result<(), PodmanError> {
         let params = VolumeDeleteLibpod { force: Some(false) };
         self.client
             .v5()
@@ -421,7 +347,7 @@ impl ContainerRuntime for PodmanRuntime {
         Ok(())
     }
 
-    async fn remove_container(&self, name: &str, force: bool) -> Result<(), Self::Error> {
+    async fn remove_container_impl(&self, name: &str, force: bool) -> Result<(), PodmanError> {
         let params = ContainerDeleteLibpod {
             force: Some(force),
             ..Default::default()
@@ -435,7 +361,153 @@ impl ContainerRuntime for PodmanRuntime {
         Ok(())
     }
 
-    async fn exec(&self, _name: &str, _spec: ExecSpec) -> Result<ExecHandle, Self::Error> {
+    async fn exec_impl(&self, _name: &str, _spec: ExecSpec) -> Result<ExecHandle, PodmanError> {
         todo!("PodmanRuntime::exec")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn map_api_err(e: podman_rest_client::Error) -> PodmanError {
+    PodmanError::Api {
+        source: Box::new(e),
+    }
+}
+
+fn is_not_found(e: &podman_rest_client::Error) -> bool {
+    matches!(
+        e,
+        podman_rest_client::Error::Api { code, .. } if code.as_u16() == 404
+    )
+}
+
+fn parse_container_status(s: &str) -> ContainerStatus {
+    match s {
+        "created" | "configured" => ContainerStatus::Created,
+        "running" => ContainerStatus::Running,
+        "paused" => ContainerStatus::Paused,
+        "exited" | "stopped" | "dead" => ContainerStatus::Exited,
+        _ => ContainerStatus::Unknown,
+    }
+}
+
+fn parse_health(s: &str) -> ContainerHealth {
+    match s {
+        "starting" => ContainerHealth::Starting,
+        "healthy" => ContainerHealth::Healthy,
+        "unhealthy" => ContainerHealth::Unhealthy,
+        _ => ContainerHealth::None,
+    }
+}
+
+fn parse_rfc3339(s: &str) -> Option<SystemTime> {
+    if s.is_empty() || s.starts_with("0001-01-01") {
+        return None;
+    }
+    let dt = DateTime::parse_from_rfc3339(s).ok()?;
+    let secs = dt.timestamp();
+    if secs < 0 {
+        return None;
+    }
+    SystemTime::UNIX_EPOCH.checked_add(std::time::Duration::new(
+        secs as u64,
+        dt.timestamp_subsec_nanos(),
+    ))
+}
+
+fn build_filters(filter: &ContainerFilter<'_>) -> Option<String> {
+    let mut map: HashMap<&str, Vec<String>> = HashMap::new();
+    if let Some((key, val)) = filter.label {
+        map.insert("label", vec![format!("{}={}", key, val)]);
+    }
+    if let Some(prefix) = filter.name_prefix {
+        map.insert("name", vec![format!("^{}", prefix)]);
+    }
+    if map.is_empty() {
+        None
+    } else {
+        serde_json::to_string(&map).ok()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ContainerRuntime impl
+// ---------------------------------------------------------------------------
+
+impl ContainerRuntime for PodmanRuntime {
+    fn inspect<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<ContainerState>, BoxError>> {
+        Box::pin(async move { self.inspect_impl(name).await.map_err(Into::into) })
+    }
+
+    fn list<'a>(
+        &'a self,
+        filter: ContainerFilter<'a>,
+    ) -> BoxFuture<'a, Result<Vec<ContainerSummary>, BoxError>> {
+        Box::pin(async move { self.list_impl(filter).await.map_err(Into::into) })
+    }
+
+    fn image_exists<'a>(&'a self, reference: &'a str) -> BoxFuture<'a, Result<bool, BoxError>> {
+        Box::pin(async move { self.image_exists_impl(reference).await.map_err(Into::into) })
+    }
+
+    fn pull_image<'a>(&'a self, reference: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move { self.pull_image_impl(reference).await.map_err(Into::into) })
+    }
+
+    fn network_exists<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<bool, BoxError>> {
+        Box::pin(async move { self.network_exists_impl(name).await.map_err(Into::into) })
+    }
+
+    fn create_network<'a>(
+        &'a self,
+        name: &'a str,
+        prefix: Ipv6Net,
+    ) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move {
+            self.create_network_impl(name, prefix)
+                .await
+                .map_err(Into::into)
+        })
+    }
+
+    fn remove_network<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move { self.remove_network_impl(name).await.map_err(Into::into) })
+    }
+
+    fn volume_exists<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<bool, BoxError>> {
+        Box::pin(async move { self.volume_exists_impl(name).await.map_err(Into::into) })
+    }
+
+    fn create_volume<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move { self.create_volume_impl(name).await.map_err(Into::into) })
+    }
+
+    fn remove_volume<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move { self.remove_volume_impl(name).await.map_err(Into::into) })
+    }
+
+    fn remove_container<'a>(
+        &'a self,
+        name: &'a str,
+        force: bool,
+    ) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move {
+            self.remove_container_impl(name, force)
+                .await
+                .map_err(Into::into)
+        })
+    }
+
+    fn exec<'a>(
+        &'a self,
+        name: &'a str,
+        spec: ExecSpec,
+    ) -> BoxFuture<'a, Result<ExecHandle, BoxError>> {
+        Box::pin(async move { self.exec_impl(name, spec).await.map_err(Into::into) })
     }
 }

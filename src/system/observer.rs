@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use snafu::Snafu;
@@ -6,7 +7,7 @@ use crate::{
     defs::resource::Resource,
     runtime::identity::ResourceInstance,
     system::{
-        ContainerRuntime, DataPlane, NetworkProxy, ProcessManager, SystemDriver,
+        System,
         types::{ActiveState, ContainerHealth, ContainerStatus, ObservationFact},
     },
 };
@@ -53,18 +54,12 @@ fn unit_name(instance: &ResourceInstance) -> String {
 // Observer
 // ---------------------------------------------------------------------------
 
-pub struct Observer<C, P, N, D> {
-    driver: SystemDriver<C, P, N, D>,
+pub struct Observer {
+    driver: Arc<System>,
 }
 
-impl<C, P, N, D> Observer<C, P, N, D>
-where
-    C: ContainerRuntime,
-    P: ProcessManager,
-    N: NetworkProxy,
-    D: DataPlane,
-{
-    pub fn new(driver: SystemDriver<C, P, N, D>) -> Self {
+impl Observer {
+    pub fn new(driver: Arc<System>) -> Self {
         Self { driver }
     }
 
@@ -97,9 +92,7 @@ where
                     .container
                     .volume_exists(name)
                     .await
-                    .map_err(|e| ObserveError::Container {
-                        source: Box::new(e),
-                    })?;
+                    .map_err(|e| ObserveError::Container { source: e })?;
                 facts.push((
                     if exists {
                         ObservationFact::VolumePresent
@@ -111,14 +104,12 @@ where
             }
             Resource::Ingress(_) => {
                 // r[impl observe.ingress]
-                let healthy =
-                    self.driver
-                        .proxy
-                        .is_healthy()
-                        .await
-                        .map_err(|e| ObserveError::Proxy {
-                            source: Box::new(e),
-                        })?;
+                let healthy = self
+                    .driver
+                    .proxy
+                    .is_healthy()
+                    .await
+                    .map_err(|e| ObserveError::Proxy { source: e })?;
                 facts.push((
                     if healthy {
                         ObservationFact::ProxyReachable
@@ -152,9 +143,7 @@ where
             .container
             .network_exists(&net_name)
             .await
-            .map_err(|e| ObserveError::Container {
-                source: Box::new(e),
-            })?;
+            .map_err(|e| ObserveError::Container { source: e })?;
         facts.push((
             if net_exists {
                 ObservationFact::NetworkPresent
@@ -169,9 +158,7 @@ where
             .container
             .inspect(&instance.display_name)
             .await
-            .map_err(|e| ObserveError::Container {
-                source: Box::new(e),
-            })?;
+            .map_err(|e| ObserveError::Container { source: e })?;
 
         match state {
             None => facts.push((ObservationFact::ContainerMissing, now)),
@@ -206,9 +193,7 @@ where
             .process
             .unit_state(&unit_name(instance))
             .await
-            .map_err(|e| ObserveError::Process {
-                source: Box::new(e),
-            })?;
+            .map_err(|e| ObserveError::Process { source: e })?;
 
         let unit_fact = match unit_state.as_ref().map(|s| s.active) {
             None | Some(ActiveState::Inactive) | Some(ActiveState::Deactivating) => {

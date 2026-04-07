@@ -11,7 +11,7 @@ use crate::{
     },
     runtime::{identity::ResourceInstance, registry::InstanceRegistry},
     system::{
-        ContainerRuntime, DataPlane, NetworkProxy, ProcessManager, SystemDriver,
+        System,
         translate::{
             container::{deployment_spec, job_spec, podman_args},
             proxy::{instance_ipv6, pod_network_prefix},
@@ -74,21 +74,15 @@ fn map_on_exit(on_exit: OnExit) -> TransientRestart {
 // Actuator
 // ---------------------------------------------------------------------------
 
-pub struct Actuator<C, P, N, D> {
-    driver: SystemDriver<C, P, N, D>,
+pub struct Actuator {
+    driver: Arc<System>,
     node_prefix: Ipv6Net,
     registry: Arc<dyn InstanceRegistry>,
 }
 
-impl<C, P, N, D> Actuator<C, P, N, D>
-where
-    C: ContainerRuntime,
-    P: ProcessManager,
-    N: NetworkProxy,
-    D: DataPlane,
-{
+impl Actuator {
     pub fn new(
-        driver: SystemDriver<C, P, N, D>,
+        driver: Arc<System>,
         node_prefix: Ipv6Net,
         registry: Arc<dyn InstanceRegistry>,
     ) -> Self {
@@ -178,31 +172,21 @@ where
                     .container
                     .volume_exists(&name)
                     .await
-                    .map_err(|e| ActuateError::Container {
-                        source: Box::new(e),
-                    })?
+                    .map_err(|e| ActuateError::Container { source: e })?
                 {
                     self.driver
                         .container
                         .create_volume(&name)
                         .await
-                        .map_err(|e| ActuateError::Container {
-                            source: Box::new(e),
-                        })?;
+                        .map_err(|e| ActuateError::Container { source: e })?;
                 }
                 // Volume writes (populating files into the volume) are not yet
                 // implemented; they require running a helper container.
                 Ok(())
             }
             Resource::ExternalVolume(_) | Resource::ExternalService(_) => Ok(()),
-            Resource::Service(_) | Resource::HttpService(_) => {
-                todo!(
-                    "actuate start: Service/HttpService DataPlane coordination not yet implemented"
-                )
-            }
-            Resource::Ingress(_) => {
-                todo!("actuate start: Ingress proxy/DataPlane coordination not yet implemented")
-            }
+            Resource::Service(_) | Resource::HttpService(_) => Ok(()),
+            Resource::Ingress(_) => Ok(()),
         }
     }
 
@@ -228,29 +212,19 @@ where
                     .container
                     .volume_exists(&name)
                     .await
-                    .map_err(|e| ActuateError::Container {
-                        source: Box::new(e),
-                    })?
+                    .map_err(|e| ActuateError::Container { source: e })?
                 {
                     self.driver
                         .container
                         .remove_volume(&name)
                         .await
-                        .map_err(|e| ActuateError::Container {
-                            source: Box::new(e),
-                        })?;
+                        .map_err(|e| ActuateError::Container { source: e })?;
                 }
                 Ok(())
             }
             Resource::ExternalVolume(_) | Resource::ExternalService(_) => Ok(()),
-            Resource::Service(_) | Resource::HttpService(_) => {
-                todo!(
-                    "actuate stop: Service/HttpService DataPlane coordination not yet implemented"
-                )
-            }
-            Resource::Ingress(_) => {
-                todo!("actuate stop: Ingress proxy/DataPlane coordination not yet implemented")
-            }
+            Resource::Service(_) | Resource::HttpService(_) => Ok(()),
+            Resource::Ingress(_) => Ok(()),
         }
     }
 
@@ -304,9 +278,7 @@ where
             .container
             .image_exists(image)
             .await
-            .map_err(|e| ActuateError::Container {
-                source: Box::new(e),
-            })?
+            .map_err(|e| ActuateError::Container { source: e })?
         {
             self.driver.container.pull_image(image).await.map_err(|_| {
                 ActuateError::ImageUnavailable {
@@ -323,29 +295,23 @@ where
             .container
             .network_exists(&net_name)
             .await
-            .map_err(|e| ActuateError::Container {
-                source: Box::new(e),
-            })?
+            .map_err(|e| ActuateError::Container { source: e })?
         {
             self.driver
                 .container
                 .create_network(&net_name, net_prefix)
                 .await
-                .map_err(|e| ActuateError::Container {
-                    source: Box::new(e),
-                })?;
+                .map_err(|e| ActuateError::Container { source: e })?;
         }
 
         // Skip if the unit is already active.
         let unit = unit_name(instance);
-        if let Some(state) =
-            self.driver
-                .process
-                .unit_state(&unit)
-                .await
-                .map_err(|e| ActuateError::Process {
-                    source: Box::new(e),
-                })?
+        if let Some(state) = self
+            .driver
+            .process
+            .unit_state(&unit)
+            .await
+            .map_err(|e| ActuateError::Process { source: e })?
             && matches!(state.active, ActiveState::Active | ActiveState::Activating)
         {
             return Ok(());
@@ -364,9 +330,7 @@ where
                 restart,
             })
             .await
-            .map_err(|e| ActuateError::Process {
-                source: Box::new(e),
-            })?;
+            .map_err(|e| ActuateError::Process { source: e })?;
 
         Ok(())
     }
@@ -380,25 +344,19 @@ where
             .process
             .unit_state(&unit)
             .await
-            .map_err(|e| ActuateError::Process {
-                source: Box::new(e),
-            })?
+            .map_err(|e| ActuateError::Process { source: e })?
             .is_some()
         {
             self.driver
                 .process
                 .stop_unit(&unit)
                 .await
-                .map_err(|e| ActuateError::Process {
-                    source: Box::new(e),
-                })?;
+                .map_err(|e| ActuateError::Process { source: e })?;
             self.driver
                 .process
                 .wait_unit_stopped(&unit, Duration::from_secs(30))
                 .await
-                .map_err(|e| ActuateError::Process {
-                    source: Box::new(e),
-                })?;
+                .map_err(|e| ActuateError::Process { source: e })?;
         }
 
         // Force-remove the container in case it outlived the unit.
@@ -406,9 +364,7 @@ where
             .container
             .remove_container(&instance.display_name, true)
             .await
-            .map_err(|e| ActuateError::Container {
-                source: Box::new(e),
-            })?;
+            .map_err(|e| ActuateError::Container { source: e })?;
 
         // Remove the pod network.
         let net_name = pod_network_name(instance);
@@ -417,17 +373,13 @@ where
             .container
             .network_exists(&net_name)
             .await
-            .map_err(|e| ActuateError::Container {
-                source: Box::new(e),
-            })?
+            .map_err(|e| ActuateError::Container { source: e })?
         {
             self.driver
                 .container
                 .remove_network(&net_name)
                 .await
-                .map_err(|e| ActuateError::Container {
-                    source: Box::new(e),
-                })?;
+                .map_err(|e| ActuateError::Container { source: e })?;
         }
 
         Ok(())

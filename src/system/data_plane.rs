@@ -19,7 +19,7 @@ use rtnetlink::{
 use snafu::Snafu;
 
 use crate::system::{
-    DataPlane,
+    BoxError, BoxFuture, DataPlane,
     types::{DataPlaneRules, ForwardProto, IngressRule, MountRule, ServiceRoute},
 };
 
@@ -65,10 +65,8 @@ impl NftablesDataPlane {
     }
 }
 
-impl DataPlane for NftablesDataPlane {
-    type Error = DataPlaneError;
-
-    async fn apply_rules(&self, rules: &DataPlaneRules) -> Result<(), Self::Error> {
+impl NftablesDataPlane {
+    async fn apply_rules_impl(&self, rules: &DataPlaneRules) -> Result<(), DataPlaneError> {
         let mut batch = Batch::new();
         batch.add(nft_table());
         batch.add_cmd(NfCmd::Flush(FlushObject::Table(table())));
@@ -97,7 +95,7 @@ impl DataPlane for NftablesDataPlane {
             })
     }
 
-    async fn apply_routes(&self, routes: &[ServiceRoute]) -> Result<(), Self::Error> {
+    async fn apply_routes_impl(&self, routes: &[ServiceRoute]) -> Result<(), DataPlaneError> {
         self.delete_managed_routes().await?;
         for svc in routes {
             self.add_service_route(svc).await?;
@@ -105,12 +103,29 @@ impl DataPlane for NftablesDataPlane {
         Ok(())
     }
 
-    async fn clear_all(&self) -> Result<(), Self::Error> {
+    async fn clear_all_impl(&self) -> Result<(), DataPlaneError> {
         let mut batch = Batch::new();
         batch.add_cmd(NfCmd::Delete(NfListObject::Table(table())));
         let nft = batch.to_nftables();
         let _ = helper::apply_ruleset_async(&nft).await;
         self.delete_managed_routes().await
+    }
+}
+
+impl DataPlane for NftablesDataPlane {
+    fn apply_rules<'a>(&'a self, rules: &'a DataPlaneRules) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move { self.apply_rules_impl(rules).await.map_err(Into::into) })
+    }
+
+    fn apply_routes<'a>(
+        &'a self,
+        routes: &'a [ServiceRoute],
+    ) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move { self.apply_routes_impl(routes).await.map_err(Into::into) })
+    }
+
+    fn clear_all<'a>(&'a self) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move { self.clear_all_impl().await.map_err(Into::into) })
     }
 }
 

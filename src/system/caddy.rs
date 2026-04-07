@@ -7,7 +7,7 @@ use snafu::Snafu;
 use tokio::sync::RwLock;
 
 use crate::system::{
-    NetworkProxy,
+    BoxError, BoxFuture, ContainerRuntime, NetworkProxy, ProcessManager,
     types::{ProxyConfig, ProxyListenerProto, VirtualHost},
 };
 
@@ -65,10 +65,8 @@ impl CaddyProxy {
     }
 }
 
-impl NetworkProxy for CaddyProxy {
-    type Error = CaddyError;
-
-    async fn is_healthy(&self) -> Result<bool, Self::Error> {
+impl CaddyProxy {
+    async fn is_healthy_impl(&self) -> Result<bool, CaddyError> {
         let url = self.admin_url("/config/").await;
         match self.client.get(&url).send().await {
             Ok(resp) => Ok(resp.status().is_success()),
@@ -76,7 +74,7 @@ impl NetworkProxy for CaddyProxy {
         }
     }
 
-    async fn apply_config(&self, config: &ProxyConfig) -> Result<(), Self::Error> {
+    async fn apply_config_impl(&self, config: &ProxyConfig) -> Result<(), CaddyError> {
         let caddy_json = build_caddy_config(config);
         let url = self.admin_url("/config/").await;
 
@@ -95,6 +93,16 @@ impl NetworkProxy for CaddyProxy {
         }
 
         Ok(())
+    }
+}
+
+impl NetworkProxy for CaddyProxy {
+    fn is_healthy<'a>(&'a self) -> BoxFuture<'a, Result<bool, BoxError>> {
+        Box::pin(async move { self.is_healthy_impl().await.map_err(Into::into) })
+    }
+
+    fn apply_config<'a>(&'a self, config: &'a ProxyConfig) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move { self.apply_config_impl(config).await.map_err(Into::into) })
     }
 }
 
@@ -153,16 +161,12 @@ pub(crate) enum CaddyStartupError {
 /// 5. Otherwise force-removes any existing (unhealthy) container, pulls the
 ///    image if necessary, starts a transient systemd unit, and polls until
 ///    healthy (up to 60 s).
-pub(crate) async fn ensure_caddy_running<C, P>(
-    container: &C,
-    process: &P,
+pub(crate) async fn ensure_caddy_running(
+    container: &dyn ContainerRuntime,
+    process: &dyn ProcessManager,
     node_prefix: &Ipv6Net,
     data_dir: &std::path::Path,
-) -> Result<std::net::SocketAddr, CaddyStartupError>
-where
-    C: crate::system::ContainerRuntime,
-    P: crate::system::ProcessManager,
-{
+) -> Result<std::net::SocketAddr, CaddyStartupError> {
     use crate::system::types::{ContainerStatus, TransientRestart, TransientUnitSpec};
     use std::net::{IpAddr, SocketAddr};
     use std::time::Duration;
@@ -172,16 +176,12 @@ where
     if !container
         .network_exists(PROXY_NETWORK)
         .await
-        .map_err(|e| CaddyStartupError::Container {
-            source: Box::new(e),
-        })?
+        .map_err(|e| CaddyStartupError::Container { source: e })?
     {
         container
             .create_network(PROXY_NETWORK, proxy_prefix)
             .await
-            .map_err(|e| CaddyStartupError::Container {
-                source: Box::new(e),
-            })?;
+            .map_err(|e| CaddyStartupError::Container { source: e })?;
     }
 
     // Write admin config so Caddy binds the admin API on all interfaces.
@@ -193,26 +193,19 @@ where
     if !container
         .volume_exists(CADDY_DATA_VOLUME)
         .await
-        .map_err(|e| CaddyStartupError::Container {
-            source: Box::new(e),
-        })?
+        .map_err(|e| CaddyStartupError::Container { source: e })?
     {
         container
             .create_volume(CADDY_DATA_VOLUME)
             .await
-            .map_err(|e| CaddyStartupError::Container {
-                source: Box::new(e),
-            })?;
+            .map_err(|e| CaddyStartupError::Container { source: e })?;
     }
 
     // Check if Caddy is already running and healthy.
-    if let Some(state) =
-        container
-            .inspect(CADDY_CONTAINER)
-            .await
-            .map_err(|e| CaddyStartupError::Container {
-                source: Box::new(e),
-            })?
+    if let Some(state) = container
+        .inspect(CADDY_CONTAINER)
+        .await
+        .map_err(|e| CaddyStartupError::Container { source: e })?
     {
         if matches!(state.status, ContainerStatus::Running)
             && let Some(ip) = state.pod_addr
@@ -227,25 +220,19 @@ where
         container
             .remove_container(CADDY_CONTAINER, true)
             .await
-            .map_err(|e| CaddyStartupError::Container {
-                source: Box::new(e),
-            })?;
+            .map_err(|e| CaddyStartupError::Container { source: e })?;
     }
 
     // Ensure the image is present.
     if !container
         .image_exists(CADDY_IMAGE)
         .await
-        .map_err(|e| CaddyStartupError::Container {
-            source: Box::new(e),
-        })?
+        .map_err(|e| CaddyStartupError::Container { source: e })?
     {
         container
             .pull_image(CADDY_IMAGE)
             .await
-            .map_err(|e| CaddyStartupError::Container {
-                source: Box::new(e),
-            })?;
+            .map_err(|e| CaddyStartupError::Container { source: e })?;
     }
 
     // Start via a transient systemd unit.
@@ -275,9 +262,7 @@ where
             restart: TransientRestart::Always,
         })
         .await
-        .map_err(|e| CaddyStartupError::Process {
-            source: Box::new(e),
-        })?;
+        .map_err(|e| CaddyStartupError::Process { source: e })?;
 
     // Poll until Caddy is running and healthy (60 s deadline).
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
