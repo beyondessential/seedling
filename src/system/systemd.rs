@@ -33,6 +33,18 @@ pub(crate) enum SystemdError {
 // D-Bus proxy — systemd Manager interface
 // ---------------------------------------------------------------------------
 
+#[derive(serde::Serialize, zbus::zvariant::Type)]
+struct UnitProperty<'a> {
+    name: &'a str,
+    value: Value<'a>,
+}
+
+#[derive(serde::Serialize, zbus::zvariant::Type)]
+struct AuxUnit<'a> {
+    name: &'a str,
+    properties: Vec<UnitProperty<'a>>,
+}
+
 #[derive(Debug, serde::Deserialize, zbus::zvariant::Type)]
 struct ListedUnit {
     name: String,
@@ -59,8 +71,8 @@ trait Systemd1Manager {
         &self,
         name: &str,
         mode: &str,
-        properties: Vec<(&str, Value<'_>)>,
-        aux: Vec<(&str, Vec<(&str, Value<'_>)>)>,
+        properties: Vec<UnitProperty<'_>>,
+        aux: Vec<AuxUnit<'_>>,
     ) -> zbus::Result<OwnedObjectPath>;
 
     fn stop_unit(&self, name: &str, mode: &str) -> zbus::Result<OwnedObjectPath>;
@@ -186,14 +198,29 @@ impl ProcessManager for SystemdManager {
         let exec_value = build_exec_start(&spec.exec_start)?;
         let restart = restart_str(spec.restart);
 
-        let props: Vec<(&str, Value<'_>)> = vec![
-            ("Description", Value::from(spec.description.as_str())),
-            ("ExecStart", exec_value),
-            ("Restart", Value::from(restart)),
-            ("StandardOutput", Value::from("journal")),
-            ("StandardError", Value::from("journal")),
+        let props = vec![
+            UnitProperty {
+                name: "Description",
+                value: Value::from(spec.description.as_str()),
+            },
+            UnitProperty {
+                name: "ExecStart",
+                value: exec_value,
+            },
+            UnitProperty {
+                name: "Restart",
+                value: Value::from(restart),
+            },
+            UnitProperty {
+                name: "StandardOutput",
+                value: Value::from("journal"),
+            },
+            UnitProperty {
+                name: "StandardError",
+                value: Value::from("journal"),
+            },
         ];
-        let aux: Vec<(&str, Vec<(&str, Value<'_>)>)> = vec![];
+        let aux: Vec<AuxUnit<'_>> = vec![];
 
         proxy
             .start_transient_unit(&spec.name, "fail", props, aux)
