@@ -125,10 +125,9 @@ Identify stream type:
 
 ### Method router
 
-Parse each bidi stream as a single JSON `{ id, method, params }` object (read until the
+Parse each bidi stream as a single JSON `{ method, params }` object (read until the
 client half-closes). Dispatch to a handler function by `method` string. Serialize the result
-as `{ id, result }` or `{ id, error: { code, message } }` and write it, then close the
-stream.
+as `{ result }` or `{ error: { code, message } }` and write it, then close the stream.
 
 ### Initial endpoints (read-only, to validate the stack)
 
