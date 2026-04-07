@@ -45,11 +45,7 @@ impl CustomType for Param {
                         }
                         def.param_changes.insert(this.name.clone());
                     }
-                    this.app
-                        .closures
-                        .borrow_mut()
-                        .param_changes
-                        .insert(this.name.clone(), closure);
+                    crate::defs::app::capture_param_change(this.name.clone(), closure);
                     Ok(())
                 },
             );

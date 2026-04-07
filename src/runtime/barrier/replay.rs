@@ -6,7 +6,7 @@ use rhai::{AST, Dynamic, Engine, EvalAltResult, Scope};
 use crate::runtime::db::Db;
 use crate::runtime::history;
 
-use crate::defs::app::App;
+use crate::defs::app::{App, AppDef, begin_closure_capture, end_closure_capture};
 use crate::runtime::barrier::oracle::WorldStateOracle;
 use crate::runtime::barrier::runtime::{
     ActionClosureGuard, RuntimeInstance, clear_barrier_hit, extract_barrier_hit,
@@ -159,7 +159,7 @@ pub enum OperationResult {
 pub fn run_operation<W>(
     engine: &Engine,
     scope: &mut Scope,
-    _script_ast: &AST,
+    script_ast: &AST,
     operation_id: OperationId,
     app: &App,
     action_name: &str,
@@ -182,22 +182,37 @@ where
     clear_barrier_hit();
 
     let app_name = app.def.lock().name.clone();
-    let rt = RuntimeInstance::with_context(Arc::clone(&ctx), app_name, registry);
+    let rt = RuntimeInstance::with_context(Arc::clone(&ctx), app_name.clone(), registry);
 
-    // Look up the action closure from ClosureStore.
+    // Re-run the BSL script with a fresh scope and App to recover the FnPtr
+    // for this action. FnPtrs are not stored in AppDef (which must be Send);
+    // the thread-local capture buffer collects them during the re-run and is
+    // discarded immediately after. The fresh AppDef is compared against the
+    // stored one as an idempotency check, then also discarded.
     let (closure, is_param_change) = {
-        let closures = app.closures.borrow();
-        if let Some(c) = closures.actions.get(action_name) {
-            let is_pc = app.def.lock().param_changes.contains(action_name);
-            (c.clone(), is_pc)
-        } else if let Some(c) = closures.param_changes.get(action_name) {
-            (c.clone(), true)
+        let (mut fresh_scope, fresh_app) = crate::defs::scope();
+        fresh_app.def.lock().name = app_name;
+        begin_closure_capture();
+        let run_result = engine.run_ast_with_scope(&mut fresh_scope, script_ast);
+        let captured = end_closure_capture(); // always drain, even on error
+        if let Err(e) = run_result {
+            return OperationResult::Failed(e);
+        }
+        check_idempotent(&fresh_app.def.lock(), &app.def.lock());
+
+        let closure = if let Some(c) = captured.actions.get(action_name) {
+            c.clone()
+        } else if let Some(c) = captured.param_changes.get(action_name) {
+            c.clone()
         } else {
             return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
                 format!("Action '{}' not found", action_name).into(),
                 rhai::Position::NONE,
             )));
-        }
+        };
+        let is_param_change = fresh_app.def.lock().param_changes.contains(action_name);
+        (closure, is_param_change)
+        // captured, fresh_scope, and fresh_app are all dropped here.
     };
 
     let old_app = App::default();
@@ -239,6 +254,41 @@ where
             Some(condition) => OperationResult::Suspended(condition),
             None => OperationResult::Failed(result.unwrap_err()),
         },
+    }
+}
+
+/// Compare a freshly-evaluated AppDef against the stored one and warn if they
+/// differ. A mismatch means the BSL script produces different structure on
+/// re-run, which indicates a non-idempotent script and may cause the closure's
+/// captured variables to be inconsistent with the stored resource state.
+fn check_idempotent(fresh: &AppDef, stored: &AppDef) {
+    let mut diffs: Vec<&str> = Vec::new();
+
+    if fresh.actions.keys().ne(stored.actions.keys()) {
+        diffs.push("actions");
+    }
+    if fresh.shells.keys().ne(stored.shells.keys()) {
+        diffs.push("shells");
+    }
+    if fresh.install.is_some() != stored.install.is_some() {
+        diffs.push("install handler");
+    }
+    if fresh.param_changes != stored.param_changes {
+        diffs.push("param_changes");
+    }
+    if fresh.resources.keys().ne(stored.resources.keys()) {
+        diffs.push("resources");
+    }
+    if fresh.params.keys().ne(stored.params.keys()) {
+        diffs.push("params");
+    }
+
+    if !diffs.is_empty() {
+        tracing::warn!(
+            fields = diffs.join(", "),
+            "BSL script produced a different AppDef on re-run; \
+             script may not be idempotent"
+        );
     }
 }
 

@@ -17,15 +17,76 @@ use super::{
     volume::{ExternalVolume, Volume},
 };
 
-/// Rhai closures registered by the BSL script. Lives only in `App`; never
-/// stored in `AppDef` so that `AppDef` stays `Send`.
-#[derive(Default, Clone)]
-pub(crate) struct ClosureStore {
+// ---------------------------------------------------------------------------
+// Thread-local closure capture buffer
+// ---------------------------------------------------------------------------
+
+/// Closures registered by the BSL script during a single re-run in
+/// `run_operation`. Never stored persistently — activated on demand, consumed
+/// immediately after the re-run, then discarded.
+#[derive(Default)]
+pub(crate) struct ClosureCapture {
     pub actions: BTreeMap<String, FnPtr>,
     pub shells: BTreeMap<String, FnPtr>,
     pub install: Option<FnPtr>,
     pub param_changes: BTreeMap<String, FnPtr>,
 }
+
+thread_local! {
+    static CLOSURE_CAPTURE: RefCell<Option<ClosureCapture>> = const { RefCell::new(None) };
+}
+
+/// Activate the closure capture buffer on this thread. While active, every
+/// `on_start`, `on_action`, `on_shell`, `on_install`, and `param.on_change`
+/// call will push its `FnPtr` into the buffer in addition to writing metadata
+/// into `AppDef`. Has no effect (and causes no allocation) when not active.
+pub(crate) fn begin_closure_capture() {
+    CLOSURE_CAPTURE.with(|c| *c.borrow_mut() = Some(ClosureCapture::default()));
+}
+
+/// Deactivate the buffer and return whatever was captured. Must be called
+/// exactly once after `begin_closure_capture`, even if the script run fails.
+pub(crate) fn end_closure_capture() -> ClosureCapture {
+    CLOSURE_CAPTURE.with(|c| c.borrow_mut().take().unwrap_or_default())
+}
+
+/// Called by `param.on_change` — writes the FnPtr into the active buffer if
+/// one exists, otherwise silently discards it.
+pub(crate) fn capture_param_change(name: String, fnptr: FnPtr) {
+    CLOSURE_CAPTURE.with(|c| {
+        if let Some(ref mut store) = *c.borrow_mut() {
+            store.param_changes.insert(name, fnptr);
+        }
+    });
+}
+
+fn capture_action(name: String, fnptr: FnPtr) {
+    CLOSURE_CAPTURE.with(|c| {
+        if let Some(ref mut store) = *c.borrow_mut() {
+            store.actions.insert(name, fnptr);
+        }
+    });
+}
+
+fn capture_shell(name: String, fnptr: FnPtr) {
+    CLOSURE_CAPTURE.with(|c| {
+        if let Some(ref mut store) = *c.borrow_mut() {
+            store.shells.insert(name, fnptr);
+        }
+    });
+}
+
+fn capture_install(fnptr: FnPtr) {
+    CLOSURE_CAPTURE.with(|c| {
+        if let Some(ref mut store) = *c.borrow_mut() {
+            store.install = Some(fnptr);
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// AppDef — Send, shared with the Reconciler
+// ---------------------------------------------------------------------------
 
 // l[impl app.resources]
 // l[impl app.resources.names]
@@ -34,9 +95,12 @@ pub struct AppDef {
     pub name: String,
     pub params: BTreeMap<String, String>,
     pub resources: BTreeMap<ResourceId, Resource>,
+    /// Action metadata (name, description). No FnPtrs — closures are
+    /// recovered on demand via the thread-local capture buffer.
     pub actions: BTreeMap<String, ActionDef>,
     pub shells: BTreeMap<String, ShellDef>,
     pub install: Option<InstallDef>,
+    /// Names of parameters that have an `on_change` handler registered.
     pub param_changes: BTreeSet<String>,
 }
 
@@ -46,12 +110,15 @@ fn extract_description(options: &Map) -> Option<String> {
         .and_then(|v| v.clone().into_string().ok())
 }
 
+// ---------------------------------------------------------------------------
+// App — the BSL-facing handle; !Send (Rc inside), stays on the BSL thread
+// ---------------------------------------------------------------------------
+
 // l[impl app.type]
 // l[impl app.constructor]
 #[derive(Clone, Default)]
 pub struct App {
     pub def: Holder<AppDef>,
-    pub(crate) closures: Rc<RefCell<ClosureStore>>,
 }
 
 impl std::fmt::Debug for App {
@@ -240,10 +307,7 @@ impl CustomType for App {
                             description: None,
                         },
                     );
-                    this.closures
-                        .borrow_mut()
-                        .actions
-                        .insert(name.into(), closure);
+                    capture_action(name.into(), closure);
                     Action { name: name.into() }
                 },
             )
@@ -258,10 +322,7 @@ impl CustomType for App {
                             description: desc,
                         },
                     );
-                    this.closures
-                        .borrow_mut()
-                        .actions
-                        .insert(name.into(), closure);
+                    capture_action(name.into(), closure);
                     Action { name: name.into() }
                 },
             );
@@ -276,10 +337,7 @@ impl CustomType for App {
                         description: None,
                     },
                 );
-                this.closures
-                    .borrow_mut()
-                    .actions
-                    .insert("start".into(), closure);
+                capture_action("start".into(), closure);
                 Action {
                     name: "start".into(),
                 }
@@ -295,10 +353,7 @@ impl CustomType for App {
                             description: desc,
                         },
                     );
-                    this.closures
-                        .borrow_mut()
-                        .actions
-                        .insert("start".into(), closure);
+                    capture_action("start".into(), closure);
                     Action {
                         name: "start".into(),
                     }
@@ -315,10 +370,7 @@ impl CustomType for App {
                         description: None,
                     },
                 );
-                this.closures
-                    .borrow_mut()
-                    .shells
-                    .insert(name.into(), closure);
+                capture_shell(name.into(), closure);
             })
             .with_fn(
                 "on_shell",
@@ -331,10 +383,7 @@ impl CustomType for App {
                             description: desc,
                         },
                     );
-                    this.closures
-                        .borrow_mut()
-                        .shells
-                        .insert(name.into(), closure);
+                    capture_shell(name.into(), closure);
                 },
             );
 
@@ -344,7 +393,7 @@ impl CustomType for App {
                 this.def.lock().install = Some(InstallDef {
                     requirements: BTreeMap::new(),
                 });
-                this.closures.borrow_mut().install = Some(closure);
+                capture_install(closure);
             })
             .with_fn(
                 "on_install",
@@ -354,7 +403,7 @@ impl CustomType for App {
                  -> Result<(), Box<EvalAltResult>> {
                     let reqs = parse_install_requirements(&requirements)?;
                     this.def.lock().install = Some(InstallDef { requirements: reqs });
-                    this.closures.borrow_mut().install = Some(closure);
+                    capture_install(closure);
                     Ok(())
                 },
             );

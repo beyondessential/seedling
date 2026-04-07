@@ -46,36 +46,25 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
     let rt = RuntimeInstance::stub();
     let attach = shell_attach_fn_ptr();
 
+    // Re-run the script with the TLS capture active to recover FnPtrs,
+    // exactly as run_operation does. FnPtrs are never stored persistently.
     let (actions, shells, install, param_changes) = {
-        let closures = app.closures.borrow();
-        let def = app.def.lock();
+        let (mut fresh_scope, fresh_app) = defs::scope();
+        fresh_app.def.lock().name = app.def.lock().name.clone();
+        defs::app::begin_closure_capture();
+        engine
+            .run_ast_with_scope(&mut fresh_scope, script_ast)
+            .expect("re-run for exercise should succeed");
+        let captured = defs::app::end_closure_capture();
 
-        let actions: Vec<_> = def
-            .actions
-            .keys()
-            .filter_map(|name| {
-                closures
-                    .actions
-                    .get(name)
-                    .map(|c| (name.clone(), c.clone()))
-            })
-            .collect();
-        let shells: Vec<_> = def
-            .shells
-            .keys()
-            .filter_map(|name| closures.shells.get(name).map(|c| (name.clone(), c.clone())))
-            .collect();
-        let install = def.install.as_ref().and_then(|i| {
-            closures
-                .install
-                .clone()
-                .map(|c| (c, build_install_reqs_map(i)))
-        });
-        let param_changes: Vec<_> = closures
-            .param_changes
-            .iter()
-            .map(|(name, closure)| (name.clone(), closure.clone()))
-            .collect();
+        let def = fresh_app.def.lock();
+        let actions: Vec<_> = captured.actions.into_iter().collect();
+        let shells: Vec<_> = captured.shells.into_iter().collect();
+        let install = def
+            .install
+            .as_ref()
+            .and_then(|i| captured.install.map(|c| (c, build_install_reqs_map(i))));
+        let param_changes: Vec<_> = captured.param_changes.into_iter().collect();
 
         (actions, shells, install, param_changes)
     };
