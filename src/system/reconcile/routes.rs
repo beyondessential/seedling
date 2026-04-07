@@ -65,16 +65,19 @@ pub(super) async fn apply(
             "network_created",
             serde_json::json!({}),
         ));
+        // Always install a route, even with no backends — the data plane
+        // converts an empty backends list to a blackhole /128 so that
+        // connections fail fast (RST) rather than timing out.
+        routes.push(ServiceRoute {
+            service_ip,
+            backends: backends.clone(),
+        });
         if !backends.is_empty() {
             observations.push((
                 svc_instance.clone(),
                 "backend_healthy",
                 serde_json::json!({}),
             ));
-            routes.push(ServiceRoute {
-                service_ip,
-                backends,
-            });
         }
     }
 
