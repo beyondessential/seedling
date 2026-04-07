@@ -48,6 +48,11 @@ pub enum ActuateError {
     ImageUnavailable { reference: String },
     #[snafu(display("resource kind {kind:?} is not supported by this actuator"))]
     UnsupportedKind { kind: ResourceKind },
+    #[snafu(display("volume write {path:?}: {source}"))]
+    VolumeWrite {
+        path: std::path::PathBuf,
+        source: std::io::Error,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -94,7 +99,6 @@ impl Actuator {
     }
 
     // r[impl actuate.deployment.start]
-    // r[impl actuate.volume.start]
     /// Ensure all primitives for this instance exist and are running.
     pub async fn start(
         &self,
@@ -160,7 +164,8 @@ impl Actuator {
                 )
                 .await
             }
-            Resource::Volume(_) => {
+            // r[impl actuate.volume.start]
+            Resource::Volume(vol) => {
                 let name = instance.display_name.clone();
                 if !self
                     .driver
@@ -175,7 +180,32 @@ impl Actuator {
                         .await
                         .map_err(|e| ActuateError::Container { source: e })?;
                 }
-                // TODO: Volume writes (populating files into the volume)
+                let writes = vol.def.lock().writes.clone();
+                if !writes.is_empty() {
+                    let mountpoint = self
+                        .driver
+                        .container
+                        .volume_mountpoint(&name)
+                        .await
+                        .map_err(|e| ActuateError::Container { source: e })?;
+                    for (path, contents) in &writes {
+                        let dest = mountpoint.join(path.trim_start_matches('/'));
+                        if let Some(parent) = dest.parent() {
+                            tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                                ActuateError::VolumeWrite {
+                                    path: dest.clone(),
+                                    source: e,
+                                }
+                            })?;
+                        }
+                        tokio::fs::write(&dest, contents).await.map_err(|e| {
+                            ActuateError::VolumeWrite {
+                                path: dest.clone(),
+                                source: e,
+                            }
+                        })?;
+                    }
+                }
                 Ok(None)
             }
             Resource::ExternalVolume(_) | Resource::ExternalService(_) => Ok(None),

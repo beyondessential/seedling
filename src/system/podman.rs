@@ -374,6 +374,20 @@ impl PodmanRuntime {
         Ok(())
     }
 
+    async fn volume_mountpoint_impl(&self, name: &str) -> Result<std::path::PathBuf, PodmanError> {
+        let info = self
+            .client
+            .v5()
+            .volumes()
+            .volume_inspect_libpod(name)
+            .await
+            .map_err(map_api_err)?;
+        let mountpoint = info.mountpoint.ok_or_else(|| PodmanError::Protocol {
+            message: format!("volume '{name}' has no mountpoint"),
+        })?;
+        Ok(std::path::PathBuf::from(mountpoint))
+    }
+
     async fn remove_container_impl(&self, name: &str, force: bool) -> Result<(), PodmanError> {
         let params = ContainerDeleteLibpod {
             force: Some(force),
@@ -551,6 +565,13 @@ impl ContainerRuntime for PodmanRuntime {
 
     fn remove_volume<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {
         Box::pin(async move { self.remove_volume_impl(name).await.map_err(Into::into) })
+    }
+
+    fn volume_mountpoint<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<std::path::PathBuf, BoxError>> {
+        Box::pin(async move { self.volume_mountpoint_impl(name).await.map_err(Into::into) })
     }
 
     fn remove_container<'a>(

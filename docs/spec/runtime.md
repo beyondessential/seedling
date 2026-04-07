@@ -317,7 +317,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Stopping a Deployment or Job instance must stop the supervised container process and, once stopped, remove the pod network.
 
 > r[actuate.volume.start]
-> Starting a Volume instance must create the named volume if it does not already exist.
+> Starting a Volume instance must create the named volume if it does not already exist, then apply any declared file writes to the volume.
 
 > r[actuate.volume.stop]
 > Stopping a Volume instance must remove the named volume.

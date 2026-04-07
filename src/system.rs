@@ -83,6 +83,11 @@ pub trait ContainerRuntime: Send + Sync + 'static {
     fn volume_exists<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<bool, BoxError>>;
     fn create_volume<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>>;
     fn remove_volume<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>>;
+    /// Returns the host filesystem path where the named volume is mounted.
+    fn volume_mountpoint<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<std::path::PathBuf, BoxError>>;
 
     // Forced cleanup (e.g. seedling crashed while container was running)
     fn remove_container<'a>(

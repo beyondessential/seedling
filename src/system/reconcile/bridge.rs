@@ -108,9 +108,10 @@ async fn is_address_assigned(
         }
         for attr in &msg.attributes {
             if let AddressAttribute::Address(IpAddr::V6(a)) = attr
-                && *a == target {
-                    return Ok(true);
-                }
+                && *a == target
+            {
+                return Ok(true);
+            }
         }
     }
     Ok(false)
