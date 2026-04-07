@@ -745,6 +745,59 @@ and re-converges via steps 2–5 of the upgrade sequence.
 
 ---
 
+## Seedling restart and upgrade
+
+Seedling restarts (clean or crash, including mid-upgrade binary replacement) are
+largely transparent because the critical design decisions already compose well:
+
+| Concern                     | Survives restart? | Reason                                              |
+|-----------------------------|:-----------------:|-----------------------------------------------------|
+| DNAT forwarding rules       | yes               | kernel-owned; process lifecycle irrelevant          |
+| App containers              | yes               | systemd transient units; not tied to seedling's PID |
+| Caddy container             | yes               | same — another transient unit                       |
+| Caddy routing config        | yes               | lives in Caddy's process memory; Caddy keeps running|
+| Pod networks                | yes               | podman networks persist independently               |
+| Volumes                     | yes               | persistent by definition                           |
+| DB state / operation replay | yes               | already persisted; existing replay infrastructure   |
+
+**What seedling re-establishes on startup:**
+
+The only in-memory state that must be reconstructed is `CaddyProxy`'s current
+`SocketAddr`. Seedling inspects running containers for the active Caddy instance,
+reads its IP on `seedling-proxy`, and re-initialises `CaddyProxy`. Everything
+else is handled by the reconciliation loop's first tick, which observes actual
+system state and converges from there — the same path used for normal operation.
+
+**Crash mid-Caddy-upgrade:**
+
+If seedling crashes during the blue/green upgrade window (after the new Caddy
+container has been started but before the old one has been stopped), two Caddy
+containers may be running simultaneously. Seedling uses distinct container names
+to make this unambiguous:
+
+- `seedling-caddy` — the currently active container (the one DNAT rules point to)
+- `seedling-caddy-next` — an in-progress replacement
+
+On startup, if both exist, seedling reads the current DNAT rules to identify
+which IP is active. The container on that IP is the live one; the other is an
+orphan from the interrupted upgrade and is stopped and removed. `CaddyProxy` is
+then initialised from the live container.
+
+If only `seedling-caddy-next` exists (crash occurred after DNAT switch but
+before the old container was removed), it is treated as the active container: it
+is renamed to `seedling-caddy` and `CaddyProxy` is initialised from it.
+
+This naming convention also makes Caddy containers unambiguous when scanning
+with `list_units("seedling-")` or inspecting running containers.
+
+**DB schema migrations:**
+
+If a new version of seedling requires a schema change, migrations run before
+the reconciliation loop starts — the same as any other restart. No special
+handling beyond what the existing migration infrastructure provides.
+
+---
+
 ## nftables port forwarder (`src/system/nftables.rs`)
 
 - Crate: `nftables` (v0.6+) with the `tokio` feature, which provides an async
