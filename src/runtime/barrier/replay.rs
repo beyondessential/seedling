@@ -268,8 +268,8 @@ mod tests {
     #[test]
     fn db_action_log_barrier_suspends_then_resumes() {
         let (engine, mut scope, app, ast) = {
-            let (engine, mut scope, app) = crate::setup();
-            let ast = crate::run_script(
+            let (engine, mut scope, app) = crate::setup_language();
+            let ast = crate::tests::run_script(
                 &engine,
                 &mut scope,
                 r#"
@@ -350,8 +350,8 @@ mod tests {
     #[test]
     fn db_action_log_sequential_barriers() {
         let (engine, mut scope, app, ast) = {
-            let (engine, mut scope, app) = crate::setup();
-            let ast = crate::run_script(
+            let (engine, mut scope, app) = crate::setup_language();
+            let ast = crate::tests::run_script(
                 &engine,
                 &mut scope,
                 r#"

@@ -15,7 +15,7 @@ use crate::{
 // param.value — string coercions
 // -----------------------------------------------------------------------
 
-// r[verify param.value]
+// l[verify param.value]
 #[test]
 fn param_value_used_in_string_interpolation() {
     let app = run_test_script_app(
@@ -31,7 +31,7 @@ fn param_value_used_in_string_interpolation() {
     let _ = dep;
 }
 
-// r[verify param.value]
+// l[verify param.value]
 #[test]
 fn param_to_string_returns_value() {
     let app = run_test_script_app(r#"let _host = app.param("host");"#);

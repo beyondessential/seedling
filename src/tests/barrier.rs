@@ -18,8 +18,8 @@ fn setup_with_script(
     defs::app::App,
     rhai::AST,
 ) {
-    let (engine, mut scope, app) = crate::setup();
-    let ast = crate::run_script(&engine, &mut scope, script).expect("script should parse");
+    let (engine, mut scope, app) = crate::setup_language();
+    let ast = super::run_script(&engine, &mut scope, script).expect("script should parse");
     (engine, scope, app, ast)
 }
 
