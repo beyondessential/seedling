@@ -1061,6 +1061,143 @@ migration infrastructure provides.
 
 ---
 
+## Reconciliation loop
+
+The reconciler runs as a background task, ticking at a fixed interval (5 s).
+Each tick executes a sequence of phases. All phases operate on a
+point-in-time snapshot of the desired state computed at the start of the tick.
+The complete DataPlane and proxy state is recomputed and reapplied from scratch
+on every tick — it is never accumulated across ticks, so the loop is
+inherently idempotent.
+
+### Phase 1 — Desired state snapshot
+
+Under a brief lock on the App, compute the desired state:
+
+- **Steady state** (no active operation): every resource in the AppDef is
+  desired at `Ready`. The `compute(app_name, &def, None)` path in
+  `runtime/desired.rs` handles this.
+- **During an operation**: desired state comes from the action log — only
+  resources the action closure has explicitly `rt.start()`'d or `rt.stop()`'d
+  are included, at the state they were placed into.
+
+The lock is dropped before any async work begins.
+
+Scale is deferred: `compute_steady` currently produces exactly one instance
+per resource via `get_or_create_singleton`. True N-instance scale handling
+(N stable instance IDs per slot, starting/stopping to match declared scale)
+is a separate work item.
+
+### Phase 2 — Observe and actuate Deployments and Jobs
+
+For each Deployment or Job instance in the desired state:
+
+1. **Observe** via `Observer::observe`: pod network presence, container
+   lifecycle state (missing / created / running / exited), systemd unit state.
+2. **Decide**:
+   - desired=`Ready` and container not running → call `Actuator::start`.
+   - desired=`Unscheduled` and container running or unit active →
+     call `Actuator::stop`.
+   - Otherwise → no action this tick.
+3. **Collect running pods**: if the container is currently running (from the
+   observation, before any actuation this tick), call `container.inspect()` to
+   obtain its IPv6 address on the pod network. Build a `running_pods` list of
+   `(instance, pod_prefix, pod_ip)` for use in Phases 4 and 5.
+
+Errors for individual instances are logged and skipped; they do not abort
+the tick or affect other instances.
+
+### Phase 3 — Observe and actuate Volumes
+
+For each Volume instance in the desired state:
+
+1. **Observe**: does the named volume exist?
+2. **Decide**: desired=`Ready` and missing → create; desired=`Unscheduled`
+   and present → remove.
+
+`ExternalVolume` and `ExternalService` are no-ops; skip them entirely.
+
+### Phase 4 — DataPlane: service routes
+
+For each `Service` and `HttpService` resource in the AppDef snapshot:
+
+1. Derive the service's stable `/128` IPv6 address from the node prefix and
+   the service's persisted instance ID (via `instance_ipv6`).
+2. Scan `running_pods`: collect the pod IPv6 addresses of every running pod
+   instance whose definition has a `tcp_binding`, `udp_binding`, or
+   `http_binding` pointing to this service name.
+3. If there is at least one backend, emit a `ServiceRoute { service_ip,
+   backends }`.
+
+Call `data_plane.apply_routes(&routes)` with the complete replacement set.
+`ExternalService` resources are skipped — they represent services outside
+seedling's control and produce no routes.
+
+### Phase 5 — DataPlane: nftables rules
+
+Build `DataPlaneRules { ingress, mounts }`:
+
+**IngressRules** — one per `Ingress` resource in the AppDef snapshot:
+
+- `external_port`: the ingress's declared listen port.
+- `caddy_addr`: Caddy's IPv6 address on the `seedling-proxy` network,
+  paired with the same port (Caddy listens on the same port number internally).
+- `proto`: `Tcp` normally; `Both` if the ingress has `.dtls()` or `.quic()`.
+- If the ingress has a redirect configured (e.g. HTTP→HTTPS), add a second
+  `IngressRule` for the redirect source port using `proto: Tcp`.
+
+**MountRules** — for each running pod that declares service mounts:
+
+For each `ServicePort` in the pod's `service_mounts` list:
+
+- `pod_prefix`: the pod's `/64` network prefix (derived from node prefix +
+  instance ID).
+- `mount_addr`: `pod_prefix::2` — the bridge's mount endpoint address.
+- `mount_port`: `service_port.port`.
+- `service_ip`: the target service's stable IPv6 address.
+- `service_port`: `service_port.port`.
+- `proto`: `Tcp` (UDP service mounts are not yet supported).
+
+Call `data_plane.apply_rules(&rules)`.
+
+### Phase 6 — Proxy config (Caddy)
+
+For each `Ingress` resource in the AppDef snapshot:
+
+1. Look up the ingress's target service name (`ingress.service.name`).
+2. Derive the service's stable IPv6 address.
+3. Find the upstream port: scan all pod definitions for the first
+   `tcp_binding` or `http_binding` that references this service; use
+   `pod_port` (the port the container actually listens on). Fall back to
+   the ingress's declared port if no binding is found.
+4. Build a `ServiceUpstream { service_ip, service_port: upstream_port }`.
+
+Pass all `(ingress_def, upstream)` pairs to `build_proxy_config()`, then
+call `proxy.apply_config(&proxy_config)`.
+
+### Phase 7 — Bridge `::2` address check (startup reconciliation)
+
+For each pod instance whose network is known to exist, verify that
+`pod_prefix::2` is assigned to the bridge interface. If the address is
+absent (e.g. after a crash between `create_network` and the rtnetlink
+assignment), re-add it via rtnetlink.
+
+This is required to close the crash-recovery gap described in the network
+topology section. It is noted here but is not yet implemented — the
+`create_network` path in `PodmanRuntime` must be extended to record bridge
+interface names so this check can look them up.
+
+### Error handling across phases
+
+- An error in one phase does not skip later phases.
+- Within a phase, an error for one resource is logged and skipped; the
+  reconciler continues to the next resource.
+- The Caddy `admin_addr` handle is read under an async read lock at the
+  start of phases 5 and 6; if the address is not yet IPv6 (e.g. Caddy has
+  not started), those phases are skipped for that tick and an error is logged.
+
+---
+
 ## Implementation order
 
 1. **`src/system/types.rs`** — all shared data types; no logic, no deps.
@@ -1089,10 +1226,6 @@ migration infrastructure provides.
 ---
 
 ## Open questions for implementation time
-
-- **`async fn` in traits + `Send` bounds**: use `trait-variant` (idiomatic,
-  minimal) or `async_trait` (heavier but widely understood). Decide when adding
-  the tokio dependency.
 
 - **rtnetlink crate**: adding ECMP IPv6 routes requires rtnetlink. The `rtnetlink`
   crate (from the `netlink-packet-*` family) is the most complete option.
