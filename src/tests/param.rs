@@ -141,6 +141,7 @@ fn on_change_inside_action_closure_throws() {
         &log,
         oracle,
         std::sync::Arc::new(crate::runtime::EphemeralInstanceRegistry::new()),
+        None,
     );
     assert!(
         matches!(result, OperationResult::Failed(_)),

@@ -190,9 +190,6 @@ async fn main() {
     // Reconciler
     // ---------------------------------------------------------------------------
 
-    // TODO: wire active_progress to the operation runner so the reconciler
-    // tracks mid-operation desired state (live rt.start() / rt.stop() calls)
-    // rather than always falling back to steady state between ticks.
     let active_progress: Arc<RwLock<Option<OperationProgress>>> = Arc::new(RwLock::new(None));
 
     let obs_db = Db::open(&db_path).unwrap_or_else(|e| {
@@ -263,14 +260,12 @@ async fn main() {
         &current_op.action_name,
     );
 
-    // Seed active_progress from any already-committed log entries so the
-    // reconciler has a reasonable view of in-flight resources when resuming
-    // an interrupted operation. Mid-operation updates are not yet wired.
+    // Seed active_progress from any already-committed log entries. For a fresh
+    // operation this is empty; Some(empty) signals the reconciler that an
+    // operation is in progress and it should not fall back to steady state.
     {
         let entries = log.load();
-        if !entries.is_empty() {
-            *active_progress.write() = Some(OperationProgress::from_log(&entries));
-        }
+        *active_progress.write() = Some(OperationProgress::from_log(&entries));
     }
 
     // run_operation is synchronous and uses Rhai types that are not Send;
@@ -286,6 +281,7 @@ async fn main() {
             &log,
             oracle,
             Arc::clone(&registry),
+            Some(Arc::clone(&active_progress)),
         )
     });
 

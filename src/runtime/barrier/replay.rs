@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use rhai::{AST, Dynamic, Engine, EvalAltResult, Scope};
 
 use crate::runtime::db::Db;
+use crate::runtime::desired::OperationProgress;
 use crate::runtime::history;
 
 use crate::defs::app::{App, AppDef, begin_closure_capture, end_closure_capture};
@@ -166,6 +167,7 @@ pub fn run_operation<W>(
     log: &dyn ActionLog,
     world: Arc<W>,
     registry: Arc<dyn InstanceRegistry>,
+    active_progress: Option<Arc<RwLock<Option<OperationProgress>>>>,
 ) -> OperationResult
 where
     W: WorldStateOracle + 'static,
@@ -247,6 +249,9 @@ where
     // Flush pending entries from the context to the log.
     let pending = ctx.lock().take_pending();
     log.commit(&pending);
+    if let Some(ap) = &active_progress {
+        *ap.write() = Some(OperationProgress::from_log(&log.load()));
+    }
 
     match result {
         Ok(_) => OperationResult::Completed,
@@ -359,6 +364,7 @@ mod tests {
             &log,
             Arc::clone(&oracle),
             Arc::clone(&reg),
+            None,
         );
         assert!(matches!(result, OperationResult::Suspended(_)));
 
@@ -385,6 +391,7 @@ mod tests {
             &log,
             Arc::clone(&oracle),
             Arc::clone(&reg),
+            None,
         );
         assert!(matches!(r, OperationResult::Completed));
 
@@ -438,6 +445,7 @@ mod tests {
             &log,
             Arc::clone(&oracle),
             Arc::clone(&reg),
+            None,
         );
         assert!(matches!(r, OperationResult::Suspended(_)));
 
@@ -454,6 +462,7 @@ mod tests {
             &log,
             Arc::clone(&oracle),
             Arc::clone(&reg),
+            None,
         );
         assert!(matches!(r, OperationResult::Suspended(_)));
 
@@ -470,6 +479,7 @@ mod tests {
             &log,
             Arc::clone(&oracle),
             Arc::clone(&reg),
+            None,
         );
         assert!(matches!(r, OperationResult::Completed));
 

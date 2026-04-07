@@ -58,6 +58,7 @@ fn barrier_satisfied_on_first_pass() {
         &log,
         oracle,
         registry(),
+        None,
     );
     assert!(matches!(result, OperationResult::Completed));
 }
@@ -91,6 +92,7 @@ fn barrier_suspends_then_resumes() {
         &log,
         Arc::clone(&oracle),
         Arc::clone(&reg),
+        None,
     );
     assert!(matches!(r, OperationResult::Suspended(_)));
 
@@ -108,6 +110,7 @@ fn barrier_suspends_then_resumes() {
         &log,
         Arc::clone(&oracle),
         Arc::clone(&reg),
+        None,
     );
     assert!(matches!(r, OperationResult::Completed));
 }
@@ -142,6 +145,7 @@ fn sequential_barriers() {
         &log,
         Arc::clone(&oracle),
         Arc::clone(&reg),
+        None,
     );
     assert!(matches!(r, OperationResult::Suspended(_)));
 
@@ -158,6 +162,7 @@ fn sequential_barriers() {
         &log,
         Arc::clone(&oracle),
         Arc::clone(&reg),
+        None,
     );
     assert!(matches!(r, OperationResult::Suspended(_)));
 
@@ -174,6 +179,7 @@ fn sequential_barriers() {
         &log,
         Arc::clone(&oracle),
         Arc::clone(&reg),
+        None,
     );
     assert!(matches!(r, OperationResult::Completed));
 }
@@ -205,6 +211,7 @@ fn barrier_deadline_zero_expires_on_second_pass() {
         &log,
         Arc::clone(&oracle),
         Arc::clone(&reg),
+        None,
     );
     assert!(matches!(r, OperationResult::Suspended(_)));
 
@@ -219,6 +226,7 @@ fn barrier_deadline_zero_expires_on_second_pass() {
         &log,
         Arc::clone(&oracle),
         Arc::clone(&reg),
+        None,
     );
     assert!(matches!(r, OperationResult::Failed(_)));
 }
@@ -253,6 +261,7 @@ fn replay_idempotency() {
         &log,
         Arc::clone(&oracle),
         Arc::clone(&reg),
+        None,
     );
     assert!(matches!(r, OperationResult::Suspended(_)));
 
@@ -269,6 +278,7 @@ fn replay_idempotency() {
         &log,
         Arc::clone(&oracle),
         Arc::clone(&reg),
+        None,
     );
     assert!(matches!(r, OperationResult::Completed));
 
@@ -318,6 +328,7 @@ fn rt_stop_acts_as_barrier() {
         &log,
         Arc::clone(&oracle),
         Arc::clone(&reg),
+        None,
     );
     assert!(matches!(r, OperationResult::Suspended(_)));
 
@@ -334,6 +345,7 @@ fn rt_stop_acts_as_barrier() {
         &log,
         Arc::clone(&oracle),
         Arc::clone(&reg),
+        None,
     );
     assert!(matches!(r, OperationResult::Completed));
 }
