@@ -20,6 +20,7 @@ use crate::runtime::scheduler::{RejectReason, ScheduleResult, Scheduler};
 
 pub(crate) mod defs;
 pub(crate) mod runtime;
+pub(crate) mod system;
 
 #[cfg(test)]
 mod tests;
