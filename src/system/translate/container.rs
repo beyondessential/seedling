@@ -154,7 +154,12 @@ fn spec_from_pod(
         .map(|(path, vm)| {
             let source = match vm {
                 VolumeMount::Volume(v) => {
-                    MountSource::Volume(v.name.as_ref().map_or("", |n| n.as_str()).to_string())
+                    let name = v
+                        .name
+                        .as_ref()
+                        .map(|n| format!("{}-{}", instance.app, n.as_str()))
+                        .unwrap_or_default();
+                    MountSource::Volume(name)
                 }
                 VolumeMount::ExternalVolume(ev) => MountSource::Volume(ev.name.to_string()),
             };
@@ -304,5 +309,57 @@ mod tests {
         assert_eq!(&octets[..8], &prefix.network().octets()[..8]);
         assert_eq!(&octets[8..15], &[0u8; 7]);
         assert_eq!(octets[15], 2);
+    }
+
+    #[test]
+    fn volume_mount_uses_app_prefixed_display_name() {
+        use std::sync::Arc;
+
+        use crate::defs::resource::ResourceKind;
+        use crate::defs::{container::VolumeMount, deployment::DeploymentDef, volume::Volume};
+        use crate::runtime::identity::{InstanceId, InstanceVariant, ResourceInstance};
+
+        // Build a DeploymentDef whose container mounts a named volume "data".
+        let dep_def = DeploymentDef::default();
+        {
+            let pod = dep_def.pod.lock();
+            let mut container = pod.container.lock();
+            container.image = Some("img".to_string());
+            container.volume_mounts.insert(
+                std::path::PathBuf::from("/mnt/data"),
+                VolumeMount::Volume(Volume::new(Some(Arc::new("data".to_string())))),
+            );
+        }
+
+        let instance = ResourceInstance {
+            id: InstanceId::generate(),
+            app: "myapp".to_string(),
+            kind: ResourceKind::Deployment,
+            name: Some("web".to_string()),
+            variant: InstanceVariant::Singleton,
+            display_name: "myapp-web".to_string(),
+        };
+
+        let prefix: ipnet::Ipv6Net = "fd5e:ed12:3456:0100::/64".parse().unwrap();
+        let network = ("seedling-myapp-web".to_string(), prefix);
+        let spec = deployment_spec(
+            &dep_def,
+            &instance,
+            &std::collections::BTreeMap::new(),
+            &network,
+            &[],
+        );
+
+        // The volume mount source must be the app-prefixed display name, not the raw BSL name.
+        let vol_mount = spec
+            .mounts
+            .iter()
+            .find(|m| m.target == "/mnt/data")
+            .expect("mount at /mnt/data present");
+        assert!(
+            matches!(&vol_mount.source, MountSource::Volume(n) if n == "myapp-data"),
+            "expected myapp-data, got {:?}",
+            vol_mount.source,
+        );
     }
 }
