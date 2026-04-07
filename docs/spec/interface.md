@@ -283,8 +283,16 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Any forward whose target service name or port is no longer declared in the new AppDef must be torn down: all tunneled connections are closed, the control stream is closed, and a `ForwardStopped` event is emitted.
 > Forwards whose target service and port still exist in the new AppDef are unaffected.
 
+> i[forward.record]
+> A forward record contains the following fields: `forward_id`, `app`, `service`, `port`, `proto`, and `opened_at` (RFC 3339).
+
+> i[forward.list]
+> `ListForwards { app? }` returns an array of forward records for all currently active port forwards.
+> If `app` is provided, only forwards for that app are returned; otherwise all active forwards across all apps are returned.
+
 > i[forward.stop]
 > `StopForward { forward_id }` explicitly tears down an active port forward, closing all of its tunneled connections.
+> Any operator may stop any forward regardless of which connection opened it.
 > Returns `{}` on success, or `not_found` if the forward does not exist.
 
 > i[forward.concurrent]

@@ -178,6 +178,7 @@ Shared QUIC client logic lives in `src/oi/client.rs`:
 | `invoke-action <app> <name>` | `InvokeAction` |
 | `invoke-install <app> [--req key=value]…` | `InvokeInstall` |
 | `list-faults [--app <name>]` | `ListFaults` |
+| `list-forwards [--app <name>]` | `ListForwards` |
 | `subscribe` | `Subscribe` — streams events to stdout, one JSON object per line |
 | `open-shell <app> <name>` | `OpenShell` — interactive terminal session |
 | `forward-port <app> <service> <port> --proto tcp\|udp [--local-port <N>]` | `ForwardPort` — TCP or UDP port forward |
