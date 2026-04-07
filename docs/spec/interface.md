@@ -79,7 +79,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 # App Management
 
 > i[app.register]
-> `RegisterApp { name, script_path }` evaluates the BSL script at the given path.
+> `RegisterApp { name, script }` evaluates the provided BSL script source text.
 > On success, the app is added to the managed set in the `NotInstalled` state and an `AppRegistered` event is emitted.
 > On script failure, `script_error` is returned and the app is not registered.
 
@@ -89,7 +89,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Otherwise the app immediately enters the `Deregistering` state and an `AppDeregistered` event is emitted when teardown completes and the app is fully removed.
 
 > i[app.reload]
-> `ReloadApp { name }` re-reads and re-evaluates the BSL script from disk.
+> `ReloadApp { name, script }` re-evaluates the provided BSL script source text.
 > If a lifecycle operation is in progress, the new AppDef takes effect at the next evaluation boundary after the operation completes.
 > If the script fails to parse or evaluate, a fault is filed, the existing AppDef continues running, and `FaultFiled` is emitted.
 > On success, `AppReloaded` is emitted.

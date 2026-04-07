@@ -35,14 +35,14 @@ Create `src/runtime/apps.rs`.
 - `installed: bool` — set to true when an install operation completes successfully
 
 `AppRegistry` holds a `HashMap<String, AppEntry>` and exposes:
-- `register(name, script_path) -> Result<(), ScriptError>`
+- `register(name, script: String) -> Result<(), ScriptError>`
 - `deregister(name)`
-- `reload(name) -> Result<(), ScriptError>` — re-evaluates; updates `ast` and `app` on
-  success; leaves existing state intact on failure
+- `reload(name, script: String) -> Result<(), ScriptError>` — re-evaluates; updates `ast`
+  and `app` on success; leaves existing state intact on failure
 - `get(name) -> Option<&AppEntry>`
 - `list() -> Vec<(String, AppStatus)>`
 
-Persist registered apps to a `registered_apps(name TEXT, script_path TEXT)` DB table so that
+Persist registered apps to a `registered_apps(name TEXT, script TEXT)` DB table so that
 registration survives restarts. Load all registered apps at startup before opening the OI
 listener.
 
@@ -145,8 +145,8 @@ Implement `RegisterApp`, `DeregisterApp`, and `ReloadApp`.
 
 1. Validate that the name conforms to `bsl.name` rules.
 2. Check the name is not already registered.
-3. Evaluate the script. On failure, return `script_error`.
-4. Persist to `registered_apps` table.
+3. Evaluate the script content. On failure, return `script_error`.
+4. Persist name and script content to `registered_apps` table.
 5. Add to in-memory `AppRegistry`.
 6. Spawn reconciler task for the new app (it will be in `NotInstalled` so it runs in
    steady-state with nothing desired).
@@ -164,12 +164,12 @@ Implement `RegisterApp`, `DeregisterApp`, and `ReloadApp`.
 
 ### `ReloadApp`
 
-1. Compile and evaluate the new script from disk.
+1. Compile and evaluate the provided script content.
 2. On failure: file a fault (wire fault table once Phase 6 is done; stub for now), emit
    `FaultFiled`, return `script_error`.
-3. On success: if an operation is in progress, store the new AST and App as "pending reload"
-   — apply at the next evaluation boundary. Otherwise apply immediately, notify the
-   reconciler tick. Emit `AppReloaded`.
+3. On success: update the stored script content in `registered_apps`. If an operation is in
+   progress, store the new AST and App as "pending reload" — apply at the next evaluation
+   boundary. Otherwise apply immediately, notify the reconciler tick. Emit `AppReloaded`.
 
 ---
 
