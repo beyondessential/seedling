@@ -323,3 +323,43 @@ pub enum ObservationFact {
     RoutePresent { hostname: String },
     RouteAbsent { hostname: String },
 }
+
+impl ObservationFact {
+    // r[impl observe.persist]
+    /// Maps this observation to the `(obs_kind, payload)` pairs written to
+    /// `world_observations`. Returns multiple entries when one fact advances
+    /// several oracle states simultaneously (e.g. VolumePresent → created +
+    /// ready). Returns an empty slice when this fact has no oracle mapping.
+    pub fn to_obs_kinds(&self) -> Vec<(&'static str, serde_json::Value)> {
+        use serde_json::json;
+        match self {
+            ObservationFact::ContainerCreated => vec![("container_created", json!({}))],
+            ObservationFact::ContainerRunning { pid } => {
+                vec![("container_running", json!({ "pid": pid }))]
+            }
+            ObservationFact::ContainerExited { exit_code } => {
+                vec![("container_exited", json!({ "exit_code": exit_code }))]
+            }
+            ObservationFact::ContainerHealthy => vec![("health_check_pass", json!({}))],
+            ObservationFact::ContainerMissing => vec![("container_removed", json!({}))],
+            // A present volume is both created and ready.
+            ObservationFact::VolumePresent => {
+                vec![("volume_created", json!({})), ("volume_ready", json!({}))]
+            }
+            ObservationFact::VolumeMissing => vec![("volume_cleaned_up", json!({}))],
+            // Ingress observations are emitted by proxy::apply, not here.
+            // Network observations are used only for pod actuation decisions.
+            // Unit and health-failure facts have no direct oracle mapping.
+            ObservationFact::ContainerUnhealthy
+            | ObservationFact::NetworkPresent
+            | ObservationFact::NetworkMissing
+            | ObservationFact::ProxyReachable
+            | ObservationFact::ProxyUnreachable
+            | ObservationFact::RoutePresent { .. }
+            | ObservationFact::RouteAbsent { .. }
+            | ObservationFact::UnitActive
+            | ObservationFact::UnitInactive
+            | ObservationFact::UnitFailed => vec![],
+        }
+    }
+}

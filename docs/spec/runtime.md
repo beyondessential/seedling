@@ -296,6 +296,18 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[observe.ingress]
 > For Ingress resource instances, the runtime must observe whether the proxy is reachable.
 
+> r[observe.persist]
+> After each observation pass, the runtime must persist the resulting facts to the
+> `world_observations` table as `obs_kind` string entries so that the barrier oracle
+> can derive lifecycle states and satisfy barriers. Each `(instance, obs_kind)` pair
+> must be written at most once per runtime session to prevent unbounded table growth.
+> Service lifecycle facts (`network_created`, `backend_healthy`) must be emitted by
+> the routes phase based on running backends. Ingress lifecycle facts
+> (`ingress_configured`, `ingress_ready`) must be emitted by the proxy phase only
+> after a successful configuration apply. Stop and cleanup facts (`stop_sent`,
+> `network_removed`, `network_cleaned_up`, `ingress_removed`, `ingress_cleaned_up`)
+> must be emitted for resources whose desired state is `Unscheduled`.
+
 # Actuation
 
 > r[actuate.deployment.start]

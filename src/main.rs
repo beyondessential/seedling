@@ -195,6 +195,11 @@ async fn main() {
     // rather than always falling back to steady state between ticks.
     let active_progress: Arc<RwLock<Option<OperationProgress>>> = Arc::new(RwLock::new(None));
 
+    let obs_db = Db::open(&db_path).unwrap_or_else(|e| {
+        eprintln!("error: cannot open observations database: {e}");
+        std::process::exit(1);
+    });
+
     let mut reconciler = Reconciler::new(
         app_name.clone(),
         app.clone(),
@@ -205,6 +210,7 @@ async fn main() {
         HashMap::new(), // bridge_names: populated by populate_bridge_names below
         caddy_admin_addr,
         data_dir.clone(),
+        obs_db,
     );
 
     reconciler.populate_bridge_names().await;

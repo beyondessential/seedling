@@ -1,11 +1,12 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use ipnet::Ipv6Net;
+use serde_json::json;
 use tracing::error;
 
 use crate::{
     defs::resource::Resource,
-    runtime::{desired::DesiredState, lifecycle::LifecycleState},
+    runtime::{desired::DesiredState, identity::ResourceInstance, lifecycle::LifecycleState},
     system::{
         System, actuator::Actuator, observer::Observer, translate::proxy::pod_network_prefix,
         types::ObservationFact,
@@ -22,6 +23,7 @@ pub(super) struct PodActuationUpdate {
     pub new_bridges: Vec<(String, String)>,
     /// Network names removed this tick (the pod was stopped).
     pub removed_networks: Vec<String>,
+    pub observations: Vec<(ResourceInstance, &'static str, serde_json::Value)>,
 }
 
 fn pod_network_name(instance: &crate::runtime::identity::ResourceInstance) -> String {
@@ -42,6 +44,7 @@ pub(super) async fn observe_and_actuate(
     let mut running = Vec::new();
     let mut new_bridges = Vec::new();
     let mut removed_networks = Vec::new();
+    let mut observations: Vec<(ResourceInstance, &'static str, serde_json::Value)> = Vec::new();
 
     for dr in &desired.resources {
         match &dr.definition {
@@ -61,6 +64,12 @@ pub(super) async fn observe_and_actuate(
                 continue;
             }
         };
+
+        for (fact, _ts) in &facts {
+            for (kind, payload) in fact.to_obs_kinds() {
+                observations.push((dr.instance.clone(), kind, payload));
+            }
+        }
 
         let is_running = facts
             .iter()
@@ -116,6 +125,7 @@ pub(super) async fn observe_and_actuate(
                 }
             }
             LifecycleState::Unscheduled if is_running || unit_active => {
+                observations.push((dr.instance.clone(), "stop_sent", json!({})));
                 match actuator.stop(&dr.instance, &dr.definition).await {
                     Ok(()) => {
                         removed_networks.push(pod_network_name(&dr.instance));
@@ -137,5 +147,6 @@ pub(super) async fn observe_and_actuate(
         running,
         new_bridges,
         removed_networks,
+        observations,
     }
 }

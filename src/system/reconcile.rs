@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     net::{IpAddr, SocketAddr},
     path::PathBuf,
     sync::Arc,
@@ -21,7 +21,10 @@ use crate::{
     defs::app::{App, AppDef},
     runtime::{
         InstanceRegistry,
+        db::Db,
         desired::{DesiredState, OperationProgress, compute},
+        history::insert_observation,
+        identity::InstanceId,
     },
     system::{System, actuator::Actuator, caddy, observer::Observer},
 };
@@ -86,6 +89,11 @@ pub struct Reconciler {
     /// Data directory passed to `ensure_caddy_running` on every tick so the
     /// reconciler can recover Caddy if it crashes after startup.
     data_dir: PathBuf,
+    /// Database handle for persisting observations to `world_observations`.
+    db: Arc<parking_lot::Mutex<Db>>,
+    /// Tracks which `(instance_id, obs_kind)` pairs have already been written
+    /// this run so we don't spam the table with identical rows every tick.
+    written_obs: HashSet<(InstanceId, &'static str)>,
 }
 
 impl Reconciler {
@@ -103,6 +111,7 @@ impl Reconciler {
         bridge_names: HashMap<String, String>,
         caddy_admin_addr: Arc<AsyncRwLock<SocketAddr>>,
         data_dir: PathBuf,
+        obs_db: Db,
     ) -> Self {
         let observer = Observer::new(Arc::clone(&driver));
         let actuator = Actuator::new(Arc::clone(&driver), node_prefix, Arc::clone(&registry));
@@ -119,6 +128,8 @@ impl Reconciler {
             netlink: None,
             caddy_admin_addr,
             data_dir,
+            db: Arc::new(parking_lot::Mutex::new(obs_db)),
+            written_obs: HashSet::new(),
         }
     }
 
@@ -183,6 +194,7 @@ impl Reconciler {
             self.bridge_names.remove(&net_name);
         }
         let running_pods = pod_update.running;
+        self.persist_obs(pod_update.observations);
 
         // Bridge ::2 address check — re-add mount endpoint addresses that
         // were lost due to a crash between create_network and the initial
@@ -193,11 +205,13 @@ impl Reconciler {
         }
 
         // Observe and actuate Volumes.
-        volumes::observe_and_actuate(&self.observer, &self.actuator, &desired).await;
+        let vol_obs = volumes::observe_and_actuate(&self.observer, &self.actuator, &desired).await;
+        self.persist_obs(vol_obs);
 
         // DataPlane: service routes.
-        routes::apply(
+        let svc_obs = routes::apply(
             &self.driver,
+            &desired,
             &snapshot,
             &self.node_prefix,
             &*self.registry,
@@ -205,6 +219,7 @@ impl Reconciler {
             &self.app_name,
         )
         .await;
+        self.persist_obs(svc_obs);
 
         // Caddy health check — ensure Caddy is running before phases 5 and 6.
         //
@@ -260,9 +275,10 @@ impl Reconciler {
         .await;
 
         // Proxy config (Caddy).
-        proxy::apply(
+        let proxy_obs = proxy::apply(
             &self.driver,
             &snapshot,
+            &desired,
             &self.node_prefix,
             &*self.registry,
             &self.app_name,
@@ -270,6 +286,34 @@ impl Reconciler {
             &self.data_dir,
         )
         .await;
+        self.persist_obs(proxy_obs);
+    }
+
+    // r[impl observe.persist]
+    /// Write a batch of observations to `world_observations`, skipping any
+    /// `(instance, obs_kind)` pair that has already been persisted this run.
+    fn persist_obs(
+        &mut self,
+        batch: Vec<(
+            crate::runtime::identity::ResourceInstance,
+            &'static str,
+            serde_json::Value,
+        )>,
+    ) {
+        for (instance, kind, payload) in batch {
+            if !self.written_obs.insert((instance.id, kind)) {
+                continue;
+            }
+            let db = self.db.lock();
+            if let Err(e) = insert_observation(&db, &instance, kind, &payload) {
+                error!(
+                    error = %e,
+                    instance = %instance.display_name,
+                    obs = kind,
+                    "reconciler: failed to persist observation"
+                );
+            }
+        }
     }
 
     // r[desired-state.definition]

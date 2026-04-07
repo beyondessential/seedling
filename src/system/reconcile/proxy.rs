@@ -11,7 +11,10 @@ use crate::{
         pod::PodDef,
         resource::{Resource, ResourceKind},
     },
-    runtime::InstanceRegistry,
+    runtime::{
+        InstanceRegistry, desired::DesiredState, identity::ResourceInstance,
+        lifecycle::LifecycleState,
+    },
     system::{
         System,
         translate::proxy::{ServiceUpstream, build_proxy_config, instance_ipv6},
@@ -23,12 +26,14 @@ use crate::{
 pub(super) async fn apply(
     driver: &System,
     snapshot: &AppDef,
+    desired: &DesiredState,
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
     app_name: &str,
     caddy_addr: SocketAddr,
     data_dir: &std::path::Path,
-) {
+) -> Vec<(ResourceInstance, &'static str, serde_json::Value)> {
+    let mut observations: Vec<(ResourceInstance, &'static str, serde_json::Value)> = Vec::new();
     let mut pairs: Vec<(IngressDef, ServiceUpstream)> = Vec::new();
 
     for resource in snapshot.resources.values() {
@@ -49,6 +54,17 @@ pub(super) async fn apply(
         // if no binding is found.
         let upstream_port = find_upstream_port(snapshot, svc_name, def.port);
 
+        let ingress_instance = registry.get_or_create_singleton(
+            app_name,
+            ResourceKind::Ingress,
+            Some(ingress.service.name.as_str()),
+        );
+        observations.push((
+            ingress_instance,
+            "ingress_configured",
+            serde_json::json!({}),
+        ));
+
         pairs.push((
             def,
             ServiceUpstream {
@@ -59,7 +75,7 @@ pub(super) async fn apply(
     }
 
     if pairs.is_empty() {
-        return;
+        return observations;
     }
 
     let config = build_proxy_config(&pairs, caddy_addr);
@@ -67,13 +83,54 @@ pub(super) async fn apply(
 
     if let Err(e) = driver.proxy.apply_config(&config).await {
         error!(error = %e, "proxy: apply_config failed");
-        return;
+        return observations;
+    }
+
+    for resource in snapshot.resources.values() {
+        let ingress = match resource {
+            Resource::Ingress(i) => i,
+            _ => continue,
+        };
+        let ingress_instance = registry.get_or_create_singleton(
+            app_name,
+            ResourceKind::Ingress,
+            Some(ingress.service.name.as_str()),
+        );
+        observations.push((ingress_instance, "ingress_ready", serde_json::json!({})));
     }
 
     // r[impl infra.proxy.upgrade.cache]
     if let Err(e) = caddy::write_cached_proxy_json(data_dir, &caddy_json) {
         warn!(error = %e, "proxy: failed to cache proxy config; upgrade continuity may be impaired");
     }
+
+    for dr in &desired.resources {
+        let ingress = match &dr.definition {
+            Resource::Ingress(i) => i,
+            _ => continue,
+        };
+        if dr.desired != LifecycleState::Unscheduled {
+            continue;
+        }
+        let ingress_instance = registry.get_or_create_singleton(
+            app_name,
+            ResourceKind::Ingress,
+            Some(ingress.service.name.as_str()),
+        );
+        observations.push((ingress_instance.clone(), "stop_sent", serde_json::json!({})));
+        observations.push((
+            ingress_instance.clone(),
+            "ingress_removed",
+            serde_json::json!({}),
+        ));
+        observations.push((
+            ingress_instance.clone(),
+            "ingress_cleaned_up",
+            serde_json::json!({}),
+        ));
+    }
+
+    observations
 }
 
 /// Scan all Deployment and Job pod definitions for the first TCP or HTTP

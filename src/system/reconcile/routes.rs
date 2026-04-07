@@ -9,7 +9,10 @@ use crate::{
         pod::PodDef,
         resource::{Resource, ResourceKind},
     },
-    runtime::InstanceRegistry,
+    runtime::{
+        InstanceRegistry, desired::DesiredState, identity::ResourceInstance,
+        lifecycle::LifecycleState,
+    },
     system::{System, translate::proxy::instance_ipv6, types::ServiceRoute},
 };
 
@@ -19,12 +22,14 @@ use super::RunningPod;
 // r[fault.non-blocking]
 pub(super) async fn apply(
     driver: &System,
+    desired: &DesiredState,
     snapshot: &AppDef,
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
     running_pods: &[RunningPod],
     app_name: &str,
-) {
+) -> Vec<(ResourceInstance, &'static str, serde_json::Value)> {
+    let mut observations: Vec<(ResourceInstance, &'static str, serde_json::Value)> = Vec::new();
     let mut routes: Vec<ServiceRoute> = Vec::new();
 
     for (id, resource) in &snapshot.resources {
@@ -50,7 +55,18 @@ pub(super) async fn apply(
             .map(|pod| pod.pod_ip)
             .collect();
 
+        // Service exists → its IP is allocated (oracle "network_created").
+        observations.push((
+            svc_instance.clone(),
+            "network_created",
+            serde_json::json!({}),
+        ));
         if !backends.is_empty() {
+            observations.push((
+                svc_instance.clone(),
+                "backend_healthy",
+                serde_json::json!({}),
+            ));
             routes.push(ServiceRoute {
                 service_ip,
                 backends,
@@ -58,9 +74,62 @@ pub(super) async fn apply(
         }
     }
 
+    // Emit termination observations for services desired at Unscheduled.
+    for dr in &desired.resources {
+        match &dr.definition {
+            Resource::Service(s) => {
+                if dr.desired != LifecycleState::Unscheduled {
+                    continue;
+                }
+                let svc_name = s.name.as_str();
+                let svc_instance = registry.get_or_create_singleton(
+                    app_name,
+                    ResourceKind::Service,
+                    Some(svc_name),
+                );
+                observations.push((svc_instance.clone(), "stop_sent", serde_json::json!({})));
+                observations.push((
+                    svc_instance.clone(),
+                    "network_removed",
+                    serde_json::json!({}),
+                ));
+                observations.push((
+                    svc_instance.clone(),
+                    "network_cleaned_up",
+                    serde_json::json!({}),
+                ));
+            }
+            Resource::HttpService(h) => {
+                if dr.desired != LifecycleState::Unscheduled {
+                    continue;
+                }
+                let svc_name = h.service.name.as_str();
+                let svc_instance = registry.get_or_create_singleton(
+                    app_name,
+                    ResourceKind::Service,
+                    Some(svc_name),
+                );
+                observations.push((svc_instance.clone(), "stop_sent", serde_json::json!({})));
+                observations.push((
+                    svc_instance.clone(),
+                    "network_removed",
+                    serde_json::json!({}),
+                ));
+                observations.push((
+                    svc_instance.clone(),
+                    "network_cleaned_up",
+                    serde_json::json!({}),
+                ));
+            }
+            _ => {}
+        }
+    }
+
     if let Err(e) = driver.data_plane.apply_routes(&routes).await {
         error!(error = %e, "routes: apply_routes failed");
     }
+
+    observations
 }
 
 /// Returns `true` if the pod's definition contains any TCP, UDP, or HTTP
