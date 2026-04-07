@@ -234,14 +234,15 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Returns `{ "forward_id": "<string>", "forward_key": <u16>, "max_udp_payload": <uint> | null }` on success.
 > `forward_id` is used for control operations such as `StopForward`.
 > `forward_key` is the compact 2-byte identifier used in QUIC datagram headers for UDP forwards (see [datagram.forward](#i--datagram.forward)); it is not used for TCP forwards.
-> `max_udp_payload` is the maximum UDP payload size in bytes that can be delivered through this forward at the time of the request, as defined in [forward.mtu](#i--forward.mtu); it is `null` for TCP forwards.
+> `max_udp_payload` is the maximum UDP payload the server can forward from the service back to the client, as defined in [forward.mtu](#i--forward.mtu); it is `null` for TCP forwards.
 > The control stream that carried the request is kept open for the lifetime of the forward; closing it tears down the forward.
 
 > i[forward.mtu]
-> For UDP forwards, `max_udp_payload` is computed as the connection's maximum datagram size minus the 2-byte `forward_key` prefix.
-> Payloads exceeding this value cannot be delivered and are silently dropped.
-> This value reflects the path MTU estimate at the time of the request; it may differ if queried again later as the estimate is refined.
-> Clients may use this value to configure application-level buffer sizes (for example, DNS EDNS0 advertised payload size) or, for a TUN-based client, to set the TUN interface MTU so that the operating system enforces the limit transparently.
+> For UDP forwards, `max_udp_payload` is the server's own `max_datagram_size() - 2` — the maximum payload the server can send toward the client (i.e. service responses).
+> The client already has its own send limit for the client-to-server direction available locally from its QUIC connection.
+> Path MTU may be asymmetric; for bidirectional protocols (e.g. DNS), clients should use the minimum of their local send limit and `max_udp_payload` when configuring application-level buffer sizes such as EDNS0.
+> For a TUN-based client, setting the TUN interface MTU to that minimum causes the operating system to enforce the limit before packets reach the forwarding layer.
+> This value reflects the path MTU estimate at the time of the request and may change as the estimate is refined.
 
 > i[forward.tunnel.tcp]
 > Each individual TCP connection forwarded through a TCP port forward uses a dedicated bidi stream as defined in [stream.forward](#i--stream.forward).
