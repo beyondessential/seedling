@@ -161,7 +161,14 @@ fn spec_from_pod(
                         .unwrap_or_default();
                     MountSource::Volume(name)
                 }
-                VolumeMount::ExternalVolume(ev) => MountSource::Volume(ev.name.to_string()),
+                VolumeMount::ExternalVolume(ev) => {
+                    // TODO: ExternalVolume is external to this BSL app but still within
+                    // seedling. The name here is a BSL-level reference, not yet a resolved
+                    // podman volume name. When cross-app volume sharing is implemented,
+                    // this must resolve to the source volume's display_name
+                    // (e.g. "{source_app}-{vol_name}") using seedling's instance registry.
+                    MountSource::Volume(ev.name.to_string())
+                }
             };
             Mount {
                 source,

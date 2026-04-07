@@ -36,7 +36,11 @@ pub(super) async fn apply(
         let svc_name = match resource {
             Resource::Service(s) => s.name.as_str(),
             Resource::HttpService(h) => h.service.name.as_str(),
-            // ExternalService is managed outside seedling; skip.
+            // TODO: ExternalService is external to this BSL app but still within
+            // seedling. When cross-app service routing is implemented, this must
+            // resolve to the source service's IPv6 address in the other app
+            // (instance_ipv6(node_prefix, &source_service_instance)) and install
+            // a route for it. For now, no route is installed.
             Resource::ExternalService(_) => continue,
             _ => continue,
         };
