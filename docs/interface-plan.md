@@ -139,7 +139,7 @@ that the QUIC plumbing, JSON framing, and registry reads are all working end-to-
 
 ## Phase 2 — App management
 
-Implement `RegisterApp`, `DeregisterApp`, and `ReloadApp`.
+Implement `RegisterApp`, `DeregisterApp`, and `UpdateApp`.
 
 ### `RegisterApp`
 
@@ -162,14 +162,14 @@ Implement `RegisterApp`, `DeregisterApp`, and `ReloadApp`.
 5. Remove from DB and in-memory registry.
 6. Emit `AppDeregistered`.
 
-### `ReloadApp`
+### `UpdateApp`
 
 1. Compile and evaluate the provided script content.
 2. On failure: file a fault (wire fault table once Phase 6 is done; stub for now), emit
    `FaultFiled`, return `script_error`.
 3. On success: update the stored script content in `registered_apps`. If an operation is in
    progress, store the new AST and App as "pending reload" — apply at the next evaluation
-   boundary. Otherwise apply immediately, notify the reconciler tick. Emit `AppReloaded`.
+   boundary. Otherwise apply immediately, notify the reconciler tick. Emit `AppUpdated`.
 
 ---
 

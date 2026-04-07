@@ -88,11 +88,11 @@ Absent specification bugs, anything that is not defined here is either defined i
 > If a lifecycle operation is in progress for the app, the request is rejected with `operation_in_progress`.
 > Otherwise the app immediately enters the `Deregistering` state and an `AppDeregistered` event is emitted when teardown completes and the app is fully removed.
 
-> i[app.reload]
-> `ReloadApp { name, script }` re-evaluates the provided BSL script source text.
+> i[app.update]
+> `UpdateApp { name, script }` re-evaluates the provided BSL script source text.
 > If a lifecycle operation is in progress, the new AppDef takes effect at the next evaluation boundary after the operation completes.
 > If the script fails to parse or evaluate, a fault is filed, the existing AppDef continues running, and `FaultFiled` is emitted.
-> On success, `AppReloaded` is emitted.
+> On success, `AppUpdated` is emitted.
 
 > i[app.list]
 > `ListApps` returns an array of objects with fields `name` and `status`.
@@ -236,7 +236,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > |---|---|
 > | `AppRegistered` | `app` |
 > | `AppDeregistered` | `app` |
-> | `AppReloaded` | `app` |
+> | `AppUpdated` | `app` |
 > | `OperationStarted` | `app`, `action_name`, `operation_id` |
 > | `OperationCompleted` | `app`, `action_name`, `operation_id` |
 > | `OperationFailed` | `app`, `action_name`, `operation_id`, `error` |
