@@ -629,6 +629,7 @@ pub fn build_proxy_config(
 - Crate: `podman-rest-client` (v0.13+), with features `uds` only (no `ssh`).
 - Socket: `/run/podman/podman.sock` (rootful); use `Config::guess()` or
   supply the path explicitly.
+- API version: pinned to v5 via `client.v5()`. No runtime negotiation.
 - The crate is generated from the official podman v5 swagger file and exposes
   libpod-specific methods (e.g. `container_inspect_libpod`,
   `network_connect_libpod`) rather than the Docker-compat equivalents.
@@ -645,6 +646,9 @@ trait types exist so the rest of the codebase never imports
 ## systemd manager (`src/system/systemd.rs`)
 
 - D-Bus: system bus via `zbus` (async, pairs with tokio).
+- One `zbus::Connection` is created at startup and held for the process
+  lifetime. `zbus` async connections are `Send + Sync` and safe to share across
+  tasks via `Arc` or by storing directly in `SystemdManager`.
 - Interface: `org.freedesktop.systemd1.Manager` on `/org/freedesktop/systemd1`.
 - Transient units are created via `StartTransientUnit`.
 - Persistent unit files (if needed) go to `/etc/systemd/system/` (rootful).
@@ -669,7 +673,10 @@ systemd has no role in external port binding. Its responsibilities are:
 
 ## Caddy proxy (`src/system/caddy.rs`)
 
-- Caddy runs as a container managed by seedling (started as a transient unit).
+- Caddy is managed **out of band**: it is not tracked in `resource_instances`
+  and does not go through the normal `Actuator` start/stop path. Seedling
+  manages Caddy's container and transient unit directly at startup as
+  infrastructure, distinct from user-declared BSL resources.
 - Caddy is attached to the stable `seedling-proxy` network with a fixed IP
   (e.g. `10.88.0.2`). As pods start and stop, Caddy is also dynamically
   connected to and disconnected from each pod's network.
@@ -692,15 +699,17 @@ JSON config API. Caddy applies it atomically with no traffic drop.
 
 ## nftables port forwarder (`src/system/nftables.rs`)
 
+- Crate: `nftables` (v0.6+) with the `tokio` feature, which provides an async
+  `apply_ruleset` function. The crate is a safe abstraction over the nftables
+  JSON API (`nft -j`) and avoids both text parsing and raw netlink.
 - Manages a dedicated nftables table: `table inet seedling_ingress {}`.
 - All DNAT rules live in a single chain within that table, making cleanup
   (`clear_rules`) a simple table flush.
-- `apply_rules` replaces the chain contents atomically using an nftables
-  transaction (or a single `nft -f -` invocation with a flush + add sequence).
+- `apply_rules` builds a `nftables::schema::Nftables` ruleset value, flushes
+  the chain, and appends the new rules in a single atomic transaction via
+  `nftables::helper::apply_ruleset`.
 - Each `ForwardingRule` with `ForwardProto::Both` produces two rules (one TCP,
   one UDP) sharing the same destination.
-- Implementation: drive `nft` via `Command` with JSON input/output, or use
-  netlink directly. JSON mode (`nft -j`) is stable and avoids text parsing.
 
 Example ruleset for two ingress ports:
 
@@ -749,24 +758,10 @@ Note: UDP DNAT at port 443 is required for QUIC (HTTP/3) support when Caddy's
 - **`async fn` in traits + `Send` bounds**: use `trait-variant` (idiomatic,
   minimal) or `async_trait` (heavier but widely understood). Decide when adding
   the tokio dependency.
-- **API version in path**: pin to `/v5.0/libpod/` or negotiate at startup via
-  the `/_ping` response. Pinning is simpler; negotiation is more
-  forward-compatible.
-- **`zbus` connection lifecycle**: one shared connection for the process or
-  per-call. One shared connection is the right answer; confirm `zbus` async
-  connection is `Send + Sync`.
 - **Caddy fixed IP**: the address `10.88.0.2` is illustrative; the actual
   value should be configurable or derived from the `seedling-proxy` network's
   subnet. Podman assigns subnets to user-defined networks automatically; decide
   whether to pin the subnet or inspect the network after creation.
-- **nftables implementation**: `nft` CLI with JSON mode is the simplest path.
-  A direct netlink approach (via a crate like `nftables` or hand-rolled) is
-  more robust but significantly more complex. Start with CLI; switch if latency
-  or reliability becomes an issue.
-- **Caddy as a resource instance**: decide whether Caddy appears in the
-  `resource_instances` registry as a seedling-internal resource or is managed
-  out-of-band. Treating it as an internal instance allows uniform lifecycle
-  tracking but requires a reserved resource kind.
 - **ip_forward**: nftables DNAT requires `net.ipv4.ip_forward=1` (and the
   IPv6 equivalent). Rootful podman typically sets this already; confirm and
   document the assumption.
