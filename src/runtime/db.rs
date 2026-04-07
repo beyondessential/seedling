@@ -154,12 +154,15 @@ mod tests {
     #[test]
     fn open_in_memory_succeeds() {
         let db = Db::open_in_memory().expect("in-memory DB should open");
-        // Simple connectivity check
-        let n: i64 = db
+        let version: i64 = db
             .conn
-            .query_row("SELECT COUNT(*) FROM schema_version", [], |r| r.get(0))
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+                [],
+                |r| r.get(0),
+            )
             .expect("schema_version should exist");
-        assert_eq!(n, 1);
+        assert_eq!(version, 3);
     }
 
     // r[verify history.persistence]

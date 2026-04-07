@@ -1,8 +1,9 @@
 use std::net::{Ipv6Addr, SocketAddr};
 
 use ipnet::Ipv6Net;
-use tracing::error;
+use tracing::{error, warn};
 
+use crate::system::caddy;
 use crate::{
     defs::{
         app::AppDef,
@@ -26,6 +27,7 @@ pub(super) async fn apply(
     registry: &dyn InstanceRegistry,
     app_name: &str,
     caddy_addr: SocketAddr,
+    data_dir: &std::path::Path,
 ) {
     let mut pairs: Vec<(IngressDef, ServiceUpstream)> = Vec::new();
 
@@ -61,9 +63,16 @@ pub(super) async fn apply(
     }
 
     let config = build_proxy_config(&pairs, caddy_addr);
+    let caddy_json = caddy::build_caddy_config(&config);
 
     if let Err(e) = driver.proxy.apply_config(&config).await {
         error!(error = %e, "proxy: apply_config failed");
+        return;
+    }
+
+    // r[impl infra.proxy.upgrade.cache]
+    if let Err(e) = caddy::write_cached_proxy_json(data_dir, &caddy_json) {
+        warn!(error = %e, "proxy: failed to cache proxy config; upgrade continuity may be impaired");
     }
 }
 

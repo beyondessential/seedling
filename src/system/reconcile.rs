@@ -267,6 +267,7 @@ impl Reconciler {
             &*self.registry,
             &self.app_name,
             caddy_addr,
+            &self.data_dir,
         )
         .await;
     }
