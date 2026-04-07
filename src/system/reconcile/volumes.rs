@@ -7,10 +7,6 @@ use crate::{
     system::{actuator::Actuator, observer::Observer, types::ObservationFact},
 };
 
-// r[observe.volume]
-// r[actuate.volume.start]
-// r[actuate.volume.stop]
-// r[fault.non-blocking]
 pub(super) async fn observe_and_actuate(
     observer: &Observer,
     actuator: &Actuator,
@@ -25,6 +21,7 @@ pub(super) async fn observe_and_actuate(
             _ => continue,
         }
 
+        // r[observe.volume]
         let facts = match observer.observe(&dr.instance, &dr.definition).await {
             Ok(f) => f,
             Err(e) => {
@@ -49,6 +46,7 @@ pub(super) async fn observe_and_actuate(
 
         match dr.desired {
             LifecycleState::Ready if !volume_present => {
+                // r[actuate.volume.start]
                 if let Err(e) = actuator.start(&dr.instance, &dr.definition).await {
                     error!(
                         instance = %dr.instance.display_name,
@@ -59,6 +57,7 @@ pub(super) async fn observe_and_actuate(
             }
             LifecycleState::Unscheduled if volume_present => {
                 observations.push((dr.instance.clone(), "stop_sent", json!({})));
+                // r[actuate.volume.stop]
                 if let Err(e) = actuator.stop(&dr.instance, &dr.definition).await {
                     error!(
                         instance = %dr.instance.display_name,

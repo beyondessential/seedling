@@ -180,8 +180,7 @@ impl Actuator {
                         .await
                         .map_err(|e| ActuateError::Container { source: e })?;
                 }
-                // Volume writes (populating files into the volume) are not yet
-                // implemented; they require running a helper container.
+                // TODO: Volume writes (populating files into the volume)
                 Ok(None)
             }
             Resource::ExternalVolume(_) | Resource::ExternalService(_) => Ok(None),
