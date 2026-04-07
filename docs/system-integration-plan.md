@@ -82,16 +82,15 @@ All internal networking uses IPv6. External traffic is handled by Caddy
 Addresses follow RFC 4193 ULA format: `fd` (8 bits) + Global ID (40 bits) +
 Subnet ID (16 bits) + Interface ID (64 bits) = 128 bits.
 
-The Global ID is split into two parts:
+The node's `/48` prefix is `fd5e:XXYY:ZZWW::/48`, derived as follows:
 
-- **Fixed seedling prefix** (16 bits): `0x5eed` — the literal bytes `5e:ed`,
-  chosen as a mnemonic. Documentation can state: "any address beginning with
-  `fd5e:ed` is seedling-managed internal traffic."
-- **Per-node random** (24 bits): generated once at install time, persisted to
-  the DB. Each seedling node gets a unique `/48` within the seedling space.
-
-A node's full `/48` prefix: `fd5e:edXX:XXXX::/48` where `XX:XXXX` is the
-24-bit per-node value.
+- **Bytes 0–1** (`fd5e`): fixed seedling ULA magic. Any address beginning with
+  `fd5e:` is seedling-managed internal traffic.
+- **Bytes 2–5** (`XX YY ZZ WW`): first four bytes of `SHA-256(machine-id)`,
+  where `machine-id` is the whitespace-trimmed content of `/etc/machine-id`.
+  Hashing rather than direct byte interpretation makes the derivation
+  format-agnostic: it works identically whether the file contains a plain
+  32-hex-character string, a UUID with dashes, or any other format.
 
 ### InstanceId encoding
 

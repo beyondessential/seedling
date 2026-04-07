@@ -4,6 +4,8 @@ use std::{
     sync::Arc,
 };
 
+use sha2::{Digest, Sha256};
+
 use ipnet::Ipv6Net;
 use parking_lot::RwLock;
 use tokio::sync::RwLock as AsyncRwLock;
@@ -197,39 +199,34 @@ impl Reconciler {
 // r[infra.node.prefix]
 /// Derive the node's /48 ULA prefix from `/etc/machine-id`.
 ///
-/// Layout: `fd5e:XXYY:ZZWW::/48` where `XX YY ZZ WW` are the first four
-/// bytes of the machine ID (read as the first 8 hex characters of the file).
+/// The raw machine-id content (whitespace-trimmed) is hashed with SHA-256;
+/// the first four bytes of the digest fill octets 2–5 of the prefix:
+///
+/// ```text
+/// fd5e : <hash[0]><hash[1]> : <hash[2]><hash[3]> :: /48
+/// ```
+///
+/// Hashing instead of direct interpretation means the derivation is
+/// agnostic to the machine-id format (plain hex, UUID with dashes, etc.).
 pub fn node_prefix_from_machine_id() -> std::io::Result<Ipv6Net> {
     let raw = std::fs::read_to_string("/etc/machine-id")?;
-    let hex = raw.trim();
-    if hex.len() < 8 {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "machine-id too short to derive node prefix",
+            "machine-id is empty",
         ));
     }
 
-    let parse = |s: &str| -> std::io::Result<u8> {
-        u8::from_str_radix(s, 16).map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("invalid hex in machine-id: {e}"),
-            )
-        })
-    };
-
-    let b0 = parse(&hex[0..2])?;
-    let b1 = parse(&hex[2..4])?;
-    let b2 = parse(&hex[4..6])?;
-    let b3 = parse(&hex[6..8])?;
+    let digest = Sha256::digest(trimmed.as_bytes());
 
     let mut octets = [0u8; 16];
     octets[0] = 0xfd;
     octets[1] = 0x5e;
-    octets[2] = b0;
-    octets[3] = b1;
-    octets[4] = b2;
-    octets[5] = b3;
+    octets[2] = digest[0];
+    octets[3] = digest[1];
+    octets[4] = digest[2];
+    octets[5] = digest[3];
 
     Ok(Ipv6Net::new(std::net::Ipv6Addr::from(octets), 48)
         .expect("48 is a valid IPv6 prefix length"))
