@@ -14,7 +14,7 @@ use seedling::{
         barrier::{
             OperationId,
             oracle::DbWorldOracle,
-            replay::{ActionLog, DbActionLog, OperationResult, run_operation},
+            replay::{ActionLog, DbActionLog, OperationContext, OperationResult, run_operation},
         },
         db::Db,
         history::{
@@ -281,17 +281,19 @@ async fn main() {
     // block_in_place runs it on the current thread without moving anything.
     let result = tokio::task::block_in_place(|| {
         run_operation(
-            &engine,
+            OperationContext {
+                engine: &engine,
+                script_ast: &ast,
+                operation_id: current_op.operation_id.clone(),
+                app: &app,
+                action_name: &current_op.action_name,
+                log: &log,
+                world: oracle,
+                registry: Arc::clone(&registry),
+                active_progress: Some(Arc::clone(&active_progress)),
+                tick_notify: Some(Arc::clone(&tick_notify)),
+            },
             &mut scope,
-            &ast,
-            current_op.operation_id.clone(),
-            &app,
-            &current_op.action_name,
-            &log,
-            oracle,
-            Arc::clone(&registry),
-            Some(Arc::clone(&active_progress)),
-            Some(Arc::clone(&tick_notify)),
         )
     });
 

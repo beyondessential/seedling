@@ -153,27 +153,41 @@ pub enum OperationResult {
 ///   state changes.
 /// - `Failed(err)` if the closure threw a genuine BSL error.
 ///
+/// All inputs to a single pass of a lifecycle operation.
+pub struct OperationContext<'a, W: WorldStateOracle + 'static> {
+    pub engine: &'a Engine,
+    pub script_ast: &'a AST,
+    pub operation_id: OperationId,
+    pub app: &'a App,
+    pub action_name: &'a str,
+    pub log: &'a dyn ActionLog,
+    pub world: Arc<W>,
+    pub registry: Arc<dyn InstanceRegistry>,
+    pub active_progress: Option<Arc<RwLock<Option<OperationProgress>>>>,
+    pub tick_notify: Option<Arc<Notify>>,
+}
+
 /// The `log` carries committed entries across calls; pass the same `log`
 /// instance for all passes of the same operation to enable replay.
 // r[impl history.action-log.replay]
 // r[impl barrier.replay]
-#[expect(clippy::too_many_arguments, reason = "FIXME(prototyping)")]
-pub fn run_operation<W>(
-    engine: &Engine,
-    scope: &mut Scope,
-    script_ast: &AST,
-    operation_id: OperationId,
-    app: &App,
-    action_name: &str,
-    log: &dyn ActionLog,
-    world: Arc<W>,
-    registry: Arc<dyn InstanceRegistry>,
-    active_progress: Option<Arc<RwLock<Option<OperationProgress>>>>,
-    tick_notify: Option<Arc<Notify>>,
-) -> OperationResult
-where
-    W: WorldStateOracle + 'static,
-{
+pub fn run_operation<W: WorldStateOracle + 'static>(
+    op: OperationContext<'_, W>,
+    scope: &mut Scope<'_>,
+) -> OperationResult {
+    let OperationContext {
+        engine,
+        script_ast,
+        operation_id,
+        app,
+        action_name,
+        log,
+        world,
+        registry,
+        active_progress,
+        tick_notify,
+    } = op;
+
     // Build the replay context from committed log entries.
     let committed = log.load();
     let ctx = Arc::new(Mutex::new(ReplayContext::new(
@@ -360,17 +374,19 @@ mod tests {
         // Pass 1: web is Pending → suspend
         let log = make_log();
         let result = run_operation(
-            &engine,
+            OperationContext {
+                engine: &engine,
+                script_ast: &ast,
+                operation_id: op.clone(),
+                app: &app,
+                action_name: "start",
+                log: &log,
+                world: Arc::clone(&oracle),
+                registry: Arc::clone(&reg),
+                active_progress: None,
+                tick_notify: None,
+            },
             &mut scope,
-            &ast,
-            op.clone(),
-            &app,
-            "start",
-            &log,
-            Arc::clone(&oracle),
-            Arc::clone(&reg),
-            None,
-            None,
         );
         assert!(matches!(result, OperationResult::Suspended(_)));
 
@@ -388,17 +404,19 @@ mod tests {
 
         // Pass 2: same DB log, barrier satisfied → complete
         let r = run_operation(
-            &engine,
+            OperationContext {
+                engine: &engine,
+                script_ast: &ast,
+                operation_id: op.clone(),
+                app: &app,
+                action_name: "start",
+                log: &log,
+                world: Arc::clone(&oracle),
+                registry: Arc::clone(&reg),
+                active_progress: None,
+                tick_notify: None,
+            },
             &mut scope,
-            &ast,
-            op.clone(),
-            &app,
-            "start",
-            &log,
-            Arc::clone(&oracle),
-            Arc::clone(&reg),
-            None,
-            None,
         );
         assert!(matches!(r, OperationResult::Completed));
 
@@ -443,17 +461,19 @@ mod tests {
 
         // Pass 1: frontend not Scheduled → suspend
         let r = run_operation(
-            &engine,
+            OperationContext {
+                engine: &engine,
+                script_ast: &ast,
+                operation_id: op.clone(),
+                app: &app,
+                action_name: "start",
+                log: &log,
+                world: Arc::clone(&oracle),
+                registry: Arc::clone(&reg),
+                active_progress: None,
+                tick_notify: None,
+            },
             &mut scope,
-            &ast,
-            op.clone(),
-            &app,
-            "start",
-            &log,
-            Arc::clone(&oracle),
-            Arc::clone(&reg),
-            None,
-            None,
         );
         assert!(matches!(r, OperationResult::Suspended(_)));
 
@@ -461,17 +481,19 @@ mod tests {
 
         // Pass 2: frontend ok, backend not Ready → suspend
         let r = run_operation(
-            &engine,
+            OperationContext {
+                engine: &engine,
+                script_ast: &ast,
+                operation_id: op.clone(),
+                app: &app,
+                action_name: "start",
+                log: &log,
+                world: Arc::clone(&oracle),
+                registry: Arc::clone(&reg),
+                active_progress: None,
+                tick_notify: None,
+            },
             &mut scope,
-            &ast,
-            op.clone(),
-            &app,
-            "start",
-            &log,
-            Arc::clone(&oracle),
-            Arc::clone(&reg),
-            None,
-            None,
         );
         assert!(matches!(r, OperationResult::Suspended(_)));
 
@@ -479,17 +501,19 @@ mod tests {
 
         // Pass 3: both satisfied → complete
         let r = run_operation(
-            &engine,
+            OperationContext {
+                engine: &engine,
+                script_ast: &ast,
+                operation_id: op.clone(),
+                app: &app,
+                action_name: "start",
+                log: &log,
+                world: Arc::clone(&oracle),
+                registry: Arc::clone(&reg),
+                active_progress: None,
+                tick_notify: None,
+            },
             &mut scope,
-            &ast,
-            op.clone(),
-            &app,
-            "start",
-            &log,
-            Arc::clone(&oracle),
-            Arc::clone(&reg),
-            None,
-            None,
         );
         assert!(matches!(r, OperationResult::Completed));
 

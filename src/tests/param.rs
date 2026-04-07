@@ -5,7 +5,7 @@ use crate::{
         LifecycleState, TestWorldOracle,
         barrier::{
             OperationId,
-            replay::{InMemoryActionLog, OperationResult, run_operation},
+            replay::{InMemoryActionLog, OperationContext, OperationResult, run_operation},
         },
     },
     tests::{run_test_script, run_test_script_app, run_test_script_err},
@@ -132,17 +132,19 @@ fn on_change_inside_action_closure_throws() {
     );
     let log = InMemoryActionLog::new();
     let result = run_operation(
-        &engine,
+        OperationContext {
+            engine: &engine,
+            script_ast: &ast,
+            operation_id: OperationId::new(),
+            app: &app,
+            action_name: "start",
+            log: &log,
+            world: oracle,
+            registry: std::sync::Arc::new(crate::runtime::EphemeralInstanceRegistry::new()),
+            active_progress: None,
+            tick_notify: None,
+        },
         &mut scope,
-        &ast,
-        OperationId::new(),
-        &app,
-        "start",
-        &log,
-        oracle,
-        std::sync::Arc::new(crate::runtime::EphemeralInstanceRegistry::new()),
-        None,
-        None,
     );
     assert!(
         matches!(result, OperationResult::Failed(_)),

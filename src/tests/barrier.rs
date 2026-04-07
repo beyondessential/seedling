@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use crate::defs::resource::ResourceKind;
 use crate::{
     defs,
+    defs::resource::ResourceKind,
     runtime::{
         ActionLog, EphemeralInstanceRegistry, LifecycleState, ResourceInstance, TestWorldOracle,
         barrier::OperationId,
-        barrier::replay::{InMemoryActionLog, OperationResult, run_operation},
+        barrier::replay::{InMemoryActionLog, OperationContext, OperationResult, run_operation},
     },
 };
 
@@ -49,17 +49,19 @@ fn barrier_satisfied_on_first_pass() {
     let log = InMemoryActionLog::new();
     let op = OperationId::new();
     let result = run_operation(
-        &engine,
+        OperationContext {
+            engine: &engine,
+            script_ast: &ast,
+            operation_id: op,
+            app: &app,
+            action_name: "start",
+            log: &log,
+            world: oracle,
+            registry: registry(),
+            active_progress: None,
+            tick_notify: None,
+        },
         &mut scope,
-        &ast,
-        op,
-        &app,
-        "start",
-        &log,
-        oracle,
-        registry(),
-        None,
-        None,
     );
     assert!(matches!(result, OperationResult::Completed));
 }
@@ -84,17 +86,19 @@ fn barrier_suspends_then_resumes() {
 
     // Pass 1: web is Pending → suspend
     let r = run_operation(
-        &engine,
+        OperationContext {
+            engine: &engine,
+            script_ast: &ast,
+            operation_id: op.clone(),
+            app: &app,
+            action_name: "start",
+            log: &log,
+            world: Arc::clone(&oracle),
+            registry: Arc::clone(&reg),
+            active_progress: None,
+            tick_notify: None,
+        },
         &mut scope,
-        &ast,
-        op.clone(),
-        &app,
-        "start",
-        &log,
-        Arc::clone(&oracle),
-        Arc::clone(&reg),
-        None,
-        None,
     );
     assert!(matches!(r, OperationResult::Suspended(_)));
 
@@ -103,17 +107,19 @@ fn barrier_suspends_then_resumes() {
 
     // Pass 2: barrier satisfied → complete
     let r = run_operation(
-        &engine,
+        OperationContext {
+            engine: &engine,
+            script_ast: &ast,
+            operation_id: op,
+            app: &app,
+            action_name: "start",
+            log: &log,
+            world: Arc::clone(&oracle),
+            registry: Arc::clone(&reg),
+            active_progress: None,
+            tick_notify: None,
+        },
         &mut scope,
-        &ast,
-        op,
-        &app,
-        "start",
-        &log,
-        Arc::clone(&oracle),
-        Arc::clone(&reg),
-        None,
-        None,
     );
     assert!(matches!(r, OperationResult::Completed));
 }
@@ -139,17 +145,19 @@ fn sequential_barriers() {
 
     // Pass 1: frontend not Scheduled → suspend
     let r = run_operation(
-        &engine,
+        OperationContext {
+            engine: &engine,
+            script_ast: &ast,
+            operation_id: op.clone(),
+            app: &app,
+            action_name: "start",
+            log: &log,
+            world: Arc::clone(&oracle),
+            registry: Arc::clone(&reg),
+            active_progress: None,
+            tick_notify: None,
+        },
         &mut scope,
-        &ast,
-        op.clone(),
-        &app,
-        "start",
-        &log,
-        Arc::clone(&oracle),
-        Arc::clone(&reg),
-        None,
-        None,
     );
     assert!(matches!(r, OperationResult::Suspended(_)));
 
@@ -157,17 +165,19 @@ fn sequential_barriers() {
 
     // Pass 2: first barrier ok, backend not Ready → suspend
     let r = run_operation(
-        &engine,
+        OperationContext {
+            engine: &engine,
+            script_ast: &ast,
+            operation_id: op.clone(),
+            app: &app,
+            action_name: "start",
+            log: &log,
+            world: Arc::clone(&oracle),
+            registry: Arc::clone(&reg),
+            active_progress: None,
+            tick_notify: None,
+        },
         &mut scope,
-        &ast,
-        op.clone(),
-        &app,
-        "start",
-        &log,
-        Arc::clone(&oracle),
-        Arc::clone(&reg),
-        None,
-        None,
     );
     assert!(matches!(r, OperationResult::Suspended(_)));
 
@@ -175,17 +185,19 @@ fn sequential_barriers() {
 
     // Pass 3: both satisfied → complete
     let r = run_operation(
-        &engine,
+        OperationContext {
+            engine: &engine,
+            script_ast: &ast,
+            operation_id: op,
+            app: &app,
+            action_name: "start",
+            log: &log,
+            world: Arc::clone(&oracle),
+            registry: Arc::clone(&reg),
+            active_progress: None,
+            tick_notify: None,
+        },
         &mut scope,
-        &ast,
-        op,
-        &app,
-        "start",
-        &log,
-        Arc::clone(&oracle),
-        Arc::clone(&reg),
-        None,
-        None,
     );
     assert!(matches!(r, OperationResult::Completed));
 }
@@ -208,33 +220,37 @@ fn barrier_deadline_zero_expires_on_second_pass() {
 
     // Pass 1: not ready → suspend
     let r = run_operation(
-        &engine,
+        OperationContext {
+            engine: &engine,
+            script_ast: &ast,
+            operation_id: op.clone(),
+            app: &app,
+            action_name: "start",
+            log: &log,
+            world: Arc::clone(&oracle),
+            registry: Arc::clone(&reg),
+            active_progress: None,
+            tick_notify: None,
+        },
         &mut scope,
-        &ast,
-        op.clone(),
-        &app,
-        "start",
-        &log,
-        Arc::clone(&oracle),
-        Arc::clone(&reg),
-        None,
-        None,
     );
     assert!(matches!(r, OperationResult::Suspended(_)));
 
     // Pass 2: deadline=0, time has elapsed → Failed
     let r = run_operation(
-        &engine,
+        OperationContext {
+            engine: &engine,
+            script_ast: &ast,
+            operation_id: op,
+            app: &app,
+            action_name: "start",
+            log: &log,
+            world: Arc::clone(&oracle),
+            registry: Arc::clone(&reg),
+            active_progress: None,
+            tick_notify: None,
+        },
         &mut scope,
-        &ast,
-        op,
-        &app,
-        "start",
-        &log,
-        Arc::clone(&oracle),
-        Arc::clone(&reg),
-        None,
-        None,
     );
     assert!(matches!(r, OperationResult::Failed(_)));
 }
@@ -260,17 +276,19 @@ fn replay_idempotency() {
 
     // Pass 1: b not ready → suspend
     let r = run_operation(
-        &engine,
+        OperationContext {
+            engine: &engine,
+            script_ast: &ast,
+            operation_id: op.clone(),
+            app: &app,
+            action_name: "start",
+            log: &log,
+            world: Arc::clone(&oracle),
+            registry: Arc::clone(&reg),
+            active_progress: None,
+            tick_notify: None,
+        },
         &mut scope,
-        &ast,
-        op.clone(),
-        &app,
-        "start",
-        &log,
-        Arc::clone(&oracle),
-        Arc::clone(&reg),
-        None,
-        None,
     );
     assert!(matches!(r, OperationResult::Suspended(_)));
 
@@ -278,17 +296,19 @@ fn replay_idempotency() {
 
     // Pass 2: completes
     let r = run_operation(
-        &engine,
+        OperationContext {
+            engine: &engine,
+            script_ast: &ast,
+            operation_id: op,
+            app: &app,
+            action_name: "start",
+            log: &log,
+            world: Arc::clone(&oracle),
+            registry: Arc::clone(&reg),
+            active_progress: None,
+            tick_notify: None,
+        },
         &mut scope,
-        &ast,
-        op,
-        &app,
-        "start",
-        &log,
-        Arc::clone(&oracle),
-        Arc::clone(&reg),
-        None,
-        None,
     );
     assert!(matches!(r, OperationResult::Completed));
 
@@ -329,17 +349,19 @@ fn rt_stop_acts_as_barrier() {
 
     // Pass 1: dep not Terminated → stop suspends
     let r = run_operation(
-        &engine,
+        OperationContext {
+            engine: &engine,
+            script_ast: &ast,
+            operation_id: op.clone(),
+            app: &app,
+            action_name: "start",
+            log: &log,
+            world: Arc::clone(&oracle),
+            registry: Arc::clone(&reg),
+            active_progress: None,
+            tick_notify: None,
+        },
         &mut scope,
-        &ast,
-        op.clone(),
-        &app,
-        "start",
-        &log,
-        Arc::clone(&oracle),
-        Arc::clone(&reg),
-        None,
-        None,
     );
     assert!(matches!(r, OperationResult::Suspended(_)));
 
@@ -347,17 +369,19 @@ fn rt_stop_acts_as_barrier() {
 
     // Pass 2: stop barrier satisfied → complete
     let r = run_operation(
-        &engine,
+        OperationContext {
+            engine: &engine,
+            script_ast: &ast,
+            operation_id: op,
+            app: &app,
+            action_name: "start",
+            log: &log,
+            world: Arc::clone(&oracle),
+            registry: Arc::clone(&reg),
+            active_progress: None,
+            tick_notify: None,
+        },
         &mut scope,
-        &ast,
-        op,
-        &app,
-        "start",
-        &log,
-        Arc::clone(&oracle),
-        Arc::clone(&reg),
-        None,
-        None,
     );
     assert!(matches!(r, OperationResult::Completed));
 }
