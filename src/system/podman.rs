@@ -140,6 +140,7 @@ impl PodmanRuntime {
             started_at,
             finished_at,
             pod_addr,
+            image_digest: data.image_digest.clone(),
         }))
     }
 
@@ -387,6 +388,23 @@ impl PodmanRuntime {
         Ok(())
     }
 
+    async fn local_image_digest_impl(
+        &self,
+        reference: &str,
+    ) -> Result<Option<String>, PodmanError> {
+        match self
+            .client
+            .v5()
+            .images()
+            .image_inspect_libpod(reference)
+            .await
+        {
+            Ok(data) => Ok(data.digest),
+            Err(ref e) if is_not_found(e) => Ok(None),
+            Err(e) => Err(map_api_err(e)),
+        }
+    }
+
     async fn exec_impl(&self, _name: &str, _spec: ExecSpec) -> Result<ExecHandle, PodmanError> {
         todo!("PodmanRuntime::exec")
     }
@@ -483,6 +501,17 @@ impl ContainerRuntime for PodmanRuntime {
 
     fn pull_image<'a>(&'a self, reference: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {
         Box::pin(async move { self.pull_image_impl(reference).await.map_err(Into::into) })
+    }
+
+    fn local_image_digest<'a>(
+        &'a self,
+        reference: &'a str,
+    ) -> BoxFuture<'a, Result<Option<String>, BoxError>> {
+        Box::pin(async move {
+            self.local_image_digest_impl(reference)
+                .await
+                .map_err(Into::into)
+        })
     }
 
     fn network_exists<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<bool, BoxError>> {

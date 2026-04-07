@@ -55,6 +55,12 @@ pub trait ContainerRuntime: Send + Sync + 'static {
     // Images
     fn image_exists<'a>(&'a self, reference: &'a str) -> BoxFuture<'a, Result<bool, BoxError>>;
     fn pull_image<'a>(&'a self, reference: &'a str) -> BoxFuture<'a, Result<(), BoxError>>;
+    /// Returns the OCI digest (e.g. `sha256:…`) for a locally-stored image.
+    /// Returns `None` if the image is not present locally.
+    fn local_image_digest<'a>(
+        &'a self,
+        reference: &'a str,
+    ) -> BoxFuture<'a, Result<Option<String>, BoxError>>;
 
     // Networks — one IPv6 /64 per pod instance.
     // The host bridge is assigned ::1 (gateway) and ::2 (mount endpoint).

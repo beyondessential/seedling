@@ -383,3 +383,16 @@ Absent specification bugs, anything that is not defined here is either defined i
 > The runtime must ensure the network proxy is running and healthy before beginning the
 > reconciliation loop. On each startup, the runtime verifies proxy health and restarts the
 > proxy if necessary.
+
+> r[infra.proxy.upgrade]
+> When the configured proxy image digest differs from the running container's image digest,
+> the runtime must upgrade the proxy using a blue/green strategy: the replacement container
+> is started and fully configured before any traffic is directed to it. The name of the
+> currently-active proxy container is persisted in the database so that a crash at any
+> point in the upgrade sequence can be recovered deterministically on the next startup.
+
+> r[infra.proxy.upgrade.cache]
+> The runtime must persist the last successfully applied proxy configuration so that it can
+> be applied to a replacement container during an upgrade before the traffic cutover occurs,
+> ensuring no window exists where the new container receives traffic without a valid
+> configuration.
