@@ -1,5 +1,6 @@
 use std::{net::SocketAddr, sync::Arc};
 
+use ipnet::Ipv6Net;
 use reqwest::Client;
 use serde_json::{Value, json};
 use snafu::Snafu;
@@ -94,6 +95,209 @@ impl NetworkProxy for CaddyProxy {
         }
 
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Startup constants
+// ---------------------------------------------------------------------------
+
+pub(crate) const CADDY_CONTAINER: &str = "seedling-caddy";
+pub(crate) const CADDY_UNIT: &str = "seedling-caddy.service";
+pub(crate) const CADDY_IMAGE: &str = "docker.io/library/caddy:2.11.2";
+pub(crate) const CADDY_DATA_VOLUME: &str = "seedling-caddy-data";
+pub(crate) const PROXY_NETWORK: &str = "seedling-proxy";
+/// Minimal Caddy JSON config that binds the admin API on all interfaces.
+const CADDY_ADMIN_JSON: &str = r#"{"admin":{"listen":":2019"}}"#;
+
+// ---------------------------------------------------------------------------
+// Startup helpers
+// ---------------------------------------------------------------------------
+
+/// Returns the /64 infrastructure prefix for the seedling-proxy network.
+///
+/// The network sits at `fd5e:edXX:XXXX:ff00::/64` within the node's /48,
+/// using `0xff` as the subnet discriminant (above the resource-kind range 0–9).
+// r[impl infra.proxy.startup]
+pub(crate) fn proxy_network_prefix(node_prefix: &Ipv6Net) -> Ipv6Net {
+    let bytes = node_prefix.network().octets();
+    let mut addr = [0u8; 16];
+    addr[..6].copy_from_slice(&bytes[..6]);
+    addr[6] = 0xff;
+    Ipv6Net::new(std::net::Ipv6Addr::from(addr), 64).expect("64 is a valid IPv6 prefix length")
+}
+
+#[derive(Debug, Snafu)]
+pub(crate) enum CaddyStartupError {
+    #[snafu(display("container runtime error: {source}"))]
+    Container {
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+    #[snafu(display("process manager error: {source}"))]
+    Process {
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+    #[snafu(display("I/O error writing admin config: {source}"))]
+    Io { source: std::io::Error },
+    #[snafu(display("Caddy did not become healthy within the timeout"))]
+    Timeout,
+}
+
+// r[impl infra.proxy.startup]
+/// Ensure the Caddy proxy container is running and healthy.
+///
+/// 1. Creates the `seedling-proxy` network if absent.
+/// 2. Writes a minimal admin-API config to `{data_dir}/caddy-admin.json`.
+/// 3. Creates the `seedling-caddy-data` volume if absent.
+/// 4. If Caddy is already running and healthy, returns its admin `SocketAddr`.
+/// 5. Otherwise force-removes any existing (unhealthy) container, pulls the
+///    image if necessary, starts a transient systemd unit, and polls until
+///    healthy (up to 60 s).
+pub(crate) async fn ensure_caddy_running<C, P>(
+    container: &C,
+    process: &P,
+    node_prefix: &Ipv6Net,
+    data_dir: &std::path::Path,
+) -> Result<std::net::SocketAddr, CaddyStartupError>
+where
+    C: crate::system::ContainerRuntime,
+    P: crate::system::ProcessManager,
+{
+    use crate::system::types::{ContainerStatus, TransientRestart, TransientUnitSpec};
+    use std::net::{IpAddr, SocketAddr};
+    use std::time::Duration;
+
+    // Ensure the proxy network exists.
+    let proxy_prefix = proxy_network_prefix(node_prefix);
+    if !container
+        .network_exists(PROXY_NETWORK)
+        .await
+        .map_err(|e| CaddyStartupError::Container {
+            source: Box::new(e),
+        })?
+    {
+        container
+            .create_network(PROXY_NETWORK, proxy_prefix)
+            .await
+            .map_err(|e| CaddyStartupError::Container {
+                source: Box::new(e),
+            })?;
+    }
+
+    // Write admin config so Caddy binds the admin API on all interfaces.
+    let admin_config_path = data_dir.join("caddy-admin.json");
+    std::fs::write(&admin_config_path, CADDY_ADMIN_JSON)
+        .map_err(|e| CaddyStartupError::Io { source: e })?;
+
+    // Ensure the data volume exists.
+    if !container
+        .volume_exists(CADDY_DATA_VOLUME)
+        .await
+        .map_err(|e| CaddyStartupError::Container {
+            source: Box::new(e),
+        })?
+    {
+        container
+            .create_volume(CADDY_DATA_VOLUME)
+            .await
+            .map_err(|e| CaddyStartupError::Container {
+                source: Box::new(e),
+            })?;
+    }
+
+    // Check if Caddy is already running and healthy.
+    if let Some(state) =
+        container
+            .inspect(CADDY_CONTAINER)
+            .await
+            .map_err(|e| CaddyStartupError::Container {
+                source: Box::new(e),
+            })?
+    {
+        if matches!(state.status, ContainerStatus::Running)
+            && let Some(ip) = state.pod_addr
+        {
+            let addr = SocketAddr::new(IpAddr::V6(ip), 2019);
+            let probe = CaddyProxy::new(addr);
+            if probe.is_healthy().await.unwrap_or(false) {
+                return Ok(addr);
+            }
+        }
+        // Not healthy — remove and restart.
+        container
+            .remove_container(CADDY_CONTAINER, true)
+            .await
+            .map_err(|e| CaddyStartupError::Container {
+                source: Box::new(e),
+            })?;
+    }
+
+    // Ensure the image is present.
+    if !container
+        .image_exists(CADDY_IMAGE)
+        .await
+        .map_err(|e| CaddyStartupError::Container {
+            source: Box::new(e),
+        })?
+    {
+        container
+            .pull_image(CADDY_IMAGE)
+            .await
+            .map_err(|e| CaddyStartupError::Container {
+                source: Box::new(e),
+            })?;
+    }
+
+    // Start via a transient systemd unit.
+    let admin_config_str = admin_config_path.to_string_lossy().into_owned();
+    process
+        .start_transient(TransientUnitSpec {
+            name: CADDY_UNIT.to_owned(),
+            description: "seedling Caddy proxy".to_owned(),
+            exec_start: vec![
+                "podman".to_owned(),
+                "run".to_owned(),
+                "--rm".to_owned(),
+                "--name".to_owned(),
+                CADDY_CONTAINER.to_owned(),
+                "--network".to_owned(),
+                PROXY_NETWORK.to_owned(),
+                "--volume".to_owned(),
+                format!("{CADDY_DATA_VOLUME}:/data"),
+                "--volume".to_owned(),
+                format!("{admin_config_str}:/etc/caddy/admin.json:ro"),
+                CADDY_IMAGE.to_owned(),
+                "caddy".to_owned(),
+                "run".to_owned(),
+                "--config".to_owned(),
+                "/etc/caddy/admin.json".to_owned(),
+            ],
+            restart: TransientRestart::Always,
+        })
+        .await
+        .map_err(|e| CaddyStartupError::Process {
+            source: Box::new(e),
+        })?;
+
+    // Poll until Caddy is running and healthy (60 s deadline).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            return Err(CaddyStartupError::Timeout);
+        }
+
+        if let Ok(Some(state)) = container.inspect(CADDY_CONTAINER).await
+            && matches!(state.status, ContainerStatus::Running)
+            && let Some(ip) = state.pod_addr
+        {
+            let addr = SocketAddr::new(IpAddr::V6(ip), 2019);
+            let probe = CaddyProxy::new(addr);
+            if probe.is_healthy().await.unwrap_or(false) {
+                return Ok(addr);
+            }
+        }
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }
 
