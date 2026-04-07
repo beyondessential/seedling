@@ -2,7 +2,7 @@
 - This repo uses jujutsu. Commit changes incrementally as you work.
 - Use `jj commit` over `jj describe` so that new changes can be applied as a new description easily; we can always squash to put history together where it makes sense.
 - Remember to use --no-pager for jj commands.
-- Never write documentation files or readmes.
+- Never write documentation files or readmes (plans are fine).
 - Use conventional commit/describe messages.
 - Never write useless comments that only repeat the code.
 - Never print summaries or unnecessary information.
