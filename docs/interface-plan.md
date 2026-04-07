@@ -92,59 +92,10 @@ The single-script CLI argument should be removed.
 
 ---
 
-## Phase 1 — QUIC server skeleton
-
-Add `quinn` to `Cargo.toml` via `cargo add quinn` (record the full version).
-`rustls` is a transitive dependency of `quinn`; confirm it is accessible directly and at a
-version that includes `AlwaysResolvesServerRawPublicKeys` (rustls 0.23+).
-
-### Module layout
-
-Create `src/oi/` with:
-- `src/oi.rs` — module declaration
-- `src/oi/server.rs` — QUIC listener, connection accept loop, stream dispatch
-- `src/oi/handler.rs` — JSON method router and response helpers
-- `src/oi/error.rs` — OI error type mapping to `wire.error-codes`
-
-### Listener
-
-Bind a QUIC endpoint on `[::1]` at a configurable port (default TBD; pick something in the
-ephemeral range and document it as the default).
-
-Configure the server to use an RFC 7250 raw public key via
-`rustls::server::AlwaysResolvesServerRawPublicKeys`. On first startup, generate a key pair
-(Ed25519 or ECDSA P-256) and persist it to `<data_dir>/oi.key`. On subsequent startups, load
-the existing key. Print the SPKI fingerprint (SHA-256, hex-encoded) to stderr at startup so
-operators can pin it in their clients.
-
-Implement a client-side `rustls::client::ServerCertVerifier` that accepts a raw public key
-and verifies it matches a configured SPKI fingerprint. For the initial dev/test path, also
-provide a verifier that accepts any raw public key without checking the fingerprint, gated
-behind an explicit opt-in flag.
-
-Accept connections in a loop. For each connection, spawn a task that reads incoming streams.
-Identify stream type:
-- Client-initiated bidirectional: route to the JSON method router.
-- Other stream types: ignore for now (used in later phases for event feed and shells).
-
-### Method router
-
-Parse each bidi stream as a single JSON `{ method, params }` object (read until the
-client half-closes). Dispatch to a handler function by `method` string. Serialize the result
-as `{ result }` or `{ error: { code, message } }` and write it, then close the stream.
-
-### Initial endpoints (read-only, to validate the stack)
-
-Implement `ListApps` and `DescribeApp`. These require only read access to the `AppRegistry`
-and can be done without any of the write-path work from later phases. Use them to confirm
-that the QUIC plumbing, JSON framing, and registry reads are all working end-to-end.
-
----
-
-## Phase 1.5 — Basic CLI client (`seedling-ctl`)
+## Basic CLI client (`seedling-ctl`)
 
 Add a second binary at `src/bin/seedling_ctl.rs`. It connects to a running Seedling OI
-endpoint and exposes each API method as a subcommand.
+endpoint and exposes each API method as a subcommand. Implement each subcommand during the relevant implementation phase below.
 
 ### Dependencies
 
@@ -223,6 +174,55 @@ This subcommand has more moving parts than the others:
      send back to the originating UDP address.
 5. On Ctrl-C or the control stream closing: send `StopForward { forward_id }`, stop
    accepting new connections, and wait for in-flight relays to drain.
+
+---
+
+## Phase 1 — QUIC server skeleton
+
+Add `quinn` to `Cargo.toml` via `cargo add quinn` (record the full version).
+`rustls` is a transitive dependency of `quinn`; confirm it is accessible directly and at a
+version that includes `AlwaysResolvesServerRawPublicKeys` (rustls 0.23+).
+
+### Module layout
+
+Create `src/oi/` with:
+- `src/oi.rs` — module declaration
+- `src/oi/server.rs` — QUIC listener, connection accept loop, stream dispatch
+- `src/oi/handler.rs` — JSON method router and response helpers
+- `src/oi/error.rs` — OI error type mapping to `wire.error-codes`
+
+### Listener
+
+Bind a QUIC endpoint on `[::1]` at a configurable port (default TBD; pick something in the
+ephemeral range and document it as the default).
+
+Configure the server to use an RFC 7250 raw public key via
+`rustls::server::AlwaysResolvesServerRawPublicKeys`. On first startup, generate a key pair
+(Ed25519 or ECDSA P-256) and persist it to `<data_dir>/oi.key`. On subsequent startups, load
+the existing key. Print the SPKI fingerprint (SHA-256, hex-encoded) to stderr at startup so
+operators can pin it in their clients.
+
+Implement a client-side `rustls::client::ServerCertVerifier` that accepts a raw public key
+and verifies it matches a configured SPKI fingerprint. For the initial dev/test path, also
+provide a verifier that accepts any raw public key without checking the fingerprint, gated
+behind an explicit opt-in flag.
+
+Accept connections in a loop. For each connection, spawn a task that reads incoming streams.
+Identify stream type:
+- Client-initiated bidirectional: route to the JSON method router.
+- Other stream types: ignore for now (used in later phases for event feed and shells).
+
+### Method router
+
+Parse each bidi stream as a single JSON `{ method, params }` object (read until the
+client half-closes). Dispatch to a handler function by `method` string. Serialize the result
+as `{ result }` or `{ error: { code, message } }` and write it, then close the stream.
+
+### Initial endpoints (read-only, to validate the stack)
+
+Implement `ListApps` and `DescribeApp`. These require only read access to the `AppRegistry`
+and can be done without any of the write-path work from later phases. Use them to confirm
+that the QUIC plumbing, JSON framing, and registry reads are all working end-to-end.
 
 ---
 
