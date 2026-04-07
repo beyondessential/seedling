@@ -39,6 +39,16 @@ Absent specification bugs, anything that is not defined here is either defined i
 > The server-to-client direction of the session stream carries newline-delimited JSON: the `OpenShell` response first, then the exit frame when the session ends.
 > The client-to-server direction carries a single newline-terminated JSON request followed by raw stdin bytes for the remainder of the stream's lifetime.
 
+> i[stream.forward]
+> Each tunneled TCP connection within a port forward uses one client-initiated bidirectional QUIC stream.
+> Both the client-to-server and server-to-client directions carry raw TCP bytes after an initial newline-terminated JSON header line: `{ "forward": "<forward_id>" }`.
+> The stream closes when the tunneled TCP connection closes.
+
+> i[stream.dispatch]
+> All client-initiated bidirectional streams begin with a newline-terminated JSON object.
+> If that object contains a `"method"` key it is dispatched as a control request per [stream.control](#i--stream.control).
+> If it contains a `"forward"` key it is dispatched as a port forward data stream per [stream.forward](#i--stream.forward).
+
 > i[stream.events]
 > After a client sends a `Subscribe` request, the server opens one server-initiated unidirectional QUIC stream per connection and pushes events as newline-delimited JSON objects for the duration of the connection.
 
@@ -209,6 +219,33 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[shell.concurrent]
 > Shell sessions may run concurrently with lifecycle operations and with other shell sessions.
 
+# Port Forwards
+
+> i[forward.request]
+> `ForwardPort { app, service, port }` requests a TCP port forward to the named service at the given service-side port number.
+> `service` is the name of a Service defined in the app's BSL script.
+> `port` is a port number on that Service as defined by `service.port()`.
+> Returns `{ "forward_id": "<string>" }` on success.
+> The control stream that carried the request is kept open for the lifetime of the forward; closing it tears down the forward.
+
+> i[forward.tunnel]
+> Each individual TCP connection forwarded through the port forward uses a dedicated bidi stream as defined in [stream.forward](#i--stream.forward).
+> The server accepts the stream, connects to the target service port, and relays bytes bidirectionally until either end closes the connection.
+
+> i[forward.lifetime]
+> A port forward remains active until any of the following occur:
+>
+> - The client closes the control stream.
+> - The client sends `StopForward { forward_id }` on a new control stream.
+> - The connection is lost.
+
+> i[forward.stop]
+> `StopForward { forward_id }` explicitly tears down an active port forward, closing all of its tunneled TCP connections.
+> Returns `{}` on success, or `not_found` if the forward does not exist.
+
+> i[forward.concurrent]
+> Multiple port forwards may be active concurrently, including to the same service.
+
 # Fault Surface
 
 > i[fault.record]
@@ -244,6 +281,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > | `FaultCleared` | `id`, `app` |
 > | `ResourceStateChanged` | `app`, `resource_type`, `resource_name`, `instance_id`, `state` |
 > | `ShellExited` | `session_id`, `exit_code` |
+> | `ForwardStarted` | `forward_id`, `app`, `service`, `port` |
+> | `ForwardStopped` | `forward_id` |
 
 > i[event.ordering]
 > Events on a single connection's event stream are emitted in the order they occur.

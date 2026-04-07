@@ -179,6 +179,7 @@ Shared QUIC client logic lives in `src/oi/client.rs`:
 | `list-faults [--app <name>]` | `ListFaults` |
 | `subscribe` | `Subscribe` — streams events to stdout, one JSON object per line |
 | `open-shell <app> <name>` | `OpenShell` — interactive terminal session |
+| `forward-port <app> <service> <port> [--local-port <N>]` | `ForwardPort` — TCP port forward |
 
 All subcommands print the `result` object as pretty-printed JSON on success, or print the
 error code and message to stderr and exit non-zero on failure.
@@ -199,6 +200,20 @@ This subcommand has more moving parts than the others:
 6. When the server writes the final `{ "exit_code": N }` JSON frame to the session stream's
    server-to-client direction, restore the terminal, and exit with that code.
 7. Restore the terminal on any error path (use a drop guard).
+
+### `forward-port` handling
+
+1. Send `ForwardPort { app, service, port }` on a bidi stream and read `{ forward_id }` from
+   the response. Keep the control stream open.
+2. Bind a local TCP listener on `--local-port` if given, or any available port. Print the
+   bound address to stdout.
+3. For each incoming TCP connection:
+   - Open a new QUIC bidi stream.
+   - Write the header `{ "forward": "<forward_id>" }\n`.
+   - Spawn two tasks to relay bytes in both directions concurrently.
+   - Close the QUIC stream when the TCP connection closes, and vice versa.
+4. On Ctrl-C or the control stream closing: send `StopForward { forward_id }`, stop accepting
+   new connections, and wait for in-flight relays to drain.
 
 ---
 
@@ -339,7 +354,45 @@ backs the shell attach. It must:
 
 ---
 
-## Phase 6 — Fault surface
+## Phase 6 — Port forwards
+
+### Server-side dispatch
+
+Extend the stream dispatcher to handle the `"forward"` key per `i[stream.dispatch]`:
+- Read the first newline-terminated JSON line from each incoming client bidi stream.
+- Route to the method handler if `"method"` is present, or to the forward relay if
+  `"forward"` is present.
+
+### `ForwardPort`
+
+1. Look up the service by name in the AppDef. Return `not_found` if absent.
+2. Resolve the service's internal IPv6 address for the given port number. Return `not_found`
+   if the port is not defined on the service.
+3. Allocate a `forward_id` (random UUID) and register the forward in an in-memory
+   `ForwardRegistry` (app, service, port, control stream handle).
+4. Keep the control stream open. When it closes (client disconnect or `StopForward`), tear
+   down all active tunneled connections for this forward and remove from the registry.
+5. Emit `ForwardStarted` event.
+
+### `StopForward`
+
+1. Look up the forward by ID. Return `not_found` if absent.
+2. Close all tunneled TCP connections for this forward.
+3. Close the control stream.
+4. Remove from the registry.
+5. Emit `ForwardStopped` event.
+
+### Tunnel relay
+
+For each incoming forward data stream (identified by `i[stream.forward]` header):
+1. Extract `forward_id` from the header. Return an error if not found in the registry.
+2. Open a TCP connection to the service's resolved address and port.
+3. Spawn two tasks: relay stream→TCP and TCP→stream concurrently.
+4. Close both ends when either side closes.
+
+---
+
+## Phase 7 — Fault surface
 
 ### DB schema
 
@@ -377,7 +430,7 @@ of fault records.
 
 ---
 
-## Phase 7 — Event feed
+## Phase 8 — Event feed
 
 ### Broadcast channel
 
