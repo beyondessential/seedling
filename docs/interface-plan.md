@@ -168,6 +168,7 @@ Shared QUIC client logic lives in `src/oi/client.rs`:
 
 | Subcommand | Maps to |
 |---|---|
+| `status` | `GetStatus` |
 | `list-apps` | `ListApps` |
 | `describe-app <name>` | `DescribeApp` |
 | `register-app <name> <script-file>` | `RegisterApp` (reads file, sends content) |
