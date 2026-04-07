@@ -231,10 +231,17 @@ Absent specification bugs, anything that is not defined here is either defined i
 > `service` is the name of a Service defined in the app's BSL script.
 > `port` is a port number on that Service as defined by `service.port()`.
 > `proto` is either `"tcp"` or `"udp"`.
-> Returns `{ "forward_id": "<string>", "forward_key": <u16> }` on success.
+> Returns `{ "forward_id": "<string>", "forward_key": <u16>, "max_udp_payload": <uint> | null }` on success.
 > `forward_id` is used for control operations such as `StopForward`.
 > `forward_key` is the compact 2-byte identifier used in QUIC datagram headers for UDP forwards (see [datagram.forward](#i--datagram.forward)); it is not used for TCP forwards.
+> `max_udp_payload` is the maximum UDP payload size in bytes that can be delivered through this forward at the time of the request, as defined in [forward.mtu](#i--forward.mtu); it is `null` for TCP forwards.
 > The control stream that carried the request is kept open for the lifetime of the forward; closing it tears down the forward.
+
+> i[forward.mtu]
+> For UDP forwards, `max_udp_payload` is computed as the connection's maximum datagram size minus the 2-byte `forward_key` prefix.
+> Payloads exceeding this value cannot be delivered and are silently dropped.
+> This value reflects the path MTU estimate at the time of the request; it may differ if queried again later as the estimate is refined.
+> Clients may use this value to configure application-level buffer sizes (for example, DNS EDNS0 advertised payload size) or, for a TUN-based client, to set the TUN interface MTU so that the operating system enforces the limit transparently.
 
 > i[forward.tunnel.tcp]
 > Each individual TCP connection forwarded through a TCP port forward uses a dedicated bidi stream as defined in [stream.forward](#i--stream.forward).

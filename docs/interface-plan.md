@@ -376,9 +376,11 @@ Extend the stream dispatcher to handle the `"forward"` key per `i[stream.dispatc
 3. Allocate a `forward_id` (random UUID) and a `forward_key` (u16, assigned from a
    per-connection counter) and register the forward in an in-memory `ForwardRegistry`
    (app, service, port, proto, IPv6 address, forward_key, control stream handle).
-4. Keep the control stream open. When it closes (client disconnect or `StopForward`), tear
+4. For UDP forwards, compute `max_udp_payload` as `Connection::max_datagram_size() - 2`.
+   Include it in the response. For TCP forwards, set it to `null`.
+5. Keep the control stream open. When it closes (client disconnect or `StopForward`), tear
    down all active tunneled connections for this forward and remove from the registry.
-5. Emit `ForwardStarted` event.
+6. Emit `ForwardStarted` event.
 
 ### `StopForward`
 
