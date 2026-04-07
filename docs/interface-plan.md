@@ -390,6 +390,24 @@ For each incoming forward data stream (identified by `i[stream.forward]` header)
 3. Spawn two tasks: relay stream→TCP and TCP→stream concurrently.
 4. Close both ends when either side closes.
 
+### Future: TUN-based forwarding (v2)
+
+Because services have stable IPv6 addresses within the node's `/48` prefix, a future client
+enhancement could create a TUN interface and add a host route for a service's IPv6 address,
+making the service feel locally routable without specifying ports in advance. This also
+handles UDP naturally.
+
+Two implementation paths exist:
+- **Userspace TCP stack (no wire changes):** packets from TUN are reconstructed into
+  individual connections by a userspace stack (e.g. `smoltcp`) and forwarded through the
+  existing per-connection QUIC protocol. The server side is unchanged.
+- **Raw IP packet forwarding (new stream type):** a dedicated QUIC stream carries framed IP
+  packets in both directions; the server injects them directly into the pod network. More
+  efficient but requires a new stream framing type in the spec.
+
+The server-side `ForwardRegistry` should store the resolved service IPv6 address alongside
+the port so that a future TUN implementation can retrieve it without additional lookups.
+
 ---
 
 ## Phase 7 — Fault surface
