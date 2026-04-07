@@ -179,7 +179,7 @@ Shared QUIC client logic lives in `src/oi/client.rs`:
 | `list-faults [--app <name>]` | `ListFaults` |
 | `subscribe` | `Subscribe` — streams events to stdout, one JSON object per line |
 | `open-shell <app> <name>` | `OpenShell` — interactive terminal session |
-| `forward-port <app> <service> <port> [--local-port <N>]` | `ForwardPort` — TCP port forward |
+| `forward-port <app> <service> <port> --proto tcp\|udp [--local-port <N>]` | `ForwardPort` — TCP or UDP port forward |
 
 All subcommands print the `result` object as pretty-printed JSON on success, or print the
 error code and message to stderr and exit non-zero on failure.
@@ -203,17 +203,22 @@ This subcommand has more moving parts than the others:
 
 ### `forward-port` handling
 
-1. Send `ForwardPort { app, service, port }` on a bidi stream and read `{ forward_id }` from
-   the response. Keep the control stream open.
-2. Bind a local TCP listener on `--local-port` if given, or any available port. Print the
-   bound address to stdout.
-3. For each incoming TCP connection:
-   - Open a new QUIC bidi stream.
-   - Write the header `{ "forward": "<forward_id>" }\n`.
-   - Spawn two tasks to relay bytes in both directions concurrently.
+1. Send `ForwardPort { app, service, port, proto }` on a bidi stream and read
+   `{ forward_id, forward_key }` from the response. Keep the control stream open.
+2. Print the `forward_id` and bound address to stdout.
+3. For `--proto tcp`:
+   - Bind a local TCP listener on `--local-port` if given, or any available port.
+   - For each incoming TCP connection: open a new QUIC bidi stream, write the header
+     `{ "forward": "<forward_id>" }\n`, then relay bytes in both directions concurrently.
    - Close the QUIC stream when the TCP connection closes, and vice versa.
-4. On Ctrl-C or the control stream closing: send `StopForward { forward_id }`, stop accepting
-   new connections, and wait for in-flight relays to drain.
+4. For `--proto udp`:
+   - Bind a local UDP socket on `--local-port` if given, or any available port.
+   - For each incoming UDP datagram: prepend the 2-byte big-endian `forward_key` and send
+     as a QUIC datagram.
+   - For each incoming QUIC datagram with a matching `forward_key`: strip the prefix and
+     send back to the originating UDP address.
+5. On Ctrl-C or the control stream closing: send `StopForward { forward_id }`, stop
+   accepting new connections, and wait for in-flight relays to drain.
 
 ---
 
@@ -368,8 +373,9 @@ Extend the stream dispatcher to handle the `"forward"` key per `i[stream.dispatc
 1. Look up the service by name in the AppDef. Return `not_found` if absent.
 2. Resolve the service's internal IPv6 address for the given port number. Return `not_found`
    if the port is not defined on the service.
-3. Allocate a `forward_id` (random UUID) and register the forward in an in-memory
-   `ForwardRegistry` (app, service, port, control stream handle).
+3. Allocate a `forward_id` (random UUID) and a `forward_key` (u16, assigned from a
+   per-connection counter) and register the forward in an in-memory `ForwardRegistry`
+   (app, service, port, proto, IPv6 address, forward_key, control stream handle).
 4. Keep the control stream open. When it closes (client disconnect or `StopForward`), tear
    down all active tunneled connections for this forward and remove from the registry.
 5. Emit `ForwardStarted` event.
@@ -377,36 +383,42 @@ Extend the stream dispatcher to handle the `"forward"` key per `i[stream.dispatc
 ### `StopForward`
 
 1. Look up the forward by ID. Return `not_found` if absent.
-2. Close all tunneled TCP connections for this forward.
+2. Close all tunneled connections for this forward (TCP streams or UDP state).
 3. Close the control stream.
 4. Remove from the registry.
 5. Emit `ForwardStopped` event.
 
-### Tunnel relay
+### TCP tunnel relay
 
 For each incoming forward data stream (identified by `i[stream.forward]` header):
 1. Extract `forward_id` from the header. Return an error if not found in the registry.
-2. Open a TCP connection to the service's resolved address and port.
+2. Open a TCP connection to the service's resolved IPv6 address and port.
 3. Spawn two tasks: relay stream→TCP and TCP→stream concurrently.
 4. Close both ends when either side closes.
 
+### UDP datagram relay
+
+On each incoming QUIC datagram:
+1. Read the 2-byte big-endian `forward_key` prefix.
+2. Look up the forward in the registry by `forward_key`. Discard if not found.
+3. Send the remaining payload as a UDP datagram to the service's resolved IPv6 address
+   and port.
+4. Listen for UDP responses on the same socket; wrap each in the `forward_key` prefix and
+   send back as a QUIC datagram.
+
+Enable datagram support in the quinn `TransportConfig` (`max_datagram_frame_size`). Check
+`Connection::max_datagram_size()` before sending; if the payload exceeds the limit, drop
+it and log a warning.
+
 ### Future: TUN-based forwarding (v2)
 
-Because services have stable IPv6 addresses within the node's `/48` prefix, a future client
-enhancement could create a TUN interface and add a host route for a service's IPv6 address,
-making the service feel locally routable without specifying ports in advance. This also
-handles UDP naturally.
-
-Two implementation paths exist:
-- **Userspace TCP stack (no wire changes):** packets from TUN are reconstructed into
-  individual connections by a userspace stack (e.g. `smoltcp`) and forwarded through the
-  existing per-connection QUIC protocol. The server side is unchanged.
-- **Raw IP packet forwarding (new stream type):** a dedicated QUIC stream carries framed IP
-  packets in both directions; the server injects them directly into the pod network. More
-  efficient but requires a new stream framing type in the spec.
-
-The server-side `ForwardRegistry` should store the resolved service IPv6 address alongside
-the port so that a future TUN implementation can retrieve it without additional lookups.
+Because services have stable IPv6 addresses within the node's `/48` prefix, a future
+`seedling-ctl` enhancement could create a TUN interface, add a host route for the service's
+IPv6 address, intercept packets, and open TCP or UDP forwards on demand — using the exact
+same wire protocol as the bind-a-port v1 implementation. For TCP the client needs to handle
+the TCP handshake locally (e.g. via `smoltcp`) before opening a TCP forward stream; for UDP
+it can extract the payload directly and use a UDP forward. No wire or server changes are
+required.
 
 ---
 

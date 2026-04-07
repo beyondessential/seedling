@@ -41,8 +41,13 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > i[stream.forward]
 > Each tunneled TCP connection within a port forward uses one client-initiated bidirectional QUIC stream.
-> Both the client-to-server and server-to-client directions carry raw TCP bytes after an initial newline-terminated JSON header line: `{ "forward": "<forward_id>" }`.
+> Both directions carry raw TCP bytes after an initial newline-terminated JSON header line: `{ "forward": "<forward_id>" }`.
 > The stream closes when the tunneled TCP connection closes.
+
+> i[datagram.forward]
+> Each tunneled UDP datagram within a port forward is carried as a QUIC datagram (RFC 9221).
+> Every datagram begins with a 2-byte big-endian `forward_key` followed immediately by the UDP payload.
+> QUIC datagrams are path-MTU constrained; payloads that exceed the limit reported by `max_datagram_size()` cannot be delivered and are silently dropped.
 
 > i[stream.dispatch]
 > All client-initiated bidirectional streams begin with a newline-terminated JSON object.
@@ -222,15 +227,23 @@ Absent specification bugs, anything that is not defined here is either defined i
 # Port Forwards
 
 > i[forward.request]
-> `ForwardPort { app, service, port }` requests a TCP port forward to the named service at the given service-side port number.
+> `ForwardPort { app, service, port, proto }` requests a port forward to the named service at the given service-side port number.
 > `service` is the name of a Service defined in the app's BSL script.
 > `port` is a port number on that Service as defined by `service.port()`.
-> Returns `{ "forward_id": "<string>" }` on success.
+> `proto` is either `"tcp"` or `"udp"`.
+> Returns `{ "forward_id": "<string>", "forward_key": <u16> }` on success.
+> `forward_id` is used for control operations such as `StopForward`.
+> `forward_key` is the compact 2-byte identifier used in QUIC datagram headers for UDP forwards (see [datagram.forward](#i--datagram.forward)); it is not used for TCP forwards.
 > The control stream that carried the request is kept open for the lifetime of the forward; closing it tears down the forward.
 
-> i[forward.tunnel]
-> Each individual TCP connection forwarded through the port forward uses a dedicated bidi stream as defined in [stream.forward](#i--stream.forward).
-> The server accepts the stream, connects to the target service port, and relays bytes bidirectionally until either end closes the connection.
+> i[forward.tunnel.tcp]
+> Each individual TCP connection forwarded through a TCP port forward uses a dedicated bidi stream as defined in [stream.forward](#i--stream.forward).
+> The server accepts the stream, opens a TCP connection to the target service address and port, and relays bytes bidirectionally until either end closes.
+
+> i[forward.tunnel.udp]
+> Each UDP datagram forwarded through a UDP port forward is carried as a QUIC datagram as defined in [datagram.forward](#i--datagram.forward).
+> The server extracts the `forward_key`, looks up the target service address and port, and forwards the payload as a UDP datagram.
+> Responses from the service are sent back as QUIC datagrams with the same `forward_key` prefix.
 
 > i[forward.lifetime]
 > A port forward remains active until any of the following occur:
@@ -240,7 +253,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - The connection is lost.
 
 > i[forward.stop]
-> `StopForward { forward_id }` explicitly tears down an active port forward, closing all of its tunneled TCP connections.
+> `StopForward { forward_id }` explicitly tears down an active port forward, closing all of its tunneled connections.
 > Returns `{}` on success, or `not_found` if the forward does not exist.
 
 > i[forward.concurrent]
