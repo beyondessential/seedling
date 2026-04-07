@@ -22,11 +22,11 @@ use crate::{
     system::{System, actuator::Actuator, caddy, observer::Observer},
 };
 
-pub mod phase2_pods;
-pub mod phase3_volumes;
-pub mod phase4_routes;
-pub mod phase5_rules;
-pub mod phase6_proxy;
+pub mod pods;
+pub mod proxy;
+pub mod routes;
+pub mod rules;
+pub mod volumes;
 
 // ---------------------------------------------------------------------------
 // RunningPod
@@ -122,8 +122,8 @@ impl Reconciler {
     pub async fn tick(&mut self) {
         let (desired, snapshot) = self.snapshot_desired();
 
-        // Phase 2 — observe and actuate Deployments and Jobs.
-        let running_pods = phase2_pods::observe_and_actuate(
+        // Observe and actuate Deployments and Jobs.
+        let running_pods = pods::observe_and_actuate(
             &self.observer,
             &self.actuator,
             &self.driver,
@@ -132,11 +132,11 @@ impl Reconciler {
         )
         .await;
 
-        // Phase 3 — observe and actuate Volumes.
-        phase3_volumes::observe_and_actuate(&self.observer, &self.actuator, &desired).await;
+        // Observe and actuate Volumes.
+        volumes::observe_and_actuate(&self.observer, &self.actuator, &desired).await;
 
-        // Phase 4 — DataPlane: service routes.
-        phase4_routes::apply(
+        // DataPlane: service routes.
+        routes::apply(
             &self.driver,
             &snapshot,
             &self.node_prefix,
@@ -187,8 +187,8 @@ impl Reconciler {
             }
         };
 
-        // Phase 5 — DataPlane: nftables rules.
-        phase5_rules::apply(
+        // DataPlane: nftables rules.
+        rules::apply(
             &self.driver,
             &snapshot,
             &self.node_prefix,
@@ -199,8 +199,8 @@ impl Reconciler {
         )
         .await;
 
-        // Phase 6 — Proxy config (Caddy).
-        phase6_proxy::apply(
+        // Proxy config (Caddy).
+        proxy::apply(
             &self.driver,
             &snapshot,
             &self.node_prefix,
@@ -214,7 +214,7 @@ impl Reconciler {
     // r[desired-state.definition]
     // r[desired-state.steady]
     // r[desired-state.during-operation]
-    /// Phase 1: compute the desired state snapshot.
+    /// Compute the desired state snapshot.
     ///
     /// Acquires the sync locks on `active_progress` and the AppDef
     /// simultaneously, computes the desired state, clones the AppDef

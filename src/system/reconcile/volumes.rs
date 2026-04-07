@@ -28,7 +28,7 @@ pub(super) async fn observe_and_actuate(
                 error!(
                     instance = %dr.instance.display_name,
                     error = %e,
-                    "phase 3: observe failed, skipping instance"
+                    "volumes: observe failed, skipping instance"
                 );
                 continue;
             }
@@ -44,7 +44,7 @@ pub(super) async fn observe_and_actuate(
                     error!(
                         instance = %dr.instance.display_name,
                         error = %e,
-                        "phase 3: volume create failed"
+                        "volumes: create failed"
                     );
                 }
             }
@@ -53,7 +53,7 @@ pub(super) async fn observe_and_actuate(
                     error!(
                         instance = %dr.instance.display_name,
                         error = %e,
-                        "phase 3: volume remove failed"
+                        "volumes: remove failed"
                     );
                 }
             }

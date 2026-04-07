@@ -40,7 +40,7 @@ pub(super) async fn observe_and_actuate(
                 error!(
                     instance = %dr.instance.display_name,
                     error = %e,
-                    "phase 2: observe failed, skipping instance"
+                    "pods: observe failed, skipping instance"
                 );
                 continue;
             }
@@ -76,7 +76,7 @@ pub(super) async fn observe_and_actuate(
                     error!(
                         instance = %dr.instance.display_name,
                         error = %e,
-                        "phase 2: inspect failed while collecting running pod, skipping"
+                        "pods: inspect failed while collecting running pod, skipping"
                     );
                 }
             }
@@ -89,7 +89,7 @@ pub(super) async fn observe_and_actuate(
                     error!(
                         instance = %dr.instance.display_name,
                         error = %e,
-                        "phase 2: start failed"
+                        "pods: start failed"
                     );
                 }
             }
@@ -98,7 +98,7 @@ pub(super) async fn observe_and_actuate(
                     error!(
                         instance = %dr.instance.display_name,
                         error = %e,
-                        "phase 2: stop failed"
+                        "pods: stop failed"
                     );
                 }
             }

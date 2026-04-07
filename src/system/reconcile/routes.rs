@@ -59,7 +59,7 @@ pub(super) async fn apply(
     }
 
     if let Err(e) = driver.data_plane.apply_routes(&routes).await {
-        error!(error = %e, "phase 4: apply_routes failed");
+        error!(error = %e, "routes: apply_routes failed");
     }
 }
 

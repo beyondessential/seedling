@@ -63,7 +63,7 @@ pub(super) async fn apply(
     let config = build_proxy_config(&pairs, caddy_addr);
 
     if let Err(e) = driver.proxy.apply_config(&config).await {
-        error!(error = %e, "phase 6: apply_config failed");
+        error!(error = %e, "proxy: apply_config failed");
     }
 }
 

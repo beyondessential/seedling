@@ -36,7 +36,7 @@ pub(super) async fn apply(
     let rules = DataPlaneRules { ingress, mounts };
 
     if let Err(e) = driver.data_plane.apply_rules(&rules).await {
-        error!(error = %e, "phase 5: apply_rules failed");
+        error!(error = %e, "rules: apply_rules failed");
     }
 }
 

@@ -1071,22 +1071,22 @@ inherently idempotent.
 
 ### File structure
 
-Each phase lives in its own file, with `src/system/reconcile.rs` as the
+Each step lives in its own file, with `src/system/reconcile.rs` as the
 coordinating top module (using the `foo.rs` / `foo/sub.rs` convention):
 
 ```
-src/system/reconcile.rs                — Reconciler struct, tick() coordination,
-                                         node_prefix_from_machine_id()
-src/system/reconcile/phase2_pods.rs   — Observe + actuate Deployments/Jobs
-src/system/reconcile/phase3_volumes.rs — Observe + actuate Volumes
-src/system/reconcile/phase4_routes.rs  — Service route computation
-src/system/reconcile/phase5_rules.rs   — DataPlane nftables rules
-src/system/reconcile/phase6_proxy.rs   — Proxy config (Caddy)
+src/system/reconcile.rs          — Reconciler struct, tick() coordination,
+                                   node_prefix_from_machine_id()
+src/system/reconcile/pods.rs    — Observe + actuate Deployments/Jobs
+src/system/reconcile/volumes.rs — Observe + actuate Volumes
+src/system/reconcile/routes.rs  — DataPlane: service route computation
+src/system/reconcile/rules.rs   — DataPlane: nftables rules
+src/system/reconcile/proxy.rs   — Proxy config (Caddy)
 ```
 
-Phase 1 (desired state snapshot) is a single `compute()` call and lives
-directly in `reconcile.rs`. Phase 7 (bridge `::2` check) is deferred pending
-the bridge name persistence prerequisite described below.
+The desired state snapshot is a single `compute()` call and lives directly in
+`reconcile.rs`. The bridge `::2` address check is deferred pending the bridge
+name persistence prerequisite described below.
 
 ### Phase 1 — Desired state snapshot
 
