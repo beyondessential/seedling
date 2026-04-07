@@ -47,19 +47,19 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[wire.request]
 > Every control request has the form:
 > ```json
-> { "id": "<string>", "method": "<string>", "params": { } }
+> { "method": "<string>", "params": { } }
 > ```
 
 > i[wire.response.ok]
 > A successful response has the form:
 > ```json
-> { "id": "<string>", "result": { } }
+> { "result": { } }
 > ```
 
 > i[wire.response.error]
 > An error response has the form:
 > ```json
-> { "id": "<string>", "error": { "code": "<string>", "message": "<string>" } }
+> { "error": { "code": "<string>", "message": "<string>" } }
 > ```
 
 > i[wire.error-codes]
