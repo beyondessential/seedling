@@ -695,6 +695,39 @@ step.
 `apply_config` sends the full config document to `POST /config/` using Caddy's
 JSON config API. Caddy applies it atomically with no traffic drop.
 
+### Version management and upgrades
+
+Caddy's image reference (e.g. `docker.io/library/caddy:2.9`) is part of
+seedling's own configuration, not the BSL script. It is versioned and
+distributed alongside seedling itself — upgrading Caddy means upgrading
+seedling's config or the seedling binary, not editing a BSL script.
+
+At startup, seedling runs a **Caddy reconciliation** pass before entering the
+main loop:
+
+1. Inspect the running Caddy container (if any) and read its image digest.
+2. Compare against the configured digest.
+3. If they match and Caddy is healthy: apply the current `ProxyConfig` and
+   proceed. No restart needed.
+4. If they differ (upgrade) or Caddy is absent/unhealthy:
+   a. Pull the new image (while the old container, if any, keeps running).
+   b. Stop the old transient unit gracefully.
+   c. Start a new transient unit with the new image and the same fixed IP.
+   d. Re-connect Caddy to every currently active pod network (pod network
+      connections are not part of the container spec and are lost on
+      recreation).
+   e. Apply the full `ProxyConfig` via the admin API (new Caddy starts with
+      no routing config).
+
+The DNAT rules in `seedling_ingress` are unaffected by Caddy container
+replacement — they point to the fixed IP, which the new container inherits
+immediately. Traffic is interrupted only during the stop→start gap, which is
+minimised by pre-pulling the image in step (a).
+
+This same reconciliation path handles crash recovery: if Caddy's container is
+found absent on any reconciliation tick (not just startup), seedling restarts
+it and re-converges its state via steps (c)–(e) above.
+
 ---
 
 ## nftables port forwarder (`src/system/nftables.rs`)
