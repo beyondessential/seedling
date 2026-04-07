@@ -43,10 +43,10 @@ level (wiring `src/runtime/` to `src/system/`), not inside either module.
 
 | Trait            | Struct               | Transport                                                     |
 |------------------|----------------------|---------------------------------------------------------------|
-| `ContainerRuntime` | `PodmanRuntime`    | libpod REST API over unix socket at `/run/podman/podman.sock` |
-| `ProcessManager`   | `SystemdManager`   | system D-Bus via `zbus`; transient + persistent unit control  |
-| `NetworkProxy`     | `CaddyProxy`       | Caddy admin API at `http://<fixed-container-ip>:2019`         |
-| `PortForwarder`    | `NftablesForwarder`| nftables DNAT rules via netlink or `nft` CLI                  |
+| `ContainerRuntime` | `PodmanRuntime`    | libpod REST API over unix socket at `/run/podman/podman.sock`  |
+| `ProcessManager`   | `SystemdManager`   | system D-Bus via `zbus`; transient + persistent unit control   |
+| `NetworkProxy`     | `CaddyProxy`       | Caddy admin API; IP discovered by container inspection         |
+| `PortForwarder`    | `NftablesForwarder`| nftables DNAT via `nft` binary in JSON mode (`nft -j`)        |
 
 ---
 
@@ -102,6 +102,7 @@ pub trait ContainerRuntime: Send + Sync + 'static {
     async fn network_exists(&self, name: &str)    -> Result<bool, Self::Error>;
     async fn create_network(&self, name: &str)    -> Result<(), Self::Error>;
     async fn remove_network(&self, name: &str)    -> Result<(), Self::Error>;
+    async fn list_networks(&self)                 -> Result<Vec<String>, Self::Error>;
     async fn connect_network(&self, container: &str, network: &str)
         -> Result<(), Self::Error>;
     async fn disconnect_network(&self, container: &str, network: &str)
@@ -140,7 +141,13 @@ pub trait ProcessManager: Send + Sync + 'static {
     // Transient units — container lifecycle; no unit file written to disk.
     async fn start_transient(&self, spec: TransientUnitSpec)
         -> Result<(), Self::Error>;
+    /// Sends the stop signal to the unit; returns immediately without waiting.
+    /// Use `wait_unit_stopped` to block until the unit has fully stopped.
     async fn stop_unit(&self, name: &str)    -> Result<(), Self::Error>;
+    /// Polls until the unit reaches an inactive or failed state, or the
+    /// timeout elapses.  Required before removing pod networks or volumes.
+    async fn wait_unit_stopped(&self, name: &str, timeout: Duration)
+        -> Result<(), Self::Error>;
     async fn unit_state(&self, name: &str)
         -> Result<Option<UnitState>, Self::Error>;
     async fn list_units(&self, prefix: &str)
@@ -325,11 +332,11 @@ work. When systemd stops the unit, podman exits and the container is removed.
 ### systemd unit observation
 
 ```rust
+/// `unit_state` returns `None` when the unit does not exist or is masked.
 pub struct UnitState   { pub active: ActiveState, pub sub: String }
 pub struct UnitSummary { pub name: String, pub state: UnitState }
 
 pub enum ActiveState { Active, Activating, Deactivating, Inactive, Failed }
-pub enum LoadState   { Loaded, NotFound, Masked, Error }
 ```
 
 ### Proxy config
@@ -352,19 +359,35 @@ pub struct ProxyConfig {
 
 pub struct ProxyListener {
     pub port:  u16,
-    pub proto: ForwardProto,
+    pub proto: ProxyListenerProto,
+}
+
+/// Protocol type for Caddy listener configuration.
+/// Distinct from `ForwardProto` (nftables); Caddy's listener model is
+/// HTTP/HTTPS/QUIC, not raw TCP/UDP.
+pub enum ProxyListenerProto {
+    Http,   // plain HTTP
+    Https,  // TLS termination
+    Quic,   // HTTP/3 over QUIC (UDP); requires tls_acme or manual cert
 }
 
 pub struct VirtualHost {
-    pub hostname:      String,
-    pub tls_acme:      bool,
-    pub http_redirect: bool,    // add HTTP→HTTPS redirect virtual host
-    pub routes:        Vec<ProxyRoute>,
+    pub hostname: String,
+    pub tls_acme: bool,
+    /// If present, add an HTTP→HTTPS redirect server block.
+    /// Preserves the BSL `redirect(port, code)` arguments.
+    pub redirect: Option<HttpRedirect>,
+    pub routes:   Vec<ProxyRoute>,
+}
+
+pub struct HttpRedirect {
+    pub from_port: u16,
+    pub code:      u16,
 }
 
 pub struct ProxyRoute {
     pub prefix:   String,
-    pub upstream: String,   // e.g. "http://myapp-web-abc123:8080"
+    pub upstreams: Vec<String>,  // one per scale instance e.g. "http://myapp-web-abc123:8080"
 }
 ```
 
@@ -410,9 +433,13 @@ pub enum ObservationFact {
 
 ### Error types
 
-Backend-internal errors (`PodmanError`, `SystemdError`, `CaddyError`,
-`NftablesError`) are not re-exported from `src/system/`. Boundary errors wrap
-them opaquely so callers never import backend internals.
+Per-backend error enums (`PodmanError`, `SystemdError`, `CaddyError`,
+`NftablesError`) are full snafu enums internal to each backend module and not
+re-exported from `src/system/`. The boundary error types are also snafu enums,
+but use `Box<dyn Error + Send + Sync + 'static>` as the source type to
+intentionally erase the backend variant — callers see `ObserveError::Container`
+but cannot match on `PodmanError` internals. This is opacity by design, not an
+accident of the error library choice.
 
 ```rust
 #[derive(Debug, Snafu)]
@@ -523,15 +550,14 @@ its pod network, at the port the container listens on internally.
 ### Proxy network
 
 A single stable network named `seedling-proxy` connects Caddy to seedling's
-management plane. Caddy is assigned a **fixed IP** on this network (e.g.
-`10.88.0.2`). This IP is configured at Caddy container creation and never
-changes across restarts.
+management plane. Caddy's IP on this network is **dynamic**: podman assigns it
+at container creation time and seedling discovers it by inspecting the container.
 
-The fixed IP serves two purposes:
-- Seedling reaches Caddy's admin API at `http://10.88.0.2:2019` without needing
-  to re-inspect the container after every restart.
-- `PortForwarder` DNAT rules are written once per ingress port and remain valid
-  across Caddy restarts, because the destination IP never changes.
+`CaddyProxy` holds the current admin API address in an `Arc<RwLock<SocketAddr>>`
+updated on every Caddy container change (startup, upgrade, crash recovery).
+DNAT rules reference Caddy's current IP and are replaced atomically whenever
+that IP changes — either during a blue/green upgrade cutover or after crash
+recovery brings up a new container.
 
 ### Pod lifecycle and Caddy connectivity
 
@@ -544,20 +570,29 @@ The fixed IP serves two purposes:
 - When a pod stops:
   1. Disconnect Caddy from the pod network.
   2. Apply updated `ProxyConfig` and `ForwardingRule`s (remove the upstream).
-  3. Stop the container (stop the transient unit).
-  4. Remove the pod network.
+  3. Stop the container (`stop_unit`).
+  4. Wait for the unit to reach an inactive state (`wait_unit_stopped`) before
+     proceeding — podman will refuse to remove a network with active endpoints.
+  5. Remove the pod network.
 
 ### External port forwarding
 
 Seedling does not bind external ports. Instead, `PortForwarder` installs
 nftables DNAT rules that redirect host-level traffic at the kernel before it
-reaches any userspace socket. The rules point to Caddy's fixed container IP.
+reaches any userspace socket. The rules point to the **currently active** Caddy
+container's IP, which changes only during blue/green upgrades and crash recovery.
 
-Because the rules are managed independently of Caddy's container lifecycle,
-they survive Caddy restarts without modification. When ingress ports change
-(a genuinely rare event), the rule set is updated atomically and Caddy's
-listener config is updated via the admin API — no Caddy container restart
-required in the common case.
+DNAT rules are replaced atomically (single `nft` transaction) in two scenarios:
+a new ingress port is added or removed (rare), or the active Caddy IP changes
+(upgrade or recovery). In steady state, rules are untouched across reconciliation
+ticks.
+
+Note: nftables `prerouting` DNAT applies only to traffic arriving from outside
+the host. Traffic originating on the host itself (e.g. seedling's own health
+checks on port 80) bypasses `prerouting` and requires either a matching `output`
+chain DNAT rule or `net.ipv4.conf.all.route_localnet=1` to reach Caddy via the
+ingress port. This is noted as an open question for implementation.
+</thinking>
 
 Caddy binds ports inside its container based on `ProxyConfig.listeners`. Caddy
 supports adding and removing listener addresses hot via its admin API.
@@ -614,10 +649,23 @@ pub fn job_spec(
 pub fn podman_args(spec: &ContainerSpec) -> Vec<String>;
 
 // proxy.rs
-/// Builds the full ProxyConfig and the corresponding ForwardingRules
-/// from the current set of active ingresses and their backing pod instances.
+
+/// A resolved upstream: one running pod instance and its reachable address
+/// on the pod's network (IP:port, as seen from Caddy after network connect).
+/// The caller resolves instances → addresses via ContainerRuntime::inspect.
+pub struct PodUpstream {
+    pub instance: ResourceInstance,
+    pub address:  SocketAddr,
+}
+
+/// Builds the full ProxyConfig and the corresponding ForwardingRules from the
+/// current set of active ingresses, their resolved pod upstreams, and the
+/// active Caddy container's IP (used as the DNAT destination).
+///
+/// One ingress may have multiple upstreams when the backing Deployment runs
+/// at scale > 1; all instances appear as upstreams in the same ProxyRoute.
 pub fn build_proxy_config(
-    ingresses: &[(IngressDef, ResourceInstance /* backing pod */)],
+    ingresses: &[(IngressDef, Vec<PodUpstream>)],
     caddy_ip:  IpAddr,
 ) -> (ProxyConfig, Vec<ForwardingRule>);
 ```
@@ -652,10 +700,13 @@ trait types exist so the rest of the codebase never imports
 - Interface: `org.freedesktop.systemd1.Manager` on `/org/freedesktop/systemd1`.
 - Transient units are created via `StartTransientUnit`.
 - Persistent unit files (if needed) go to `/etc/systemd/system/` (rootful).
-- Unit naming convention: `seedling-{display_name}.service` / `.socket`.
+- Unit naming convention for app containers: `seedling-{display_name}.service`.
   Since display names are already hyphen-separated components (e.g.
-  `myapp-web-abc123`), all seedling units are naturally grouped under the
+  `myapp-web-abc123`), all app units are naturally grouped under the
   `seedling-` prefix and enumerable with `list_units("seedling-")`.
+- Caddy's units are named `seedling-caddy.service` and
+  `seedling-caddy-next.service` (during blue/green upgrade). These are
+  fixed infrastructure names, not derived from the display-name convention.
 
 `start_transient` maps `TransientUnitSpec` to a `StartTransientUnit` D-Bus call
 with at minimum:
@@ -681,13 +732,19 @@ systemd has no role in external port binding. Its responsibilities are:
   network is **dynamic**: podman assigns it at container start time and seedling
   discovers it by inspecting the container. No fixed IP is pre-assigned.
 - As pods start and stop, Caddy is also dynamically connected to and
-  disconnected from each pod's network.
+  disconnected from each pod's network. The active pod network list is sourced
+  from `ContainerRuntime::list_networks` filtered to the `seedling-` prefix,
+  cross-referenced with running pod containers, at the time of the upgrade.
 - Caddy listens on `::` (all interfaces) for the ports declared in
   `ProxyConfig.listeners`, making it reachable from every attached network.
 - The admin API is accessed at `http://<current-caddy-ip>:2019`. `CaddyProxy`
   holds the current IP in an `Arc<RwLock<SocketAddr>>` that is updated
   whenever the active Caddy container changes. The admin API port is not
   exposed to the host; it is only reachable on the `seedling-proxy` network.
+- Caddy requires a persistent named volume (e.g. `seedling-caddy-data`) mounted
+  at `/data` inside the container. This stores ACME account keys and certificate
+  cache. Without it, every Caddy restart triggers fresh ACME challenges and will
+  hit Let's Encrypt rate limits in production.
 
 Caddy's JSON config API supports adding new server blocks with new listener
 addresses hot, without process restart. When an ingress is added on a new port,
@@ -715,17 +772,27 @@ DNAT rule replacement with no gap for new connections.
 1. Pull the new image while the old Caddy container continues serving traffic.
 2. Start the new Caddy container on `seedling-proxy`; podman assigns it an IP.
 3. Inspect the new container to discover its IP on `seedling-proxy`.
-4. Connect the new container to every currently active pod network.
-5. Apply the full `ProxyConfig` to the new container via its admin API.
+4. Poll `is_healthy` (with retries and a timeout) before proceeding — Caddy
+   needs time to initialise before its admin API accepts connections.
+5. Connect the new container to every currently active pod network.
+   (Source of truth: `list_networks` filtered to pod networks, i.e. those
+   not named `seedling-proxy`, cross-referenced with running containers.)
+6. Apply the full `ProxyConfig` to the new container via its admin API.
    (The new container is reachable but not yet receiving external traffic.)
-6. Atomically replace the DNAT ruleset in `seedling_ingress` so all rules
+7. Atomically replace the DNAT ruleset in `seedling_ingress` so all rules
    point to the new container's IP. New connections are now routed to the new
    container. The kernel's conntrack table preserves established connections to
    the old container, allowing them to drain naturally.
-7. Update `CaddyProxy`'s internal `SocketAddr` to the new container's admin
+8. Persist the active Caddy container name (`seedling-caddy-next` at this
+   point) to the DB. This is the crash-recovery oracle.
+9. Update `CaddyProxy`'s internal `SocketAddr` to the new container's admin
    API address. Subsequent config updates go to the new container.
-8. Send SIGTERM to the old transient unit and wait for it to stop (or force
-   after a timeout). The old container is removed by `--rm`.
+10. Stop the old transient unit (`stop_unit` + `wait_unit_stopped` with
+    timeout; force-stop on timeout). The old container is removed by `--rm`.
+11. Record `seedling-caddy` as the canonical active name in the DB. The
+    container may be renamed by stopping `seedling-caddy-next` and starting
+    a fresh `seedling-caddy` on the next reconciliation, or left as-is until
+    the next upgrade; the DB name is the authority, not the container name.
 
 **Startup reconciliation:**
 
@@ -770,25 +837,23 @@ system state and converges from there — the same path used for normal operatio
 
 **Crash mid-Caddy-upgrade:**
 
-If seedling crashes during the blue/green upgrade window (after the new Caddy
-container has been started but before the old one has been stopped), two Caddy
-containers may be running simultaneously. Seedling uses distinct container names
-to make this unambiguous:
+The DB is the oracle for which Caddy container is active. The upgrade sequence
+writes the active container name to the DB at step 8 (after DNAT switch) and
+again at step 11 (after cleanup). On startup, seedling reads the DB to determine
+which container name was last recorded as active.
 
-- `seedling-caddy` — the currently active container (the one DNAT rules point to)
-- `seedling-caddy-next` — an in-progress replacement
+If both `seedling-caddy` and `seedling-caddy-next` exist:
+- DB says `seedling-caddy` is active → crash occurred before step 8 (DNAT not
+  yet switched). Stop and remove `seedling-caddy-next`; proceed with the
+  recorded active container.
+- DB says `seedling-caddy-next` is active → crash occurred between steps 8 and
+  11 (DNAT switched, old not yet cleaned up). Stop and remove `seedling-caddy`;
+  `CaddyProxy` is initialised from `seedling-caddy-next`.
 
-On startup, if both exist, seedling reads the current DNAT rules to identify
-which IP is active. The container on that IP is the live one; the other is an
-orphan from the interrupted upgrade and is stopped and removed. `CaddyProxy` is
-then initialised from the live container.
+If only `seedling-caddy-next` exists and DB says it is active: old container
+was already cleaned up. `CaddyProxy` is initialised from `seedling-caddy-next`.
 
-If only `seedling-caddy-next` exists (crash occurred after DNAT switch but
-before the old container was removed), it is treated as the active container: it
-is renamed to `seedling-caddy` and `CaddyProxy` is initialised from it.
-
-This naming convention also makes Caddy containers unambiguous when scanning
-with `list_units("seedling-")` or inspecting running containers.
+In all cases no container rename is needed — the DB name is the authority.
 
 **DB schema migrations:**
 
@@ -800,9 +865,10 @@ handling beyond what the existing migration infrastructure provides.
 
 ## nftables port forwarder (`src/system/nftables.rs`)
 
-- Crate: `nftables` (v0.6+) with the `tokio` feature, which provides an async
-  `apply_ruleset` function. The crate is a safe abstraction over the nftables
-  JSON API (`nft -j`) and avoids both text parsing and raw netlink.
+- Crate: `nftables` (v0.6+) with the `tokio` feature. The crate shells out to
+  the `nft` binary in JSON mode (`nft -j`), providing a typed Rust API over the
+  nftables JSON schema without hand-written text parsing. The `nft` binary must
+  be installed on the host; this is a hard runtime dependency.
 - Manages a dedicated nftables table: `table inet seedling_ingress {}`.
 - All DNAT rules live in a single chain within that table, making cleanup
   (`clear_rules`) a simple table flush.
@@ -863,6 +929,14 @@ Note: UDP DNAT at port 443 is required for QUIC (HTTP/3) support when Caddy's
 - **ip_forward**: nftables DNAT requires `net.ipv4.ip_forward=1` (and the
   IPv6 equivalent). Rootful podman typically sets this already; confirm and
   document the assumption.
+
+- **Localhost → ingress port access**: nftables `prerouting` DNAT does not
+  apply to traffic originating on the host. Accessing ingress ports from
+  localhost (seedling health checks, monitoring, etc.) requires either an
+  additional `output` chain DNAT rule or `net.ipv4.conf.all.route_localnet=1`.
+  Decide whether to add the output rule unconditionally or document the
+  limitation.
+
 - **Client IP visibility**: with DNAT, Caddy sees the original client IP as the
   connection source (conntrack handles reverse translation on replies). Verify
   this holds with the specific bridge/network setup and document whether Caddy's
