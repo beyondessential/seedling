@@ -104,6 +104,15 @@ pub fn import_bootstrap_file(data_dir: &Path, db: &Db, trusted: &TrustedKeys) ->
     Ok(())
 }
 
+/// Look up the label for a fingerprint. Returns `None` if not found.
+pub fn get_label(db: &Db, fingerprint: &str) -> rusqlite::Result<Option<String>> {
+    let mut stmt = db
+        .conn
+        .prepare("SELECT label FROM authorized_keys WHERE fingerprint = ?1")?;
+    let mut rows = stmt.query([fingerprint])?;
+    Ok(rows.next()?.map(|r| r.get(0)).transpose()?)
+}
+
 // i[key.list]
 pub fn list_keys(db: &Db) -> rusqlite::Result<Vec<(String, String, i64)>> {
     let mut stmt = db.conn.prepare(

@@ -115,6 +115,17 @@ async fn handle_connection(conn: quinn::Connection, state: Arc<OiState>) {
     let peer = conn.remote_address();
     let client_fp = extract_client_fp(&conn);
 
+    // Resolve a human-readable name for the span: the key label if available,
+    // otherwise the fingerprint, otherwise "unauthenticated".
+    let client: String = client_fp
+        .as_deref()
+        .and_then(|fp| {
+            let db = state.db.lock();
+            super::auth::get_label(&db, fp).ok().flatten()
+        })
+        .or_else(|| client_fp.clone())
+        .unwrap_or_else(|| "unauthenticated".to_owned());
+
     loop {
         let stream = match conn.accept_bi().await {
             Ok(s) => s,
@@ -126,9 +137,10 @@ async fn handle_connection(conn: quinn::Connection, state: Arc<OiState>) {
         };
         let state = Arc::clone(&state);
         let client_fp = client_fp.clone();
+        let client = client.clone();
         tokio::spawn(
             handle_bidi_stream(stream, state, client_fp)
-                .instrument(tracing::info_span!("oi", %peer)),
+                .instrument(tracing::info_span!("oi", %peer, %client)),
         );
     }
 }
