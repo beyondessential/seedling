@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use snafu::Snafu;
 use zbus::{
     Connection,
-    zvariant::{Array, OwnedObjectPath, Signature, Value},
+    zvariant::{Array, OwnedObjectPath, Signature, StructureBuilder, Value},
 };
 
 use crate::system::{
@@ -356,9 +356,19 @@ fn build_exec_start(exec_start: &[String]) -> Result<Value<'static>, SystemdErro
             })?;
     }
 
-    // One (sasb) struct entry using Value::from on a 3-tuple.
-    // zvariant implements From<(T1,T2,T3)> for Value when each Ti: Into<Value>.
-    let entry = Value::from((path, Value::Array(argv_arr), false));
+    // Build one (sasb) struct entry. We must use append_field (which pushes the
+    // Value directly) rather than add_field (which routes through Value::new and
+    // wraps any Value<'_> as a variant because Value::SIGNATURE == "v").
+    let entry = Value::Structure(
+        StructureBuilder::new()
+            .append_field(Value::from(path))
+            .append_field(Value::Array(argv_arr))
+            .append_field(Value::from(false))
+            .build()
+            .map_err(|e| SystemdError::Protocol {
+                message: format!("building ExecStart entry: {e}"),
+            })?,
+    );
 
     // Outer a(sasb) array
     let entry_sig = Signature::try_from("(sasb)").map_err(|e| SystemdError::Protocol {
