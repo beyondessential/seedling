@@ -6,7 +6,7 @@ use super::app::App;
 #[derive(Debug, Clone)]
 pub struct Param {
     pub name: String,
-    pub value: String,
+    pub value: Option<String>,
     /// Back-reference to the owning App so that `on_change` can register the
     /// handler in `AppDef.param_changes` without needing a separate method on App.
     pub app: App,
@@ -14,40 +14,46 @@ pub struct Param {
 
 impl CustomType for Param {
     fn build(mut builder: TypeBuilder<Self>) {
-        builder
-            .with_name("Param")
-            // l[impl param.value]
-            .with_fn("to_string", |this: &mut Self| -> String {
-                this.value.clone()
-            })
-            .with_fn("to_debug", |this: &mut Self| -> String {
-                format!("Param({:?}, {:?})", this.name, this.value)
-            })
-            // l[impl param.on-change]
-            .with_fn(
-                "on_change",
-                |this: &mut Self, closure: FnPtr| -> Result<(), Box<EvalAltResult>> {
-                    if crate::runtime::barrier::runtime::is_in_action_closure() {
+        builder.with_name("Param");
+
+        // l[impl param.is-set]
+        builder.with_fn("is_set", |this: &mut Self| -> bool { this.value.is_some() });
+
+        // l[impl param.value]
+        builder.with_fn(
+            "value",
+            |this: &mut Self| -> Result<String, Box<EvalAltResult>> {
+                this.value
+                    .clone()
+                    .ok_or_else(|| format!("param '{}' is not set", this.name).into())
+            },
+        );
+
+        // l[impl param.on-change]
+        builder.with_fn(
+            "on_change",
+            |this: &mut Self, closure: FnPtr| -> Result<(), Box<EvalAltResult>> {
+                if crate::runtime::barrier::runtime::is_in_action_closure() {
+                    return Err(format!(
+                        "on_change for parameter '{}' cannot be called from within an action closure",
+                        this.name
+                    )
+                    .into());
+                }
+                {
+                    let mut def = this.app.def.lock();
+                    if def.param_changes.contains(&this.name) {
                         return Err(format!(
-                            "on_change for parameter '{}' cannot be called from within an action closure",
+                            "on_change already registered for parameter '{}'",
                             this.name
                         )
                         .into());
                     }
-                    {
-                        let mut def = this.app.def.lock();
-                        if def.param_changes.contains(&this.name) {
-                            return Err(format!(
-                                "on_change already registered for parameter '{}'",
-                                this.name
-                            )
-                            .into());
-                        }
-                        def.param_changes.insert(this.name.clone());
-                    }
-                    crate::defs::app::capture_param_change(this.name.clone(), closure);
-                    Ok(())
-                },
-            );
+                    def.param_changes.insert(this.name.clone());
+                }
+                crate::defs::app::capture_param_change(this.name.clone(), closure);
+                Ok(())
+            },
+        );
     }
 }

@@ -51,23 +51,16 @@ pub fn register(engine: &mut Engine) {
     // l[impl collection.col]
     engine.register_fn("col", collection::col);
 
-    engine.register_fn("+", |p: param::Param, s: &str| -> String {
-        format!("{}{}", p.value, s)
-    });
-    engine.register_fn("+", |s: &str, p: param::Param| -> String {
-        format!("{}{}", s, p.value)
-    });
-
     engine.register_fn(
         "ingress",
         |svc: service::Service,
-         hostname: param::Param,
+         hostname: String,
          port: i64|
          -> Result<ingress::Ingress, Box<rhai::EvalAltResult>> {
             if !(1..=65534).contains(&port) {
                 return Err(format!("port {port} out of valid range 1..65534").into());
             }
-            Ok(ingress::Ingress::new(svc, hostname.value, port as u16))
+            Ok(ingress::Ingress::new(svc, hostname, port as u16))
         },
     );
 }

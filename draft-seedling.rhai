@@ -8,7 +8,7 @@ let domain = app.param("domain");
 
 // you can use closures to make yourself little helpers
 let version = app.param("version");
-let image = |name| `ghcr.io/beyondessential/tamanu-${name}:${version}`;
+let image = |name| `ghcr.io/beyondessential/tamanu-${name}:${version.value()}`;
 
 // a service is a network endpoint that operators and other resources can access
 let control = app.service("frontend-control");
@@ -18,7 +18,7 @@ let sync_api = app.service("sync-api").http(4100);
 
 // an ingress is a publicly routable service
 let traffic = app.service("public")
-    .ingress(domain, 443).http() // terminate HTTPS for the domain, and output HTTP/1.1
+    .ingress(domain.value(), 443).http() // terminate HTTPS for the domain, and output HTTP/1.1
     .service() // get the service instance back
     .http(80); // specialise to get path routing
 

@@ -93,7 +93,8 @@ fn capture_install(fnptr: FnPtr) {
 #[derive(Debug, Default, Clone)]
 pub struct AppDef {
     pub name: String,
-    pub params: BTreeMap<String, String>,
+    /// Names of parameters declared by the BSL script via `app.param()`.
+    pub params: BTreeSet<String>,
     pub resources: BTreeMap<ResourceId, Resource>,
     /// Action metadata (name, description). No FnPtrs — closures are
     /// recovered on demand via the thread-local capture buffer.
@@ -119,12 +120,16 @@ fn extract_description(options: &Map) -> Option<String> {
 #[derive(Clone, Default)]
 pub struct App {
     pub def: Holder<AppDef>,
+    /// Operator-provided parameter values, pre-populated from the database before
+    /// script evaluation. Not BSL-driven — the script cannot modify this directly.
+    pub stored: Holder<BTreeMap<String, String>>,
 }
 
 impl std::fmt::Debug for App {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("App")
             .field("def", &self.def)
+            .field("stored", &self.stored)
             .finish_non_exhaustive()
     }
 }
@@ -138,13 +143,8 @@ impl CustomType for App {
         builder.with_fn(
             "param",
             |this: &mut Self, name: &str| -> super::param::Param {
-                let mut def = this.def.lock();
-                let value = def
-                    .params
-                    .entry(name.into())
-                    // l[impl bsl.placeholder]
-                    .or_insert_with(|| "<placeholder>".into())
-                    .clone();
+                let value = this.stored.lock().get(name).cloned();
+                this.def.lock().params.insert(name.into());
                 super::param::Param {
                     name: name.into(),
                     value,
