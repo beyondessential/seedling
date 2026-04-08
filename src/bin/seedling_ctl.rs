@@ -103,8 +103,12 @@ async fn main() {
         _guard = cli
             .logging
             .setup(|v| match v {
-                0 => "info",
-                1 => "debug",
+                0 => "seedling=info,seedling_ctl=info,warn",
+                1 => "seedling=debug,seedling_ctl=debug,warn",
+                2 => "info",
+                3 => "seedling=debug,seedling_ctl=debug,info",
+                4 => "debug",
+                5 => "seedling=trace,seedling_ctl=trace,debug",
                 _ => "trace",
             })
             .map(Some)

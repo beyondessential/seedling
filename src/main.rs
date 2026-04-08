@@ -46,8 +46,12 @@ async fn main() {
         _guard = args
             .logging
             .setup(|v| match v {
-                0 => "info",
-                1 => "debug",
+                0 => "seedling=info,warn",
+                1 => "seedling=debug,warn",
+                2 => "info",
+                3 => "seedling=debug,info",
+                4 => "debug",
+                5 => "seedling=trace,debug",
                 _ => "trace",
             })
             .map(Some)
