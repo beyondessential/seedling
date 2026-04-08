@@ -212,6 +212,7 @@ fn authorize_key(state: &OiState, params: Value) -> HandlerResult {
     let db = state.db.lock();
     crate::oi::auth::authorize_key(&db, &state.trusted_keys, fp, label)
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
+    tracing::info!(fingerprint = %fp, label = %label, "authorized key");
     Ok(json!({}))
 }
 
@@ -225,6 +226,7 @@ fn revoke_key(state: &OiState, params: Value) -> HandlerResult {
     let removed = crate::oi::auth::revoke_key(&db, &state.trusted_keys, fp)
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
     if removed {
+        tracing::info!(fingerprint = %fp, "revoked key");
         Ok(json!({}))
     } else {
         Err(OiError::not_found(format!("key not found: {fp}")))
@@ -466,6 +468,7 @@ fn register_app(state: &OiState, params: Value) -> HandlerResult {
         .expect("just registered")
         .reconciler_handle = Some(handle);
 
+    tracing::info!(app = %name, "registered app");
     Ok(json!({}))
 }
 
@@ -512,6 +515,7 @@ fn deregister_app(state: &OiState, params: Value) -> HandlerResult {
     // Remove from in-memory registry.
     state.registry.write().deregister(name);
 
+    tracing::info!(app = %name, "deregistered app");
     Ok(json!({}))
 }
 
@@ -567,5 +571,6 @@ fn update_app(state: &OiState, params: Value) -> HandlerResult {
             .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db update: {e}")))?;
     }
 
+    tracing::info!(app = %name, "updated app");
     Ok(json!({}))
 }
