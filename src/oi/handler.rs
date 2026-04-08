@@ -326,13 +326,28 @@ fn describe_app(state: &OiState, params: Value) -> HandlerResult {
         .ok_or_else(|| OiError::not_found(format!("app not found: {name}")))?;
 
     let status = reg.status_of(name).unwrap();
+
+    // Load stored param values from DB. Names come from AppDef; values come
+    // from the params table. Params declared by the script but never set by
+    // the operator are shown as null, not as the internal <placeholder> string.
+    let stored_params = {
+        let db = state.db.lock();
+        crate::runtime::apps::load_params_for_app(&db, name).unwrap_or_default()
+    };
+
     let def = entry.app.def.lock();
 
-    // params
+    // i[app.describe]
     let params_json: Vec<Value> = def
         .params
-        .iter()
-        .map(|(k, v)| json!({ "name": k, "value": v }))
+        .keys()
+        .map(|k| {
+            let value = stored_params
+                .get(k)
+                .map(|v| Value::String(v.clone()))
+                .unwrap_or(Value::Null);
+            json!({ "name": k, "value": value })
+        })
         .collect();
 
     // actions (kind: "action")
