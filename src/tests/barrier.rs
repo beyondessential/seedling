@@ -60,6 +60,7 @@ fn barrier_satisfied_on_first_pass() {
             registry: registry(),
             active_progress: None,
             tick_notify: None,
+            install_requirements: None,
         },
         &mut scope,
     );
@@ -97,6 +98,7 @@ fn barrier_suspends_then_resumes() {
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
+            install_requirements: None,
         },
         &mut scope,
     );
@@ -118,6 +120,7 @@ fn barrier_suspends_then_resumes() {
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
+            install_requirements: None,
         },
         &mut scope,
     );
@@ -156,6 +159,7 @@ fn sequential_barriers() {
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
+            install_requirements: None,
         },
         &mut scope,
     );
@@ -176,6 +180,7 @@ fn sequential_barriers() {
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
+            install_requirements: None,
         },
         &mut scope,
     );
@@ -196,6 +201,7 @@ fn sequential_barriers() {
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
+            install_requirements: None,
         },
         &mut scope,
     );
@@ -231,6 +237,7 @@ fn barrier_deadline_zero_expires_on_second_pass() {
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
+            install_requirements: None,
         },
         &mut scope,
     );
@@ -249,6 +256,7 @@ fn barrier_deadline_zero_expires_on_second_pass() {
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
+            install_requirements: None,
         },
         &mut scope,
     );
@@ -287,6 +295,7 @@ fn replay_idempotency() {
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
+            install_requirements: None,
         },
         &mut scope,
     );
@@ -307,6 +316,7 @@ fn replay_idempotency() {
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
+            install_requirements: None,
         },
         &mut scope,
     );
@@ -360,6 +370,7 @@ fn rt_stop_acts_as_barrier() {
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
+            install_requirements: None,
         },
         &mut scope,
     );
@@ -380,6 +391,7 @@ fn rt_stop_acts_as_barrier() {
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
+            install_requirements: None,
         },
         &mut scope,
     );

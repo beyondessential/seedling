@@ -234,6 +234,7 @@ fn param_used_in_closure_captures_injected_value() {
             registry: std::sync::Arc::new(crate::runtime::EphemeralInstanceRegistry::new()),
             active_progress: None,
             tick_notify: None,
+            install_requirements: None,
         },
         &mut scope,
     );
@@ -276,6 +277,7 @@ fn on_change_inside_action_closure_throws() {
             registry: std::sync::Arc::new(crate::runtime::EphemeralInstanceRegistry::new()),
             active_progress: None,
             tick_notify: None,
+            install_requirements: None,
         },
         &mut scope,
     );
