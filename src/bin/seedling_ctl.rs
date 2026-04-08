@@ -1,8 +1,96 @@
-use std::{collections::HashMap, net::SocketAddr, path::PathBuf};
+use std::{collections::HashMap, io::Write, net::SocketAddr, path::PathBuf};
 
 use clap::{Parser, Subcommand};
 use lloggs::LoggingArgs;
 use seedling::oi::client::{ClientAuth, ClientError, OiClient};
+
+mod known_hosts {
+    use std::{
+        collections::HashMap,
+        io,
+        path::{Path, PathBuf},
+    };
+
+    pub(super) enum Status {
+        Match,
+        Unknown,
+        Mismatch { expected: String },
+    }
+
+    pub(super) struct KnownHosts {
+        path: PathBuf,
+        entries: HashMap<String, String>,
+    }
+
+    impl KnownHosts {
+        pub(super) fn default_path() -> PathBuf {
+            dirs::state_dir()
+                .or_else(dirs::data_local_dir)
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("seedling")
+                .join("known_hosts")
+        }
+
+        pub(super) fn load(path: &Path) -> io::Result<Self> {
+            let mut entries = HashMap::new();
+            if path.exists() {
+                for line in std::fs::read_to_string(path)?.lines() {
+                    let line = line.trim();
+                    if line.is_empty() || line.starts_with('#') {
+                        continue;
+                    }
+                    let mut parts = line.splitn(2, ' ');
+                    if let (Some(ep), Some(fp)) = (parts.next(), parts.next()) {
+                        entries.insert(ep.to_owned(), fp.to_owned());
+                    }
+                }
+            }
+            Ok(Self {
+                path: path.to_owned(),
+                entries,
+            })
+        }
+
+        pub(super) fn empty(path: PathBuf) -> Self {
+            Self {
+                path,
+                entries: HashMap::new(),
+            }
+        }
+
+        pub(super) fn check(&self, endpoint: &str, fingerprint: &str) -> Status {
+            match self.entries.get(endpoint) {
+                Some(saved) if saved == fingerprint => Status::Match,
+                Some(saved) => Status::Mismatch {
+                    expected: saved.clone(),
+                },
+                None => Status::Unknown,
+            }
+        }
+
+        pub(super) fn add(&mut self, endpoint: &str, fingerprint: &str) {
+            self.entries
+                .insert(endpoint.to_owned(), fingerprint.to_owned());
+        }
+
+        pub(super) fn save(&self) -> io::Result<()> {
+            if let Some(parent) = self.path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let mut out =
+                String::from("# seedling-ctl known hosts\n# endpoint sha256-fingerprint\n");
+            let mut pairs: Vec<_> = self.entries.iter().collect();
+            pairs.sort_by_key(|(ep, _)| ep.as_str());
+            for (ep, fp) in pairs {
+                out.push_str(ep);
+                out.push(' ');
+                out.push_str(fp);
+                out.push('\n');
+            }
+            std::fs::write(&self.path, out)
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "seedling-ctl", about = "Seedling operator interface CLI")]
@@ -122,21 +210,86 @@ async fn main() {
         .install_default()
         .expect("ring crypto provider already installed");
 
-    let auth = if cli.trust_any {
-        ClientAuth::TrustAny
-    } else if let Some(fp) = cli.fingerprint {
-        ClientAuth::Fingerprint(fp)
-    } else {
-        tracing::error!("--fingerprint <hex> or --trust-any is required");
-        std::process::exit(1);
-    };
+    let client;
 
-    let client = OiClient::connect(cli.endpoint, auth)
-        .await
-        .unwrap_or_else(|e| {
-            tracing::error!("{e}");
-            std::process::exit(1);
+    if cli.trust_any {
+        client = OiClient::connect(cli.endpoint, ClientAuth::TrustAny)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::error!("{e}");
+                std::process::exit(1);
+            });
+    } else if let Some(fp) = cli.fingerprint {
+        client = OiClient::connect(cli.endpoint, ClientAuth::Fingerprint(fp))
+            .await
+            .unwrap_or_else(|e| {
+                tracing::error!("{e}");
+                std::process::exit(1);
+            });
+    } else {
+        let kh_path = known_hosts::KnownHosts::default_path();
+        let mut kh = known_hosts::KnownHosts::load(&kh_path).unwrap_or_else(|e| {
+            tracing::warn!("could not read {}: {e}", kh_path.display());
+            known_hosts::KnownHosts::empty(kh_path.clone())
         });
+
+        let (c, fp) = OiClient::connect_pinning(cli.endpoint)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::error!("{e}");
+                std::process::exit(1);
+            });
+
+        let ep = cli.endpoint.to_string();
+        match kh.check(&ep, &fp) {
+            known_hosts::Status::Match => {}
+            known_hosts::Status::Unknown => {
+                let mut stderr = std::io::stderr();
+                writeln!(
+                    stderr,
+                    "The authenticity of host '{ep}' can't be established."
+                )
+                .ok();
+                writeln!(stderr, "Fingerprint: {fp}").ok();
+                write!(stderr, "Continue connecting? (yes/no) ").ok();
+                stderr.flush().ok();
+
+                let mut line = String::new();
+                std::io::stdin().read_line(&mut line).ok();
+                if line.trim() != "yes" {
+                    eprintln!("Aborted.");
+                    std::process::exit(1);
+                }
+
+                kh.add(&ep, &fp);
+                match kh.save() {
+                    Ok(()) => eprintln!(
+                        "Permanently added '{ep}' to known hosts ({}).",
+                        kh_path.display()
+                    ),
+                    Err(e) => tracing::warn!("could not save known hosts: {e}"),
+                }
+            }
+            known_hosts::Status::Mismatch { expected } => {
+                let bar = "@".repeat(60);
+                eprintln!("{bar}");
+                eprintln!("@ WARNING: REMOTE HOST FINGERPRINT HAS CHANGED!            @");
+                eprintln!("{bar}");
+                eprintln!("Someone could be eavesdropping on you right now!");
+                eprintln!("Expected fingerprint for '{ep}':");
+                eprintln!("  {expected}");
+                eprintln!("Received:");
+                eprintln!("  {fp}");
+                eprintln!(
+                    "Remove the stale entry from {} to proceed.",
+                    kh_path.display()
+                );
+                std::process::exit(1);
+            }
+        }
+
+        client = c;
+    }
 
     dispatch(&client, cli.command).await;
 }

@@ -11,6 +11,7 @@ path = "src/bin/seedling_ctl.rs"
 chrono = { version = "0.4.44", default-features = false, features = ["serde"] }
 clap = { version = "4.6.0", features = ["derive"] }
 crossterm = "0.29.0"
+dirs = "5.0.1"
 ed25519-dalek = { version = "2.2.0", features = ["pkcs8", "rand_core"] }
 futures-util = { version = "0.3.32", default-features = false, features = ["io", "channel"] }
 ipnet = "2.12.0"

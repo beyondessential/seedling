@@ -2980,6 +2980,7 @@ dependencies = [
  "chrono",
  "clap",
  "crossterm",
+ "dirs",
  "ed25519-dalek",
  "futures-util",
  "ipnet",

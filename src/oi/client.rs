@@ -194,6 +194,55 @@ impl ServerCertVerifier for TrustAnyVerifier {
 }
 
 // ---------------------------------------------------------------------------
+// Recording verifier — captures the fingerprint, accepts anything
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+struct RecordingVerifier {
+    cell: Arc<std::sync::OnceLock<String>>,
+}
+
+impl ServerCertVerifier for RecordingVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        let _ = self.cell.set(hex_digest(end_entity.as_ref()));
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        ring_verify_tls12(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        ring_verify_tls13_rpk(message, cert, dss)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        ring_schemes()
+    }
+
+    fn requires_raw_public_keys(&self) -> bool {
+        true
+    }
+}
+
+// ---------------------------------------------------------------------------
 // OiClient
 // ---------------------------------------------------------------------------
 
@@ -279,5 +328,43 @@ impl OiClient {
                 message: error.message,
             }),
         }
+    }
+}
+
+impl OiClient {
+    /// Connect and capture the server's SPKI fingerprint.
+    ///
+    /// Accepts any certificate — the fingerprint is returned so the caller
+    /// can validate it against a known-hosts file and prompt the user if needed.
+    pub async fn connect_pinning(addr: SocketAddr) -> Result<(Self, String), ClientError> {
+        let cell = Arc::new(std::sync::OnceLock::new());
+        let verifier: Arc<dyn ServerCertVerifier> = Arc::new(RecordingVerifier {
+            cell: Arc::clone(&cell),
+        });
+
+        let tls_config = TlsClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(verifier)
+            .with_no_client_auth();
+
+        let quic_config = quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
+            .map_err(|e| ClientError::Connect(Box::new(e)))?;
+
+        let mut endpoint = Endpoint::client("[::]:0".parse().unwrap())
+            .map_err(|e| ClientError::Connect(Box::new(e)))?;
+        endpoint.set_default_client_config(ClientConfig::new(Arc::new(quic_config)));
+
+        let conn = tokio::time::timeout(
+            Duration::from_secs(5),
+            endpoint
+                .connect(addr, "seedling")
+                .map_err(|e| ClientError::Connect(Box::new(e)))?,
+        )
+        .await
+        .map_err(|_| ClientError::Connect("connection timed out".into()))?
+        .map_err(|e| ClientError::Connect(Box::new(e)))?;
+
+        let fingerprint = cell.get().cloned().unwrap_or_default();
+        Ok((Self { conn }, fingerprint))
     }
 }
