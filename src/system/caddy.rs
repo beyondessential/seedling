@@ -178,8 +178,8 @@ pub(crate) enum CaddyStartupError {
     Timeout,
     #[snafu(display("database error: {source}"))]
     Db { source: rusqlite::Error },
-    #[snafu(display("image digest unavailable for {reference}"))]
-    ImageDigest { reference: String },
+    #[snafu(display("image ID unavailable for {reference}"))]
+    ImageId { reference: String },
 }
 
 fn caddy_db_open(data_dir: &std::path::Path) -> Result<rusqlite::Connection, rusqlite::Error> {
@@ -441,12 +441,12 @@ pub(crate) async fn ensure_caddy_running(
             .map_err(|e| CaddyStartupError::Container { source: e })?;
     }
 
-    // 8. Get the desired image digest.
-    let desired_digest = container
-        .local_image_digest(CADDY_IMAGE)
+    // 8. Get the desired image ID.
+    let desired_id = container
+        .local_image_id(CADDY_IMAGE)
         .await
         .map_err(|e| CaddyStartupError::Container { source: e })?
-        .ok_or_else(|| CaddyStartupError::ImageDigest {
+        .ok_or_else(|| CaddyStartupError::ImageId {
             reference: CADDY_IMAGE.to_owned(),
         })?;
 
@@ -458,7 +458,7 @@ pub(crate) async fn ensure_caddy_running(
 
     match active_state {
         Some(state) if matches!(state.status, ContainerStatus::Running) => {
-            if state.image_digest.as_deref() == Some(&desired_digest) {
+            if state.image_id.as_deref() == Some(&desired_id) {
                 // Correct image — check if already healthy.
                 if let Some(ip) = state.pod_addr {
                     let addr = SocketAddr::new(IpAddr::V6(ip), 2019);

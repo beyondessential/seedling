@@ -55,9 +55,9 @@ pub trait ContainerRuntime: Send + Sync + 'static {
     // Images
     fn image_exists<'a>(&'a self, reference: &'a str) -> BoxFuture<'a, Result<bool, BoxError>>;
     fn pull_image<'a>(&'a self, reference: &'a str) -> BoxFuture<'a, Result<(), BoxError>>;
-    /// Returns the OCI digest (e.g. `sha256:…`) for a locally-stored image.
+    /// Returns the image ID (config digest, e.g. `sha256:…`) for a locally-stored image.
     /// Returns `None` if the image is not present locally.
-    fn local_image_digest<'a>(
+    fn local_image_id<'a>(
         &'a self,
         reference: &'a str,
     ) -> BoxFuture<'a, Result<Option<String>, BoxError>>;

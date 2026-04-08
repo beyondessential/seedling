@@ -22,8 +22,8 @@ pub struct ContainerState {
     pub finished_at: Option<SystemTime>,
     /// The container's IPv6 address on its pod network, if known.
     pub pod_addr: Option<Ipv6Addr>,
-    /// The digest of the image the container was started from, if known.
-    pub image_digest: Option<String>,
+    /// The image ID (config digest) the container was started from, if known.
+    pub image_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

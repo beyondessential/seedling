@@ -141,7 +141,7 @@ impl PodmanRuntime {
             started_at,
             finished_at,
             pod_addr,
-            image_digest: data.image_digest.clone(),
+            image_id: data.image.clone(),
         }))
     }
 
@@ -412,7 +412,7 @@ impl PodmanRuntime {
             .image_inspect_libpod(reference)
             .await
         {
-            Ok(data) => Ok(data.digest),
+            Ok(data) => Ok(data.id),
             Err(ref e) if is_not_found(e) => Ok(None),
             Err(e) => Err(map_api_err(e)),
         }
@@ -516,7 +516,7 @@ impl ContainerRuntime for PodmanRuntime {
         Box::pin(async move { self.pull_image_impl(reference).await.map_err(Into::into) })
     }
 
-    fn local_image_digest<'a>(
+    fn local_image_id<'a>(
         &'a self,
         reference: &'a str,
     ) -> BoxFuture<'a, Result<Option<String>, BoxError>> {
