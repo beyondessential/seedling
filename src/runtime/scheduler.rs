@@ -97,7 +97,7 @@ impl Scheduler {
 
     /// Returns true if there is an active or queued operation for the given app.
     pub fn has_operation_for(&self, app: &str) -> bool {
-        self.active.as_ref().map_or(false, |a| a.app == app)
+        self.active.as_ref().is_some_and(|a| a.app == app)
             || self.queue.iter().any(|q| q.app == app)
     }
 

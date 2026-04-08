@@ -110,6 +110,90 @@ fn on_change_twice_on_same_param_throws() {
     );
 }
 
+// -----------------------------------------------------------------------
+// param.store — pre-injected value overrides placeholder
+// -----------------------------------------------------------------------
+
+// i[verify param.store]
+#[test]
+fn pre_injected_param_value_overrides_placeholder() {
+    use std::collections::BTreeMap;
+
+    // Simulate what AppRegistry does: pre-populate app.def.params before
+    // running the script so stored values win over the placeholder.
+    let (engine, mut scope, app) = crate::setup_language();
+    {
+        let mut params = BTreeMap::new();
+        params.insert("hostname".to_owned(), "injected.example.com".to_owned());
+        app.def.lock().params = params;
+    }
+    crate::tests::run_script(&engine, &mut scope, r#"let h = app.param("hostname");"#)
+        .expect("script should evaluate");
+
+    let def = app.def.lock();
+    assert_eq!(
+        def.params.get("hostname").map(String::as_str),
+        Some("injected.example.com"),
+        "pre-injected param value should replace the <placeholder>"
+    );
+}
+
+// i[verify param.store]
+#[test]
+fn param_used_in_closure_captures_injected_value() {
+    use std::collections::BTreeMap;
+
+    let mut params = BTreeMap::new();
+    params.insert("version".to_owned(), "2.0".to_owned());
+
+    let (engine, mut scope, app) = crate::setup_language();
+    {
+        app.def.lock().params = params;
+    }
+    let ast = crate::tests::run_script(
+        &engine,
+        &mut scope,
+        r#"
+        let ver = app.param("version");
+        app.on_start(|rt| {
+            rt.start(app.deployment("web").image(`myapp:${ver}`));
+        });
+        "#,
+    )
+    .expect("script should evaluate");
+
+    let def = app.def.lock();
+    assert_eq!(
+        def.params.get("version").map(String::as_str),
+        Some("2.0"),
+        "injected version should be captured, not placeholder"
+    );
+    drop(def);
+
+    // Verify the action can be invoked with the injected value in scope.
+    let oracle = Arc::new(crate::runtime::TestWorldOracle::new());
+    let log = InMemoryActionLog::new();
+    let result = run_operation(
+        OperationContext {
+            engine: &engine,
+            script_ast: &ast,
+            operation_id: OperationId::new(),
+            app: &app,
+            action_name: "start",
+            log: &log,
+            world: oracle,
+            registry: std::sync::Arc::new(crate::runtime::EphemeralInstanceRegistry::new()),
+            active_progress: None,
+            tick_notify: None,
+        },
+        &mut scope,
+    );
+    assert!(
+        matches!(result, OperationResult::Completed),
+        "operation with injected param should complete without error"
+    );
+}
+
 // l[verify param.on-change]
 #[test]
 fn on_change_inside_action_closure_throws() {

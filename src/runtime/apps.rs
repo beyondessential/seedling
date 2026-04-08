@@ -69,7 +69,15 @@ impl AppRegistry {
             entries: HashMap::new(),
         }
     }
+}
 
+impl Default for AppRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AppRegistry {
     pub fn is_registered(&self, name: &str) -> bool {
         self.entries.contains_key(name)
     }
@@ -227,6 +235,142 @@ fn evaluate_script(
         .map_err(|e| ScriptError(e.to_string()))?;
     app.def.lock().name = name.to_owned();
     Ok(app)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::db::Db;
+
+    // i[verify param.store]
+    #[test]
+    fn upsert_and_load_params_round_trip() {
+        let db = Db::open_in_memory().expect("open");
+        upsert_param(&db, "myapp", "host", "example.com").expect("upsert");
+        upsert_param(&db, "myapp", "port", "8080").expect("upsert");
+
+        let params = load_params_for_app(&db, "myapp").expect("load");
+        assert_eq!(params.get("host").map(String::as_str), Some("example.com"));
+        assert_eq!(params.get("port").map(String::as_str), Some("8080"));
+    }
+
+    // i[verify param.store]
+    #[test]
+    fn upsert_param_replaces_existing_value() {
+        let db = Db::open_in_memory().expect("open");
+        upsert_param(&db, "myapp", "host", "old.example.com").expect("first upsert");
+        upsert_param(&db, "myapp", "host", "new.example.com").expect("second upsert");
+
+        let params = load_params_for_app(&db, "myapp").expect("load");
+        assert_eq!(
+            params.get("host").map(String::as_str),
+            Some("new.example.com")
+        );
+        assert_eq!(params.len(), 1);
+    }
+
+    // i[verify param.store]
+    #[test]
+    fn load_params_scoped_to_app() {
+        let db = Db::open_in_memory().expect("open");
+        upsert_param(&db, "app-a", "key", "val-a").expect("upsert a");
+        upsert_param(&db, "app-b", "key", "val-b").expect("upsert b");
+
+        let params_a = load_params_for_app(&db, "app-a").expect("load a");
+        let params_b = load_params_for_app(&db, "app-b").expect("load b");
+
+        assert_eq!(params_a.get("key").map(String::as_str), Some("val-a"));
+        assert_eq!(params_b.get("key").map(String::as_str), Some("val-b"));
+    }
+
+    // i[verify param.store]
+    #[test]
+    fn load_params_returns_empty_for_unknown_app() {
+        let db = Db::open_in_memory().expect("open");
+        let params = load_params_for_app(&db, "nonexistent").expect("load");
+        assert!(params.is_empty());
+    }
+
+    // i[verify param.store]
+    #[test]
+    fn delete_app_params_removes_only_that_apps_params() {
+        let db = Db::open_in_memory().expect("open");
+        upsert_param(&db, "app-a", "key", "val-a").expect("upsert a");
+        upsert_param(&db, "app-b", "key", "val-b").expect("upsert b");
+
+        delete_app_params(&db, "app-a").expect("delete");
+
+        assert!(
+            load_params_for_app(&db, "app-a")
+                .expect("load a")
+                .is_empty()
+        );
+        assert_eq!(
+            load_params_for_app(&db, "app-b")
+                .expect("load b")
+                .get("key")
+                .map(String::as_str),
+            Some("val-b")
+        );
+    }
+
+    // i[verify param.store]
+    #[test]
+    fn evaluate_script_injects_params_into_app_def() {
+        let mut params = BTreeMap::new();
+        params.insert("hostname".to_owned(), "prod.example.com".to_owned());
+
+        let app = evaluate_script("test-app", r#"let h = app.param("hostname");"#, &params)
+            .expect("script should evaluate");
+
+        let def = app.def.lock();
+        assert_eq!(
+            def.params.get("hostname").map(String::as_str),
+            Some("prod.example.com"),
+            "stored param value should override the placeholder"
+        );
+    }
+
+    // i[verify param.store]
+    #[test]
+    fn evaluate_script_absent_param_gets_placeholder() {
+        let params = BTreeMap::new();
+        let app = evaluate_script("test-app", r#"let h = app.param("hostname");"#, &params)
+            .expect("script should evaluate");
+
+        let def = app.def.lock();
+        assert_eq!(
+            def.params.get("hostname").map(String::as_str),
+            Some("<placeholder>"),
+        );
+    }
+
+    // i[verify param.store]
+    #[test]
+    fn registry_load_from_db_restores_params() {
+        let db = Db::open_in_memory().expect("open");
+
+        // Register an app directly in the DB.
+        db.conn
+            .execute(
+                "INSERT INTO registered_apps (name, script, installed) VALUES (?1, ?2, 0)",
+                rusqlite::params!["myapp", r#"let h = app.param("hostname");"#],
+            )
+            .expect("insert app");
+
+        // Store a param for it.
+        upsert_param(&db, "myapp", "hostname", "restored.example.com").expect("upsert");
+
+        let registry = AppRegistry::load_from_db(&db).expect("load registry");
+        let entry = registry.get("myapp").expect("app should be registered");
+        let def = entry.app.def.lock();
+
+        assert_eq!(
+            def.params.get("hostname").map(String::as_str),
+            Some("restored.example.com"),
+            "param value should be restored from DB on startup"
+        );
+    }
 }
 
 // i[param.store]

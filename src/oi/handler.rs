@@ -446,7 +446,7 @@ fn register_app(state: &OiState, params: Value) -> HandlerResult {
         let reg = state.registry.read();
         let entry = reg.get(name).expect("just registered");
         let db = state.db.lock();
-        AppRegistry::persist_app(&*db, entry)
+        AppRegistry::persist_app(&db, entry)
             .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db persist: {e}")))?;
     }
 
@@ -490,7 +490,7 @@ fn deregister_app(state: &OiState, params: Value) -> HandlerResult {
     // Remove from DB.
     {
         let db = state.db.lock();
-        AppRegistry::remove_app(&*db, name)
+        AppRegistry::remove_app(&db, name)
             .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db remove: {e}")))?;
     }
     {
@@ -528,7 +528,7 @@ fn update_app(state: &OiState, params: Value) -> HandlerResult {
         .registry
         .read()
         .get(name)
-        .map_or(false, |e| e.active_progress.read().is_some());
+        .is_some_and(|e| e.active_progress.read().is_some());
 
     if op_in_progress {
         // Operation running: just update stored script so next evaluation uses it.
@@ -559,7 +559,7 @@ fn update_app(state: &OiState, params: Value) -> HandlerResult {
         let reg = state.registry.read();
         let entry = reg.get(name).expect("confirmed registered");
         let db = state.db.lock();
-        AppRegistry::persist_app(&*db, entry)
+        AppRegistry::persist_app(&db, entry)
             .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db update: {e}")))?;
     }
 
