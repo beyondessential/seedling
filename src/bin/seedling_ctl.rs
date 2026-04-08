@@ -129,6 +129,8 @@ enum Command {
     RegisterApp { name: String, script_file: PathBuf },
     /// Deregister an app
     DeregisterApp { name: String },
+    /// Uninstall an app (stop all resources). The app can be deregistered once done.
+    UninstallApp { name: String },
     /// Update an app's script
     UpdateApp { name: String, script_file: PathBuf },
     /// Set a param value
@@ -399,6 +401,13 @@ async fn dispatch(client: &OiClient, cmd: Command) {
             print_result(
                 client
                     .request("DeregisterApp", serde_json::json!({ "name": name }))
+                    .await,
+            );
+        }
+        Command::UninstallApp { name } => {
+            print_result(
+                client
+                    .request("UninstallApp", serde_json::json!({ "name": name }))
                     .await,
             );
         }

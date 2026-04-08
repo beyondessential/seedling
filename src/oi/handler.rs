@@ -16,9 +16,11 @@ use tokio::sync::RwLock as AsyncRwLock;
 use crate::{
     defs::install::InstallRequirementKind,
     runtime::{
+        AppPhase,
         apps::{AppRegistry, AppStatus},
         desired::OperationProgress,
         scheduler::{RejectReason, ScheduleResult},
+        transition_phase,
     },
 };
 
@@ -49,6 +51,7 @@ impl ReconcilerFactory {
         app: crate::defs::app::App,
         active_progress: Arc<parking_lot::RwLock<Option<OperationProgress>>>,
         tick_notify: Arc<tokio::sync::Notify>,
+        phase: Arc<parking_lot::Mutex<AppPhase>>,
     ) -> tokio::task::JoinHandle<()> {
         use crate::{
             runtime::{InstanceRegistry, db::Db, registry::DbInstanceRegistry},
@@ -75,6 +78,7 @@ impl ReconcilerFactory {
             app_name,
             app,
             active_progress,
+            phase,
             Arc::clone(&self.system),
             self.node_prefix,
             instance_registry,
@@ -157,6 +161,7 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8]) -> HandlerResult {
         "DescribeApp" => describe_app(state, req.params),
         "RegisterApp" => register_app(state, req.params),
         "DeregisterApp" => deregister_app(state, req.params),
+        "UninstallApp" => uninstall_app(state, req.params),
         "UpdateApp" => update_app(state, req.params),
         // i[param.set]
         "SetParam" => set_param(state, req.params),
@@ -532,14 +537,32 @@ fn deregister_app(state: &OiState, params: Value) -> HandlerResult {
         ));
     }
 
-    // Mark as deregistering and abort the reconciler.
+    // Reject if the app is not in the NotInstalled phase.
+    {
+        let reg = state.registry.read();
+        if let Some(entry) = reg.get(name) {
+            let phase = entry.phase.lock();
+            if !matches!(*phase, AppPhase::NotInstalled) {
+                return Err(OiError::new(
+                    ErrorCode::RequirementsInvalid,
+                    if matches!(*phase, AppPhase::Uninstalling) {
+                        format!("app is still uninstalling: {name}")
+                    } else {
+                        format!("app is installed; call uninstall first: {name}")
+                    },
+                ));
+            }
+            drop(phase);
+        }
+    }
+
+    // Abort the reconciler (safe no-op for not-installed apps).
     {
         let mut reg = state.registry.write();
-        if let Some(entry) = reg.get_mut(name) {
-            entry.deregistering = true;
-            if let Some(handle) = entry.reconciler_handle.take() {
-                handle.abort();
-            }
+        if let Some(entry) = reg.get_mut(name)
+            && let Some(handle) = entry.reconciler_handle.take()
+        {
+            handle.abort();
         }
     }
 
@@ -559,6 +582,45 @@ fn deregister_app(state: &OiState, params: Value) -> HandlerResult {
     state.registry.write().deregister(name);
 
     tracing::info!(app = %name, "deregistered app");
+    Ok(json!({}))
+}
+
+// i[app.uninstall]
+fn uninstall_app(state: &OiState, params: Value) -> HandlerResult {
+    let name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| OiError::new(ErrorCode::NotFound, "missing param: name"))?;
+
+    let phase_arc = {
+        let reg = state.registry.read();
+        let entry = reg
+            .get(name)
+            .ok_or_else(|| OiError::not_found(format!("app not found: {name}")))?;
+        if !matches!(*entry.phase.lock(), AppPhase::Installed) {
+            return Err(OiError::new(
+                ErrorCode::NotInstalled,
+                format!("app is not installed: {name}"),
+            ));
+        }
+        Arc::clone(&entry.phase)
+    };
+
+    // Persist the transition before waking the reconciler.
+    {
+        let db = state.db.lock();
+        transition_phase(&phase_arc, AppPhase::Uninstalling, &db, name, "");
+    }
+
+    // Wake the reconciler so it starts cleanup immediately.
+    {
+        let reg = state.registry.read();
+        if let Some(entry) = reg.get(name) {
+            entry.tick_notify.notify_one();
+        }
+    }
+
+    tracing::info!(app = %name, "uninstall initiated");
     Ok(json!({}))
 }
 
@@ -650,13 +712,6 @@ fn set_param(state: &OiState, params: Value) -> HandlerResult {
         }
     }
 
-    if let Some(AppStatus::Deregistering) = state.registry.read().status_of(app) {
-        return Err(OiError::new(
-            ErrorCode::Deregistering,
-            format!("app is deregistering: {app}"),
-        ));
-    }
-
     {
         let db = state.db.lock();
         crate::runtime::apps::upsert_param(&db, app, param_name, value)
@@ -678,7 +733,10 @@ fn set_param(state: &OiState, params: Value) -> HandlerResult {
         let reg = state.registry.read();
         let entry = reg.get(app).expect("confirmed registered");
         let has = entry.app.def.lock().param_changes.contains(param_name);
-        let installed = entry.installed;
+        let installed = matches!(
+            *entry.phase.lock(),
+            AppPhase::Installed | AppPhase::Uninstalling
+        );
         let notify = Arc::clone(&entry.tick_notify);
         (has, installed, notify)
     };
@@ -737,13 +795,6 @@ fn unset_param(state: &OiState, params: Value) -> HandlerResult {
         }
     }
 
-    if let Some(AppStatus::Deregistering) = state.registry.read().status_of(app) {
-        return Err(OiError::new(
-            ErrorCode::Deregistering,
-            format!("app is deregistering: {app}"),
-        ));
-    }
-
     {
         let db = state.db.lock();
         crate::runtime::apps::delete_one_param(&db, app, param_name)
@@ -765,7 +816,10 @@ fn unset_param(state: &OiState, params: Value) -> HandlerResult {
         let reg = state.registry.read();
         let entry = reg.get(app).expect("confirmed registered");
         let has = entry.app.def.lock().param_changes.contains(param_name);
-        let installed = entry.installed;
+        let installed = matches!(
+            *entry.phase.lock(),
+            AppPhase::Installed | AppPhase::Uninstalling
+        );
         let notify = Arc::clone(&entry.tick_notify);
         (has, installed, notify)
     };
@@ -1122,7 +1176,7 @@ fn invoke_action(state: &Arc<OiState>, params: Value) -> HandlerResult {
             .ok_or_else(|| OiError::not_found(format!("app not found: {app_name}")))?;
 
         // i[action.not-installed-gate]
-        if !entry.installed {
+        if !matches!(*entry.phase.lock(), AppPhase::Installed) {
             return Err(OiError::new(
                 ErrorCode::NotInstalled,
                 format!("app is not installed: {app_name}"),
@@ -1211,17 +1265,11 @@ fn invoke_install(state: &Arc<OiState>, params: Value) -> HandlerResult {
             .get(app_name)
             .ok_or_else(|| OiError::not_found(format!("app not found: {app_name}")))?;
 
-        // i[action.invoke.install] - reject if already installed
-        if entry.installed {
+        // i[action.invoke.install] - reject if already installed or uninstalling
+        if !matches!(*entry.phase.lock(), AppPhase::NotInstalled) {
             return Err(OiError::new(
                 ErrorCode::AlreadyInstalled,
                 format!("app is already installed: {app_name}"),
-            ));
-        }
-        if entry.deregistering {
-            return Err(OiError::new(
-                ErrorCode::Deregistering,
-                format!("app is deregistering: {app_name}"),
             ));
         }
 
@@ -1236,24 +1284,26 @@ fn invoke_install(state: &Arc<OiState>, params: Value) -> HandlerResult {
         {
             let mut reg = state.registry.write();
             if let Some(entry) = reg.get_mut(app_name) {
-                entry.installed = true;
+                *entry.phase.lock() = AppPhase::Installed;
                 let db = state.db.lock();
                 AppRegistry::persist_app(&db, entry)
                     .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db persist: {e}")))?;
             }
         }
-        let (app_val, ap, tn) = {
+        let (app_val, ap, tn, phase) = {
             let reg = state.registry.read();
             let entry = reg.get(app_name).expect("confirmed registered");
             (
                 entry.app.clone(),
                 Arc::clone(&entry.active_progress),
                 Arc::clone(&entry.tick_notify),
+                Arc::clone(&entry.phase),
             )
         };
-        let handle = state
-            .reconciler_factory
-            .spawn_for(app_name.to_owned(), app_val, ap, tn);
+        let handle =
+            state
+                .reconciler_factory
+                .spawn_for(app_name.to_owned(), app_val, ap, tn, phase);
         if let Some(entry) = state.registry.write().get_mut(app_name) {
             entry.reconciler_handle = Some(handle);
         }
@@ -1437,7 +1487,7 @@ fn spawn_accepted_operation(
             let reconciler_info = {
                 let mut reg = state.registry.write();
                 reg.get_mut(&app_name).map(|entry| {
-                    entry.installed = true;
+                    *entry.phase.lock() = AppPhase::Installed;
                     let db = state.db.lock();
                     if let Err(e) = AppRegistry::persist_app(&db, entry) {
                         tracing::error!(app = %app_name, "persist installed flag: {e}");
@@ -1446,13 +1496,15 @@ fn spawn_accepted_operation(
                         entry.app.clone(),
                         Arc::clone(&entry.active_progress),
                         Arc::clone(&entry.tick_notify),
+                        Arc::clone(&entry.phase),
                     )
                 })
             };
-            if let Some((app_val, ap, tn)) = reconciler_info {
-                let handle = state
-                    .reconciler_factory
-                    .spawn_for(app_name.clone(), app_val, ap, tn);
+            if let Some((app_val, ap, tn, phase)) = reconciler_info {
+                let handle =
+                    state
+                        .reconciler_factory
+                        .spawn_for(app_name.clone(), app_val, ap, tn, phase);
                 if let Some(entry) = state.registry.write().get_mut(&app_name) {
                     entry.reconciler_handle = Some(handle);
                 }

@@ -145,6 +145,7 @@ async fn main() {
         let app = entry.app.clone();
         let active_progress = Arc::clone(&entry.active_progress);
         let tick_notify = Arc::clone(&entry.tick_notify);
+        let phase = Arc::clone(&entry.phase);
         let app_name = app_name.clone();
         drop(reg);
 
@@ -168,6 +169,7 @@ async fn main() {
             app_name.clone(),
             app,
             active_progress,
+            phase,
             driver,
             node_prefix,
             instance_registry,

@@ -20,9 +20,10 @@ use tracing::{error, warn};
 use crate::{
     defs::app::{App, AppDef},
     runtime::{
-        InstanceRegistry,
+        AppPhase, InstanceRegistry,
+        apps::transition_phase,
         db::Db,
-        desired::{DesiredState, OperationProgress, compute},
+        desired::{DesiredState, OperationProgress, compute, compute_uninstalling},
         history::insert_observation,
         identity::InstanceId,
     },
@@ -70,6 +71,9 @@ pub struct Reconciler {
     /// desired at `Ready`). Set to `Some` while a lifecycle operation is
     /// in progress.
     active_progress: Arc<RwLock<Option<OperationProgress>>>,
+    /// Shared phase state — the reconciler transitions this to NotInstalled when
+    /// uninstall cleanup completes.
+    phase: Arc<parking_lot::Mutex<AppPhase>>,
     observer: Observer,
     actuator: Actuator,
     driver: Arc<System>,
@@ -105,6 +109,7 @@ impl Reconciler {
         app_name: String,
         app: App,
         active_progress: Arc<RwLock<Option<OperationProgress>>>,
+        phase: Arc<parking_lot::Mutex<AppPhase>>,
         driver: Arc<System>,
         node_prefix: Ipv6Net,
         registry: Arc<dyn InstanceRegistry>,
@@ -119,6 +124,7 @@ impl Reconciler {
             app_name,
             app: app.def,
             active_progress,
+            phase,
             observer,
             actuator,
             driver,
@@ -197,6 +203,14 @@ impl Reconciler {
         }
         let running_pods = pod_update.running;
         self.persist_obs(pod_update.observations);
+
+        // When uninstalling: if all pods are stopped, transition to NotInstalled.
+        if matches!(*self.phase.lock(), AppPhase::Uninstalling) && running_pods.is_empty() {
+            let db = self.db.lock();
+            transition_phase(&self.phase, AppPhase::NotInstalled, &db, &self.app_name, "");
+            tracing::info!(app = %self.app_name, "uninstall complete");
+            return;
+        }
 
         // Bridge ::2 address check — re-add mount endpoint addresses that
         // were lost due to a crash between create_network and the initial
@@ -327,10 +341,18 @@ impl Reconciler {
     /// simultaneously, computes the desired state, clones the AppDef
     /// snapshot, then drops both locks before any async work begins.
     fn snapshot_desired(&self) -> (DesiredState, crate::defs::app::AppDef) {
+        let phase = self.phase.lock().clone();
         let progress = self.active_progress.read();
         let app_def = self.app.lock();
-        let desired = compute(&self.app_name, &app_def, (*progress).as_ref());
+
+        let desired = match phase {
+            AppPhase::Uninstalling => compute_uninstalling(&self.app_name, &app_def),
+            AppPhase::NotInstalled => DesiredState::default(),
+            AppPhase::Installed => compute(&self.app_name, &app_def, (*progress).as_ref()),
+        };
+
         let snapshot = app_def.clone();
+        drop(progress);
         (desired, snapshot)
     }
 }
