@@ -209,6 +209,27 @@ impl NftablesDataPlane {
         Ok(())
     }
 
+    /// Look up the output interface index for a given IPv6 address by querying
+    /// the kernel's routing table. Kernel 6.x requires an explicit `RTA_OIF`
+    /// in `RTM_NEWROUTE` for non-link-local gateways; without it the kernel
+    /// returns EINVAL instead of resolving the interface automatically.
+    async fn resolve_oif(&self, addr: Ipv6Addr) -> Option<u32> {
+        let query = RouteMessageBuilder::<Ipv6Addr>::new()
+            .destination_prefix(addr, 128)
+            .build();
+        let mut stream = self.route_handle.route().get(query).execute();
+        match stream.next().await {
+            Some(Ok(msg)) => msg.attributes.iter().find_map(|attr| {
+                if let RouteAttribute::Oif(idx) = attr {
+                    Some(*idx)
+                } else {
+                    None
+                }
+            }),
+            _ => None,
+        }
+    }
+
     #[tracing::instrument(level = "trace", skip(self))]
     async fn add_service_route(&self, svc: &ServiceRoute) -> Result<(), DataPlaneError> {
         let route = match svc.backends.len() {
@@ -220,22 +241,31 @@ impl NftablesDataPlane {
                 .kind(RouteType::BlackHole)
                 .table_id(254)
                 .build(),
-            1 => RouteMessageBuilder::<Ipv6Addr>::new()
-                .destination_prefix(svc.service_ip, 128)
-                .gateway(svc.backends[0])
-                .table_id(254)
-                .build(),
+            1 => {
+                // Resolve the output interface from the kernel routing table.
+                // Kernel 6.x no longer auto-resolves the interface for
+                // global-scope (non-link-local) IPv6 gateways and returns
+                // EINVAL when RTA_OIF is absent.
+                let oif = self.resolve_oif(svc.backends[0]).await;
+                let mut builder = RouteMessageBuilder::<Ipv6Addr>::new()
+                    .destination_prefix(svc.service_ip, 128)
+                    .gateway(svc.backends[0])
+                    .table_id(254);
+                if let Some(idx) = oif {
+                    builder = builder.output_interface(idx);
+                }
+                builder.build()
+            }
             _ => {
-                let nexthops = svc
-                    .backends
-                    .iter()
-                    .map(|&b| {
-                        RouteNextHopBuilder::new_ipv6()
-                            .via(IpAddr::V6(b))
-                            .unwrap()
-                            .build()
-                    })
-                    .collect();
+                let mut nexthops = Vec::with_capacity(svc.backends.len());
+                for &b in &svc.backends {
+                    let oif = self.resolve_oif(b).await;
+                    let mut nh = RouteNextHopBuilder::new_ipv6().via(IpAddr::V6(b)).unwrap();
+                    if let Some(idx) = oif {
+                        nh = nh.interface(idx);
+                    }
+                    nexthops.push(nh.build());
+                }
                 RouteMessageBuilder::<Ipv6Addr>::new()
                     .destination_prefix(svc.service_ip, 128)
                     .multipath(nexthops)
