@@ -118,6 +118,10 @@ async fn main() {
             });
     }
 
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("ring crypto provider already installed");
+
     let auth = if cli.trust_any {
         ClientAuth::TrustAny
     } else if let Some(fp) = cli.fingerprint {

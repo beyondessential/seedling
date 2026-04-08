@@ -61,6 +61,10 @@ async fn main() {
             });
     }
 
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("ring crypto provider already installed");
+
     let data_dir = args.data_dir;
 
     std::fs::create_dir_all(&data_dir).unwrap_or_else(|e| {
