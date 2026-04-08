@@ -447,27 +447,6 @@ fn register_app(state: &OiState, params: Value) -> HandlerResult {
             .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db persist: {e}")))?;
     }
 
-    // Spawn reconciler and store handle.
-    let (app, active_progress, tick_notify) = {
-        let reg = state.registry.read();
-        let e = reg.get(name).expect("just registered");
-        (
-            e.app.clone(),
-            Arc::clone(&e.active_progress),
-            Arc::clone(&e.tick_notify),
-        )
-    };
-    let handle =
-        state
-            .reconciler_factory
-            .spawn_for(name.to_owned(), app, active_progress, tick_notify);
-    state
-        .registry
-        .write()
-        .get_mut(name)
-        .expect("just registered")
-        .reconciler_handle = Some(handle);
-
     tracing::info!(app = %name, "registered app");
     Ok(json!({}))
 }
