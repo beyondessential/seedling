@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    net::SocketAddr,
     path::PathBuf,
     sync::{Arc, OnceLock},
     time::{Duration, Instant},
@@ -8,100 +7,20 @@ use std::{
 
 use std::collections::HashSet;
 
-use ipnet::Ipv6Net;
 use parking_lot::RwLock;
 use serde_json::{Value, json};
-use tokio::sync::RwLock as AsyncRwLock;
 
 use crate::{
     defs::install::InstallRequirementKind,
     runtime::{
         AppPhase,
         apps::{AppRegistry, AppStatus},
-        desired::OperationProgress,
         scheduler::{RejectReason, ScheduleResult},
         transition_phase,
     },
 };
 
 use super::error::{ErrorCode, OiError};
-
-// ---------------------------------------------------------------------------
-// ReconcilerFactory
-// ---------------------------------------------------------------------------
-
-/// Spawns per-app reconciler tokio tasks. Constructed in `main.rs` and stored
-/// in `OiState`. `spawn_for` is called from within `block_in_place` (a sync
-/// context) and uses `tokio::runtime::Handle::current().spawn()` to schedule
-/// the async reconciler task.
-pub struct ReconcilerFactory {
-    pub system: Arc<crate::system::System>,
-    pub node_prefix: Ipv6Net,
-    pub db_path: PathBuf,
-    pub data_dir: PathBuf,
-    pub caddy_admin_addr: Arc<AsyncRwLock<SocketAddr>>,
-}
-
-impl ReconcilerFactory {
-    /// Spawn a reconciler task for `app_name`. Returns the `JoinHandle` so the
-    /// caller can store it in `AppEntry.reconciler_handle` for later cancellation.
-    pub fn spawn_for(
-        &self,
-        app_name: String,
-        app: crate::defs::app::App,
-        active_progress: Arc<parking_lot::RwLock<Option<OperationProgress>>>,
-        tick_notify: Arc<tokio::sync::Notify>,
-        phase: Arc<parking_lot::Mutex<AppPhase>>,
-    ) -> tokio::task::JoinHandle<()> {
-        use crate::{
-            runtime::{InstanceRegistry, db::Db, registry::DbInstanceRegistry},
-            system::reconcile::Reconciler,
-        };
-
-        let instance_registry: Arc<dyn InstanceRegistry> = match Db::open(&self.db_path) {
-            Ok(db) => Arc::new(DbInstanceRegistry::new(db)),
-            Err(e) => {
-                tracing::error!("cannot open instance db for app {app_name}: {e}");
-                return tokio::runtime::Handle::current().spawn(async {});
-            }
-        };
-
-        let obs_db = match Db::open(&self.db_path) {
-            Ok(db) => db,
-            Err(e) => {
-                tracing::error!("cannot open obs db for app {app_name}: {e}");
-                return tokio::runtime::Handle::current().spawn(async {});
-            }
-        };
-
-        let mut reconciler = Reconciler::new(
-            app_name,
-            app,
-            active_progress,
-            phase,
-            Arc::clone(&self.system),
-            self.node_prefix,
-            instance_registry,
-            HashMap::new(),
-            Arc::clone(&self.caddy_admin_addr),
-            self.data_dir.clone(),
-            obs_db,
-        );
-
-        tokio::runtime::Handle::current().spawn(async move {
-            reconciler.populate_bridge_names().await;
-            let mut interval = tokio::time::interval(Duration::from_secs(5));
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            loop {
-                tokio::select! {
-                    _ = interval.tick() => {},
-                    _ = tick_notify.notified() => {},
-                }
-                reconciler.tick().await;
-            }
-        })
-    }
-}
 
 // ---------------------------------------------------------------------------
 // OiState
@@ -115,7 +34,8 @@ pub struct OiState {
     pub start_time: Instant,
     pub db: Arc<parking_lot::Mutex<crate::runtime::db::Db>>,
     pub scheduler: Arc<parking_lot::Mutex<crate::runtime::Scheduler>>,
-    pub reconciler_factory: Arc<ReconcilerFactory>,
+    pub tick_notify: Arc<tokio::sync::Notify>,
+    pub db_path: PathBuf,
     /// In-memory set of authorized client SPKI fingerprints, shared with the
     /// TLS client cert verifier so additions/removals take effect immediately.
     pub trusted_keys: Arc<parking_lot::RwLock<HashSet<String>>>,
@@ -498,8 +418,12 @@ fn register_app(state: &OiState, params: Value) -> HandlerResult {
     // Evaluate script and add to in-memory registry.
     {
         let mut reg = state.registry.write();
-        reg.register(name.to_owned(), script.to_owned())
-            .map_err(|e| OiError::script_error(e.to_string()))?;
+        reg.register(
+            name.to_owned(),
+            script.to_owned(),
+            Arc::clone(&state.tick_notify),
+        )
+        .map_err(|e| OiError::script_error(e.to_string()))?;
     }
 
     // Persist to DB.
@@ -553,16 +477,6 @@ fn deregister_app(state: &OiState, params: Value) -> HandlerResult {
                 ));
             }
             drop(phase);
-        }
-    }
-
-    // Abort the reconciler (safe no-op for not-installed apps).
-    {
-        let mut reg = state.registry.write();
-        if let Some(entry) = reg.get_mut(name)
-            && let Some(handle) = entry.reconciler_handle.take()
-        {
-            handle.abort();
         }
     }
 
@@ -1290,23 +1204,7 @@ fn invoke_install(state: &Arc<OiState>, params: Value) -> HandlerResult {
                     .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db persist: {e}")))?;
             }
         }
-        let (app_val, ap, tn, phase) = {
-            let reg = state.registry.read();
-            let entry = reg.get(app_name).expect("confirmed registered");
-            (
-                entry.app.clone(),
-                Arc::clone(&entry.active_progress),
-                Arc::clone(&entry.tick_notify),
-                Arc::clone(&entry.phase),
-            )
-        };
-        let handle =
-            state
-                .reconciler_factory
-                .spawn_for(app_name.to_owned(), app_val, ap, tn, phase);
-        if let Some(entry) = state.registry.write().get_mut(app_name) {
-            entry.reconciler_handle = Some(handle);
-        }
+        state.tick_notify.notify_one();
         tracing::info!(app = %app_name, schedule = "accepted", "invoke_install (immediate)");
         return Ok(json!({ "schedule": "accepted" }));
     }
@@ -1388,7 +1286,7 @@ fn spawn_accepted_operation(
             }
         }
     };
-    let db_path = state.reconciler_factory.db_path.clone();
+    let db_path = state.db_path.clone();
     let is_install = action_name == "install";
 
     tokio::spawn(async move {
@@ -1484,31 +1382,17 @@ fn spawn_accepted_operation(
 
         // i[action.invoke.install.completion]
         if is_install && success {
-            let reconciler_info = {
+            {
                 let mut reg = state.registry.write();
-                reg.get_mut(&app_name).map(|entry| {
+                if let Some(entry) = reg.get_mut(&app_name) {
                     *entry.phase.lock() = AppPhase::Installed;
                     let db = state.db.lock();
                     if let Err(e) = AppRegistry::persist_app(&db, entry) {
                         tracing::error!(app = %app_name, "persist installed flag: {e}");
                     }
-                    (
-                        entry.app.clone(),
-                        Arc::clone(&entry.active_progress),
-                        Arc::clone(&entry.tick_notify),
-                        Arc::clone(&entry.phase),
-                    )
-                })
-            };
-            if let Some((app_val, ap, tn, phase)) = reconciler_info {
-                let handle =
-                    state
-                        .reconciler_factory
-                        .spawn_for(app_name.clone(), app_val, ap, tn, phase);
-                if let Some(entry) = state.registry.write().get_mut(&app_name) {
-                    entry.reconciler_handle = Some(handle);
                 }
             }
+            state.tick_notify.notify_one();
             tracing::info!(app = %app_name, "install completed; app is now installed");
         }
 

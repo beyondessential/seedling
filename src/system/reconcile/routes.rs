@@ -1,7 +1,6 @@
 use std::net::Ipv6Addr;
 
 use ipnet::Ipv6Net;
-use tracing::error;
 
 use crate::{
     defs::{
@@ -13,22 +12,24 @@ use crate::{
         InstanceRegistry, desired::DesiredState, identity::ResourceInstance,
         lifecycle::LifecycleState,
     },
-    system::{System, translate::proxy::instance_ipv6, types::ServiceRoute},
+    system::{translate::proxy::instance_ipv6, types::ServiceRoute},
 };
 
 use super::RunningPod;
 
 // r[autonomous.network]
 // r[fault.non-blocking]
-pub(super) async fn apply(
-    driver: &System,
+pub(super) fn build(
     desired: &DesiredState,
     snapshot: &AppDef,
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
     running_pods: &[RunningPod],
     app_name: &str,
-) -> Vec<(ResourceInstance, &'static str, serde_json::Value)> {
+) -> (
+    Vec<ServiceRoute>,
+    Vec<(ResourceInstance, &'static str, serde_json::Value)>,
+) {
     let mut observations: Vec<(ResourceInstance, &'static str, serde_json::Value)> = Vec::new();
     let mut routes: Vec<ServiceRoute> = Vec::new();
 
@@ -132,11 +133,7 @@ pub(super) async fn apply(
         }
     }
 
-    if let Err(e) = driver.data_plane.apply_routes(&routes).await {
-        error!(error = %e, "routes: apply_routes failed");
-    }
-
-    observations
+    (routes, observations)
 }
 
 /// Returns `true` if the pod's definition contains any TCP, UDP, or HTTP

@@ -1,9 +1,5 @@
-use std::net::{Ipv6Addr, SocketAddr};
-
 use ipnet::Ipv6Net;
-use tracing::{error, warn};
 
-use crate::system::caddy;
 use crate::{
     defs::{
         app::AppDef,
@@ -15,29 +11,29 @@ use crate::{
         InstanceRegistry, desired::DesiredState, identity::ResourceInstance,
         lifecycle::LifecycleState,
     },
-    system::{
-        System,
-        translate::proxy::{ServiceUpstream, build_proxy_config, instance_ipv6},
-    },
+    system::translate::proxy::{ServiceUpstream, instance_ipv6},
 };
+
+pub(super) struct ProxyBuildOutput {
+    pub pairs: Vec<(IngressDef, ServiceUpstream)>,
+    /// Observations to persist regardless of apply outcome (ingress_configured + uninstall).
+    pub observations: Vec<(ResourceInstance, &'static str, serde_json::Value)>,
+    /// Observations to persist only after successful apply (ingress_ready).
+    pub ready_observations: Vec<(ResourceInstance, &'static str, serde_json::Value)>,
+}
 
 // r[autonomous.ingress]
 // r[fault.non-blocking]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "fixme(prototyping): simplify/pass a struct"
-)]
-pub(super) async fn apply(
-    driver: &System,
+pub(super) fn collect(
     snapshot: &AppDef,
     desired: &DesiredState,
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
     app_name: &str,
-    caddy_addr: SocketAddr,
-    data_dir: &std::path::Path,
-) -> Vec<(ResourceInstance, &'static str, serde_json::Value)> {
+) -> ProxyBuildOutput {
     let mut observations: Vec<(ResourceInstance, &'static str, serde_json::Value)> = Vec::new();
+    let mut ready_observations: Vec<(ResourceInstance, &'static str, serde_json::Value)> =
+        Vec::new();
     let mut pairs: Vec<(IngressDef, ServiceUpstream)> = Vec::new();
 
     for resource in snapshot.resources.values() {
@@ -51,7 +47,7 @@ pub(super) async fn apply(
 
         let svc_instance =
             registry.get_or_create_singleton(app_name, ResourceKind::Service, Some(svc_name));
-        let service_ip: Ipv6Addr = instance_ipv6(node_prefix, &svc_instance);
+        let service_ip = instance_ipv6(node_prefix, &svc_instance);
 
         // Find the upstream port by scanning all pod definitions for a binding
         // that references this service. Fall back to the ingress's declared port
@@ -64,10 +60,12 @@ pub(super) async fn apply(
             Some(ingress.service.name.as_str()),
         );
         observations.push((
-            ingress_instance,
+            ingress_instance.clone(),
             "ingress_configured",
             serde_json::json!({}),
         ));
+
+        ready_observations.push((ingress_instance, "ingress_ready", serde_json::json!({})));
 
         pairs.push((
             def,
@@ -76,36 +74,6 @@ pub(super) async fn apply(
                 service_port: upstream_port,
             },
         ));
-    }
-
-    if pairs.is_empty() {
-        return observations;
-    }
-
-    let config = build_proxy_config(&pairs, caddy_addr);
-    let caddy_json = caddy::build_caddy_config(&config);
-
-    if let Err(e) = driver.proxy.apply_config(&config).await {
-        error!(error = %e, "proxy: apply_config failed");
-        return observations;
-    }
-
-    for resource in snapshot.resources.values() {
-        let ingress = match resource {
-            Resource::Ingress(i) => i,
-            _ => continue,
-        };
-        let ingress_instance = registry.get_or_create_singleton(
-            app_name,
-            ResourceKind::Ingress,
-            Some(ingress.service.name.as_str()),
-        );
-        observations.push((ingress_instance, "ingress_ready", serde_json::json!({})));
-    }
-
-    // r[impl infra.proxy.upgrade.cache]
-    if let Err(e) = caddy::write_cached_proxy_json(data_dir, &caddy_json) {
-        warn!(error = %e, "proxy: failed to cache proxy config; upgrade continuity may be impaired");
     }
 
     for dr in &desired.resources {
@@ -134,7 +102,11 @@ pub(super) async fn apply(
         ));
     }
 
-    observations
+    ProxyBuildOutput {
+        pairs,
+        observations,
+        ready_observations,
+    }
 }
 
 /// Scan all Deployment and Job pod definitions for the first TCP or HTTP

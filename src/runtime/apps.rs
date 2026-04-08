@@ -5,9 +5,9 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
+use tokio::sync::Notify;
 
 use crate::{
     defs::app::App,
@@ -67,8 +67,7 @@ pub struct AppEntry {
     /// Shared with the reconciler and operation runner to track in-progress ops.
     pub active_progress: Arc<RwLock<Option<OperationProgress>>>,
     /// Wakes the reconciler for an immediate tick.
-    pub tick_notify: Arc<tokio::sync::Notify>,
-    pub reconciler_handle: Option<tokio::task::JoinHandle<()>>,
+    pub tick_notify: Arc<Notify>,
     /// Active script-evaluation fault, if the last reload failed.
     /// Cleared on the next successful evaluation.
     pub script_error: Option<(String, DateTime<Utc>)>,
@@ -98,7 +97,12 @@ impl AppRegistry {
     }
 
     // i[app.register]
-    pub fn register(&mut self, name: String, script: String) -> Result<(), ScriptError> {
+    pub fn register(
+        &mut self,
+        name: String,
+        script: String,
+        tick_notify: Arc<Notify>,
+    ) -> Result<(), ScriptError> {
         let (app, script_error) = match evaluate_script(&name, &script, &BTreeMap::new()) {
             Ok(a) => (a, None),
             Err(e) => {
@@ -117,8 +121,7 @@ impl AppRegistry {
                 app,
                 phase: Arc::new(Mutex::new(AppPhase::NotInstalled)),
                 active_progress: Arc::new(RwLock::new(None)),
-                tick_notify: Arc::new(tokio::sync::Notify::new()),
-                reconciler_handle: None,
+                tick_notify,
                 script_error,
             },
         );
@@ -179,7 +182,7 @@ impl AppRegistry {
     }
 
     // i[app.persist]
-    pub fn load_from_db(db: &Db) -> rusqlite::Result<Self> {
+    pub fn load_from_db(db: &Db, tick_notify: Arc<Notify>) -> rusqlite::Result<Self> {
         let mut registry = Self::new();
         let mut stmt = db.conn.prepare(
             "SELECT name, script, installed, uninstalling FROM registered_apps ORDER BY name",
@@ -226,8 +229,7 @@ impl AppRegistry {
                     app,
                     phase: Arc::new(Mutex::new(phase)),
                     active_progress: Arc::new(RwLock::new(None)),
-                    tick_notify: Arc::new(tokio::sync::Notify::new()),
-                    reconciler_handle: None,
+                    tick_notify: Arc::clone(&tick_notify),
                     script_error,
                 },
             );
@@ -444,7 +446,8 @@ mod tests {
         // Store a param for it.
         upsert_param(&db, "myapp", "hostname", "restored.example.com").expect("upsert");
 
-        let registry = AppRegistry::load_from_db(&db).expect("load registry");
+        let registry =
+            AppRegistry::load_from_db(&db, Arc::new(Notify::new())).expect("load registry");
         let entry = registry.get("myapp").expect("app should be registered");
 
         assert!(

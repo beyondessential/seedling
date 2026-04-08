@@ -1,7 +1,6 @@
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 
 use ipnet::Ipv6Net;
-use tracing::error;
 
 use crate::{
     defs::{
@@ -10,37 +9,15 @@ use crate::{
     },
     runtime::InstanceRegistry,
     system::{
-        System,
         translate::proxy::{instance_ipv6, pod_mount_addr},
-        types::{DataPlaneRules, ForwardProto, IngressRule, MountRule},
+        types::{ForwardProto, IngressRule, MountRule},
     },
 };
 
 use super::RunningPod;
 
 // r[autonomous.ingress]
-// r[autonomous.network]
-// r[fault.non-blocking]
-pub(super) async fn apply(
-    driver: &System,
-    snapshot: &AppDef,
-    node_prefix: &Ipv6Net,
-    registry: &dyn InstanceRegistry,
-    running_pods: &[RunningPod],
-    app_name: &str,
-    caddy_ip: Ipv6Addr,
-) {
-    let ingress = build_ingress_rules(snapshot, caddy_ip);
-    let mounts = build_mount_rules(node_prefix, registry, running_pods, app_name);
-
-    let rules = DataPlaneRules { ingress, mounts };
-
-    if let Err(e) = driver.data_plane.apply_rules(&rules).await {
-        error!(error = %e, "rules: apply_rules failed");
-    }
-}
-
-fn build_ingress_rules(snapshot: &AppDef, caddy_ip: Ipv6Addr) -> Vec<IngressRule> {
+pub(super) fn build_ingress_rules(snapshot: &AppDef, caddy_ip: Ipv6Addr) -> Vec<IngressRule> {
     let mut rules = Vec::new();
 
     for resource in snapshot.resources.values() {
@@ -82,7 +59,8 @@ fn build_ingress_rules(snapshot: &AppDef, caddy_ip: Ipv6Addr) -> Vec<IngressRule
     rules
 }
 
-fn build_mount_rules(
+// r[autonomous.network]
+pub(super) fn build_mount_rules(
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
     running_pods: &[RunningPod],

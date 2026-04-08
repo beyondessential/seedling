@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
@@ -9,16 +8,14 @@ use clap::Parser;
 use lloggs::LoggingArgs;
 use parking_lot::{Mutex, RwLock};
 use seedling::{
-    oi::{
-        self,
-        handler::{OiState, ReconcilerFactory},
-    },
+    oi::{self, handler::OiState},
     runtime::{AppRegistry, InstanceRegistry, Scheduler, db::Db, registry::DbInstanceRegistry},
     system::{
         System,
         reconcile::{Reconciler, node_prefix_from_machine_id},
     },
 };
+use tokio::sync::Notify;
 
 #[derive(Parser)]
 #[command(name = "seedling")]
@@ -95,6 +92,8 @@ async fn main() {
         std::process::exit(1);
     });
 
+    let tick_notify = Arc::new(Notify::new());
+
     let (driver, caddy_admin_addr) =
         System::setup(node_prefix, &data_dir)
             .await
@@ -108,81 +107,47 @@ async fn main() {
     // ---------------------------------------------------------------------------
 
     let registry =
-        tokio::task::block_in_place(|| AppRegistry::load_from_db(&db)).unwrap_or_else(|e| {
-            tracing::error!("failed to load registered apps: {e}");
-            std::process::exit(1);
-        });
-
-    let installed_apps: Vec<_> = registry
-        .list()
-        .into_iter()
-        .filter(|(_, status)| !matches!(status, seedling::runtime::AppStatus::NotInstalled))
-        .map(|(name, _)| name)
-        .collect();
+        tokio::task::block_in_place(|| AppRegistry::load_from_db(&db, Arc::clone(&tick_notify)))
+            .unwrap_or_else(|e| {
+                tracing::error!("failed to load registered apps: {e}");
+                std::process::exit(1);
+            });
 
     let registry = Arc::new(RwLock::new(registry));
     let db = Arc::new(Mutex::new(db));
     let scheduler = Arc::new(Mutex::new(Scheduler::new()));
-    let reconciler_factory = Arc::new(ReconcilerFactory {
-        system: Arc::clone(&driver),
-        node_prefix,
-        db_path: db_path.clone(),
-        data_dir: data_dir.clone(),
-        caddy_admin_addr: Arc::clone(&caddy_admin_addr),
+
+    // ---------------------------------------------------------------------------
+    // Global reconciler
+    // ---------------------------------------------------------------------------
+
+    let instance_registry: Arc<dyn InstanceRegistry> = Arc::new(DbInstanceRegistry::new(
+        Db::open(&db_path).unwrap_or_else(|e| {
+            tracing::error!("cannot open instance registry db: {e}");
+            std::process::exit(1);
+        }),
+    ));
+
+    let obs_db = Db::open(&db_path).unwrap_or_else(|e| {
+        tracing::error!("cannot open observations db: {e}");
+        std::process::exit(1);
     });
 
-    // ---------------------------------------------------------------------------
-    // Reconcilers — one per installed app
-    // ---------------------------------------------------------------------------
+    let mut reconciler = Reconciler::new(
+        Arc::clone(&driver),
+        node_prefix,
+        instance_registry,
+        Arc::clone(&caddy_admin_addr),
+        data_dir.clone(),
+        obs_db,
+        Arc::clone(&registry),
+    );
 
-    for app_name in &installed_apps {
-        let reg = registry.read();
-        let entry = match reg.get(app_name) {
-            Some(e) => e,
-            None => continue,
-        };
+    reconciler.populate_bridge_names().await;
 
-        let app = entry.app.clone();
-        let active_progress = Arc::clone(&entry.active_progress);
-        let tick_notify = Arc::clone(&entry.tick_notify);
-        let phase = Arc::clone(&entry.phase);
-        let app_name = app_name.clone();
-        drop(reg);
-
-        let instance_registry: Arc<dyn InstanceRegistry> = Arc::new(DbInstanceRegistry::new(
-            Db::open(&db_path).unwrap_or_else(|e| {
-                tracing::error!("cannot open registry db for app {app_name}: {e}");
-                std::process::exit(1);
-            }),
-        ));
-
-        let obs_db = Db::open(&db_path).unwrap_or_else(|e| {
-            tracing::error!("cannot open observations db for app {app_name}: {e}");
-            std::process::exit(1);
-        });
-
-        let driver = Arc::clone(&driver);
-        let caddy_admin_addr = Arc::clone(&caddy_admin_addr);
-        let data_dir = data_dir.clone();
-
-        let mut reconciler = Reconciler::new(
-            app_name.clone(),
-            app,
-            active_progress,
-            phase,
-            driver,
-            node_prefix,
-            instance_registry,
-            HashMap::new(),
-            caddy_admin_addr,
-            data_dir,
-            obs_db,
-        );
-
-        reconciler.populate_bridge_names().await;
-
-        let handle = tokio::spawn(async move {
-            let mut r = reconciler;
+    {
+        let tick_notify = Arc::clone(&tick_notify);
+        tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(5));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
@@ -190,19 +155,12 @@ async fn main() {
                     _ = interval.tick() => {},
                     _ = tick_notify.notified() => {},
                 }
-                r.tick().await;
+                reconciler.tick().await;
             }
         });
-
-        {
-            let mut reg = registry.write();
-            if let Some(entry) = reg.get_mut(&app_name) {
-                entry.reconciler_handle = Some(handle);
-            }
-        }
-
-        tracing::info!("started reconciler for app: {app_name}");
     }
+
+    tracing::info!("started global reconciler");
 
     // ---------------------------------------------------------------------------
     // OI server
@@ -214,7 +172,8 @@ async fn main() {
         start_time: Instant::now(),
         db: Arc::clone(&db),
         scheduler: Arc::clone(&scheduler),
-        reconciler_factory: Arc::clone(&reconciler_factory),
+        tick_notify: Arc::clone(&tick_notify),
+        db_path: db_path.clone(),
         trusted_keys: seedling::oi::auth::new_trusted_keys(),
     });
 

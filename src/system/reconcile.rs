@@ -18,16 +18,19 @@ use tokio::sync::RwLock as AsyncRwLock;
 use tracing::{error, warn};
 
 use crate::{
-    defs::app::{App, AppDef},
+    defs::app::AppDef,
     runtime::{
         AppPhase, InstanceRegistry,
-        apps::transition_phase,
+        apps::{AppRegistry, transition_phase},
         db::Db,
-        desired::{DesiredState, OperationProgress, compute, compute_uninstalling},
+        desired::{DesiredState, compute, compute_uninstalling},
         history::insert_observation,
         identity::InstanceId,
     },
-    system::{System, actuator::Actuator, caddy, observer::Observer},
+    system::{
+        System, actuator::Actuator, caddy, observer::Observer,
+        translate::proxy::build_proxy_config, types::DataPlaneRules,
+    },
 };
 
 pub mod bridge;
@@ -36,10 +39,6 @@ pub mod proxy;
 pub mod routes;
 pub mod rules;
 pub mod volumes;
-
-// ---------------------------------------------------------------------------
-// RunningPod
-// ---------------------------------------------------------------------------
 
 /// A pod instance observed to be running before this tick's actuations.
 ///
@@ -60,99 +59,66 @@ pub(crate) struct RunningPod {
     pub resource: crate::defs::resource::Resource,
 }
 
-// ---------------------------------------------------------------------------
-// Reconciler
-// ---------------------------------------------------------------------------
+/// Point-in-time snapshot of a single app's state, taken at tick start.
+struct AppSnapshot {
+    name: String,
+    desired: DesiredState,
+    app_def: AppDef,
+    phase: AppPhase,
+    phase_handle: Arc<Mutex<AppPhase>>,
+}
 
+/// Single global reconciler that processes all installed apps each tick.
 pub struct Reconciler {
-    app_name: String,
-    app: Arc<Mutex<AppDef>>,
-    /// Shared desired-state override. `None` = steady state (all resources
-    /// desired at `Ready`). Set to `Some` while a lifecycle operation is
-    /// in progress.
-    active_progress: Arc<RwLock<Option<OperationProgress>>>,
-    /// Shared phase state — the reconciler transitions this to NotInstalled when
-    /// uninstall cleanup completes.
-    phase: Arc<parking_lot::Mutex<AppPhase>>,
-    observer: Observer,
-    actuator: Actuator,
     driver: Arc<System>,
     node_prefix: Ipv6Net,
-    registry: Arc<dyn InstanceRegistry>,
-    /// Network-name → bridge-interface-name map. Populated at startup via
-    /// `list_networks` and maintained during normal operation. Used by the
-    /// bridge-address check on every tick.
+    observer: Observer,
+    actuator: Actuator,
+    /// Network-name → bridge-interface-name map, maintained across ticks.
     bridge_names: HashMap<String, String>,
-    /// rtnetlink handle for the bridge-address check.  `None` until
-    /// `populate_bridge_names` is called.
     netlink: Option<NetlinkHandle>,
-    /// The Caddy admin API address, updated atomically during blue/green
-    /// Caddy upgrades. Phases 5 and 6 read this to obtain Caddy's container
-    /// IPv6 address; if the address is not yet IPv6, those phases are skipped.
     caddy_admin_addr: Arc<AsyncRwLock<SocketAddr>>,
-    /// Data directory passed to `ensure_caddy_running` on every tick so the
-    /// reconciler can recover Caddy if it crashes after startup.
     data_dir: PathBuf,
-    /// Database handle for persisting observations to `world_observations`.
-    db: Arc<parking_lot::Mutex<Db>>,
-    /// Tracks which `(instance_id, obs_kind)` pairs have already been written
-    /// this run so we don't spam the table with identical rows every tick.
+    db: Arc<Mutex<Db>>,
+    registry: Arc<dyn InstanceRegistry>,
+    app_registry: Arc<RwLock<AppRegistry>>,
     written_obs: HashSet<(InstanceId, &'static str)>,
 }
 
 impl Reconciler {
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "all parameters are architecturally required for the reconciler"
-    )]
     pub fn new(
-        app_name: String,
-        app: App,
-        active_progress: Arc<RwLock<Option<OperationProgress>>>,
-        phase: Arc<parking_lot::Mutex<AppPhase>>,
         driver: Arc<System>,
         node_prefix: Ipv6Net,
         registry: Arc<dyn InstanceRegistry>,
-        bridge_names: HashMap<String, String>,
         caddy_admin_addr: Arc<AsyncRwLock<SocketAddr>>,
         data_dir: PathBuf,
-        obs_db: Db,
+        db: Db,
+        app_registry: Arc<RwLock<AppRegistry>>,
     ) -> Self {
         let observer = Observer::new(Arc::clone(&driver));
         let actuator = Actuator::new(Arc::clone(&driver), node_prefix, Arc::clone(&registry));
         Self {
-            app_name,
-            app: app.def,
-            active_progress,
-            phase,
-            observer,
-            actuator,
             driver,
             node_prefix,
-            registry,
-            bridge_names,
+            observer,
+            actuator,
+            bridge_names: HashMap::new(),
             netlink: None,
             caddy_admin_addr,
             data_dir,
-            db: Arc::new(parking_lot::Mutex::new(obs_db)),
+            db: Arc::new(Mutex::new(db)),
+            registry,
+            app_registry,
             written_obs: HashSet::new(),
         }
     }
 
-    /// Populate `bridge_names` from existing `seedling-` networks and open
-    /// the rtnetlink connection used by the bridge-address check.
-    ///
-    /// Call this once before entering the reconciliation loop so that pod
-    /// bridges that survived a restart are immediately tracked.
-    #[tracing::instrument(skip_all, fields(app = %self.app_name))]
+    #[tracing::instrument(skip_all)]
     pub async fn populate_bridge_names(&mut self) {
         let (connection, handle, _) = match rtnetlink::new_connection() {
             Ok(c) => c,
             Err(e) => {
-                error!(
-                    error = %e,
-                    "failed to open rtnetlink connection for bridge address checks"
-                );
+                error!(error = %e, "failed to open rtnetlink connection for bridge address checks");
                 return;
             }
         };
@@ -171,111 +137,158 @@ impl Reconciler {
         }
     }
 
+    // r[desired-state.definition]
+    // r[desired-state.steady]
+    // r[desired-state.during-operation]
+    fn snapshot_all_apps(&self) -> Vec<AppSnapshot> {
+        let reg = self.app_registry.read();
+        let mut snapshots = Vec::new();
+        for (name, status) in reg.list() {
+            let entry = match reg.get(&name) {
+                Some(e) => e,
+                None => continue,
+            };
+            let phase = entry.phase.lock().clone();
+            match phase {
+                AppPhase::Installed | AppPhase::Uninstalling => {}
+                AppPhase::NotInstalled => continue,
+            }
+            let _ = status;
+            let progress = entry.active_progress.read();
+            let app_def = entry.app.def.lock().clone();
+            let desired = match phase {
+                AppPhase::Uninstalling => compute_uninstalling(&name, &app_def),
+                AppPhase::NotInstalled => unreachable!(),
+                AppPhase::Installed => compute(&name, &app_def, (*progress).as_ref()),
+            };
+            snapshots.push(AppSnapshot {
+                name,
+                desired,
+                app_def,
+                phase,
+                phase_handle: Arc::clone(&entry.phase),
+            });
+        }
+        snapshots
+    }
+
     // r[reconciliation.loop]
     // r[reconciliation.convergence]
     // r[reconciliation.idempotency]
     // r[fault.non-blocking]
-    /// Execute one reconciliation tick.
-    ///
-    /// Phases run sequentially. An error in one phase does not skip later
-    /// phases. Within each phase, per-resource errors are logged and skipped;
-    /// the reconciler continues with the next resource.
-    #[tracing::instrument(skip_all, fields(app = %self.app_name), level = "debug")]
+    #[tracing::instrument(skip_all, level = "debug")]
     pub async fn tick(&mut self) {
-        let (desired, snapshot) = self.snapshot_desired();
+        let apps = self.snapshot_all_apps();
 
-        // Observe and actuate Deployments and Jobs.
-        let pod_update = pods::observe_and_actuate(
-            &self.observer,
-            &self.actuator,
-            &self.driver,
-            &desired,
-            &self.node_prefix,
-        )
-        .await;
+        // Per-app phases: pods, uninstall, bridge, volumes
+        let mut running_pods_by_app: HashMap<String, Vec<RunningPod>> = HashMap::new();
 
-        // Maintain bridge_names from this tick's pod actuations.
-        for (net_name, bridge_name) in pod_update.new_bridges {
-            self.bridge_names.insert(net_name, bridge_name);
+        for app in &apps {
+            let pod_update = pods::observe_and_actuate(
+                &self.observer,
+                &self.actuator,
+                &self.driver,
+                &app.desired,
+                &self.node_prefix,
+            )
+            .await;
+
+            for (net_name, bridge_name) in pod_update.new_bridges {
+                self.bridge_names.insert(net_name, bridge_name);
+            }
+            for net_name in pod_update.removed_networks {
+                self.bridge_names.remove(&net_name);
+            }
+            self.persist_obs(pod_update.observations);
+            running_pods_by_app.insert(app.name.clone(), pod_update.running);
         }
-        for net_name in pod_update.removed_networks {
-            self.bridge_names.remove(&net_name);
-        }
-        let running_pods = pod_update.running;
-        self.persist_obs(pod_update.observations);
 
-        // When uninstalling: skip the remaining phases and check whether cleanup
-        // is complete. Completion requires both no running pods AND no systemd
-        // units still loaded — a unit can linger in failed/inactive state after
-        // its container exits, which would block a clean reinstall.
-        if matches!(*self.phase.lock(), AppPhase::Uninstalling) {
-            if running_pods.is_empty() {
-                let unit_prefix = format!("seedling-{}-", self.app_name);
-                match self.driver.process.list_units(&unit_prefix).await {
-                    Ok(units) if units.is_empty() => {
-                        let db = self.db.lock();
-                        transition_phase(
-                            &self.phase,
-                            AppPhase::NotInstalled,
-                            &db,
-                            &self.app_name,
-                            "",
-                        );
-                        tracing::info!(app = %self.app_name, "uninstall complete");
-                    }
-                    Ok(units) => {
-                        // Units still loaded — reset + stop each one so
-                        // CollectMode=inactive-or-failed can finish the job.
-                        warn!(
-                            app = %self.app_name,
-                            count = units.len(),
-                            "uninstall: units still loaded, retrying cleanup"
-                        );
-                        for unit in &units {
-                            let _ = self.driver.process.reset_failed_unit(&unit.name).await;
-                            let _ = self.driver.process.stop_unit(&unit.name).await;
-                        }
-                    }
-                    Err(e) => {
-                        warn!(app = %self.app_name, error = %e, "uninstall: list_units failed");
+        for app in &apps {
+            if app.phase != AppPhase::Uninstalling {
+                continue;
+            }
+            let running = running_pods_by_app
+                .get(&app.name)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
+            if !running.is_empty() {
+                continue;
+            }
+            let unit_prefix = format!("seedling-{}-", app.name);
+            match self.driver.process.list_units(&unit_prefix).await {
+                Ok(units) if units.is_empty() => {
+                    let db = self.db.lock();
+                    transition_phase(
+                        &app.phase_handle,
+                        AppPhase::NotInstalled,
+                        &db,
+                        &app.name,
+                        "",
+                    );
+                    tracing::info!(app = %app.name, "uninstall complete");
+                }
+                Ok(units) => {
+                    warn!(
+                        app = %app.name,
+                        count = units.len(),
+                        "uninstall: units still loaded, retrying cleanup"
+                    );
+                    for unit in &units {
+                        let _ = self.driver.process.reset_failed_unit(&unit.name).await;
+                        let _ = self.driver.process.stop_unit(&unit.name).await;
                     }
                 }
+                Err(e) => {
+                    warn!(app = %app.name, error = %e, "uninstall: list_units failed");
+                }
             }
-            return;
         }
 
-        // Bridge ::2 address check — re-add mount endpoint addresses that
-        // were lost due to a crash between create_network and the initial
-        // rtnetlink assignment.
-        if let Some(ref handle) = self.netlink {
-            bridge::ensure_mount_endpoints(handle, &self.bridge_names, &desired, &self.node_prefix)
+        for app in &apps {
+            if app.phase == AppPhase::Uninstalling {
+                continue;
+            }
+            if let Some(ref handle) = self.netlink {
+                bridge::ensure_mount_endpoints(
+                    handle,
+                    &self.bridge_names,
+                    &app.desired,
+                    &self.node_prefix,
+                )
                 .await;
+            }
+            let vol_obs =
+                volumes::observe_and_actuate(&self.observer, &self.actuator, &app.desired).await;
+            self.persist_obs(vol_obs);
         }
 
-        // Observe and actuate Volumes.
-        let vol_obs = volumes::observe_and_actuate(&self.observer, &self.actuator, &desired).await;
-        self.persist_obs(vol_obs);
+        // Global: service routes (aggregated across all apps)
+        let mut all_routes = Vec::new();
+        let mut route_obs = Vec::new();
+        for app in &apps {
+            if app.phase == AppPhase::Uninstalling {
+                continue;
+            }
+            let running = running_pods_by_app
+                .get(&app.name)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
+            let (routes, obs) = routes::build(
+                &app.desired,
+                &app.app_def,
+                &self.node_prefix,
+                &*self.registry,
+                running,
+                &app.name,
+            );
+            all_routes.extend(routes);
+            route_obs.extend(obs);
+        }
+        if let Err(e) = self.driver.data_plane.apply_routes(&all_routes).await {
+            error!(error = %e, "routes: apply_routes failed");
+        }
+        self.persist_obs(route_obs);
 
-        // DataPlane: service routes.
-        let svc_obs = routes::apply(
-            &self.driver,
-            &desired,
-            &snapshot,
-            &self.node_prefix,
-            &*self.registry,
-            &running_pods,
-            &self.app_name,
-        )
-        .await;
-        self.persist_obs(svc_obs);
-
-        // Caddy health check — ensure Caddy is running before phases 5 and 6.
-        //
-        // `ensure_caddy_running` is idempotent: it returns immediately when
-        // Caddy is already healthy, and starts/restarts it otherwise. A
-        // 10-second timeout prevents a slow startup from stalling the tick;
-        // if the timeout fires, phases 5 and 6 are skipped this tick and the
-        // next tick will try again.
         // r[autonomous.ingress]
         match tokio::time::timeout(
             Duration::from_secs(10),
@@ -292,11 +305,11 @@ impl Reconciler {
                 *self.caddy_admin_addr.write().await = addr;
             }
             Ok(Err(e)) => {
-                error!(error = %e, "caddy health check failed; skipping phases 5 and 6 this tick");
+                error!(error = %e, "caddy health check failed; skipping nftables and proxy this tick");
                 return;
             }
             Err(_) => {
-                warn!("caddy health check timed out; skipping phases 5 and 6 this tick");
+                warn!("caddy health check timed out; skipping nftables and proxy this tick");
                 return;
             }
         }
@@ -305,41 +318,80 @@ impl Reconciler {
         let caddy_ip = match caddy_addr.ip() {
             IpAddr::V6(ip) => ip,
             _ => {
-                warn!("caddy admin address is not yet IPv6; skipping phases 5 and 6 this tick");
+                warn!("caddy admin address is not yet IPv6; skipping nftables and proxy this tick");
                 return;
             }
         };
 
-        // DataPlane: nftables rules.
-        rules::apply(
-            &self.driver,
-            &snapshot,
-            &self.node_prefix,
-            &*self.registry,
-            &running_pods,
-            &self.app_name,
-            caddy_ip,
-        )
-        .await;
+        // Global: nftables rules (aggregated across all apps)
+        let mut all_ingress = Vec::new();
+        let mut all_mounts = Vec::new();
+        for app in &apps {
+            if app.phase == AppPhase::Uninstalling {
+                continue;
+            }
+            let running = running_pods_by_app
+                .get(&app.name)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
+            all_ingress.extend(rules::build_ingress_rules(&app.app_def, caddy_ip));
+            all_mounts.extend(rules::build_mount_rules(
+                &self.node_prefix,
+                &*self.registry,
+                running,
+                &app.name,
+            ));
+        }
+        let dp_rules = DataPlaneRules {
+            ingress: all_ingress,
+            mounts: all_mounts,
+        };
+        if let Err(e) = self.driver.data_plane.apply_rules(&dp_rules).await {
+            error!(error = %e, "rules: apply_rules failed");
+        }
 
-        // Proxy config (Caddy).
-        let proxy_obs = proxy::apply(
-            &self.driver,
-            &snapshot,
-            &desired,
-            &self.node_prefix,
-            &*self.registry,
-            &self.app_name,
-            caddy_addr,
-            &self.data_dir,
-        )
-        .await;
+        // Global: proxy config (aggregated across all apps)
+        let mut all_pairs = Vec::new();
+        let mut proxy_obs = Vec::new();
+        let mut proxy_ready_obs = Vec::new();
+        for app in &apps {
+            if app.phase == AppPhase::Uninstalling {
+                continue;
+            }
+            let build = proxy::collect(
+                &app.app_def,
+                &app.desired,
+                &self.node_prefix,
+                &*self.registry,
+                &app.name,
+            );
+            all_pairs.extend(build.pairs);
+            proxy_obs.extend(build.observations);
+            proxy_ready_obs.extend(build.ready_observations);
+        }
         self.persist_obs(proxy_obs);
+
+        if !all_pairs.is_empty() {
+            let config = build_proxy_config(&all_pairs, caddy_addr);
+            let caddy_json = caddy::build_caddy_config(&config);
+
+            if let Err(e) = self.driver.proxy.apply_config(&config).await {
+                error!(error = %e, "proxy: apply_config failed");
+            } else {
+                self.persist_obs(proxy_ready_obs);
+
+                // r[impl infra.proxy.upgrade.cache]
+                if let Err(e) = caddy::write_cached_proxy_json(&self.data_dir, &caddy_json) {
+                    warn!(
+                        error = %e,
+                        "proxy: failed to cache proxy config; upgrade continuity may be impaired"
+                    );
+                }
+            }
+        }
     }
 
     // r[impl observe.persist]
-    /// Write a batch of observations to `world_observations`, skipping any
-    /// `(instance, obs_kind)` pair that has already been persisted this run.
     fn persist_obs(
         &mut self,
         batch: Vec<(
@@ -363,35 +415,7 @@ impl Reconciler {
             }
         }
     }
-
-    // r[desired-state.definition]
-    // r[desired-state.steady]
-    // r[desired-state.during-operation]
-    /// Compute the desired state snapshot.
-    ///
-    /// Acquires the sync locks on `active_progress` and the AppDef
-    /// simultaneously, computes the desired state, clones the AppDef
-    /// snapshot, then drops both locks before any async work begins.
-    fn snapshot_desired(&self) -> (DesiredState, crate::defs::app::AppDef) {
-        let phase = self.phase.lock().clone();
-        let progress = self.active_progress.read();
-        let app_def = self.app.lock();
-
-        let desired = match phase {
-            AppPhase::Uninstalling => compute_uninstalling(&self.app_name, &app_def),
-            AppPhase::NotInstalled => DesiredState::default(),
-            AppPhase::Installed => compute(&self.app_name, &app_def, (*progress).as_ref()),
-        };
-
-        let snapshot = app_def.clone();
-        drop(progress);
-        (desired, snapshot)
-    }
 }
-
-// ---------------------------------------------------------------------------
-// Node prefix derivation
-// ---------------------------------------------------------------------------
 
 // r[infra.node.prefix]
 /// Derive the node's /48 ULA prefix from `/etc/machine-id`.
