@@ -1,0 +1,267 @@
+use std::{net::SocketAddr, sync::Arc};
+
+use quinn::{ClientConfig, Connection, Endpoint};
+use rustls::{
+    ClientConfig as TlsClientConfig, DigitallySignedStruct, SignatureScheme,
+    client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
+};
+use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+
+// ---------------------------------------------------------------------------
+// Error type
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+pub enum ClientError {
+    Connect(Box<dyn std::error::Error + Send + Sync>),
+    Transport(Box<dyn std::error::Error + Send + Sync>),
+    Protocol(String),
+    Api { code: String, message: String },
+}
+
+impl std::fmt::Display for ClientError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Connect(e) => write!(f, "connection failed: {e}"),
+            Self::Transport(e) => write!(f, "transport error: {e}"),
+            Self::Protocol(s) => write!(f, "protocol error: {s}"),
+            Self::Api { code, message } => write!(f, "[{code}] {message}"),
+        }
+    }
+}
+
+impl std::error::Error for ClientError {}
+
+// ---------------------------------------------------------------------------
+// Authentication
+// ---------------------------------------------------------------------------
+
+pub enum ClientAuth {
+    /// Pin the server by the hex-encoded SHA-256 of its SPKI.
+    Fingerprint(String),
+    /// Accept any server key without verification (development only).
+    TrustAny,
+}
+
+// ---------------------------------------------------------------------------
+// Helpers shared between verifiers
+// ---------------------------------------------------------------------------
+
+fn hex_digest(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn ring_verify_tls12(
+    message: &[u8],
+    cert: &CertificateDer<'_>,
+    dss: &DigitallySignedStruct,
+) -> Result<HandshakeSignatureValid, rustls::Error> {
+    rustls::crypto::verify_tls12_signature(
+        message,
+        cert,
+        dss,
+        &rustls::crypto::ring::default_provider().signature_verification_algorithms,
+    )
+}
+
+fn ring_verify_tls13(
+    message: &[u8],
+    cert: &CertificateDer<'_>,
+    dss: &DigitallySignedStruct,
+) -> Result<HandshakeSignatureValid, rustls::Error> {
+    rustls::crypto::verify_tls13_signature(
+        message,
+        cert,
+        dss,
+        &rustls::crypto::ring::default_provider().signature_verification_algorithms,
+    )
+}
+
+fn ring_schemes() -> Vec<SignatureScheme> {
+    rustls::crypto::ring::default_provider()
+        .signature_verification_algorithms
+        .supported_schemes()
+}
+
+// ---------------------------------------------------------------------------
+// Fingerprint verifier
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+struct FingerprintVerifier {
+    expected: String,
+}
+
+impl ServerCertVerifier for FingerprintVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        let got = hex_digest(end_entity.as_ref());
+        if got == self.expected {
+            Ok(ServerCertVerified::assertion())
+        } else {
+            Err(rustls::Error::InvalidCertificate(
+                rustls::CertificateError::ApplicationVerificationFailure,
+            ))
+        }
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        ring_verify_tls12(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        ring_verify_tls13(message, cert, dss)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        ring_schemes()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Trust-any verifier (dev/test only)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+struct TrustAnyVerifier;
+
+impl ServerCertVerifier for TrustAnyVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        ring_verify_tls12(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        ring_verify_tls13(message, cert, dss)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        ring_schemes()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// OiClient
+// ---------------------------------------------------------------------------
+
+pub struct OiClient {
+    conn: Connection,
+}
+
+impl OiClient {
+    pub async fn connect(addr: SocketAddr, auth: ClientAuth) -> Result<Self, ClientError> {
+        let verifier: Arc<dyn ServerCertVerifier> = match auth {
+            ClientAuth::Fingerprint(fp) => Arc::new(FingerprintVerifier { expected: fp }),
+            ClientAuth::TrustAny => Arc::new(TrustAnyVerifier),
+        };
+
+        let tls_config = TlsClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(verifier)
+            .with_no_client_auth();
+
+        let quic_config = quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
+            .map_err(|e| ClientError::Connect(Box::new(e)))?;
+
+        let mut endpoint = Endpoint::client("[::]:0".parse().unwrap())
+            .map_err(|e| ClientError::Connect(Box::new(e)))?;
+        endpoint.set_default_client_config(ClientConfig::new(Arc::new(quic_config)));
+
+        let conn = endpoint
+            .connect(addr, "seedling")
+            .map_err(|e| ClientError::Connect(Box::new(e)))?
+            .await
+            .map_err(|e| ClientError::Connect(Box::new(e)))?;
+
+        Ok(Self { conn })
+    }
+
+    /// Send a single JSON request and return the parsed result value.
+    pub async fn request(&self, method: &str, params: Value) -> Result<Value, ClientError> {
+        let req_bytes = serde_json::to_vec(&serde_json::json!({
+            "method": method,
+            "params": params,
+        }))
+        .expect("request serialisation never fails");
+
+        let (mut send, mut recv) = self
+            .conn
+            .open_bi()
+            .await
+            .map_err(|e| ClientError::Transport(Box::new(e)))?;
+
+        send.write_all(&req_bytes)
+            .await
+            .map_err(|e| ClientError::Transport(Box::new(e)))?;
+        send.finish()
+            .map_err(|e| ClientError::Transport(Box::new(e)))?;
+
+        let resp_bytes = recv
+            .read_to_end(4 * 1024 * 1024)
+            .await
+            .map_err(|e| ClientError::Transport(Box::new(e)))?;
+
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum Response {
+            Ok { result: Value },
+            Err { error: ApiError },
+        }
+        #[derive(serde::Deserialize)]
+        struct ApiError {
+            code: String,
+            message: String,
+        }
+
+        match serde_json::from_slice::<Response>(&resp_bytes)
+            .map_err(|e| ClientError::Protocol(format!("invalid response: {e}")))?
+        {
+            Response::Ok { result } => Ok(result),
+            Response::Err { error } => Err(ClientError::Api {
+                code: error.code,
+                message: error.message,
+            }),
+        }
+    }
+}
