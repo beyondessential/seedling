@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use quinn::{ClientConfig, Connection, Endpoint};
 use rustls::{
@@ -208,11 +208,15 @@ impl OiClient {
             .map_err(|e| ClientError::Connect(Box::new(e)))?;
         endpoint.set_default_client_config(ClientConfig::new(Arc::new(quic_config)));
 
-        let conn = endpoint
-            .connect(addr, "seedling")
-            .map_err(|e| ClientError::Connect(Box::new(e)))?
-            .await
-            .map_err(|e| ClientError::Connect(Box::new(e)))?;
+        let conn = tokio::time::timeout(
+            Duration::from_secs(5),
+            endpoint
+                .connect(addr, "seedling")
+                .map_err(|e| ClientError::Connect(Box::new(e)))?,
+        )
+        .await
+        .map_err(|_| ClientError::Connect("connection timed out".into()))?
+        .map_err(|e| ClientError::Connect(Box::new(e)))?;
 
         Ok(Self { conn })
     }
