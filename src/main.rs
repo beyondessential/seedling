@@ -46,8 +46,8 @@ async fn main() {
         _guard = args
             .logging
             .setup(|v| match v {
-                0 => "seedling=info,warn",
-                1 => "seedling=debug,warn",
+                0 => "seedling=info,warn,netlink_packet_route::link::buffer_tool=off",
+                1 => "seedling=debug,warn,netlink_packet_route::link::buffer_tool=off",
                 2 => "info",
                 3 => "seedling=debug,info",
                 4 => "debug",

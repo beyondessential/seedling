@@ -20,6 +20,7 @@ use rtnetlink::{
     packet_route::route::{RouteAddress, RouteAttribute, RouteProtocol, RouteType},
 };
 use snafu::Snafu;
+use tracing::{error, warn};
 
 use crate::system::{
     BoxError, BoxFuture, DataPlane,
@@ -101,9 +102,20 @@ impl NftablesDataPlane {
     }
 
     async fn apply_routes_impl(&self, routes: &[ServiceRoute]) -> Result<(), DataPlaneError> {
-        self.delete_managed_routes().await?;
+        self.delete_managed_routes().await.map_err(|e| {
+            error!(error = %e, "data_plane: delete_managed_routes failed");
+            e
+        })?;
         for svc in routes {
-            self.add_service_route(svc).await?;
+            self.add_service_route(svc).await.map_err(|e| {
+                error!(
+                    error = %e,
+                    service_ip = %svc.service_ip,
+                    backends = svc.backends.len(),
+                    "data_plane: add_service_route failed"
+                );
+                e
+            })?;
         }
         Ok(())
     }
@@ -164,9 +176,29 @@ impl NftablesDataPlane {
         }
 
         for route in to_delete {
+            // Reconstruct a minimal delete message from the destination only,
+            // rather than echoing the full kernel-returned route message. The
+            // kernel (5.2+) may include RTA_NH_ID and other NLAs that
+            // netlink-packet-route stores as Other(DefaultNla); serialising
+            // those back verbatim in RTM_DELROUTE causes EINVAL on kernel 6.x.
+            let dst = route.attributes.iter().find_map(|attr| {
+                if let RouteAttribute::Destination(RouteAddress::Inet6(a)) = attr {
+                    Some(*a)
+                } else {
+                    None
+                }
+            });
+            let Some(dst) = dst else {
+                warn!("managed route has no IPv6 destination attribute; skipping deletion");
+                continue;
+            };
+            let del_route = RouteMessageBuilder::<Ipv6Addr>::new()
+                .destination_prefix(dst, route.header.destination_prefix_length)
+                .table_id(254)
+                .build();
             self.route_handle
                 .route()
-                .del(route)
+                .del(del_route)
                 .execute()
                 .await
                 .map_err(|e| DataPlaneError::Netlink {
@@ -180,13 +212,18 @@ impl NftablesDataPlane {
     #[tracing::instrument(level = "trace", skip(self))]
     async fn add_service_route(&self, svc: &ServiceRoute) -> Result<(), DataPlaneError> {
         let route = match svc.backends.len() {
+            // Explicit table_id(254) adds RTA_TABLE as an NLA attribute in
+            // addition to the header field; kernel 6.x validates this more
+            // strictly and may return EINVAL when the attribute is absent.
             0 => RouteMessageBuilder::<Ipv6Addr>::new()
                 .destination_prefix(svc.service_ip, 128)
                 .kind(RouteType::BlackHole)
+                .table_id(254)
                 .build(),
             1 => RouteMessageBuilder::<Ipv6Addr>::new()
                 .destination_prefix(svc.service_ip, 128)
                 .gateway(svc.backends[0])
+                .table_id(254)
                 .build(),
             _ => {
                 let nexthops = svc
@@ -202,6 +239,7 @@ impl NftablesDataPlane {
                 RouteMessageBuilder::<Ipv6Addr>::new()
                     .destination_prefix(svc.service_ip, 128)
                     .multipath(nexthops)
+                    .table_id(254)
                     .build()
             }
         };
