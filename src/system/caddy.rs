@@ -257,6 +257,7 @@ fn slot_unit(container: &str) -> &'static str {
 /// Start a Caddy container in the given slot (container name) as a transient
 /// systemd unit, and return once the unit has been successfully started.
 /// Does not wait for health — the caller polls separately.
+#[tracing::instrument(skip_all, fields(%container_name))]
 async fn start_slot(
     container_name: &str,
     _container: &dyn ContainerRuntime,
@@ -317,6 +318,7 @@ async fn start_slot(
 
 /// Stop and remove a Caddy container slot. Errors are ignored — the caller
 /// is doing cleanup and should not fail if the unit or container is already gone.
+#[tracing::instrument(skip_all, fields(%container_name))]
 async fn stop_slot(
     container_name: &str,
     process: &dyn ProcessManager,
@@ -332,6 +334,7 @@ async fn stop_slot(
 
 /// Poll `container_name` until it is running and Caddy's admin API responds,
 /// or until the deadline elapses. Returns the admin SocketAddr on success.
+#[tracing::instrument(skip_all, fields(%container_name))]
 async fn poll_until_healthy(
     container_name: &str,
     container: &dyn ContainerRuntime,
@@ -373,6 +376,7 @@ async fn poll_until_healthy(
 /// 8. If the active container is running but with a different image, starts the
 ///    new image in the other slot and performs a blue/green handoff.
 /// 9. Otherwise, force-removes any stale container and starts fresh.
+#[tracing::instrument(skip_all, level = "debug")]
 pub(crate) async fn ensure_caddy_running(
     container: &dyn ContainerRuntime,
     process: &dyn ProcessManager,

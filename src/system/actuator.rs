@@ -100,6 +100,7 @@ impl Actuator {
 
     // r[impl actuate.deployment.start]
     /// Ensure all primitives for this instance exist and are running.
+    #[tracing::instrument(skip_all, fields(instance = %instance.display_name))]
     pub async fn start(
         &self,
         instance: &ResourceInstance,
@@ -217,6 +218,7 @@ impl Actuator {
     // r[impl actuate.deployment.stop]
     // r[impl actuate.volume.stop]
     /// Stop and remove all primitives for this instance.
+    #[tracing::instrument(skip_all, fields(instance = %instance.display_name))]
     pub async fn stop(
         &self,
         instance: &ResourceInstance,

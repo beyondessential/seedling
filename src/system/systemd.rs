@@ -135,6 +135,7 @@ impl SystemdManager {
         })
     }
 
+    #[tracing::instrument(skip_all, fields(unit = %spec.name))]
     async fn start_transient_impl(&self, spec: TransientUnitSpec) -> Result<(), SystemdError> {
         let proxy = Systemd1ManagerProxy::new(&self.conn)
             .await
@@ -175,6 +176,7 @@ impl SystemdManager {
         Ok(())
     }
 
+    #[tracing::instrument(skip_all, fields(%name))]
     async fn stop_unit_impl(&self, name: &str) -> Result<(), SystemdError> {
         let proxy = Systemd1ManagerProxy::new(&self.conn)
             .await

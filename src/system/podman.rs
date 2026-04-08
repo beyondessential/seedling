@@ -201,6 +201,7 @@ impl PodmanRuntime {
         }
     }
 
+    #[tracing::instrument(skip_all, fields(%reference))]
     async fn pull_image_impl(&self, reference: &str) -> Result<(), PodmanError> {
         let params = ImagePullLibpod {
             reference: Some(reference),

@@ -138,6 +138,7 @@ impl Reconciler {
     ///
     /// Call this once before entering the reconciliation loop so that pod
     /// bridges that survived a restart are immediately tracked.
+    #[tracing::instrument(skip_all, fields(app = %self.app_name))]
     pub async fn populate_bridge_names(&mut self) {
         let (connection, handle, _) = match rtnetlink::new_connection() {
             Ok(c) => c,
@@ -173,6 +174,7 @@ impl Reconciler {
     /// Phases run sequentially. An error in one phase does not skip later
     /// phases. Within each phase, per-resource errors are logged and skipped;
     /// the reconciler continues with the next resource.
+    #[tracing::instrument(skip_all, fields(app = %self.app_name), level = "debug")]
     pub async fn tick(&mut self) {
         let (desired, snapshot) = self.snapshot_desired();
 
