@@ -1,9 +1,5 @@
-use std::{
-    borrow::Cow,
-    net::{IpAddr, Ipv6Addr},
-};
+use std::{borrow::Cow, net::IpAddr};
 
-use futures_util::StreamExt;
 use nftables::{
     batch::Batch,
     expr::{
@@ -15,12 +11,8 @@ use nftables::{
     stmt::{Match, NAT, NATFamily, Operator, Statement},
     types::{NfChainPolicy, NfChainType, NfFamily, NfHook},
 };
-use rtnetlink::{
-    Handle, RouteMessageBuilder, RouteNextHopBuilder, new_connection,
-    packet_route::route::{RouteAddress, RouteAttribute, RouteProtocol, RouteType},
-};
 use snafu::Snafu;
-use tracing::{error, warn};
+use tracing::error;
 
 use crate::system::{
     BoxError, BoxFuture, DataPlane,
@@ -52,17 +44,11 @@ pub(crate) enum DataPlaneError {
     },
 }
 
-pub(crate) struct NftablesDataPlane {
-    route_handle: Handle,
-}
+pub(crate) struct NftablesDataPlane {}
 
 impl NftablesDataPlane {
     pub(crate) fn new() -> std::io::Result<Self> {
-        let (connection, handle, _) = new_connection()?;
-        tokio::spawn(connection);
-        Ok(Self {
-            route_handle: handle,
-        })
+        Ok(Self {})
     }
 }
 
@@ -147,141 +133,138 @@ impl DataPlane for NftablesDataPlane {
 }
 
 impl NftablesDataPlane {
+    /// Delete all seedling-managed IPv6 static /128 routes in the fd5e::/16
+    /// range using the `ip` CLI. Using the CLI instead of rtnetlink directly
+    /// allows us to isolate whether EINVAL is a library/message-construction
+    /// issue or genuine kernel behaviour.
     #[tracing::instrument(level = "trace", skip(self))]
     async fn delete_managed_routes(&self) -> Result<(), DataPlaneError> {
-        let query = RouteMessageBuilder::<Ipv6Addr>::new().build();
-        let mut stream = self.route_handle.route().get(query).execute();
-
-        let mut to_delete = Vec::new();
-        while let Some(msg) = stream.next().await {
-            let msg = msg.map_err(|e: rtnetlink::Error| DataPlaneError::Netlink {
+        // `ip -j route show` emits JSON; each element has a "dst" key.
+        // For IPv6 host (/128) routes, iproute2 may omit the prefix length.
+        let out = tokio::process::Command::new("ip")
+            .args([
+                "-6", "-j", "route", "show", "proto", "static", "table", "main",
+            ])
+            .output()
+            .await
+            .map_err(|e| DataPlaneError::Netlink {
                 source: Box::new(e),
             })?;
-            if msg.header.protocol != RouteProtocol::Static
-                || msg.header.destination_prefix_length != 128
-            {
-                continue;
-            }
-            let in_range = msg.attributes.iter().any(|attr| {
-                if let RouteAttribute::Destination(RouteAddress::Inet6(a)) = attr {
-                    let b = a.octets();
-                    b[0] == 0xfd && b[1] == 0x5e
-                } else {
-                    false
-                }
+
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            return Err(DataPlaneError::Netlink {
+                source: format!("ip route show failed: {}", stderr.trim()).into(),
             });
-            if in_range {
-                to_delete.push(msg);
-            }
         }
 
-        for route in to_delete {
-            // Reconstruct a minimal delete message from the destination only,
-            // rather than echoing the full kernel-returned route message. The
-            // kernel (5.2+) may include RTA_NH_ID and other NLAs that
-            // netlink-packet-route stores as Other(DefaultNla); serialising
-            // those back verbatim in RTM_DELROUTE causes EINVAL on kernel 6.x.
-            let dst = route.attributes.iter().find_map(|attr| {
-                if let RouteAttribute::Destination(RouteAddress::Inet6(a)) = attr {
-                    Some(*a)
-                } else {
-                    None
-                }
-            });
-            let Some(dst) = dst else {
-                warn!("managed route has no IPv6 destination attribute; skipping deletion");
-                continue;
+        let routes: Vec<serde_json::Value> =
+            serde_json::from_slice(&out.stdout).unwrap_or_default();
+
+        for route in routes {
+            let dst = match route["dst"].as_str() {
+                Some(d) => d,
+                None => continue,
             };
-            let del_route = RouteMessageBuilder::<Ipv6Addr>::new()
-                .destination_prefix(dst, route.header.destination_prefix_length)
-                .table_id(254)
-                .build();
-            self.route_handle
-                .route()
-                .del(del_route)
-                .execute()
+
+            // Only touch /128 routes in our managed range.
+            // Host routes may appear without the "/128" suffix.
+            let addr_part = dst.split('/').next().unwrap_or(dst);
+            let prefix_len = dst
+                .split('/')
+                .nth(1)
+                .and_then(|s| s.parse::<u8>().ok())
+                .unwrap_or(128); // no slash → host route → /128
+
+            if prefix_len != 128 {
+                continue;
+            }
+            if !addr_part.starts_with("fd5e") {
+                continue;
+            }
+
+            let del = tokio::process::Command::new("ip")
+                .args([
+                    "-6", "route", "del", dst, "proto", "static", "table", "main",
+                ])
+                .output()
                 .await
                 .map_err(|e| DataPlaneError::Netlink {
                     source: Box::new(e),
                 })?;
+
+            if !del.status.success() {
+                let stderr = String::from_utf8_lossy(&del.stderr);
+                return Err(DataPlaneError::Netlink {
+                    source: format!(
+                        "ip route del {} failed (exit {:?}): {}",
+                        dst,
+                        del.status.code(),
+                        stderr.trim()
+                    )
+                    .into(),
+                });
+            }
         }
 
         Ok(())
     }
 
-    /// Look up the output interface index for a given IPv6 address by querying
-    /// the kernel's routing table. Kernel 6.x requires an explicit `RTA_OIF`
-    /// in `RTM_NEWROUTE` for non-link-local gateways; without it the kernel
-    /// returns EINVAL instead of resolving the interface automatically.
-    async fn resolve_oif(&self, addr: Ipv6Addr) -> Option<u32> {
-        let query = RouteMessageBuilder::<Ipv6Addr>::new()
-            .destination_prefix(addr, 128)
-            .build();
-        let mut stream = self.route_handle.route().get(query).execute();
-        match stream.next().await {
-            Some(Ok(msg)) => msg.attributes.iter().find_map(|attr| {
-                if let RouteAttribute::Oif(idx) = attr {
-                    Some(*idx)
-                } else {
-                    None
-                }
-            }),
-            _ => None,
-        }
-    }
-
+    /// Add or replace a service route using the `ip` CLI.
     #[tracing::instrument(level = "trace", skip(self))]
     async fn add_service_route(&self, svc: &ServiceRoute) -> Result<(), DataPlaneError> {
-        let route = match svc.backends.len() {
-            // Explicit table_id(254) adds RTA_TABLE as an NLA attribute in
-            // addition to the header field; kernel 6.x validates this more
-            // strictly and may return EINVAL when the attribute is absent.
-            0 => RouteMessageBuilder::<Ipv6Addr>::new()
-                .destination_prefix(svc.service_ip, 128)
-                .kind(RouteType::BlackHole)
-                .table_id(254)
-                .build(),
+        let dst = format!("{}/128", svc.service_ip);
+
+        // Build the argument list for: ip -6 route replace <args>
+        let mut args: Vec<String> = vec!["route".into(), "replace".into()];
+
+        match svc.backends.len() {
+            0 => {
+                args.push("blackhole".into());
+                args.push(dst);
+            }
             1 => {
-                // Resolve the output interface from the kernel routing table.
-                // Kernel 6.x no longer auto-resolves the interface for
-                // global-scope (non-link-local) IPv6 gateways and returns
-                // EINVAL when RTA_OIF is absent.
-                let oif = self.resolve_oif(svc.backends[0]).await;
-                let mut builder = RouteMessageBuilder::<Ipv6Addr>::new()
-                    .destination_prefix(svc.service_ip, 128)
-                    .gateway(svc.backends[0])
-                    .table_id(254);
-                if let Some(idx) = oif {
-                    builder = builder.output_interface(idx);
-                }
-                builder.build()
+                args.push(dst);
+                args.extend(["via".into(), svc.backends[0].to_string()]);
             }
             _ => {
-                let mut nexthops = Vec::with_capacity(svc.backends.len());
-                for &b in &svc.backends {
-                    let oif = self.resolve_oif(b).await;
-                    let mut nh = RouteNextHopBuilder::new_ipv6().via(IpAddr::V6(b)).unwrap();
-                    if let Some(idx) = oif {
-                        nh = nh.interface(idx);
-                    }
-                    nexthops.push(nh.build());
+                args.push(dst);
+                for b in &svc.backends {
+                    args.extend(["nexthop".into(), "via".into(), b.to_string()]);
                 }
-                RouteMessageBuilder::<Ipv6Addr>::new()
-                    .destination_prefix(svc.service_ip, 128)
-                    .multipath(nexthops)
-                    .table_id(254)
-                    .build()
             }
-        };
-        self.route_handle
-            .route()
-            .add(route)
-            .replace()
-            .execute()
+        }
+
+        args.extend([
+            "proto".into(),
+            "static".into(),
+            "table".into(),
+            "main".into(),
+        ]);
+
+        let out = tokio::process::Command::new("ip")
+            .arg("-6")
+            .args(&args)
+            .output()
             .await
             .map_err(|e| DataPlaneError::Netlink {
                 source: Box::new(e),
-            })
+            })?;
+
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            return Err(DataPlaneError::Netlink {
+                source: format!(
+                    "ip -6 {} failed (exit {:?}): {}",
+                    args.join(" "),
+                    out.status.code(),
+                    stderr.trim()
+                )
+                .into(),
+            });
+        }
+
+        Ok(())
     }
 }
 
