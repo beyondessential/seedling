@@ -9,9 +9,7 @@ phases can proceed in order once it is done.
 
 The spec is in docs/spec/interface.md. The rule prefix is i[...].
 
-A basic CLI client (`seedling-ctl`) is built in Phase 1.5, immediately after the QUIC
-skeleton, so every subsequent server phase can be exercised end-to-end from the command line
-as it lands.
+A basic CLI client (`seedling-ctl`) is also built, immediately after the QUIC skeleton, so every subsequent server phase can be exercised end-to-end from the command line as it lands.
 
 ---
 
