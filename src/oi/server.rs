@@ -136,11 +136,9 @@ async fn handle_connection(conn: quinn::Connection, state: Arc<OiState>) {
             }
         };
         let state = Arc::clone(&state);
-        let client_fp = client_fp.clone();
         let client = client.clone();
         tokio::spawn(
-            handle_bidi_stream(stream, state, client_fp)
-                .instrument(tracing::info_span!("oi", %peer, %client)),
+            handle_bidi_stream(stream, state).instrument(tracing::info_span!("oi", %peer, %client)),
         );
     }
 }
@@ -148,7 +146,6 @@ async fn handle_connection(conn: quinn::Connection, state: Arc<OiState>) {
 async fn handle_bidi_stream(
     (mut send, mut recv): (quinn::SendStream, quinn::RecvStream),
     state: Arc<OiState>,
-    client_fp: Option<String>,
 ) {
     let buf = match recv.read_to_end(4 * 1024 * 1024).await {
         Ok(b) => b,
@@ -158,7 +155,7 @@ async fn handle_bidi_stream(
         }
     };
 
-    let response = tokio::task::block_in_place(|| dispatch(&state, client_fp.as_deref(), &buf));
+    let response = tokio::task::block_in_place(|| dispatch(&state, &buf));
 
     if let Err(e) = send.write_all(&response).await {
         tracing::warn!("stream write error: {e}");

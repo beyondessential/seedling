@@ -183,12 +183,11 @@ enum Command {
     ListKeys,
     /// Authorize a client key on the server
     AuthorizeKey {
+        /// Fingerprint to authorize
+        fingerprint: String,
         /// Human-readable label for this key
         #[arg(long)]
         label: String,
-        /// Fingerprint to authorize (defaults to this client's own fingerprint)
-        #[arg(long)]
-        fingerprint: Option<String>,
     },
     /// Revoke an authorized client key on the server
     RevokeKey {
@@ -341,24 +340,21 @@ async fn main() {
         client = c;
     }
 
-    dispatch(&client, &identity, cli.command).await;
+    dispatch(&client, cli.command).await;
 }
 
-async fn dispatch(client: &OiClient, identity: &ClientIdentity, cmd: Command) {
+async fn dispatch(client: &OiClient, cmd: Command) {
     match cmd {
         Command::PrintFingerprint => unreachable!("handled before connect"),
         Command::ListKeys => {
             print_result(client.request("ListKeys", serde_json::json!({})).await);
         }
-        Command::AuthorizeKey { label, fingerprint } => {
-            let fp = fingerprint
-                .as_deref()
-                .unwrap_or(identity.fingerprint.as_str());
+        Command::AuthorizeKey { fingerprint, label } => {
             print_result(
                 client
                     .request(
                         "AuthorizeKey",
-                        serde_json::json!({ "fingerprint": fp, "label": label }),
+                        serde_json::json!({ "fingerprint": fingerprint, "label": label }),
                     )
                     .await,
             );

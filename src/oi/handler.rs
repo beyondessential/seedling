@@ -124,8 +124,8 @@ type HandlerResult = Result<Value, OiError>;
 
 /// Parse the newline-terminated JSON request from `buf`, dispatch to a handler,
 /// and return the serialised JSON response (no trailing newline).
-pub fn dispatch(state: &OiState, client_fp: Option<&str>, buf: &[u8]) -> Vec<u8> {
-    let response = match parse_and_dispatch(state, client_fp, buf) {
+pub fn dispatch(state: &OiState, buf: &[u8]) -> Vec<u8> {
+    let response = match parse_and_dispatch(state, buf) {
         Ok(result) => json!({ "result": result }),
         Err(e) => json!({
             "error": {
@@ -137,7 +137,7 @@ pub fn dispatch(state: &OiState, client_fp: Option<&str>, buf: &[u8]) -> Vec<u8>
     serde_json::to_vec(&response).expect("response serialisation never fails")
 }
 
-fn parse_and_dispatch(state: &OiState, client_fp: Option<&str>, buf: &[u8]) -> HandlerResult {
+fn parse_and_dispatch(state: &OiState, buf: &[u8]) -> HandlerResult {
     #[derive(serde::Deserialize)]
     struct Request {
         method: String,
@@ -160,7 +160,7 @@ fn parse_and_dispatch(state: &OiState, client_fp: Option<&str>, buf: &[u8]) -> H
         // i[key.list]
         "ListKeys" => list_keys(state),
         // i[key.authorize]
-        "AuthorizeKey" => authorize_key(state, client_fp, req.params),
+        "AuthorizeKey" => authorize_key(state, req.params),
         // i[key.revoke]
         "RevokeKey" => revoke_key(state, req.params),
         other => Err(OiError::not_found(format!("unknown method: {other}"))),
@@ -198,16 +198,12 @@ fn list_keys(state: &OiState) -> HandlerResult {
 }
 
 // i[key.authorize]
-fn authorize_key(state: &OiState, client_fp: Option<&str>, params: Value) -> HandlerResult {
+fn authorize_key(state: &OiState, params: Value) -> HandlerResult {
     let fp = params
         .get("fingerprint")
         .and_then(Value::as_str)
-        .or(client_fp)
         .ok_or_else(|| {
-            OiError::new(
-                ErrorCode::RequirementsInvalid,
-                "missing param: fingerprint (or connect with a client key)",
-            )
+            OiError::new(ErrorCode::RequirementsInvalid, "missing param: fingerprint")
         })?;
     let label = params
         .get("label")
