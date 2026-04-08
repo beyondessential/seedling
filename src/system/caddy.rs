@@ -264,6 +264,24 @@ async fn start_slot(
     data_dir: &std::path::Path,
 ) -> Result<(), CaddyStartupError> {
     let unit_name = slot_unit(container_name);
+
+    // StartTransientUnit fails with UnitExists if the unit is still loaded in
+    // systemd's memory (transient units linger briefly after reaching inactive).
+    // If it's still there, stop it and spin until systemd fully GCs it.
+    if process.unit_state(unit_name).await.ok().flatten().is_some() {
+        let _ = process.stop_unit(unit_name).await;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            if tokio::time::Instant::now() >= deadline {
+                break;
+            }
+            if process.unit_state(unit_name).await.ok().flatten().is_none() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
     let admin_config_path = data_dir.join("caddy-admin.json");
     let admin_config_str = admin_config_path.to_string_lossy().into_owned();
     process
