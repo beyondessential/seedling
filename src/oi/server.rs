@@ -1,5 +1,7 @@
 use std::{net::SocketAddr, path::Path, sync::Arc};
 
+use tracing::Instrument;
+
 use ed25519_dalek::{
     SigningKey,
     pkcs8::{DecodePrivateKey, EncodePrivateKey},
@@ -117,6 +119,7 @@ async fn accept_loop(endpoint: Endpoint, state: Arc<OiState>) {
 // i[stream.control]
 // i[stream.dispatch]
 async fn handle_connection(conn: quinn::Connection, state: Arc<OiState>) {
+    let peer = conn.remote_address();
     loop {
         let stream = match conn.accept_bi().await {
             Ok(s) => s,
@@ -127,7 +130,9 @@ async fn handle_connection(conn: quinn::Connection, state: Arc<OiState>) {
             }
         };
         let state = Arc::clone(&state);
-        tokio::spawn(handle_bidi_stream(stream, state));
+        tokio::spawn(
+            handle_bidi_stream(stream, state).instrument(tracing::info_span!("oi", %peer)),
+        );
     }
 }
 

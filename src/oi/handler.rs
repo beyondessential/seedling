@@ -142,7 +142,7 @@ fn parse_and_dispatch(state: &OiState, buf: &[u8]) -> HandlerResult {
     let req: Request = serde_json::from_slice(buf)
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("invalid request: {e}")))?;
 
-    match req.method.as_str() {
+    let result = match req.method.as_str() {
         // i[status.get]
         "GetStatus" => get_status(state),
         // i[app.list]
@@ -153,7 +153,19 @@ fn parse_and_dispatch(state: &OiState, buf: &[u8]) -> HandlerResult {
         "DeregisterApp" => deregister_app(state, req.params),
         "UpdateApp" => update_app(state, req.params),
         other => Err(OiError::not_found(format!("unknown method: {other}"))),
+    };
+
+    match &result {
+        Ok(_) => tracing::info!(method = %req.method, "ok"),
+        Err(e) => tracing::info!(
+            method = %req.method,
+            code = ?e.code,
+            error = %e.message,
+            "error"
+        ),
     }
+
+    result
 }
 
 // ---------------------------------------------------------------------------
