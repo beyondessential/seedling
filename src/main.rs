@@ -72,6 +72,14 @@ async fn main() {
         std::process::exit(1);
     });
 
+    let data_dir = std::fs::canonicalize(&data_dir).unwrap_or_else(|e| {
+        tracing::error!(
+            "cannot canonicalize data directory {}: {e}",
+            data_dir.display()
+        );
+        std::process::exit(1);
+    });
+
     let db_path = data_dir.join("seedling.db");
     let db = Db::open(&db_path).unwrap_or_else(|e| {
         tracing::error!("cannot open database {}: {e}", db_path.display());

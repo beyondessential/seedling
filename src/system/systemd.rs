@@ -88,6 +88,8 @@ trait Systemd1Manager {
 
     fn stop_unit(&self, name: &str, mode: &str) -> zbus::Result<OwnedObjectPath>;
 
+    fn reset_failed_unit(&self, name: &str) -> zbus::Result<()>;
+
     fn start_unit(&self, name: &str, mode: &str) -> zbus::Result<OwnedObjectPath>;
 
     fn get_unit(&self, name: &str) -> zbus::Result<OwnedObjectPath>;
@@ -179,6 +181,17 @@ impl SystemdManager {
             .map_err(|e| SystemdError::DBus { source: e })?;
         proxy
             .stop_unit(name, "replace")
+            .await
+            .map_err(|e| SystemdError::DBus { source: e })?;
+        Ok(())
+    }
+
+    async fn reset_failed_unit_impl(&self, name: &str) -> Result<(), SystemdError> {
+        let proxy = Systemd1ManagerProxy::new(&self.conn)
+            .await
+            .map_err(|e| SystemdError::DBus { source: e })?;
+        proxy
+            .reset_failed_unit(name)
             .await
             .map_err(|e| SystemdError::DBus { source: e })?;
         Ok(())
@@ -396,6 +409,10 @@ impl ProcessManager for SystemdManager {
 
     fn stop_unit<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {
         Box::pin(async move { self.stop_unit_impl(name).await.map_err(Into::into) })
+    }
+
+    fn reset_failed_unit<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move { self.reset_failed_unit_impl(name).await.map_err(Into::into) })
     }
 
     fn wait_unit_stopped<'a>(

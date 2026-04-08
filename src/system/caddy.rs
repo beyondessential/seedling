@@ -266,9 +266,12 @@ async fn start_slot(
     let unit_name = slot_unit(container_name);
 
     // StartTransientUnit fails with UnitExists if the unit is still loaded in
-    // systemd's memory (transient units linger briefly after reaching inactive).
-    // If it's still there, stop it and spin until systemd fully GCs it.
+    // systemd's memory. Two cases:
+    // - transient units linger briefly after reaching inactive (GC delay)
+    // - unit hit its start rate limit and is stuck in failed/start-limit-hit;
+    //   reset_failed_unit clears that so it can be unloaded.
     if process.unit_state(unit_name).await.ok().flatten().is_some() {
+        let _ = process.reset_failed_unit(unit_name).await;
         let _ = process.stop_unit(unit_name).await;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
         loop {
