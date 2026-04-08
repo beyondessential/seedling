@@ -1,6 +1,7 @@
 use std::{collections::HashMap, net::SocketAddr, path::PathBuf};
 
 use clap::{Parser, Subcommand};
+use lloggs::LoggingArgs;
 use seedling::oi::client::{ClientAuth, ClientError, OiClient};
 
 #[derive(Parser)]
@@ -17,6 +18,9 @@ struct Cli {
     /// Skip server key verification (development only)
     #[arg(long, conflicts_with = "fingerprint")]
     trust_any: bool,
+
+    #[command(flatten)]
+    logging: LoggingArgs,
 
     #[command(subcommand)]
     command: Command,
@@ -86,21 +90,43 @@ enum Command {
 
 #[tokio::main]
 async fn main() {
+    let mut _guard = lloggs::PreArgs::parse_with_env("SEEDLING_LOG")
+        .setup()
+        .unwrap_or_else(|e| {
+            tracing::warn!("logging setup: {e}");
+            None
+        });
+
     let cli = Cli::parse();
+
+    if _guard.is_none() {
+        _guard = cli
+            .logging
+            .setup(|v| match v {
+                0 => "info",
+                1 => "debug",
+                _ => "trace",
+            })
+            .map(Some)
+            .unwrap_or_else(|e| {
+                tracing::warn!("logging setup: {e}");
+                None
+            });
+    }
 
     let auth = if cli.trust_any {
         ClientAuth::TrustAny
     } else if let Some(fp) = cli.fingerprint {
         ClientAuth::Fingerprint(fp)
     } else {
-        eprintln!("error: --fingerprint <hex> or --trust-any is required");
+        tracing::error!("--fingerprint <hex> or --trust-any is required");
         std::process::exit(1);
     };
 
     let client = OiClient::connect(cli.endpoint, auth)
         .await
         .unwrap_or_else(|e| {
-            eprintln!("error: {e}");
+            tracing::error!("{e}");
             std::process::exit(1);
         });
 
@@ -232,7 +258,7 @@ fn print_result(result: Result<serde_json::Value, ClientError>) {
     match result {
         Ok(v) => println!("{}", serde_json::to_string_pretty(&v).unwrap()),
         Err(e) => {
-            eprintln!("error: {e}");
+            tracing::error!("{e}");
             std::process::exit(1);
         }
     }
@@ -240,7 +266,7 @@ fn print_result(result: Result<serde_json::Value, ClientError>) {
 
 fn read_script_file(path: &PathBuf) -> String {
     std::fs::read_to_string(path).unwrap_or_else(|e| {
-        eprintln!("error: cannot read {}: {e}", path.display());
+        tracing::error!("cannot read {}: {e}", path.display());
         std::process::exit(1);
     })
 }

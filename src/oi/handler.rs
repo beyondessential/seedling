@@ -55,7 +55,7 @@ impl ReconcilerFactory {
         let instance_registry: Arc<dyn InstanceRegistry> = match Db::open(&self.db_path) {
             Ok(db) => Arc::new(DbInstanceRegistry::new(db)),
             Err(e) => {
-                eprintln!("error: cannot open instance db for app {app_name}: {e}");
+                tracing::error!("cannot open instance db for app {app_name}: {e}");
                 return tokio::runtime::Handle::current().spawn(async {});
             }
         };
@@ -63,7 +63,7 @@ impl ReconcilerFactory {
         let obs_db = match Db::open(&self.db_path) {
             Ok(db) => db,
             Err(e) => {
-                eprintln!("error: cannot open obs db for app {app_name}: {e}");
+                tracing::error!("cannot open obs db for app {app_name}: {e}");
                 return tokio::runtime::Handle::current().spawn(async {});
             }
         };

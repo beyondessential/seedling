@@ -146,7 +146,7 @@ impl AppRegistry {
             let app = match evaluate_script(&name, &script) {
                 Ok(a) => a,
                 Err(e) => {
-                    eprintln!("warning: failed to reload script for app '{name}': {e}");
+                    tracing::warn!("failed to reload script for app '{name}': {e}");
                     App::default()
                 }
             };

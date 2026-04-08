@@ -36,7 +36,7 @@ async fn main() {
     let mut _guard = lloggs::PreArgs::parse_with_env("SEEDLING_LOG")
         .setup()
         .unwrap_or_else(|e| {
-            eprintln!("warning: logging setup: {e}");
+            tracing::warn!("logging setup: {e}");
             None
         });
 
@@ -52,7 +52,7 @@ async fn main() {
             })
             .map(Some)
             .unwrap_or_else(|e| {
-                eprintln!("warning: logging setup: {e}");
+                tracing::warn!("logging setup: {e}");
                 None
             });
     }
@@ -60,16 +60,13 @@ async fn main() {
     let data_dir = args.data_dir;
 
     std::fs::create_dir_all(&data_dir).unwrap_or_else(|e| {
-        eprintln!(
-            "error: cannot create data directory {}: {e}",
-            data_dir.display()
-        );
+        tracing::error!("cannot create data directory {}: {e}", data_dir.display());
         std::process::exit(1);
     });
 
     let db_path = data_dir.join("seedling.db");
     let db = Db::open(&db_path).unwrap_or_else(|e| {
-        eprintln!("error: cannot open database {}: {e}", db_path.display());
+        tracing::error!("cannot open database {}: {e}", db_path.display());
         std::process::exit(1);
     });
 
@@ -78,7 +75,7 @@ async fn main() {
     // ---------------------------------------------------------------------------
 
     let node_prefix = node_prefix_from_machine_id().unwrap_or_else(|e| {
-        eprintln!("error: cannot derive node prefix from machine-id: {e}");
+        tracing::error!("cannot derive node prefix from machine-id: {e}");
         std::process::exit(1);
     });
 
@@ -86,7 +83,7 @@ async fn main() {
         System::setup(node_prefix, &data_dir)
             .await
             .unwrap_or_else(|e| {
-                eprintln!("error: system setup failed: {e}");
+                tracing::error!("system setup failed: {e}");
                 std::process::exit(1);
             });
 
@@ -96,7 +93,7 @@ async fn main() {
 
     let registry =
         tokio::task::block_in_place(|| AppRegistry::load_from_db(&db)).unwrap_or_else(|e| {
-            eprintln!("error: failed to load registered apps: {e}");
+            tracing::error!("failed to load registered apps: {e}");
             std::process::exit(1);
         });
 
@@ -137,13 +134,13 @@ async fn main() {
 
         let instance_registry: Arc<dyn InstanceRegistry> = Arc::new(DbInstanceRegistry::new(
             Db::open(&db_path).unwrap_or_else(|e| {
-                eprintln!("error: cannot open registry db for app {app_name}: {e}");
+                tracing::error!("cannot open registry db for app {app_name}: {e}");
                 std::process::exit(1);
             }),
         ));
 
         let obs_db = Db::open(&db_path).unwrap_or_else(|e| {
-            eprintln!("error: cannot open observations db for app {app_name}: {e}");
+            tracing::error!("cannot open observations db for app {app_name}: {e}");
             std::process::exit(1);
         });
 
@@ -205,7 +202,7 @@ async fn main() {
     oi::run(Arc::clone(&oi_state), oi::DEFAULT_PORT, &data_dir)
         .await
         .unwrap_or_else(|e| {
-            eprintln!("error: OI server failed to start: {e}");
+            tracing::error!("OI server failed to start: {e}");
             std::process::exit(1);
         });
 

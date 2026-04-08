@@ -85,7 +85,7 @@ pub async fn run(
         hex_fingerprint(hasher.finalize().as_ref())
     };
 
-    eprintln!("OI SPKI fingerprint: {fingerprint}");
+    tracing::info!("OI SPKI fingerprint: {fingerprint}");
     state.spki_fingerprint.set(fingerprint.clone()).ok();
 
     let tls_config = build_tls_config(&key, spki)?;
@@ -95,7 +95,7 @@ pub async fn run(
     let addr: SocketAddr = format!("[::1]:{port}").parse().unwrap();
     let endpoint = Endpoint::server(server_config, addr)?;
 
-    eprintln!("OI listening on {}", endpoint.local_addr()?);
+    tracing::info!("OI listening on {}", endpoint.local_addr()?);
 
     tokio::spawn(accept_loop(endpoint, state));
 
