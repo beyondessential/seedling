@@ -12,12 +12,14 @@ pub mod lifecycle;
 pub mod registry;
 pub mod scheduler;
 
-pub use apps::{AppEntry, AppRegistry, AppStatus, ScriptError};
+pub use apps::{AppEntry, AppPhase, AppRegistry, AppStatus, ScriptError, transition_phase};
 pub use barrier::oracle::{DbWorldOracle, TestWorldOracle, WorldStateOracle};
 pub use barrier::replay::{
     ActionLog, DbActionLog, InMemoryActionLog, OperationResult, run_operation,
 };
-pub use desired::{DesiredResource, DesiredState, OperationProgress, compute};
+pub use desired::{
+    DesiredResource, DesiredState, OperationProgress, compute, compute_uninstalling,
+};
 pub use identity::{InstanceId, InstanceVariant, ResourceInstance};
 pub use lifecycle::LifecycleState;
 pub use registry::{DbInstanceRegistry, EphemeralInstanceRegistry, InstanceRegistry};

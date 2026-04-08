@@ -6,7 +6,7 @@ use std::{
 
 use chrono::{DateTime, Utc};
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -24,12 +24,21 @@ impl std::fmt::Display for ScriptError {
     }
 }
 
+/// The installation phase of an app. Stored in `registered_apps` and shared
+/// with the reconciler via Arc so the reconciler can transition it on cleanup.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AppPhase {
+    NotInstalled,
+    Installed,
+    Uninstalling,
+}
+
 // i[app.status]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AppStatus {
     NotInstalled,
-    Deregistering,
+    Uninstalling,
     Operating { action_name: String },
     Running,
     Degraded,
@@ -40,7 +49,7 @@ impl AppStatus {
     pub fn name(&self) -> &'static str {
         match self {
             Self::NotInstalled => "not_installed",
-            Self::Deregistering => "deregistering",
+            Self::Uninstalling => "uninstalling",
             Self::Operating { .. } => "operating",
             Self::Running => "running",
             Self::Degraded => "degraded",
@@ -53,8 +62,8 @@ pub struct AppEntry {
     pub name: String,
     pub script: String,
     pub app: App,
-    pub installed: bool,
-    pub deregistering: bool,
+    /// Shared with the reconciler so it can transition the phase when cleanup completes.
+    pub phase: Arc<Mutex<AppPhase>>,
     /// Shared with the reconciler and operation runner to track in-progress ops.
     pub active_progress: Arc<RwLock<Option<OperationProgress>>>,
     /// Wakes the reconciler for an immediate tick.
@@ -90,19 +99,27 @@ impl AppRegistry {
 
     // i[app.register]
     pub fn register(&mut self, name: String, script: String) -> Result<(), ScriptError> {
-        let app = evaluate_script(&name, &script, &BTreeMap::new())?;
+        let (app, script_error) = match evaluate_script(&name, &script, &BTreeMap::new()) {
+            Ok(a) => (a, None),
+            Err(e) => {
+                tracing::warn!(app = %name, error = %e, "script has errors at registration; params may need to be set");
+                (
+                    App::default(),
+                    Some((e.to_string(), SystemTime::now().into())),
+                )
+            }
+        };
         self.entries.insert(
             name.clone(),
             AppEntry {
                 name,
                 script,
                 app,
-                installed: false,
-                deregistering: false,
+                phase: Arc::new(Mutex::new(AppPhase::NotInstalled)),
                 active_progress: Arc::new(RwLock::new(None)),
                 tick_notify: Arc::new(tokio::sync::Notify::new()),
                 reconciler_handle: None,
-                script_error: None,
+                script_error,
             },
         );
         Ok(())
@@ -164,20 +181,26 @@ impl AppRegistry {
     // i[app.persist]
     pub fn load_from_db(db: &Db) -> rusqlite::Result<Self> {
         let mut registry = Self::new();
-        let mut stmt = db
-            .conn
-            .prepare("SELECT name, script, installed FROM registered_apps ORDER BY name")?;
-        let rows: Vec<(String, String, bool)> = stmt
+        let mut stmt = db.conn.prepare(
+            "SELECT name, script, installed, uninstalling FROM registered_apps ORDER BY name",
+        )?;
+        let rows: Vec<(String, String, bool, bool)> = stmt
             .query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, bool>(2)?,
+                    row.get::<_, bool>(3)?,
                 ))
             })?
             .collect::<rusqlite::Result<_>>()?;
 
-        for (name, script, installed) in rows {
+        for (name, script, installed, uninstalling) in rows {
+            let phase = match (installed, uninstalling) {
+                (_, true) => AppPhase::Uninstalling,
+                (true, _) => AppPhase::Installed,
+                (false, _) => AppPhase::NotInstalled,
+            };
             let stored = match load_params_for_app(db, &name) {
                 Ok(p) => p,
                 Err(e) => {
@@ -201,8 +224,7 @@ impl AppRegistry {
                     name,
                     script,
                     app,
-                    installed,
-                    deregistering: false,
+                    phase: Arc::new(Mutex::new(phase)),
                     active_progress: Arc::new(RwLock::new(None)),
                     tick_notify: Arc::new(tokio::sync::Notify::new()),
                     reconciler_handle: None,
@@ -216,10 +238,18 @@ impl AppRegistry {
 
     // i[app.persist]
     pub fn persist_app(db: &Db, entry: &AppEntry) -> rusqlite::Result<()> {
+        let phase = entry.phase.lock();
+        let installed = matches!(*phase, AppPhase::Installed | AppPhase::Uninstalling);
+        let uninstalling = matches!(*phase, AppPhase::Uninstalling);
         db.conn.execute(
-            "INSERT OR REPLACE INTO registered_apps (name, script, installed) \
-             VALUES (?1, ?2, ?3)",
-            rusqlite::params![entry.name, entry.script, entry.installed as i64],
+            "INSERT OR REPLACE INTO registered_apps (name, script, installed, uninstalling) \
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                entry.name,
+                entry.script,
+                installed as i64,
+                uninstalling as i64
+            ],
         )?;
         Ok(())
     }
@@ -232,18 +262,37 @@ impl AppRegistry {
 }
 
 fn derive_status(entry: &AppEntry) -> AppStatus {
-    if entry.deregistering {
-        return AppStatus::Deregistering;
-    }
-    if !entry.installed {
-        AppStatus::NotInstalled
-    } else if entry.active_progress.read().is_some() {
-        AppStatus::Operating {
-            action_name: String::new(),
+    let phase = entry.phase.lock();
+    match *phase {
+        AppPhase::NotInstalled => AppStatus::NotInstalled,
+        AppPhase::Uninstalling => AppStatus::Uninstalling,
+        AppPhase::Installed => {
+            if entry.active_progress.read().is_some() {
+                AppStatus::Operating {
+                    action_name: String::new(),
+                }
+            } else {
+                AppStatus::Running
+            }
         }
-    } else {
-        AppStatus::Running
     }
+}
+
+/// Update the phase both in the shared Arc and in the database.
+pub fn transition_phase(
+    phase_arc: &Mutex<AppPhase>,
+    new_phase: AppPhase,
+    db: &Db,
+    app_name: &str,
+    _script: &str,
+) {
+    *phase_arc.lock() = new_phase.clone();
+    let installed = matches!(new_phase, AppPhase::Installed | AppPhase::Uninstalling);
+    let uninstalling = matches!(new_phase, AppPhase::Uninstalling);
+    let _ = db.conn.execute(
+        "UPDATE registered_apps SET installed = ?1, uninstalling = ?2 WHERE name = ?3",
+        rusqlite::params![installed as i64, uninstalling as i64, app_name],
+    );
 }
 
 fn evaluate_script(

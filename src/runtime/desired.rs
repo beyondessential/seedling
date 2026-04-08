@@ -101,6 +101,21 @@ pub fn compute(
     }
 }
 
+/// Compute the desired state for an app that is being uninstalled.
+/// All resources are desired at `Unscheduled`.
+pub fn compute_uninstalling(app_name: &str, app_def: &AppDef) -> DesiredState {
+    let resources = app_def
+        .resources
+        .iter()
+        .map(|(id, resource)| DesiredResource {
+            instance: ResourceInstance::new_singleton(app_name, id.kind, id.name.as_str()),
+            desired: LifecycleState::Unscheduled,
+            definition: resource.clone(),
+        })
+        .collect();
+    DesiredState { resources }
+}
+
 // r[impl desired-state.steady]
 fn compute_steady(app_name: &str, app_def: &AppDef) -> DesiredState {
     let resources = app_def

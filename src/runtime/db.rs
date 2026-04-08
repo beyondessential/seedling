@@ -181,6 +181,16 @@ impl Db {
                 .execute_batch("INSERT INTO schema_version VALUES (6);")?;
         }
 
+        if version < 7 {
+            // Add uninstalling column to registered_apps so the reconciler can
+            // persist cleanup state across restarts.
+            self.conn.execute_batch(
+                "ALTER TABLE registered_apps ADD COLUMN uninstalling INTEGER NOT NULL DEFAULT 0;",
+            )?;
+            self.conn
+                .execute_batch("INSERT INTO schema_version VALUES (7);")?;
+        }
+
         Ok(())
     }
 }
@@ -202,7 +212,7 @@ mod tests {
                 |r| r.get(0),
             )
             .expect("schema_version should exist");
-        assert_eq!(version, 6);
+        assert_eq!(version, 7);
     }
 
     // r[verify history.persistence]
@@ -234,7 +244,7 @@ mod tests {
                 |r| r.get(0),
             )
             .expect("schema_version should exist");
-        assert_eq!(version, 6);
+        assert_eq!(version, 7);
     }
 
     // i[verify app.persist]
