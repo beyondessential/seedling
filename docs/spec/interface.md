@@ -173,6 +173,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 >   Each fault entry is a [fault record](#i--fault.record).
 > - `params`: array of objects with fields `name` and `value`.
 >   `value` is `null` if the param has not been set.
+> - `unknown_params`: array of objects with fields `name` and `value`, listing parameters that have a stored value in the database but whose name does not appear in the app's current script evaluation. This is informational only; these values have no effect until the script is updated to reference them.
 > - `actions`: array of objects with fields `name`, `description`, and `kind`.
 >   `kind` is one of `action`, `shell`, or `install`.
 > - `install_requirements`: an object map of requirement key to `{ kind, required, description, default_value }`, as defined in the language spec for install requirements.
@@ -195,6 +196,12 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[param.unknown]
 > Setting a param whose name does not appear in the app's current script evaluation is permitted.
 > The value is stored and will take effect when the script is next evaluated.
+
+> i[param.unset]
+> `UnsetParam { app, name }` removes the stored value for the named parameter and reloads the script.
+> If the parameter has an `on_change` handler and the app is installed, it is scheduled as a lifecycle operation.
+> Returns `{ "schedule": "accepted" }` or `{ "schedule": "queued" }` on success, or an error.
+> If the parameter has no stored value, the request still succeeds.
 
 # Action Invocation
 

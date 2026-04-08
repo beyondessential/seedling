@@ -283,8 +283,6 @@ this to happen on every evaluation, including reload.
 5. If no `on_change` handler, the new value takes effect on the next script evaluation; return
    `accepted`.
 
-Note: `SetParam` is rejected with `not_installed` while the app is `NotInstalled`.
-
 ---
 
 ## Phase 4 — Action invocation

@@ -28,14 +28,6 @@ Absent specification bugs, anything that is not defined here is either defined i
 > If an exception bubbles to the top of the script, execution is considered failed and will not proceed further.
 > Responding to this is a control plane concern and not defined in this spec.
 
-> l[bsl.placeholder]
-> A placeholder value is a special value which is returned from a method or function when its real value is not yet known.
-> Placeholder values must not be used for real effects.
-> Some placeholders are special opaque instances of a type, others are predefined values.
->
-> Predefined values for non-opaque types:
-> - string placeholder: `"<placeholder>"`
-
 > l[bsl.builder]
 > Some methods and functions return "builders", which are types that have further methods which configure one instance of the type piece by piece, rather than all at once.
 >
@@ -217,9 +209,12 @@ This is currently the only value.
 >
 > Parameters are defined using the `app.param(name: string)` method, which returns a `Param`.
 
+> l[param.is-set]
+> `param.is_set()` returns `true` if the operator has stored a value for this parameter, `false` otherwise.
+
 > l[param.value]
-> The `Param` type can be used anywhere a string is expected (e.g. in string interpolation, as arguments to methods that accept strings).
-> When the value is not yet known, it behaves as the [placeholder string](#l--bsl.placeholder).
+> `param.value()` returns the parameter's current string value.
+> If no value has been stored, it throws.
 
 > l[param.on-change]
 > `param.on_change(fn: closure)` registers a handler that is called when the parameter's value changes.
