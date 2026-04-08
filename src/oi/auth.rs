@@ -123,29 +123,25 @@ pub fn list_keys(db: &Db) -> rusqlite::Result<Vec<(String, String, i64)>> {
         .collect()
 }
 
-/// Insert a key if not already present. Returns `true` if actually inserted.
+/// Insert a key, or update its label if it already exists.
 // i[key.authorize]
 pub fn authorize_key(
     db: &Db,
     trusted: &TrustedKeys,
     fp: &str,
     label: &str,
-) -> rusqlite::Result<bool> {
+) -> rusqlite::Result<()> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
-    let rows = db.conn.execute(
-        "INSERT OR IGNORE INTO authorized_keys (fingerprint, label, added_at) \
-         VALUES (?1, ?2, ?3)",
+    db.conn.execute(
+        "INSERT INTO authorized_keys (fingerprint, label, added_at) VALUES (?1, ?2, ?3) \
+         ON CONFLICT(fingerprint) DO UPDATE SET label = excluded.label",
         rusqlite::params![fp, label, now],
     )?;
-    if rows > 0 {
-        trusted.write().insert(fp.to_owned());
-        Ok(true)
-    } else {
-        Ok(false)
-    }
+    trusted.write().insert(fp.to_owned());
+    Ok(())
 }
 
 /// Remove a key. Returns `true` if it was present and removed.

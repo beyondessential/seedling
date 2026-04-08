@@ -379,9 +379,10 @@ Absent specification bugs, anything that is not defined here is either defined i
 > and `added_at` (Unix timestamp integer).
 
 > i[key.authorize]
-> `AuthorizeKey` adds a client key to the authorized set.
+> `AuthorizeKey` adds a client key to the authorized set, or updates its label if the key is
+> already authorized.
 > Params: `fingerprint` (string, required), `label` (string, required).
-> Returns `{}` on success. Idempotent: adding an already-authorized key is not an error.
+> Returns `{}` on success. The original `added_at` timestamp is preserved on label update.
 
 > i[key.revoke]
 > `RevokeKey` removes a client key from the authorized set.
