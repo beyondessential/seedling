@@ -204,11 +204,43 @@ impl Reconciler {
         let running_pods = pod_update.running;
         self.persist_obs(pod_update.observations);
 
-        // When uninstalling: if all pods are stopped, transition to NotInstalled.
-        if matches!(*self.phase.lock(), AppPhase::Uninstalling) && running_pods.is_empty() {
-            let db = self.db.lock();
-            transition_phase(&self.phase, AppPhase::NotInstalled, &db, &self.app_name, "");
-            tracing::info!(app = %self.app_name, "uninstall complete");
+        // When uninstalling: skip the remaining phases and check whether cleanup
+        // is complete. Completion requires both no running pods AND no systemd
+        // units still loaded — a unit can linger in failed/inactive state after
+        // its container exits, which would block a clean reinstall.
+        if matches!(*self.phase.lock(), AppPhase::Uninstalling) {
+            if running_pods.is_empty() {
+                let unit_prefix = format!("seedling-{}-", self.app_name);
+                match self.driver.process.list_units(&unit_prefix).await {
+                    Ok(units) if units.is_empty() => {
+                        let db = self.db.lock();
+                        transition_phase(
+                            &self.phase,
+                            AppPhase::NotInstalled,
+                            &db,
+                            &self.app_name,
+                            "",
+                        );
+                        tracing::info!(app = %self.app_name, "uninstall complete");
+                    }
+                    Ok(units) => {
+                        // Units still loaded — reset + stop each one so
+                        // CollectMode=inactive-or-failed can finish the job.
+                        warn!(
+                            app = %self.app_name,
+                            count = units.len(),
+                            "uninstall: units still loaded, retrying cleanup"
+                        );
+                        for unit in &units {
+                            let _ = self.driver.process.reset_failed_unit(&unit.name).await;
+                            let _ = self.driver.process.stop_unit(&unit.name).await;
+                        }
+                    }
+                    Err(e) => {
+                        warn!(app = %self.app_name, error = %e, "uninstall: list_units failed");
+                    }
+                }
+            }
             return;
         }
 

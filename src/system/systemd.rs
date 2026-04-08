@@ -165,6 +165,15 @@ impl SystemdManager {
                 name: "StandardError",
                 value: Value::from("journal"),
             },
+            // Garbage-collect the transient unit (and remove its file from
+            // /run/systemd/transient/) as soon as it reaches inactive or
+            // failed state with no pending restart jobs. Without this the
+            // default CollectMode=inactive leaves units stuck in
+            // failed/start-limit-hit loaded indefinitely.
+            UnitProperty {
+                name: "CollectMode",
+                value: Value::from("inactive-or-failed"),
+            },
         ];
         let aux: Vec<AuxUnit<'_>> = vec![];
 
@@ -192,11 +201,17 @@ impl SystemdManager {
         let proxy = Systemd1ManagerProxy::new(&self.conn)
             .await
             .map_err(|e| SystemdError::DBus { source: e })?;
-        proxy
-            .reset_failed_unit(name)
-            .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
-        Ok(())
+        match proxy.reset_failed_unit(name).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let msg = e.to_string().to_lowercase();
+                if msg.contains("no such unit") || msg.contains("not loaded") {
+                    Ok(())
+                } else {
+                    Err(SystemdError::DBus { source: e })
+                }
+            }
+        }
     }
 
     async fn wait_unit_stopped_impl(
