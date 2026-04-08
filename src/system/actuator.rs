@@ -329,7 +329,7 @@ impl Actuator {
             None
         };
 
-        // Skip if the unit is already active.
+        // Handle any pre-existing unit with this name.
         let unit = unit_name(instance);
         if let Some(state) = self
             .driver
@@ -337,9 +337,21 @@ impl Actuator {
             .unit_state(&unit)
             .await
             .map_err(|e| ActuateError::Process { source: e })?
-            && matches!(state.active, ActiveState::Active | ActiveState::Activating)
         {
-            return Ok(bridge_name);
+            match state.active {
+                // Already running — nothing to do.
+                ActiveState::Active | ActiveState::Activating => return Ok(bridge_name),
+                // Lingering after the previous cycle (inactive/failed but still
+                // loaded). reset_failed clears the unit so systemd will accept a
+                // fresh StartTransientUnit with the same name.
+                _ => {
+                    self.driver
+                        .process
+                        .reset_failed_unit(&unit)
+                        .await
+                        .map_err(|e| ActuateError::Process { source: e })?;
+                }
+            }
         }
 
         // Resolve service mounts and build the argv.
