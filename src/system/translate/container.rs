@@ -8,7 +8,10 @@ use ipnet::Ipv6Net;
 use crate::{
     defs::{container::VolumeMount, deployment::DeploymentDef, job::JobDef, pod::PodDef},
     runtime::identity::ResourceInstance,
-    system::types::{ContainerSpec, Mount, MountSource},
+    system::{
+        translate::proxy::pod_mount_addr,
+        types::{ContainerSpec, Mount, MountSource},
+    },
 };
 
 /// Builds a `ContainerSpec` for one instance of a `Deployment`.
@@ -193,7 +196,7 @@ fn spec_from_pod(
     let hosts = if mounts.is_empty() {
         vec![]
     } else {
-        let mount_endpoint = pod_mount_endpoint(&network.1);
+        let mount_endpoint = pod_mount_addr(&network.1);
         vec![("localmount".to_string(), IpAddr::V6(mount_endpoint))]
     };
 
@@ -209,15 +212,6 @@ fn spec_from_pod(
         health: None,
         hosts,
     }
-}
-
-/// Returns the `::2` address within a pod /64 prefix — the mount endpoint
-/// on the host bridge used for service mount DNAT6.
-fn pod_mount_endpoint(pod_prefix: &Ipv6Net) -> Ipv6Addr {
-    let mut bytes = pod_prefix.network().octets();
-    bytes[8..].fill(0);
-    bytes[15] = 2;
-    Ipv6Addr::from(bytes)
 }
 
 #[cfg(test)]
@@ -309,13 +303,14 @@ mod tests {
     }
 
     #[test]
-    fn pod_mount_endpoint_is_two() {
+    fn pod_mount_endpoint_is_one_thousand() {
         let prefix: Ipv6Net = "fd5e:ed12:3456:0500::/64".parse().unwrap();
-        let endpoint = pod_mount_endpoint(&prefix);
+        let endpoint = pod_mount_addr(&prefix);
         let octets = endpoint.octets();
         assert_eq!(&octets[..8], &prefix.network().octets()[..8]);
-        assert_eq!(&octets[8..15], &[0u8; 7]);
-        assert_eq!(octets[15], 2);
+        assert_eq!(&octets[8..14], &[0u8; 6]);
+        assert_eq!(octets[14], 0x10);
+        assert_eq!(octets[15], 0x00);
     }
 
     #[test]

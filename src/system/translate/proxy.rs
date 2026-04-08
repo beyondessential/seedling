@@ -54,6 +54,22 @@ pub fn pod_network_prefix(node_prefix: &Ipv6Net, instance: &ResourceInstance) ->
     Ipv6Net::new(Ipv6Addr::from(bytes), 64).expect("64 is a valid IPv6 prefix length")
 }
 
+/// Returns the mount endpoint address for a pod's /64 prefix: `prefix::1000`.
+///
+/// This address is assigned to the host bridge and is the DNAT6 destination
+/// that containers use to reach mounted services via the `localmount` hostname.
+///
+/// `::2` is intentionally avoided: netavark sequentially assigns that address
+/// to the first container on the network, which would produce a host-local
+/// address collision and cause route additions to fail with EINVAL.
+pub fn pod_mount_addr(pod_prefix: &Ipv6Net) -> Ipv6Addr {
+    let mut bytes = pod_prefix.network().octets();
+    bytes[8..].fill(0);
+    bytes[14] = 0x10;
+    // bytes[15] is already 0 from fill above; result is prefix::1000
+    Ipv6Addr::from(bytes)
+}
+
 /// Builds the full `ProxyConfig` from the current set of active ingresses
 /// and their resolved service upstreams.
 ///

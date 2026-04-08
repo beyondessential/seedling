@@ -11,7 +11,7 @@ use crate::{
     runtime::InstanceRegistry,
     system::{
         System,
-        translate::proxy::instance_ipv6,
+        translate::proxy::{instance_ipv6, pod_mount_addr},
         types::{DataPlaneRules, ForwardProto, IngressRule, MountRule},
     },
 };
@@ -131,13 +131,4 @@ fn build_mount_rules(
     }
 
     rules
-}
-
-/// Returns `pod_prefix::2` — the bridge-side mount endpoint address used as
-/// the DNAT6 destination match for service-mount rules.
-fn pod_mount_addr(pod_prefix: &Ipv6Net) -> Ipv6Addr {
-    let mut bytes = pod_prefix.network().octets();
-    bytes[8..].fill(0);
-    bytes[15] = 2;
-    Ipv6Addr::from(bytes)
 }

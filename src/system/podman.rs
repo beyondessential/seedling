@@ -22,6 +22,7 @@ use snafu::Snafu;
 
 use crate::system::{
     BoxError, BoxFuture, ContainerRuntime,
+    translate::proxy::pod_mount_addr,
     types::{
         ContainerFilter, ContainerHealth, ContainerState, ContainerStatus, ContainerSummary,
         ExecHandle, ExecSpec, NetworkSummary,
@@ -287,15 +288,12 @@ impl PodmanRuntime {
             })?;
         let if_index = link.header.index;
 
-        // Assign <prefix>::2/64 to the bridge. This is the mount endpoint
+        // Assign pod_mount_addr/64 to the bridge. This is the mount endpoint
         // address: pod containers resolve `localmount` to this address, and
         // the DataPlane's MountRule DNAT6 redirects that traffic to the target
         // service IP. The ::1 gateway is already assigned by netavark; Linux
         // supports multiple addresses per interface so there is no conflict.
-        let mut endpoint_bytes = net_addr.octets();
-        endpoint_bytes[8..].fill(0);
-        endpoint_bytes[15] = 2;
-        let endpoint = Ipv6Addr::from(endpoint_bytes);
+        let endpoint = pod_mount_addr(&prefix);
 
         self.route_handle
             .address()

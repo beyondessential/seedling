@@ -9,19 +9,13 @@ use rtnetlink::{Handle, packet_route::address::AddressAttribute};
 use tracing::error;
 
 use crate::{
-    defs::resource::Resource, runtime::desired::DesiredState,
-    system::translate::proxy::pod_network_prefix,
+    defs::resource::Resource,
+    runtime::desired::DesiredState,
+    system::translate::proxy::{pod_mount_addr, pod_network_prefix},
 };
 
 fn pod_network_name(instance: &crate::runtime::identity::ResourceInstance) -> String {
     format!("seedling-{}", instance.display_name)
-}
-
-fn pod_mount_addr(pod_prefix: &Ipv6Net) -> Ipv6Addr {
-    let mut bytes = pod_prefix.network().octets();
-    bytes[8..].fill(0);
-    bytes[15] = 2;
-    Ipv6Addr::from(bytes)
 }
 
 // r[autonomous.network]

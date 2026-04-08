@@ -205,7 +205,7 @@ pub struct IngressRule {
 pub struct MountRule {
     /// The mounting pod's /64 prefix.
     pub pod_prefix: Ipv6Net,
-    /// pod-prefix::2 — the mount endpoint address on the bridge.
+    /// pod-prefix::1000 — the mount endpoint address on the bridge.
     pub mount_addr: Ipv6Addr,
     /// Port declared in `.mount()`.
     pub mount_port: u16,
