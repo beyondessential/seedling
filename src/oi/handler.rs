@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     net::SocketAddr,
     path::PathBuf,
     sync::{Arc, OnceLock},
@@ -533,7 +533,7 @@ fn update_app(state: &OiState, params: Value) -> HandlerResult {
         state
             .registry
             .write()
-            .reload(name, script.to_owned())
+            .reload(name, script.to_owned(), &BTreeMap::new())
             .map_err(|e| OiError::script_error(e.to_string()))?;
         // Wake reconciler to pick up new desired state.
         if let Some(entry) = state.registry.read().get(name) {

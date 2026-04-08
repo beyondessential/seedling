@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -73,7 +76,7 @@ impl AppRegistry {
 
     // i[app.register]
     pub fn register(&mut self, name: String, script: String) -> Result<(), ScriptError> {
-        let app = evaluate_script(&name, &script)?;
+        let app = evaluate_script(&name, &script, &BTreeMap::new())?;
         self.entries.insert(
             name.clone(),
             AppEntry {
@@ -94,8 +97,13 @@ impl AppRegistry {
         self.entries.remove(name).is_some()
     }
 
-    pub fn reload(&mut self, name: &str, script: String) -> Result<(), ScriptError> {
-        let app = evaluate_script(name, &script)?;
+    pub fn reload(
+        &mut self,
+        name: &str,
+        script: String,
+        params: &BTreeMap<String, String>,
+    ) -> Result<(), ScriptError> {
+        let app = evaluate_script(name, &script, params)?;
         if let Some(entry) = self.entries.get_mut(name) {
             entry.script = script;
             entry.app = app;
@@ -143,7 +151,14 @@ impl AppRegistry {
             .collect::<rusqlite::Result<_>>()?;
 
         for (name, script, installed) in rows {
-            let app = match evaluate_script(&name, &script) {
+            let params = match load_params_for_app(db, &name) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!("failed to load params for app '{name}': {e}");
+                    BTreeMap::new()
+                }
+            };
+            let app = match evaluate_script(&name, &script, &params) {
                 Ok(a) => a,
                 Err(e) => {
                     tracing::warn!("failed to reload script for app '{name}': {e}");
@@ -200,11 +215,50 @@ fn derive_status(entry: &AppEntry) -> AppStatus {
     }
 }
 
-fn evaluate_script(name: &str, script: &str) -> Result<App, ScriptError> {
+fn evaluate_script(
+    name: &str,
+    script: &str,
+    params: &BTreeMap<String, String>,
+) -> Result<App, ScriptError> {
     let (engine, mut scope, app) = setup_language();
+    app.def.lock().params = params.clone();
     engine
         .run_with_scope(&mut scope, script)
         .map_err(|e| ScriptError(e.to_string()))?;
     app.def.lock().name = name.to_owned();
     Ok(app)
+}
+
+// i[param.store]
+pub fn load_params_for_app(db: &Db, app_name: &str) -> rusqlite::Result<BTreeMap<String, String>> {
+    let mut stmt = db
+        .conn
+        .prepare("SELECT param_name, value FROM params WHERE app_name = ?1 ORDER BY param_name")?;
+    let rows: Vec<(String, String)> = stmt
+        .query_map([app_name], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows.into_iter().collect())
+}
+
+// i[param.store]
+// i[param.set]
+pub fn upsert_param(
+    db: &Db,
+    app_name: &str,
+    param_name: &str,
+    value: &str,
+) -> rusqlite::Result<()> {
+    db.conn.execute(
+        "INSERT OR REPLACE INTO params (app_name, param_name, value) VALUES (?1, ?2, ?3)",
+        rusqlite::params![app_name, param_name, value],
+    )?;
+    Ok(())
+}
+
+pub fn delete_app_params(db: &Db, app_name: &str) -> rusqlite::Result<()> {
+    db.conn
+        .execute("DELETE FROM params WHERE app_name = ?1", [app_name])?;
+    Ok(())
 }

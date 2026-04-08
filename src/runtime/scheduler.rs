@@ -29,8 +29,10 @@ pub struct QueuedOperation {
 // r[impl operation.lifecycle.single]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScheduleResult {
-    /// The operation was accepted: either started immediately or queued.
+    /// Operation started immediately (no prior active op).
     Accepted,
+    /// Operation added to the queue (another app was active).
+    Queued,
     /// The request was rejected.
     Rejected(RejectReason),
 }
@@ -133,7 +135,7 @@ impl Scheduler {
                     action: action.to_owned(),
                     operation_id: OperationId::new(),
                 });
-                ScheduleResult::Accepted
+                ScheduleResult::Queued
             }
         }
     }
@@ -325,7 +327,7 @@ mod tests {
     fn different_app_request_is_queued() {
         let mut s = Scheduler::new();
         s.request("app1", "start");
-        assert_eq!(s.request("app2", "start"), ScheduleResult::Accepted);
+        assert_eq!(s.request("app2", "start"), ScheduleResult::Queued);
         // app2 is queued, not yet active.
         assert_eq!(s.active().unwrap().app, "app1");
         assert_eq!(s.queue.len(), 1);
@@ -349,8 +351,8 @@ mod tests {
     fn two_different_apps_can_both_queue() {
         let mut s = Scheduler::new();
         s.request("app1", "start");
-        assert_eq!(s.request("app2", "start"), ScheduleResult::Accepted);
-        assert_eq!(s.request("app3", "start"), ScheduleResult::Accepted);
+        assert_eq!(s.request("app2", "start"), ScheduleResult::Queued);
+        assert_eq!(s.request("app3", "start"), ScheduleResult::Queued);
         assert_eq!(s.queue.len(), 2);
     }
 

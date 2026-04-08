@@ -167,6 +167,20 @@ impl Db {
                 .execute_batch("INSERT INTO schema_version VALUES (5);")?;
         }
 
+        if version < 6 {
+            // i[param.store]
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS params (
+                    app_name   TEXT NOT NULL,
+                    param_name TEXT NOT NULL,
+                    value      TEXT NOT NULL,
+                    PRIMARY KEY (app_name, param_name)
+                );",
+            )?;
+            self.conn
+                .execute_batch("INSERT INTO schema_version VALUES (6);")?;
+        }
+
         Ok(())
     }
 }
@@ -188,7 +202,7 @@ mod tests {
                 |r| r.get(0),
             )
             .expect("schema_version should exist");
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
     }
 
     // r[verify history.persistence]
@@ -197,6 +211,30 @@ mod tests {
         let db = Db::open_in_memory().expect("open");
         // Running migrate again should not error
         db.migrate().expect("second migration should not error");
+    }
+
+    // i[verify param.store]
+    #[test]
+    fn params_table_exists() {
+        let db = Db::open_in_memory().expect("open");
+        let count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='params'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("query should succeed");
+        assert_eq!(count, 1, "params table should exist after migration");
+        let version: i64 = db
+            .conn
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+                [],
+                |r| r.get(0),
+            )
+            .expect("schema_version should exist");
+        assert_eq!(version, 6);
     }
 
     // i[verify app.persist]
