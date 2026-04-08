@@ -137,6 +137,10 @@ impl ServerCertVerifier for FingerprintVerifier {
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
         ring_schemes()
     }
+
+    fn requires_raw_public_keys(&self) -> bool {
+        true
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -178,6 +182,10 @@ impl ServerCertVerifier for TrustAnyVerifier {
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
         ring_schemes()
+    }
+
+    fn requires_raw_public_keys(&self) -> bool {
+        true
     }
 }
 
