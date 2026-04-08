@@ -617,12 +617,6 @@ fn set_param(state: &OiState, params: Value) -> HandlerResult {
                 format!("app is deregistering: {app}"),
             ));
         }
-        Some(AppStatus::NotInstalled) => {
-            return Err(OiError::new(
-                ErrorCode::NotInstalled,
-                format!("app is not installed: {app}"),
-            ));
-        }
         _ => {}
     }
 
@@ -647,15 +641,19 @@ fn set_param(state: &OiState, params: Value) -> HandlerResult {
         .reload(app, script, &loaded_params)
         .map_err(|e| OiError::script_error(e.to_string()))?;
 
-    let (has_on_change, tick_notify) = {
+    let (has_on_change, is_installed, tick_notify) = {
         let reg = state.registry.read();
         let entry = reg.get(app).expect("confirmed registered");
         let has = entry.app.def.lock().param_changes.contains(param_name);
+        let installed = entry.installed;
         let notify = Arc::clone(&entry.tick_notify);
-        (has, notify)
+        (has, installed, notify)
     };
 
-    if has_on_change {
+    // Only schedule the on_change handler when the app is installed — there is
+    // nothing running to respond to the change before that. The stored value
+    // takes effect automatically when the app is next evaluated (e.g. at install).
+    if has_on_change && is_installed {
         let result = state.scheduler.lock().request(app, param_name);
         match result {
             ScheduleResult::Accepted => {
