@@ -5,7 +5,7 @@ use rustls::{
     ClientConfig as TlsClientConfig, DigitallySignedStruct, SignatureScheme,
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
 };
-use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls_pki_types::{CertificateDer, ServerName, SubjectPublicKeyInfoDer, UnixTime};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -69,14 +69,18 @@ fn ring_verify_tls12(
     )
 }
 
-fn ring_verify_tls13(
+fn ring_verify_tls13_rpk(
     message: &[u8],
     cert: &CertificateDer<'_>,
     dss: &DigitallySignedStruct,
 ) -> Result<HandshakeSignatureValid, rustls::Error> {
-    rustls::crypto::verify_tls13_signature(
+    // In RPK mode cert contains the raw SPKI bytes, not an X.509 certificate.
+    // verify_tls13_signature_with_raw_key extracts the public key from the SPKI
+    // directly; the standard verify_tls13_signature would fail with BadEncoding
+    // trying to parse the SPKI as X.509 via webpki.
+    rustls::crypto::verify_tls13_signature_with_raw_key(
         message,
-        cert,
+        &SubjectPublicKeyInfoDer::from(cert.as_ref()),
         dss,
         &rustls::crypto::ring::default_provider().signature_verification_algorithms,
     )
@@ -131,7 +135,7 @@ impl ServerCertVerifier for FingerprintVerifier {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        ring_verify_tls13(message, cert, dss)
+        ring_verify_tls13_rpk(message, cert, dss)
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
@@ -177,7 +181,7 @@ impl ServerCertVerifier for TrustAnyVerifier {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        ring_verify_tls13(message, cert, dss)
+        ring_verify_tls13_rpk(message, cert, dss)
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
