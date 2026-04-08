@@ -2,6 +2,7 @@
 // All items here are production infrastructure, not dead code.
 #![allow(dead_code, unused_imports)]
 
+pub mod apps;
 pub mod barrier;
 pub mod db;
 pub mod desired;
@@ -11,6 +12,7 @@ pub mod lifecycle;
 pub mod registry;
 pub mod scheduler;
 
+pub use apps::{AppEntry, AppRegistry, AppStatus, ScriptError};
 pub use barrier::oracle::{DbWorldOracle, TestWorldOracle, WorldStateOracle};
 pub use barrier::replay::{
     ActionLog, DbActionLog, InMemoryActionLog, OperationResult, run_operation,

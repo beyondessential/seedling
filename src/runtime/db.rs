@@ -141,6 +141,19 @@ impl Db {
                 .execute_batch("INSERT INTO schema_version VALUES (3);")?;
         }
 
+        if version < 4 {
+            // i[app.persist]
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS registered_apps (
+                    name      TEXT    PRIMARY KEY,
+                    script    TEXT    NOT NULL,
+                    installed INTEGER NOT NULL DEFAULT 0
+                );",
+            )?;
+            self.conn
+                .execute_batch("INSERT INTO schema_version VALUES (4);")?;
+        }
+
         Ok(())
     }
 }
@@ -162,7 +175,7 @@ mod tests {
                 |r| r.get(0),
             )
             .expect("schema_version should exist");
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
     }
 
     // r[verify history.persistence]
@@ -171,6 +184,24 @@ mod tests {
         let db = Db::open_in_memory().expect("open");
         // Running migrate again should not error
         db.migrate().expect("second migration should not error");
+    }
+
+    // i[verify app.persist]
+    #[test]
+    fn registered_apps_table_exists() {
+        let db = Db::open_in_memory().expect("open");
+        let count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='registered_apps'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("query should succeed");
+        assert_eq!(
+            count, 1,
+            "registered_apps table should exist after migration"
+        );
     }
 
     // r[verify history.world.entries]

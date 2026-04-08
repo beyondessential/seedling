@@ -115,6 +115,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 > On success, the app is added to the managed set in the `NotInstalled` state and an `AppRegistered` event is emitted.
 > On script failure, `script_error` is returned and the app is not registered.
 
+> i[app.persist]
+> Registered apps and their BSL scripts are stored durably and reloaded automatically on restart.
+
 > i[app.deregister]
 > `DeregisterApp { name }` initiates graceful teardown of all of the app's resources and removes the app from the managed set.
 > If a lifecycle operation is in progress for the app, the request is rejected with `operation_in_progress`.
