@@ -210,6 +210,12 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     let (closure, is_param_change) = {
         let (mut fresh_scope, fresh_app) = crate::defs::scope();
         fresh_app.def.lock().name = app_name;
+        // i[param.store] — restore persisted param values so on_change closures
+        // capture the correct values when the script is re-evaluated.
+        {
+            let stored_params = app.def.lock().params.clone();
+            fresh_app.def.lock().params = stored_params;
+        }
         begin_closure_capture();
         let run_result = engine.run_ast_with_scope(&mut fresh_scope, script_ast);
         let captured = end_closure_capture(); // always drain, even on error

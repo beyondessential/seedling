@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::HashMap,
     net::SocketAddr,
     path::PathBuf,
     sync::{Arc, OnceLock},
@@ -18,6 +18,7 @@ use crate::{
     runtime::{
         apps::{AppRegistry, AppStatus},
         desired::OperationProgress,
+        scheduler::{RejectReason, ScheduleResult},
     },
 };
 
@@ -157,6 +158,8 @@ fn parse_and_dispatch(state: &OiState, buf: &[u8]) -> HandlerResult {
         "RegisterApp" => register_app(state, req.params),
         "DeregisterApp" => deregister_app(state, req.params),
         "UpdateApp" => update_app(state, req.params),
+        // i[param.set]
+        "SetParam" => set_param(state, req.params),
         // i[key.list]
         "ListKeys" => list_keys(state),
         // i[key.authorize]
@@ -490,6 +493,11 @@ fn deregister_app(state: &OiState, params: Value) -> HandlerResult {
         AppRegistry::remove_app(&*db, name)
             .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db remove: {e}")))?;
     }
+    {
+        let db = state.db.lock();
+        crate::runtime::apps::delete_app_params(&db, name)
+            .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db param cleanup: {e}")))?;
+    }
 
     // Remove from in-memory registry.
     state.registry.write().deregister(name);
@@ -530,10 +538,15 @@ fn update_app(state: &OiState, params: Value) -> HandlerResult {
         }
     } else {
         // No operation: reload script and apply to in-memory AppDef immediately.
+        let loaded_params = {
+            let db = state.db.lock();
+            crate::runtime::apps::load_params_for_app(&db, name)
+                .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db params: {e}")))?
+        };
         state
             .registry
             .write()
-            .reload(name, script.to_owned(), &BTreeMap::new())
+            .reload(name, script.to_owned(), &loaded_params)
             .map_err(|e| OiError::script_error(e.to_string()))?;
         // Wake reconciler to pick up new desired state.
         if let Some(entry) = state.registry.read().get(name) {
@@ -552,4 +565,110 @@ fn update_app(state: &OiState, params: Value) -> HandlerResult {
 
     tracing::info!(app = %name, "updated app");
     Ok(json!({}))
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3 handlers
+// ---------------------------------------------------------------------------
+
+// i[param.store]
+// i[param.set]
+// i[param.unknown]
+fn set_param(state: &OiState, params: Value) -> HandlerResult {
+    let app = params
+        .get("app")
+        .and_then(Value::as_str)
+        .ok_or_else(|| OiError::new(ErrorCode::RequirementsInvalid, "missing param: app"))?;
+    let param_name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| OiError::new(ErrorCode::RequirementsInvalid, "missing param: name"))?;
+    let value = params
+        .get("value")
+        .and_then(Value::as_str)
+        .ok_or_else(|| OiError::new(ErrorCode::RequirementsInvalid, "missing param: value"))?;
+
+    {
+        let reg = state.registry.read();
+        if !reg.is_registered(app) {
+            return Err(OiError::not_found(format!("app not found: {app}")));
+        }
+    }
+
+    match state.registry.read().status_of(app) {
+        Some(AppStatus::Deregistering) => {
+            return Err(OiError::new(
+                ErrorCode::Deregistering,
+                format!("app is deregistering: {app}"),
+            ));
+        }
+        Some(AppStatus::NotInstalled) => {
+            return Err(OiError::new(
+                ErrorCode::NotInstalled,
+                format!("app is not installed: {app}"),
+            ));
+        }
+        _ => {}
+    }
+
+    {
+        let db = state.db.lock();
+        crate::runtime::apps::upsert_param(&db, app, param_name, value)
+            .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
+    }
+
+    let script = {
+        let reg = state.registry.read();
+        reg.get(app).expect("confirmed registered").script.clone()
+    };
+    let loaded_params = {
+        let db = state.db.lock();
+        crate::runtime::apps::load_params_for_app(&db, app)
+            .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?
+    };
+    state
+        .registry
+        .write()
+        .reload(app, script, &loaded_params)
+        .map_err(|e| OiError::script_error(e.to_string()))?;
+
+    let (has_on_change, tick_notify) = {
+        let reg = state.registry.read();
+        let entry = reg.get(app).expect("confirmed registered");
+        let has = entry.app.def.lock().param_changes.contains(param_name);
+        let notify = Arc::clone(&entry.tick_notify);
+        (has, notify)
+    };
+
+    if has_on_change {
+        let result = state.scheduler.lock().request(app, param_name);
+        match result {
+            ScheduleResult::Accepted => {
+                tracing::info!(app = %app, param = %param_name, schedule = "accepted", "set_param");
+                tick_notify.notify_one();
+                Ok(json!({ "schedule": "accepted" }))
+            }
+            ScheduleResult::Queued => {
+                tracing::info!(app = %app, param = %param_name, schedule = "queued", "set_param");
+                tick_notify.notify_one();
+                Ok(json!({ "schedule": "queued" }))
+            }
+            ScheduleResult::Rejected(RejectReason::SameAppOperationInProgress) => {
+                tracing::info!(app = %app, param = %param_name, schedule = "rejected_in_progress", "set_param");
+                Err(OiError::new(
+                    ErrorCode::OperationInProgress,
+                    format!("operation in progress for app: {app}"),
+                ))
+            }
+            ScheduleResult::Rejected(RejectReason::SameAppAlreadyQueued) => {
+                tracing::info!(app = %app, param = %param_name, schedule = "rejected_queued", "set_param");
+                Err(OiError::new(
+                    ErrorCode::AlreadyQueued,
+                    format!("already queued for app: {app}"),
+                ))
+            }
+        }
+    } else {
+        Ok(json!({ "schedule": "accepted" }))
+    }
 }
