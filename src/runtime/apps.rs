@@ -229,7 +229,10 @@ fn evaluate_script(
     params: &BTreeMap<String, String>,
 ) -> Result<App, ScriptError> {
     let (engine, mut scope, app) = setup_language();
-    app.def.lock().params = params.clone();
+    // i[param.store] — pre-populate stored values so is_set()/value() work
+    // during script evaluation. AppDef.params (the BSL-declared set) is
+    // populated by the script itself via app.param() calls.
+    *app.stored.lock() = params.clone();
     engine
         .run_with_scope(&mut scope, script)
         .map_err(|e| ScriptError(e.to_string()))?;
@@ -316,32 +319,40 @@ mod tests {
 
     // i[verify param.store]
     #[test]
-    fn evaluate_script_injects_params_into_app_def() {
+    fn evaluate_script_injects_params_into_stored() {
         let mut params = BTreeMap::new();
         params.insert("hostname".to_owned(), "prod.example.com".to_owned());
 
         let app = evaluate_script("test-app", r#"let h = app.param("hostname");"#, &params)
             .expect("script should evaluate");
 
-        let def = app.def.lock();
+        // The declared-param set tracks the name.
+        assert!(
+            app.def.lock().params.contains("hostname"),
+            "hostname should be in declared params"
+        );
+        // The stored map holds the value.
         assert_eq!(
-            def.params.get("hostname").map(String::as_str),
+            app.stored.lock().get("hostname").map(String::as_str),
             Some("prod.example.com"),
-            "stored param value should override the placeholder"
+            "stored param value should be accessible via app.stored"
         );
     }
 
     // i[verify param.store]
     #[test]
-    fn evaluate_script_absent_param_gets_placeholder() {
+    fn evaluate_script_absent_param_has_no_stored_value() {
         let params = BTreeMap::new();
         let app = evaluate_script("test-app", r#"let h = app.param("hostname");"#, &params)
             .expect("script should evaluate");
 
-        let def = app.def.lock();
-        assert_eq!(
-            def.params.get("hostname").map(String::as_str),
-            Some("<placeholder>"),
+        assert!(
+            app.def.lock().params.contains("hostname"),
+            "hostname should be recorded as declared"
+        );
+        assert!(
+            app.stored.lock().get("hostname").is_none(),
+            "absent param should have no stored value"
         );
     }
 
@@ -363,12 +374,15 @@ mod tests {
 
         let registry = AppRegistry::load_from_db(&db).expect("load registry");
         let entry = registry.get("myapp").expect("app should be registered");
-        let def = entry.app.def.lock();
 
+        assert!(
+            entry.app.def.lock().params.contains("hostname"),
+            "hostname should be in declared params after load"
+        );
         assert_eq!(
-            def.params.get("hostname").map(String::as_str),
+            entry.app.stored.lock().get("hostname").map(String::as_str),
             Some("restored.example.com"),
-            "param value should be restored from DB on startup"
+            "param value should be restored into app.stored on startup"
         );
     }
 }
@@ -404,5 +418,14 @@ pub fn upsert_param(
 pub fn delete_app_params(db: &Db, app_name: &str) -> rusqlite::Result<()> {
     db.conn
         .execute("DELETE FROM params WHERE app_name = ?1", [app_name])?;
+    Ok(())
+}
+
+// i[param.unset]
+pub fn delete_one_param(db: &Db, app_name: &str, param_name: &str) -> rusqlite::Result<()> {
+    db.conn.execute(
+        "DELETE FROM params WHERE app_name = ?1 AND param_name = ?2",
+        rusqlite::params![app_name, param_name],
+    )?;
     Ok(())
 }

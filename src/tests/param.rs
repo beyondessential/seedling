@@ -31,14 +31,18 @@ fn param_value_used_in_string_interpolation() {
     let _ = dep;
 }
 
-// l[verify param.value]
+// l[verify param.is-set]
 #[test]
-fn param_to_string_returns_value() {
+fn unset_param_is_not_set() {
     let app = run_test_script_app(r#"let _host = app.param("host");"#);
     let def = app.def.lock();
-    assert_eq!(
-        def.params.get("host").map(String::as_str),
-        Some("<placeholder>")
+    assert!(
+        def.params.contains("host"),
+        "host should be in declared params"
+    );
+    assert!(
+        app.stored.lock().get("host").is_none(),
+        "host should have no stored value"
     );
 }
 
@@ -111,30 +115,74 @@ fn on_change_twice_on_same_param_throws() {
 }
 
 // -----------------------------------------------------------------------
-// param.store — pre-injected value overrides placeholder
+// param.store — stored value accessible via is_set() / value()
 // -----------------------------------------------------------------------
 
 // i[verify param.store]
 #[test]
-fn pre_injected_param_value_overrides_placeholder() {
+fn stored_param_is_set_returns_true() {
     use std::collections::BTreeMap;
 
-    // Simulate what AppRegistry does: pre-populate app.def.params before
-    // running the script so stored values win over the placeholder.
     let (engine, mut scope, app) = crate::setup_language();
     {
-        let mut params = BTreeMap::new();
-        params.insert("hostname".to_owned(), "injected.example.com".to_owned());
-        app.def.lock().params = params;
+        let mut stored = BTreeMap::new();
+        stored.insert("hostname".to_owned(), "injected.example.com".to_owned());
+        *app.stored.lock() = stored;
     }
-    crate::tests::run_script(&engine, &mut scope, r#"let h = app.param("hostname");"#)
-        .expect("script should evaluate");
+    crate::tests::run_script(
+        &engine,
+        &mut scope,
+        r#"
+        let h = app.param("hostname");
+        if !h.is_set() { throw "expected is_set() == true"; }
+        if h.value() != "injected.example.com" { throw `wrong value: ${h.value()}`; }
+        "#,
+    )
+    .expect("script should evaluate without error");
 
     let def = app.def.lock();
-    assert_eq!(
-        def.params.get("hostname").map(String::as_str),
-        Some("injected.example.com"),
-        "pre-injected param value should replace the <placeholder>"
+    assert!(
+        def.params.contains("hostname"),
+        "hostname should be recorded as declared"
+    );
+}
+
+// i[verify param.store]
+#[test]
+fn unset_param_is_set_returns_false() {
+    let (engine, mut scope, app) = crate::setup_language();
+    // No stored values pre-populated.
+    crate::tests::run_script(
+        &engine,
+        &mut scope,
+        r#"
+        let h = app.param("hostname");
+        if h.is_set() { throw "expected is_set() == false"; }
+        "#,
+    )
+    .expect("script should evaluate without error");
+
+    let def = app.def.lock();
+    assert!(
+        def.params.contains("hostname"),
+        "hostname should be recorded as declared even when unset"
+    );
+}
+
+// i[verify param.store]
+// i[verify param.value]
+#[test]
+fn value_throws_when_param_not_set() {
+    let err = crate::tests::run_test_script_err(
+        r#"
+        let h = app.param("hostname");
+        h.value()
+        "#,
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("hostname") && msg.contains("not set"),
+        "error should mention the param name and 'not set', got: {msg}"
     );
 }
 
@@ -143,32 +191,33 @@ fn pre_injected_param_value_overrides_placeholder() {
 fn param_used_in_closure_captures_injected_value() {
     use std::collections::BTreeMap;
 
-    let mut params = BTreeMap::new();
-    params.insert("version".to_owned(), "2.0".to_owned());
+    let mut stored = BTreeMap::new();
+    stored.insert("version".to_owned(), "2.0".to_owned());
 
     let (engine, mut scope, app) = crate::setup_language();
-    {
-        app.def.lock().params = params;
-    }
+    *app.stored.lock() = stored;
+
     let ast = crate::tests::run_script(
         &engine,
         &mut scope,
         r#"
         let ver = app.param("version");
         app.on_start(|rt| {
-            rt.start(app.deployment("web").image(`myapp:${ver}`));
+            rt.start(app.deployment("web").image(`myapp:${ver.value()}`));
         });
         "#,
     )
     .expect("script should evaluate");
 
-    let def = app.def.lock();
-    assert_eq!(
-        def.params.get("version").map(String::as_str),
-        Some("2.0"),
-        "injected version should be captured, not placeholder"
+    assert!(
+        app.def.lock().params.contains("version"),
+        "version should be recorded as declared"
     );
-    drop(def);
+    assert_eq!(
+        app.stored.lock().get("version").map(String::as_str),
+        Some("2.0"),
+        "injected version should be in App.stored"
+    );
 
     // Verify the action can be invoked with the injected value in scope.
     let oracle = Arc::new(crate::runtime::TestWorldOracle::new());

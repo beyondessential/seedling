@@ -160,6 +160,8 @@ fn parse_and_dispatch(state: &OiState, buf: &[u8]) -> HandlerResult {
         "UpdateApp" => update_app(state, req.params),
         // i[param.set]
         "SetParam" => set_param(state, req.params),
+        // i[param.unset]
+        "UnsetParam" => unset_param(state, req.params),
         // i[key.list]
         "ListKeys" => list_keys(state),
         // i[key.authorize]
@@ -340,7 +342,7 @@ fn describe_app(state: &OiState, params: Value) -> HandlerResult {
     // i[app.describe]
     let params_json: Vec<Value> = def
         .params
-        .keys()
+        .iter()
         .map(|k| {
             let value = stored_params
                 .get(k)
@@ -348,6 +350,14 @@ fn describe_app(state: &OiState, params: Value) -> HandlerResult {
                 .unwrap_or(Value::Null);
             json!({ "name": k, "value": value })
         })
+        .collect();
+
+    // i[app.describe] — params stored in the DB that the current script does
+    // not reference; shown for operator awareness only.
+    let unknown_params_json: Vec<Value> = stored_params
+        .iter()
+        .filter(|(k, _)| !def.params.contains(*k))
+        .map(|(k, v)| json!({ "name": k, "value": v }))
         .collect();
 
     // actions (kind: "action")
@@ -407,6 +417,7 @@ fn describe_app(state: &OiState, params: Value) -> HandlerResult {
         "status": status.name(),
         "resources": resources_json,
         "params": params_json,
+        "unknown_params": unknown_params_json,
         "actions": actions_json,
         "install_requirements": install_requirements,
     });
@@ -610,14 +621,11 @@ fn set_param(state: &OiState, params: Value) -> HandlerResult {
         }
     }
 
-    match state.registry.read().status_of(app) {
-        Some(AppStatus::Deregistering) => {
-            return Err(OiError::new(
-                ErrorCode::Deregistering,
-                format!("app is deregistering: {app}"),
-            ));
-        }
-        _ => {}
+    if let Some(AppStatus::Deregistering) = state.registry.read().status_of(app) {
+        return Err(OiError::new(
+            ErrorCode::Deregistering,
+            format!("app is deregistering: {app}"),
+        ));
     }
 
     {
@@ -682,6 +690,91 @@ fn set_param(state: &OiState, params: Value) -> HandlerResult {
             }
         }
     } else {
+        Ok(json!({ "schedule": "accepted" }))
+    }
+}
+
+// i[param.unset]
+fn unset_param(state: &OiState, params: Value) -> HandlerResult {
+    let app = params
+        .get("app")
+        .and_then(Value::as_str)
+        .ok_or_else(|| OiError::new(ErrorCode::RequirementsInvalid, "missing param: app"))?;
+    let param_name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| OiError::new(ErrorCode::RequirementsInvalid, "missing param: name"))?;
+
+    {
+        let reg = state.registry.read();
+        if !reg.is_registered(app) {
+            return Err(OiError::not_found(format!("app not found: {app}")));
+        }
+    }
+
+    if let Some(AppStatus::Deregistering) = state.registry.read().status_of(app) {
+        return Err(OiError::new(
+            ErrorCode::Deregistering,
+            format!("app is deregistering: {app}"),
+        ));
+    }
+
+    {
+        let db = state.db.lock();
+        crate::runtime::apps::delete_one_param(&db, app, param_name)
+            .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
+    }
+
+    let script = {
+        let reg = state.registry.read();
+        reg.get(app).expect("confirmed registered").script.clone()
+    };
+    let loaded_params = {
+        let db = state.db.lock();
+        crate::runtime::apps::load_params_for_app(&db, app)
+            .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?
+    };
+    state
+        .registry
+        .write()
+        .reload(app, script, &loaded_params)
+        .map_err(|e| OiError::script_error(e.to_string()))?;
+
+    let (has_on_change, is_installed, tick_notify) = {
+        let reg = state.registry.read();
+        let entry = reg.get(app).expect("confirmed registered");
+        let has = entry.app.def.lock().param_changes.contains(param_name);
+        let installed = entry.installed;
+        let notify = Arc::clone(&entry.tick_notify);
+        (has, installed, notify)
+    };
+
+    if has_on_change && is_installed {
+        let result = state.scheduler.lock().request(app, param_name);
+        match result {
+            ScheduleResult::Accepted => {
+                tracing::info!(app = %app, param = %param_name, schedule = "accepted", "unset_param");
+                tick_notify.notify_one();
+                Ok(json!({ "schedule": "accepted" }))
+            }
+            ScheduleResult::Queued => {
+                tracing::info!(app = %app, param = %param_name, schedule = "queued", "unset_param");
+                tick_notify.notify_one();
+                Ok(json!({ "schedule": "queued" }))
+            }
+            ScheduleResult::Rejected(RejectReason::SameAppOperationInProgress) => {
+                Err(OiError::new(
+                    ErrorCode::OperationInProgress,
+                    format!("operation in progress for app: {app}"),
+                ))
+            }
+            ScheduleResult::Rejected(RejectReason::SameAppAlreadyQueued) => Err(OiError::new(
+                ErrorCode::AlreadyQueued,
+                format!("already queued for app: {app}"),
+            )),
+        }
+    } else {
+        tracing::info!(app = %app, param = %param_name, "unset_param");
         Ok(json!({ "schedule": "accepted" }))
     }
 }

@@ -137,6 +137,8 @@ enum Command {
         name: String,
         value: String,
     },
+    /// Unset a param value
+    UnsetParam { app: String, name: String },
     /// Invoke a lifecycle action
     InvokeAction { app: String, name: String },
     /// Invoke the install action
@@ -417,6 +419,16 @@ async fn dispatch(client: &OiClient, cmd: Command) {
                     .request(
                         "SetParam",
                         serde_json::json!({ "app": app, "name": name, "value": value }),
+                    )
+                    .await,
+            );
+        }
+        Command::UnsetParam { app, name } => {
+            print_result(
+                client
+                    .request(
+                        "UnsetParam",
+                        serde_json::json!({ "app": app, "name": name }),
                     )
                     .await,
             );

@@ -107,9 +107,8 @@ fn same_name_returns_same_resource() {
 
 // l[verify param.type]
 #[test]
-fn param_returns_placeholder() {
+fn param_declared_in_script_appears_in_params() {
     let app = run_test_script_app(r#"let x = app.param("foo");"#);
     let def = app.def.lock();
-    assert!(def.params.contains_key("foo"));
-    assert_eq!(def.params["foo"], "<placeholder>");
+    assert!(def.params.contains("foo"));
 }

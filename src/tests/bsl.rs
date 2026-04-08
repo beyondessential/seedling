@@ -157,11 +157,3 @@ fn builder_methods_chain() {
     "#,
     );
 }
-
-// l[verify bsl.placeholder]
-#[test]
-fn placeholder_string_value() {
-    let app = run_test_script_app(r#"let x = app.param("foo");"#);
-    let def = app.def.lock();
-    assert_eq!(def.params["foo"], "<placeholder>");
-}
