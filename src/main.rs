@@ -213,6 +213,7 @@ async fn main() {
         db: Arc::clone(&db),
         scheduler: Arc::clone(&scheduler),
         reconciler_factory: Arc::clone(&reconciler_factory),
+        trusted_keys: seedling::oi::auth::new_trusted_keys(),
     });
 
     oi::run(Arc::clone(&oi_state), oi::DEFAULT_PORT, &data_dir)

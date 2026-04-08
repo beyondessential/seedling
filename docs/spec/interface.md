@@ -20,6 +20,19 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Remote operation mode — binding to a non-loopback address, with client authentication and PKI — is reserved for a future extension of this spec.
 > Authentication and certificate verification requirements for remote mode are not defined here yet.
 
+> i[transport.client-auth]
+> Every client connection must present a raw public key (RFC 7250 SPKI) as its mTLS certificate.
+> The server maintains a set of authorized client SPKI fingerprints in persistent storage.
+> A connection whose client certificate fingerprint is not in the authorized set is rejected at the TLS layer.
+>
+> On startup the server reads `$data_dir/authorized_keys` and imports any entries not already in
+> persistent storage. Each non-comment line in that file has the form:
+> ```
+> <sha256-hex-fingerprint> <label>
+> ```
+> This file is the initial bootstrap mechanism: an operator with write access to the data directory
+> can authorize a client key without requiring a prior authenticated connection.
+
 # Streams
 
 > i[stream.control]
@@ -90,6 +103,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > | `requirements_invalid` | Install requirements failed validation; per-field errors are included in `message`. |
 > | `script_error` | The BSL script failed to parse or evaluate; detail is included in `message`. |
 > | `deregistering` | The app is in the `Deregistering` state. |
+> | `unauthorized` | The client's key is not in the authorized set, or the operation is not permitted. |
 
 # Status
 
@@ -356,3 +370,20 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[event.ordering]
 > Events on a single connection's event stream are emitted in the order they occur.
 > No ordering guarantee is made across separate connections.
+
+# Key Management
+
+> i[key.list]
+> `ListKeys` returns the list of authorized client keys.
+> Response `result` is an array of objects, each with `fingerprint` (string), `label` (string),
+> and `added_at` (Unix timestamp integer).
+
+> i[key.authorize]
+> `AuthorizeKey` adds a client key to the authorized set.
+> Params: `fingerprint` (string, required), `label` (string, required).
+> Returns `{}` on success. Idempotent: adding an already-authorized key is not an error.
+
+> i[key.revoke]
+> `RevokeKey` removes a client key from the authorized set.
+> Params: `fingerprint` (string, required).
+> Returns `{}` on success. Returns `not_found` if the fingerprint is not known.

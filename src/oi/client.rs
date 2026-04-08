@@ -1,5 +1,7 @@
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
+use super::keys::ClientIdentity;
+
 use quinn::{ClientConfig, Connection, Endpoint};
 use rustls::{
     ClientConfig as TlsClientConfig, DigitallySignedStruct, SignatureScheme,
@@ -251,7 +253,11 @@ pub struct OiClient {
 }
 
 impl OiClient {
-    pub async fn connect(addr: SocketAddr, auth: ClientAuth) -> Result<Self, ClientError> {
+    pub async fn connect(
+        addr: SocketAddr,
+        auth: ClientAuth,
+        identity: &ClientIdentity,
+    ) -> Result<Self, ClientError> {
         let verifier: Arc<dyn ServerCertVerifier> = match auth {
             ClientAuth::Fingerprint(fp) => Arc::new(FingerprintVerifier { expected: fp }),
             ClientAuth::TrustAny => Arc::new(TrustAnyVerifier),
@@ -260,7 +266,7 @@ impl OiClient {
         let tls_config = TlsClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(verifier)
-            .with_no_client_auth();
+            .with_client_cert_resolver(build_client_cert_resolver(identity)?);
 
         let quic_config = quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
             .map_err(|e| ClientError::Connect(Box::new(e)))?;
@@ -336,7 +342,10 @@ impl OiClient {
     ///
     /// Accepts any certificate — the fingerprint is returned so the caller
     /// can validate it against a known-hosts file and prompt the user if needed.
-    pub async fn connect_pinning(addr: SocketAddr) -> Result<(Self, String), ClientError> {
+    pub async fn connect_pinning(
+        addr: SocketAddr,
+        identity: &ClientIdentity,
+    ) -> Result<(Self, String), ClientError> {
         let cell = Arc::new(std::sync::OnceLock::new());
         let verifier: Arc<dyn ServerCertVerifier> = Arc::new(RecordingVerifier {
             cell: Arc::clone(&cell),
@@ -345,7 +354,7 @@ impl OiClient {
         let tls_config = TlsClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(verifier)
-            .with_no_client_auth();
+            .with_client_cert_resolver(build_client_cert_resolver(identity)?);
 
         let quic_config = quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
             .map_err(|e| ClientError::Connect(Box::new(e)))?;
@@ -367,4 +376,15 @@ impl OiClient {
         let fingerprint = cell.get().cloned().unwrap_or_default();
         Ok((Self { conn }, fingerprint))
     }
+}
+
+fn build_client_cert_resolver(
+    identity: &ClientIdentity,
+) -> Result<Arc<dyn rustls::client::ResolvesClientCert>, ClientError> {
+    let ck = identity
+        .to_certified_key()
+        .map_err(|e| ClientError::Connect(e))?;
+    Ok(Arc::new(
+        rustls::client::AlwaysResolvesClientRawPublicKeys::new(ck),
+    ))
 }

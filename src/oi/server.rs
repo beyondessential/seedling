@@ -2,57 +2,27 @@ use std::{net::SocketAddr, path::Path, sync::Arc};
 
 use tracing::Instrument;
 
-use ed25519_dalek::{
-    SigningKey,
-    pkcs8::{DecodePrivateKey, EncodePrivateKey},
-};
 use quinn::Endpoint;
-use rand_core::OsRng;
-use rustls::{
-    ServerConfig as TlsServerConfig, server::AlwaysResolvesServerRawPublicKeys, sign::CertifiedKey,
-};
-use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
-use sha2::{Digest, Sha256};
+use rustls::ServerConfig as TlsServerConfig;
 
-use super::handler::{OiState, dispatch};
+use super::{
+    auth::{SeedlingClientVerifier, TrustedKeys},
+    handler::{OiState, dispatch},
+    keys,
+};
 
 /// Default OI listen port.
 pub const DEFAULT_PORT: u16 = 7891;
 
-fn load_or_generate_key(key_path: &Path) -> std::io::Result<SigningKey> {
-    if key_path.exists() {
-        let der = std::fs::read(key_path)?;
-        SigningKey::from_pkcs8_der(&der)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-    } else {
-        let key = SigningKey::generate(&mut OsRng);
-        let doc = key
-            .to_pkcs8_der()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        std::fs::write(key_path, doc.as_bytes())?;
-        Ok(key)
-    }
-}
-
-fn ed25519_spki(key: &SigningKey) -> Vec<u8> {
-    // Fixed DER prefix for SubjectPublicKeyInfo with Ed25519 (OID 1.3.101.112)
-    const PREFIX: [u8; 12] = [
-        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
-    ];
-    let mut spki = Vec::with_capacity(44);
-    spki.extend_from_slice(&PREFIX);
-    spki.extend_from_slice(key.verifying_key().as_bytes());
-    spki
-}
-
-fn hex_fingerprint(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
 fn build_tls_config(
-    key: &SigningKey,
-    spki_der: Vec<u8>,
+    key: &ed25519_dalek::SigningKey,
+    spki: Vec<u8>,
+    trusted: TrustedKeys,
 ) -> Result<TlsServerConfig, Box<dyn std::error::Error + Send + Sync>> {
+    use ed25519_dalek::pkcs8::EncodePrivateKey;
+    use rustls::{server::AlwaysResolvesServerRawPublicKeys, sign::CertifiedKey};
+    use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+
     let pkcs8 = key
         .to_pkcs8_der()
         .map_err(|e| format!("key encoding: {e}"))?;
@@ -60,37 +30,60 @@ fn build_tls_config(
     let signing_key = rustls::crypto::ring::sign::any_supported_type(&private_key)
         .map_err(|e| format!("signing key: {e}"))?;
 
-    let cert = CertificateDer::from(spki_der);
+    let cert = CertificateDer::from(spki);
     let certified_key = Arc::new(CertifiedKey::new(vec![cert], signing_key));
     let resolver = Arc::new(AlwaysResolvesServerRawPublicKeys::new(certified_key));
 
+    let client_verifier = Arc::new(SeedlingClientVerifier { trusted });
+
     let tls_config = TlsServerConfig::builder()
-        .with_no_client_auth()
+        .with_client_cert_verifier(client_verifier)
         .with_cert_resolver(resolver);
 
     Ok(tls_config)
 }
 
+fn extract_client_fp(conn: &quinn::Connection) -> Option<String> {
+    let id = conn.peer_identity()?;
+    let certs = id
+        .downcast::<Vec<rustls_pki_types::CertificateDer<'static>>>()
+        .ok()?;
+    certs.first().map(|c| keys::fingerprint(c.as_ref()))
+}
+
 // i[transport.quic]
 // i[transport.local]
+// i[transport.client-auth]
 pub async fn run(
     state: Arc<OiState>,
     port: u16,
     data_dir: &Path,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let key_path = data_dir.join("oi.key");
-    let key = load_or_generate_key(&key_path)?;
-    let spki = ed25519_spki(&key);
-    let fingerprint = {
-        let mut hasher = Sha256::new();
-        hasher.update(&spki);
-        hex_fingerprint(hasher.finalize().as_ref())
-    };
+    let key = keys::load_or_generate(&key_path)?;
+    let spki = keys::spki_der(&key);
+    let fingerprint = keys::fingerprint(&spki);
 
     tracing::info!("OI SPKI fingerprint: {fingerprint}");
     state.spki_fingerprint.set(fingerprint.clone()).ok();
 
-    let tls_config = build_tls_config(&key, spki)?;
+    // Populate trusted keys: DB first, then bootstrap file.
+    {
+        let db = state.db.lock();
+        super::auth::load_from_db(&db, &state.trusted_keys)
+            .map_err(|e| format!("loading authorized keys: {e}"))?;
+        super::auth::import_bootstrap_file(data_dir, &db, &state.trusted_keys)
+            .map_err(|e| format!("reading bootstrap file: {e}"))?;
+    }
+
+    if state.trusted_keys.read().is_empty() {
+        tracing::warn!(
+            "no authorized client keys — add fingerprints to {}/authorized_keys and restart",
+            data_dir.display()
+        );
+    }
+
+    let tls_config = build_tls_config(&key, spki, Arc::clone(&state.trusted_keys))?;
     let quic_config = quinn::crypto::rustls::QuicServerConfig::try_from(tls_config)?;
     let server_config = quinn::ServerConfig::with_crypto(Arc::new(quic_config));
 
@@ -120,6 +113,8 @@ async fn accept_loop(endpoint: Endpoint, state: Arc<OiState>) {
 // i[stream.dispatch]
 async fn handle_connection(conn: quinn::Connection, state: Arc<OiState>) {
     let peer = conn.remote_address();
+    let client_fp = extract_client_fp(&conn);
+
     loop {
         let stream = match conn.accept_bi().await {
             Ok(s) => s,
@@ -130,8 +125,10 @@ async fn handle_connection(conn: quinn::Connection, state: Arc<OiState>) {
             }
         };
         let state = Arc::clone(&state);
+        let client_fp = client_fp.clone();
         tokio::spawn(
-            handle_bidi_stream(stream, state).instrument(tracing::info_span!("oi", %peer)),
+            handle_bidi_stream(stream, state, client_fp)
+                .instrument(tracing::info_span!("oi", %peer)),
         );
     }
 }
@@ -139,8 +136,8 @@ async fn handle_connection(conn: quinn::Connection, state: Arc<OiState>) {
 async fn handle_bidi_stream(
     (mut send, mut recv): (quinn::SendStream, quinn::RecvStream),
     state: Arc<OiState>,
+    client_fp: Option<String>,
 ) {
-    // Read until client half-closes (read_to_end).
     let buf = match recv.read_to_end(4 * 1024 * 1024).await {
         Ok(b) => b,
         Err(e) => {
@@ -149,7 +146,7 @@ async fn handle_bidi_stream(
         }
     };
 
-    let response = tokio::task::block_in_place(|| dispatch(&state, &buf));
+    let response = tokio::task::block_in_place(|| dispatch(&state, client_fp.as_deref(), &buf));
 
     if let Err(e) = send.write_all(&response).await {
         tracing::warn!("stream write error: {e}");

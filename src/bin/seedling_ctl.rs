@@ -2,7 +2,10 @@ use std::{collections::HashMap, io::Write, net::SocketAddr, path::PathBuf};
 
 use clap::{Parser, Subcommand};
 use lloggs::LoggingArgs;
-use seedling::oi::client::{ClientAuth, ClientError, OiClient};
+use seedling::oi::{
+    client::{ClientAuth, ClientError, OiClient},
+    keys::ClientIdentity,
+};
 
 mod known_hosts {
     use std::{
@@ -174,6 +177,24 @@ enum Command {
         #[arg(long)]
         local_port: Option<u16>,
     },
+    /// Print this client's key fingerprint (no server connection needed)
+    PrintFingerprint,
+    /// List authorized client keys on the server
+    ListKeys,
+    /// Authorize a client key on the server
+    AuthorizeKey {
+        /// Human-readable label for this key
+        #[arg(long)]
+        label: String,
+        /// Fingerprint to authorize (defaults to this client's own fingerprint)
+        #[arg(long)]
+        fingerprint: Option<String>,
+    },
+    /// Revoke an authorized client key on the server
+    RevokeKey {
+        /// Fingerprint to revoke
+        fingerprint: String,
+    },
 }
 
 #[tokio::main]
@@ -210,17 +231,46 @@ async fn main() {
         .install_default()
         .expect("ring crypto provider already installed");
 
+    // Load (or generate) the client identity early; PrintFingerprint needs it
+    // before any server connection is attempted.
+    let key_path = ClientIdentity::default_path();
+    let (identity, is_new) = ClientIdentity::load_or_generate(&key_path).unwrap_or_else(|e| {
+        tracing::error!(
+            "could not load/generate client key at {}: {e}",
+            key_path.display()
+        );
+        std::process::exit(1);
+    });
+    if is_new {
+        tracing::info!(
+            path = %key_path.display(),
+            fingerprint = %identity.fingerprint,
+            "generated new client key"
+        );
+    }
+
+    // Handle commands that don't need a server connection.
+    if let Command::PrintFingerprint = &cli.command {
+        println!("{}", identity.fingerprint);
+        eprintln!("Client key: {}", key_path.display());
+        eprintln!(
+            "\nTo bootstrap a new server, add this line to $data_dir/authorized_keys:\n  {} my-label",
+            identity.fingerprint
+        );
+        return;
+    }
+
     let client;
 
     if cli.trust_any {
-        client = OiClient::connect(cli.endpoint, ClientAuth::TrustAny)
+        client = OiClient::connect(cli.endpoint, ClientAuth::TrustAny, &identity)
             .await
             .unwrap_or_else(|e| {
                 tracing::error!("{e}");
                 std::process::exit(1);
             });
     } else if let Some(fp) = cli.fingerprint {
-        client = OiClient::connect(cli.endpoint, ClientAuth::Fingerprint(fp))
+        client = OiClient::connect(cli.endpoint, ClientAuth::Fingerprint(fp), &identity)
             .await
             .unwrap_or_else(|e| {
                 tracing::error!("{e}");
@@ -233,7 +283,7 @@ async fn main() {
             known_hosts::KnownHosts::empty(kh_path.clone())
         });
 
-        let (c, fp) = OiClient::connect_pinning(cli.endpoint)
+        let (c, fp) = OiClient::connect_pinning(cli.endpoint, &identity)
             .await
             .unwrap_or_else(|e| {
                 tracing::error!("{e}");
@@ -291,11 +341,38 @@ async fn main() {
         client = c;
     }
 
-    dispatch(&client, cli.command).await;
+    dispatch(&client, &identity, cli.command).await;
 }
 
-async fn dispatch(client: &OiClient, cmd: Command) {
+async fn dispatch(client: &OiClient, identity: &ClientIdentity, cmd: Command) {
     match cmd {
+        Command::PrintFingerprint => unreachable!("handled before connect"),
+        Command::ListKeys => {
+            print_result(client.request("ListKeys", serde_json::json!({})).await);
+        }
+        Command::AuthorizeKey { label, fingerprint } => {
+            let fp = fingerprint
+                .as_deref()
+                .unwrap_or(identity.fingerprint.as_str());
+            print_result(
+                client
+                    .request(
+                        "AuthorizeKey",
+                        serde_json::json!({ "fingerprint": fp, "label": label }),
+                    )
+                    .await,
+            );
+        }
+        Command::RevokeKey { fingerprint } => {
+            print_result(
+                client
+                    .request(
+                        "RevokeKey",
+                        serde_json::json!({ "fingerprint": fingerprint }),
+                    )
+                    .await,
+            );
+        }
         Command::Status => {
             print_result(client.request("GetStatus", serde_json::json!({})).await);
         }

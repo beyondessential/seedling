@@ -6,6 +6,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use std::collections::HashSet;
+
 use ipnet::Ipv6Net;
 use parking_lot::RwLock;
 use serde_json::{Value, json};
@@ -109,6 +111,9 @@ pub struct OiState {
     pub db: Arc<parking_lot::Mutex<crate::runtime::db::Db>>,
     pub scheduler: Arc<parking_lot::Mutex<crate::runtime::Scheduler>>,
     pub reconciler_factory: Arc<ReconcilerFactory>,
+    /// In-memory set of authorized client SPKI fingerprints, shared with the
+    /// TLS client cert verifier so additions/removals take effect immediately.
+    pub trusted_keys: Arc<parking_lot::RwLock<HashSet<String>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -119,8 +124,8 @@ type HandlerResult = Result<Value, OiError>;
 
 /// Parse the newline-terminated JSON request from `buf`, dispatch to a handler,
 /// and return the serialised JSON response (no trailing newline).
-pub fn dispatch(state: &OiState, buf: &[u8]) -> Vec<u8> {
-    let response = match parse_and_dispatch(state, buf) {
+pub fn dispatch(state: &OiState, client_fp: Option<&str>, buf: &[u8]) -> Vec<u8> {
+    let response = match parse_and_dispatch(state, client_fp, buf) {
         Ok(result) => json!({ "result": result }),
         Err(e) => json!({
             "error": {
@@ -132,7 +137,7 @@ pub fn dispatch(state: &OiState, buf: &[u8]) -> Vec<u8> {
     serde_json::to_vec(&response).expect("response serialisation never fails")
 }
 
-fn parse_and_dispatch(state: &OiState, buf: &[u8]) -> HandlerResult {
+fn parse_and_dispatch(state: &OiState, client_fp: Option<&str>, buf: &[u8]) -> HandlerResult {
     #[derive(serde::Deserialize)]
     struct Request {
         method: String,
@@ -152,6 +157,12 @@ fn parse_and_dispatch(state: &OiState, buf: &[u8]) -> HandlerResult {
         "RegisterApp" => register_app(state, req.params),
         "DeregisterApp" => deregister_app(state, req.params),
         "UpdateApp" => update_app(state, req.params),
+        // i[key.list]
+        "ListKeys" => list_keys(state),
+        // i[key.authorize]
+        "AuthorizeKey" => authorize_key(state, client_fp, req.params),
+        // i[key.revoke]
+        "RevokeKey" => revoke_key(state, req.params),
         other => Err(OiError::not_found(format!("unknown method: {other}"))),
     };
 
@@ -161,11 +172,67 @@ fn parse_and_dispatch(state: &OiState, buf: &[u8]) -> HandlerResult {
             method = %req.method,
             code = ?e.code,
             error = %e.message,
-            "error"
+            "error",
         ),
     }
 
     result
+}
+
+// ---------------------------------------------------------------------------
+// Key management handlers
+// ---------------------------------------------------------------------------
+
+// i[key.list]
+fn list_keys(state: &OiState) -> HandlerResult {
+    let db = state.db.lock();
+    let rows = crate::oi::auth::list_keys(&db)
+        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
+    let result: Vec<Value> = rows
+        .into_iter()
+        .map(|(fp, label, added_at)| {
+            json!({ "fingerprint": fp, "label": label, "added_at": added_at })
+        })
+        .collect();
+    Ok(json!(result))
+}
+
+// i[key.authorize]
+fn authorize_key(state: &OiState, client_fp: Option<&str>, params: Value) -> HandlerResult {
+    let fp = params
+        .get("fingerprint")
+        .and_then(Value::as_str)
+        .or(client_fp)
+        .ok_or_else(|| {
+            OiError::new(
+                ErrorCode::RequirementsInvalid,
+                "missing param: fingerprint (or connect with a client key)",
+            )
+        })?;
+    let label = params
+        .get("label")
+        .and_then(Value::as_str)
+        .unwrap_or("unnamed");
+    let db = state.db.lock();
+    crate::oi::auth::authorize_key(&db, &state.trusted_keys, fp, label)
+        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
+    Ok(json!({}))
+}
+
+// i[key.revoke]
+fn revoke_key(state: &OiState, params: Value) -> HandlerResult {
+    let fp = params
+        .get("fingerprint")
+        .and_then(Value::as_str)
+        .ok_or_else(|| OiError::new(ErrorCode::NotFound, "missing param: fingerprint"))?;
+    let db = state.db.lock();
+    let removed = crate::oi::auth::revoke_key(&db, &state.trusted_keys, fp)
+        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
+    if removed {
+        Ok(json!({}))
+    } else {
+        Err(OiError::not_found(format!("key not found: {fp}")))
+    }
 }
 
 // ---------------------------------------------------------------------------

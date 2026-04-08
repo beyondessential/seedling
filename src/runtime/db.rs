@@ -154,6 +154,19 @@ impl Db {
                 .execute_batch("INSERT INTO schema_version VALUES (4);")?;
         }
 
+        if version < 5 {
+            // i[key.authorize]
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS authorized_keys (
+                    fingerprint TEXT    PRIMARY KEY,
+                    label       TEXT    NOT NULL,
+                    added_at    INTEGER NOT NULL
+                );",
+            )?;
+            self.conn
+                .execute_batch("INSERT INTO schema_version VALUES (5);")?;
+        }
+
         Ok(())
     }
 }
@@ -175,7 +188,7 @@ mod tests {
                 |r| r.get(0),
             )
             .expect("schema_version should exist");
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
     }
 
     // r[verify history.persistence]
