@@ -140,8 +140,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[app.update]
 > `UpdateApp { name, script }` re-evaluates the provided BSL script source text.
 > If a lifecycle operation is in progress, the new AppDef takes effect at the next evaluation boundary after the operation completes.
-> If the script fails to parse or evaluate, a fault is filed, the existing AppDef continues running, and `FaultFiled` is emitted.
-> On success, `AppUpdated` is emitted.
+> If the script fails to parse or evaluate, a `script_error` app-level fault is filed, the existing AppDef continues running, and the request still succeeds.
+> On success, any previously active `script_error` fault for this app is cleared.
 
 > i[app.list]
 > `ListApps` returns an array of objects with fields `name` and `status`.
@@ -168,6 +168,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > `DescribeApp { name }` returns a single object with the following fields:
 >
 > - `status`: the app's current status as defined in [app.status](#i--app.status).
+> - `faults`: array of app-level [fault records](#i--fault.record) not associated with a specific resource instance (e.g. script evaluation errors). Empty when there are no active app-level faults.
 > - `resources`: array of objects with fields `name`, `type`, `instances`, and `faults`.
 >   Each instance has fields `id`, `display_name`, and `lifecycle_state`.
 >   Each fault entry is a [fault record](#i--fault.record).
@@ -191,6 +192,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > i[param.set]
 > `SetParam { app, name, value }` persists the value and, if an `on_change` handler is registered for that param, schedules it as a lifecycle operation subject to the same concurrency rules as all lifecycle operations.
+> The script is re-evaluated after the value is persisted; if evaluation fails, a `script_error` app-level fault is filed and the request still succeeds.
 > Returns `{ "schedule": "accepted" }` or `{ "schedule": "queued" }` on success, or an error.
 
 > i[param.unknown]
@@ -200,6 +202,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[param.unset]
 > `UnsetParam { app, name }` removes the stored value for the named parameter and reloads the script.
 > If the parameter has an `on_change` handler and the app is installed, it is scheduled as a lifecycle operation.
+> The script is re-evaluated after the value is removed; if evaluation fails, a `script_error` app-level fault is filed and the request still succeeds.
 > Returns `{ "schedule": "accepted" }` or `{ "schedule": "queued" }` on success, or an error.
 > If the parameter has no stored value, the request still succeeds.
 

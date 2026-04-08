@@ -337,6 +337,24 @@ fn describe_app(state: &OiState, params: Value) -> HandlerResult {
         crate::runtime::apps::load_params_for_app(&db, name).unwrap_or_default()
     };
 
+    // i[app.describe] — app-level faults (e.g. script evaluation errors).
+    let app_faults_json: Vec<Value> = entry
+        .script_error
+        .as_ref()
+        .map(|(msg, ts)| {
+            vec![json!({
+                "id": "script_error",
+                "app": name,
+                "resource_type": null,
+                "resource_name": null,
+                "instance_id": null,
+                "kind": "script_error",
+                "timestamp": ts.to_rfc3339(),
+                "description": msg,
+            })]
+        })
+        .unwrap_or_default();
+
     let def = entry.app.def.lock();
 
     // i[app.describe]
@@ -415,6 +433,7 @@ fn describe_app(state: &OiState, params: Value) -> HandlerResult {
 
     let mut desc = json!({
         "status": status.name(),
+        "faults": app_faults_json,
         "resources": resources_json,
         "params": params_json,
         "unknown_params": unknown_params_json,
@@ -572,8 +591,7 @@ fn update_app(state: &OiState, params: Value) -> HandlerResult {
         state
             .registry
             .write()
-            .reload(name, script.to_owned(), &loaded_params)
-            .map_err(|e| OiError::script_error(e.to_string()))?;
+            .reload(name, script.to_owned(), &loaded_params);
         // Wake reconciler to pick up new desired state.
         if let Some(entry) = state.registry.read().get(name) {
             entry.tick_notify.notify_one();
@@ -643,11 +661,7 @@ fn set_param(state: &OiState, params: Value) -> HandlerResult {
         crate::runtime::apps::load_params_for_app(&db, app)
             .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?
     };
-    state
-        .registry
-        .write()
-        .reload(app, script, &loaded_params)
-        .map_err(|e| OiError::script_error(e.to_string()))?;
+    state.registry.write().reload(app, script, &loaded_params);
 
     let (has_on_change, is_installed, tick_notify) = {
         let reg = state.registry.read();
@@ -734,11 +748,7 @@ fn unset_param(state: &OiState, params: Value) -> HandlerResult {
         crate::runtime::apps::load_params_for_app(&db, app)
             .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?
     };
-    state
-        .registry
-        .write()
-        .reload(app, script, &loaded_params)
-        .map_err(|e| OiError::script_error(e.to_string()))?;
+    state.registry.write().reload(app, script, &loaded_params);
 
     let (has_on_change, is_installed, tick_notify) = {
         let reg = state.registry.read();

@@ -1,7 +1,10 @@
 use std::{
     collections::{BTreeMap, HashMap},
     sync::Arc,
+    time::SystemTime,
 };
+
+use chrono::{DateTime, Utc};
 
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -57,6 +60,9 @@ pub struct AppEntry {
     /// Wakes the reconciler for an immediate tick.
     pub tick_notify: Arc<tokio::sync::Notify>,
     pub reconciler_handle: Option<tokio::task::JoinHandle<()>>,
+    /// Active script-evaluation fault, if the last reload failed.
+    /// Cleared on the next successful evaluation.
+    pub script_error: Option<(String, DateTime<Utc>)>,
 }
 
 pub struct AppRegistry {
@@ -96,6 +102,7 @@ impl AppRegistry {
                 active_progress: Arc::new(RwLock::new(None)),
                 tick_notify: Arc::new(tokio::sync::Notify::new()),
                 reconciler_handle: None,
+                script_error: None,
             },
         );
         Ok(())
@@ -105,18 +112,30 @@ impl AppRegistry {
         self.entries.remove(name).is_some()
     }
 
-    pub fn reload(
-        &mut self,
-        name: &str,
-        script: String,
-        params: &BTreeMap<String, String>,
-    ) -> Result<(), ScriptError> {
-        let app = evaluate_script(name, &script, params)?;
-        if let Some(entry) = self.entries.get_mut(name) {
-            entry.script = script;
-            entry.app = app;
+    // i[app.update]
+    // i[param.set]
+    // i[param.unset]
+    /// Re-evaluate the script with updated stored params.
+    ///
+    /// On success the entry's app and script are updated and any active
+    /// script-error fault is cleared. On failure the existing AppDef keeps
+    /// running and the fault is recorded — the caller always succeeds.
+    pub fn reload(&mut self, name: &str, script: String, params: &BTreeMap<String, String>) {
+        match evaluate_script(name, &script, params) {
+            Ok(app) => {
+                if let Some(entry) = self.entries.get_mut(name) {
+                    entry.script = script;
+                    entry.app = app;
+                    entry.script_error = None;
+                }
+            }
+            Err(e) => {
+                if let Some(entry) = self.entries.get_mut(name) {
+                    entry.script = script;
+                    entry.script_error = Some((e.to_string(), SystemTime::now().into()));
+                }
+            }
         }
-        Ok(())
     }
 
     pub fn get(&self, name: &str) -> Option<&AppEntry> {
@@ -159,18 +178,21 @@ impl AppRegistry {
             .collect::<rusqlite::Result<_>>()?;
 
         for (name, script, installed) in rows {
-            let params = match load_params_for_app(db, &name) {
+            let stored = match load_params_for_app(db, &name) {
                 Ok(p) => p,
                 Err(e) => {
                     tracing::warn!("failed to load params for app '{name}': {e}");
                     BTreeMap::new()
                 }
             };
-            let app = match evaluate_script(&name, &script, &params) {
-                Ok(a) => a,
+            let (app, script_error) = match evaluate_script(&name, &script, &stored) {
+                Ok(a) => (a, None),
                 Err(e) => {
                     tracing::warn!("failed to reload script for app '{name}': {e}");
-                    App::default()
+                    (
+                        App::default(),
+                        Some((e.to_string(), SystemTime::now().into())),
+                    )
                 }
             };
             registry.entries.insert(
@@ -184,6 +206,7 @@ impl AppRegistry {
                     active_progress: Arc::new(RwLock::new(None)),
                     tick_notify: Arc::new(tokio::sync::Notify::new()),
                     reconciler_handle: None,
+                    script_error,
                 },
             );
         }
