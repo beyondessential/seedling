@@ -394,6 +394,13 @@ impl Actuator {
                 .wait_unit_stopped(&unit, Duration::from_secs(30))
                 .await
                 .map_err(|e| ActuateError::Process { source: e })?;
+            // Clear the unit from systemd's memory so it does not linger in
+            // inactive/failed state after teardown.
+            self.driver
+                .process
+                .reset_failed_unit(&unit)
+                .await
+                .map_err(|e| ActuateError::Process { source: e })?;
         }
 
         // Force-remove the container in case it outlived the unit.
