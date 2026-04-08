@@ -192,7 +192,8 @@ impl Observer {
             .map_err(|e| ObserveError::Process { source: e })?;
 
         let unit_fact = match unit_state.as_ref().map(|s| s.active) {
-            None | Some(ActiveState::Inactive) | Some(ActiveState::Deactivating) => {
+            None => ObservationFact::UnitGone,
+            Some(ActiveState::Inactive) | Some(ActiveState::Deactivating) => {
                 ObservationFact::UnitInactive
             }
             Some(ActiveState::Active) | Some(ActiveState::Activating) => {

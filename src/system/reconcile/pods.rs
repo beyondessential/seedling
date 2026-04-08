@@ -74,9 +74,14 @@ pub(super) async fn observe_and_actuate(
         let is_running = facts
             .iter()
             .any(|(f, _)| matches!(f, ObservationFact::ContainerRunning { .. }));
-        let unit_active = facts
-            .iter()
-            .any(|(f, _)| matches!(f, ObservationFact::UnitActive));
+        let unit_loaded = facts.iter().any(|(f, _)| {
+            matches!(
+                f,
+                ObservationFact::UnitActive
+                    | ObservationFact::UnitInactive
+                    | ObservationFact::UnitFailed
+            )
+        });
 
         // Collect running pods from the pre-actuation observation.
         //
@@ -124,7 +129,7 @@ pub(super) async fn observe_and_actuate(
                     }
                 }
             }
-            LifecycleState::Unscheduled if is_running || unit_active => {
+            LifecycleState::Unscheduled if is_running || unit_loaded => {
                 observations.push((dr.instance.clone(), "stop_sent", json!({})));
                 match actuator.stop(&dr.instance, &dr.definition).await {
                     Ok(()) => {

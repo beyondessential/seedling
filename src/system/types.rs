@@ -299,8 +299,12 @@ pub enum ObservationFact {
     // Container
     ContainerMissing,
     ContainerCreated,
-    ContainerRunning { pid: u32 },
-    ContainerExited { exit_code: i32 },
+    ContainerRunning {
+        pid: u32,
+    },
+    ContainerExited {
+        exit_code: i32,
+    },
     ContainerHealthy,
     ContainerUnhealthy,
 
@@ -316,12 +320,18 @@ pub enum ObservationFact {
     UnitActive,
     UnitInactive,
     UnitFailed,
+    /// The unit is not loaded by systemd at all (unit_state returned None).
+    UnitGone,
 
     // Proxy
     ProxyReachable,
     ProxyUnreachable,
-    RoutePresent { hostname: String },
-    RouteAbsent { hostname: String },
+    RoutePresent {
+        hostname: String,
+    },
+    RouteAbsent {
+        hostname: String,
+    },
 }
 
 impl ObservationFact {
@@ -359,7 +369,8 @@ impl ObservationFact {
             | ObservationFact::RouteAbsent { .. }
             | ObservationFact::UnitActive
             | ObservationFact::UnitInactive
-            | ObservationFact::UnitFailed => vec![],
+            | ObservationFact::UnitFailed
+            | ObservationFact::UnitGone => vec![],
         }
     }
 }
