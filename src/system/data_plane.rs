@@ -135,6 +135,7 @@ impl DataPlane for NftablesDataPlane {
 }
 
 impl NftablesDataPlane {
+    #[tracing::instrument(level = "trace", skip(self))]
     async fn delete_managed_routes(&self) -> Result<(), DataPlaneError> {
         let query = RouteMessageBuilder::<Ipv6Addr>::new().build();
         let mut stream = self.route_handle.route().get(query).execute();
@@ -176,6 +177,7 @@ impl NftablesDataPlane {
         Ok(())
     }
 
+    #[tracing::instrument(level = "trace", skip(self))]
     async fn add_service_route(&self, svc: &ServiceRoute) -> Result<(), DataPlaneError> {
         let route = match svc.backends.len() {
             0 => RouteMessageBuilder::<Ipv6Addr>::new()
