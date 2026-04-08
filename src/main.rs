@@ -5,6 +5,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use clap::Parser;
+use lloggs::LoggingArgs;
 use parking_lot::{Mutex, RwLock};
 use seedling::{
     oi::{
@@ -18,34 +20,44 @@ use seedling::{
     },
 };
 
-fn parse_data_dir() -> PathBuf {
-    let args: Vec<_> = std::env::args_os().skip(1).collect();
-    let mut data_dir: Option<PathBuf> = None;
-    let mut i = 0;
-    while i < args.len() {
-        if args[i] == "--data-dir" {
-            match args.get(i + 1) {
-                Some(dir) => {
-                    data_dir = Some(PathBuf::from(dir));
-                    i += 2;
-                }
-                None => {
-                    eprintln!("error: --data-dir requires an argument");
-                    std::process::exit(1);
-                }
-            }
-        } else {
-            eprintln!("error: unexpected argument: {}", args[i].to_string_lossy());
-            eprintln!("usage: seedling [--data-dir <DIR>]");
-            std::process::exit(1);
-        }
-    }
-    data_dir.unwrap_or_else(|| PathBuf::from("."))
+#[derive(Parser)]
+#[command(name = "seedling")]
+struct Args {
+    /// Directory to store persistent state
+    #[arg(long, default_value = ".")]
+    data_dir: PathBuf,
+
+    #[command(flatten)]
+    logging: LoggingArgs,
 }
 
 #[tokio::main]
 async fn main() {
-    let data_dir = parse_data_dir();
+    let mut _guard = lloggs::PreArgs::parse_with_env("SEEDLING_LOG")
+        .setup()
+        .unwrap_or_else(|e| {
+            eprintln!("warning: logging setup: {e}");
+            None
+        });
+
+    let args = Args::parse();
+
+    if _guard.is_none() {
+        _guard = args
+            .logging
+            .setup(|v| match v {
+                0 => "info",
+                1 => "debug",
+                _ => "trace",
+            })
+            .map(Some)
+            .unwrap_or_else(|e| {
+                eprintln!("warning: logging setup: {e}");
+                None
+            });
+    }
+
+    let data_dir = args.data_dir;
 
     std::fs::create_dir_all(&data_dir).unwrap_or_else(|e| {
         eprintln!(
@@ -174,7 +186,7 @@ async fn main() {
             }
         }
 
-        eprintln!("started reconciler for app: {app_name}");
+        tracing::info!("started reconciler for app: {app_name}");
     }
 
     // ---------------------------------------------------------------------------
@@ -190,7 +202,6 @@ async fn main() {
         reconciler_factory: Arc::clone(&reconciler_factory),
     });
 
-    // Run the server; it prints the fingerprint to stderr.
     oi::run(Arc::clone(&oi_state), oi::DEFAULT_PORT, &data_dir)
         .await
         .unwrap_or_else(|e| {
@@ -198,6 +209,6 @@ async fn main() {
             std::process::exit(1);
         });
 
-    eprintln!("seedling ready. Ctrl-C to exit.");
+    tracing::info!("seedling ready");
     tokio::signal::ctrl_c().await.ok();
 }

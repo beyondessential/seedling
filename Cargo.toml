@@ -14,6 +14,7 @@ crossterm = "0.29.0"
 ed25519-dalek = { version = "2.2.0", features = ["pkcs8", "rand_core"] }
 futures-util = { version = "0.3.32", default-features = false, features = ["io", "channel"] }
 ipnet = "2.12.0"
+lloggs = "1.4.0"
 nftables = { version = "0.6.3", features = ["tokio"] }
 parking_lot = "0.12.5"
 podman-rest-client = { version = "0.13.0", features = ["uds"] }
