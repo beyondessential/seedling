@@ -48,10 +48,12 @@ pub struct AppEntry {
     pub script: String,
     pub app: App,
     pub installed: bool,
+    pub deregistering: bool,
     /// Shared with the reconciler and operation runner to track in-progress ops.
     pub active_progress: Arc<RwLock<Option<OperationProgress>>>,
     /// Wakes the reconciler for an immediate tick.
     pub tick_notify: Arc<tokio::sync::Notify>,
+    pub reconciler_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 pub struct AppRegistry {
@@ -79,8 +81,10 @@ impl AppRegistry {
                 script,
                 app,
                 installed: false,
+                deregistering: false,
                 active_progress: Arc::new(RwLock::new(None)),
                 tick_notify: Arc::new(tokio::sync::Notify::new()),
+                reconciler_handle: None,
             },
         );
         Ok(())
@@ -153,8 +157,10 @@ impl AppRegistry {
                     script,
                     app,
                     installed,
+                    deregistering: false,
                     active_progress: Arc::new(RwLock::new(None)),
                     tick_notify: Arc::new(tokio::sync::Notify::new()),
+                    reconciler_handle: None,
                 },
             );
         }
@@ -180,6 +186,9 @@ impl AppRegistry {
 }
 
 fn derive_status(entry: &AppEntry) -> AppStatus {
+    if entry.deregistering {
+        return AppStatus::Deregistering;
+    }
     if !entry.installed {
         AppStatus::NotInstalled
     } else if entry.active_progress.read().is_some() {

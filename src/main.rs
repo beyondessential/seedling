@@ -1,23 +1,22 @@
 use std::{
     collections::HashMap,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
 };
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use seedling::{
-    oi::{self, handler::OiState},
-    runtime::{
-        AppRegistry, InstanceRegistry, db::Db, desired::OperationProgress,
-        registry::DbInstanceRegistry,
+    oi::{
+        self,
+        handler::{OiState, ReconcilerFactory},
     },
+    runtime::{AppRegistry, InstanceRegistry, Scheduler, db::Db, registry::DbInstanceRegistry},
     system::{
         System,
         reconcile::{Reconciler, node_prefix_from_machine_id},
     },
 };
-use tokio::sync::Notify;
 
 fn parse_data_dir() -> PathBuf {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
@@ -97,6 +96,15 @@ async fn main() {
         .collect();
 
     let registry = Arc::new(RwLock::new(registry));
+    let db = Arc::new(Mutex::new(db));
+    let scheduler = Arc::new(Mutex::new(Scheduler::new()));
+    let reconciler_factory = Arc::new(ReconcilerFactory {
+        system: Arc::clone(&driver),
+        node_prefix,
+        db_path: db_path.clone(),
+        data_dir: data_dir.clone(),
+        caddy_admin_addr: Arc::clone(&caddy_admin_addr),
+    });
 
     // ---------------------------------------------------------------------------
     // Reconcilers — one per installed app
@@ -146,7 +154,7 @@ async fn main() {
 
         reconciler.populate_bridge_names().await;
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let mut r = reconciler;
             let mut interval = tokio::time::interval(Duration::from_secs(5));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -159,6 +167,13 @@ async fn main() {
             }
         });
 
+        {
+            let mut reg = registry.write();
+            if let Some(entry) = reg.get_mut(&app_name) {
+                entry.reconciler_handle = Some(handle);
+            }
+        }
+
         eprintln!("started reconciler for app: {app_name}");
     }
 
@@ -170,6 +185,9 @@ async fn main() {
         registry: Arc::clone(&registry),
         spki_fingerprint: std::sync::OnceLock::new(),
         start_time: Instant::now(),
+        db: Arc::clone(&db),
+        scheduler: Arc::clone(&scheduler),
+        reconciler_factory: Arc::clone(&reconciler_factory),
     });
 
     // Run the server; it prints the fingerprint to stderr.

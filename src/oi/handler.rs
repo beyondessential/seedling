@@ -1,18 +1,104 @@
 use std::{
     collections::HashMap,
+    net::SocketAddr,
+    path::PathBuf,
     sync::{Arc, OnceLock},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
+use ipnet::Ipv6Net;
 use parking_lot::RwLock;
 use serde_json::{Value, json};
+use tokio::sync::RwLock as AsyncRwLock;
 
 use crate::{
     defs::install::InstallRequirementKind,
-    runtime::apps::{AppRegistry, AppStatus},
+    runtime::{
+        apps::{AppRegistry, AppStatus},
+        desired::OperationProgress,
+    },
 };
 
 use super::error::{ErrorCode, OiError};
+
+// ---------------------------------------------------------------------------
+// ReconcilerFactory
+// ---------------------------------------------------------------------------
+
+/// Spawns per-app reconciler tokio tasks. Constructed in `main.rs` and stored
+/// in `OiState`. `spawn_for` is called from within `block_in_place` (a sync
+/// context) and uses `tokio::runtime::Handle::current().spawn()` to schedule
+/// the async reconciler task.
+pub struct ReconcilerFactory {
+    pub system: Arc<crate::system::System>,
+    pub node_prefix: Ipv6Net,
+    pub db_path: PathBuf,
+    pub data_dir: PathBuf,
+    pub caddy_admin_addr: Arc<AsyncRwLock<SocketAddr>>,
+}
+
+impl ReconcilerFactory {
+    /// Spawn a reconciler task for `app_name`. Returns the `JoinHandle` so the
+    /// caller can store it in `AppEntry.reconciler_handle` for later cancellation.
+    pub fn spawn_for(
+        &self,
+        app_name: String,
+        app: crate::defs::app::App,
+        active_progress: Arc<parking_lot::RwLock<Option<OperationProgress>>>,
+        tick_notify: Arc<tokio::sync::Notify>,
+    ) -> tokio::task::JoinHandle<()> {
+        use crate::{
+            runtime::{InstanceRegistry, db::Db, registry::DbInstanceRegistry},
+            system::reconcile::Reconciler,
+        };
+
+        let instance_registry: Arc<dyn InstanceRegistry> = match Db::open(&self.db_path) {
+            Ok(db) => Arc::new(DbInstanceRegistry::new(db)),
+            Err(e) => {
+                eprintln!("error: cannot open instance db for app {app_name}: {e}");
+                return tokio::runtime::Handle::current().spawn(async {});
+            }
+        };
+
+        let obs_db = match Db::open(&self.db_path) {
+            Ok(db) => db,
+            Err(e) => {
+                eprintln!("error: cannot open obs db for app {app_name}: {e}");
+                return tokio::runtime::Handle::current().spawn(async {});
+            }
+        };
+
+        let mut reconciler = Reconciler::new(
+            app_name,
+            app,
+            active_progress,
+            Arc::clone(&self.system),
+            self.node_prefix,
+            instance_registry,
+            HashMap::new(),
+            Arc::clone(&self.caddy_admin_addr),
+            self.data_dir.clone(),
+            obs_db,
+        );
+
+        tokio::runtime::Handle::current().spawn(async move {
+            reconciler.populate_bridge_names().await;
+            let mut interval = tokio::time::interval(Duration::from_secs(5));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {},
+                    _ = tick_notify.notified() => {},
+                }
+                reconciler.tick().await;
+            }
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// OiState
+// ---------------------------------------------------------------------------
 
 /// Shared state for all OI request handlers.
 pub struct OiState {
@@ -20,7 +106,14 @@ pub struct OiState {
     /// Set once by the server after key generation; never changes after that.
     pub spki_fingerprint: OnceLock<String>,
     pub start_time: Instant,
+    pub db: Arc<parking_lot::Mutex<crate::runtime::db::Db>>,
+    pub scheduler: Arc<parking_lot::Mutex<crate::runtime::Scheduler>>,
+    pub reconciler_factory: Arc<ReconcilerFactory>,
 }
+
+// ---------------------------------------------------------------------------
+// Dispatch
+// ---------------------------------------------------------------------------
 
 type HandlerResult = Result<Value, OiError>;
 
@@ -56,9 +149,48 @@ fn parse_and_dispatch(state: &OiState, buf: &[u8]) -> HandlerResult {
         "ListApps" => list_apps(state),
         // i[app.describe]
         "DescribeApp" => describe_app(state, req.params),
+        "RegisterApp" => register_app(state, req.params),
+        "DeregisterApp" => deregister_app(state, req.params),
+        "UpdateApp" => update_app(state, req.params),
         other => Err(OiError::not_found(format!("unknown method: {other}"))),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn validate_name(name: &str) -> Result<(), OiError> {
+    // l[bsl.name]: ^[a-zA-Z][a-zA-Z0-9-]{1,60}[a-zA-Z0-9]$
+    let ok = name.len() >= 3
+        && name.len() <= 63
+        && name.starts_with(|c: char| c.is_ascii_alphabetic())
+        && name.ends_with(|c: char| c.is_ascii_alphanumeric())
+        && name[1..name.len() - 1]
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-');
+    if ok {
+        Ok(())
+    } else {
+        Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!("invalid name '{name}': must match ^[a-zA-Z][a-zA-Z0-9-]{{1,60}}[a-zA-Z0-9]$"),
+        ))
+    }
+}
+
+fn install_requirement_kind_str(kind: InstallRequirementKind) -> &'static str {
+    match kind {
+        InstallRequirementKind::Text => "text",
+        InstallRequirementKind::Email => "email",
+        InstallRequirementKind::Password => "password",
+        InstallRequirementKind::WeakPassword => "weak-password",
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 1 handlers
+// ---------------------------------------------------------------------------
 
 // i[status.get]
 fn get_status(state: &OiState) -> HandlerResult {
@@ -99,15 +231,6 @@ fn list_apps(state: &OiState) -> HandlerResult {
         })
         .collect();
     Ok(json!(result))
-}
-
-fn install_requirement_kind_str(kind: InstallRequirementKind) -> &'static str {
-    match kind {
-        InstallRequirementKind::Text => "text",
-        InstallRequirementKind::Email => "email",
-        InstallRequirementKind::Password => "password",
-        InstallRequirementKind::WeakPassword => "weak-password",
-    }
 }
 
 // i[app.describe]
@@ -201,4 +324,173 @@ fn describe_app(state: &OiState, params: Value) -> HandlerResult {
     }
 
     Ok(desc)
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 handlers
+// ---------------------------------------------------------------------------
+
+// i[app.register]
+// i[app.persist]
+fn register_app(state: &OiState, params: Value) -> HandlerResult {
+    let name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| OiError::new(ErrorCode::RequirementsInvalid, "missing param: name"))?;
+    let script = params
+        .get("script")
+        .and_then(Value::as_str)
+        .ok_or_else(|| OiError::new(ErrorCode::RequirementsInvalid, "missing param: script"))?;
+
+    validate_name(name)?;
+
+    {
+        let reg = state.registry.read();
+        if reg.is_registered(name) {
+            return Err(OiError::new(
+                ErrorCode::RequirementsInvalid,
+                format!("app already registered: {name}"),
+            ));
+        }
+    }
+
+    // Evaluate script and add to in-memory registry.
+    {
+        let mut reg = state.registry.write();
+        reg.register(name.to_owned(), script.to_owned())
+            .map_err(|e| OiError::script_error(e.to_string()))?;
+    }
+
+    // Persist to DB.
+    {
+        let reg = state.registry.read();
+        let entry = reg.get(name).expect("just registered");
+        let db = state.db.lock();
+        AppRegistry::persist_app(&*db, entry)
+            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db persist: {e}")))?;
+    }
+
+    // Spawn reconciler and store handle.
+    let (app, active_progress, tick_notify) = {
+        let reg = state.registry.read();
+        let e = reg.get(name).expect("just registered");
+        (
+            e.app.clone(),
+            Arc::clone(&e.active_progress),
+            Arc::clone(&e.tick_notify),
+        )
+    };
+    let handle =
+        state
+            .reconciler_factory
+            .spawn_for(name.to_owned(), app, active_progress, tick_notify);
+    state
+        .registry
+        .write()
+        .get_mut(name)
+        .expect("just registered")
+        .reconciler_handle = Some(handle);
+
+    Ok(json!({}))
+}
+
+// i[app.deregister]
+fn deregister_app(state: &OiState, params: Value) -> HandlerResult {
+    let name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| OiError::new(ErrorCode::NotFound, "missing param: name"))?;
+
+    {
+        let reg = state.registry.read();
+        if !reg.is_registered(name) {
+            return Err(OiError::not_found(format!("app not found: {name}")));
+        }
+    }
+
+    // Reject if an operation is active or queued for this app.
+    if state.scheduler.lock().has_operation_for(name) {
+        return Err(OiError::new(
+            ErrorCode::OperationInProgress,
+            format!("operation in progress for app: {name}"),
+        ));
+    }
+
+    // Mark as deregistering and abort the reconciler.
+    {
+        let mut reg = state.registry.write();
+        if let Some(entry) = reg.get_mut(name) {
+            entry.deregistering = true;
+            if let Some(handle) = entry.reconciler_handle.take() {
+                handle.abort();
+            }
+        }
+    }
+
+    // Remove from DB.
+    {
+        let db = state.db.lock();
+        AppRegistry::remove_app(&*db, name)
+            .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db remove: {e}")))?;
+    }
+
+    // Remove from in-memory registry.
+    state.registry.write().deregister(name);
+
+    Ok(json!({}))
+}
+
+// i[app.update]
+fn update_app(state: &OiState, params: Value) -> HandlerResult {
+    let name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| OiError::new(ErrorCode::NotFound, "missing param: name"))?;
+    let script = params
+        .get("script")
+        .and_then(Value::as_str)
+        .ok_or_else(|| OiError::new(ErrorCode::RequirementsInvalid, "missing param: script"))?;
+
+    {
+        let reg = state.registry.read();
+        if !reg.is_registered(name) {
+            return Err(OiError::not_found(format!("app not found: {name}")));
+        }
+    }
+
+    let op_in_progress = state
+        .registry
+        .read()
+        .get(name)
+        .map_or(false, |e| e.active_progress.read().is_some());
+
+    if op_in_progress {
+        // Operation running: just update stored script so next evaluation uses it.
+        // The in-memory AppDef is left unchanged until the operation completes.
+        if let Some(entry) = state.registry.write().get_mut(name) {
+            entry.script = script.to_owned();
+        }
+    } else {
+        // No operation: reload script and apply to in-memory AppDef immediately.
+        state
+            .registry
+            .write()
+            .reload(name, script.to_owned())
+            .map_err(|e| OiError::script_error(e.to_string()))?;
+        // Wake reconciler to pick up new desired state.
+        if let Some(entry) = state.registry.read().get(name) {
+            entry.tick_notify.notify_one();
+        }
+    }
+
+    // Persist updated script to DB in either case.
+    {
+        let reg = state.registry.read();
+        let entry = reg.get(name).expect("confirmed registered");
+        let db = state.db.lock();
+        AppRegistry::persist_app(&*db, entry)
+            .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db update: {e}")))?;
+    }
+
+    Ok(json!({}))
 }
