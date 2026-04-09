@@ -494,11 +494,32 @@ pub(crate) async fn ensure_caddy_running(
     }
 
     // 4. Read active container name from DB (default to blue slot).
+    //    Normalize legacy names ("seedling-caddy", "seedling-caddy-next")
+    //    to the blue/green scheme so upgrades from older installations
+    //    converge cleanly.
     let active = {
         let conn = caddy_db_open(data_dir).map_err(|e| CaddyStartupError::Db { source: e })?;
-        read_active_container(&conn)
+        let raw = read_active_container(&conn)
             .map_err(|e| CaddyStartupError::Db { source: e })?
-            .unwrap_or_else(|| CADDY_BLUE.to_owned())
+            .unwrap_or_else(|| CADDY_BLUE.to_owned());
+        if raw != CADDY_BLUE && raw != CADDY_GREEN {
+            tracing::info!(
+                old = %raw,
+                new = CADDY_BLUE,
+                "migrating legacy caddy slot name to blue/green"
+            );
+            // Stop the legacy container so it doesn't linger.
+            if container.inspect(&raw).await.ok().flatten().is_some() {
+                stop_slot(&raw, process, container).await;
+            }
+            // Persist the normalized name.
+            let conn = caddy_db_open(data_dir).map_err(|e| CaddyStartupError::Db { source: e })?;
+            write_active_container(&conn, CADDY_BLUE)
+                .map_err(|e| CaddyStartupError::Db { source: e })?;
+            CADDY_BLUE.to_owned()
+        } else {
+            raw
+        }
     };
 
     // 5. Determine the other slot.
