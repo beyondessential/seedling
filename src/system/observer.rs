@@ -179,6 +179,11 @@ impl Observer {
                     ContainerHealth::Unhealthy => {
                         facts.push((ObservationFact::ContainerUnhealthy, now));
                     }
+                    ContainerHealth::None if s.status == ContainerStatus::Running => {
+                        // No health check configured — a running container is
+                        // implicitly healthy and therefore Ready.
+                        facts.push((ObservationFact::ContainerHealthy, now));
+                    }
                     _ => {}
                 }
             }
