@@ -348,13 +348,23 @@ fn describe_app(state: &OiState, params: Value) -> HandlerResult {
         })
         .unwrap_or_default();
 
-    // resources — with instance lifecycle state from DB observations
+    // resources — with instance lifecycle state from DB observations.
+    // Only query instances for Installed/Uninstalling apps; NotInstalled
+    // apps have no live instances and stale DB records are misleading.
+    let query_instances = matches!(
+        status,
+        AppStatus::Running
+            | AppStatus::Degraded
+            | AppStatus::Faulted
+            | AppStatus::Operating { .. }
+            | AppStatus::Uninstalling
+    );
     let resources_json: Vec<Value> = {
         let db = state.db.lock();
         def.resources
             .keys()
             .map(|id| {
-                let instances_json: Vec<Value> =
+                let instances_json: Vec<Value> = if query_instances {
                     find_instances_for_group(&db, name, id.kind, Some(id.name.as_str()))
                         .unwrap_or_default()
                         .iter()
@@ -371,7 +381,10 @@ fn describe_app(state: &OiState, params: Value) -> HandlerResult {
                                 }),
                             })
                         })
-                        .collect();
+                        .collect()
+                } else {
+                    vec![]
+                };
 
                 json!({
                     "name": id.name.as_str(),
