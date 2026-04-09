@@ -288,6 +288,28 @@ impl OiClient {
         Ok(Self { conn })
     }
 
+    /// Open a raw bidirectional stream.
+    ///
+    /// Used for shell sessions where the stream protocol differs from the
+    /// standard request/response cycle of `request()`.
+    pub async fn open_bi(&self) -> Result<(quinn::SendStream, quinn::RecvStream), ClientError> {
+        self.conn
+            .open_bi()
+            .await
+            .map_err(|e| ClientError::Transport(Box::new(e)))
+    }
+
+    /// Accept an incoming server-initiated unidirectional stream.
+    ///
+    /// Used to receive the stdout and stderr streams opened by the server
+    /// during an `OpenShell` session.
+    pub async fn accept_uni(&self) -> Result<quinn::RecvStream, ClientError> {
+        self.conn
+            .accept_uni()
+            .await
+            .map_err(|e| ClientError::Transport(Box::new(e)))
+    }
+
     /// Send a single JSON request and return the parsed result value.
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, ClientError> {
         let req_bytes = serde_json::to_vec(&serde_json::json!({
