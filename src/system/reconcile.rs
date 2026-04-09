@@ -365,6 +365,7 @@ impl Reconciler {
 
         // Global: proxy config (aggregated across all apps)
         let mut all_pairs = Vec::new();
+        let mut all_l4_routes = Vec::new();
         let mut proxy_obs = Vec::new();
         let mut proxy_ready_obs = Vec::new();
         for app in &apps {
@@ -379,13 +380,15 @@ impl Reconciler {
                 &app.name,
             );
             all_pairs.extend(build.pairs);
+            all_l4_routes.extend(build.l4_routes);
             proxy_obs.extend(build.observations);
             proxy_ready_obs.extend(build.ready_observations);
         }
         self.persist_obs(proxy_obs);
 
-        if !all_pairs.is_empty() {
-            let config = build_proxy_config(&all_pairs, caddy_addr);
+        if !all_pairs.is_empty() || !all_l4_routes.is_empty() {
+            let mut config = build_proxy_config(&all_pairs, caddy_addr);
+            config.l4_routes = all_l4_routes.clone();
             let caddy_json = caddy::build_caddy_config(&config);
 
             if let Err(e) = self.driver.proxy.apply_config(&config).await {

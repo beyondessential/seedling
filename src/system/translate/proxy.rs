@@ -147,6 +147,7 @@ pub fn build_proxy_config(
     ProxyConfig {
         listeners: listener_set.into_iter().collect(),
         virtual_hosts: vhosts.into_values().collect(),
+        l4_routes: vec![],
     }
 }
 

@@ -11,11 +11,15 @@ use crate::{
         InstanceRegistry, desired::DesiredState, identity::ResourceInstance,
         lifecycle::LifecycleState,
     },
-    system::translate::proxy::{ServiceUpstream, instance_ipv6},
+    system::{
+        translate::proxy::{ServiceUpstream, instance_ipv6},
+        types::{L4Proto, L4Route},
+    },
 };
 
 pub(super) struct ProxyBuildOutput {
     pub pairs: Vec<(IngressDef, ServiceUpstream)>,
+    pub l4_routes: Vec<L4Route>,
     /// Observations to persist regardless of apply outcome (ingress_configured + uninstall).
     pub observations: Vec<(ResourceInstance, &'static str, serde_json::Value)>,
     /// Observations to persist only after successful apply (ingress_ready).
@@ -35,6 +39,7 @@ pub(super) fn collect(
     let mut ready_observations: Vec<(ResourceInstance, &'static str, serde_json::Value)> =
         Vec::new();
     let mut pairs: Vec<(IngressDef, ServiceUpstream)> = Vec::new();
+    let mut l4_routes: Vec<L4Route> = Vec::new();
 
     for resource in snapshot.resources.values() {
         let ingress = match resource {
@@ -49,9 +54,6 @@ pub(super) fn collect(
             registry.get_or_create_singleton(app_name, ResourceKind::Service, Some(svc_name));
         let service_ip = instance_ipv6(node_prefix, &svc_instance);
 
-        // Find the upstream port by scanning all pod definitions for a binding
-        // that references this service. Fall back to the ingress's declared port
-        // if no binding is found.
         let upstream_port = find_upstream_port(snapshot, svc_name, def.port);
 
         let ingress_instance = registry.get_or_create_singleton(
@@ -59,6 +61,39 @@ pub(super) fn collect(
             ResourceKind::Ingress,
             Some(ingress.service.name.as_str()),
         );
+
+        if def.http_terminate.is_none() {
+            let upstream_url = format!("[{}]:{}", service_ip, upstream_port);
+
+            if def.dtls || def.quic {
+                l4_routes.push(L4Route {
+                    port: def.port,
+                    proto: L4Proto::Tcp,
+                    upstreams: vec![upstream_url.clone()],
+                });
+                l4_routes.push(L4Route {
+                    port: def.port,
+                    proto: L4Proto::Udp,
+                    upstreams: vec![upstream_url],
+                });
+            } else {
+                l4_routes.push(L4Route {
+                    port: def.port,
+                    proto: L4Proto::Tcp,
+                    upstreams: vec![upstream_url],
+                });
+            };
+
+            observations.push((
+                ingress_instance.clone(),
+                "ingress_configured",
+                serde_json::json!({}),
+            ));
+            ready_observations.push((ingress_instance, "ingress_ready", serde_json::json!({})));
+
+            continue;
+        }
+
         observations.push((
             ingress_instance.clone(),
             "ingress_configured",
@@ -104,6 +139,7 @@ pub(super) fn collect(
 
     ProxyBuildOutput {
         pairs,
+        l4_routes,
         observations,
         ready_observations,
     }

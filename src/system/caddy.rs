@@ -14,8 +14,8 @@ use tokio::sync::RwLock;
 use crate::system::{
     BoxError, BoxFuture, ContainerRuntime, NetworkProxy, ProcessManager,
     types::{
-        ContainerStatus, ProxyConfig, ProxyListenerProto, TransientRestart, TransientUnitSpec,
-        VirtualHost,
+        ContainerStatus, L4Proto, ProxyConfig, ProxyListenerProto, TransientRestart,
+        TransientUnitSpec, VirtualHost,
     },
 };
 
@@ -672,6 +672,40 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
         });
     }
 
+    if !config.l4_routes.is_empty() {
+        let mut l4_servers = serde_json::Map::new();
+
+        for route in &config.l4_routes {
+            let proto_str = match route.proto {
+                L4Proto::Tcp => "tcp",
+                L4Proto::Udp => "udp",
+            };
+            let server_name = format!("l4_{proto_str}_{}", route.port);
+            let listen = format!("{proto_str}/:{}", route.port);
+
+            let upstreams: Vec<Value> = route
+                .upstreams
+                .iter()
+                .map(|u| json!({ "dial": [u] }))
+                .collect();
+
+            l4_servers.insert(
+                server_name,
+                json!({
+                    "listen": [listen],
+                    "routes": [{
+                        "handle": [{
+                            "handler": "proxy",
+                            "upstreams": upstreams,
+                        }]
+                    }]
+                }),
+            );
+        }
+
+        apps["layer4"] = json!({ "servers": l4_servers });
+    }
+
     json!({ "admin": { "listen": ":2019" }, "apps": apps })
 }
 
@@ -777,6 +811,7 @@ mod tests {
                 proto: ProxyListenerProto::Http,
             }],
             virtual_hosts: vec![http_vhost("example.com", "[fd5e::1]:3000")],
+            l4_routes: vec![],
         };
         let json = build_caddy_config(&config);
         let servers = &json["apps"]["http"]["servers"];
@@ -798,6 +833,7 @@ mod tests {
                 },
             ],
             virtual_hosts: vec![https_vhost("example.com", "[fd5e::1]:3000")],
+            l4_routes: vec![],
         };
         let json = build_caddy_config(&config);
         let servers = &json["apps"]["http"]["servers"];
@@ -834,6 +870,7 @@ mod tests {
                     upstreams: vec!["http://[fd5e::1]:3000".to_string()],
                 }],
             }],
+            l4_routes: vec![],
         };
         let json = build_caddy_config(&config);
         let subjects = &json["apps"]["tls"]["automation"]["policies"][0]["subjects"];
@@ -856,6 +893,7 @@ mod tests {
                     upstreams: vec!["http://[fd5e:ed12:3456:0100::3]:3000".to_string()],
                 }],
             }],
+            l4_routes: vec![],
         };
         let json = build_caddy_config(&config);
         let dial = &json["apps"]["http"]["servers"]["seedling_https"]["routes"][0]["handle"][0]["upstreams"]
@@ -885,6 +923,7 @@ mod tests {
                     upstreams: vec!["http://[fd5e::1]:3000".to_string()],
                 }],
             }],
+            l4_routes: vec![],
         };
         let json = build_caddy_config(&config);
         let listen = &json["apps"]["http"]["servers"]["seedling_https"]["listen"];
