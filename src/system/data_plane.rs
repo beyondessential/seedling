@@ -407,6 +407,7 @@ fn ingress_rule_stmts(rule: &IngressRule) -> Vec<Vec<Statement<'static>>> {
     let make = |proto: &'static str| {
         vec![
             match_nfproto(NFPROTO_IPV6),
+            match_fib_daddr_local(),
             match_eq(payload_expr(proto, "dport"), Expression::Number(ext_port)),
             dnat_ip6(caddy_ip.clone(), caddy_port),
         ]
