@@ -212,6 +212,7 @@ async fn read_json_line(
 
 // i[shell.open]
 // i[shell.streams]
+// i[shell.concurrent]
 // i[stream.shell]
 // i[stream.shell.framing]
 async fn open_shell_session(
@@ -577,6 +578,7 @@ async fn open_shell_session(
         }
     }
 
+    // i[shell.cleanup]
     let _ = exec_handle.child.kill().await;
     let status = exec_handle.child.wait().await;
     exit_code = status.ok().and_then(|s| s.code()).unwrap_or(-1);
