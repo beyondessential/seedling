@@ -116,10 +116,8 @@ pub(super) fn collect(
 /// binding is found.
 ///
 /// # Port translation
-/// TODO: port translation between pod_port and service_port is not yet
-/// supported. Until it is, `pod_port` and `service_port.port` are asserted
-/// to be equal so that misconfigurations are caught immediately rather than
-/// silently routing traffic to the wrong port.
+/// Service DNAT rules handle translation from service port to pod port,
+/// so the returned port is always the service-facing port.
 fn find_upstream_port(snapshot: &AppDef, service_name: &str, fallback_port: u16) -> u16 {
     for resource in snapshot.resources.values() {
         let result = match resource {
@@ -147,27 +145,13 @@ fn find_upstream_port(snapshot: &AppDef, service_name: &str, fallback_port: u16)
 fn scan_pod_for_port(pod: &PodDef, service_name: &str) -> Option<u16> {
     for b in &pod.tcp_bindings {
         if b.service_port.service.name.as_str() == service_name {
-            // TODO: port translation is not yet supported; the pod port and
-            // the service port must be identical until translation is
-            // implemented.
-            debug_assert_eq!(
-                b.pod_port, b.service_port.port,
-                "port translation not supported: pod_port {} != service_port {}",
-                b.pod_port, b.service_port.port,
-            );
-            return Some(b.pod_port);
+            return Some(b.service_port.port);
         }
     }
 
     for b in &pod.http_bindings {
         if b.route.http.service.name.as_str() == service_name {
-            // TODO: port translation is not yet supported.
-            debug_assert_eq!(
-                b.pod_port, b.route.http.port,
-                "port translation not supported: pod_port {} != http_service port {}",
-                b.pod_port, b.route.http.port,
-            );
-            return Some(b.pod_port);
+            return Some(b.route.http.port);
         }
     }
 

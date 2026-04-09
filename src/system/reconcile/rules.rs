@@ -1,4 +1,7 @@
-use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+use std::{
+    collections::HashMap,
+    net::{IpAddr, Ipv6Addr, SocketAddr},
+};
 
 use ipnet::Ipv6Net;
 
@@ -9,12 +12,73 @@ use crate::{
     },
     runtime::InstanceRegistry,
     system::{
-        translate::proxy::{instance_ipv6, pod_mount_addr},
-        types::{ForwardProto, IngressRule, MountRule},
+        translate::proxy::instance_ipv6,
+        types::{ForwardProto, IngressRule, MountRule, ServiceDnatRule},
     },
 };
 
 use super::RunningPod;
+
+/// Collects backends from running pods' bindings.
+/// Returns a map from `(service_name, service_port)` to `Vec<(pod_ip, pod_port)>`.
+fn collect_service_backends(
+    running_pods: &[RunningPod],
+) -> HashMap<(String, u16), Vec<(Ipv6Addr, u16)>> {
+    let mut backends: HashMap<(String, u16), Vec<(Ipv6Addr, u16)>> = HashMap::new();
+
+    for pod in running_pods {
+        let (http, tcp, udp) = match &pod.resource {
+            Resource::Deployment(dep) => {
+                let def = dep.def.lock();
+                let pod_def = def.pod.lock();
+                (
+                    pod_def.http_bindings.clone(),
+                    pod_def.tcp_bindings.clone(),
+                    pod_def.udp_bindings.clone(),
+                )
+            }
+            Resource::Job(job) => {
+                let def = job.def.lock();
+                let pod_def = def.pod.lock();
+                (
+                    pod_def.http_bindings.clone(),
+                    pod_def.tcp_bindings.clone(),
+                    pod_def.udp_bindings.clone(),
+                )
+            }
+            _ => continue,
+        };
+
+        for b in &http {
+            let svc_name = b.route.http.service.name.as_str().to_owned();
+            let svc_port = b.route.http.port;
+            backends
+                .entry((svc_name, svc_port))
+                .or_default()
+                .push((pod.pod_ip, b.pod_port));
+        }
+
+        for b in &tcp {
+            let svc_name = b.service_port.service.name.as_str().to_owned();
+            let svc_port = b.service_port.port;
+            backends
+                .entry((svc_name, svc_port))
+                .or_default()
+                .push((pod.pod_ip, b.pod_port));
+        }
+
+        for b in &udp {
+            let svc_name = b.service_port.service.name.as_str().to_owned();
+            let svc_port = b.service_port.port;
+            backends
+                .entry((svc_name, svc_port))
+                .or_default()
+                .push((pod.pod_ip, b.pod_port));
+        }
+    }
+
+    backends
+}
 
 // r[autonomous.ingress]
 pub(super) fn build_ingress_rules(snapshot: &AppDef, caddy_ip: Ipv6Addr) -> Vec<IngressRule> {
@@ -59,13 +123,35 @@ pub(super) fn build_ingress_rules(snapshot: &AppDef, caddy_ip: Ipv6Addr) -> Vec<
     rules
 }
 
-// r[autonomous.network]
-pub(super) fn build_mount_rules(
+// r[impl infra.dataplane.service-dnat]
+pub(super) fn build_service_dnat_rules(
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
     running_pods: &[RunningPod],
     app_name: &str,
-) -> Vec<MountRule> {
+) -> Vec<ServiceDnatRule> {
+    let backends = collect_service_backends(running_pods);
+    let mut rules = Vec::new();
+
+    for ((svc_name, svc_port), backend_list) in &backends {
+        let svc_instance =
+            registry.get_or_create_singleton(app_name, ResourceKind::Service, Some(svc_name));
+        let service_ip = instance_ipv6(node_prefix, &svc_instance);
+
+        rules.push(ServiceDnatRule {
+            service_ip,
+            service_port: *svc_port,
+            backends: backend_list.clone(),
+            proto: ForwardProto::Tcp,
+        });
+    }
+
+    rules
+}
+
+// r[autonomous.network]
+pub(super) fn build_mount_rules(running_pods: &[RunningPod]) -> Vec<MountRule> {
+    let backend_map = collect_service_backends(running_pods);
     let mut rules = Vec::new();
 
     for pod in running_pods {
@@ -87,22 +173,18 @@ pub(super) fn build_mount_rules(
             continue;
         }
 
-        let mount_addr = pod_mount_addr(&pod.pod_prefix);
+        let mount_addr = crate::system::translate::proxy::pod_mount_addr(&pod.pod_prefix);
 
         for sp in &service_mounts {
             let svc_name = sp.service.name.as_str();
-            let svc_instance =
-                registry.get_or_create_singleton(app_name, ResourceKind::Service, Some(svc_name));
-            let service_ip = instance_ipv6(node_prefix, &svc_instance);
+            let key = (svc_name.to_owned(), sp.port);
+            let svc_backends = backend_map.get(&key).cloned().unwrap_or_default();
 
             rules.push(MountRule {
                 pod_prefix: pod.pod_prefix,
                 mount_addr,
                 mount_port: sp.port,
-                service_ip,
-                // Port translation is not yet supported; mount_port and
-                // service_port are always the same value.
-                service_port: sp.port,
+                backends: svc_backends,
                 proto: ForwardProto::Tcp,
             });
         }

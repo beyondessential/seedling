@@ -415,3 +415,16 @@ Absent specification bugs, anything that is not defined here is either defined i
 > local address is redirected to the proxy. The output rules must be restricted to
 > locally-destined packets (`fib daddr type local`) and to the IPv6 address family, and
 > must mirror the port and protocol set of the prerouting ingress rules.
+
+> r[infra.dataplane.service-dnat]
+> The runtime must install DNAT6 rules in the nftables `prerouting` chain that translate
+> traffic destined for a service's stable IPv6 address and declared service port to a
+> backing pod's address and pod-side port. When multiple backends are available, the
+> runtime must distribute new connections across them. These rules are applied atomically
+> alongside ingress and mount rules.
+
+> r[infra.dataplane.mount-dnat]
+> Mount DNAT rules must translate directly from the pod's mount endpoint address and mount
+> port to a backing pod's address and pod-side port, without an intermediate hop through
+> the service address. When multiple backends are available, the runtime must distribute
+> new connections across them.

@@ -1,10 +1,13 @@
-use std::{borrow::Cow, net::IpAddr};
+use std::{
+    borrow::Cow,
+    net::{IpAddr, Ipv6Addr},
+};
 
 use nftables::{
     batch::Batch,
     expr::{
-        Expression, Fib, FibFlag, FibResult, Meta, MetaKey, NamedExpression, Payload, PayloadField,
-        Prefix,
+        Expression, Fib, FibFlag, FibResult, Map, Meta, MetaKey, NamedExpression, NgMode, Numgen,
+        Payload, PayloadField, Prefix, SetItem,
     },
     helper,
     schema::{Chain, FlushObject, NfCmd, NfListObject, Rule, Table},
@@ -16,7 +19,7 @@ use tracing::error;
 
 use crate::system::{
     BoxError, BoxFuture, DataPlane,
-    types::{DataPlaneRules, ForwardProto, IngressRule, MountRule, ServiceRoute},
+    types::{DataPlaneRules, ForwardProto, IngressRule, MountRule, ServiceDnatRule, ServiceRoute},
 };
 
 const TABLE: &str = "seedling_net";
@@ -73,6 +76,12 @@ impl NftablesDataPlane {
 
         for rule in &rules.mounts {
             for stmts in mount_rule_stmts(rule) {
+                batch.add(rule_obj(CHAIN_PRE, stmts));
+            }
+        }
+
+        for rule in &rules.service_dnat {
+            for stmts in service_dnat_rule_stmts(rule) {
                 batch.add(rule_obj(CHAIN_PRE, stmts));
             }
         }
@@ -457,12 +466,14 @@ fn output_ingress_rule_stmts(rule: &IngressRule) -> Vec<Vec<Statement<'static>>>
 }
 
 fn mount_rule_stmts(rule: &MountRule) -> Vec<Vec<Statement<'static>>> {
+    if rule.backends.is_empty() {
+        return vec![];
+    }
+
     let pod_addr = rule.pod_prefix.network().to_string();
     let pod_len = rule.pod_prefix.prefix_len();
     let mount_addr = rule.mount_addr.to_string();
-    let svc_ip = rule.service_ip.to_string();
     let mount_port = rule.mount_port as u32;
-    let svc_port = rule.service_port;
 
     let make = |proto: &'static str| {
         vec![
@@ -475,7 +486,7 @@ fn mount_rule_stmts(rule: &MountRule) -> Vec<Vec<Statement<'static>>> {
                 Expression::String(Cow::Owned(mount_addr.clone())),
             ),
             match_eq(payload_expr(proto, "dport"), Expression::Number(mount_port)),
-            dnat_ip6(svc_ip.clone(), svc_port),
+            dnat_lb(&rule.backends),
         ]
     };
 
@@ -484,6 +495,77 @@ fn mount_rule_stmts(rule: &MountRule) -> Vec<Vec<Statement<'static>>> {
         ForwardProto::Udp => vec![make("udp")],
         ForwardProto::Both => vec![make("tcp"), make("udp")],
     }
+}
+
+// r[impl infra.dataplane.service-dnat]
+fn service_dnat_rule_stmts(rule: &ServiceDnatRule) -> Vec<Vec<Statement<'static>>> {
+    if rule.backends.is_empty() {
+        return vec![];
+    }
+
+    let svc_ip = rule.service_ip.to_string();
+    let svc_port = rule.service_port as u32;
+
+    let make = |proto: &'static str| {
+        let mut stmts = vec![
+            match_nfproto(NFPROTO_IPV6),
+            match_eq(
+                payload_expr("ip6", "daddr"),
+                Expression::String(Cow::Owned(svc_ip.clone())),
+            ),
+            match_eq(payload_expr(proto, "dport"), Expression::Number(svc_port)),
+        ];
+        stmts.push(dnat_lb(&rule.backends));
+        stmts
+    };
+
+    match rule.proto {
+        ForwardProto::Tcp => vec![make("tcp")],
+        ForwardProto::Udp => vec![make("udp")],
+        ForwardProto::Both => vec![make("tcp"), make("udp")],
+    }
+}
+
+/// DNAT to one or more backends. Single backend: plain DNAT. Multiple
+/// backends: round-robin via `numgen inc mod N` mapping to addresses.
+fn dnat_lb(backends: &[(Ipv6Addr, u16)]) -> Statement<'static> {
+    assert!(!backends.is_empty(), "dnat_lb called with no backends");
+
+    if backends.len() == 1 {
+        let (ip, port) = &backends[0];
+        return dnat_ip6(ip.to_string(), *port);
+    }
+
+    let port = backends[0].1;
+
+    let numgen = Expression::Named(NamedExpression::Numgen(Numgen {
+        mode: NgMode::Inc,
+        ng_mod: backends.len() as u32,
+        offset: None,
+    }));
+
+    let mapping_set: Vec<SetItem<'_>> = backends
+        .iter()
+        .enumerate()
+        .map(|(i, (ip, _))| {
+            SetItem::Mapping(
+                Expression::Number(i as u32),
+                Expression::String(Cow::Owned(ip.to_string())),
+            )
+        })
+        .collect();
+
+    let mapped_addr = Expression::Named(NamedExpression::Map(Box::new(Map {
+        key: numgen,
+        data: Expression::Named(NamedExpression::Set(mapping_set)),
+    })));
+
+    Statement::DNAT(Some(NAT {
+        addr: Some(mapped_addr),
+        family: Some(NATFamily::IP6),
+        port: Some(Expression::Number(port as u32)),
+        flags: None,
+    }))
 }
 
 fn seedling_forward_stmts() -> Vec<Statement<'static>> {
@@ -501,7 +583,7 @@ mod tests {
 
     use crate::system::types::{ForwardProto, IngressRule};
 
-    use super::{ingress_rule_stmts, output_ingress_rule_stmts};
+    use super::{dnat_lb, ingress_rule_stmts, output_ingress_rule_stmts};
 
     fn test_rule(port: u16, proto: ForwardProto) -> IngressRule {
         IngressRule {

@@ -326,6 +326,7 @@ impl Reconciler {
         // Global: nftables rules (aggregated across all apps)
         let mut all_ingress = Vec::new();
         let mut all_mounts = Vec::new();
+        let mut all_service_dnat = Vec::new();
         for app in &apps {
             if app.phase == AppPhase::Uninstalling {
                 continue;
@@ -335,7 +336,8 @@ impl Reconciler {
                 .map(|v| v.as_slice())
                 .unwrap_or(&[]);
             all_ingress.extend(rules::build_ingress_rules(&app.app_def, caddy_ip));
-            all_mounts.extend(rules::build_mount_rules(
+            all_mounts.extend(rules::build_mount_rules(running));
+            all_service_dnat.extend(rules::build_service_dnat_rules(
                 &self.node_prefix,
                 &*self.registry,
                 running,
@@ -345,6 +347,7 @@ impl Reconciler {
         let dp_rules = DataPlaneRules {
             ingress: all_ingress,
             mounts: all_mounts,
+            service_dnat: all_service_dnat,
         };
         if let Err(e) = self.driver.data_plane.apply_rules(&dp_rules).await {
             error!(error = %e, "rules: apply_rules failed");

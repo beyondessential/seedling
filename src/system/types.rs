@@ -185,8 +185,10 @@ pub enum ActiveState {
 pub struct DataPlaneRules {
     /// External ingress: host port → Caddy's IPv6 address.
     pub ingress: Vec<IngressRule>,
-    /// Service mount DNAT6: per-pod localmount:port → service-ip:port.
+    /// Service mount DNAT6: per-pod localmount:port → backend pod_ip:pod_port.
     pub mounts: Vec<MountRule>,
+    /// Service DNAT6: service_ip:service_port → backend pod_ip:pod_port.
+    pub service_dnat: Vec<ServiceDnatRule>,
 }
 
 /// Redirects an external host port to Caddy's container address.
@@ -199,8 +201,10 @@ pub struct IngressRule {
     pub caddy_addr: SocketAddr,
 }
 
-/// DNAT6 rule translating a service mount port to the canonical service port.
-/// Scoped to traffic from a specific pod's /64 destined for that pod's ::2.
+/// DNAT6 rule translating a mount endpoint to a backing pod's address and
+/// pod-side port. Scoped to traffic from a specific pod's /64 destined for
+/// that pod's mount endpoint address (::1000).
+// r[impl infra.dataplane.mount-dnat]
 #[derive(Debug, Clone)]
 pub struct MountRule {
     /// The mounting pod's /64 prefix.
@@ -209,10 +213,25 @@ pub struct MountRule {
     pub mount_addr: Ipv6Addr,
     /// Port declared in `.mount()`.
     pub mount_port: u16,
-    /// Target service's IPv6 address.
+    /// Backend pod addresses and pod-side ports.
+    pub backends: Vec<(Ipv6Addr, u16)>,
+    pub proto: ForwardProto,
+}
+
+/// DNAT6 rule translating service_ip:service_port to a backing pod's
+/// address and pod-side port. When multiple backends exist, connections are
+/// distributed round-robin via nftables `numgen`.
+///
+/// Applied in the nftables prerouting chain.
+// r[impl infra.dataplane.service-dnat]
+#[derive(Debug, Clone)]
+pub struct ServiceDnatRule {
+    /// The service's stable IPv6 address.
     pub service_ip: Ipv6Addr,
-    /// Canonical service port.
+    /// The endpoint-side (service) port.
     pub service_port: u16,
+    /// Backend pod addresses and pod-side ports.
+    pub backends: Vec<(Ipv6Addr, u16)>,
     pub proto: ForwardProto,
 }
 
