@@ -50,19 +50,6 @@ pub fn register(engine: &mut Engine) {
 
     // l[impl collection.col]
     engine.register_fn("col", collection::col);
-
-    engine.register_fn(
-        "ingress",
-        |svc: service::Service,
-         hostname: String,
-         port: i64|
-         -> Result<ingress::Ingress, Box<rhai::EvalAltResult>> {
-            if !(1..=65534).contains(&port) {
-                return Err(format!("port {port} out of valid range 1..65534").into());
-            }
-            Ok(ingress::Ingress::new(svc, hostname, port as u16))
-        },
-    );
 }
 
 // l[impl bsl.scope]
