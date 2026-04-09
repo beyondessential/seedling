@@ -4,5 +4,6 @@ pub mod error;
 pub mod handler;
 pub mod keys;
 pub mod server;
+pub mod shells;
 
 pub use server::{DEFAULT_PORT, run};

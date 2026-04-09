@@ -9,6 +9,7 @@ use std::collections::HashSet;
 
 use parking_lot::RwLock;
 use serde_json::{Value, json};
+use uuid::Uuid;
 
 use crate::{
     defs::install::InstallRequirementKind,
@@ -42,6 +43,8 @@ pub struct OiState {
     /// In-memory set of authorized client SPKI fingerprints, shared with the
     /// TLS client cert verifier so additions/removals take effect immediately.
     pub trusted_keys: Arc<parking_lot::RwLock<HashSet<String>>>,
+    pub shells: Arc<crate::oi::shells::ShellRegistry>,
+    pub container_runtime: Arc<dyn crate::system::ContainerRuntime>,
 }
 
 // ---------------------------------------------------------------------------
@@ -100,6 +103,12 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8]) -> HandlerResult {
         "AuthorizeKey" => authorize_key(state, req.params),
         // i[key.revoke]
         "RevokeKey" => revoke_key(state, req.params),
+        // i[shell.resize]
+        "ResizeShell" => resize_shell(state, req.params),
+        // i[shell.list]
+        "ListShells" => list_shells(state, req.params),
+        // i[shell.stop]
+        "StopShell" => stop_shell(state, req.params),
         other => Err(OiError::not_found(format!("unknown method: {other}"))),
     };
 
@@ -1284,6 +1293,62 @@ fn spawn_accepted_operation(
             );
         }
     });
+}
+
+// i[shell.resize]
+fn resize_shell(state: &Arc<OiState>, params: Value) -> HandlerResult {
+    let id_str = params
+        .get("session_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| OiError::new(ErrorCode::RequirementsInvalid, "missing param: session_id"))?;
+    let id = Uuid::parse_str(id_str)
+        .map_err(|_| OiError::new(ErrorCode::RequirementsInvalid, "invalid session_id"))?;
+    let rows = params
+        .get("rows")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| OiError::new(ErrorCode::RequirementsInvalid, "missing param: rows"))?
+        as u16;
+    let cols = params
+        .get("cols")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| OiError::new(ErrorCode::RequirementsInvalid, "missing param: cols"))?
+        as u16;
+    if !state.shells.resize(&id, rows, cols) {
+        return Err(OiError::not_found(format!("session not found: {id_str}")));
+    }
+    Ok(json!({}))
+}
+
+// i[shell.list]
+fn list_shells(state: &Arc<OiState>, params: Value) -> HandlerResult {
+    let app = params.get("app").and_then(Value::as_str);
+    let records = state.shells.list(app);
+    let list: Vec<Value> = records
+        .iter()
+        .map(|r| {
+            json!({
+                "session_id": r.session_id.to_string(),
+                "app": r.app,
+                "name": r.name,
+                "opened_at": r.opened_at.to_rfc3339(),
+            })
+        })
+        .collect();
+    Ok(json!({ "shells": list }))
+}
+
+// i[shell.stop]
+fn stop_shell(state: &Arc<OiState>, params: Value) -> HandlerResult {
+    let id_str = params
+        .get("session_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| OiError::new(ErrorCode::RequirementsInvalid, "missing param: session_id"))?;
+    let id = Uuid::parse_str(id_str)
+        .map_err(|_| OiError::new(ErrorCode::RequirementsInvalid, "invalid session_id"))?;
+    if !state.shells.stop(&id) {
+        return Err(OiError::not_found(format!("session not found: {id_str}")));
+    }
+    Ok(json!({}))
 }
 
 #[cfg(test)]

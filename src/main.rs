@@ -186,6 +186,8 @@ async fn main() {
         tick_notify: Arc::clone(&tick_notify),
         db_path: db_path.clone(),
         trusted_keys: seedling::oi::auth::new_trusted_keys(),
+        shells: seedling::oi::shells::ShellRegistry::new(),
+        container_runtime: Arc::clone(&driver.container),
     });
 
     oi::run(Arc::clone(&oi_state), oi::DEFAULT_PORT, &data_dir)
