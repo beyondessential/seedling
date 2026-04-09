@@ -194,9 +194,9 @@ impl System {
         let process: Arc<dyn ProcessManager> = Arc::new(systemd::SystemdManager::connect().await?);
         let data_plane_arc: Arc<dyn DataPlane> = Arc::new(data_plane::NftablesDataPlane::new()?);
 
-        let initial_addr =
+        let initial =
             caddy::ensure_caddy_running(&*container, &*process, &node_prefix, data_dir).await?;
-        let caddy_proxy = Arc::new(caddy::CaddyProxy::new(initial_addr));
+        let caddy_proxy = Arc::new(caddy::CaddyProxy::new(initial.v6));
         let caddy_admin_addr = caddy_proxy.admin_addr_handle();
         let proxy: Arc<dyn NetworkProxy> = caddy_proxy;
 

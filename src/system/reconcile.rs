@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    net::{IpAddr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
     sync::Arc,
     time::Duration,
@@ -78,6 +78,7 @@ pub struct Reconciler {
     bridge_names: HashMap<String, String>,
     netlink: Option<NetlinkHandle>,
     caddy_admin_addr: Arc<AsyncRwLock<SocketAddr>>,
+    caddy_v4_addr: Option<Ipv4Addr>,
     data_dir: PathBuf,
     db: Arc<Mutex<Db>>,
     registry: Arc<dyn InstanceRegistry>,
@@ -105,6 +106,7 @@ impl Reconciler {
             bridge_names: HashMap::new(),
             netlink: None,
             caddy_admin_addr,
+            caddy_v4_addr: None,
             data_dir,
             db: Arc::new(Mutex::new(db)),
             registry,
@@ -301,8 +303,12 @@ impl Reconciler {
         )
         .await
         {
-            Ok(Ok(addr)) => {
-                *self.caddy_admin_addr.write().await = addr;
+            Ok(Ok(addrs)) => {
+                *self.caddy_admin_addr.write().await = addrs.v6;
+                self.caddy_v4_addr = addrs.v4.and_then(|sa| match sa.ip() {
+                    IpAddr::V4(ip4) => Some(ip4),
+                    _ => None,
+                });
             }
             Ok(Err(e)) => {
                 error!(error = %e, "caddy health check failed; skipping nftables and proxy this tick");
@@ -335,7 +341,12 @@ impl Reconciler {
                 .get(&app.name)
                 .map(|v| v.as_slice())
                 .unwrap_or(&[]);
-            all_ingress.extend(rules::build_ingress_rules(&app.app_def, caddy_ip, running));
+            all_ingress.extend(rules::build_ingress_rules(
+                &app.app_def,
+                caddy_ip,
+                self.caddy_v4_addr,
+                running,
+            ));
             all_mounts.extend(rules::build_mount_rules(running));
             all_service_dnat.extend(rules::build_service_dnat_rules(
                 &self.node_prefix,

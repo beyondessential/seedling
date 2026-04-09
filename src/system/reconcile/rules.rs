@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    net::{IpAddr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
 };
 
 use ipnet::Ipv6Net;
@@ -84,6 +84,7 @@ fn collect_service_backends(
 pub(super) fn build_ingress_rules(
     snapshot: &AppDef,
     caddy_ip: Ipv6Addr,
+    caddy_v4: Option<Ipv4Addr>,
     running_pods: &[RunningPod],
 ) -> Vec<IngressRule> {
     let mut rules = Vec::new();
@@ -107,23 +108,27 @@ pub(super) fn build_ingress_rules(
                 ForwardProto::Tcp
             };
 
+            let v4_addr = caddy_v4.map(|ip4| SocketAddr::new(IpAddr::V4(ip4), def.port));
+
             rules.push(IngressRule {
                 external_port: def.port,
                 proto,
                 target: IngressTarget::Proxy {
                     v6_addr: caddy_addr,
-                    v4_addr: None,
+                    v4_addr,
                 },
             });
 
             // HTTP→HTTPS redirect (always TCP, always through Caddy)
             if let Some(redirect) = &def.redirect {
+                let v4_redirect =
+                    caddy_v4.map(|ip4| SocketAddr::new(IpAddr::V4(ip4), redirect.port));
                 rules.push(IngressRule {
                     external_port: redirect.port,
                     proto: ForwardProto::Tcp,
                     target: IngressTarget::Proxy {
                         v6_addr: SocketAddr::new(IpAddr::V6(caddy_ip), redirect.port),
-                        v4_addr: None,
+                        v4_addr: v4_redirect,
                     },
                 });
             }

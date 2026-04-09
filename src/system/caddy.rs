@@ -1,5 +1,5 @@
 use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{IpAddr, SocketAddr},
     sync::Arc,
     time::Duration,
 };
@@ -18,6 +18,16 @@ use crate::system::{
         VirtualHost,
     },
 };
+
+// ---------------------------------------------------------------------------
+// CaddyAddrs — returned by ensure_caddy_running
+// ---------------------------------------------------------------------------
+
+/// Addresses at which Caddy's admin API is reachable.
+pub(crate) struct CaddyAddrs {
+    pub v6: SocketAddr,
+    pub v4: Option<SocketAddr>,
+}
 
 // ---------------------------------------------------------------------------
 // Internal error type
@@ -160,6 +170,12 @@ pub(crate) fn proxy_network_prefix(node_prefix: &Ipv6Net) -> Ipv6Net {
     addr[..6].copy_from_slice(&bytes[..6]);
     addr[6] = 0xff;
     Ipv6Net::new(std::net::Ipv6Addr::from(addr), 64).expect("64 is a valid IPv6 prefix length")
+}
+
+/// Fixed IPv4 /24 subnet for the seedling-proxy network, enabling
+/// dual-stack ingress without IPv4 on pod networks.
+pub(crate) fn proxy_ipv4_subnet() -> ipnet::Ipv4Net {
+    "10.89.255.0/24".parse().expect("valid IPv4 subnet")
 }
 
 #[derive(Debug, Snafu)]
@@ -333,13 +349,13 @@ async fn stop_slot(
 }
 
 /// Poll `container_name` until it is running and Caddy's admin API responds,
-/// or until the deadline elapses. Returns the admin SocketAddr on success.
+/// or until the deadline elapses. Returns `CaddyAddrs` on success.
 #[tracing::instrument(skip_all, fields(%container_name))]
 async fn poll_until_healthy(
     container_name: &str,
     container: &dyn ContainerRuntime,
     deadline: tokio::time::Instant,
-) -> Result<SocketAddr, CaddyStartupError> {
+) -> Result<CaddyAddrs, CaddyStartupError> {
     loop {
         if tokio::time::Instant::now() >= deadline {
             return Err(CaddyStartupError::Timeout);
@@ -348,9 +364,12 @@ async fn poll_until_healthy(
             && matches!(state.status, ContainerStatus::Running)
             && let Some(ip) = state.pod_addr
         {
-            let addr = SocketAddr::new(IpAddr::V6(ip), 2019);
-            if CaddyProxy::new(addr).is_healthy().await.unwrap_or(false) {
-                return Ok(addr);
+            let v6 = SocketAddr::new(IpAddr::V6(ip), 2019);
+            if CaddyProxy::new(v6).is_healthy().await.unwrap_or(false) {
+                let v4 = state
+                    .pod_addr_v4
+                    .map(|ip4| SocketAddr::new(IpAddr::V4(ip4), 2019));
+                return Ok(CaddyAddrs { v6, v4 });
             }
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -382,7 +401,7 @@ pub(crate) async fn ensure_caddy_running(
     process: &dyn ProcessManager,
     node_prefix: &Ipv6Net,
     data_dir: &std::path::Path,
-) -> Result<SocketAddr, CaddyStartupError> {
+) -> Result<CaddyAddrs, CaddyStartupError> {
     // 1. Ensure the proxy network exists.
     let proxy_prefix = proxy_network_prefix(node_prefix);
     if !container
@@ -391,7 +410,7 @@ pub(crate) async fn ensure_caddy_running(
         .map_err(|e| CaddyStartupError::Container { source: e })?
     {
         let _ = container
-            .create_network(PROXY_NETWORK, proxy_prefix, None)
+            .create_network(PROXY_NETWORK, proxy_prefix, Some(proxy_ipv4_subnet()))
             .await
             .map_err(|e| CaddyStartupError::Container { source: e })?;
     }
@@ -463,7 +482,10 @@ pub(crate) async fn ensure_caddy_running(
                 if let Some(ip) = state.pod_addr {
                     let addr = SocketAddr::new(IpAddr::V6(ip), 2019);
                     if CaddyProxy::new(addr).is_healthy().await.unwrap_or(false) {
-                        return Ok(addr);
+                        let v4 = state
+                            .pod_addr_v4
+                            .map(|ip4| SocketAddr::new(IpAddr::V4(ip4), 2019));
+                        return Ok(CaddyAddrs { v6: addr, v4 });
                     }
                     tracing::warn!(
                         container = %active,
@@ -489,12 +511,12 @@ pub(crate) async fn ensure_caddy_running(
                 // Wrong image — perform blue/green upgrade.
                 start_slot(other, container, process, data_dir).await?;
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
-                let new_addr = poll_until_healthy(other, container, deadline).await?;
+                let new_addrs = poll_until_healthy(other, container, deadline).await?;
 
                 // r[impl infra.proxy.upgrade.cache]
                 // Apply the cached proxy config to the new container.
                 if let Ok(Some(json)) = read_cached_proxy_json(data_dir)
-                    && let Err(e) = CaddyProxy::new(new_addr).apply_raw_json(&json).await
+                    && let Err(e) = CaddyProxy::new(new_addrs.v6).apply_raw_json(&json).await
                 {
                     tracing::warn!("failed to apply cached proxy config to upgraded Caddy: {e}");
                 }
@@ -505,7 +527,7 @@ pub(crate) async fn ensure_caddy_running(
                 write_active_container(&conn, other)
                     .map_err(|e| CaddyStartupError::Db { source: e })?;
 
-                return Ok(new_addr);
+                return Ok(new_addrs);
             }
         }
         Some(state) => {
@@ -525,12 +547,12 @@ pub(crate) async fn ensure_caddy_running(
     // 10. Fresh start.
     start_slot(&active, container, process, data_dir).await?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
-    let addr = poll_until_healthy(&active, container, deadline).await?;
+    let addrs = poll_until_healthy(&active, container, deadline).await?;
 
     // r[impl infra.proxy.upgrade.cache]
     // Apply the cached proxy config.
     if let Ok(Some(json)) = read_cached_proxy_json(data_dir)
-        && let Err(e) = CaddyProxy::new(addr).apply_raw_json(&json).await
+        && let Err(e) = CaddyProxy::new(addrs.v6).apply_raw_json(&json).await
     {
         tracing::warn!("failed to apply cached proxy config to fresh Caddy: {e}");
     }
@@ -539,7 +561,7 @@ pub(crate) async fn ensure_caddy_running(
     let conn = caddy_db_open(data_dir).map_err(|e| CaddyStartupError::Db { source: e })?;
     write_active_container(&conn, &active).map_err(|e| CaddyStartupError::Db { source: e })?;
 
-    Ok(addr)
+    Ok(addrs)
 }
 
 // ---------------------------------------------------------------------------
