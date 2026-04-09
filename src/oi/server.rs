@@ -86,7 +86,19 @@ pub async fn run(
 
     let tls_config = build_tls_config(&key, spki, Arc::clone(&state.trusted_keys))?;
     let quic_config = quinn::crypto::rustls::QuicServerConfig::try_from(tls_config)?;
-    let server_config = quinn::ServerConfig::with_crypto(Arc::new(quic_config));
+    let mut transport = quinn::TransportConfig::default();
+    // Send PING frames every 15 s so idle shell sessions do not trip the
+    // QUIC idle timeout.  Without this, a shell with no I/O for ~10 s
+    // causes the connection to be dropped by the peer.
+    transport.keep_alive_interval(Some(Duration::from_secs(15)));
+    // Allow connections to be genuinely idle for up to an hour before the
+    // endpoint considers them dead.  Shell sessions can be quiet for long
+    // stretches and must not be disconnected by an overly aggressive timeout.
+    transport.max_idle_timeout(Some(
+        quinn::VarInt::from_u32(3_600_000).into(), // 1 h in ms
+    ));
+    let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(quic_config));
+    server_config.transport_config(Arc::new(transport));
 
     let addr: SocketAddr = format!("[::1]:{port}").parse().unwrap();
     let endpoint = Endpoint::server(server_config, addr)?;
@@ -496,6 +508,8 @@ async fn open_shell_session(
             exec_target.instance_id.display_suffix()
         ),
     };
+    // Save before the spec is moved into exec().
+    let container_name = instance.display_name.clone();
 
     // Ensure the container image is available locally before creating the network.
     let image = exec_target
@@ -678,6 +692,15 @@ async fn open_shell_session(
     }
 
     // i[shell.cleanup]
+    // Force-remove the container via the runtime API.  Killing the child
+    // process (the `podman run` frontend) is not sufficient — conmon manages
+    // the container lifecycle independently and keeps it running if the
+    // frontend dies.  remove_container(force=true) sends SIGKILL to the
+    // container and removes it regardless of state.
+    let _ = state
+        .container_runtime
+        .remove_container(&container_name, true)
+        .await;
     let _ = exec_handle.child.kill().await;
     let status = exec_handle.child.wait().await;
     exit_code = status.ok().and_then(|s| s.code()).unwrap_or(-1);
