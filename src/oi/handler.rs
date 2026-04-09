@@ -15,6 +15,8 @@ use crate::{
     runtime::{
         AppPhase,
         apps::{AppRegistry, AppStatus},
+        barrier::oracle::derive_state_with_transition_time,
+        history::{find_instances_for_group, query_observations},
         scheduler::{RejectReason, ScheduleResult},
         transition_phase,
     },
@@ -346,19 +348,40 @@ fn describe_app(state: &OiState, params: Value) -> HandlerResult {
         })
         .unwrap_or_default();
 
-    // resources — instances not yet wired (Phase 1 skeleton)
-    let resources_json: Vec<Value> = def
-        .resources
-        .keys()
-        .map(|id| {
-            json!({
-                "name": id.name.as_str(),
-                "type": format!("{:?}", id.kind).to_lowercase(),
-                "instances": [],
-                "faults": [],
+    // resources — with instance lifecycle state from DB observations
+    let resources_json: Vec<Value> = {
+        let db = state.db.lock();
+        def.resources
+            .keys()
+            .map(|id| {
+                let instances_json: Vec<Value> =
+                    find_instances_for_group(&db, name, id.kind, Some(id.name.as_str()))
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|inst| {
+                            let observations = query_observations(&db, inst).unwrap_or_default();
+                            let (lifecycle, transition_time) =
+                                derive_state_with_transition_time(inst, &observations);
+                            json!({
+                                "id": inst.id.to_hex(),
+                                "display_name": inst.display_name,
+                                "lifecycle": format!("{lifecycle:?}"),
+                                "transition_time": transition_time.map(|t| {
+                                    chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()
+                                }),
+                            })
+                        })
+                        .collect();
+
+                json!({
+                    "name": id.name.as_str(),
+                    "type": format!("{:?}", id.kind).to_lowercase(),
+                    "instances": instances_json,
+                    "faults": [],
+                })
             })
-        })
-        .collect();
+            .collect()
+    };
 
     let mut desc = json!({
         "status": status.name(),
