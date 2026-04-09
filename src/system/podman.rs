@@ -141,6 +141,7 @@ impl PodmanRuntime {
             started_at,
             finished_at,
             pod_addr,
+            pod_addr_v4: None,
             image_id: data.image.clone(),
         }))
     }
@@ -235,6 +236,7 @@ impl PodmanRuntime {
         &self,
         name: &str,
         prefix: Ipv6Net,
+        _ipv4: Option<ipnet::Ipv4Net>,
     ) -> Result<String, PodmanError> {
         let net_addr = prefix.network();
         let mut gw_bytes = net_addr.octets();
@@ -535,9 +537,10 @@ impl ContainerRuntime for PodmanRuntime {
         &'a self,
         name: &'a str,
         prefix: Ipv6Net,
+        ipv4: Option<ipnet::Ipv4Net>,
     ) -> BoxFuture<'a, Result<String, BoxError>> {
         Box::pin(async move {
-            self.create_network_impl(name, prefix)
+            self.create_network_impl(name, prefix, ipv4)
                 .await
                 .map_err(Into::into)
         })

@@ -321,7 +321,7 @@ impl Actuator {
             Some(
                 self.driver
                     .container
-                    .create_network(&net_name, net_prefix)
+                    .create_network(&net_name, net_prefix, None)
                     .await
                     .map_err(|e| ActuateError::Container { source: e })?,
             )

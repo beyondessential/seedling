@@ -110,7 +110,10 @@ pub(super) fn build_ingress_rules(
             rules.push(IngressRule {
                 external_port: def.port,
                 proto,
-                target: IngressTarget::Proxy(caddy_addr),
+                target: IngressTarget::Proxy {
+                    v6_addr: caddy_addr,
+                    v4_addr: None,
+                },
             });
 
             // HTTP→HTTPS redirect (always TCP, always through Caddy)
@@ -118,10 +121,10 @@ pub(super) fn build_ingress_rules(
                 rules.push(IngressRule {
                     external_port: redirect.port,
                     proto: ForwardProto::Tcp,
-                    target: IngressTarget::Proxy(SocketAddr::new(
-                        IpAddr::V6(caddy_ip),
-                        redirect.port,
-                    )),
+                    target: IngressTarget::Proxy {
+                        v6_addr: SocketAddr::new(IpAddr::V6(caddy_ip), redirect.port),
+                        v4_addr: None,
+                    },
                 });
             }
         } else {

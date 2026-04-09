@@ -412,12 +412,15 @@ fn ingress_rule_stmts(rule: &IngressRule) -> Vec<Vec<Statement<'static>>> {
     };
 
     let dnat_stmt = match &rule.target {
-        IngressTarget::Proxy(addr) => {
-            let ip = match addr.ip() {
+        IngressTarget::Proxy {
+            v6_addr,
+            v4_addr: _,
+        } => {
+            let ip = match v6_addr.ip() {
                 IpAddr::V6(ip) => ip.to_string(),
                 IpAddr::V4(ip) => format!("::ffff:{ip}"),
             };
-            dnat_ip6(ip, addr.port())
+            dnat_ip6(ip, v6_addr.port())
         }
         IngressTarget::Direct { backends } => {
             if backends.is_empty() {
@@ -469,12 +472,15 @@ fn output_ingress_rule_stmts(rule: &IngressRule) -> Vec<Vec<Statement<'static>>>
     };
 
     let dnat_stmt = match &rule.target {
-        IngressTarget::Proxy(addr) => {
-            let ip = match addr.ip() {
+        IngressTarget::Proxy {
+            v6_addr,
+            v4_addr: _,
+        } => {
+            let ip = match v6_addr.ip() {
                 IpAddr::V6(ip) => ip.to_string(),
                 IpAddr::V4(ip) => format!("::ffff:{ip}"),
             };
-            dnat_ip6(ip, addr.port())
+            dnat_ip6(ip, v6_addr.port())
         }
         IngressTarget::Direct { backends } => {
             if backends.is_empty() {
@@ -615,10 +621,13 @@ mod tests {
         IngressRule {
             external_port: port,
             proto,
-            target: IngressTarget::Proxy(SocketAddr::new(
-                std::net::IpAddr::V6(Ipv6Addr::new(0xfd5e, 0, 0, 0, 0, 0, 0, 1)),
-                8080,
-            )),
+            target: IngressTarget::Proxy {
+                v6_addr: SocketAddr::new(
+                    std::net::IpAddr::V6(Ipv6Addr::new(0xfd5e, 0, 0, 0, 0, 0, 0, 1)),
+                    8080,
+                ),
+                v4_addr: None,
+            },
         }
     }
 

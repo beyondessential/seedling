@@ -1,12 +1,11 @@
 use std::{
     collections::HashMap,
-    net::{IpAddr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::PathBuf,
     time::{Duration, SystemTime},
 };
 
 use ipnet::Ipv6Net;
-use std::net::Ipv6Addr;
 
 // ---------------------------------------------------------------------------
 // Container observation
@@ -22,6 +21,8 @@ pub struct ContainerState {
     pub finished_at: Option<SystemTime>,
     /// The container's IPv6 address on its pod network, if known.
     pub pod_addr: Option<Ipv6Addr>,
+    /// The container's IPv4 address on its pod network, if known.
+    pub pod_addr_v4: Option<Ipv4Addr>,
     /// The image ID (config digest) the container was started from, if known.
     pub image_id: Option<String>,
 }
@@ -195,7 +196,12 @@ pub struct DataPlaneRules {
 #[derive(Debug, Clone)]
 pub enum IngressTarget {
     /// HTTP ingress — DNAT to Caddy for reverse proxying.
-    Proxy(SocketAddr),
+    Proxy {
+        /// Caddy's IPv6 address:port on the proxy network.
+        v6_addr: SocketAddr,
+        /// Caddy's IPv4 address:port, if the proxy network is dual-stack.
+        v4_addr: Option<SocketAddr>,
+    },
     /// Direct TCP/UDP ingress — DNAT straight to pod backends.
     /// Used for ingresses without HTTP/TLS termination.
     Direct { backends: Vec<(Ipv6Addr, u16)> },

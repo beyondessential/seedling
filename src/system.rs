@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, path::Path, sync::Arc, time::Duration};
 
-use ipnet::Ipv6Net;
+use ipnet::{Ipv4Net, Ipv6Net};
 
 use crate::system::types::{
     ContainerFilter, ContainerState, ContainerSummary, DataPlaneRules, ExecHandle, ExecSpec,
@@ -70,6 +70,7 @@ pub trait ContainerRuntime: Send + Sync + 'static {
         &'a self,
         name: &'a str,
         prefix: Ipv6Net,
+        ipv4: Option<Ipv4Net>,
     ) -> BoxFuture<'a, Result<String, BoxError>>;
     fn remove_network<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>>;
     /// List all networks whose name starts with `prefix`.
