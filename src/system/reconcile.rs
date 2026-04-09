@@ -248,6 +248,12 @@ impl Reconciler {
                         &app.name,
                         "",
                     );
+                    // Clear the observation dedup set so that a future
+                    // reinstall writes fresh observations instead of being
+                    // blocked by stale entries from the previous install
+                    // cycle. The cost of re-writing all observations on
+                    // the next tick is bounded and harmless.
+                    self.written_obs.clear();
                     tracing::info!(app = %app.name, "uninstall complete");
                 }
                 Ok(units) => {
