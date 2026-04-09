@@ -68,22 +68,37 @@ pub struct ResourceInstance {
 
 impl ResourceInstance {
     // r[impl identity.components]
+    // r[impl identity.job]
     pub fn new_singleton(
         app: impl Into<String>,
         kind: ResourceKind,
         name: impl Into<String>,
     ) -> Self {
-        let id = InstanceId::generate();
         let app = app.into();
         let name = name.into();
-        // Deployment and Job display names map directly to container/unit names
-        // in external systems (Podman, systemd), so they keep the flat
-        // "{app}-{name}" form. All other resource kinds include the kind slug
-        // to avoid display_name collisions between, e.g., a Service and an
-        // Ingress that share the same BSL name.
-        let display_name = match kind {
-            ResourceKind::Deployment | ResourceKind::Job => format!("{}-{}", app, name),
-            _ => format!("{}-{}-{}", app, kind_slug(kind), name),
+        // Jobs use a fixed all-zero instance ID so that their identity is
+        // fully deterministic without persisting state.  Their display name
+        // includes the ID suffix (always "00000000") to match the format used
+        // by operation-derived and shell instances of the same Job definition,
+        // and to avoid clashing with Deployment display names.
+        //
+        // Deployments keep the flat "{app}-{name}" form because they are
+        // managed as singletons whose display name must be stable across
+        // upgrades.  All other resource kinds include the kind slug.
+        let (id, display_name) = match kind {
+            ResourceKind::Job => {
+                let id = InstanceId(uuid::Uuid::nil());
+                let dn = format!("{}-{}-{}", app, name, id.display_suffix());
+                (id, dn)
+            }
+            ResourceKind::Deployment => {
+                let id = InstanceId::generate();
+                (id, format!("{}-{}", app, name))
+            }
+            _ => {
+                let id = InstanceId::generate();
+                (id, format!("{}-{}-{}", app, kind_slug(kind), name))
+            }
         };
         Self {
             id,

@@ -353,7 +353,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[identity.components]
 > A resource identity consists of:
 >
-> - A randomly-generated opaque instance ID, assigned once at creation and never changed.
+> - An opaque instance ID, assigned once at creation and never changed. For most resource types the ID is randomly generated; see [Job instance identity](#r--identity.job) for the exception.
 > - The application name.
 > - The resource type.
 > - The resource name (if not anonymous).
@@ -370,6 +370,15 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > r[identity.anonymous]
 > Anonymous resources (those without a name) must receive a runtime-assigned identity that is stable for the lifetime of the resource but does not conflict with named resources.
+
+> r[identity.job]
+> Job instances have a deterministic identity scheme rather than a randomly-generated one, because concurrent executions of the same Job definition must be distinguishable without persisting state across restarts.
+>
+> - **Static Jobs** (defined in the top-level BSL scope) have a fixed all-zero instance ID. Their display name includes the all-zero suffix (e.g. `myapp-worker-00000000`). There is at most one static instance per Job name; the identity is fully deterministic.
+> - **Dynamic Jobs** (defined inside an action closure) have an instance ID derived from the lifecycle operation's `OperationId` and the Job's name via a deterministic UUID v5 derivation: `UUID_v5(operation_id, "job:{name}")`. This gives a stable identity within one operation execution (including across barrier replay passes) while ensuring that distinct operation invocations produce distinct container names, allowing concurrent action runs involving the same Job name to coexist without collision.
+
+> r[identity.job.shell]
+> A Job used as the target of a shell `attach()` call receives a fresh randomly-generated instance ID chosen at the moment `attach()` is called, independent of any lifecycle operation ID. This allows multiple concurrent shell sessions to run against the same Job definition without collision.
 
 # Reconciliation of Resources
 

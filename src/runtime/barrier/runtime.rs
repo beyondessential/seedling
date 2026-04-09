@@ -162,11 +162,40 @@ impl RuntimeInstance {
             )];
         }
         if let Some(job) = resources.clone().try_cast::<Job>() {
-            return vec![self.registry.get_or_create_singleton(
-                &self.app_name,
-                ResourceKind::Job,
-                Some(&job.name),
-            )];
+            // r[impl identity.job]
+            // Dynamic Jobs inside an action closure get an instance ID derived
+            // from the operation ID via UUID v5, giving a stable identity
+            // within one operation (replay-safe) while ensuring distinct
+            // invocations of the same action produce different container names.
+            let instance = if let Some(ctx) = &self.ctx {
+                let op_id_str = ctx.lock().operation_id.0.clone();
+                let ns = uuid::Uuid::parse_str(&op_id_str).unwrap_or(uuid::Uuid::nil());
+                let key = format!("job:{}", job.name.as_str());
+                let id =
+                    crate::runtime::identity::InstanceId(uuid::Uuid::new_v5(&ns, key.as_bytes()));
+                crate::runtime::identity::ResourceInstance {
+                    id,
+                    app: self.app_name.clone(),
+                    kind: ResourceKind::Job,
+                    name: Some(job.name.to_string()),
+                    variant: crate::runtime::identity::InstanceVariant::Singleton,
+                    display_name: format!(
+                        "{}-{}-{}",
+                        self.app_name,
+                        job.name.as_str(),
+                        id.display_suffix()
+                    ),
+                }
+            } else {
+                // Stub / steady-state context: fall back to registry which
+                // returns the nil-UUID singleton for Jobs.
+                self.registry.get_or_create_singleton(
+                    &self.app_name,
+                    ResourceKind::Job,
+                    Some(job.name.as_str()),
+                )
+            };
+            return vec![instance];
         }
         if let Some(svc) = resources.clone().try_cast::<Service>() {
             return vec![self.registry.get_or_create_singleton(
@@ -608,7 +637,15 @@ thread_local! {
 /// via the standard `job_spec` pipeline and runs `podman run --rm -it`.
 pub struct ShellExecTarget {
     pub job_def: crate::defs::job::JobDef,
+    /// BSL-level name of the Job (from `app.job("name")`), used to derive
+    /// the container display name.
+    pub job_name: String,
     pub app_name: String,
+    // r[impl identity.job.shell]
+    /// Fresh randomly-generated instance ID chosen at `attach()` call time.
+    /// Each shell session gets a distinct ID so concurrent sessions against
+    /// the same Job definition produce distinct container names.
+    pub instance_id: crate::runtime::identity::InstanceId,
 }
 
 /// Context installed in the thread-local before running a shell closure.
@@ -643,10 +680,13 @@ pub fn register_shell_attach(engine: &mut rhai::Engine) {
             // Clone the JobDef (Arc-based, so this is a shallow clone sharing
             // the same pod/container def that the BSL closure configured).
             let job_def = j.def.lock().clone();
+            let job_name = j.name.to_string();
 
             *c.result.lock() = Some(ShellExecTarget {
                 job_def,
+                job_name,
                 app_name: c.app_name.clone(),
+                instance_id: crate::runtime::identity::InstanceId::generate(),
             });
         });
     });

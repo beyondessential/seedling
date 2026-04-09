@@ -223,7 +223,10 @@ async fn open_shell_session(
     initial_line: Vec<u8>,
     state: Arc<OiState>,
 ) {
+    use std::{collections::BTreeMap, net::Ipv6Addr};
+
     use crate::{
+        defs::resource::ResourceKind,
         runtime::{
             AppPhase,
             barrier::{
@@ -234,9 +237,14 @@ async fn open_shell_session(
                     ShellAttachCtx, ShellExecTarget, clear_shell_attach_ctx, set_shell_attach_ctx,
                 },
             },
+            identity::{InstanceVariant, ResourceInstance},
             registry::DbInstanceRegistry,
+            registry::InstanceRegistry,
         },
-        system::translate::container::job_spec,
+        system::translate::{
+            container::job_spec,
+            proxy::{instance_ipv6, pod_network_prefix},
+        },
     };
 
     #[derive(serde::Deserialize)]
@@ -472,45 +480,112 @@ async fn open_shell_session(
         }
     };
 
-    // Translate the JobDef into a full ContainerSpec using the standard pipeline.
-    // Network is set to "none" for now; volume names are resolved via app_name.
-    // The container is named after the session ID for observability in `podman ps`.
-    let container_spec = {
-        use crate::defs::resource::ResourceKind;
-        use crate::runtime::identity::{InstanceId, InstanceVariant, ResourceInstance};
-        use std::collections::BTreeMap;
-
-        let instance = ResourceInstance {
-            id: InstanceId::generate(),
-            app: exec_target.app_name.clone(),
-            kind: ResourceKind::Job,
-            name: Some(shell_name.clone()),
-            variant: InstanceVariant::Singleton,
-            display_name: format!("seedling-shell-{session_id}"),
-        };
-        let network = (
-            "none".to_string(),
-            "::/0".parse::<ipnet::Ipv6Net>().expect("valid"),
-        );
-        let mut spec = job_spec(
-            &exec_target.job_def,
-            &instance,
-            &BTreeMap::new(),
-            &network,
-            &[],
-        );
-        // Ensure health checks don't run on an ephemeral shell container.
-        spec.health = None;
-        spec
+    // Build the ResourceInstance for this shell session.  Each session gets a
+    // fresh random instance ID (chosen at attach() time) so concurrent sessions
+    // against the same Job definition produce distinct container names.
+    let instance = ResourceInstance {
+        id: exec_target.instance_id,
+        app: exec_target.app_name.clone(),
+        kind: ResourceKind::Job,
+        name: Some(exec_target.job_name.clone()),
+        variant: InstanceVariant::Scaled,
+        display_name: format!(
+            "{}-{}-{}",
+            exec_target.app_name,
+            exec_target.job_name,
+            exec_target.instance_id.display_suffix()
+        ),
     };
+
+    // Ensure the container image is available locally before creating the network.
+    let image = exec_target
+        .job_def
+        .pod
+        .lock()
+        .container
+        .lock()
+        .image
+        .clone()
+        .unwrap_or_default();
+    if !image.is_empty() {
+        match state.container_runtime.image_exists(&image).await {
+            Ok(false) => {
+                tracing::info!(app = %app_name, shell = %shell_name, %image, "pulling shell image");
+                if let Err(e) = state.container_runtime.pull_image(&image).await {
+                    tracing::warn!(app = %app_name, shell = %shell_name, %image, "image pull failed: {e}");
+                    let resp = serde_json::to_vec(&serde_json::json!({ "exit_code": -1 }))
+                        .unwrap_or_default();
+                    let _ = send.write_all(&resp).await;
+                    let _ = send.finish();
+                    return;
+                }
+            }
+            Err(e) => tracing::warn!(app = %app_name, %image, "image_exists check failed: {e}"),
+            Ok(true) => {}
+        }
+    }
+
+    // Create a dedicated pod network for the shell container.
+    let net_name = format!("seedling-{}", instance.display_name);
+    let net_prefix = pod_network_prefix(&state.node_prefix, &instance);
+    if let Err(e) = state
+        .container_runtime
+        .create_network(&net_name, net_prefix, None)
+        .await
+    {
+        tracing::warn!(app = %app_name, shell = %shell_name, %net_name, "create network failed: {e}");
+        let resp = serde_json::to_vec(&serde_json::json!({ "exit_code": -1 })).unwrap_or_default();
+        let _ = send.write_all(&resp).await;
+        let _ = send.finish();
+        return;
+    }
+
+    // Resolve service mounts declared on the job's pod.
+    let resolved_mounts: Vec<(u16, Ipv6Addr, u16)> = {
+        let service_mounts = exec_target.job_def.pod.lock().service_mounts.clone();
+        if service_mounts.is_empty() {
+            vec![]
+        } else {
+            match crate::runtime::db::Db::open(&state.db_path) {
+                Ok(db) => {
+                    let mount_registry = DbInstanceRegistry::new(db);
+                    service_mounts
+                        .iter()
+                        .map(|sp| {
+                            let svc_instance = mount_registry.get_or_create_singleton(
+                                &exec_target.app_name,
+                                ResourceKind::Service,
+                                Some(sp.service.name.as_str()),
+                            );
+                            let svc_ip = instance_ipv6(&state.node_prefix, &svc_instance);
+                            (sp.port, svc_ip, sp.port)
+                        })
+                        .collect()
+                }
+                Err(e) => {
+                    tracing::warn!(app = %app_name, "open db for service mounts: {e}");
+                    vec![]
+                }
+            }
+        }
+    };
+
+    // Build the full ContainerSpec through the standard translation pipeline.
+    let mut container_spec = job_spec(
+        &exec_target.job_def,
+        &instance,
+        &BTreeMap::new(),
+        &(net_name.clone(), net_prefix),
+        &resolved_mounts,
+    );
+    // Health checks are meaningless for an ephemeral interactive container.
+    container_spec.health = None;
 
     let mut exec_handle = match state.container_runtime.exec(container_spec).await {
         Ok(h) => h,
         Err(e) => {
-            tracing::warn!(
-                app = %app_name, shell = %shell_name,
-                "exec failed: {e}"
-            );
+            tracing::warn!(app = %app_name, shell = %shell_name, "exec failed: {e}");
+            let _ = state.container_runtime.remove_network(&net_name).await;
             let resp =
                 serde_json::to_vec(&serde_json::json!({ "exit_code": -1 })).unwrap_or_default();
             let _ = send.write_all(&resp).await;
@@ -582,6 +657,7 @@ async fn open_shell_session(
             status = exec_handle.child.wait() => {
                 exit_code = status.ok().and_then(|s| s.code()).unwrap_or(-1);
                 state.shells.remove(&session_id);
+                let _ = state.container_runtime.remove_network(&net_name).await;
                 let mut exit_frame =
                     serde_json::to_vec(&serde_json::json!({ "exit_code": exit_code }))
                         .unwrap_or_default();
@@ -607,6 +683,7 @@ async fn open_shell_session(
     exit_code = status.ok().and_then(|s| s.code()).unwrap_or(-1);
 
     state.shells.remove(&session_id);
+    let _ = state.container_runtime.remove_network(&net_name).await;
 
     let mut exit_frame =
         serde_json::to_vec(&serde_json::json!({ "exit_code": exit_code })).unwrap_or_default();

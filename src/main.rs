@@ -188,6 +188,7 @@ async fn main() {
         trusted_keys: seedling::oi::auth::new_trusted_keys(),
         shells: seedling::oi::shells::ShellRegistry::new(),
         container_runtime: Arc::clone(&driver.container),
+        node_prefix,
     });
 
     oi::run(Arc::clone(&oi_state), oi::DEFAULT_PORT, &data_dir)

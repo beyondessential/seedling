@@ -45,6 +45,9 @@ pub struct OiState {
     pub trusted_keys: Arc<parking_lot::RwLock<HashSet<String>>>,
     pub shells: Arc<crate::oi::shells::ShellRegistry>,
     pub container_runtime: Arc<dyn crate::system::ContainerRuntime>,
+    /// Node-wide /48 IPv6 prefix, used to derive pod network addresses for
+    /// shell session containers.
+    pub node_prefix: ipnet::Ipv6Net,
 }
 
 // ---------------------------------------------------------------------------
