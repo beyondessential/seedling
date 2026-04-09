@@ -692,18 +692,35 @@ async fn open_shell_session(
     }
 
     // i[shell.cleanup]
-    // Force-remove the container via the runtime API.  Killing the child
-    // process (the `podman run` frontend) is not sufficient — conmon manages
-    // the container lifecycle independently and keeps it running if the
-    // frontend dies.  remove_container(force=true) sends SIGKILL to the
-    // container and removes it regardless of state.
-    let _ = state
-        .container_runtime
-        .remove_container(&container_name, true)
-        .await;
-    let _ = exec_handle.child.kill().await;
-    let status = exec_handle.child.wait().await;
-    exit_code = status.ok().and_then(|s| s.code()).unwrap_or(-1);
+    // Send SIGTERM to the `podman run` frontend.  podman forwards the signal
+    // to the container's main process, allowing the shell to clean up.  On a
+    // clean exit, `podman run --rm` removes the container itself.
+    if let Some(pid) = exec_handle.child.id() {
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+    }
+
+    let graceful = tokio::time::timeout(Duration::from_secs(5), exec_handle.child.wait()).await;
+
+    exit_code = match graceful {
+        Ok(status) => status.ok().and_then(|s| s.code()).unwrap_or(-1),
+        Err(_timeout) => {
+            // Grace period expired.  Force-remove the container (conmon keeps
+            // it alive even after the frontend is killed) then SIGKILL the
+            // podman run process.
+            let _ = state
+                .container_runtime
+                .remove_container(&container_name, true)
+                .await;
+            let _ = exec_handle.child.kill().await;
+            exec_handle
+                .child
+                .wait()
+                .await
+                .ok()
+                .and_then(|s| s.code())
+                .unwrap_or(-1)
+        }
+    };
 
     state.shells.remove(&session_id);
     let _ = state.container_runtime.remove_network(&net_name).await;
