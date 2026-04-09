@@ -3,7 +3,7 @@ use std::{net::SocketAddr, path::Path, sync::Arc, time::Duration};
 use ipnet::{Ipv4Net, Ipv6Net};
 
 use crate::system::types::{
-    ContainerFilter, ContainerState, ContainerSummary, DataPlaneRules, ExecHandle, ExecSpec,
+    ContainerFilter, ContainerSpec, ContainerState, ContainerSummary, DataPlaneRules, ExecHandle,
     NetworkSummary, ProxyConfig, ServiceRoute, TransientUnitSpec, UnitState, UnitSummary,
 };
 
@@ -97,12 +97,8 @@ pub trait ContainerRuntime: Send + Sync + 'static {
         force: bool,
     ) -> BoxFuture<'a, Result<(), BoxError>>;
 
-    // Interactive exec (for BSL shell sessions)
-    fn exec<'a>(
-        &'a self,
-        name: &'a str,
-        spec: ExecSpec,
-    ) -> BoxFuture<'a, Result<ExecHandle, BoxError>>;
+    // Interactive shell sessions — runs a fresh ephemeral container with a PTY.
+    fn exec<'a>(&'a self, spec: ContainerSpec) -> BoxFuture<'a, Result<ExecHandle, BoxError>>;
 }
 
 pub trait ProcessManager: Send + Sync + 'static {

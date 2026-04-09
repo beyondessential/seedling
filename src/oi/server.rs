@@ -236,7 +236,7 @@ async fn open_shell_session(
             },
             registry::DbInstanceRegistry,
         },
-        system::types::ExecSpec,
+        system::translate::container::job_spec,
     };
 
     #[derive(serde::Deserialize)]
@@ -406,6 +406,7 @@ async fn open_shell_session(
         let world = Arc::new(DbWorldOracle::new(world_db));
 
         set_shell_attach_ctx(ShellAttachCtx {
+            app_name: app_name_for_task.clone(),
             result: Arc::clone(&result_slot_for_task),
         });
 
@@ -471,24 +472,43 @@ async fn open_shell_session(
         }
     };
 
-    // Use the session ID as the container name so it is identifiable in `podman ps`.
-    let container_name = format!("seedling-shell-{session_id}");
-    let exec_spec = ExecSpec {
-        image: exec_target.image.clone(),
-        command: exec_target.command.clone(),
-        env: exec_target.env.clone(),
-        tty: true,
-        user: None,
+    // Translate the JobDef into a full ContainerSpec using the standard pipeline.
+    // Network is set to "none" for now; volume names are resolved via app_name.
+    // The container is named after the session ID for observability in `podman ps`.
+    let container_spec = {
+        use crate::defs::resource::ResourceKind;
+        use crate::runtime::identity::{InstanceId, InstanceVariant, ResourceInstance};
+        use std::collections::BTreeMap;
+
+        let instance = ResourceInstance {
+            id: InstanceId::generate(),
+            app: exec_target.app_name.clone(),
+            kind: ResourceKind::Job,
+            name: Some(shell_name.clone()),
+            variant: InstanceVariant::Singleton,
+            display_name: format!("seedling-shell-{session_id}"),
+        };
+        let network = (
+            "none".to_string(),
+            "::/0".parse::<ipnet::Ipv6Net>().expect("valid"),
+        );
+        let mut spec = job_spec(
+            &exec_target.job_def,
+            &instance,
+            &BTreeMap::new(),
+            &network,
+            &[],
+        );
+        // Ensure health checks don't run on an ephemeral shell container.
+        spec.health = None;
+        spec
     };
-    let mut exec_handle = match state
-        .container_runtime
-        .exec(&container_name, exec_spec)
-        .await
-    {
+
+    let mut exec_handle = match state.container_runtime.exec(container_spec).await {
         Ok(h) => h,
         Err(e) => {
             tracing::warn!(
-                app = %app_name, shell = %shell_name, image = %exec_target.image,
+                app = %app_name, shell = %shell_name,
                 "exec failed: {e}"
             );
             let resp =

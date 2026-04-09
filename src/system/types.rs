@@ -112,19 +112,8 @@ pub struct HealthCheckSpec {
 }
 
 // ---------------------------------------------------------------------------
-// Exec spec and handle
+// Exec handle
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone)]
-pub struct ExecSpec {
-    /// Container image to run (passed to `podman run`).
-    pub image: String,
-    /// Command override; empty means use the image's default entrypoint/cmd.
-    pub command: Vec<String>,
-    pub env: Vec<(String, String)>,
-    pub tty: bool,
-    pub user: Option<String>,
-}
 
 /// Handle returned by `ContainerRuntime::exec` for an interactive PTY session.
 ///

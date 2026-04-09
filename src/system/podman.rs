@@ -24,9 +24,10 @@ use tokio::{fs::File, io::split, process::Command};
 
 use crate::system::{
     BoxError, BoxFuture, ContainerRuntime,
+    translate::container::podman_args,
     types::{
-        ContainerFilter, ContainerHealth, ContainerState, ContainerStatus, ContainerSummary,
-        ExecHandle, ExecSpec, NetworkSummary,
+        ContainerFilter, ContainerHealth, ContainerSpec, ContainerState, ContainerStatus,
+        ContainerSummary, ExecHandle, NetworkSummary,
     },
 };
 
@@ -407,7 +408,7 @@ impl PodmanRuntime {
         }
     }
 
-    async fn exec_impl(&self, name: &str, spec: ExecSpec) -> Result<ExecHandle, PodmanError> {
+    async fn exec_impl(&self, spec: ContainerSpec) -> Result<ExecHandle, PodmanError> {
         let pty = nix::pty::openpty(None, None).map_err(|e| PodmanError::Protocol {
             message: e.to_string(),
         })?;
@@ -420,18 +421,17 @@ impl PodmanRuntime {
         let slave_out = unsafe { libc::dup(slave_raw) };
         let slave_err = unsafe { libc::dup(slave_raw) };
 
-        let mut cmd = Command::new("podman");
-        cmd.arg("run").arg("--rm").arg("-i").arg("-t");
-        cmd.arg("--name").arg(name);
+        // Build argv from the standard translation pipeline, then insert -i -t
+        // for interactive PTY use right after "podman run --rm".
+        let mut argv = podman_args(&spec);
+        // argv = ["podman", "run", "--rm", "--name", …]
+        argv.insert(3, "-t".to_string());
+        argv.insert(3, "-i".to_string());
+        // argv = ["podman", "run", "--rm", "-i", "-t", "--name", …]
 
-        if let Some(ref user) = spec.user {
-            cmd.arg("--user").arg(user);
-        }
-        for (k, v) in &spec.env {
-            cmd.arg("--env").arg(format!("{k}={v}"));
-        }
-        cmd.arg(&spec.image);
-        cmd.args(&spec.command);
+        let program = argv.remove(0);
+        let mut cmd = Command::new(program);
+        cmd.args(&argv);
 
         cmd.stdin(unsafe { std::process::Stdio::from_raw_fd(slave_raw) });
         cmd.stdout(unsafe { std::process::Stdio::from_raw_fd(slave_out) });
@@ -621,11 +621,7 @@ impl ContainerRuntime for PodmanRuntime {
         })
     }
 
-    fn exec<'a>(
-        &'a self,
-        name: &'a str,
-        spec: ExecSpec,
-    ) -> BoxFuture<'a, Result<ExecHandle, BoxError>> {
-        Box::pin(async move { self.exec_impl(name, spec).await.map_err(Into::into) })
+    fn exec<'a>(&'a self, spec: ContainerSpec) -> BoxFuture<'a, Result<ExecHandle, BoxError>> {
+        Box::pin(async move { self.exec_impl(spec).await.map_err(Into::into) })
     }
 }

@@ -603,19 +603,19 @@ thread_local! {
     static SHELL_ATTACH_CTX: RefCell<Option<ShellAttachCtx>> = const { RefCell::new(None) };
 }
 
-/// The exec target resolved by `__bsl_shell_attach_impl` from a Job or Deployment.
-/// Passed back to the OI layer to run `podman run --rm -it`.
+/// The exec target resolved by `__bsl_shell_attach_impl` from a Job.
+/// Passed back to the OI layer which translates it to a `ContainerSpec`
+/// via the standard `job_spec` pipeline and runs `podman run --rm -it`.
 pub struct ShellExecTarget {
-    pub image: String,
-    /// Command override; empty means use the image's default entrypoint/cmd.
-    pub command: Vec<String>,
-    pub env: Vec<(String, String)>,
+    pub job_def: crate::defs::job::JobDef,
+    pub app_name: String,
 }
 
 /// Context installed in the thread-local before running a shell closure.
 /// Provides a slot for `__bsl_shell_attach_impl` to write the resolved
 /// exec target into.
 pub struct ShellAttachCtx {
+    pub app_name: String,
     pub result: Arc<Mutex<Option<ShellExecTarget>>>,
 }
 
@@ -632,34 +632,22 @@ pub fn register_shell_attach(engine: &mut rhai::Engine) {
     engine.register_fn("__bsl_shell_attach_impl", |job: Dynamic| {
         use crate::defs::job::Job;
 
-        fn target_from_job(j: &Job) -> ShellExecTarget {
-            let pod_holder = j.def.lock().pod.clone();
-            let container_holder = pod_holder.lock().container.clone();
-            let container = container_holder.lock();
-            let image = container.image.clone().unwrap_or_default();
-            let mut command = container.command.clone().unwrap_or_default();
-            if let Some(args) = &container.args {
-                command.extend(args.iter().cloned());
-            }
-            let env = container.env.clone();
-            ShellExecTarget {
-                image,
-                command,
-                env,
-            }
-        }
-
         SHELL_ATTACH_CTX.with(|ctx| {
             let ctx = ctx.borrow();
             let Some(ref c) = *ctx else { return };
 
-            let target = if let Some(j) = job.clone().try_cast::<Job>() {
-                target_from_job(&j)
-            } else {
+            let Some(j) = job.try_cast::<Job>() else {
                 return;
             };
 
-            *c.result.lock() = Some(target);
+            // Clone the JobDef (Arc-based, so this is a shallow clone sharing
+            // the same pod/container def that the BSL closure configured).
+            let job_def = j.def.lock().clone();
+
+            *c.result.lock() = Some(ShellExecTarget {
+                job_def,
+                app_name: c.app_name.clone(),
+            });
         });
     });
 }
