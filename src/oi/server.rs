@@ -230,7 +230,9 @@ async fn open_shell_session(
                 OperationId,
                 oracle::DbWorldOracle,
                 replay::{DbActionLog, OperationContext, OperationResult, run_operation},
-                runtime::{ShellAttachCtx, clear_shell_attach_ctx, set_shell_attach_ctx},
+                runtime::{
+                    ShellAttachCtx, ShellExecTarget, clear_shell_attach_ctx, set_shell_attach_ctx,
+                },
             },
             registry::DbInstanceRegistry,
         },
@@ -352,7 +354,7 @@ async fn open_shell_session(
         }
     }
 
-    let result_slot: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let result_slot: Arc<Mutex<Option<ShellExecTarget>>> = Arc::new(Mutex::new(None));
     let result_slot_for_task = Arc::clone(&result_slot);
     let db_path = state.db_path.clone();
     let operation_id = OperationId::new();
@@ -404,8 +406,6 @@ async fn open_shell_session(
         let world = Arc::new(DbWorldOracle::new(world_db));
 
         set_shell_attach_ctx(ShellAttachCtx {
-            app_name: app_name_for_task.clone(),
-            registry: Arc::clone(&registry),
             result: Arc::clone(&result_slot_for_task),
         });
 
@@ -455,9 +455,9 @@ async fn open_shell_session(
         return;
     }
 
-    let container_name_opt = result_slot.lock().take();
-    let container_name = match container_name_opt {
-        Some(name) => name,
+    let exec_target_opt = result_slot.lock().take();
+    let exec_target = match exec_target_opt {
+        Some(t) => t,
         None => {
             tracing::warn!(
                 app = %app_name, shell = %shell_name,
@@ -471,9 +471,12 @@ async fn open_shell_session(
         }
     };
 
+    // Use the session ID as the container name so it is identifiable in `podman ps`.
+    let container_name = format!("seedling-shell-{session_id}");
     let exec_spec = ExecSpec {
-        command: vec!["/bin/sh".to_string()],
-        env: vec![],
+        image: exec_target.image.clone(),
+        command: exec_target.command.clone(),
+        env: exec_target.env.clone(),
         tty: true,
         user: None,
     };
@@ -485,7 +488,7 @@ async fn open_shell_session(
         Ok(h) => h,
         Err(e) => {
             tracing::warn!(
-                app = %app_name, shell = %shell_name, container = %container_name,
+                app = %app_name, shell = %shell_name, image = %exec_target.image,
                 "exec failed: {e}"
             );
             let resp =

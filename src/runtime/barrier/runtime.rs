@@ -603,13 +603,20 @@ thread_local! {
     static SHELL_ATTACH_CTX: RefCell<Option<ShellAttachCtx>> = const { RefCell::new(None) };
 }
 
+/// The exec target resolved by `__bsl_shell_attach_impl` from a Job or Deployment.
+/// Passed back to the OI layer to run `podman run --rm -it`.
+pub struct ShellExecTarget {
+    pub image: String,
+    /// Command override; empty means use the image's default entrypoint/cmd.
+    pub command: Vec<String>,
+    pub env: Vec<(String, String)>,
+}
+
 /// Context installed in the thread-local before running a shell closure.
-/// Provides the registry for resolving job names → container display_names,
-/// and a slot for `__bsl_shell_attach_impl` to write the result into.
+/// Provides a slot for `__bsl_shell_attach_impl` to write the resolved
+/// exec target into.
 pub struct ShellAttachCtx {
-    pub app_name: String,
-    pub registry: Arc<dyn crate::runtime::InstanceRegistry>,
-    pub result: Arc<Mutex<Option<String>>>,
+    pub result: Arc<Mutex<Option<ShellExecTarget>>>,
 }
 
 pub fn set_shell_attach_ctx(ctx: ShellAttachCtx) {
@@ -623,33 +630,36 @@ pub fn clear_shell_attach_ctx() {
 // l[impl action.shell.attach]
 pub fn register_shell_attach(engine: &mut rhai::Engine) {
     engine.register_fn("__bsl_shell_attach_impl", |job: Dynamic| {
-        use crate::defs::deployment::Deployment;
         use crate::defs::job::Job;
-        use crate::defs::resource::ResourceKind;
+
+        fn target_from_job(j: &Job) -> ShellExecTarget {
+            let pod_holder = j.def.lock().pod.clone();
+            let container_holder = pod_holder.lock().container.clone();
+            let container = container_holder.lock();
+            let image = container.image.clone().unwrap_or_default();
+            let mut command = container.command.clone().unwrap_or_default();
+            if let Some(args) = &container.args {
+                command.extend(args.iter().cloned());
+            }
+            let env = container.env.clone();
+            ShellExecTarget {
+                image,
+                command,
+                env,
+            }
+        }
 
         SHELL_ATTACH_CTX.with(|ctx| {
             let ctx = ctx.borrow();
             let Some(ref c) = *ctx else { return };
 
-            let container_name = if let Some(j) = job.clone().try_cast::<Job>() {
-                c.registry
-                    .get_or_create_singleton(&c.app_name, ResourceKind::Job, Some(j.name.as_str()))
-                    .display_name
-                    .clone()
-            } else if let Some(d) = job.clone().try_cast::<Deployment>() {
-                c.registry
-                    .get_or_create_singleton(
-                        &c.app_name,
-                        ResourceKind::Deployment,
-                        Some(d.name.as_str()),
-                    )
-                    .display_name
-                    .clone()
+            let target = if let Some(j) = job.clone().try_cast::<Job>() {
+                target_from_job(&j)
             } else {
                 return;
             };
 
-            *c.result.lock() = Some(container_name);
+            *c.result.lock() = Some(target);
         });
     });
 }

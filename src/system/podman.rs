@@ -421,7 +421,8 @@ impl PodmanRuntime {
         let slave_err = unsafe { libc::dup(slave_raw) };
 
         let mut cmd = Command::new("podman");
-        cmd.arg("exec").arg("-i").arg("-t");
+        cmd.arg("run").arg("--rm").arg("-i").arg("-t");
+        cmd.arg("--name").arg(name);
 
         if let Some(ref user) = spec.user {
             cmd.arg("--user").arg(user);
@@ -429,7 +430,7 @@ impl PodmanRuntime {
         for (k, v) in &spec.env {
             cmd.arg("--env").arg(format!("{k}={v}"));
         }
-        cmd.arg(name);
+        cmd.arg(&spec.image);
         cmd.args(&spec.command);
 
         cmd.stdin(unsafe { std::process::Stdio::from_raw_fd(slave_raw) });

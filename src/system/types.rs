@@ -117,6 +117,9 @@ pub struct HealthCheckSpec {
 
 #[derive(Debug, Clone)]
 pub struct ExecSpec {
+    /// Container image to run (passed to `podman run`).
+    pub image: String,
+    /// Command override; empty means use the image's default entrypoint/cmd.
     pub command: Vec<String>,
     pub env: Vec<(String, String)>,
     pub tty: bool,
@@ -130,7 +133,7 @@ pub struct ExecSpec {
 /// is merged into stdout by the PTY).
 /// `pty_master_fd` is the raw fd of the PTY master for `TIOCSWINSZ` resize ioctls.
 /// It remains valid for as long as `stdin`/`stdout` are alive.
-/// `child` is the subprocess running `podman exec`.
+/// `child` is the subprocess running `podman run`.
 pub struct ExecHandle {
     pub stdin: tokio::io::WriteHalf<tokio::fs::File>,
     pub stdout: tokio::io::ReadHalf<tokio::fs::File>,
