@@ -109,14 +109,18 @@ pub fn podman_args(spec: &ContainerSpec) -> Vec<String> {
     }
 
     if !spec.entrypoint.is_empty() {
+        // Clear the image's ENTRYPOINT so the image's baked-in CMD is not
+        // appended to our command (Kubernetes `command:` semantics: when an
+        // entrypoint override is present, the image's CMD is suppressed).
+        // Our entrypoint args are then folded into the positional CMD args,
+        // which also override the image CMD.
         args.push("--entrypoint".to_string());
-        // Podman parses a JSON array for multi-component entrypoints.
-        args.push(
-            serde_json::to_string(&spec.entrypoint).unwrap_or_else(|_| spec.entrypoint[0].clone()),
-        );
+        args.push("[]".to_string());
     }
 
     args.push(spec.image.clone());
+    // Entrypoint args precede any explicit cmd (arg) overrides.
+    args.extend(spec.entrypoint.iter().cloned());
     args.extend(spec.command.iter().cloned());
 
     args
