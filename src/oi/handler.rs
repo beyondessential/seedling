@@ -499,7 +499,6 @@ fn deregister_app(state: &OiState, params: Value) -> HandlerResult {
     Ok(json!({}))
 }
 
-// i[app.uninstall]
 fn uninstall_app(state: &OiState, params: Value) -> HandlerResult {
     let name = params
         .get("name")
