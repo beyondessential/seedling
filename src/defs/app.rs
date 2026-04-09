@@ -156,6 +156,7 @@ impl CustomType for App {
         // l[impl service.type]
         builder.with_fn("service", |this: &mut Self, name: &str| -> Service {
             let name = ResourceName::new(name.into());
+            let weak = std::sync::Arc::downgrade(&this.def);
             let mut def = this.def.lock();
             let id = ResourceId {
                 kind: ResourceKind::Service,
@@ -164,9 +165,16 @@ impl CustomType for App {
             let resource = def
                 .resources
                 .entry(id)
-                .or_insert_with(|| Resource::Service(Service::new(name)));
+                .or_insert_with(|| Resource::Service(Service::new_with_app(name, weak.clone())));
             match resource {
-                Resource::Service(s) => s.clone(),
+                Resource::Service(s) => {
+                    // Backfill the weak ref in case this Service was inserted
+                    // without one (e.g. during a script re-evaluation).
+                    if s.app_def.is_none() {
+                        s.app_def = Some(weak);
+                    }
+                    s.clone()
+                }
                 _ => unreachable!(),
             }
         });

@@ -1,6 +1,14 @@
+use std::sync::Weak;
+
+use parking_lot::Mutex;
 use rhai::{CustomType, EvalAltResult, TypeBuilder};
 
-use super::{Holder, ingress::Ingress, resource::ResourceName};
+use super::{
+    Holder,
+    app::AppDef,
+    ingress::Ingress,
+    resource::{Resource, ResourceId, ResourceKind, ResourceName},
+};
 
 // l[impl service.type]
 #[derive(Debug, Default, Clone)]
@@ -12,6 +20,10 @@ pub struct ServiceDef {
 pub struct Service {
     pub name: ResourceName,
     pub def: Holder<ServiceDef>,
+    /// Weak back-reference to the owning `AppDef` so that `ingress()` can
+    /// register the created `Ingress` into `app_def.resources`. `None` for
+    /// services created outside of an `App` context (e.g. via `ExternalService`).
+    pub(super) app_def: Option<Weak<Mutex<AppDef>>>,
 }
 
 impl Service {
@@ -19,6 +31,15 @@ impl Service {
         Self {
             name,
             def: Default::default(),
+            app_def: None,
+        }
+    }
+
+    pub(super) fn new_with_app(name: ResourceName, app_def: Weak<Mutex<AppDef>>) -> Self {
+        Self {
+            name,
+            def: Default::default(),
+            app_def: Some(app_def),
         }
     }
 }
@@ -67,7 +88,18 @@ impl CustomType for Service {
                     // l[impl ingress.conflicts]
                     // TODO: check for duplicate (hostname, port) in the app's ingress
                     // registry and throw if a conflict is found.
-                    Ok(Ingress::new(this.clone(), hostname.into(), port as u16))
+                    let ingress = Ingress::new(this.clone(), hostname.into(), port as u16);
+                    // l[impl ingress.type]
+                    if let Some(arc) = this.app_def.as_ref().and_then(Weak::upgrade) {
+                        let id = ResourceId {
+                            kind: ResourceKind::Ingress,
+                            name: ingress.name.clone(),
+                        };
+                        arc.lock()
+                            .resources
+                            .insert(id, Resource::Ingress(ingress.clone()));
+                    }
+                    Ok(ingress)
                 },
             );
     }
