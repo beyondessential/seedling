@@ -132,15 +132,23 @@ flows through Caddy, which runs in a container on the dual-stack
 `seedling-proxy` network. The proxy network has both an IPv6 /64
 (`fd5e:XXYY:ZZWW:ff00::/64`) and a fixed IPv4 /24 (`10.89.255.0/24`).
 
-Caddy uses a custom image (`localhost/seedling-caddy`) built with the
-[caddy-l4](https://github.com/mholt/caddy-l4) plugin, enabling it to
-proxy both HTTP and raw TCP/UDP streams. The Containerfile is at
-`Containerfile.caddy` in the repository root.
+Caddy uses a custom image (`localhost/seedling-caddy:latest`) built
+with the [caddy-l4](https://github.com/mholt/caddy-l4) plugin,
+enabling it to proxy both HTTP and raw TCP/UDP streams. The
+Containerfile is at `Containerfile.caddy` in the repository root. If
+the image is not present locally, seedling builds it automatically
+from an embedded copy of the Containerfile on first startup.
+
+Caddy runs in one of two container slots — `seedling-caddy-blue` and
+`seedling-caddy-green` — for blue/green upgrades. The active slot is
+recorded in the database; the default for fresh installations is blue.
+During an image upgrade, the new container is started in the inactive
+slot, configured, and health-checked before traffic is switched over.
 
 ### nftables ingress rules
 
-Every ingress port gets a pair of nftables DNAT rules (prerouting +
-output) that redirect traffic to Caddy. For IPv6:
+Every ingress port gets nftables DNAT rules in both the prerouting and
+output chains that redirect traffic to Caddy. For IPv6:
 
     meta nfproto ipv6 fib daddr type local tcp dport <port>
     dnat ip6 to [<caddy_ipv6>]:<port>
@@ -157,6 +165,24 @@ via the `fib daddr type local` guard.
 The `fib daddr type local` guard is essential: without it, the
 prerouting dport rule would catch Caddy's own upstream traffic to
 `service_ip:<port>` and loop it back to Caddy.
+
+### Loopback hairpin NAT
+
+When host-originated traffic to `localhost:80` is DNAT'd to Caddy in
+the output chain, the source address stays `127.0.0.1` (or `::1`).
+Caddy receives the packet and tries to respond to the loopback
+address, which routes to its own container loopback — the reply never
+leaves the container.
+
+A `postrouting` chain with masquerade rules fixes this:
+
+    meta nfproto ipv4 ip saddr 127.0.0.0/8 masquerade
+    meta nfproto ipv6 ip6 saddr ::1 masquerade
+
+MASQUERADE rewrites the source to the bridge gateway IP so the
+response goes back through the bridge. Conntrack reverses both the
+SNAT and DNAT on the return path, delivering the response to the
+original caller with the expected loopback source address.
 
 ### HTTP ingress
 
@@ -207,13 +233,17 @@ All rules live in a single `inet` (dual-stack) table:
     table inet seedling_net {
       chain prerouting {
         type nat hook prerouting priority dstnat; policy accept;
-        # ingress DNAT (IPv6 + IPv4 for HTTP, IPv6 for direct)
+        # ingress DNAT (IPv6 + IPv4)
         # mount DNAT
         # service DNAT
       }
       chain output {
         type nat hook output priority dstnat; policy accept;
         # ingress DNAT (same targets as prerouting)
+      }
+      chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        # loopback masquerade (hairpin NAT for localhost access)
       }
       chain forward {
         type filter hook forward priority filter; policy accept;
@@ -223,7 +253,9 @@ All rules live in a single `inet` (dual-stack) table:
 
 The entire table is flushed and rebuilt atomically on every
 reconciliation tick. The forward chain carries a single blanket accept
-rule allowing all forwarded traffic within the seedling ULA range.
+rule allowing all forwarded traffic within the seedling ULA range. The
+postrouting chain carries masquerade rules for loopback-sourced traffic
+(see [Loopback hairpin NAT](#loopback-hairpin-nat) above).
 
 ## Reconciliation order
 
