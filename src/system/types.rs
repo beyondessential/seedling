@@ -192,29 +192,17 @@ pub struct DataPlaneRules {
     pub service_dnat: Vec<ServiceDnatRule>,
 }
 
-/// Where an ingress rule sends traffic.
-#[derive(Debug, Clone)]
-pub enum IngressTarget {
-    /// HTTP ingress — DNAT to Caddy for reverse proxying.
-    Proxy {
-        /// Caddy's IPv6 address:port on the proxy network.
-        v6_addr: SocketAddr,
-        /// Caddy's IPv4 address:port, if the proxy network is dual-stack.
-        v4_addr: Option<SocketAddr>,
-    },
-    /// Direct TCP/UDP ingress — DNAT straight to pod backends.
-    /// Used for ingresses without HTTP/TLS termination.
-    Direct { backends: Vec<(Ipv6Addr, u16)> },
-}
-
-/// Redirects an external host port to either Caddy (for HTTP) or directly
-/// to pod backends (for raw TCP/UDP). Applied in both prerouting and output
-/// nftables chains.
+/// Redirects an external host port to Caddy's container address.
+/// All ingress traffic (HTTP and L4) flows through Caddy.
+/// Applied in both prerouting and output nftables chains.
 #[derive(Debug, Clone)]
 pub struct IngressRule {
     pub external_port: u16,
     pub proto: ForwardProto,
-    pub target: IngressTarget,
+    /// Caddy's IPv6 address:port on the proxy network.
+    pub caddy_v6: SocketAddr,
+    /// Caddy's IPv4 address:port, if the proxy network is dual-stack.
+    pub caddy_v4: Option<SocketAddr>,
 }
 
 /// DNAT6 rule translating a mount endpoint to a backing pod's address and
@@ -280,6 +268,24 @@ pub struct ProxyConfig {
     /// Ports Caddy should bind inside its container.
     pub listeners: Vec<ProxyListener>,
     pub virtual_hosts: Vec<VirtualHost>,
+    /// Layer-4 (TCP/UDP) routes for non-HTTP ingresses proxied via Caddy L4.
+    pub l4_routes: Vec<L4Route>,
+}
+
+/// A layer-4 (TCP/UDP) proxy route for non-HTTP ingresses.
+/// Caddy L4 listens on the port and forwards to service upstreams.
+#[derive(Debug, Clone)]
+pub struct L4Route {
+    pub port: u16,
+    pub proto: L4Proto,
+    /// Upstream addresses: `"[fd5e:...]:port"` format.
+    pub upstreams: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum L4Proto {
+    Tcp,
+    Udp,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
