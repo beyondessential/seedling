@@ -345,7 +345,6 @@ impl Reconciler {
                 &app.app_def,
                 caddy_ip,
                 self.caddy_v4_addr,
-                running,
             ));
             all_mounts.extend(rules::build_mount_rules(running));
             all_service_dnat.extend(rules::build_service_dnat_rules(

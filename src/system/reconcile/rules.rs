@@ -13,7 +13,7 @@ use crate::{
     runtime::InstanceRegistry,
     system::{
         translate::proxy::instance_ipv6,
-        types::{ForwardProto, IngressRule, IngressTarget, MountRule, ServiceDnatRule},
+        types::{ForwardProto, IngressRule, MountRule, ServiceDnatRule},
     },
 };
 
@@ -85,10 +85,8 @@ pub(super) fn build_ingress_rules(
     snapshot: &AppDef,
     caddy_ip: Ipv6Addr,
     caddy_v4: Option<Ipv4Addr>,
-    running_pods: &[RunningPod],
 ) -> Vec<IngressRule> {
     let mut rules = Vec::new();
-    let backend_map = collect_service_backends(running_pods);
 
     for resource in snapshot.resources.values() {
         let ingress = match resource {
@@ -97,55 +95,29 @@ pub(super) fn build_ingress_rules(
         };
 
         let def = ingress.def.lock();
-        let svc_name = ingress.service.name.as_str();
 
-        if def.http_terminate.is_some() {
-            // HTTP ingress — proxy through Caddy
-            let caddy_addr = SocketAddr::new(IpAddr::V6(caddy_ip), def.port);
-            let proto = if def.dtls || def.quic {
-                ForwardProto::Both
-            } else {
-                ForwardProto::Tcp
-            };
+        let caddy_v6 = SocketAddr::new(IpAddr::V6(caddy_ip), def.port);
+        let caddy_v4_addr = caddy_v4.map(|ip| SocketAddr::new(IpAddr::V4(ip), def.port));
 
-            let v4_addr = caddy_v4.map(|ip4| SocketAddr::new(IpAddr::V4(ip4), def.port));
-
-            rules.push(IngressRule {
-                external_port: def.port,
-                proto,
-                target: IngressTarget::Proxy {
-                    v6_addr: caddy_addr,
-                    v4_addr,
-                },
-            });
-
-            // HTTP→HTTPS redirect (always TCP, always through Caddy)
-            if let Some(redirect) = &def.redirect {
-                let v4_redirect =
-                    caddy_v4.map(|ip4| SocketAddr::new(IpAddr::V4(ip4), redirect.port));
-                rules.push(IngressRule {
-                    external_port: redirect.port,
-                    proto: ForwardProto::Tcp,
-                    target: IngressTarget::Proxy {
-                        v6_addr: SocketAddr::new(IpAddr::V6(caddy_ip), redirect.port),
-                        v4_addr: v4_redirect,
-                    },
-                });
-            }
+        let proto = if def.dtls || def.quic {
+            ForwardProto::Both
         } else {
-            // Direct TCP/UDP ingress — DNAT straight to pod backends
-            let key = (svc_name.to_owned(), def.port);
-            let backends = backend_map.get(&key).cloned().unwrap_or_default();
-            let proto = if def.dtls || def.quic {
-                ForwardProto::Both
-            } else {
-                ForwardProto::Tcp
-            };
+            ForwardProto::Tcp
+        };
 
+        rules.push(IngressRule {
+            external_port: def.port,
+            proto,
+            caddy_v6,
+            caddy_v4: caddy_v4_addr,
+        });
+
+        if let Some(redirect) = &def.redirect {
             rules.push(IngressRule {
-                external_port: def.port,
-                proto,
-                target: IngressTarget::Direct { backends },
+                external_port: redirect.port,
+                proto: ForwardProto::Tcp,
+                caddy_v6: SocketAddr::new(IpAddr::V6(caddy_ip), redirect.port),
+                caddy_v4: caddy_v4.map(|ip| SocketAddr::new(IpAddr::V4(ip), redirect.port)),
             });
         }
     }

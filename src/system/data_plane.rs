@@ -19,10 +19,7 @@ use tracing::error;
 
 use crate::system::{
     BoxError, BoxFuture, DataPlane,
-    types::{
-        DataPlaneRules, ForwardProto, IngressRule, IngressTarget, MountRule, ServiceDnatRule,
-        ServiceRoute,
-    },
+    types::{DataPlaneRules, ForwardProto, IngressRule, MountRule, ServiceDnatRule, ServiceRoute},
 };
 
 const TABLE: &str = "seedling_net";
@@ -425,52 +422,34 @@ fn ingress_rule_stmts(rule: &IngressRule) -> Vec<Vec<Statement<'static>>> {
         ]
     };
 
+    let ip6 = match rule.caddy_v6.ip() {
+        IpAddr::V6(ip) => ip.to_string(),
+        IpAddr::V4(ip) => format!("::ffff:{ip}"),
+    };
+    let dnat6 = dnat_ip6(ip6, rule.caddy_v6.port());
+
     let mut rules = Vec::new();
-
-    match &rule.target {
-        IngressTarget::Proxy { v6_addr, v4_addr } => {
-            let ip6 = match v6_addr.ip() {
-                IpAddr::V6(ip) => ip.to_string(),
-                IpAddr::V4(ip) => format!("::ffff:{ip}"),
-            };
-            let dnat6 = dnat_ip6(ip6, v6_addr.port());
-            match rule.proto {
-                ForwardProto::Tcp => rules.push(make_v6("tcp", dnat6)),
-                ForwardProto::Udp => rules.push(make_v6("udp", dnat6)),
-                ForwardProto::Both => {
-                    rules.push(make_v6("tcp", dnat6.clone()));
-                    rules.push(make_v6("udp", dnat6));
-                }
-            }
-
-            if let Some(v4) = v4_addr {
-                let ip4 = match v4.ip() {
-                    IpAddr::V4(ip) => ip.to_string(),
-                    IpAddr::V6(ip) => ip.to_string(),
-                };
-                let dnat4 = dnat_ip4(ip4, v4.port());
-                match rule.proto {
-                    ForwardProto::Tcp => rules.push(make_v4("tcp", dnat4)),
-                    ForwardProto::Udp => rules.push(make_v4("udp", dnat4)),
-                    ForwardProto::Both => {
-                        rules.push(make_v4("tcp", dnat4.clone()));
-                        rules.push(make_v4("udp", dnat4));
-                    }
-                }
-            }
+    match rule.proto {
+        ForwardProto::Tcp => rules.push(make_v6("tcp", dnat6)),
+        ForwardProto::Udp => rules.push(make_v6("udp", dnat6)),
+        ForwardProto::Both => {
+            rules.push(make_v6("tcp", dnat6.clone()));
+            rules.push(make_v6("udp", dnat6));
         }
-        IngressTarget::Direct { backends } => {
-            if backends.is_empty() {
-                return vec![];
-            }
-            let dnat = dnat_lb(backends);
-            match rule.proto {
-                ForwardProto::Tcp => rules.push(make_v6("tcp", dnat)),
-                ForwardProto::Udp => rules.push(make_v6("udp", dnat)),
-                ForwardProto::Both => {
-                    rules.push(make_v6("tcp", dnat.clone()));
-                    rules.push(make_v6("udp", dnat));
-                }
+    }
+
+    if let Some(v4) = &rule.caddy_v4 {
+        let ip4 = match v4.ip() {
+            IpAddr::V4(ip) => ip.to_string(),
+            IpAddr::V6(ip) => ip.to_string(),
+        };
+        let dnat4 = dnat_ip4(ip4, v4.port());
+        match rule.proto {
+            ForwardProto::Tcp => rules.push(make_v4("tcp", dnat4)),
+            ForwardProto::Udp => rules.push(make_v4("udp", dnat4)),
+            ForwardProto::Both => {
+                rules.push(make_v4("tcp", dnat4.clone()));
+                rules.push(make_v4("udp", dnat4));
             }
         }
     }
@@ -501,77 +480,8 @@ fn match_fib_daddr_local() -> Statement<'static> {
 /// (`fib daddr type local`) so that host processes connecting to ingress
 /// ports on `::1`, `127.0.0.1`, or the host's own addresses are redirected.
 fn output_ingress_rule_stmts(rule: &IngressRule) -> Vec<Vec<Statement<'static>>> {
-    let ext_port = rule.external_port as u32;
-
-    let make_v6 = |proto: &'static str, dnat: Statement<'static>| {
-        vec![
-            match_nfproto(NFPROTO_IPV6),
-            match_fib_daddr_local(),
-            match_eq(payload_expr(proto, "dport"), Expression::Number(ext_port)),
-            dnat,
-        ]
-    };
-
-    let make_v4 = |proto: &'static str, dnat: Statement<'static>| {
-        vec![
-            match_nfproto(NFPROTO_IPV4),
-            match_fib_daddr_local(),
-            match_eq(payload_expr(proto, "dport"), Expression::Number(ext_port)),
-            dnat,
-        ]
-    };
-
-    let mut rules = Vec::new();
-
-    match &rule.target {
-        IngressTarget::Proxy { v6_addr, v4_addr } => {
-            let ip6 = match v6_addr.ip() {
-                IpAddr::V6(ip) => ip.to_string(),
-                IpAddr::V4(ip) => format!("::ffff:{ip}"),
-            };
-            let dnat6 = dnat_ip6(ip6, v6_addr.port());
-            match rule.proto {
-                ForwardProto::Tcp => rules.push(make_v6("tcp", dnat6)),
-                ForwardProto::Udp => rules.push(make_v6("udp", dnat6)),
-                ForwardProto::Both => {
-                    rules.push(make_v6("tcp", dnat6.clone()));
-                    rules.push(make_v6("udp", dnat6));
-                }
-            }
-
-            if let Some(v4) = v4_addr {
-                let ip4 = match v4.ip() {
-                    IpAddr::V4(ip) => ip.to_string(),
-                    IpAddr::V6(ip) => ip.to_string(),
-                };
-                let dnat4 = dnat_ip4(ip4, v4.port());
-                match rule.proto {
-                    ForwardProto::Tcp => rules.push(make_v4("tcp", dnat4)),
-                    ForwardProto::Udp => rules.push(make_v4("udp", dnat4)),
-                    ForwardProto::Both => {
-                        rules.push(make_v4("tcp", dnat4.clone()));
-                        rules.push(make_v4("udp", dnat4));
-                    }
-                }
-            }
-        }
-        IngressTarget::Direct { backends } => {
-            if backends.is_empty() {
-                return vec![];
-            }
-            let dnat = dnat_lb(backends);
-            match rule.proto {
-                ForwardProto::Tcp => rules.push(make_v6("tcp", dnat)),
-                ForwardProto::Udp => rules.push(make_v6("udp", dnat)),
-                ForwardProto::Both => {
-                    rules.push(make_v6("tcp", dnat.clone()));
-                    rules.push(make_v6("udp", dnat));
-                }
-            }
-        }
-    }
-
-    rules
+    // Identical to ingress_rule_stmts — both chains need the same rules.
+    ingress_rule_stmts(rule)
 }
 
 fn mount_rule_stmts(rule: &MountRule) -> Vec<Vec<Statement<'static>>> {
@@ -690,7 +600,7 @@ fn seedling_forward_stmts() -> Vec<Statement<'static>> {
 mod tests {
     use std::net::{Ipv6Addr, SocketAddr};
 
-    use crate::system::types::{ForwardProto, IngressRule, IngressTarget};
+    use crate::system::types::{ForwardProto, IngressRule};
 
     use super::{ingress_rule_stmts, output_ingress_rule_stmts};
 
@@ -698,13 +608,11 @@ mod tests {
         IngressRule {
             external_port: port,
             proto,
-            target: IngressTarget::Proxy {
-                v6_addr: SocketAddr::new(
-                    std::net::IpAddr::V6(Ipv6Addr::new(0xfd5e, 0, 0, 0, 0, 0, 0, 1)),
-                    8080,
-                ),
-                v4_addr: None,
-            },
+            caddy_v6: SocketAddr::new(
+                std::net::IpAddr::V6(Ipv6Addr::new(0xfd5e, 0, 0, 0, 0, 0, 0, 1)),
+                8080,
+            ),
+            caddy_v4: None,
         }
     }
 
