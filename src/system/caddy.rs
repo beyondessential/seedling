@@ -387,6 +387,28 @@ async fn stop_slot(
     let _ = container.remove_container(container_name, true).await;
 }
 
+/// Tear down all Caddy infrastructure: stop both blue/green slots and remove
+/// the proxy network. Called when no apps are installed so the system is fully
+/// clean. The data volume is intentionally kept — it holds ACME certificates
+/// that are expensive to re-obtain.
+#[tracing::instrument(skip_all)]
+pub(crate) async fn teardown_caddy(container: &dyn ContainerRuntime, process: &dyn ProcessManager) {
+    for slot in [CADDY_BLUE, CADDY_GREEN] {
+        if container.inspect(slot).await.ok().flatten().is_some() {
+            tracing::info!(container = slot, "tearing down caddy slot");
+            stop_slot(slot, process, container).await;
+        }
+    }
+
+    if container
+        .network_exists(PROXY_NETWORK)
+        .await
+        .unwrap_or(false)
+    {
+        let _ = container.remove_network(PROXY_NETWORK).await;
+    }
+}
+
 /// Poll `container_name` until it is running and Caddy's admin API responds,
 /// or until the deadline elapses. Returns `CaddyAddrs` on success.
 #[tracing::instrument(skip_all, fields(%container_name))]

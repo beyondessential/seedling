@@ -182,6 +182,24 @@ impl Reconciler {
     pub async fn tick(&mut self) {
         let apps = self.snapshot_all_apps();
 
+        // When no apps are installed (or all have finished uninstalling),
+        // tear down infrastructure so the system is fully clean.
+        if apps.is_empty() {
+            // Flush nftables rules (empty set).
+            let empty_rules = DataPlaneRules::default();
+            if let Err(e) = self.driver.data_plane.apply_rules(&empty_rules).await {
+                error!(error = %e, "idle: flush rules failed");
+            }
+            // Remove all service routes.
+            if let Err(e) = self.driver.data_plane.apply_routes(&[]).await {
+                error!(error = %e, "idle: clear routes failed");
+            }
+            // Stop Caddy and remove the proxy network.
+            caddy::teardown_caddy(&*self.driver.container, &*self.driver.process).await;
+            self.caddy_v4_addr = None;
+            return;
+        }
+
         // Per-app phases: pods, uninstall, bridge, volumes
         let mut running_pods_by_app: HashMap<String, Vec<RunningPod>> = HashMap::new();
 
