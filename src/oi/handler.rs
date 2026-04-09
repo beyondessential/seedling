@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::{
-    defs::install::InstallRequirementKind,
+    defs::{install::InstallRequirementKind, resource::ResourceKind},
     runtime::{
         AppPhase,
         apps::{AppEntry, AppRegistry, AppStatus},
@@ -24,7 +24,10 @@ use crate::{
     },
 };
 
-use super::error::{ErrorCode, OiError};
+use super::{
+    error::{ErrorCode, OiError},
+    forwards::{ForwardId, ForwardRegistry},
+};
 
 // ---------------------------------------------------------------------------
 // OiState
@@ -44,6 +47,7 @@ pub struct OiState {
     /// TLS client cert verifier so additions/removals take effect immediately.
     pub trusted_keys: Arc<parking_lot::RwLock<HashSet<String>>>,
     pub shells: Arc<crate::oi::shells::ShellRegistry>,
+    pub forwards: Arc<parking_lot::Mutex<ForwardRegistry>>,
     pub container_runtime: Arc<dyn crate::system::ContainerRuntime>,
     /// Node-wide /48 IPv6 prefix, used to derive pod network addresses for
     /// shell session containers.
@@ -112,6 +116,10 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8]) -> HandlerResult {
         "ListShells" => list_shells(state, req.params),
         // i[shell.stop]
         "StopShell" => stop_shell(state, req.params),
+        // i[forward.list]
+        "ListForwards" => list_forwards(state, req.params),
+        // i[forward.stop]
+        "StopForward" => stop_forward(state, req.params),
         other => Err(OiError::not_found(format!("unknown method: {other}"))),
     };
 
@@ -237,8 +245,8 @@ fn get_status(state: &OiState) -> HandlerResult {
         "apps_by_status": apps_by_status,
         "active_operations": 0,
         "active_faults": 0,
-        "active_shells": 0,
-        "active_forwards": 0,
+        "active_shells": state.shells.list(None).len(),
+        "active_forwards": state.forwards.lock().count(),
     }))
 }
 
@@ -681,6 +689,32 @@ fn update_app(state: &OiState, params: Value) -> HandlerResult {
         let db = state.db.lock();
         AppRegistry::persist_app(&db, entry)
             .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db update: {e}")))?;
+    }
+
+    // i[forward.script-update] — tear down any forward whose target service is
+    // no longer present in the new AppDef (only when the AppDef was reloaded
+    // immediately; deferred reload at evaluation boundary is handled separately).
+    if !op_in_progress {
+        let valid_services: std::collections::HashSet<String> = {
+            let reg = state.registry.read();
+            if let Some(entry) = reg.get(name) {
+                let def = entry.app.def.lock();
+                def.resources
+                    .keys()
+                    .filter(|rid| rid.kind == ResourceKind::Service)
+                    .map(|rid| rid.name.as_str().to_owned())
+                    .collect()
+            } else {
+                Default::default()
+            }
+        };
+        let stale = state
+            .forwards
+            .lock()
+            .remove_stale_for_app(name, |fwd| !valid_services.contains(&fwd.service));
+        for entry in stale {
+            let _ = entry.stop_tx.send(true);
+        }
     }
 
     tracing::info!(app = %name, "updated app");
@@ -1338,6 +1372,44 @@ fn list_shells(state: &Arc<OiState>, params: Value) -> HandlerResult {
         })
         .collect();
     Ok(json!({ "shells": list }))
+}
+
+// i[forward.list]
+fn list_forwards(state: &Arc<OiState>, params: Value) -> HandlerResult {
+    let app = params.get("app").and_then(Value::as_str);
+    let records = state.forwards.lock().list(app);
+    let list: Vec<Value> = records
+        .iter()
+        .map(|r| {
+            json!({
+                "forward_id": r.forward_id.to_string(),
+                "app": r.app,
+                "service": r.service,
+                "port": r.port,
+                "proto": r.proto,
+                "opened_at": r.opened_at.to_rfc3339(),
+            })
+        })
+        .collect();
+    Ok(json!({ "forwards": list }))
+}
+
+// i[forward.stop]
+fn stop_forward(state: &Arc<OiState>, params: Value) -> HandlerResult {
+    let id_str = params
+        .get("forward_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| OiError::new(ErrorCode::NotFound, "missing param: forward_id"))?;
+    let forward_id: ForwardId = Uuid::parse_str(id_str)
+        .map_err(|_| OiError::not_found(format!("invalid forward_id: {id_str}")))?;
+    let entry = state
+        .forwards
+        .lock()
+        .remove(&forward_id)
+        .ok_or_else(|| OiError::not_found(format!("forward not found: {id_str}")))?;
+    let _ = entry.stop_tx.send(true);
+    tracing::info!(forward_id = %forward_id, "stopped forward");
+    Ok(json!({}))
 }
 
 // i[shell.stop]

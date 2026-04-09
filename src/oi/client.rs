@@ -2,7 +2,7 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use super::keys::ClientIdentity;
 
-use quinn::{ClientConfig, Connection, Endpoint};
+use quinn::{ClientConfig, Connection, Endpoint, TransportConfig};
 use rustls::{
     ClientConfig as TlsClientConfig, DigitallySignedStruct, SignatureScheme,
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
@@ -271,9 +271,14 @@ impl OiClient {
         let quic_config = quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
             .map_err(|e| ClientError::Connect(Box::new(e)))?;
 
+        let mut transport = TransportConfig::default();
+        transport.datagram_receive_buffer_size(Some(65536));
+        let mut client_cfg = ClientConfig::new(Arc::new(quic_config));
+        client_cfg.transport_config(Arc::new(transport));
+
         let mut endpoint = Endpoint::client("[::]:0".parse().unwrap())
             .map_err(|e| ClientError::Connect(Box::new(e)))?;
-        endpoint.set_default_client_config(ClientConfig::new(Arc::new(quic_config)));
+        endpoint.set_default_client_config(client_cfg);
 
         let conn = tokio::time::timeout(
             Duration::from_secs(5),
@@ -307,6 +312,28 @@ impl OiClient {
         self.conn
             .accept_uni()
             .await
+            .map_err(|e| ClientError::Transport(Box::new(e)))
+    }
+
+    /// Send a QUIC datagram to the server.
+    ///
+    /// Used for UDP port-forward relay; the caller is responsible for prepending
+    /// the 2-byte big-endian `forward_key` prefix.
+    pub fn send_datagram(&self, data: Vec<u8>) -> Result<(), ClientError> {
+        self.conn
+            .send_datagram(data.into())
+            .map_err(|e| ClientError::Transport(Box::new(e)))
+    }
+
+    /// Receive the next QUIC datagram from the server.
+    ///
+    /// Used for UDP port-forward relay; the returned bytes include the 2-byte
+    /// big-endian `forward_key` prefix followed by the UDP payload.
+    pub async fn read_datagram(&self) -> Result<Vec<u8>, ClientError> {
+        self.conn
+            .read_datagram()
+            .await
+            .map(|b| b.to_vec())
             .map_err(|e| ClientError::Transport(Box::new(e)))
     }
 
@@ -381,9 +408,14 @@ impl OiClient {
         let quic_config = quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
             .map_err(|e| ClientError::Connect(Box::new(e)))?;
 
+        let mut transport = TransportConfig::default();
+        transport.datagram_receive_buffer_size(Some(65536));
+        let mut client_cfg = ClientConfig::new(Arc::new(quic_config));
+        client_cfg.transport_config(Arc::new(transport));
+
         let mut endpoint = Endpoint::client("[::]:0".parse().unwrap())
             .map_err(|e| ClientError::Connect(Box::new(e)))?;
-        endpoint.set_default_client_config(ClientConfig::new(Arc::new(quic_config)));
+        endpoint.set_default_client_config(client_cfg);
 
         let conn = tokio::time::timeout(
             Duration::from_secs(5),

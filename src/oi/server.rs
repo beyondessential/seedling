@@ -97,6 +97,8 @@ pub async fn run(
     transport.max_idle_timeout(Some(
         quinn::VarInt::from_u32(30_000).into(), // 30 s in ms
     ));
+    // Enable QUIC datagrams for UDP port-forward relay.
+    transport.datagram_receive_buffer_size(Some(65536));
     let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(quic_config));
     server_config.transport_config(Arc::new(transport));
 
@@ -124,7 +126,9 @@ async fn accept_loop(endpoint: Endpoint, state: Arc<OiState>) {
 
 // i[stream.control]
 // i[stream.dispatch]
+// i[datagram.forward]
 async fn handle_connection(conn: quinn::Connection, state: Arc<OiState>) {
+    let conn_id = conn.stable_id();
     let peer = conn.remote_address();
     let client_fp = extract_client_fp(&conn);
 
@@ -138,21 +142,42 @@ async fn handle_connection(conn: quinn::Connection, state: Arc<OiState>) {
         .unwrap_or_else(|| "unauthenticated".to_owned());
 
     loop {
-        let stream = match conn.accept_bi().await {
-            Ok(s) => s,
-            Err(quinn::ConnectionError::ApplicationClosed { .. }) => break,
-            Err(e) => {
-                tracing::warn!("connection error: {e}");
-                break;
+        tokio::select! {
+            stream_result = conn.accept_bi() => {
+                match stream_result {
+                    Ok(stream) => {
+                        let state = Arc::clone(&state);
+                        let conn = conn.clone();
+                        let client = client.clone();
+                        tokio::spawn(
+                            handle_bidi_stream(stream, conn, state)
+                                .instrument(tracing::info_span!("oi", %peer, %client)),
+                        );
+                    }
+                    Err(quinn::ConnectionError::ApplicationClosed { .. }) => break,
+                    Err(e) => {
+                        tracing::warn!("connection error: {e}");
+                        break;
+                    }
+                }
             }
-        };
-        let state = Arc::clone(&state);
-        let client = client.clone();
-        let conn = conn.clone();
-        tokio::spawn(
-            handle_bidi_stream(stream, conn, state)
-                .instrument(tracing::info_span!("oi", %peer, %client)),
-        );
+            datagram = conn.read_datagram() => {
+                if let Ok(data) = datagram && data.len() >= 2 {
+                    let key = u16::from_be_bytes([data[0], data[1]]);
+                    let payload = data[2..].to_vec();
+                    let fwds = state.forwards.lock();
+                    if let Some(sender) = fwds.get_udp_sender(conn_id, key) {
+                        let _ = sender.try_send(payload);
+                    }
+                }
+            }
+        }
+    }
+
+    // i[forward.lifetime] — tear down all port forwards belonging to this connection.
+    let entries = state.forwards.lock().remove_by_conn(conn_id);
+    for entry in entries {
+        let _ = entry.stop_tx.send(true);
     }
 }
 
@@ -173,12 +198,32 @@ async fn handle_bidi_stream(
         return;
     }
 
-    let maybe_method = serde_json::from_slice::<serde_json::Value>(&line)
-        .ok()
-        .and_then(|v| v.get("method").and_then(|m| m.as_str()).map(str::to_owned));
+    let first_obj = serde_json::from_slice::<serde_json::Value>(&line).unwrap_or_default();
+
+    // i[stream.forward] — forward data stream, identified by the "forward" key.
+    if let Some(forward_id) = first_obj
+        .get("forward")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned)
+    {
+        handle_forward_stream((send, recv), forward_id, leftover, state).await;
+        return;
+    }
+
+    let maybe_method = first_obj
+        .get("method")
+        .and_then(|m| m.as_str())
+        .map(str::to_owned);
 
     if maybe_method.as_deref() == Some("OpenShell") {
         open_shell_session(conn, send, recv, leftover, line, state).await;
+        return;
+    }
+
+    // i[forward.request] — ForwardPort keeps the control stream open for the
+    // duration of the forward; it must be handled outside the normal req/resp path.
+    if maybe_method.as_deref() == Some("ForwardPort") {
+        forward_port_session(conn, send, recv, line, state).await;
         return;
     }
 
@@ -733,4 +778,363 @@ async fn open_shell_session(
     let _ = stdout_send.finish();
 
     tracing::info!(app = %app_name, shell = %shell_name, %exit_code, "shell session ended");
+}
+
+// i[forward.request]
+// i[forward.mtu]
+async fn forward_port_session(
+    conn: quinn::Connection,
+    mut send: quinn::SendStream,
+    mut recv: quinn::RecvStream,
+    initial_line: Vec<u8>,
+    state: Arc<OiState>,
+) {
+    use crate::{
+        defs::resource::ResourceKind,
+        oi::forwards::{ForwardEntry, ForwardProto},
+        runtime::{
+            AppPhase,
+            registry::{DbInstanceRegistry, InstanceRegistry},
+        },
+        system::translate::proxy::instance_ipv6,
+    };
+
+    #[derive(serde::Deserialize)]
+    struct ForwardPortRequest {
+        #[serde(default)]
+        params: serde_json::Value,
+    }
+    #[derive(serde::Deserialize)]
+    struct ForwardPortParams {
+        app: String,
+        service: String,
+        port: u16,
+        proto: String,
+    }
+
+    async fn write_err(send: &mut quinn::SendStream, code: &str, msg: &str) {
+        let resp = serde_json::to_vec(&serde_json::json!({
+            "error": { "code": code, "message": msg }
+        }))
+        .unwrap_or_default();
+        let _ = send.write_all(&resp).await;
+        let _ = send.finish();
+    }
+
+    let req: ForwardPortRequest = match serde_json::from_slice(&initial_line) {
+        Ok(r) => r,
+        Err(e) => {
+            write_err(&mut send, "not_found", &format!("invalid request: {e}")).await;
+            return;
+        }
+    };
+    let params: ForwardPortParams = match serde_json::from_value(req.params) {
+        Ok(p) => p,
+        Err(e) => {
+            write_err(
+                &mut send,
+                "requirements_invalid",
+                &format!("invalid params: {e}"),
+            )
+            .await;
+            return;
+        }
+    };
+
+    let proto = match params.proto.as_str() {
+        "tcp" => ForwardProto::Tcp,
+        "udp" => ForwardProto::Udp,
+        other => {
+            write_err(
+                &mut send,
+                "requirements_invalid",
+                &format!("unknown proto: {other}; expected tcp or udp"),
+            )
+            .await;
+            return;
+        }
+    };
+
+    // Validate: app exists, is installed, service is declared.
+    let lookup: Result<(), (&'static str, String)> = (|| {
+        let reg = state.registry.read();
+        let Some(entry) = reg.get(&params.app) else {
+            return Err(("not_found", format!("app not found: {}", params.app)));
+        };
+        if !matches!(*entry.phase.lock(), AppPhase::Installed) {
+            return Err((
+                "not_installed",
+                format!("app not installed: {}", params.app),
+            ));
+        }
+        let def = entry.app.def.lock();
+        let found = def.resources.keys().any(|rid| {
+            rid.kind == ResourceKind::Service && rid.name.as_str() == params.service.as_str()
+        });
+        if !found {
+            return Err((
+                "not_found",
+                format!("service not found: {}", params.service),
+            ));
+        }
+        Ok(())
+    })();
+    if let Err((code, msg)) = lookup {
+        write_err(&mut send, code, &msg).await;
+        return;
+    }
+
+    // Resolve the service's stable IPv6 address via the instance registry.
+    let target_addr = tokio::task::block_in_place(|| {
+        let db =
+            crate::runtime::db::Db::open(&state.db_path).map_err(|e| format!("db open: {e}"))?;
+        let registry = DbInstanceRegistry::new(db);
+        let instance = registry.get_or_create_singleton(
+            &params.app,
+            ResourceKind::Service,
+            Some(&params.service),
+        );
+        Ok::<_, String>(instance_ipv6(&state.node_prefix, &instance))
+    });
+    let target_addr = match target_addr {
+        Ok(a) => a,
+        Err(e) => {
+            write_err(&mut send, "not_found", &e).await;
+            return;
+        }
+    };
+
+    let conn_id = conn.stable_id();
+    let forward_id = Uuid::new_v4();
+    let forward_key = state.forwards.lock().alloc_key(conn_id);
+
+    let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
+
+    // i[forward.mtu]
+    let max_udp_payload: Option<u64> = match proto {
+        ForwardProto::Udp => conn.max_datagram_size().map(|s| s.saturating_sub(2) as u64),
+        ForwardProto::Tcp => None,
+    };
+
+    // For UDP forwards: spawn a relay task that forwards QUIC datagrams to UDP.
+    let udp_tx: Option<tokio::sync::mpsc::Sender<Vec<u8>>> = if matches!(proto, ForwardProto::Udp) {
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        let conn_clone = conn.clone();
+        let fkey = forward_key;
+        let taddr = target_addr;
+        let tport = params.port;
+        tokio::spawn(async move {
+            udp_relay_task(rx, conn_clone, fkey, taddr, tport).await;
+        });
+        Some(tx)
+    } else {
+        None
+    };
+
+    // Register before writing the response so TCP data streams can resolve the id.
+    state.forwards.lock().insert(ForwardEntry {
+        forward_id,
+        forward_key,
+        conn_id,
+        app: params.app.clone(),
+        service: params.service.clone(),
+        port: params.port,
+        proto,
+        target_addr,
+        opened_at: chrono::DateTime::<chrono::Utc>::from(std::time::SystemTime::now()),
+        stop_tx,
+        udp_tx,
+    });
+
+    // Write the newline-terminated JSON response; the stream stays open after this.
+    let resp = serde_json::to_vec(&serde_json::json!({
+        "result": {
+            "forward_id": forward_id.to_string(),
+            "forward_key": forward_key,
+            "max_udp_payload": max_udp_payload,
+        }
+    }))
+    .unwrap_or_default();
+    let mut resp_line = resp;
+    resp_line.push(b'\n');
+    if let Err(e) = send.write_all(&resp_line).await {
+        tracing::warn!(fwd = %forward_id, "write forward response: {e}");
+        if let Some(entry) = state.forwards.lock().remove(&forward_id) {
+            let _ = entry.stop_tx.send(true);
+        }
+        return;
+    }
+
+    tracing::info!(
+        app = %params.app, service = %params.service, port = params.port,
+        fwd = %forward_id, "forward started"
+    );
+
+    // Keep the control stream open until the client closes it or a stop signal arrives.
+    let mut ctrl_buf = [0u8; 1];
+    loop {
+        tokio::select! {
+            n = recv.read(&mut ctrl_buf) => {
+                match n {
+                    Ok(None) | Ok(Some(0)) | Err(_) => break,
+                    Ok(Some(_)) => {} // ignore any bytes sent on the control stream
+                }
+            }
+            result = stop_rx.changed() => {
+                // changed() fires once for the initial value (false) — only break on true.
+                if result.is_err() || *stop_rx.borrow() {
+                    break;
+                }
+            }
+        }
+    }
+
+    // If the entry is still registered (closed naturally, not via StopForward),
+    // remove it and signal the UDP relay task to stop.
+    if let Some(entry) = state.forwards.lock().remove(&forward_id) {
+        let _ = entry.stop_tx.send(true);
+    }
+
+    let _ = send.finish();
+    tracing::info!(
+        app = %params.app, service = %params.service, fwd = %forward_id,
+        "forward ended"
+    );
+}
+
+// i[stream.forward]
+// i[forward.tunnel.tcp]
+async fn handle_forward_stream(
+    (mut send, mut recv): (quinn::SendStream, quinn::RecvStream),
+    forward_id_str: String,
+    leftover: Vec<u8>,
+    state: Arc<OiState>,
+) {
+    let forward_id = match uuid::Uuid::parse_str(&forward_id_str) {
+        Ok(id) => id,
+        Err(_) => {
+            tracing::warn!(fwd = %forward_id_str, "invalid forward_id in stream header");
+            return;
+        }
+    };
+
+    let Some((target_addr, port)) = state.forwards.lock().get_target(&forward_id) else {
+        tracing::warn!(fwd = %forward_id, "TCP forward stream for unknown forward");
+        return;
+    };
+
+    let target = format!("[{target_addr}]:{port}");
+    let mut tcp = match tokio::net::TcpStream::connect(&target).await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!(fwd = %forward_id, "TCP connect to {target} failed: {e}");
+            return;
+        }
+    };
+
+    let (mut tcp_recv, mut tcp_send) = tcp.split();
+
+    // Flush any leftover bytes that arrived before the JSON header ended.
+    if !leftover.is_empty() && tcp_send.write_all(&leftover).await.is_err() {
+        let _ = send.finish();
+        return;
+    }
+
+    let mut qbuf = vec![0u8; 8192];
+    let mut tbuf = vec![0u8; 8192];
+
+    loop {
+        tokio::select! {
+            // QUIC stream → TCP
+            n = recv.read(&mut qbuf) => {
+                match n {
+                    Ok(Some(n)) if n > 0 => {
+                        if tcp_send.write_all(&qbuf[..n]).await.is_err() {
+                            break;
+                        }
+                    }
+                    _ => break,
+                }
+            }
+            // TCP → QUIC stream
+            n = tcp_recv.read(&mut tbuf) => {
+                match n {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        if send.write_all(&tbuf[..n]).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let _ = send.finish();
+}
+
+// i[forward.tunnel.udp]
+// i[datagram.forward]
+async fn udp_relay_task(
+    mut udp_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+    conn: quinn::Connection,
+    forward_key: u16,
+    target_addr: std::net::Ipv6Addr,
+    port: u16,
+) {
+    let target = std::net::SocketAddr::V6(std::net::SocketAddrV6::new(target_addr, port, 0, 0));
+    let socket = match tokio::net::UdpSocket::bind("[::]:0").await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(key = forward_key, "UDP relay bind failed: {e}");
+            return;
+        }
+    };
+    if let Err(e) = socket.connect(target).await {
+        tracing::warn!(key = forward_key, "UDP relay connect failed: {e}");
+        return;
+    }
+
+    let key_bytes = forward_key.to_be_bytes();
+    let mut buf = vec![0u8; 65535];
+
+    loop {
+        tokio::select! {
+            // Incoming payload from the QUIC datagram handler → send to UDP service
+            payload = udp_rx.recv() => {
+                match payload {
+                    Some(data) => {
+                        if let Err(e) = socket.send(&data).await {
+                            tracing::warn!(key = forward_key, "UDP send failed: {e}");
+                        }
+                    }
+                    None => break, // channel closed = forward stopped
+                }
+            }
+            // UDP response from service → forward back as a QUIC datagram
+            n = socket.recv(&mut buf) => {
+                match n {
+                    Ok(n) if n > 0 => {
+                        let max_size = conn.max_datagram_size().unwrap_or(0);
+                        if n + 2 > max_size {
+                            tracing::warn!(
+                                key = forward_key, size = n + 2, max = max_size,
+                                "UDP response too large, dropping"
+                            );
+                            continue;
+                        }
+                        let mut pkt = Vec::with_capacity(2 + n);
+                        pkt.extend_from_slice(&key_bytes);
+                        pkt.extend_from_slice(&buf[..n]);
+                        match conn.send_datagram(pkt.into()) {
+                            Ok(()) => {}
+                            Err(quinn::SendDatagramError::ConnectionLost(_)) => break,
+                            Err(e) => tracing::warn!(key = forward_key, "send_datagram: {e}"),
+                        }
+                    }
+                    _ => break,
+                }
+            }
+        }
+    }
 }

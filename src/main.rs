@@ -187,6 +187,7 @@ async fn main() {
         db_path: db_path.clone(),
         trusted_keys: seedling::oi::auth::new_trusted_keys(),
         shells: seedling::oi::shells::ShellRegistry::new(),
+        forwards: seedling::oi::forwards::ForwardRegistry::new(),
         container_runtime: Arc::clone(&driver.container),
         node_prefix,
     });
