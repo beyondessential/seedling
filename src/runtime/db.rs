@@ -60,7 +60,7 @@ impl Db {
                 kind         TEXT    NOT NULL,
                 name         TEXT,
                 is_scaled    INTEGER NOT NULL DEFAULT 0,
-                display_name TEXT    NOT NULL UNIQUE,
+                display_name TEXT    NOT NULL,
                 created_at   INTEGER NOT NULL
             );",
         )?;
@@ -191,6 +191,34 @@ impl Db {
                 .execute_batch("INSERT INTO schema_version VALUES (7);")?;
         }
 
+        if version < 8 {
+            // Remove UNIQUE constraint on display_name in resource_instances.
+            // The constraint was overly broad: Deployment/Job display names are
+            // unique because Podman enforces it externally, but Service, Ingress,
+            // Volume etc. may share a name with a resource of a different kind
+            // (e.g. an Ingress and a Service both named "public"). The silent
+            // INSERT OR IGNORE failure caused those resources to never persist
+            // a stable instance ID.
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS resource_instances_new (
+                    id           TEXT    PRIMARY KEY,
+                    app          TEXT    NOT NULL,
+                    kind         TEXT    NOT NULL,
+                    name         TEXT,
+                    is_scaled    INTEGER NOT NULL DEFAULT 0,
+                    display_name TEXT    NOT NULL,
+                    created_at   INTEGER NOT NULL
+                );
+                INSERT OR IGNORE INTO resource_instances_new
+                    SELECT id, app, kind, name, is_scaled, display_name, created_at
+                    FROM resource_instances;
+                DROP TABLE resource_instances;
+                ALTER TABLE resource_instances_new RENAME TO resource_instances;",
+            )?;
+            self.conn
+                .execute_batch("INSERT INTO schema_version VALUES (8);")?;
+        }
+
         Ok(())
     }
 }
@@ -212,7 +240,7 @@ mod tests {
                 |r| r.get(0),
             )
             .expect("schema_version should exist");
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
     }
 
     // r[verify history.persistence]
@@ -244,7 +272,7 @@ mod tests {
                 |r| r.get(0),
             )
             .expect("schema_version should exist");
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
     }
 
     // i[verify app.persist]

@@ -76,7 +76,15 @@ impl ResourceInstance {
         let id = InstanceId::generate();
         let app = app.into();
         let name = name.into();
-        let display_name = format!("{}-{}", app, name);
+        // Deployment and Job display names map directly to container/unit names
+        // in external systems (Podman, systemd), so they keep the flat
+        // "{app}-{name}" form. All other resource kinds include the kind slug
+        // to avoid display_name collisions between, e.g., a Service and an
+        // Ingress that share the same BSL name.
+        let display_name = match kind {
+            ResourceKind::Deployment | ResourceKind::Job => format!("{}-{}", app, name),
+            _ => format!("{}-{}-{}", app, kind_slug(kind), name),
+        };
         Self {
             id,
             app,
