@@ -150,12 +150,25 @@ async fn main() {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(5));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut idle = false;
             loop {
-                tokio::select! {
-                    _ = interval.tick() => {},
-                    _ = tick_notify.notified() => {},
+                if idle {
+                    // No apps installed — suspend the interval and wait for an
+                    // explicit wake (app install/update).
+                    tick_notify.notified().await;
+                    idle = false;
+                    // Reset the interval so the first active tick fires immediately.
+                    interval.reset();
+                } else {
+                    tokio::select! {
+                        _ = interval.tick() => {},
+                        _ = tick_notify.notified() => {},
+                    }
                 }
-                reconciler.tick().await;
+                let active = reconciler.tick().await;
+                if !active {
+                    idle = true;
+                }
             }
         });
     }

@@ -179,7 +179,10 @@ impl Reconciler {
     // r[reconciliation.idempotency]
     // r[fault.non-blocking]
     #[tracing::instrument(skip_all, level = "debug")]
-    pub async fn tick(&mut self) {
+    /// Returns `true` if there are active apps to reconcile, `false` if the
+    /// system is idle (no apps installed). The caller can use this to suspend
+    /// the tick interval until the next `tick_notify`.
+    pub async fn tick(&mut self) -> bool {
         let apps = self.snapshot_all_apps();
 
         // When no apps are installed (or all have finished uninstalling),
@@ -197,7 +200,7 @@ impl Reconciler {
             // Stop Caddy and remove the proxy network.
             caddy::teardown_caddy(&*self.driver.container, &*self.driver.process).await;
             self.caddy_v4_addr = None;
-            return;
+            return false;
         }
 
         // Per-app phases: pods, uninstall, bridge, volumes
@@ -330,11 +333,11 @@ impl Reconciler {
             }
             Ok(Err(e)) => {
                 error!(error = %e, "caddy health check failed; skipping nftables and proxy this tick");
-                return;
+                return true;
             }
             Err(_) => {
                 warn!("caddy health check timed out; skipping nftables and proxy this tick");
-                return;
+                return true;
             }
         }
 
@@ -343,7 +346,7 @@ impl Reconciler {
             IpAddr::V6(ip) => ip,
             _ => {
                 warn!("caddy admin address is not yet IPv6; skipping nftables and proxy this tick");
-                return;
+                return true;
             }
         };
 
@@ -423,6 +426,8 @@ impl Reconciler {
                 }
             }
         }
+
+        true
     }
 
     // r[impl observe.persist]
