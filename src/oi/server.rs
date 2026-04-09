@@ -87,15 +87,15 @@ pub async fn run(
     let tls_config = build_tls_config(&key, spki, Arc::clone(&state.trusted_keys))?;
     let quic_config = quinn::crypto::rustls::QuicServerConfig::try_from(tls_config)?;
     let mut transport = quinn::TransportConfig::default();
-    // Send PING frames every 15 s so idle shell sessions do not trip the
-    // QUIC idle timeout.  Without this, a shell with no I/O for ~10 s
-    // causes the connection to be dropped by the peer.
-    transport.keep_alive_interval(Some(Duration::from_secs(15)));
-    // Allow connections to be genuinely idle for up to an hour before the
-    // endpoint considers them dead.  Shell sessions can be quiet for long
-    // stretches and must not be disconnected by an overly aggressive timeout.
+    // Send PING frames every 10 s so idle connections do not trip the idle
+    // timeout.  As long as seedling-ctl is alive and the network is healthy,
+    // PINGs reset the idle timer and the connection stays open indefinitely.
+    transport.keep_alive_interval(Some(Duration::from_secs(10)));
+    // 30 s: long enough that a single missed PING does not drop the
+    // connection, short enough that a genuinely dead connection is detected
+    // and cleaned up promptly.
     transport.max_idle_timeout(Some(
-        quinn::VarInt::from_u32(3_600_000).into(), // 1 h in ms
+        quinn::VarInt::from_u32(30_000).into(), // 30 s in ms
     ));
     let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(quic_config));
     server_config.transport_config(Arc::new(transport));
