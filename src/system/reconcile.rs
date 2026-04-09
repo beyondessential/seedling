@@ -250,23 +250,22 @@ impl Reconciler {
                         &app.name,
                         "",
                     );
-                    // Clear the dedup set for this app's instances so that
-                    // a reinstall writes fresh observations.
+                    // Delete resource instances so a reinstall gets fresh
+                    // IDs. Old observations under the old IDs become inert
+                    // historical artifacts — the oracle won't see them for
+                    // the new instances.
+                    let _ = db.conn.execute(
+                        "DELETE FROM resource_instances WHERE app = ?1",
+                        rusqlite::params![app.name],
+                    );
+                    // Clear the dedup set so fresh observations are written
+                    // on reinstall.
                     let app_instance_ids: HashSet<InstanceId> = app
                         .desired
                         .resources
                         .iter()
                         .map(|dr| dr.instance.id)
                         .collect();
-                    // NOTE: observation deletion temporarily disabled to
-                    // verify the oracle Unscheduled→Pending reset is
-                    // sufficient on its own.
-                    // for id in &app_instance_ids {
-                    //     let _ = db.conn.execute(
-                    //         "DELETE FROM world_observations WHERE instance_id = ?1",
-                    //         rusqlite::params![id.to_hex()],
-                    //     );
-                    // }
                     self.written_obs
                         .retain(|(id, _)| !app_instance_ids.contains(id));
                     tracing::info!(app = %app.name, "uninstall complete");
