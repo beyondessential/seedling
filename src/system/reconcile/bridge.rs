@@ -61,7 +61,10 @@ async fn ensure_address(
     bridge_name: &str,
     addr: Ipv6Addr,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let if_index = get_if_index(handle, bridge_name).await?;
+    let if_index = match get_if_index(handle, bridge_name).await? {
+        Some(idx) => idx,
+        None => return Ok(()),
+    };
 
     if is_address_assigned(handle, if_index, addr).await? {
         return Ok(());
@@ -77,16 +80,24 @@ async fn ensure_address(
     Ok(())
 }
 
+/// Returns the kernel interface index for `name`, or `Ok(None)` if the
+/// interface does not exist yet (ENODEV — expected while the container is
+/// still starting up and netavark has not yet created the bridge).
 async fn get_if_index(
     handle: &Handle,
     name: &str,
-) -> Result<u32, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<Option<u32>, Box<dyn std::error::Error + Send + Sync>> {
     let mut links = handle.link().get().match_name(name.to_owned()).execute();
-    let link = links
-        .next()
-        .await
-        .ok_or_else(|| format!("bridge interface {name} not found"))??;
-    Ok(link.header.index)
+    match links.next().await {
+        None => Ok(None),
+        Some(Ok(link)) => Ok(Some(link.header.index)),
+        Some(Err(rtnetlink::Error::NetlinkError(ref msg))) if msg.raw_code().abs() == 19 => {
+            // ENODEV: the bridge has not been created yet — netavark only
+            // brings it up when a container connects to the network.
+            Ok(None)
+        }
+        Some(Err(e)) => Err(Box::new(e)),
+    }
 }
 
 async fn is_address_assigned(
