@@ -159,9 +159,11 @@ impl Reconciler {
             let progress = entry.active_progress.read();
             let app_def = entry.app.def.lock().clone();
             let desired = match phase {
-                AppPhase::Uninstalling => compute_uninstalling(&name, &app_def),
+                AppPhase::Uninstalling => compute_uninstalling(&name, &app_def, &*self.registry),
                 AppPhase::NotInstalled => unreachable!(),
-                AppPhase::Installed => compute(&name, &app_def, (*progress).as_ref()),
+                AppPhase::Installed => {
+                    compute(&name, &app_def, (*progress).as_ref(), &*self.registry)
+                }
             };
             snapshots.push(AppSnapshot {
                 name,
@@ -248,12 +250,18 @@ impl Reconciler {
                         &app.name,
                         "",
                     );
-                    // Clear the observation dedup set so that a future
-                    // reinstall writes fresh observations instead of being
-                    // blocked by stale entries from the previous install
-                    // cycle. The cost of re-writing all observations on
-                    // the next tick is bounded and harmless.
-                    self.written_obs.clear();
+                    // Clear observation dedup entries for this app's
+                    // instances so that a future reinstall writes fresh
+                    // observations instead of being blocked by stale
+                    // entries from the previous install cycle.
+                    let app_instance_ids: HashSet<InstanceId> = app
+                        .desired
+                        .resources
+                        .iter()
+                        .map(|dr| dr.instance.id)
+                        .collect();
+                    self.written_obs
+                        .retain(|(id, _)| !app_instance_ids.contains(id));
                     tracing::info!(app = %app.name, "uninstall complete");
                 }
                 Ok(units) => {

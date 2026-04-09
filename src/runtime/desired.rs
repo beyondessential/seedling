@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::defs::app::AppDef;
 use crate::defs::resource::{Resource, ResourceId};
+use crate::runtime::InstanceRegistry;
 use crate::runtime::barrier::{ActionLogEntry, CallKind};
 use crate::runtime::identity::ResourceInstance;
 use crate::runtime::lifecycle::LifecycleState;
@@ -94,21 +95,26 @@ pub fn compute(
     app_name: &str,
     app_def: &AppDef,
     operation_progress: Option<&OperationProgress>,
+    registry: &dyn InstanceRegistry,
 ) -> DesiredState {
     match operation_progress {
-        None => compute_steady(app_name, app_def),
+        None => compute_steady(app_name, app_def, registry),
         Some(progress) => compute_during_operation(app_def, progress),
     }
 }
 
 /// Compute the desired state for an app that is being uninstalled.
 /// All resources are desired at `Unscheduled`.
-pub fn compute_uninstalling(app_name: &str, app_def: &AppDef) -> DesiredState {
+pub fn compute_uninstalling(
+    app_name: &str,
+    app_def: &AppDef,
+    registry: &dyn InstanceRegistry,
+) -> DesiredState {
     let resources = app_def
         .resources
         .iter()
         .map(|(id, resource)| DesiredResource {
-            instance: ResourceInstance::new_singleton(app_name, id.kind, id.name.as_str()),
+            instance: registry.get_or_create_singleton(app_name, id.kind, Some(id.name.as_str())),
             desired: LifecycleState::Unscheduled,
             definition: resource.clone(),
         })
@@ -117,12 +123,16 @@ pub fn compute_uninstalling(app_name: &str, app_def: &AppDef) -> DesiredState {
 }
 
 // r[impl desired-state.steady]
-fn compute_steady(app_name: &str, app_def: &AppDef) -> DesiredState {
+fn compute_steady(
+    app_name: &str,
+    app_def: &AppDef,
+    registry: &dyn InstanceRegistry,
+) -> DesiredState {
     let resources = app_def
         .resources
         .iter()
         .map(|(id, resource)| DesiredResource {
-            instance: ResourceInstance::new_singleton(app_name, id.kind, id.name.as_str()),
+            instance: registry.get_or_create_singleton(app_name, id.kind, Some(id.name.as_str())),
             desired: LifecycleState::Ready,
             definition: resource.clone(),
         })
@@ -170,6 +180,7 @@ mod tests {
     use crate::runtime::barrier::{ActionLogEntry, CallKind};
     use crate::runtime::identity::ResourceInstance;
     use crate::runtime::lifecycle::LifecycleState;
+    use crate::runtime::registry::EphemeralInstanceRegistry;
 
     // -----------------------------------------------------------------------
     // Helpers
@@ -227,7 +238,8 @@ mod tests {
     #[test]
     fn steady_state_all_resources_are_ready() {
         let app_def = make_app_def(&["web", "api"]);
-        let state = compute("myapp", &app_def, None);
+        let registry = EphemeralInstanceRegistry::new();
+        let state = compute("myapp", &app_def, None, &registry);
 
         assert_eq!(state.resources.len(), 2);
         assert!(
@@ -242,7 +254,8 @@ mod tests {
     #[test]
     fn steady_state_resource_names_match_app_def() {
         let app_def = make_app_def(&["web", "api"]);
-        let state = compute("myapp", &app_def, None);
+        let registry = EphemeralInstanceRegistry::new();
+        let state = compute("myapp", &app_def, None, &registry);
 
         let map = to_map(state);
         assert!(map.contains_key("web"));
@@ -253,7 +266,8 @@ mod tests {
     #[test]
     fn steady_state_instances_carry_app_name() {
         let app_def = make_app_def(&["web"]);
-        let state = compute("myapp", &app_def, None);
+        let registry = EphemeralInstanceRegistry::new();
+        let state = compute("myapp", &app_def, None, &registry);
 
         assert_eq!(state.resources[0].instance.app, "myapp");
     }
@@ -262,7 +276,8 @@ mod tests {
     #[test]
     fn steady_state_empty_app_def_gives_empty_desired_state() {
         let app_def = AppDef::default();
-        let state = compute("myapp", &app_def, None);
+        let registry = EphemeralInstanceRegistry::new();
+        let state = compute("myapp", &app_def, None, &registry);
         assert!(state.is_empty());
     }
 
@@ -275,7 +290,8 @@ mod tests {
     fn operation_with_no_starts_gives_empty_desired_state() {
         let app_def = make_app_def(&["web", "api"]);
         let progress = OperationProgress::new();
-        let state = compute("myapp", &app_def, Some(&progress));
+        let registry = EphemeralInstanceRegistry::new();
+        let state = compute("myapp", &app_def, Some(&progress), &registry);
         assert!(state.is_empty());
     }
 
@@ -286,7 +302,8 @@ mod tests {
         let mut progress = OperationProgress::new();
         progress.started(dep("myapp", "web"));
 
-        let state = compute("myapp", &app_def, Some(&progress));
+        let registry = EphemeralInstanceRegistry::new();
+        let state = compute("myapp", &app_def, Some(&progress), &registry);
 
         assert_eq!(state.resources.len(), 1);
         assert_eq!(state.resources[0].desired, LifecycleState::Ready);
@@ -300,7 +317,8 @@ mod tests {
         let mut progress = OperationProgress::new();
         progress.stopped(dep("myapp", "web"));
 
-        let state = compute("myapp", &app_def, Some(&progress));
+        let registry = EphemeralInstanceRegistry::new();
+        let state = compute("myapp", &app_def, Some(&progress), &registry);
 
         assert_eq!(state.resources.len(), 1);
         assert_eq!(state.resources[0].desired, LifecycleState::Unscheduled);
@@ -315,7 +333,8 @@ mod tests {
         progress.started(web.clone());
         progress.stopped(web);
 
-        let state = compute("myapp", &app_def, Some(&progress));
+        let registry = EphemeralInstanceRegistry::new();
+        let state = compute("myapp", &app_def, Some(&progress), &registry);
 
         assert_eq!(state.resources.len(), 1);
         assert_eq!(state.resources[0].desired, LifecycleState::Unscheduled);
@@ -328,7 +347,8 @@ mod tests {
         let mut progress = OperationProgress::new();
         progress.started(dep("myapp", "unknown"));
 
-        let state = compute("myapp", &app_def, Some(&progress));
+        let registry = EphemeralInstanceRegistry::new();
+        let state = compute("myapp", &app_def, Some(&progress), &registry);
 
         assert!(state.is_empty());
     }
@@ -344,7 +364,8 @@ mod tests {
         let entries = [log_entry(CallKind::Start, vec![dep("myapp", "web")])];
         let progress = OperationProgress::from_log(&entries);
 
-        let state = compute("myapp", &app_def, Some(&progress));
+        let registry = EphemeralInstanceRegistry::new();
+        let state = compute("myapp", &app_def, Some(&progress), &registry);
 
         let map = to_map(state);
         assert_eq!(map["web"], LifecycleState::Ready);
@@ -357,7 +378,8 @@ mod tests {
         let entries = [log_entry(CallKind::Stop, vec![dep("myapp", "web")])];
         let progress = OperationProgress::from_log(&entries);
 
-        let state = compute("myapp", &app_def, Some(&progress));
+        let registry = EphemeralInstanceRegistry::new();
+        let state = compute("myapp", &app_def, Some(&progress), &registry);
 
         let map = to_map(state);
         assert_eq!(map["web"], LifecycleState::Unscheduled);
@@ -370,7 +392,8 @@ mod tests {
         let entries = [log_entry(CallKind::Reconcile, vec![dep("myapp", "web")])];
         let progress = OperationProgress::from_log(&entries);
 
-        let state = compute("myapp", &app_def, Some(&progress));
+        let registry = EphemeralInstanceRegistry::new();
+        let state = compute("myapp", &app_def, Some(&progress), &registry);
 
         let map = to_map(state);
         assert_eq!(map["web"], LifecycleState::Ready);
@@ -395,7 +418,8 @@ mod tests {
         ];
         let progress = OperationProgress::from_log(&entries);
 
-        let state = compute("myapp", &app_def, Some(&progress));
+        let registry = EphemeralInstanceRegistry::new();
+        let state = compute("myapp", &app_def, Some(&progress), &registry);
 
         let map = to_map(state);
         assert_eq!(map["web"], LifecycleState::Unscheduled);
@@ -411,7 +435,8 @@ mod tests {
         )];
         let progress = OperationProgress::from_log(&entries);
 
-        let state = compute("myapp", &app_def, Some(&progress));
+        let registry = EphemeralInstanceRegistry::new();
+        let state = compute("myapp", &app_def, Some(&progress), &registry);
 
         assert_eq!(state.resources.len(), 2);
         assert!(
@@ -426,7 +451,8 @@ mod tests {
     #[test]
     fn definition_field_is_populated_from_app_def() {
         let app_def = make_app_def(&["web"]);
-        let state = compute("myapp", &app_def, None);
+        let registry = EphemeralInstanceRegistry::new();
+        let state = compute("myapp", &app_def, None, &registry);
 
         assert_eq!(state.resources.len(), 1);
         assert!(matches!(
