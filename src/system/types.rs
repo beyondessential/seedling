@@ -191,14 +191,24 @@ pub struct DataPlaneRules {
     pub service_dnat: Vec<ServiceDnatRule>,
 }
 
-/// Redirects an external host port to Caddy's container address.
-/// Applied in the nftables prerouting chain.
+/// Where an ingress rule sends traffic.
+#[derive(Debug, Clone)]
+pub enum IngressTarget {
+    /// HTTP ingress — DNAT to Caddy for reverse proxying.
+    Proxy(SocketAddr),
+    /// Direct TCP/UDP ingress — DNAT straight to pod backends.
+    /// Used for ingresses without HTTP/TLS termination.
+    Direct { backends: Vec<(Ipv6Addr, u16)> },
+}
+
+/// Redirects an external host port to either Caddy (for HTTP) or directly
+/// to pod backends (for raw TCP/UDP). Applied in both prerouting and output
+/// nftables chains.
 #[derive(Debug, Clone)]
 pub struct IngressRule {
     pub external_port: u16,
     pub proto: ForwardProto,
-    /// Caddy's IPv6 addr:port on the seedling-proxy network.
-    pub caddy_addr: SocketAddr,
+    pub target: IngressTarget,
 }
 
 /// DNAT6 rule translating a mount endpoint to a backing pod's address and

@@ -19,7 +19,10 @@ use tracing::error;
 
 use crate::system::{
     BoxError, BoxFuture, DataPlane,
-    types::{DataPlaneRules, ForwardProto, IngressRule, MountRule, ServiceDnatRule, ServiceRoute},
+    types::{
+        DataPlaneRules, ForwardProto, IngressRule, IngressTarget, MountRule, ServiceDnatRule,
+        ServiceRoute,
+    },
 };
 
 const TABLE: &str = "seedling_net";
@@ -391,11 +394,6 @@ fn dnat_ip6(addr: String, port: u16) -> Statement<'static> {
 }
 
 fn ingress_rule_stmts(rule: &IngressRule) -> Vec<Vec<Statement<'static>>> {
-    let caddy_ip = match rule.caddy_addr.ip() {
-        IpAddr::V6(ip) => ip.to_string(),
-        IpAddr::V4(ip) => format!("::ffff:{ip}"),
-    };
-    let caddy_port = rule.caddy_addr.port();
     let ext_port = rule.external_port as u32;
 
     // Guard with `meta nfproto ipv6` so that in the inet (dual-stack) table
@@ -404,19 +402,35 @@ fn ingress_rule_stmts(rule: &IngressRule) -> Vec<Vec<Statement<'static>>> {
     // nftables silently skips for IPv4 — leaving IPv4 callers unserved with
     // no clear signal. The explicit guard makes the IPv6-only behaviour
     // intentional and visible in `nft list ruleset` output.
-    let make = |proto: &'static str| {
+    let make = |proto: &'static str, dnat: Statement<'static>| {
         vec![
             match_nfproto(NFPROTO_IPV6),
             match_fib_daddr_local(),
             match_eq(payload_expr(proto, "dport"), Expression::Number(ext_port)),
-            dnat_ip6(caddy_ip.clone(), caddy_port),
+            dnat,
         ]
     };
 
+    let dnat_stmt = match &rule.target {
+        IngressTarget::Proxy(addr) => {
+            let ip = match addr.ip() {
+                IpAddr::V6(ip) => ip.to_string(),
+                IpAddr::V4(ip) => format!("::ffff:{ip}"),
+            };
+            dnat_ip6(ip, addr.port())
+        }
+        IngressTarget::Direct { backends } => {
+            if backends.is_empty() {
+                return vec![];
+            }
+            dnat_lb(backends)
+        }
+    };
+
     match rule.proto {
-        ForwardProto::Tcp => vec![make("tcp")],
-        ForwardProto::Udp => vec![make("udp")],
-        ForwardProto::Both => vec![make("tcp"), make("udp")],
+        ForwardProto::Tcp => vec![make("tcp", dnat_stmt)],
+        ForwardProto::Udp => vec![make("udp", dnat_stmt)],
+        ForwardProto::Both => vec![make("tcp", dnat_stmt.clone()), make("udp", dnat_stmt)],
     }
 }
 
@@ -443,26 +457,37 @@ fn match_fib_daddr_local() -> Statement<'static> {
 /// (`fib daddr type local`) so that host processes connecting to ingress
 /// ports on `::1` or the host's own addresses are redirected to Caddy.
 fn output_ingress_rule_stmts(rule: &IngressRule) -> Vec<Vec<Statement<'static>>> {
-    let caddy_ip = match rule.caddy_addr.ip() {
-        IpAddr::V6(ip) => ip.to_string(),
-        IpAddr::V4(ip) => format!("::ffff:{ip}"),
-    };
-    let caddy_port = rule.caddy_addr.port();
     let ext_port = rule.external_port as u32;
 
-    let make = |proto: &'static str| {
+    let make = |proto: &'static str, dnat: Statement<'static>| {
         vec![
             match_nfproto(NFPROTO_IPV6),
             match_fib_daddr_local(),
             match_eq(payload_expr(proto, "dport"), Expression::Number(ext_port)),
-            dnat_ip6(caddy_ip.clone(), caddy_port),
+            dnat,
         ]
     };
 
+    let dnat_stmt = match &rule.target {
+        IngressTarget::Proxy(addr) => {
+            let ip = match addr.ip() {
+                IpAddr::V6(ip) => ip.to_string(),
+                IpAddr::V4(ip) => format!("::ffff:{ip}"),
+            };
+            dnat_ip6(ip, addr.port())
+        }
+        IngressTarget::Direct { backends } => {
+            if backends.is_empty() {
+                return vec![];
+            }
+            dnat_lb(backends)
+        }
+    };
+
     match rule.proto {
-        ForwardProto::Tcp => vec![make("tcp")],
-        ForwardProto::Udp => vec![make("udp")],
-        ForwardProto::Both => vec![make("tcp"), make("udp")],
+        ForwardProto::Tcp => vec![make("tcp", dnat_stmt)],
+        ForwardProto::Udp => vec![make("udp", dnat_stmt)],
+        ForwardProto::Both => vec![make("tcp", dnat_stmt.clone()), make("udp", dnat_stmt)],
     }
 }
 
@@ -582,18 +607,18 @@ fn seedling_forward_stmts() -> Vec<Statement<'static>> {
 mod tests {
     use std::net::{Ipv6Addr, SocketAddr};
 
-    use crate::system::types::{ForwardProto, IngressRule};
+    use crate::system::types::{ForwardProto, IngressRule, IngressTarget};
 
-    use super::{dnat_lb, ingress_rule_stmts, output_ingress_rule_stmts};
+    use super::{ingress_rule_stmts, output_ingress_rule_stmts};
 
     fn test_rule(port: u16, proto: ForwardProto) -> IngressRule {
         IngressRule {
             external_port: port,
             proto,
-            caddy_addr: SocketAddr::new(
+            target: IngressTarget::Proxy(SocketAddr::new(
                 std::net::IpAddr::V6(Ipv6Addr::new(0xfd5e, 0, 0, 0, 0, 0, 0, 1)),
                 8080,
-            ),
+            )),
         }
     }
 

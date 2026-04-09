@@ -335,7 +335,7 @@ impl Reconciler {
                 .get(&app.name)
                 .map(|v| v.as_slice())
                 .unwrap_or(&[]);
-            all_ingress.extend(rules::build_ingress_rules(&app.app_def, caddy_ip));
+            all_ingress.extend(rules::build_ingress_rules(&app.app_def, caddy_ip, running));
             all_mounts.extend(rules::build_mount_rules(running));
             all_service_dnat.extend(rules::build_service_dnat_rules(
                 &self.node_prefix,
