@@ -24,9 +24,7 @@ pub fn load_or_generate(path: &Path) -> io::Result<SigningKey> {
             std::fs::create_dir_all(parent)?;
         }
         let key = SigningKey::generate(&mut OsRng);
-        let doc = key
-            .to_pkcs8_der()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let doc = key.to_pkcs8_der().map_err(|e| io::Error::other(e))?;
         std::fs::write(path, doc.as_bytes())?;
         Ok(key)
     }

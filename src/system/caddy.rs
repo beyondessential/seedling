@@ -145,13 +145,11 @@ impl NetworkProxy for CaddyProxy {
 // Startup constants
 // ---------------------------------------------------------------------------
 
-pub(crate) const CADDY_CONTAINER: &str = "seedling-caddy";
-pub(crate) const CADDY_UNIT: &str = "seedling-caddy.service";
+pub(crate) const CADDY_BLUE: &str = "seedling-caddy-blue";
+pub(crate) const CADDY_GREEN: &str = "seedling-caddy-green";
 pub(crate) const CADDY_IMAGE: &str = "localhost/seedling-caddy:latest";
 pub(crate) const CADDY_DATA_VOLUME: &str = "seedling-caddy-data";
 pub(crate) const PROXY_NETWORK: &str = "seedling-proxy";
-pub(crate) const CADDY_NEXT_CONTAINER: &str = "seedling-caddy-next";
-pub(crate) const CADDY_NEXT_UNIT: &str = "seedling-caddy-next.service";
 /// Minimal Caddy JSON config that binds the admin API on all interfaces.
 const CADDY_ADMIN_JSON: &str = r#"{"admin":{"listen":":2019"}}"#;
 
@@ -299,20 +297,16 @@ pub(crate) fn write_cached_proxy_json(
 
 /// Returns the name of the other caddy slot.
 fn other_slot(active: &str) -> &'static str {
-    if active == CADDY_CONTAINER {
-        CADDY_NEXT_CONTAINER
+    if active == CADDY_BLUE {
+        CADDY_GREEN
     } else {
-        CADDY_CONTAINER
+        CADDY_BLUE
     }
 }
 
 /// Returns the systemd unit name for a caddy container slot.
-fn slot_unit(container: &str) -> &'static str {
-    if container == CADDY_CONTAINER {
-        CADDY_UNIT
-    } else {
-        CADDY_NEXT_UNIT
-    }
+fn slot_unit(container: &str) -> String {
+    format!("{container}.service")
 }
 
 /// Start a Caddy container in the given slot (container name) as a transient
@@ -325,7 +319,7 @@ async fn start_slot(
     process: &dyn ProcessManager,
     data_dir: &std::path::Path,
 ) -> Result<(), CaddyStartupError> {
-    let unit_name = slot_unit(container_name);
+    let unit_name = &slot_unit(container_name);
 
     // StartTransientUnit fails with UnitExists if the unit is still loaded in
     // systemd's memory. Two cases:
@@ -351,7 +345,7 @@ async fn start_slot(
     let admin_config_str = admin_config_path.to_string_lossy().into_owned();
     process
         .start_transient(TransientUnitSpec {
-            name: unit_name.to_owned(),
+            name: unit_name.clone(),
             description: "seedling Caddy proxy".to_owned(),
             exec_start: vec![
                 "podman".to_owned(),
@@ -386,9 +380,9 @@ async fn stop_slot(
     container: &dyn ContainerRuntime,
 ) {
     let unit = slot_unit(container_name);
-    let _ = process.stop_unit(unit).await;
+    let _ = process.stop_unit(&unit).await;
     let _ = process
-        .wait_unit_stopped(unit, Duration::from_secs(10))
+        .wait_unit_stopped(&unit, Duration::from_secs(10))
         .await;
     let _ = container.remove_container(container_name, true).await;
 }
@@ -477,12 +471,12 @@ pub(crate) async fn ensure_caddy_running(
             .map_err(|e| CaddyStartupError::Container { source: e })?;
     }
 
-    // 4. Read active container name from DB (default to CADDY_CONTAINER).
+    // 4. Read active container name from DB (default to blue slot).
     let active = {
         let conn = caddy_db_open(data_dir).map_err(|e| CaddyStartupError::Db { source: e })?;
         read_active_container(&conn)
             .map_err(|e| CaddyStartupError::Db { source: e })?
-            .unwrap_or_else(|| CADDY_CONTAINER.to_owned())
+            .unwrap_or_else(|| CADDY_BLUE.to_owned())
     };
 
     // 5. Determine the other slot.

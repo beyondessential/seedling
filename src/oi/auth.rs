@@ -109,7 +109,7 @@ pub fn get_label(db: &Db, fingerprint: &str) -> rusqlite::Result<Option<String>>
         .conn
         .prepare("SELECT label FROM authorized_keys WHERE fingerprint = ?1")?;
     let mut rows = stmt.query([fingerprint])?;
-    Ok(rows.next()?.map(|r| r.get(0)).transpose()?)
+    rows.next()?.map(|r| r.get(0)).transpose()
 }
 
 // i[key.list]

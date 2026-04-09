@@ -381,9 +381,7 @@ impl OiClient {
 fn build_client_cert_resolver(
     identity: &ClientIdentity,
 ) -> Result<Arc<dyn rustls::client::ResolvesClientCert>, ClientError> {
-    let ck = identity
-        .to_certified_key()
-        .map_err(|e| ClientError::Connect(e))?;
+    let ck = identity.to_certified_key().map_err(ClientError::Connect)?;
     Ok(Arc::new(
         rustls::client::AlwaysResolvesClientRawPublicKeys::new(ck),
     ))
