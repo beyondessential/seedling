@@ -22,10 +22,13 @@ impl LifecycleState {
             // Normal forward
             (Pending, Scheduled) | (Scheduled, Running) | (Running, Ready) |
             (Ready, Terminating) | (Terminating, Terminated) | (Terminated, Unscheduled) |
-            // Skips
+            // Skips — forward within the active portion
             (Pending, Running) | (Pending, Ready) | (Pending, Terminated) |
             (Scheduled, Ready) | (Scheduled, Terminated) |
-            (Running, Terminated) | (Ready, Terminated) |
+            (Running, Terminating) | (Running, Terminated) | (Ready, Terminated) |
+            // Skips — any active state directly to Unscheduled (force-remove)
+            (Pending, Unscheduled) | (Scheduled, Unscheduled) |
+            (Running, Unscheduled) | (Ready, Unscheduled) |
             (Terminating, Unscheduled)
         )
     }
