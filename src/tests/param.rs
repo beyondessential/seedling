@@ -234,6 +234,7 @@ fn param_used_in_closure_captures_injected_value() {
             active_progress: None,
             tick_notify: None,
             install_requirements: None,
+            is_shell: false,
         },
         &mut scope,
     );
@@ -277,6 +278,7 @@ fn on_change_inside_action_closure_throws() {
             active_progress: None,
             tick_notify: None,
             install_requirements: None,
+            is_shell: false,
         },
         &mut scope,
     );

@@ -61,6 +61,7 @@ fn barrier_satisfied_on_first_pass() {
             active_progress: None,
             tick_notify: None,
             install_requirements: None,
+            is_shell: false,
         },
         &mut scope,
     );
@@ -99,6 +100,7 @@ fn barrier_suspends_then_resumes() {
             active_progress: None,
             tick_notify: None,
             install_requirements: None,
+            is_shell: false,
         },
         &mut scope,
     );
@@ -121,6 +123,7 @@ fn barrier_suspends_then_resumes() {
             active_progress: None,
             tick_notify: None,
             install_requirements: None,
+            is_shell: false,
         },
         &mut scope,
     );
@@ -160,6 +163,7 @@ fn sequential_barriers() {
             active_progress: None,
             tick_notify: None,
             install_requirements: None,
+            is_shell: false,
         },
         &mut scope,
     );
@@ -181,6 +185,7 @@ fn sequential_barriers() {
             active_progress: None,
             tick_notify: None,
             install_requirements: None,
+            is_shell: false,
         },
         &mut scope,
     );
@@ -202,6 +207,7 @@ fn sequential_barriers() {
             active_progress: None,
             tick_notify: None,
             install_requirements: None,
+            is_shell: false,
         },
         &mut scope,
     );
@@ -238,6 +244,7 @@ fn barrier_deadline_zero_expires_on_second_pass() {
             active_progress: None,
             tick_notify: None,
             install_requirements: None,
+            is_shell: false,
         },
         &mut scope,
     );
@@ -257,6 +264,7 @@ fn barrier_deadline_zero_expires_on_second_pass() {
             active_progress: None,
             tick_notify: None,
             install_requirements: None,
+            is_shell: false,
         },
         &mut scope,
     );
@@ -296,6 +304,7 @@ fn replay_idempotency() {
             active_progress: None,
             tick_notify: None,
             install_requirements: None,
+            is_shell: false,
         },
         &mut scope,
     );
@@ -317,6 +326,7 @@ fn replay_idempotency() {
             active_progress: None,
             tick_notify: None,
             install_requirements: None,
+            is_shell: false,
         },
         &mut scope,
     );
@@ -371,6 +381,7 @@ fn rt_stop_acts_as_barrier() {
             active_progress: None,
             tick_notify: None,
             install_requirements: None,
+            is_shell: false,
         },
         &mut scope,
     );
@@ -392,6 +403,7 @@ fn rt_stop_acts_as_barrier() {
             active_progress: None,
             tick_notify: None,
             install_requirements: None,
+            is_shell: false,
         },
         &mut scope,
     );

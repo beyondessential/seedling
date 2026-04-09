@@ -1229,6 +1229,7 @@ fn spawn_accepted_operation(
                         active_progress: Some(Arc::clone(&active_progress_bl)),
                         tick_notify: Some(Arc::clone(&tick_notify_bl)),
                         install_requirements: install_requirements.clone(),
+                        is_shell: false,
                     },
                     &mut scope,
                 );

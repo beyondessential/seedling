@@ -123,10 +123,20 @@ pub struct ExecSpec {
     pub user: Option<String>,
 }
 
-/// Opaque handle returned by `ContainerRuntime::exec`.
-/// Details depend on the shell session subsystem design.
-#[derive(Debug)]
-pub struct ExecHandle {}
+/// Handle returned by `ContainerRuntime::exec` for an interactive PTY session.
+///
+/// `stdin` writes to the PTY master (input to the container process).
+/// `stdout` reads from the PTY master (output from the container process; stderr
+/// is merged into stdout by the PTY).
+/// `pty_master_fd` is the raw fd of the PTY master for `TIOCSWINSZ` resize ioctls.
+/// It remains valid for as long as `stdin`/`stdout` are alive.
+/// `child` is the subprocess running `podman exec`.
+pub struct ExecHandle {
+    pub stdin: tokio::io::WriteHalf<tokio::fs::File>,
+    pub stdout: tokio::io::ReadHalf<tokio::fs::File>,
+    pub pty_master_fd: std::os::unix::io::RawFd,
+    pub child: tokio::process::Child,
+}
 
 // ---------------------------------------------------------------------------
 // Transient unit spec

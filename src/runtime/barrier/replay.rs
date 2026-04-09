@@ -168,6 +168,9 @@ pub struct OperationContext<'a, W: WorldStateOracle + 'static> {
     pub tick_notify: Option<Arc<Notify>>,
     /// Requirements for the install action; `None` for all other actions.
     pub install_requirements: Option<BTreeMap<String, String>>,
+    /// `true` when this operation executes a shell action closure.
+    /// Affects the call script used to invoke the closure.
+    pub is_shell: bool,
 }
 
 /// The `log` carries committed entries across calls; pass the same `log`
@@ -190,6 +193,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         active_progress,
         tick_notify,
         install_requirements,
+        is_shell: _,
     } = op;
 
     // Build the replay context from committed log entries.
@@ -211,7 +215,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     // the thread-local capture buffer collects them during the re-run and is
     // discarded immediately after. The fresh AppDef is compared against the
     // stored one as an idempotency check, then also discarded.
-    let (closure, is_install, is_param_change) = {
+    let (closure, is_install, is_param_change, is_shell) = {
         let (mut fresh_scope, fresh_app) = crate::defs::scope();
         fresh_app.def.lock().name = app_name;
         // i[param.store] — restore persisted param values so is_set()/value()
@@ -225,9 +229,9 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         }
         check_idempotent(&fresh_app.def.lock(), &app.def.lock());
 
-        let (closure, is_install) = if action_name == "install" {
+        let (closure, is_install, is_shell) = if action_name == "install" {
             if let Some(c) = captured.install {
-                (c, true)
+                (c, true, false)
             } else {
                 return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
                     "install action not defined in script".into(),
@@ -235,9 +239,11 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
                 )));
             }
         } else if let Some(c) = captured.actions.get(action_name) {
-            (c.clone(), false)
+            (c.clone(), false, false)
         } else if let Some(c) = captured.param_changes.get(action_name) {
-            (c.clone(), false)
+            (c.clone(), false, false)
+        } else if let Some(c) = captured.shells.get(action_name) {
+            (c.clone(), false, true)
         } else {
             return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
                 format!("Action '{}' not found", action_name).into(),
@@ -246,7 +252,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         };
         let is_param_change =
             !is_install && fresh_app.def.lock().param_changes.contains(action_name);
-        (closure, is_install, is_param_change)
+        (closure, is_install, is_param_change, is_shell)
         // captured, fresh_scope, and fresh_app are all dropped here.
     };
 
@@ -268,11 +274,16 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         rhai::Map::new()
     };
     scope.push("__bsl_reqs", reqs_map);
+    if is_shell {
+        scope.push("__bsl_attach", super::runtime::shell_attach_fn_ptr());
+    }
 
     let call_script = if is_install {
         "__bsl_closure.call(__bsl_rt, __bsl_reqs)"
     } else if is_param_change {
         "__bsl_closure.call(__bsl_rt, __bsl_old_app)"
+    } else if is_shell {
+        "try { __bsl_closure.call(__bsl_rt, __bsl_attach) } catch { let _r = __bsl_closure.call(__bsl_rt); __bsl_shell_attach_impl(_r) }"
     } else {
         "__bsl_closure.call(__bsl_rt)"
     };
@@ -294,6 +305,9 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     let _ = scope.remove::<Dynamic>("__bsl_closure");
     let _ = scope.remove::<Dynamic>("__bsl_old_app");
     let _ = scope.remove::<rhai::Map>("__bsl_reqs");
+    if is_shell {
+        let _ = scope.remove::<rhai::FnPtr>("__bsl_attach");
+    }
 
     // Flush pending entries from the context to the log.
     let pending = ctx.lock().take_pending();
@@ -419,6 +433,7 @@ mod tests {
                 active_progress: None,
                 tick_notify: None,
                 install_requirements: None,
+                is_shell: false,
             },
             &mut scope,
         );
@@ -450,6 +465,7 @@ mod tests {
                 active_progress: None,
                 tick_notify: None,
                 install_requirements: None,
+                is_shell: false,
             },
             &mut scope,
         );
@@ -508,6 +524,7 @@ mod tests {
                 active_progress: None,
                 tick_notify: None,
                 install_requirements: None,
+                is_shell: false,
             },
             &mut scope,
         );
@@ -529,6 +546,7 @@ mod tests {
                 active_progress: None,
                 tick_notify: None,
                 install_requirements: None,
+                is_shell: false,
             },
             &mut scope,
         );
@@ -550,6 +568,7 @@ mod tests {
                 active_progress: None,
                 tick_notify: None,
                 install_requirements: None,
+                is_shell: false,
             },
             &mut scope,
         );

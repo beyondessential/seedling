@@ -1,5 +1,6 @@
-use std::sync::Arc;
+use std::{cell::RefCell, sync::Arc};
 
+use parking_lot::Mutex;
 use rhai::{CustomType, Dynamic, EvalAltResult, Map, TypeBuilder};
 
 use crate::runtime::barrier::{
@@ -595,12 +596,62 @@ impl CustomType for Termination {
 }
 
 // ---------------------------------------------------------------------------
-// Shell attach (unchanged from before)
+// Shell attach
 // ---------------------------------------------------------------------------
+
+thread_local! {
+    static SHELL_ATTACH_CTX: RefCell<Option<ShellAttachCtx>> = const { RefCell::new(None) };
+}
+
+/// Context installed in the thread-local before running a shell closure.
+/// Provides the registry for resolving job names → container display_names,
+/// and a slot for `__bsl_shell_attach_impl` to write the result into.
+pub struct ShellAttachCtx {
+    pub app_name: String,
+    pub registry: Arc<dyn crate::runtime::InstanceRegistry>,
+    pub result: Arc<Mutex<Option<String>>>,
+}
+
+pub fn set_shell_attach_ctx(ctx: ShellAttachCtx) {
+    SHELL_ATTACH_CTX.with(|c| *c.borrow_mut() = Some(ctx));
+}
+
+pub fn clear_shell_attach_ctx() {
+    SHELL_ATTACH_CTX.with(|c| *c.borrow_mut() = None);
+}
 
 // l[impl action.shell.attach]
 pub fn register_shell_attach(engine: &mut rhai::Engine) {
-    engine.register_fn("__bsl_shell_attach_impl", |_job: Dynamic| -> () { todo!() });
+    engine.register_fn("__bsl_shell_attach_impl", |job: Dynamic| {
+        use crate::defs::deployment::Deployment;
+        use crate::defs::job::Job;
+        use crate::defs::resource::ResourceKind;
+
+        SHELL_ATTACH_CTX.with(|ctx| {
+            let ctx = ctx.borrow();
+            let Some(ref c) = *ctx else { return };
+
+            let container_name = if let Some(j) = job.clone().try_cast::<Job>() {
+                c.registry
+                    .get_or_create_singleton(&c.app_name, ResourceKind::Job, Some(j.name.as_str()))
+                    .display_name
+                    .clone()
+            } else if let Some(d) = job.clone().try_cast::<Deployment>() {
+                c.registry
+                    .get_or_create_singleton(
+                        &c.app_name,
+                        ResourceKind::Deployment,
+                        Some(d.name.as_str()),
+                    )
+                    .display_name
+                    .clone()
+            } else {
+                return;
+            };
+
+            *c.result.lock() = Some(container_name);
+        });
+    });
 }
 
 pub fn shell_attach_fn_ptr() -> rhai::FnPtr {

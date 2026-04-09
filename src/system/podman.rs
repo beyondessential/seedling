@@ -1,4 +1,9 @@
-use std::{collections::HashMap, net::Ipv6Addr, time::SystemTime};
+use std::{
+    collections::HashMap,
+    net::Ipv6Addr,
+    os::fd::{AsRawFd, FromRawFd, IntoRawFd},
+    time::SystemTime,
+};
 
 use chrono::DateTime;
 
@@ -15,6 +20,7 @@ use podman_rest_client::{
 };
 
 use snafu::Snafu;
+use tokio::{fs::File, io::split, process::Command};
 
 use crate::system::{
     BoxError, BoxFuture, ContainerRuntime,
@@ -401,8 +407,53 @@ impl PodmanRuntime {
         }
     }
 
-    async fn exec_impl(&self, _name: &str, _spec: ExecSpec) -> Result<ExecHandle, PodmanError> {
-        todo!("PodmanRuntime::exec")
+    async fn exec_impl(&self, name: &str, spec: ExecSpec) -> Result<ExecHandle, PodmanError> {
+        let pty = nix::pty::openpty(None, None).map_err(|e| PodmanError::Protocol {
+            message: e.to_string(),
+        })?;
+
+        let pty_master_fd = pty.master.as_raw_fd();
+        let master = unsafe { File::from_raw_fd(pty.master.into_raw_fd()) };
+        let (stdout, stdin) = split(master);
+
+        let slave_raw = pty.slave.into_raw_fd();
+        let slave_out = unsafe { libc::dup(slave_raw) };
+        let slave_err = unsafe { libc::dup(slave_raw) };
+
+        let mut cmd = Command::new("podman");
+        cmd.arg("exec").arg("-i").arg("-t");
+
+        if let Some(ref user) = spec.user {
+            cmd.arg("--user").arg(user);
+        }
+        for (k, v) in &spec.env {
+            cmd.arg("--env").arg(format!("{k}={v}"));
+        }
+        cmd.arg(name);
+        cmd.args(&spec.command);
+
+        cmd.stdin(unsafe { std::process::Stdio::from_raw_fd(slave_raw) });
+        cmd.stdout(unsafe { std::process::Stdio::from_raw_fd(slave_out) });
+        cmd.stderr(unsafe { std::process::Stdio::from_raw_fd(slave_err) });
+
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                libc::ioctl(0, libc::TIOCSCTTY as _, 0i32);
+                Ok(())
+            });
+        }
+
+        let child = cmd.spawn().map_err(|e| PodmanError::Protocol {
+            message: e.to_string(),
+        })?;
+
+        Ok(ExecHandle {
+            stdin,
+            stdout,
+            pty_master_fd,
+            child,
+        })
     }
 }
 
