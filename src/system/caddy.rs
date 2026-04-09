@@ -147,7 +147,7 @@ impl NetworkProxy for CaddyProxy {
 
 pub(crate) const CADDY_CONTAINER: &str = "seedling-caddy";
 pub(crate) const CADDY_UNIT: &str = "seedling-caddy.service";
-pub(crate) const CADDY_IMAGE: &str = "docker.io/library/caddy:2.11.2";
+pub(crate) const CADDY_IMAGE: &str = "localhost/seedling-caddy:latest";
 pub(crate) const CADDY_DATA_VOLUME: &str = "seedling-caddy-data";
 pub(crate) const PROXY_NETWORK: &str = "seedling-proxy";
 pub(crate) const CADDY_NEXT_CONTAINER: &str = "seedling-caddy-next";

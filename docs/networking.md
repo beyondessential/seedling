@@ -127,62 +127,78 @@ so chaining mount DNAT → service DNAT would not work.
 
 ## Ingress
 
-An Ingress exposes a service to external traffic. There are two paths
-depending on whether the ingress terminates HTTP.
+An Ingress exposes a service to external traffic. All ingress traffic
+flows through Caddy, which runs in a container on the dual-stack
+`seedling-proxy` network. The proxy network has both an IPv6 /64
+(`fd5e:XXYY:ZZWW:ff00::/64`) and a fixed IPv4 /24 (`10.89.255.0/24`).
 
-### HTTP ingress (through Caddy)
+Caddy uses a custom image (`localhost/seedling-caddy`) built with the
+[caddy-l4](https://github.com/mholt/caddy-l4) plugin, enabling it to
+proxy both HTTP and raw TCP/UDP streams. The Containerfile is at
+`Containerfile.caddy` in the repository root.
 
-Ingresses with `.http()` or `.http2()` route through Caddy, which runs
-in a container on the dual-stack `seedling-proxy` network. The proxy
-network has both an IPv6 /64 (`fd5e:XXYY:ZZWW:ff00::/64`) and a fixed
-IPv4 /24 (`10.89.255.0/24`).
+### nftables ingress rules
 
-The traffic path for an external IPv6 client:
+Every ingress port gets a pair of nftables DNAT rules (prerouting +
+output) that redirect traffic to Caddy. For IPv6:
 
-    client → host:80
-      → nftables prerouting:
-          meta nfproto ipv6 fib daddr type local tcp dport 80
-          dnat ip6 to [<caddy_ipv6>]:80
-      → Caddy receives, matches Host header, reverse-proxies
-      → upstream: http://[<service_ip>]:80
-      → nftables prerouting (service DNAT):
-          ip6 daddr <service_ip> tcp dport 80
-          dnat ip6 to [<pod_ip>]:3000
-      → pod receives on :3000
+    meta nfproto ipv6 fib daddr type local tcp dport <port>
+    dnat ip6 to [<caddy_ipv6>]:<port>
 
-For IPv4 clients, a parallel set of rules DNATs to Caddy's IPv4 address
-on the proxy bridge:
+For IPv4 (dual-stack):
 
-    meta nfproto ipv4 fib daddr type local tcp dport 80
-    dnat ip to <caddy_ipv4>:80
+    meta nfproto ipv4 fib daddr type local tcp dport <port>
+    dnat ip to <caddy_ipv4>:<port>
 
-Caddy then proxies upstream over IPv6 to the service backends. This
-gives dual-stack ingress without any IPv4 on pod networks.
-
-Both prerouting and output chains carry identical ingress DNAT rules.
-The output chain rules catch host-originated traffic (e.g., `curl
-localhost:80`) via the `fib daddr type local` guard.
+Both prerouting and output chains carry identical rules. The output
+chain rules catch host-originated traffic (e.g., `curl localhost:80`)
+via the `fib daddr type local` guard.
 
 The `fib daddr type local` guard is essential: without it, the
-prerouting dport-80 rule would catch Caddy's own upstream traffic to
-`service_ip:80` and loop it back to Caddy.
+prerouting dport rule would catch Caddy's own upstream traffic to
+`service_ip:<port>` and loop it back to Caddy.
+
+### HTTP ingress
+
+Ingresses with `.http()` or `.http2()` use Caddy's HTTP reverse proxy.
+Caddy matches on the `Host` header and proxies to the service upstream
+over IPv6:
+
+    client → host:80
+      → nftables DNAT → Caddy
+      → Caddy matches Host, reverse-proxies to http://[<service_ip>]:80
+      → nftables service DNAT: service_ip:80 → pod_ip:3000
+      → pod receives on :3000
+
+Caddy handles TLS termination, ACME certificate management, path-based
+routing, and HTTP/HTTPS redirects.
+
+### TCP/UDP ingress (Caddy L4)
+
+Ingresses without HTTP termination use Caddy's L4 plugin. Caddy
+listens on the ingress port and proxies raw TCP or UDP streams to the
+service upstream:
+
+    client → host:5432
+      → nftables DNAT → Caddy
+      → Caddy L4 proxies to [<service_ip>]:5432
+      → nftables service DNAT: service_ip:5432 → pod_ip:5432
+      → pod receives on :5432
+
+The L4 config is generated as `layer4.servers` entries in the Caddy
+JSON, separate from the `http.servers` entries used for HTTP ingress.
+
+Because all ingress flows through Caddy, dual-stack works uniformly
+for both HTTP and TCP/UDP: IPv4 clients connect to Caddy over IPv4,
+and Caddy proxies upstream over IPv6. No IPv4 addresses are needed on
+pod networks.
+
+### Caddy admin API
 
 Caddy's configuration is applied via its admin API (`POST /config/`).
 The JSON payload always includes `"admin": {"listen": ":2019"}` to
 preserve the admin listener across full-config replacements. Caddy
 listens on `:2019` on all interfaces inside its container.
-
-### Direct ingress (TCP/UDP, no HTTP termination)
-
-Ingresses without `.http()` / `.http2()` bypass Caddy entirely and
-DNAT straight to pod backends:
-
-    meta nfproto ipv6 fib daddr type local tcp dport <port> \
-      dnat ip6 to [<pod_ip>]:<pod_port>
-
-Multiple backends use `numgen inc mod N` for round-robin, same as
-service DNAT rules. Direct ingresses are IPv6-only; IPv4 support
-for non-HTTP ingress is deferred to NAT64.
 
 ## nftables table structure
 
