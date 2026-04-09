@@ -133,6 +133,19 @@ impl PodmanRuntime {
                 })
             });
 
+        let pod_addr_v4 = data
+            .network_settings
+            .as_ref()
+            .and_then(|ns| ns.networks.as_ref())
+            .and_then(|nets| {
+                nets.values().find_map(|n| {
+                    n.ip_address
+                        .as_deref()
+                        .filter(|s| !s.is_empty())
+                        .and_then(|s| s.parse::<std::net::Ipv4Addr>().ok())
+                })
+            });
+
         Ok(Some(ContainerState {
             status,
             health,
@@ -141,7 +154,7 @@ impl PodmanRuntime {
             started_at,
             finished_at,
             pod_addr,
-            pod_addr_v4: None,
+            pod_addr_v4,
             image_id: data.image.clone(),
         }))
     }
@@ -236,7 +249,7 @@ impl PodmanRuntime {
         &self,
         name: &str,
         prefix: Ipv6Net,
-        _ipv4: Option<ipnet::Ipv4Net>,
+        ipv4: Option<ipnet::Ipv4Net>,
     ) -> Result<String, PodmanError> {
         let net_addr = prefix.network();
         let mut gw_bytes = net_addr.octets();
@@ -244,15 +257,28 @@ impl PodmanRuntime {
         let gateway = Ipv6Addr::from(gw_bytes).to_string();
         let subnet = prefix.to_string();
 
+        let mut subnets = vec![Subnet {
+            gateway: Some(gateway),
+            subnet: Some(subnet),
+            ..Default::default()
+        }];
+
+        if let Some(v4) = ipv4 {
+            let mut gw4 = v4.network().octets();
+            gw4[3] = 1;
+            let gateway4 = std::net::Ipv4Addr::from(gw4).to_string();
+            subnets.push(Subnet {
+                gateway: Some(gateway4),
+                subnet: Some(v4.to_string()),
+                ..Default::default()
+            });
+        }
+
         let body = NetworkCreateLibpod {
             name: Some(name.to_string()),
             driver: Some("bridge".to_string()),
             ipv6_enabled: Some(true),
-            subnets: Some(vec![Subnet {
-                gateway: Some(gateway),
-                subnet: Some(subnet),
-                ..Default::default()
-            }]),
+            subnets: Some(subnets),
             ..Default::default()
         };
 

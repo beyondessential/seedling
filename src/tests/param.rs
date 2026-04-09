@@ -170,7 +170,6 @@ fn unset_param_is_set_returns_false() {
 }
 
 // i[verify param.store]
-// i[verify param.value]
 #[test]
 fn value_throws_when_param_not_set() {
     let err = crate::tests::run_test_script_err(
