@@ -629,7 +629,7 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
         });
     }
 
-    json!({ "apps": apps })
+    json!({ "admin": { "listen": ":2019" }, "apps": apps })
 }
 
 /// Builds one Caddy route object per `ProxyRoute` within a virtual host.
