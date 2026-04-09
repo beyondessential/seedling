@@ -465,10 +465,26 @@ pub(crate) async fn ensure_caddy_running(
                     if CaddyProxy::new(addr).is_healthy().await.unwrap_or(false) {
                         return Ok(addr);
                     }
+                    tracing::warn!(
+                        container = %active,
+                        addr = %addr,
+                        "caddy running with correct image but health check failed; restarting"
+                    );
+                } else {
+                    tracing::warn!(
+                        container = %active,
+                        "caddy running with correct image but has no pod IPv6 address; restarting"
+                    );
                 }
                 // Not healthy — stop and fall through to fresh start.
                 stop_slot(&active, process, container).await;
             } else {
+                tracing::info!(
+                    container = %active,
+                    running_image = ?state.image_id,
+                    desired_image = %desired_id,
+                    "caddy image mismatch; performing blue/green upgrade"
+                );
                 // r[impl infra.proxy.upgrade]
                 // Wrong image — perform blue/green upgrade.
                 start_slot(other, container, process, data_dir).await?;
@@ -492,12 +508,17 @@ pub(crate) async fn ensure_caddy_running(
                 return Ok(new_addr);
             }
         }
-        Some(_) => {
+        Some(state) => {
             // Container exists but is not running — force-remove it.
+            tracing::warn!(
+                container = %active,
+                status = ?state.status,
+                "caddy container exists but is not running; removing and restarting"
+            );
             let _ = container.remove_container(&active, true).await;
         }
         None => {
-            // Container doesn't exist — proceed to fresh start.
+            tracing::info!(container = %active, "caddy container not found; starting fresh");
         }
     }
 

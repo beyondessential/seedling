@@ -379,7 +379,7 @@ impl Reconciler {
             let caddy_json = caddy::build_caddy_config(&config);
 
             if let Err(e) = self.driver.proxy.apply_config(&config).await {
-                error!(error = %e, "proxy: apply_config failed");
+                error!(error = ?e, addr = %caddy_addr, "proxy: apply_config failed");
             } else {
                 self.persist_obs(proxy_ready_obs);
 
