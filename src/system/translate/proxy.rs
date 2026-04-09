@@ -54,19 +54,24 @@ pub fn pod_network_prefix(node_prefix: &Ipv6Net, instance: &ResourceInstance) ->
     Ipv6Net::new(Ipv6Addr::from(bytes), 64).expect("64 is a valid IPv6 prefix length")
 }
 
-/// Returns the mount endpoint address for a pod's /64 prefix: `prefix::1000`.
+/// Returns the node-wide mount endpoint address: `prefix[0..6]:fffe::1`.
 ///
-/// This address is assigned to the host bridge and is the DNAT6 destination
-/// that containers use to reach mounted services via the `localmount` hostname.
+/// Bytes 0–5 come from the first six octets of `prefix` (the node /48 part,
+/// shared by all pod /64 prefixes derived from the same node).  Bytes 6–7
+/// are fixed at `0xff, 0xfe` (the `fffe` infrastructure discriminant, above
+/// the resource-kind range 0–9 and the proxy discriminant `0xff`).
+/// Bytes 8–15 are zero except the last, which is `0x01`.
 ///
-/// `::2` is intentionally avoided: netavark sequentially assigns that address
-/// to the first container on the network, which would produce a host-local
-/// address collision and cause route additions to fail with EINVAL.
-pub fn pod_mount_addr(pod_prefix: &Ipv6Net) -> Ipv6Addr {
-    let mut bytes = pod_prefix.network().octets();
-    bytes[8..].fill(0);
-    bytes[14] = 0x10;
-    // bytes[15] is already 0 from fill above; result is prefix::1000
+/// The address does not need to be assigned to any interface.  Containers
+/// route it via the pod bridge gateway; nftables prerouting DNAT intercepts
+/// it before any routing decision.
+// r[impl infra.pod.mount]
+pub fn node_mount_addr(prefix: &Ipv6Net) -> Ipv6Addr {
+    let mut bytes = [0u8; 16];
+    bytes[..6].copy_from_slice(&prefix.network().octets()[..6]);
+    bytes[6] = 0xff;
+    bytes[7] = 0xfe;
+    bytes[15] = 0x01;
     Ipv6Addr::from(bytes)
 }
 
@@ -217,5 +222,24 @@ mod tests {
         let net = pod_network_prefix(&prefix, &instance);
         // The /64 network address must match the first 8 bytes of the instance address
         assert_eq!(&addr.octets()[..8], &net.network().octets()[..8]);
+    }
+
+    #[test]
+    fn node_mount_addr_uses_fffe_discriminant() {
+        let prefix = test_prefix(); // fd5e:ed12:3456::/48
+        let addr = node_mount_addr(&prefix);
+        let octets = addr.octets();
+        assert_eq!(&octets[..6], &[0xfd, 0x5e, 0xed, 0x12, 0x34, 0x56]);
+        assert_eq!(octets[6], 0xff);
+        assert_eq!(octets[7], 0xfe);
+        assert_eq!(&octets[8..15], &[0u8; 7]);
+        assert_eq!(octets[15], 0x01);
+    }
+
+    #[test]
+    fn node_mount_addr_same_from_node_or_pod_prefix() {
+        let node: Ipv6Net = "fd5e:ed12:3456::/48".parse().unwrap();
+        let pod: Ipv6Net = "fd5e:ed12:3456:0500::/64".parse().unwrap();
+        assert_eq!(node_mount_addr(&node), node_mount_addr(&pod));
     }
 }

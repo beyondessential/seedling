@@ -151,7 +151,7 @@ pub(super) fn build_service_dnat_rules(
     rules
 }
 
-// r[autonomous.network]
+// r[impl infra.dataplane.mount-dnat]
 pub(super) fn build_mount_rules(running_pods: &[RunningPod]) -> Vec<MountRule> {
     let backend_map = collect_service_backends(running_pods);
     let mut rules = Vec::new();
@@ -175,7 +175,7 @@ pub(super) fn build_mount_rules(running_pods: &[RunningPod]) -> Vec<MountRule> {
             continue;
         }
 
-        let mount_addr = crate::system::translate::proxy::pod_mount_addr(&pod.pod_prefix);
+        let mount_addr = crate::system::translate::proxy::node_mount_addr(&pod.pod_prefix);
 
         for sp in &service_mounts {
             let svc_name = sp.service.name.as_str();

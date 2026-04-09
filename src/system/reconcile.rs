@@ -6,8 +6,6 @@ use std::{
     time::Duration,
 };
 
-use rtnetlink::Handle as NetlinkHandle;
-
 use parking_lot::Mutex;
 
 use sha2::{Digest, Sha256};
@@ -33,7 +31,6 @@ use crate::{
     },
 };
 
-pub mod bridge;
 pub mod pods;
 pub mod proxy;
 pub mod routes;
@@ -74,9 +71,6 @@ pub struct Reconciler {
     node_prefix: Ipv6Net,
     observer: Observer,
     actuator: Actuator,
-    /// Network-name → bridge-interface-name map, maintained across ticks.
-    bridge_names: HashMap<String, String>,
-    netlink: Option<NetlinkHandle>,
     caddy_admin_addr: Arc<AsyncRwLock<SocketAddr>>,
     caddy_v4_addr: Option<Ipv4Addr>,
     data_dir: PathBuf,
@@ -103,8 +97,6 @@ impl Reconciler {
             node_prefix,
             observer,
             actuator,
-            bridge_names: HashMap::new(),
-            netlink: None,
             caddy_admin_addr,
             caddy_v4_addr: None,
             data_dir,
@@ -112,30 +104,6 @@ impl Reconciler {
             registry,
             app_registry,
             written_obs: HashSet::new(),
-        }
-    }
-
-    #[tracing::instrument(skip_all)]
-    pub async fn populate_bridge_names(&mut self) {
-        let (connection, handle, _) = match rtnetlink::new_connection() {
-            Ok(c) => c,
-            Err(e) => {
-                error!(error = %e, "failed to open rtnetlink connection for bridge address checks");
-                return;
-            }
-        };
-        tokio::spawn(connection);
-        self.netlink = Some(handle);
-
-        match self.driver.container.list_networks("seedling-").await {
-            Ok(networks) => {
-                for net in networks {
-                    self.bridge_names.insert(net.name, net.bridge_name);
-                }
-            }
-            Err(e) => {
-                error!(error = %e, "failed to list pod networks for bridge-name map");
-            }
         }
     }
 
@@ -205,7 +173,7 @@ impl Reconciler {
             return false;
         }
 
-        // Per-app phases: pods, uninstall, bridge, volumes
+        // Per-app phases: pods, uninstall, volumes
         let mut running_pods_by_app: HashMap<String, Vec<RunningPod>> = HashMap::new();
 
         for app in &apps {
@@ -218,12 +186,6 @@ impl Reconciler {
             )
             .await;
 
-            for (net_name, bridge_name) in pod_update.new_bridges {
-                self.bridge_names.insert(net_name, bridge_name);
-            }
-            for net_name in pod_update.removed_networks {
-                self.bridge_names.remove(&net_name);
-            }
             self.persist_obs(pod_update.observations);
             running_pods_by_app.insert(app.name.clone(), pod_update.running);
         }
@@ -290,15 +252,6 @@ impl Reconciler {
         for app in &apps {
             if app.phase == AppPhase::Uninstalling {
                 continue;
-            }
-            if let Some(ref handle) = self.netlink {
-                bridge::ensure_mount_endpoints(
-                    handle,
-                    &self.bridge_names,
-                    &app.desired,
-                    &self.node_prefix,
-                )
-                .await;
             }
             let vol_obs =
                 volumes::observe_and_actuate(&self.observer, &self.actuator, &app.desired).await;

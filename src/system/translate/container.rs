@@ -9,7 +9,7 @@ use crate::{
     defs::{container::VolumeMount, deployment::DeploymentDef, job::JobDef, pod::PodDef},
     runtime::identity::ResourceInstance,
     system::{
-        translate::proxy::pod_mount_addr,
+        translate::proxy::node_mount_addr,
         types::{ContainerSpec, Mount, MountSource},
     },
 };
@@ -196,7 +196,7 @@ fn spec_from_pod(
     let hosts = if mounts.is_empty() {
         vec![]
     } else {
-        let mount_endpoint = pod_mount_addr(&network.1);
+        let mount_endpoint = node_mount_addr(&network.1);
         vec![("localmount".to_string(), IpAddr::V6(mount_endpoint))]
     };
 
@@ -303,14 +303,19 @@ mod tests {
     }
 
     #[test]
-    fn pod_mount_endpoint_is_one_thousand() {
+    fn node_mount_endpoint_is_fffe_one() {
         let prefix: Ipv6Net = "fd5e:ed12:3456:0500::/64".parse().unwrap();
-        let endpoint = pod_mount_addr(&prefix);
+        let endpoint = node_mount_addr(&prefix);
         let octets = endpoint.octets();
-        assert_eq!(&octets[..8], &prefix.network().octets()[..8]);
-        assert_eq!(&octets[8..14], &[0u8; 6]);
-        assert_eq!(octets[14], 0x10);
-        assert_eq!(octets[15], 0x00);
+        // First 6 bytes: node prefix bytes from fd5e:ed12:3456
+        assert_eq!(&octets[..6], &[0xfd, 0x5e, 0xed, 0x12, 0x34, 0x56]);
+        // Bytes 6-7: fffe discriminant
+        assert_eq!(octets[6], 0xff);
+        assert_eq!(octets[7], 0xfe);
+        // Bytes 8-14: zeros
+        assert_eq!(&octets[8..15], &[0u8; 7]);
+        // Byte 15: 1
+        assert_eq!(octets[15], 0x01);
     }
 
     #[test]

@@ -1,11 +1,7 @@
-use std::{
-    collections::HashMap,
-    net::{IpAddr, Ipv6Addr},
-    time::SystemTime,
-};
+use std::{collections::HashMap, net::Ipv6Addr, time::SystemTime};
 
 use chrono::DateTime;
-use futures_util::StreamExt;
+
 use ipnet::Ipv6Net;
 use podman_rest_client::{
     Config, PodmanRestClient,
@@ -17,12 +13,11 @@ use podman_rest_client::{
         },
     },
 };
-use rtnetlink::{Handle, new_connection};
+
 use snafu::Snafu;
 
 use crate::system::{
     BoxError, BoxFuture, ContainerRuntime,
-    translate::proxy::pod_mount_addr,
     types::{
         ContainerFilter, ContainerHealth, ContainerState, ContainerStatus, ContainerSummary,
         ExecHandle, ExecSpec, NetworkSummary,
@@ -41,12 +36,6 @@ pub(crate) enum PodmanError {
     },
     #[snafu(display("unexpected response from podman: {message}"))]
     Protocol { message: String },
-    #[snafu(display("rtnetlink error: {source}"))]
-    Netlink {
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
-    },
-    #[snafu(display("netlink connection error: {source}"))]
-    Io { source: std::io::Error },
 }
 
 // ---------------------------------------------------------------------------
@@ -55,7 +44,6 @@ pub(crate) enum PodmanError {
 
 pub(crate) struct PodmanRuntime {
     client: PodmanRestClient,
-    route_handle: Handle,
 }
 
 impl PodmanRuntime {
@@ -69,14 +57,7 @@ impl PodmanRuntime {
             source: Box::new(e),
         })?;
 
-        let (connection, route_handle, _) =
-            new_connection().map_err(|e| PodmanError::Io { source: e })?;
-        tokio::spawn(connection);
-
-        Ok(Self {
-            client,
-            route_handle,
-        })
+        Ok(Self { client })
     }
 
     async fn inspect_impl(&self, name: &str) -> Result<Option<ContainerState>, PodmanError> {
@@ -304,40 +285,6 @@ impl PodmanRuntime {
             .network_interface
             .ok_or_else(|| PodmanError::Protocol {
                 message: format!("network {name} was created but has no network_interface field"),
-            })?;
-
-        // Resolve the bridge name to a kernel interface index.
-        let mut links = self
-            .route_handle
-            .link()
-            .get()
-            .match_name(bridge_name.clone())
-            .execute();
-        let link = links
-            .next()
-            .await
-            .ok_or_else(|| PodmanError::Protocol {
-                message: format!("bridge interface {bridge_name} not found after network creation"),
-            })?
-            .map_err(|e| PodmanError::Netlink {
-                source: Box::new(e),
-            })?;
-        let if_index = link.header.index;
-
-        // Assign pod_mount_addr/64 to the bridge. This is the mount endpoint
-        // address: pod containers resolve `localmount` to this address, and
-        // the DataPlane's MountRule DNAT6 redirects that traffic to the target
-        // service IP. The ::1 gateway is already assigned by netavark; Linux
-        // supports multiple addresses per interface so there is no conflict.
-        let endpoint = pod_mount_addr(&prefix);
-
-        self.route_handle
-            .address()
-            .add(if_index, IpAddr::V6(endpoint), 64)
-            .execute()
-            .await
-            .map_err(|e| PodmanError::Netlink {
-                source: Box::new(e),
             })?;
 
         Ok(bridge_name)

@@ -15,19 +15,9 @@ use crate::{
 
 use super::RunningPod;
 
-/// Returned from `observe_and_actuate` so the `Reconciler` can maintain the
-/// bridge-name map without giving this module a mutable reference to it.
 pub(super) struct PodActuationUpdate {
     pub running: Vec<RunningPod>,
-    /// Networks created this tick: `(network_name, bridge_interface_name)`.
-    pub new_bridges: Vec<(String, String)>,
-    /// Network names removed this tick (the pod was stopped).
-    pub removed_networks: Vec<String>,
     pub observations: Vec<(ResourceInstance, &'static str, serde_json::Value)>,
-}
-
-fn pod_network_name(instance: &crate::runtime::identity::ResourceInstance) -> String {
-    format!("seedling-{}", instance.display_name)
 }
 
 // r[observe.deployment]
@@ -42,8 +32,6 @@ pub(super) async fn observe_and_actuate(
     node_prefix: &Ipv6Net,
 ) -> PodActuationUpdate {
     let mut running = Vec::new();
-    let mut new_bridges = Vec::new();
-    let mut removed_networks = Vec::new();
     let mut observations: Vec<(ResourceInstance, &'static str, serde_json::Value)> = Vec::new();
 
     for dr in &desired.resources {
@@ -116,9 +104,7 @@ pub(super) async fn observe_and_actuate(
         match dr.desired {
             LifecycleState::Ready if !is_running => {
                 match actuator.start(&dr.instance, &dr.definition).await {
-                    Ok(Some(bridge_name)) => {
-                        new_bridges.push((pod_network_name(&dr.instance), bridge_name));
-                    }
+                    Ok(Some(_)) => {}
                     Ok(None) => {}
                     Err(e) => {
                         error!(
@@ -132,9 +118,7 @@ pub(super) async fn observe_and_actuate(
             LifecycleState::Unscheduled if is_running || unit_loaded => {
                 observations.push((dr.instance.clone(), "stop_sent", json!({})));
                 match actuator.stop(&dr.instance, &dr.definition).await {
-                    Ok(()) => {
-                        removed_networks.push(pod_network_name(&dr.instance));
-                    }
+                    Ok(()) => {}
                     Err(e) => {
                         error!(
                             instance = %dr.instance.display_name,
@@ -150,8 +134,6 @@ pub(super) async fn observe_and_actuate(
 
     PodActuationUpdate {
         running,
-        new_bridges,
-        removed_networks,
         observations,
     }
 }

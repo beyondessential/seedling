@@ -18,8 +18,8 @@ Within that /48, addresses are carved up as follows:
     fd5e:XXYY:ZZWW::/48              node prefix
     fd5e:XXYY:ZZWW:KKUU::/64        pod network (one per pod instance)
     fd5e:XXYY:ZZWW:KKUU::1/128      bridge gateway (assigned by netavark)
-    fd5e:XXYY:ZZWW:KKUU::1000/128   bridge mount endpoint (assigned by seedling)
     fd5e:XXYY:ZZWW:KKUU:..../128    pod container address (SLAAC)
+    fd5e:XXYY:ZZWW:fffe::1/128      node-wide mount endpoint
     fd5e:XXYY:ZZWW:ff00::/64        seedling-proxy network (Caddy)
     10.89.255.0/24                   seedling-proxy IPv4 subnet (dual-stack)
 
@@ -54,11 +54,12 @@ identity. Netavark (Podman's network backend) assigns:
 - `::1` on the bridge as the gateway
 - A SLAAC address to the container
 
-Seedling additionally assigns `::1000` on the host side of the bridge
-as the **mount endpoint**. This is the DNAT target that containers hit
-when they connect to `localmount`. The `::2` address is intentionally
-avoided because netavark sequentially assigns it to the first container
-on the network, which would collide.
+Seedling sets the `localmount` hostname inside each pod container to the node-wide mount
+endpoint `fd5e:XXYY:ZZWW:fffe::1`. This address lives in the `fffe` subnet, which is above
+the resource-kind range and the proxy discriminant and can never collide with a pod or service
+address. Containers route it via their pod bridge gateway; nftables prerouting DNAT intercepts
+the packet before any forwarding decision. No address assignment to bridge interfaces is
+needed.
 
 The bridge interface only exists in the kernel while at least one
 container is connected to the network. On startup, seedling's bridge

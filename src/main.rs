@@ -143,8 +143,6 @@ async fn main() {
         Arc::clone(&registry),
     );
 
-    reconciler.populate_bridge_names().await;
-
     {
         let tick_notify = Arc::clone(&tick_notify);
         tokio::spawn(async move {

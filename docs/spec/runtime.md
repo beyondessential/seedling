@@ -396,6 +396,13 @@ Absent specification bugs, anything that is not defined here is either defined i
 > prefix is a /64 derived from the node prefix and the instance identity. No IPv4 subnet
 > must be allocated on pod networks.
 
+> r[infra.pod.mount]
+> Pods that mount a service must resolve the `localmount` hostname to a stable node-wide
+> address at `fd5e:XXYY:ZZWW:fffe::1`. nftables DNAT rules scope traffic to this address
+> by source pod prefix, so multiple pods may mount the same service simultaneously without
+> collision. The mount endpoint address does not need to be assigned to any network
+> interface.
+
 > r[infra.proxy.startup]
 > The runtime must ensure the network proxy is running and healthy before beginning the
 > reconciliation loop. On each startup, the runtime verifies proxy health and restarts the
