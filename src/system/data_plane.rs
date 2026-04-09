@@ -25,8 +25,10 @@ use crate::system::{
 const TABLE: &str = "seedling_net";
 const CHAIN_PRE: &str = "prerouting";
 const CHAIN_OUT: &str = "output";
+const CHAIN_POST: &str = "postrouting";
 const CHAIN_FWD: &str = "forward";
 const PRIO_DSTNAT: i32 = -100;
+const PRIO_SRCNAT: i32 = 100;
 const PRIO_FILTER: i32 = 0;
 
 /// Netfilter protocol number for IPv6 (`NFPROTO_IPV6`).
@@ -63,6 +65,7 @@ impl NftablesDataPlane {
         batch.add_cmd(NfCmd::Flush(FlushObject::Table(table())));
         batch.add(prerouting_chain());
         batch.add(output_chain());
+        batch.add(postrouting_chain());
         batch.add(forward_chain());
 
         for rule in &rules.ingress {
@@ -84,6 +87,10 @@ impl NftablesDataPlane {
             for stmts in service_dnat_rule_stmts(rule) {
                 batch.add(rule_obj(CHAIN_PRE, stmts));
             }
+        }
+
+        for stmts in loopback_masquerade_stmts() {
+            batch.add(rule_obj(CHAIN_POST, stmts));
         }
 
         batch.add(rule_obj(CHAIN_FWD, seedling_forward_stmts()));
@@ -329,6 +336,21 @@ fn output_chain() -> NfListObject<'static> {
         _type: Some(NfChainType::NAT),
         hook: Some(NfHook::Output),
         prio: Some(PRIO_DSTNAT),
+        dev: None,
+        policy: Some(NfChainPolicy::Accept),
+    })
+}
+
+fn postrouting_chain() -> NfListObject<'static> {
+    NfListObject::Chain(Chain {
+        family: NfFamily::INet,
+        table: Cow::Borrowed(TABLE),
+        name: Cow::Borrowed(CHAIN_POST),
+        newname: None,
+        handle: None,
+        _type: Some(NfChainType::NAT),
+        hook: Some(NfHook::Postrouting),
+        prio: Some(PRIO_SRCNAT),
         dev: None,
         policy: Some(NfChainPolicy::Accept),
     })
@@ -585,6 +607,34 @@ fn dnat_lb(backends: &[(Ipv6Addr, u16)]) -> Statement<'static> {
         port: Some(Expression::Number(port as u32)),
         flags: None,
     }))
+}
+
+/// MASQUERADE rules for loopback-sourced traffic that was DNAT'd to a
+/// container. Without this, a packet arriving at Caddy with src=127.0.0.1
+/// causes Caddy to respond to its own loopback — the reply never leaves
+/// the container. MASQUERADE rewrites the source to the bridge gateway IP
+/// so the response comes back through the bridge and conntrack reverses it.
+fn loopback_masquerade_stmts() -> Vec<Vec<Statement<'static>>> {
+    vec![
+        // IPv4: src 127.0.0.0/8 → masquerade
+        vec![
+            match_nfproto(NFPROTO_IPV4),
+            match_eq(
+                payload_expr("ip", "saddr"),
+                prefix_expr("127.0.0.0".to_owned(), 8),
+            ),
+            Statement::Masquerade(None),
+        ],
+        // IPv6: src ::1/128 → masquerade
+        vec![
+            match_nfproto(NFPROTO_IPV6),
+            match_eq(
+                payload_expr("ip6", "saddr"),
+                Expression::String(Cow::Borrowed("::1")),
+            ),
+            Statement::Masquerade(None),
+        ],
+    ]
 }
 
 fn seedling_forward_stmts() -> Vec<Statement<'static>> {
