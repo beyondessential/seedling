@@ -1,7 +1,10 @@
 use std::{
     collections::HashMap,
+    io,
     net::Ipv6Addr,
-    os::fd::{AsRawFd, FromRawFd, IntoRawFd},
+    os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd},
+    pin::Pin,
+    task::{Context, Poll},
     time::SystemTime,
 };
 
@@ -20,7 +23,10 @@ use podman_rest_client::{
 };
 
 use snafu::Snafu;
-use tokio::{fs::File, io::split, process::Command};
+use tokio::{
+    io::{AsyncRead, AsyncWrite, ReadBuf, unix::AsyncFd},
+    process::Command,
+};
 
 use crate::system::{
     BoxError, BoxFuture, ContainerRuntime,
@@ -413,9 +419,39 @@ impl PodmanRuntime {
             message: e.to_string(),
         })?;
 
-        let pty_master_fd = pty.master.as_raw_fd();
-        let master = unsafe { File::from_raw_fd(pty.master.into_raw_fd()) };
-        let (stdout, stdin) = split(master);
+        let master_raw = pty.master.as_raw_fd();
+        let pty_master_fd = master_raw;
+
+        // Set O_NONBLOCK on the PTY master so that AsyncFd can drive it via
+        // epoll rather than blocking threads.  A PTY fd supports epoll unlike
+        // regular files, so this is the correct approach.
+        unsafe {
+            let flags = libc::fcntl(master_raw, libc::F_GETFL, 0);
+            libc::fcntl(master_raw, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+
+        // Dup the master so stdin and stdout each own an independent fd.
+        // Both fds share the same open file description (including O_NONBLOCK).
+        let master_read_fd = pty.master.into_raw_fd();
+        let master_write_fd = unsafe { libc::dup(master_read_fd) };
+        if master_write_fd < 0 {
+            return Err(PodmanError::Protocol {
+                message: io::Error::last_os_error().to_string(),
+            });
+        }
+
+        let stdout =
+            AsyncPtyHalf::new(unsafe { OwnedFd::from_raw_fd(master_read_fd) }).map_err(|e| {
+                PodmanError::Protocol {
+                    message: e.to_string(),
+                }
+            })?;
+        let stdin =
+            AsyncPtyHalf::new(unsafe { OwnedFd::from_raw_fd(master_write_fd) }).map_err(|e| {
+                PodmanError::Protocol {
+                    message: e.to_string(),
+                }
+            })?;
 
         let slave_raw = pty.slave.into_raw_fd();
         let slave_out = unsafe { libc::dup(slave_raw) };
@@ -450,11 +486,98 @@ impl PodmanRuntime {
         })?;
 
         Ok(ExecHandle {
-            stdin,
-            stdout,
+            stdin: Box::new(stdin),
+            stdout: Box::new(stdout),
             pty_master_fd,
             child,
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AsyncPtyHalf — epoll-backed async read/write for a PTY master fd
+// ---------------------------------------------------------------------------
+
+/// Wraps a PTY master (or dup thereof) as a proper tokio async I/O type.
+///
+/// `tokio::fs::File` uses `spawn_blocking` for all I/O, assuming regular
+/// files that don't support epoll.  PTY master fds *do* support epoll, so
+/// `AsyncFd` is correct here: reads return `EAGAIN` when no data is available
+/// and writes return `EAGAIN` when the kernel buffer is full, both of which
+/// the epoll waker handles correctly.
+struct AsyncPtyHalf(AsyncFd<OwnedFd>);
+
+impl AsyncPtyHalf {
+    fn new(fd: OwnedFd) -> io::Result<Self> {
+        Ok(Self(AsyncFd::new(fd)?))
+    }
+}
+
+impl AsyncRead for AsyncPtyHalf {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        loop {
+            let mut guard = match self.0.poll_read_ready(cx) {
+                Poll::Ready(Ok(g)) => g,
+                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                Poll::Pending => return Poll::Pending,
+            };
+            let result = guard.try_io(|inner| {
+                let raw = inner.as_raw_fd();
+                let dst = buf.initialize_unfilled();
+                let n = unsafe { libc::read(raw, dst.as_mut_ptr().cast(), dst.len()) };
+                if n < 0 {
+                    Err(io::Error::last_os_error())
+                } else {
+                    buf.advance(n as usize);
+                    Ok(())
+                }
+            });
+            match result {
+                Ok(r) => return Poll::Ready(r),
+                Err(_would_block) => continue,
+            }
+        }
+    }
+}
+
+impl AsyncWrite for AsyncPtyHalf {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        loop {
+            let mut guard = match self.0.poll_write_ready(cx) {
+                Poll::Ready(Ok(g)) => g,
+                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                Poll::Pending => return Poll::Pending,
+            };
+            let result = guard.try_io(|inner| {
+                let raw = inner.as_raw_fd();
+                let n = unsafe { libc::write(raw, buf.as_ptr().cast(), buf.len()) };
+                if n < 0 {
+                    Err(io::Error::last_os_error())
+                } else {
+                    Ok(n as usize)
+                }
+            });
+            match result {
+                Ok(r) => return Poll::Ready(r),
+                Err(_would_block) => continue,
+            }
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
     }
 }
 

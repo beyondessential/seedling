@@ -123,9 +123,16 @@ pub struct HealthCheckSpec {
 /// `pty_master_fd` is the raw fd of the PTY master for `TIOCSWINSZ` resize ioctls.
 /// It remains valid for as long as `stdin`/`stdout` are alive.
 /// `child` is the subprocess running `podman run`.
+///
+/// The I/O halves are backed by `AsyncFd` with `O_NONBLOCK` so that reads and
+/// writes integrate with the tokio event loop via epoll rather than blocking
+/// thread-pool tasks.  Using `tokio::fs::File` for a PTY fd is incorrect: it
+/// uses `spawn_blocking` and a single-operation state machine, which prevents
+/// concurrent reads and writes — causing stdin to stall while waiting for
+/// stdout data.
 pub struct ExecHandle {
-    pub stdin: tokio::io::WriteHalf<tokio::fs::File>,
-    pub stdout: tokio::io::ReadHalf<tokio::fs::File>,
+    pub stdin: Box<dyn tokio::io::AsyncWrite + Send + Unpin>,
+    pub stdout: Box<dyn tokio::io::AsyncRead + Send + Unpin>,
     pub pty_master_fd: std::os::unix::io::RawFd,
     pub child: tokio::process::Child,
 }
