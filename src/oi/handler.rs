@@ -14,9 +14,10 @@ use crate::{
     defs::install::InstallRequirementKind,
     runtime::{
         AppPhase,
-        apps::{AppRegistry, AppStatus},
-        barrier::oracle::derive_state_with_transition_time,
+        apps::{AppEntry, AppRegistry, AppStatus},
+        barrier::oracle::{derive_lifecycle_state, derive_state_with_transition_time},
         history::{find_instances_for_group, query_observations},
+        lifecycle::LifecycleState,
         scheduler::{RejectReason, ScheduleResult},
         transition_phase,
     },
@@ -233,9 +234,14 @@ fn get_status(state: &OiState) -> HandlerResult {
 fn list_apps(state: &OiState) -> HandlerResult {
     let reg = state.registry.read();
     let apps = reg.list();
+    let db = state.db.lock();
     let result: Vec<Value> = apps
         .into_iter()
-        .map(|(name, status)| {
+        .map(|(name, base_status)| {
+            let status = match reg.get(&name) {
+                Some(entry) => effective_app_status(base_status, entry, &db),
+                None => base_status,
+            };
             let mut obj = json!({ "name": name, "status": status.name() });
             if let AppStatus::Operating { action_name } = &status {
                 obj["action_name"] = json!(action_name);
@@ -244,6 +250,41 @@ fn list_apps(state: &OiState) -> HandlerResult {
         })
         .collect();
     Ok(json!(result))
+}
+
+/// Refines a base `AppStatus::Running` into `Running` or `Degraded` by
+/// checking whether all resource instances have reached `Ready`.  All other
+/// statuses are returned unchanged.
+fn effective_app_status(
+    base: AppStatus,
+    entry: &AppEntry,
+    db: &crate::runtime::db::Db,
+) -> AppStatus {
+    if !matches!(base, AppStatus::Running) {
+        return base;
+    }
+
+    let app_name = &entry.name;
+    let def = entry.app.def.lock();
+
+    let all_ready = def.resources.keys().all(|id| {
+        let instances = find_instances_for_group(db, app_name, id.kind, Some(id.name.as_str()))
+            .unwrap_or_default();
+        if instances.is_empty() {
+            // No instance persisted yet — still starting.
+            return false;
+        }
+        instances.iter().all(|inst| {
+            let obs = query_observations(db, inst).unwrap_or_default();
+            matches!(derive_lifecycle_state(inst, &obs), LifecycleState::Ready)
+        })
+    });
+
+    if all_ready {
+        AppStatus::Running
+    } else {
+        AppStatus::Degraded
+    }
 }
 
 // i[app.describe]
@@ -258,7 +299,8 @@ fn describe_app(state: &OiState, params: Value) -> HandlerResult {
         .get(name)
         .ok_or_else(|| OiError::not_found(format!("app not found: {name}")))?;
 
-    let status = reg.status_of(name).unwrap();
+    let base_status = reg.status_of(name).unwrap();
+    let status = effective_app_status(base_status, entry, &state.db.lock());
 
     // Load stored param values from DB. Names come from AppDef; values come
     // from the params table. Params declared by the script but never set by
