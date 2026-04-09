@@ -245,6 +245,7 @@ impl PodmanRuntime {
         }
     }
 
+    // r[impl infra.pod.network]
     async fn create_network_impl(
         &self,
         name: &str,
@@ -256,6 +257,9 @@ impl PodmanRuntime {
         gw_bytes[15] = 1;
         let gateway = Ipv6Addr::from(gw_bytes).to_string();
         let subnet = prefix.to_string();
+
+        // dual_stack must be checked before ipv4 is moved into the if-let below.
+        let dual_stack = ipv4.is_some();
 
         let mut subnets = vec![Subnet {
             gateway: Some(gateway),
@@ -274,10 +278,14 @@ impl PodmanRuntime {
             });
         }
 
+        // Setting ipv6_enabled is equivalent to `podman network create --ipv6`, which
+        // enables dual-stack and causes Podman to auto-allocate an IPv4 subnet even when
+        // only an IPv6 subnet is specified. For IPv6-only pod networks, omit the flag and
+        // let the explicit IPv6 subnet alone define the network family.
         let body = NetworkCreateLibpod {
             name: Some(name.to_string()),
             driver: Some("bridge".to_string()),
-            ipv6_enabled: Some(true),
+            ipv6_enabled: if dual_stack { Some(true) } else { None },
             subnets: Some(subnets),
             ..Default::default()
         };

@@ -391,6 +391,11 @@ Absent specification bugs, anything that is not defined here is either defined i
 > The prefix follows the ULA format `fd5e:edXX:XXXX::/48`, where the 24-bit host portion is
 > derived from `/etc/machine-id`.
 
+> r[infra.pod.network]
+> Each pod instance must be connected to a dedicated IPv6-only bridge network. The network
+> prefix is a /64 derived from the node prefix and the instance identity. No IPv4 subnet
+> must be allocated on pod networks.
+
 > r[infra.proxy.startup]
 > The runtime must ensure the network proxy is running and healthy before beginning the
 > reconciliation loop. On each startup, the runtime verifies proxy health and restarts the
