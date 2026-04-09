@@ -155,6 +155,12 @@ pub(crate) const CADDY_NEXT_UNIT: &str = "seedling-caddy-next.service";
 /// Minimal Caddy JSON config that binds the admin API on all interfaces.
 const CADDY_ADMIN_JSON: &str = r#"{"admin":{"listen":":2019"}}"#;
 
+const CADDY_CONTAINERFILE: &str = "\
+FROM docker.io/library/caddy:2.11.2-builder AS builder\n\
+RUN xcaddy build --with github.com/mholt/caddy-l4\n\
+FROM docker.io/library/caddy:2.11.2\n\
+COPY --from=builder /usr/bin/caddy /usr/bin/caddy\n";
+
 // ---------------------------------------------------------------------------
 // Startup helpers
 // ---------------------------------------------------------------------------
@@ -196,6 +202,45 @@ pub(crate) enum CaddyStartupError {
     Db { source: rusqlite::Error },
     #[snafu(display("image ID unavailable for {reference}"))]
     ImageId { reference: String },
+    #[snafu(display("image build failed: {message}"))]
+    Build { message: String },
+}
+
+/// Build the custom Caddy image from the embedded Containerfile.
+async fn build_caddy_image(data_dir: &std::path::Path) -> Result<(), CaddyStartupError> {
+    let containerfile_path = data_dir.join("Containerfile.caddy");
+    std::fs::write(&containerfile_path, CADDY_CONTAINERFILE)
+        .map_err(|e| CaddyStartupError::Io { source: e })?;
+
+    // podman build needs a context directory; the Containerfile has no
+    // local COPY instructions so an empty temp dir suffices.
+    let context_dir = data_dir.join("caddy-build-ctx");
+    std::fs::create_dir_all(&context_dir).map_err(|e| CaddyStartupError::Io { source: e })?;
+
+    tracing::info!("building custom Caddy image (this may take a moment)");
+
+    let output = tokio::process::Command::new("podman")
+        .args([
+            "build",
+            "-t",
+            CADDY_IMAGE,
+            "-f",
+            &containerfile_path.to_string_lossy(),
+            &context_dir.to_string_lossy(),
+        ])
+        .output()
+        .await
+        .map_err(|e| CaddyStartupError::Io { source: e })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(CaddyStartupError::Build {
+            message: format!("podman build exited {}: {}", output.status, stderr.trim()),
+        });
+    }
+
+    tracing::info!("custom Caddy image built successfully");
+    Ok(())
 }
 
 fn caddy_db_open(data_dir: &std::path::Path) -> Result<rusqlite::Connection, rusqlite::Error> {
@@ -448,16 +493,13 @@ pub(crate) async fn ensure_caddy_running(
         stop_slot(other, process, container).await;
     }
 
-    // 7. Ensure the image is present.
+    // 7. Ensure the image is present; build from embedded Containerfile if missing.
     if !container
         .image_exists(CADDY_IMAGE)
         .await
         .map_err(|e| CaddyStartupError::Container { source: e })?
     {
-        container
-            .pull_image(CADDY_IMAGE)
-            .await
-            .map_err(|e| CaddyStartupError::Container { source: e })?;
+        build_caddy_image(data_dir).await?;
     }
 
     // 8. Get the desired image ID.
