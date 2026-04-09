@@ -250,16 +250,21 @@ impl Reconciler {
                         &app.name,
                         "",
                     );
-                    // Clear observation dedup entries for this app's
-                    // instances so that a future reinstall writes fresh
-                    // observations instead of being blocked by stale
-                    // entries from the previous install cycle.
+                    // Delete stale observations and clear the dedup set
+                    // for this app's instances so that a reinstall starts
+                    // with a clean observation history.
                     let app_instance_ids: HashSet<InstanceId> = app
                         .desired
                         .resources
                         .iter()
                         .map(|dr| dr.instance.id)
                         .collect();
+                    for id in &app_instance_ids {
+                        let _ = db.conn.execute(
+                            "DELETE FROM world_observations WHERE instance_id = ?1",
+                            rusqlite::params![id.to_hex()],
+                        );
+                    }
                     self.written_obs
                         .retain(|(id, _)| !app_instance_ids.contains(id));
                     tracing::info!(app = %app.name, "uninstall complete");
