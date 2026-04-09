@@ -98,6 +98,14 @@ fn drive_observations(
             continue;
         };
 
+        // Unscheduled is the terminal state of a lifecycle. If we've
+        // reached it, reset to Pending so that subsequent observations
+        // (from a reinstall) start a fresh cycle.
+        if state == LifecycleState::Unscheduled {
+            state = LifecycleState::Pending;
+            transition_ms = None;
+        }
+
         // Already at or past this state — idempotent, skip.
         if state.has_reached(next) {
             continue;
