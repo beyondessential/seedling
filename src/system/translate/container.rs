@@ -136,18 +136,13 @@ fn spec_from_pod(
 
     let image = container.image.clone().unwrap_or_default();
 
-    // BSL `.command()` sets the executable/entrypoint override.
-    // BSL `.arg()` appends positional arguments passed after the image.
-    // Both combine into ContainerSpec.command (argv passed after the image name
-    // in the podman invocation). ContainerSpec.entrypoint is left empty unless
-    // a separate override is required.
-    let mut command = Vec::new();
-    if let Some(cmd) = &container.command {
-        command.extend(cmd.iter().cloned());
-    }
-    if let Some(extra) = &container.args {
-        command.extend(extra.iter().cloned());
-    }
+    // BSL `.command()` overrides the container entrypoint (passed as
+    // `--entrypoint` to podman run).  BSL `.arg()` provides the CMD arguments
+    // that follow the image name.  Keeping them separate matches the OCI model
+    // and lets shell sessions override the entrypoint without affecting any
+    // default CMD args.
+    let entrypoint = container.command.clone().unwrap_or_default();
+    let command = container.args.clone().unwrap_or_default();
 
     let env = container.env.clone();
 
@@ -204,7 +199,7 @@ fn spec_from_pod(
         name: instance.display_name.clone(),
         image,
         command,
-        entrypoint: vec![],
+        entrypoint,
         env,
         mounts: sys_mounts,
         network: network.0.clone(),

@@ -404,12 +404,16 @@ This is currently the only value.
 > A container without an `image` set may be inoperable.
 
 > l[container.command]
-> The `container.command(name: string)` or `container.command(entrypoint: string[])` builder method sets the container entrypoint and arguments passed to the image.
+> The `container.command(name: string)` or `container.command(entrypoint: string[])` builder method overrides the container's entrypoint (the executable to run).
 > The `command(name: string)` form is equivalent to `command([name])`.
+>
+> This follows the [Kubernetes `command:` field](https://kubernetes.io/docs/tasks/inject-data-application/define-command-argument-container/) convention, which maps to `--entrypoint` in Docker/Podman — not to the positional arguments after the image name.
 
 > l[container.arg]
-> The `container.arg(var: string)` or `container.arg(vars: string[])` builder method sets the container arguments passed to the image.
+> The `container.arg(var: string)` or `container.arg(vars: string[])` builder method appends arguments passed to the container's entrypoint (overriding the image's default `CMD`).
 > The `arg(var: string)` form is equivalent to `arg([var])`.
+>
+> This follows the [Kubernetes `args:` field](https://kubernetes.io/docs/tasks/inject-data-application/define-command-argument-container/) convention, which maps to the positional arguments after the image name in Docker/Podman.
 
 > l[container.env]
 > The `container.env(name: string, value: string)` or `container.env(#{ name: string, value: string }[])` builder method inserts variables into the environment of the container.
