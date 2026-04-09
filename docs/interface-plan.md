@@ -66,15 +66,15 @@ runners and the OI request handler.
 
 ### Generalise the reconciler
 
-`Reconciler` currently takes a single `app_name` and `App`. Options:
+**Done.** A single global `Reconciler` iterates all apps from the shared `AppRegistry` each
+tick. Per-app phases (pods, volumes, bridge checks) run in a per-app loop; global phases
+(routes, nftables rules, proxy config) aggregate across all apps before applying once. This
+avoids the clobbering bugs that per-app reconcilers would cause on global resources (Caddy
+config, nftables table, service routes all use flush-and-replace semantics).
 
-- One `Reconciler` per registered app, each running its own tick loop — simplest, isolates
-  failure well.
-- One top-level reconciler that iterates over the registry — more complex, but a single tick
-  timer.
-
-Prefer one reconciler per app. The OI handler spawns a new reconciler tokio task on
-`RegisterApp` and cancels it (and awaits clean shutdown) on `DeregisterApp`.
+The OI handler steers the reconciler by mutating `AppPhase` and `OperationProgress` on the
+shared `AppEntry`, then calling `tick_notify.notify_one()` on the global notify to wake the
+reconciler.
 
 ### Refactor `main.rs`
 
@@ -82,7 +82,7 @@ After this phase, `main.rs` should:
 1. Open the database.
 2. Set up system backends (as today).
 3. Load registered apps from DB and evaluate their scripts.
-4. Start reconciler tasks for each installed app.
+4. Start the global reconciler task (it discovers installed apps from the registry).
 5. Open the OI QUIC listener (Phase 1).
 6. Block forever (signal handler for clean shutdown).
 
@@ -235,8 +235,8 @@ Implement `RegisterApp`, `DeregisterApp`, and `UpdateApp`.
 3. Evaluate the script content. On failure, return `script_error`.
 4. Persist name and script content to `registered_apps` table.
 5. Add to in-memory `AppRegistry`.
-6. Spawn reconciler task for the new app (it will be in `NotInstalled` so it runs in
-   steady-state with nothing desired).
+6. The global reconciler picks up the new app automatically on its next tick (in
+   `NotInstalled` phase, so it's effectively a no-op until installed).
 7. Emit `AppRegistered` event (wire up once Phase 7 is done; stub the call here).
 
 ### `DeregisterApp`
@@ -244,7 +244,7 @@ Implement `RegisterApp`, `DeregisterApp`, and `UpdateApp`.
 1. Reject with `operation_in_progress` if the scheduler has an active or queued operation
    for this app.
 2. Transition app to `Deregistering` status in the registry.
-3. Cancel the reconciler task and wait for it to acknowledge.
+3. The global reconciler will stop reconciling this app on its next tick (it reads from the registry).
 4. Actuate a full teardown (equivalent to stopping all resources in the desired state).
 5. Remove from DB and in-memory registry.
 6. Emit `AppDeregistered`.

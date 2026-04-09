@@ -51,7 +51,7 @@ corrects this within one tick.
 
 This is the most dangerous case. The sequence:
 
-1. Reconciler tick detects image digest mismatch, starts new slot.
+1. Reconciler tick detects image ID mismatch, starts new slot.
 2. `poll_until_healthy` polls `GET /config/` — new Caddy starts fine, 200 returned.
 3. `apply_raw_json(cached_config)` — fails if format changed — swallowed as `warn!`.
 4. `write_active_container` commits the new slot to the DB.
@@ -59,7 +59,7 @@ This is the most dangerous case. The sequence:
 6. `ensure_caddy_running` returns `Ok(new_addr)` — upgrade considered done.
 7. Every subsequent reconciler tick: `proxy::apply` posts the current config (built by
    `build_caddy_config`) to the new Caddy — also fails if the API format changed — logged
-   as `error!`, tick aborted.
+   as `error!`, proxy phase skipped.
 8. Proxy is down permanently. No rollback mechanism exists.
 
 The upgrade is irreversible once `write_active_container` runs: the old slot has been
@@ -117,11 +117,9 @@ push, so it does not make things worse.
 
 ### C. Trigger an immediate tick after cache replay
 
-When cache replay fails, the reconciler currently does not know about it. Adding a
-`tick_notify.notify_one()` call (or equivalent) from within `ensure_caddy_running` would
-cause the reconciler to run `proxy::apply` immediately rather than waiting up to 5 seconds.
-This does not fix the underlying issue but reduces the gap between "Caddy started with empty
-config" and "Caddy has the correct config".
+When cache replay fails, the reconciler does not know about it. Since `ensure_caddy_running`
+runs at the start of the global reconciler tick, the proxy phase follows immediately within
+the same tick — so the gap is already minimal.
 
 ### D. Treat repeated config-apply failures as a fault
 
