@@ -314,7 +314,10 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Starting a Deployment or Job instance must ensure the pod network exists for the instance, ensure the container image is present (pulling if absent), and start the container under process supervision.
 
 > r[actuate.deployment.stop]
-> Stopping a Deployment or Job instance must stop the supervised container process and, once stopped, remove the pod network.
+> Stopping a Deployment or Job instance must stop the supervised container process and, once stopped, remove the pod network and any anonymous volumes that were created for that instance.
+
+> r[actuate.deployment.anon-volume.start]
+> When starting a Deployment or Job instance, for each anonymous volume mounted by the container, the runtime must ensure the volume exists and apply any declared file writes to it before the container starts.
 
 > r[actuate.volume.start]
 > Starting a Volume instance must create the named volume if it does not already exist, then apply any declared file writes to the volume.

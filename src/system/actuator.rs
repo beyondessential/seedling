@@ -5,15 +5,17 @@ use snafu::Snafu;
 
 use crate::{
     defs::{
+        container::VolumeMount,
         enums::OnExit,
         resource::{Resource, ResourceKind},
         service::ServicePort,
+        volume::VolumeDef,
     },
     runtime::{identity::ResourceInstance, registry::InstanceRegistry},
     system::{
         System,
         translate::{
-            container::{deployment_spec, job_spec, podman_args, spec_hash},
+            container::{anon_vol_name, deployment_spec, job_spec, podman_args, spec_hash},
             proxy::{instance_ipv6, pod_network_prefix},
         },
         types::{ActiveState, TransientRestart, TransientUnitSpec},
@@ -75,6 +77,28 @@ fn map_on_exit(on_exit: OnExit) -> TransientRestart {
     }
 }
 
+/// Collect the anonymous volume (name, def) pairs for a pod instance.
+/// These are volumes declared in the BSL without a name that need to be
+/// created and seeded before the container starts.
+fn collect_anon_volumes(
+    pod_def: &crate::defs::pod::PodDef,
+    instance: &ResourceInstance,
+) -> Vec<(String, VolumeDef)> {
+    pod_def
+        .container
+        .lock()
+        .volume_mounts
+        .iter()
+        .filter_map(|(path, vm)| match vm {
+            VolumeMount::Volume(v) if v.name.is_none() => {
+                let name = anon_vol_name(instance, &path.to_string_lossy());
+                Some((name, v.def.lock().clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Actuator
 // ---------------------------------------------------------------------------
@@ -108,20 +132,23 @@ impl Actuator {
     ) -> Result<Option<String>, ActuateError> {
         match resource {
             Resource::Deployment(dep) => {
-                let (image, raw_mounts, restart) = {
+                let (image, raw_mounts, restart, anon_vols) = {
                     let def = dep.def.lock();
                     let pod = def.pod.lock();
                     let container = pod.container.lock();
                     let image = container.image.clone().unwrap_or_default();
                     let raw_mounts = pod.service_mounts.clone();
                     let restart = map_on_exit(container.on_exit);
-                    (image, raw_mounts, restart)
+                    drop(container);
+                    let anon_vols = collect_anon_volumes(&pod, instance);
+                    (image, raw_mounts, restart, anon_vols)
                 };
                 self.start_pod_instance(
                     instance,
                     &image,
                     &raw_mounts,
                     restart,
+                    &anon_vols,
                     |net_name, net_prefix, mounts| {
                         let guard = dep.def.lock();
                         let spec = deployment_spec(
@@ -137,20 +164,23 @@ impl Actuator {
                 .await
             }
             Resource::Job(job) => {
-                let (image, raw_mounts, restart) = {
+                let (image, raw_mounts, restart, anon_vols) = {
                     let def = job.def.lock();
                     let pod = def.pod.lock();
                     let container = pod.container.lock();
                     let image = container.image.clone().unwrap_or_default();
                     let raw_mounts = pod.service_mounts.clone();
                     let restart = map_on_exit(container.on_exit);
-                    (image, raw_mounts, restart)
+                    drop(container);
+                    let anon_vols = collect_anon_volumes(&pod, instance);
+                    (image, raw_mounts, restart, anon_vols)
                 };
                 self.start_pod_instance(
                     instance,
                     &image,
                     &raw_mounts,
                     restart,
+                    &anon_vols,
                     |net_name, net_prefix, mounts| {
                         let guard = job.def.lock();
                         let spec = job_spec(
@@ -225,7 +255,28 @@ impl Actuator {
         resource: &Resource,
     ) -> Result<(), ActuateError> {
         match resource {
-            Resource::Deployment(_) | Resource::Job(_) => self.stop_pod_instance(instance).await,
+            Resource::Deployment(dep) => {
+                let anon_names: Vec<String> = {
+                    let def = dep.def.lock();
+                    let pod = def.pod.lock();
+                    collect_anon_volumes(&pod, instance)
+                        .into_iter()
+                        .map(|(name, _)| name)
+                        .collect()
+                };
+                self.stop_pod_instance(instance, &anon_names).await
+            }
+            Resource::Job(job) => {
+                let anon_names: Vec<String> = {
+                    let def = job.def.lock();
+                    let pod = def.pod.lock();
+                    collect_anon_volumes(&pod, instance)
+                        .into_iter()
+                        .map(|(name, _)| name)
+                        .collect()
+                };
+                self.stop_pod_instance(instance, &anon_names).await
+            }
             Resource::Volume(_) => {
                 let name = instance.display_name.clone();
                 if self
@@ -329,12 +380,14 @@ impl Actuator {
         Some(spec_hash(&spec))
     }
 
+    // r[impl actuate.deployment.anon-volume.start]
     async fn start_pod_instance(
         &self,
         instance: &ResourceInstance,
         image: &str,
         raw_mounts: &[ServicePort],
         restart: TransientRestart,
+        anon_volumes: &[(String, VolumeDef)],
         build_argv: impl FnOnce(String, Ipv6Net, &[(u16, std::net::Ipv6Addr, u16)]) -> Vec<String>,
     ) -> Result<Option<String>, ActuateError> {
         // Ensure the container image is available.
@@ -350,6 +403,48 @@ impl Actuator {
                     reference: image.to_owned(),
                 }
             })?;
+        }
+
+        // Ensure anonymous volumes exist and have their writes applied.
+        for (vol_name, vol_def) in anon_volumes {
+            if !self
+                .driver
+                .container
+                .volume_exists(vol_name)
+                .await
+                .map_err(|e| ActuateError::Container { source: e })?
+            {
+                self.driver
+                    .container
+                    .create_volume(vol_name)
+                    .await
+                    .map_err(|e| ActuateError::Container { source: e })?;
+            }
+            if !vol_def.writes.is_empty() {
+                let mountpoint = self
+                    .driver
+                    .container
+                    .volume_mountpoint(vol_name)
+                    .await
+                    .map_err(|e| ActuateError::Container { source: e })?;
+                for (path, contents) in &vol_def.writes {
+                    let dest = mountpoint.join(path.trim_start_matches('/'));
+                    if let Some(parent) = dest.parent() {
+                        tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                            ActuateError::VolumeWrite {
+                                path: dest.clone(),
+                                source: e,
+                            }
+                        })?;
+                    }
+                    tokio::fs::write(&dest, contents).await.map_err(|e| {
+                        ActuateError::VolumeWrite {
+                            path: dest.clone(),
+                            source: e,
+                        }
+                    })?;
+                }
+            }
         }
 
         // Ensure the pod network exists.
@@ -416,7 +511,11 @@ impl Actuator {
         Ok(bridge_name)
     }
 
-    async fn stop_pod_instance(&self, instance: &ResourceInstance) -> Result<(), ActuateError> {
+    async fn stop_pod_instance(
+        &self,
+        instance: &ResourceInstance,
+        anon_volume_names: &[String],
+    ) -> Result<(), ActuateError> {
         let unit = unit_name(instance);
 
         // Stop the unit if it exists, then wait for it to terminate.
@@ -468,6 +567,23 @@ impl Actuator {
                 .remove_network(&net_name)
                 .await
                 .map_err(|e| ActuateError::Container { source: e })?;
+        }
+
+        // Remove anonymous volumes that were created for this container.
+        for vol_name in anon_volume_names {
+            if self
+                .driver
+                .container
+                .volume_exists(vol_name)
+                .await
+                .map_err(|e| ActuateError::Container { source: e })?
+            {
+                self.driver
+                    .container
+                    .remove_volume(vol_name)
+                    .await
+                    .map_err(|e| ActuateError::Container { source: e })?;
+            }
         }
 
         Ok(())
