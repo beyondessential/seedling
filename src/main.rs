@@ -200,7 +200,15 @@ async fn main() {
         });
 
     tracing::info!("seedling ready");
-    tokio::signal::ctrl_c().await.ok();
+
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("failed to install SIGTERM handler");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = sigterm.recv() => {}
+    }
+
+    tracing::info!("shutting down");
     oi_endpoint.close(quinn::VarInt::from_u32(0), b"shutdown");
     oi_endpoint.wait_idle().await;
 }
