@@ -91,10 +91,13 @@ pub(super) async fn observe_and_actuate(
         });
 
         // Track unit health for fault filing/clearing.
+        // A unit that is "active" in systemd but whose container is not
+        // running (e.g. exited inside a restarting unit) is not healthy —
+        // it is stuck in a crash loop managed by systemd's restart logic.
         if dr.desired == LifecycleState::Ready {
-            if unit_active || is_running {
+            if is_running {
                 unit_healthy.push(dr.instance.clone());
-            } else if unit_failed {
+            } else if unit_failed || (unit_active && !is_running) {
                 unit_failures.push(dr.instance.clone());
             }
         }
@@ -132,11 +135,13 @@ pub(super) async fn observe_and_actuate(
         match dr.desired {
             LifecycleState::Ready if !is_running => {
                 // r[fault.container-start]
-                // If the unit is in a failed state, skip the start attempt.
-                // The failure is reported via unit_failures above; the
-                // reconciler will file a fault. Retrying immediately would
-                // just reset_failed + start_transient in a tight loop.
-                if unit_failed {
+                // If the unit is in a failed state, or the unit is active but
+                // the container is not running (crash inside a restarting
+                // unit), skip the start attempt. The failure is reported via
+                // unit_failures above; the reconciler will file a fault.
+                // Retrying would either reset+start in a tight loop (failed)
+                // or see "already active" and return Ok (active-but-exited).
+                if unit_failed || unit_active {
                     continue;
                 }
 
