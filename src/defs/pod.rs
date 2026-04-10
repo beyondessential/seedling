@@ -1,7 +1,7 @@
-use rhai::TypeBuilder;
+use rhai::{EvalAltResult, TypeBuilder};
 
 use super::{
-    Holder,
+    Freezable, Holder,
     container::ContainerDef,
     resource::ResourceId,
     service::{HttpService, HttpServiceRoute, Service, ServicePort},
@@ -30,7 +30,7 @@ pub struct TcpUdpBinding {
 }
 
 impl PodDef {
-    pub(super) fn mixin<T: Clone + 'static>(
+    pub(super) fn mixin<T: Clone + Freezable + 'static>(
         builder: &mut TypeBuilder<T>,
         ext: impl Fn(&mut T) -> Holder<Self> + Copy + 'static,
         resource: impl Fn(&mut T) -> ResourceId + Copy + 'static,
@@ -42,28 +42,37 @@ impl PodDef {
         );
 
         // l[impl pod.mount-serviceport]
-        builder.with_fn("mount", move |this: &mut T, svc: ServicePort| {
-            ext(this).lock().service_mounts.push(svc);
-            this.clone()
-        });
+        builder.with_fn(
+            "mount",
+            move |this: &mut T, svc: ServicePort| -> Result<T, Box<EvalAltResult>> {
+                this.ensure_unfrozen()?;
+                ext(this).lock().service_mounts.push(svc);
+                Ok(this.clone())
+            },
+        );
 
         // l[impl pod.http] — route form
         builder.with_fn(
             "http",
-            move |this: &mut T, port: i64, route: HttpServiceRoute| {
+            move |this: &mut T,
+                  port: i64,
+                  route: HttpServiceRoute|
+                  -> Result<T, Box<EvalAltResult>> {
+                this.ensure_unfrozen()?;
                 let port = port as u16;
                 ext(this).lock().http_bindings.push(HttpBinding {
                     pod_port: port,
                     route,
                 });
-                this.clone()
+                Ok(this.clone())
             },
         );
 
         // l[impl pod.http] — HttpService form (defaults to route("/"))
         builder.with_fn(
             "http",
-            move |this: &mut T, port: i64, service: HttpService| {
+            move |this: &mut T, port: i64, service: HttpService| -> Result<T, Box<EvalAltResult>> {
+                this.ensure_unfrozen()?;
                 let port = port as u16;
                 let route = HttpServiceRoute {
                     http: service,
@@ -73,50 +82,66 @@ impl PodDef {
                     pod_port: port,
                     route,
                 });
-                this.clone()
+                Ok(this.clone())
             },
         );
 
         // l[impl pod.tcp] — ServicePort form
-        builder.with_fn("tcp", move |this: &mut T, port: i64, svc: ServicePort| {
-            let port = port as u16;
-            ext(this).lock().tcp_bindings.push(TcpUdpBinding {
-                pod_port: port,
-                service_port: svc,
-            });
-            this.clone()
-        });
+        builder.with_fn(
+            "tcp",
+            move |this: &mut T, port: i64, svc: ServicePort| -> Result<T, Box<EvalAltResult>> {
+                this.ensure_unfrozen()?;
+                let port = port as u16;
+                ext(this).lock().tcp_bindings.push(TcpUdpBinding {
+                    pod_port: port,
+                    service_port: svc,
+                });
+                Ok(this.clone())
+            },
+        );
 
         // l[impl pod.tcp] — Service form (defaults to svc.port(port))
-        builder.with_fn("tcp", move |this: &mut T, port: i64, svc: Service| {
-            let port = port as u16;
-            let service_port = ServicePort { service: svc, port };
-            ext(this).lock().tcp_bindings.push(TcpUdpBinding {
-                pod_port: port,
-                service_port,
-            });
-            this.clone()
-        });
+        builder.with_fn(
+            "tcp",
+            move |this: &mut T, port: i64, svc: Service| -> Result<T, Box<EvalAltResult>> {
+                this.ensure_unfrozen()?;
+                let port = port as u16;
+                let service_port = ServicePort { service: svc, port };
+                ext(this).lock().tcp_bindings.push(TcpUdpBinding {
+                    pod_port: port,
+                    service_port,
+                });
+                Ok(this.clone())
+            },
+        );
 
         // l[impl pod.udp] — ServicePort form
-        builder.with_fn("udp", move |this: &mut T, port: i64, svc: ServicePort| {
-            let port = port as u16;
-            ext(this).lock().udp_bindings.push(TcpUdpBinding {
-                pod_port: port,
-                service_port: svc,
-            });
-            this.clone()
-        });
+        builder.with_fn(
+            "udp",
+            move |this: &mut T, port: i64, svc: ServicePort| -> Result<T, Box<EvalAltResult>> {
+                this.ensure_unfrozen()?;
+                let port = port as u16;
+                ext(this).lock().udp_bindings.push(TcpUdpBinding {
+                    pod_port: port,
+                    service_port: svc,
+                });
+                Ok(this.clone())
+            },
+        );
 
         // l[impl pod.udp] — Service form (defaults to svc.port(port))
-        builder.with_fn("udp", move |this: &mut T, port: i64, svc: Service| {
-            let port = port as u16;
-            let service_port = ServicePort { service: svc, port };
-            ext(this).lock().udp_bindings.push(TcpUdpBinding {
-                pod_port: port,
-                service_port,
-            });
-            this.clone()
-        });
+        builder.with_fn(
+            "udp",
+            move |this: &mut T, port: i64, svc: Service| -> Result<T, Box<EvalAltResult>> {
+                this.ensure_unfrozen()?;
+                let port = port as u16;
+                let service_port = ServicePort { service: svc, port };
+                ext(this).lock().udp_bindings.push(TcpUdpBinding {
+                    pod_port: port,
+                    service_port,
+                });
+                Ok(this.clone())
+            },
+        );
     }
 }

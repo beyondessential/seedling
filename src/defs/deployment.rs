@@ -1,9 +1,9 @@
 use std::ops::Range;
 
-use rhai::{CustomType, TypeBuilder};
+use rhai::{CustomType, EvalAltResult, TypeBuilder};
 
 use super::{
-    Holder,
+    Freezable, Holder,
     enums::{OnTerminate, OnUpdate},
     pod::PodDef,
     resource::{ResourceId, ResourceKind, ResourceName},
@@ -33,6 +33,13 @@ impl Default for DeploymentDef {
 pub struct Deployment {
     pub name: ResourceName,
     pub def: Holder<DeploymentDef>,
+    pub frozen: bool,
+}
+
+impl Freezable for Deployment {
+    fn is_frozen(&self) -> bool {
+        self.frozen
+    }
 }
 
 impl CustomType for Deployment {
@@ -49,27 +56,45 @@ impl CustomType for Deployment {
         builder
             .with_name("Deployment")
             // l[impl deployment.scale]
-            .with_fn("scale", |this: &mut Self, scale: i64| {
-                let s = clamp_scale(scale);
-                this.def.lock().scale = s..s;
-                this.clone()
-            })
-            .with_fn("scale", |this: &mut Self, scale: Range<i64>| {
-                let min = clamp_scale(scale.start);
-                let max = clamp_scale(scale.end);
-                this.def.lock().scale = min..max;
-                this.clone()
-            })
+            .with_fn(
+                "scale",
+                |this: &mut Self, scale: i64| -> Result<Deployment, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
+                    let s = clamp_scale(scale);
+                    this.def.lock().scale = s..s;
+                    Ok(this.clone())
+                },
+            )
+            .with_fn(
+                "scale",
+                |this: &mut Self, scale: Range<i64>| -> Result<Deployment, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
+                    let min = clamp_scale(scale.start);
+                    let max = clamp_scale(scale.end);
+                    this.def.lock().scale = min..max;
+                    Ok(this.clone())
+                },
+            )
             // l[impl deployment.on-update]
-            .with_fn("on_update", |this: &mut Self, strategy: OnUpdate| {
-                this.def.lock().on_update = strategy;
-                this.clone()
-            })
+            .with_fn(
+                "on_update",
+                |this: &mut Self, strategy: OnUpdate| -> Result<Deployment, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
+                    this.def.lock().on_update = strategy;
+                    Ok(this.clone())
+                },
+            )
             // l[impl deployment.on-terminate]
-            .with_fn("on_terminate", |this: &mut Self, strategy: OnTerminate| {
-                this.def.lock().on_terminate = strategy;
-                this.clone()
-            });
+            .with_fn(
+                "on_terminate",
+                |this: &mut Self,
+                 strategy: OnTerminate|
+                 -> Result<Deployment, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
+                    this.def.lock().on_terminate = strategy;
+                    Ok(this.clone())
+                },
+            );
     }
 }
 

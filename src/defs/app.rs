@@ -170,7 +170,11 @@ impl CustomType for App {
                         name: rname,
                     };
                     match def.resources.get(&id) {
-                        Some(Resource::Service(s)) => Ok(s.clone()),
+                        Some(Resource::Service(s)) => {
+                            let mut frozen = s.clone();
+                            frozen.frozen = true;
+                            Ok(frozen)
+                        }
                         Some(_) => Err(format!("'{}' is not a service", name).into()),
                         None => Err(format!("no static service named '{}'", name).into()),
                     }
@@ -247,7 +251,11 @@ impl CustomType for App {
                         name: rname,
                     };
                     match def.resources.get(&id) {
-                        Some(Resource::Deployment(d)) => Ok(d.clone()),
+                        Some(Resource::Deployment(d)) => {
+                            let mut frozen = d.clone();
+                            frozen.frozen = true;
+                            Ok(frozen)
+                        }
                         Some(_) => Err(format!("'{}' is not a deployment", name).into()),
                         None => Err(format!("no static deployment named '{}'", name).into()),
                     }
@@ -261,6 +269,7 @@ impl CustomType for App {
                         Resource::Deployment(Deployment {
                             name: rname,
                             def: Default::default(),
+                            frozen: false,
                         })
                     });
                     match resource {
@@ -283,6 +292,7 @@ impl CustomType for App {
                 Ok(Deployment {
                     name: ResourceName::new(String::new()),
                     def: Default::default(),
+                    frozen: false,
                 })
             },
         );
@@ -303,7 +313,11 @@ impl CustomType for App {
                         name: rname,
                     };
                     match def.resources.get(&id) {
-                        Some(Resource::Job(j)) => Ok(j.clone()),
+                        Some(Resource::Job(j)) => {
+                            let mut frozen = j.clone();
+                            frozen.frozen = true;
+                            Ok(frozen)
+                        }
                         Some(_) => Err(format!("'{}' is not a job", name).into()),
                         None => Err(format!("no static job named '{}'", name).into()),
                     }
@@ -317,6 +331,7 @@ impl CustomType for App {
                         Resource::Job(Job {
                             name: rname,
                             def: Default::default(),
+                            frozen: false,
                         })
                     });
                     match resource {
@@ -337,6 +352,7 @@ impl CustomType for App {
                 Ok(Job {
                     name: ResourceName::new(String::new()),
                     def: Default::default(),
+                    frozen: false,
                 })
             },
         );
@@ -357,7 +373,11 @@ impl CustomType for App {
                         name: rname,
                     };
                     match def.resources.get(&id) {
-                        Some(Resource::Volume(v)) => Ok(v.clone()),
+                        Some(Resource::Volume(v)) => {
+                            let mut frozen = v.clone();
+                            frozen.frozen = true;
+                            Ok(frozen)
+                        }
                         Some(_) => Err(format!("'{}' is not a volume", name).into()),
                         None => Err(format!("no static volume named '{}'", name).into()),
                     }

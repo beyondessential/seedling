@@ -4,7 +4,7 @@ use parking_lot::Mutex;
 use rhai::{CustomType, EvalAltResult, TypeBuilder};
 
 use super::{
-    Holder,
+    Freezable, Holder,
     app::AppDef,
     ingress::Ingress,
     resource::{Resource, ResourceId, ResourceKind, ResourceName},
@@ -24,6 +24,13 @@ pub struct Service {
     /// register the created `Ingress` into `app_def.resources`. `None` for
     /// services created outside of an `App` context (e.g. via `ExternalService`).
     pub(super) app_def: Option<Weak<Mutex<AppDef>>>,
+    pub frozen: bool,
+}
+
+impl super::Freezable for Service {
+    fn is_frozen(&self) -> bool {
+        self.frozen
+    }
 }
 
 impl Service {
@@ -32,6 +39,7 @@ impl Service {
             name,
             def: Default::default(),
             app_def: None,
+            frozen: false,
         }
     }
 
@@ -40,6 +48,7 @@ impl Service {
             name,
             def: Default::default(),
             app_def: Some(app_def),
+            frozen: false,
         }
     }
 }
@@ -52,6 +61,7 @@ impl CustomType for Service {
             .with_fn(
                 "port",
                 |this: &mut Self, port: i64| -> Result<ServicePort, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
                     validate_port(port)?;
                     Ok(ServicePort {
                         service: this.clone(),
@@ -60,16 +70,21 @@ impl CustomType for Service {
                 },
             )
             // l[impl service.http]
-            .with_fn("http", |this: &mut Self| {
-                this.def.lock().http.get_or_insert_default();
-                HttpService {
-                    service: this.clone(),
-                    port: 80,
-                }
-            })
+            .with_fn(
+                "http",
+                |this: &mut Self| -> Result<HttpService, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
+                    this.def.lock().http.get_or_insert_default();
+                    Ok(HttpService {
+                        service: this.clone(),
+                        port: 80,
+                    })
+                },
+            )
             .with_fn(
                 "http",
                 |this: &mut Self, port: i64| -> Result<HttpService, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
                     validate_port(port)?;
                     this.def.lock().http.get_or_insert_default();
                     Ok(HttpService {
@@ -84,6 +99,7 @@ impl CustomType for Service {
                  hostname: &str,
                  port: i64|
                  -> Result<Ingress, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
                     validate_port(port)?;
                     // l[impl ingress.conflicts]
                     // TODO: check for duplicate (hostname, port) in the app's ingress

@@ -213,6 +213,7 @@ mod tests {
         let resource = Resource::Deployment(Deployment {
             name: rname,
             def: Arc::new(Mutex::new(DeploymentDef::default())),
+            frozen: false,
         });
         (id, resource)
     }

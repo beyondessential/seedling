@@ -11,6 +11,21 @@ use crate::runtime::barrier::runtime;
 
 type Holder<T> = Arc<Mutex<T>>;
 
+/// Trait for BSL resource types that can be returned as frozen references
+/// in action context. Builder methods call `ensure_unfrozen()?` to prevent
+/// modification of static resource references inside action closures.
+pub trait Freezable {
+    fn is_frozen(&self) -> bool;
+
+    fn ensure_unfrozen(&self) -> Result<(), Box<rhai::EvalAltResult>> {
+        if self.is_frozen() {
+            Err("cannot modify a static resource reference inside an action closure".into())
+        } else {
+            Ok(())
+        }
+    }
+}
+
 pub mod action;
 pub mod app;
 pub mod collection;

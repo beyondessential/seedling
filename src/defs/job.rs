@@ -1,7 +1,7 @@
 use rhai::{CustomType, EvalAltResult, TypeBuilder};
 
 use super::{
-    Holder,
+    Freezable, Holder,
     pod::PodDef,
     resource::{ResourceId, ResourceKind, ResourceName},
 };
@@ -17,6 +17,13 @@ pub struct JobDef {
 pub struct Job {
     pub name: ResourceName,
     pub def: Holder<JobDef>,
+    pub frozen: bool,
+}
+
+impl super::Freezable for Job {
+    fn is_frozen(&self) -> bool {
+        self.frozen
+    }
 }
 
 impl CustomType for Job {
@@ -35,6 +42,7 @@ impl CustomType for Job {
         builder.with_fn(
             "deadline",
             |this: &mut Self, seconds: i64| -> Result<Job, Box<EvalAltResult>> {
+                this.ensure_unfrozen()?;
                 if seconds <= 0 {
                     return Err("deadline must be a positive number of seconds".into());
                 }
