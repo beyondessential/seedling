@@ -333,12 +333,20 @@ impl PodmanRuntime {
 
     async fn remove_network_impl(&self, name: &str) -> Result<(), PodmanError> {
         let params = NetworkDeleteLibpod { force: Some(false) };
-        self.client
+        let reports = self
+            .client
             .v5()
             .networks()
             .network_delete_libpod(name, Some(params))
             .await
             .map_err(map_api_err)?;
+        for r in &reports {
+            if let Some(err) = &r.err {
+                return Err(PodmanError::Protocol {
+                    message: format!("network delete '{name}': {err}"),
+                });
+            }
+        }
         Ok(())
     }
 
@@ -394,12 +402,20 @@ impl PodmanRuntime {
             force: Some(force),
             ..Default::default()
         };
-        self.client
+        let reports = self
+            .client
             .v5()
             .containers()
             .container_delete_libpod(name, Some(params))
             .await
             .map_err(map_api_err)?;
+        for r in &reports {
+            if let Some(err) = &r.err {
+                return Err(PodmanError::Protocol {
+                    message: format!("container delete '{name}': {err}"),
+                });
+            }
+        }
         Ok(())
     }
 
