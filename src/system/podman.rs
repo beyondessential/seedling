@@ -49,6 +49,8 @@ pub(crate) enum PodmanError {
     },
     #[snafu(display("unexpected response from podman: {message}"))]
     Protocol { message: String },
+    #[snafu(display("image pull failed: {message}"))]
+    Pull { message: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -216,13 +218,16 @@ impl PodmanRuntime {
             reference: Some(reference),
             ..Default::default()
         };
-        self.client
+        let report = self
+            .client
             .v5()
             .images()
             .image_pull_libpod(Some(params))
             .await
-            .map_err(map_api_err)
-            .inspect_err(|err| tracing::error!("{err}"))?;
+            .map_err(map_api_err)?;
+        if let Some(err) = report.error {
+            return Err(PodmanError::Pull { message: err });
+        }
         Ok(())
     }
 
