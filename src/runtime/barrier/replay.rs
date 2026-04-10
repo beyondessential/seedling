@@ -398,8 +398,9 @@ mod tests {
                 &engine,
                 &mut scope,
                 r#"
+                let dep = app.deployment("web").image("nginx");
                 app.on_start(|rt| {
-                    rt.start(app.deployment("web").image("nginx")).ready();
+                    rt.start(app.deployment("web")).ready();
                 });
                 "#,
             )
@@ -492,9 +493,11 @@ mod tests {
                 &engine,
                 &mut scope,
                 r#"
+                let fe = app.deployment("frontend").image("nginx");
+                let be = app.deployment("backend").image("api");
                 app.on_start(|rt| {
-                    rt.start(app.deployment("frontend").image("nginx")).scheduled();
-                    rt.start(app.deployment("backend").image("api")).ready();
+                    rt.start(app.deployment("frontend")).scheduled();
+                    rt.start(app.deployment("backend")).ready();
                 });
                 "#,
             )

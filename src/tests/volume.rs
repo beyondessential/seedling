@@ -19,11 +19,17 @@ fn volume_named() {
 
 // l[verify volume.type]
 #[test]
-fn volume_anonymous() {
-    run_test_script_app(
-        r#"
-        let v = app.volume();
-    "#,
+fn volume_anonymous_disallowed_at_top_level() {
+    let (engine, mut scope, _app) = crate::setup_language();
+    let result = super::run_script(&engine, &mut scope, r#"let v = app.volume();"#);
+    assert!(
+        result.is_err(),
+        "anonymous volume at top level should error"
+    );
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("action closures"),
+        "error should mention action closures, got: {err}"
     );
 }
 
