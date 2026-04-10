@@ -167,6 +167,10 @@ pub fn operation_failed(
     );
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors all fields of OiEvent::FaultFiled"
+)]
 pub fn fault_filed(
     tx: &EventSender,
     id: &str,
