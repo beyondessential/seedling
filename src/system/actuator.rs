@@ -80,19 +80,42 @@ fn map_on_exit(on_exit: OnExit) -> TransientRestart {
 /// Collect the anonymous volume (name, def) pairs for a pod instance.
 /// These are volumes declared in the BSL without a name that need to be
 /// created and seeded before the container starts.
-fn collect_anon_volumes(
+struct ContainerVolume {
+    /// Podman volume name.
+    name: String,
+    def: VolumeDef,
+    /// Whether to remove this volume when the container stops.
+    /// True for anonymous volumes (ephemeral per-container), false for named
+    /// volumes (static reconciler-managed or dynamic user-named).
+    remove_on_stop: bool,
+}
+
+/// Collect all volumes declared in the pod's container mounts.
+///
+/// Anonymous volumes (`v.name.is_none()`) get a deterministic podman name
+/// derived from the instance and mount path; they are marked for removal when
+/// the container stops. Named volumes use the app-prefixed BSL name and
+/// persist after the container stops.
+fn collect_container_volumes(
     pod_def: &crate::defs::pod::PodDef,
     instance: &ResourceInstance,
-) -> Vec<(String, VolumeDef)> {
+) -> Vec<ContainerVolume> {
     pod_def
         .container
         .lock()
         .volume_mounts
         .iter()
         .filter_map(|(path, vm)| match vm {
-            VolumeMount::Volume(v) if v.name.is_none() => {
-                let name = anon_vol_name(instance, &path.to_string_lossy());
-                Some((name, v.def.lock().clone()))
+            VolumeMount::Volume(v) => {
+                let (name, remove_on_stop) = match &v.name {
+                    None => (anon_vol_name(instance, &path.to_string_lossy()), true),
+                    Some(n) => (format!("{}-{}", instance.app, n.as_str()), false),
+                };
+                Some(ContainerVolume {
+                    name,
+                    def: v.def.lock().clone(),
+                    remove_on_stop,
+                })
             }
             _ => None,
         })
@@ -132,7 +155,7 @@ impl Actuator {
     ) -> Result<Option<String>, ActuateError> {
         match resource {
             Resource::Deployment(dep) => {
-                let (image, raw_mounts, restart, anon_vols) = {
+                let (image, raw_mounts, restart, vols) = {
                     let def = dep.def.lock();
                     let pod = def.pod.lock();
                     let container = pod.container.lock();
@@ -140,15 +163,15 @@ impl Actuator {
                     let raw_mounts = pod.service_mounts.clone();
                     let restart = map_on_exit(container.on_exit);
                     drop(container);
-                    let anon_vols = collect_anon_volumes(&pod, instance);
-                    (image, raw_mounts, restart, anon_vols)
+                    let vols = collect_container_volumes(&pod, instance);
+                    (image, raw_mounts, restart, vols)
                 };
                 self.start_pod_instance(
                     instance,
                     &image,
                     &raw_mounts,
                     restart,
-                    &anon_vols,
+                    &vols,
                     |net_name, net_prefix, mounts| {
                         let guard = dep.def.lock();
                         let spec = deployment_spec(
@@ -164,7 +187,7 @@ impl Actuator {
                 .await
             }
             Resource::Job(job) => {
-                let (image, raw_mounts, restart, anon_vols) = {
+                let (image, raw_mounts, restart, vols) = {
                     let def = job.def.lock();
                     let pod = def.pod.lock();
                     let container = pod.container.lock();
@@ -172,15 +195,15 @@ impl Actuator {
                     let raw_mounts = pod.service_mounts.clone();
                     let restart = map_on_exit(container.on_exit);
                     drop(container);
-                    let anon_vols = collect_anon_volumes(&pod, instance);
-                    (image, raw_mounts, restart, anon_vols)
+                    let vols = collect_container_volumes(&pod, instance);
+                    (image, raw_mounts, restart, vols)
                 };
                 self.start_pod_instance(
                     instance,
                     &image,
                     &raw_mounts,
                     restart,
-                    &anon_vols,
+                    &vols,
                     |net_name, net_prefix, mounts| {
                         let guard = job.def.lock();
                         let spec = job_spec(
@@ -259,9 +282,10 @@ impl Actuator {
                 let anon_names: Vec<String> = {
                     let def = dep.def.lock();
                     let pod = def.pod.lock();
-                    collect_anon_volumes(&pod, instance)
+                    collect_container_volumes(&pod, instance)
                         .into_iter()
-                        .map(|(name, _)| name)
+                        .filter(|v| v.remove_on_stop)
+                        .map(|v| v.name)
                         .collect()
                 };
                 self.stop_pod_instance(instance, &anon_names).await
@@ -270,9 +294,10 @@ impl Actuator {
                 let anon_names: Vec<String> = {
                     let def = job.def.lock();
                     let pod = def.pod.lock();
-                    collect_anon_volumes(&pod, instance)
+                    collect_container_volumes(&pod, instance)
                         .into_iter()
-                        .map(|(name, _)| name)
+                        .filter(|v| v.remove_on_stop)
+                        .map(|v| v.name)
                         .collect()
                 };
                 self.stop_pod_instance(instance, &anon_names).await
@@ -387,7 +412,7 @@ impl Actuator {
         image: &str,
         raw_mounts: &[ServicePort],
         restart: TransientRestart,
-        anon_volumes: &[(String, VolumeDef)],
+        volumes: &[ContainerVolume],
         build_argv: impl FnOnce(String, Ipv6Net, &[(u16, std::net::Ipv6Addr, u16)]) -> Vec<String>,
     ) -> Result<Option<String>, ActuateError> {
         // Ensure the container image is available.
@@ -405,29 +430,35 @@ impl Actuator {
             })?;
         }
 
-        // Ensure anonymous volumes exist and have their writes applied.
-        for (vol_name, vol_def) in anon_volumes {
-            if !self
+        // Ensure all container volumes exist. Writes are applied only when the
+        // volume is freshly created — static named volumes managed by the
+        // volumes reconciler already exist and must not have their content
+        // overwritten on every container start.
+        for vol in volumes {
+            let just_created = if !self
                 .driver
                 .container
-                .volume_exists(vol_name)
+                .volume_exists(&vol.name)
                 .await
                 .map_err(|e| ActuateError::Container { source: e })?
             {
                 self.driver
                     .container
-                    .create_volume(vol_name)
+                    .create_volume(&vol.name)
                     .await
                     .map_err(|e| ActuateError::Container { source: e })?;
-            }
-            if !vol_def.writes.is_empty() {
+                true
+            } else {
+                false
+            };
+            if just_created && !vol.def.writes.is_empty() {
                 let mountpoint = self
                     .driver
                     .container
-                    .volume_mountpoint(vol_name)
+                    .volume_mountpoint(&vol.name)
                     .await
                     .map_err(|e| ActuateError::Container { source: e })?;
-                for (path, contents) in &vol_def.writes {
+                for (path, contents) in &vol.def.writes {
                     let dest = mountpoint.join(path.trim_start_matches('/'));
                     if let Some(parent) = dest.parent() {
                         tokio::fs::create_dir_all(parent).await.map_err(|e| {
