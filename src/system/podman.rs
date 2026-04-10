@@ -152,6 +152,12 @@ impl PodmanRuntime {
             pod_addr,
             pod_addr_v4,
             image_id: data.image.clone(),
+            spec_hash: data
+                .config
+                .as_ref()
+                .and_then(|c| c.labels.as_ref())
+                .and_then(|l| l.get("seedling.spec-hash"))
+                .cloned(),
         }))
     }
 

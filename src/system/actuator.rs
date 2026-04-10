@@ -13,7 +13,7 @@ use crate::{
     system::{
         System,
         translate::{
-            container::{deployment_spec, job_spec, podman_args},
+            container::{deployment_spec, job_spec, podman_args, spec_hash},
             proxy::{instance_ipv6, pod_network_prefix},
         },
         types::{ActiveState, TransientRestart, TransientUnitSpec},
@@ -283,6 +283,50 @@ impl Actuator {
                 (sp.port, service_ip, sp.port)
             })
             .collect()
+    }
+
+    /// Compute the spec hash that would be used if this instance were started
+    /// right now. Returns `None` for resource kinds that have no container spec.
+    ///
+    /// This mirrors the hash stamped on the container at start time and lets the
+    /// observer detect config drift for any field — not just the image.
+    pub fn desired_spec_hash(
+        &self,
+        instance: &ResourceInstance,
+        resource: &Resource,
+    ) -> Option<String> {
+        let net_name = format!("seedling-{}", instance.display_name);
+        let net_prefix = pod_network_prefix(&self.node_prefix, instance);
+
+        let spec = match resource {
+            Resource::Deployment(dep) => {
+                let def = dep.def.lock();
+                let raw_mounts = def.pod.lock().service_mounts.clone();
+                let mounts = self.resolve_service_mounts(instance, &raw_mounts);
+                deployment_spec(
+                    &def,
+                    instance,
+                    &std::collections::BTreeMap::new(),
+                    &(net_name, net_prefix),
+                    &mounts,
+                )
+            }
+            Resource::Job(job) => {
+                let def = job.def.lock();
+                let raw_mounts = def.pod.lock().service_mounts.clone();
+                let mounts = self.resolve_service_mounts(instance, &raw_mounts);
+                job_spec(
+                    &def,
+                    instance,
+                    &std::collections::BTreeMap::new(),
+                    &(net_name, net_prefix),
+                    &mounts,
+                )
+            }
+            _ => return None,
+        };
+
+        Some(spec_hash(&spec))
     }
 
     async fn start_pod_instance(

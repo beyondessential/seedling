@@ -126,6 +126,24 @@ pub fn podman_args(spec: &ContainerSpec) -> Vec<String> {
     args
 }
 
+/// Compute a SHA-256 hash of the canonical podman argv for a container spec,
+/// excluding the `seedling.spec-hash` label itself (which would be circular).
+/// The hash covers the complete desired container configuration: image, command,
+/// args, env, mounts, health, hosts, and all other labels.
+pub fn spec_hash(spec: &ContainerSpec) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hashable = spec.clone();
+    hashable.labels.remove("seedling.spec-hash");
+    let args = podman_args(&hashable);
+    let digest = Sha256::digest(args.join("\x00").as_bytes());
+    use std::fmt::Write as FmtWrite;
+    let mut hex = String::with_capacity(64);
+    for b in digest.iter() {
+        write!(hex, "{b:02x}").expect("write to String is infallible");
+    }
+    hex
+}
+
 // ---------------------------------------------------------------------------
 // Shared pod → spec logic
 // ---------------------------------------------------------------------------
@@ -199,7 +217,7 @@ fn spec_from_pod(
         vec![("localmount".to_string(), IpAddr::V6(mount_endpoint))]
     };
 
-    ContainerSpec {
+    let mut spec = ContainerSpec {
         name: instance.display_name.clone(),
         image,
         command,
@@ -210,7 +228,10 @@ fn spec_from_pod(
         labels,
         health: None,
         hosts,
-    }
+    };
+    let hash = spec_hash(&spec);
+    spec.labels.insert("seedling.spec-hash".to_string(), hash);
+    spec
 }
 
 #[cfg(test)]

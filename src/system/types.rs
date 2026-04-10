@@ -25,6 +25,9 @@ pub struct ContainerState {
     pub pod_addr_v4: Option<Ipv4Addr>,
     /// The image ID (config digest) the container was started from, if known.
     pub image_id: Option<String>,
+    /// The `seedling.spec-hash` label value from the running container, if present.
+    /// Used to detect config drift without re-running the spec computation.
+    pub spec_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -357,9 +360,8 @@ pub enum ObservationFact {
     },
     ContainerHealthy,
     ContainerUnhealthy,
-    /// The container is running but was started from a different image than
-    /// the one currently desired by the AppDef.
-    ContainerImageStale,
+    /// The spec hash label read from the running container.
+    ContainerSpecHash(String),
 
     // Network
     NetworkPresent,
@@ -414,7 +416,7 @@ impl ObservationFact {
             // Network observations are used only for pod actuation decisions.
             // Unit and health-failure facts have no direct oracle mapping.
             ObservationFact::ContainerUnhealthy
-            | ObservationFact::ContainerImageStale
+            | ObservationFact::ContainerSpecHash(_)
             | ObservationFact::NetworkPresent
             | ObservationFact::NetworkMissing
             | ObservationFact::ProxyReachable
