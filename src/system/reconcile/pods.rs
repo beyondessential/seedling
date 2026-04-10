@@ -22,12 +22,17 @@ pub(super) struct PodActuationUpdate {
     pub image_pull_failures: Vec<(ResourceInstance, String)>,
     /// Instances whose image pull succeeded this tick (or was already present).
     pub image_pull_successes: Vec<(ResourceInstance, String)>,
+    /// Instances whose backing unit was observed in a failed state while desired active.
+    pub unit_failures: Vec<ResourceInstance>,
+    /// Instances whose backing unit was observed active/activating (clears prior failures).
+    pub unit_healthy: Vec<ResourceInstance>,
 }
 
 // r[observe.deployment]
 // r[actuate.deployment.start]
 // r[actuate.deployment.stop]
 // r[fault.non-blocking]
+// r[fault.container-start]
 pub(super) async fn observe_and_actuate(
     observer: &Observer,
     actuator: &Actuator,
@@ -39,6 +44,8 @@ pub(super) async fn observe_and_actuate(
     let mut observations: Vec<(ResourceInstance, &'static str, serde_json::Value)> = Vec::new();
     let mut image_pull_failures: Vec<(ResourceInstance, String)> = Vec::new();
     let mut image_pull_successes: Vec<(ResourceInstance, String)> = Vec::new();
+    let mut unit_failures: Vec<ResourceInstance> = Vec::new();
+    let mut unit_healthy: Vec<ResourceInstance> = Vec::new();
 
     for dr in &desired.resources {
         match &dr.definition {
@@ -68,6 +75,12 @@ pub(super) async fn observe_and_actuate(
         let is_running = facts
             .iter()
             .any(|(f, _)| matches!(f, ObservationFact::ContainerRunning { .. }));
+        let unit_failed = facts
+            .iter()
+            .any(|(f, _)| matches!(f, ObservationFact::UnitFailed));
+        let unit_active = facts
+            .iter()
+            .any(|(f, _)| matches!(f, ObservationFact::UnitActive));
         let unit_loaded = facts.iter().any(|(f, _)| {
             matches!(
                 f,
@@ -76,6 +89,15 @@ pub(super) async fn observe_and_actuate(
                     | ObservationFact::UnitFailed
             )
         });
+
+        // Track unit health for fault filing/clearing.
+        if dr.desired == LifecycleState::Ready {
+            if unit_active || is_running {
+                unit_healthy.push(dr.instance.clone());
+            } else if unit_failed {
+                unit_failures.push(dr.instance.clone());
+            }
+        }
 
         // Collect running pods from the pre-actuation observation.
         //
@@ -109,6 +131,15 @@ pub(super) async fn observe_and_actuate(
         // Decide and actuate.
         match dr.desired {
             LifecycleState::Ready if !is_running => {
+                // r[fault.container-start]
+                // If the unit is in a failed state, skip the start attempt.
+                // The failure is reported via unit_failures above; the
+                // reconciler will file a fault. Retrying immediately would
+                // just reset_failed + start_transient in a tight loop.
+                if unit_failed {
+                    continue;
+                }
+
                 let image_ref = match &dr.definition {
                     Resource::Deployment(dep) => {
                         dep.def.lock().pod.lock().container.lock().image.clone()
@@ -163,5 +194,7 @@ pub(super) async fn observe_and_actuate(
         observations,
         image_pull_failures,
         image_pull_successes,
+        unit_failures,
+        unit_healthy,
     }
 }

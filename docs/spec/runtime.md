@@ -340,6 +340,10 @@ Absent specification bugs, anything that is not defined here is either defined i
 > When the reconciler fails to pull a container image required by a resource instance, it must file a fault of kind `image_pull_failed` associated with that instance.
 > The fault is cleared automatically when a subsequent pull of the same image succeeds.
 
+> r[fault.container-start]
+> When the reconciler observes that a resource instance's backing unit is in a failed state while the desired state is active, it must file a fault of kind `container_start_failed` associated with that instance.
+> The fault is cleared automatically when the unit is subsequently observed in an active or activating state.
+
 > r[fault.surfacing]
 > Faults must be surfaced to operators through the operator interface (defined in a separate spec).
 > The runtime must not silently discard faults.
