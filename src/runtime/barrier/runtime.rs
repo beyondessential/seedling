@@ -172,22 +172,74 @@ impl RuntimeInstance {
     /// resolves them through the instance registry so the returned instances
     /// carry stable UUIDs.  Unknown types yield an empty vec (stub behaviour
     /// that leaves barriers trivially satisfied in language-only tests).
-    fn extract_instances(&self, resources: Dynamic) -> Vec<ResourceInstance> {
+    fn extract_instances(
+        &self,
+        resources: Dynamic,
+    ) -> Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)> {
         use crate::defs::deployment::Deployment;
         use crate::defs::job::Job;
-        use crate::defs::resource::ResourceKind;
+        use crate::defs::resource::{Resource, ResourceKind};
         use crate::defs::service::Service;
+        use crate::runtime::identity::{InstanceId, InstanceVariant, ResourceInstance};
 
         if let Some(dep) = resources.clone().try_cast::<Deployment>() {
-            return vec![self.registry.get_or_create_singleton(
-                &self.app_name,
-                ResourceKind::Deployment,
-                Some(&dep.name),
+            if dep.name.is_empty()
+                && let Some(ctx) = &self.ctx
+            {
+                let mut g = ctx.lock();
+                let op_id = g.operation_id.0.clone();
+                let counter = g.anon_counter;
+                g.anon_counter += 1;
+                drop(g);
+                let ns = uuid::Uuid::parse_str(&op_id).unwrap_or(uuid::Uuid::nil());
+                let key = format!("anon-deployment:{counter}");
+                let id = InstanceId(uuid::Uuid::new_v5(&ns, key.as_bytes()));
+                let display = format!("{}-anon-dep-{}", self.app_name, id.display_suffix());
+                let instance = ResourceInstance {
+                    id,
+                    app: self.app_name.clone(),
+                    kind: ResourceKind::Deployment,
+                    name: None,
+                    variant: InstanceVariant::Singleton,
+                    display_name: display,
+                };
+                return vec![(instance, Some(Resource::Deployment(dep)))];
+            }
+            return vec![(
+                self.registry.get_or_create_singleton(
+                    &self.app_name,
+                    ResourceKind::Deployment,
+                    Some(&dep.name),
+                ),
+                None,
             )];
         }
+
         if let Some(job) = resources.clone().try_cast::<Job>() {
+            if job.name.is_empty()
+                && let Some(ctx) = &self.ctx
+            {
+                let mut g = ctx.lock();
+                let op_id = g.operation_id.0.clone();
+                let counter = g.anon_counter;
+                g.anon_counter += 1;
+                drop(g);
+                let ns = uuid::Uuid::parse_str(&op_id).unwrap_or(uuid::Uuid::nil());
+                let key = format!("anon-job:{counter}");
+                let id = InstanceId(uuid::Uuid::new_v5(&ns, key.as_bytes()));
+                let display = format!("{}-anon-job-{}", self.app_name, id.display_suffix());
+                let instance = ResourceInstance {
+                    id,
+                    app: self.app_name.clone(),
+                    kind: ResourceKind::Job,
+                    name: None,
+                    variant: InstanceVariant::Singleton,
+                    display_name: display,
+                };
+                return vec![(instance, Some(Resource::Job(job)))];
+            }
             // r[impl identity.job]
-            // Dynamic Jobs inside an action closure get an instance ID derived
+            // Named jobs inside an action closure get an instance ID derived
             // from the operation ID via UUID v5, giving a stable identity
             // within one operation (replay-safe) while ensuring distinct
             // invocations of the same action produce different container names.
@@ -195,14 +247,13 @@ impl RuntimeInstance {
                 let op_id_str = ctx.lock().operation_id.0.clone();
                 let ns = uuid::Uuid::parse_str(&op_id_str).unwrap_or(uuid::Uuid::nil());
                 let key = format!("job:{}", job.name.as_str());
-                let id =
-                    crate::runtime::identity::InstanceId(uuid::Uuid::new_v5(&ns, key.as_bytes()));
-                crate::runtime::identity::ResourceInstance {
+                let id = InstanceId(uuid::Uuid::new_v5(&ns, key.as_bytes()));
+                ResourceInstance {
                     id,
                     app: self.app_name.clone(),
                     kind: ResourceKind::Job,
                     name: Some(job.name.to_string()),
-                    variant: crate::runtime::identity::InstanceVariant::Singleton,
+                    variant: InstanceVariant::Singleton,
                     display_name: format!(
                         "{}-{}-{}",
                         self.app_name,
@@ -219,13 +270,39 @@ impl RuntimeInstance {
                     Some(job.name.as_str()),
                 )
             };
-            return vec![instance];
+            return vec![(instance, None)];
         }
+
         if let Some(svc) = resources.clone().try_cast::<Service>() {
-            return vec![self.registry.get_or_create_singleton(
-                &self.app_name,
-                ResourceKind::Service,
-                Some(&svc.name),
+            if svc.name.is_empty()
+                && let Some(ctx) = &self.ctx
+            {
+                let mut g = ctx.lock();
+                let op_id = g.operation_id.0.clone();
+                let counter = g.anon_counter;
+                g.anon_counter += 1;
+                drop(g);
+                let ns = uuid::Uuid::parse_str(&op_id).unwrap_or(uuid::Uuid::nil());
+                let key = format!("anon-service:{counter}");
+                let id = InstanceId(uuid::Uuid::new_v5(&ns, key.as_bytes()));
+                let display = format!("{}-anon-svc-{}", self.app_name, id.display_suffix());
+                let instance = ResourceInstance {
+                    id,
+                    app: self.app_name.clone(),
+                    kind: ResourceKind::Service,
+                    name: None,
+                    variant: InstanceVariant::Singleton,
+                    display_name: display,
+                };
+                return vec![(instance, Some(Resource::Service(svc)))];
+            }
+            return vec![(
+                self.registry.get_or_create_singleton(
+                    &self.app_name,
+                    ResourceKind::Service,
+                    Some(&svc.name),
+                ),
+                None,
             )];
         }
 
@@ -236,8 +313,20 @@ impl RuntimeInstance {
     // r[impl desired-state.during-operation]
     fn do_start(
         &mut self,
-        resources: Vec<ResourceInstance>,
+        resources_with_defs: Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)>,
     ) -> Result<Started, Box<EvalAltResult>> {
+        let resources: Vec<ResourceInstance> =
+            resources_with_defs.iter().map(|(r, _)| r.clone()).collect();
+
+        if let Some(ctx) = &self.ctx {
+            let mut g = ctx.lock();
+            for (instance, maybe_def) in &resources_with_defs {
+                if let Some(def) = maybe_def {
+                    g.dynamic_defs.insert(instance.clone(), def.clone());
+                }
+            }
+        }
+
         if is_barrier_hit_pending()
             && let Some(ctx) = &self.ctx
             && let Some(cond) = ctx.lock().pending_barrier.clone()
@@ -375,15 +464,19 @@ impl CustomType for RuntimeInstance {
             .with_fn(
                 "start",
                 |this: &mut Self, resources: Dynamic| -> Result<Started, Box<EvalAltResult>> {
-                    let instances = this.extract_instances(resources);
-                    this.do_start(instances)
+                    let resources_with_defs = this.extract_instances(resources);
+                    this.do_start(resources_with_defs)
                 },
             )
             // l[impl rt.stop]
             .with_fn(
                 "stop",
                 |this: &mut Self, resources: Dynamic| -> Result<(), Box<EvalAltResult>> {
-                    let instances = this.extract_instances(resources);
+                    let instances = this
+                        .extract_instances(resources)
+                        .into_iter()
+                        .map(|(r, _)| r)
+                        .collect();
                     this.do_stop(instances, 30)
                 },
             )
@@ -393,7 +486,11 @@ impl CustomType for RuntimeInstance {
                  resources: Dynamic,
                  deadline: i64|
                  -> Result<(), Box<EvalAltResult>> {
-                    let instances = this.extract_instances(resources);
+                    let instances = this
+                        .extract_instances(resources)
+                        .into_iter()
+                        .map(|(r, _)| r)
+                        .collect();
                     this.do_stop(instances, deadline.max(0) as u64)
                 },
             )
@@ -401,8 +498,8 @@ impl CustomType for RuntimeInstance {
             .with_fn(
                 "query",
                 |this: &mut Self, resources: Dynamic| -> Result<Started, Box<EvalAltResult>> {
-                    let instances = this.extract_instances(resources);
-                    this.do_start(instances)
+                    let resources_with_defs = this.extract_instances(resources);
+                    this.do_start(resources_with_defs)
                 },
             )
             // l[impl rt.reconcile]
