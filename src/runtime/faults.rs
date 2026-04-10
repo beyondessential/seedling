@@ -382,20 +382,27 @@ mod tests {
 
         file_fault(&db, "myapp", None, None, None, "script_error", "boom").expect("file");
 
-        let ev = rx.try_recv().expect("should have received FaultFiled");
-        match ev {
-            crate::oi::events::OiEvent::FaultFiled {
-                app,
-                kind,
-                description,
-                ..
-            } => {
-                assert_eq!(app, "myapp");
-                assert_eq!(kind, "script_error");
-                assert_eq!(description, "boom");
+        // Parallel tests share the global sender; drain looking for our event.
+        let mut found = false;
+        loop {
+            match rx.try_recv() {
+                Ok(crate::oi::events::OiEvent::FaultFiled {
+                    app,
+                    kind,
+                    description,
+                    ..
+                }) if app == "myapp" && kind == "script_error" && description == "boom" => {
+                    found = true;
+                    break;
+                }
+                Ok(_) => continue,
+                Err(_) => break,
             }
-            other => panic!("expected FaultFiled, got {other:?}"),
         }
+        assert!(
+            found,
+            "expected a FaultFiled event for myapp/script_error/boom"
+        );
     }
 
     // i[verify fault.derived]
@@ -406,17 +413,28 @@ mod tests {
         let mut rx = EVENT_TX.get().unwrap().subscribe();
 
         let id = file_fault(&db, "myapp", None, None, None, "script_error", "boom").expect("file");
-        let _ = rx.try_recv(); // consume FaultFiled
+
+        // Drain all pending events — parallel tests share the global sender,
+        // so there may be stray events ahead of the ones we care about.
+        while rx.try_recv().is_ok() {}
 
         clear_fault(&db, &id, "myapp").expect("clear");
 
-        let ev = rx.try_recv().expect("should have received FaultCleared");
-        match ev {
-            crate::oi::events::OiEvent::FaultCleared { id: eid, app, .. } => {
-                assert_eq!(eid, id);
-                assert_eq!(app, "myapp");
+        // Drain again looking for our FaultCleared, skipping any interleaved
+        // events from other parallel tests.
+        let mut found = false;
+        loop {
+            match rx.try_recv() {
+                Ok(crate::oi::events::OiEvent::FaultCleared { id: eid, app, .. }) => {
+                    assert_eq!(eid, id);
+                    assert_eq!(app, "myapp");
+                    found = true;
+                    break;
+                }
+                Ok(_) => continue,
+                Err(_) => break,
             }
-            other => panic!("expected FaultCleared, got {other:?}"),
         }
+        assert!(found, "expected a FaultCleared event");
     }
 }

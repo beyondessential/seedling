@@ -135,13 +135,21 @@ pub(super) async fn observe_and_actuate(
         match dr.desired {
             LifecycleState::Ready if !is_running => {
                 // r[fault.container-start]
-                // If the unit is in a failed state, or the unit is active but
-                // the container is not running (crash inside a restarting
-                // unit), skip the start attempt. The failure is reported via
-                // unit_failures above; the reconciler will file a fault.
-                // Retrying would either reset+start in a tight loop (failed)
-                // or see "already active" and return Ok (active-but-exited).
+                // If the unit is in a broken state (failed, or active but the
+                // container is not running), tear it down so the next tick can
+                // start a fresh unit with the current AppDef config. Without
+                // this, a stale unit keeps running the old ExecStart forever.
                 if unit_failed || unit_active {
+                    match actuator.stop(&dr.instance, &dr.definition).await {
+                        Ok(()) => {}
+                        Err(e) => {
+                            error!(
+                                instance = %dr.instance.display_name,
+                                error = %e,
+                                "pods: stop broken unit failed"
+                            );
+                        }
+                    }
                     continue;
                 }
 
