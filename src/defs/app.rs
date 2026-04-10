@@ -16,6 +16,7 @@ use super::{
     service::{ExternalService, Service},
     volume::{ExternalVolume, Volume},
 };
+use crate::runtime::barrier::runtime::{action_def, is_in_action_closure};
 
 // ---------------------------------------------------------------------------
 // Thread-local closure capture buffer
@@ -154,30 +155,60 @@ impl CustomType for App {
         );
 
         // l[impl service.type]
-        builder.with_fn("service", |this: &mut Self, name: &str| -> Service {
-            let name = ResourceName::new(name.into());
-            let weak = std::sync::Arc::downgrade(&this.def);
-            let mut def = this.def.lock();
-            let id = ResourceId {
-                kind: ResourceKind::Service,
-                name: name.clone(),
-            };
-            let resource = def
-                .resources
-                .entry(id)
-                .or_insert_with(|| Resource::Service(Service::new_with_app(name, weak.clone())));
-            match resource {
-                Resource::Service(s) => {
-                    // Backfill the weak ref in case this Service was inserted
-                    // without one (e.g. during a script re-evaluation).
-                    if s.app_def.is_none() {
-                        s.app_def = Some(weak);
+        // l[impl app.resources.context.named]
+        builder.with_fn(
+            "service",
+            |this: &mut Self, name: &str| -> Result<Service, Box<EvalAltResult>> {
+                let rname = ResourceName::new(name.into());
+                if is_in_action_closure() {
+                    let adef = action_def().ok_or_else(|| -> Box<EvalAltResult> {
+                        "internal: action context but no action AppDef set".into()
+                    })?;
+                    let def = adef.lock();
+                    let id = ResourceId {
+                        kind: ResourceKind::Service,
+                        name: rname,
+                    };
+                    match def.resources.get(&id) {
+                        Some(Resource::Service(s)) => Ok(s.clone()),
+                        Some(_) => Err(format!("'{}' is not a service", name).into()),
+                        None => Err(format!("no static service named '{}'", name).into()),
                     }
-                    s.clone()
+                } else {
+                    let weak = std::sync::Arc::downgrade(&this.def);
+                    let mut def = this.def.lock();
+                    let id = ResourceId {
+                        kind: ResourceKind::Service,
+                        name: rname.clone(),
+                    };
+                    let resource = def.resources.entry(id).or_insert_with(|| {
+                        Resource::Service(Service::new_with_app(rname, weak.clone()))
+                    });
+                    match resource {
+                        Resource::Service(s) => {
+                            if s.app_def.is_none() {
+                                s.app_def = Some(weak);
+                            }
+                            Ok(s.clone())
+                        }
+                        _ => unreachable!(),
+                    }
                 }
-                _ => unreachable!(),
-            }
-        });
+            },
+        );
+
+        // l[impl app.resources.context.anonymous]
+        builder.with_fn(
+            "service",
+            |_this: &mut Self| -> Result<Service, Box<EvalAltResult>> {
+                if !is_in_action_closure() {
+                    return Err(
+                        "anonymous services can only be created inside action closures".into(),
+                    );
+                }
+                Ok(Service::new(ResourceName::new(String::new())))
+            },
+        );
 
         // l[impl service.external]
         builder.with_fn(
@@ -201,65 +232,166 @@ impl CustomType for App {
         );
 
         // l[impl deployment.type]
-        builder.with_fn("deployment", |this: &mut Self, name: &str| -> Deployment {
-            let name = ResourceName::new(name.into());
-            let mut def = this.def.lock();
-            let id = ResourceId {
-                kind: ResourceKind::Deployment,
-                name: name.clone(),
-            };
-            let resource = def.resources.entry(id).or_insert_with(|| {
-                Resource::Deployment(Deployment {
-                    name,
+        // l[impl app.resources.context.named]
+        builder.with_fn(
+            "deployment",
+            |this: &mut Self, name: &str| -> Result<Deployment, Box<EvalAltResult>> {
+                let rname = ResourceName::new(name.into());
+                if is_in_action_closure() {
+                    let adef = action_def().ok_or_else(|| -> Box<EvalAltResult> {
+                        "internal: action context but no action AppDef set".into()
+                    })?;
+                    let def = adef.lock();
+                    let id = ResourceId {
+                        kind: ResourceKind::Deployment,
+                        name: rname,
+                    };
+                    match def.resources.get(&id) {
+                        Some(Resource::Deployment(d)) => Ok(d.clone()),
+                        Some(_) => Err(format!("'{}' is not a deployment", name).into()),
+                        None => Err(format!("no static deployment named '{}'", name).into()),
+                    }
+                } else {
+                    let mut def = this.def.lock();
+                    let id = ResourceId {
+                        kind: ResourceKind::Deployment,
+                        name: rname.clone(),
+                    };
+                    let resource = def.resources.entry(id).or_insert_with(|| {
+                        Resource::Deployment(Deployment {
+                            name: rname,
+                            def: Default::default(),
+                        })
+                    });
+                    match resource {
+                        Resource::Deployment(d) => Ok(d.clone()),
+                        _ => unreachable!(),
+                    }
+                }
+            },
+        );
+
+        // l[impl app.resources.context.anonymous]
+        builder.with_fn(
+            "deployment",
+            |_this: &mut Self| -> Result<Deployment, Box<EvalAltResult>> {
+                if !is_in_action_closure() {
+                    return Err(
+                        "anonymous deployments can only be created inside action closures".into(),
+                    );
+                }
+                Ok(Deployment {
+                    name: ResourceName::new(String::new()),
                     def: Default::default(),
                 })
-            });
-            match resource {
-                Resource::Deployment(d) => d.clone(),
-                _ => unreachable!(),
-            }
-        });
+            },
+        );
 
         // l[impl job.type]
-        builder.with_fn("job", |this: &mut Self, name: &str| -> Job {
-            let name = ResourceName::new(name.into());
-            let mut def = this.def.lock();
-            let id = ResourceId {
-                kind: ResourceKind::Job,
-                name: name.clone(),
-            };
-            let resource = def.resources.entry(id).or_insert_with(|| {
-                Resource::Job(Job {
-                    name,
+        // l[impl app.resources.context.named]
+        builder.with_fn(
+            "job",
+            |this: &mut Self, name: &str| -> Result<Job, Box<EvalAltResult>> {
+                let rname = ResourceName::new(name.into());
+                if is_in_action_closure() {
+                    let adef = action_def().ok_or_else(|| -> Box<EvalAltResult> {
+                        "internal: action context but no action AppDef set".into()
+                    })?;
+                    let def = adef.lock();
+                    let id = ResourceId {
+                        kind: ResourceKind::Job,
+                        name: rname,
+                    };
+                    match def.resources.get(&id) {
+                        Some(Resource::Job(j)) => Ok(j.clone()),
+                        Some(_) => Err(format!("'{}' is not a job", name).into()),
+                        None => Err(format!("no static job named '{}'", name).into()),
+                    }
+                } else {
+                    let mut def = this.def.lock();
+                    let id = ResourceId {
+                        kind: ResourceKind::Job,
+                        name: rname.clone(),
+                    };
+                    let resource = def.resources.entry(id).or_insert_with(|| {
+                        Resource::Job(Job {
+                            name: rname,
+                            def: Default::default(),
+                        })
+                    });
+                    match resource {
+                        Resource::Job(j) => Ok(j.clone()),
+                        _ => unreachable!(),
+                    }
+                }
+            },
+        );
+
+        // l[impl app.resources.context.anonymous]
+        builder.with_fn(
+            "job",
+            |_this: &mut Self| -> Result<Job, Box<EvalAltResult>> {
+                if !is_in_action_closure() {
+                    return Err("anonymous jobs can only be created inside action closures".into());
+                }
+                Ok(Job {
+                    name: ResourceName::new(String::new()),
                     def: Default::default(),
                 })
-            });
-            match resource {
-                Resource::Job(j) => j.clone(),
-                _ => unreachable!(),
-            }
-        });
+            },
+        );
 
-        // l[impl volume.type] — named volume
-        builder.with_fn("volume", |this: &mut Self, name: &str| -> Volume {
-            let rname = ResourceName::new(name.into());
-            let mut def = this.def.lock();
-            let id = ResourceId {
-                kind: ResourceKind::Volume,
-                name: rname.clone(),
-            };
-            let resource = def
-                .resources
-                .entry(id)
-                .or_insert_with(|| Resource::Volume(Volume::new(Some(rname))));
-            match resource {
-                Resource::Volume(v) => v.clone(),
-                _ => unreachable!(),
-            }
-        });
+        // l[impl volume.type]
+        // l[impl app.resources.context.named]
+        builder.with_fn(
+            "volume",
+            |this: &mut Self, name: &str| -> Result<Volume, Box<EvalAltResult>> {
+                let rname = ResourceName::new(name.into());
+                if is_in_action_closure() {
+                    let adef = action_def().ok_or_else(|| -> Box<EvalAltResult> {
+                        "internal: action context but no action AppDef set".into()
+                    })?;
+                    let def = adef.lock();
+                    let id = ResourceId {
+                        kind: ResourceKind::Volume,
+                        name: rname,
+                    };
+                    match def.resources.get(&id) {
+                        Some(Resource::Volume(v)) => Ok(v.clone()),
+                        Some(_) => Err(format!("'{}' is not a volume", name).into()),
+                        None => Err(format!("no static volume named '{}'", name).into()),
+                    }
+                } else {
+                    let mut def = this.def.lock();
+                    let id = ResourceId {
+                        kind: ResourceKind::Volume,
+                        name: rname.clone(),
+                    };
+                    let resource = def
+                        .resources
+                        .entry(id)
+                        .or_insert_with(|| Resource::Volume(Volume::new(Some(rname))));
+                    match resource {
+                        Resource::Volume(v) => Ok(v.clone()),
+                        _ => unreachable!(),
+                    }
+                }
+            },
+        );
 
-        // l[impl volume.type] — anonymous volume
-        builder.with_fn("volume", |_this: &mut Self| -> Volume { Volume::new(None) });
+        // l[impl volume.type]
+        // l[impl app.resources.context.anonymous]
+        builder.with_fn(
+            "volume",
+            |_this: &mut Self| -> Result<Volume, Box<EvalAltResult>> {
+                if !is_in_action_closure() {
+                    return Err(
+                        "anonymous volumes can only be created inside action closures".into(),
+                    );
+                }
+                Ok(Volume::new(None))
+            },
+        );
 
         // l[impl volume.external]
         builder.with_fn(

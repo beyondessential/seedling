@@ -77,7 +77,9 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
 
         println!("exercising action: {name}");
         let result = {
-            let _guard = ActionClosureGuard::new();
+            let _guard = ActionClosureGuard::new(std::sync::Arc::new(parking_lot::Mutex::new(
+                crate::defs::app::AppDef::default(),
+            )));
             eval_merged(engine, scope, script_ast, call_script)
         };
         match result {
@@ -98,14 +100,18 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
         let two_arg = "__bsl_closure.call(__bsl_rt, __bsl_attach)";
         let one_arg = "__bsl_closure.call(__bsl_rt)";
         let result_two = {
-            let _guard = ActionClosureGuard::new();
+            let _guard = ActionClosureGuard::new(std::sync::Arc::new(parking_lot::Mutex::new(
+                crate::defs::app::AppDef::default(),
+            )));
             eval_merged(engine, scope, script_ast, two_arg)
         };
         match result_two {
             Ok(_) => println!("  ok (two-arg)"),
             Err(err_two) => {
                 let result_one = {
-                    let _guard = ActionClosureGuard::new();
+                    let _guard = ActionClosureGuard::new(std::sync::Arc::new(
+                        parking_lot::Mutex::new(crate::defs::app::AppDef::default()),
+                    ));
                     eval_merged(engine, scope, script_ast, one_arg)
                 };
                 match result_one {
@@ -131,7 +137,9 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
         println!("exercising install");
         let call_script = "__bsl_closure.call(__bsl_rt, __bsl_reqs)";
         let result = {
-            let _guard = ActionClosureGuard::new();
+            let _guard = ActionClosureGuard::new(std::sync::Arc::new(parking_lot::Mutex::new(
+                crate::defs::app::AppDef::default(),
+            )));
             eval_merged(engine, scope, script_ast, call_script)
         };
         match result {
@@ -154,7 +162,9 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
             println!("exercising param change: {name}");
             let call_script = "__bsl_closure.call(__bsl_rt, __bsl_old_app)";
             let result = {
-                let _guard = ActionClosureGuard::new();
+                let _guard = ActionClosureGuard::new(std::sync::Arc::new(parking_lot::Mutex::new(
+                    crate::defs::app::AppDef::default(),
+                )));
                 eval_merged(engine, scope, script_ast, call_script)
             };
             match result {
