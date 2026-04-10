@@ -17,6 +17,7 @@ use crate::{
         AppPhase,
         apps::{AppEntry, AppRegistry, AppStatus},
         barrier::oracle::{derive_lifecycle_state, derive_state_with_transition_time},
+        faults,
         history::{find_instances_for_group, query_observations},
         lifecycle::LifecycleState,
         scheduler::{RejectReason, ScheduleResult},
@@ -120,6 +121,8 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8]) -> HandlerResult {
         "ListForwards" => list_forwards(state, req.params),
         // i[forward.stop]
         "StopForward" => stop_forward(state, req.params),
+        // i[fault.list]
+        "ListFaults" => list_faults(state, req.params),
         other => Err(OiError::not_found(format!("unknown method: {other}"))),
     };
 
@@ -244,7 +247,7 @@ fn get_status(state: &OiState) -> HandlerResult {
         "apps_total": apps_total,
         "apps_by_status": apps_by_status,
         "active_operations": 0,
-        "active_faults": 0,
+        "active_faults": faults::count_active_faults(&state.db.lock()).unwrap_or(0),
         "active_shells": state.shells.list(None).len(),
         "active_forwards": state.forwards.lock().count(),
     }))
@@ -287,11 +290,12 @@ fn effective_app_status(
     let app_name = &entry.name;
     let def = entry.app.def.lock();
 
+    let has_faults = faults::has_active_faults(db, app_name).unwrap_or(false);
+
     let all_ready = def.resources.keys().all(|id| {
         let instances = find_instances_for_group(db, app_name, id.kind, Some(id.name.as_str()))
             .unwrap_or_default();
         if instances.is_empty() {
-            // No instance persisted yet — still starting.
             return false;
         }
         instances.iter().all(|inst| {
@@ -300,7 +304,9 @@ fn effective_app_status(
         })
     });
 
-    if all_ready {
+    if has_faults {
+        AppStatus::Faulted
+    } else if all_ready {
         AppStatus::Running
     } else {
         AppStatus::Degraded
@@ -330,23 +336,29 @@ fn describe_app(state: &OiState, params: Value) -> HandlerResult {
         crate::runtime::apps::load_params_for_app(&db, name).unwrap_or_default()
     };
 
-    // i[app.describe] — app-level faults (e.g. script evaluation errors).
-    let app_faults_json: Vec<Value> = entry
-        .script_error
-        .as_ref()
-        .map(|(msg, ts)| {
-            vec![json!({
-                "id": "script_error",
-                "app": name,
-                "resource_type": null,
-                "resource_name": null,
-                "instance_id": null,
-                "kind": "script_error",
-                "timestamp": ts.to_rfc3339(),
-                "description": msg,
-            })]
+    // Fetch all active faults for this app once, then split by level.
+    let all_faults_for_app = {
+        let db = state.db.lock();
+        faults::list_active_faults(&db, Some(name)).unwrap_or_default()
+    };
+
+    // i[app.describe] — app-level faults from the DB.
+    let app_faults_json: Vec<Value> = all_faults_for_app
+        .iter()
+        .filter(|f| f.resource_type.is_none())
+        .map(|f| {
+            json!({
+                "id": f.id,
+                "app": f.app,
+                "resource_type": f.resource_type,
+                "resource_name": f.resource_name,
+                "instance_id": f.instance_id,
+                "kind": f.kind,
+                "timestamp": f.timestamp.to_rfc3339(),
+                "description": f.description,
+            })
         })
-        .unwrap_or_default();
+        .collect();
 
     let def = entry.app.def.lock();
 
@@ -448,11 +460,32 @@ fn describe_app(state: &OiState, params: Value) -> HandlerResult {
                     vec![]
                 };
 
+                let resource_type_str = format!("{:?}", id.kind).to_lowercase();
+                let resource_faults: Vec<Value> = all_faults_for_app
+                    .iter()
+                    .filter(|f| {
+                        f.resource_type.as_deref() == Some(&resource_type_str)
+                            && f.resource_name.as_deref() == Some(id.name.as_str())
+                    })
+                    .map(|f| {
+                        json!({
+                            "id": f.id,
+                            "app": f.app,
+                            "resource_type": f.resource_type,
+                            "resource_name": f.resource_name,
+                            "instance_id": f.instance_id,
+                            "kind": f.kind,
+                            "timestamp": f.timestamp.to_rfc3339(),
+                            "description": f.description,
+                        })
+                    })
+                    .collect();
+
                 json!({
                     "name": id.name.as_str(),
-                    "type": format!("{:?}", id.kind).to_lowercase(),
+                    "type": resource_type_str,
                     "instances": instances_json,
-                    "faults": [],
+                    "faults": resource_faults,
                 })
             })
             .collect()
@@ -1410,6 +1443,30 @@ fn stop_forward(state: &Arc<OiState>, params: Value) -> HandlerResult {
     let _ = entry.stop_tx.send(true);
     tracing::info!(forward_id = %forward_id, "stopped forward");
     Ok(json!({}))
+}
+
+// i[fault.list]
+fn list_faults(state: &OiState, params: Value) -> HandlerResult {
+    let app = params.get("app").and_then(Value::as_str);
+    let db = state.db.lock();
+    let records = faults::list_active_faults(&db, app)
+        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db query: {e}")))?;
+    let result: Vec<Value> = records
+        .into_iter()
+        .map(|f| {
+            json!({
+                "id": f.id,
+                "app": f.app,
+                "resource_type": f.resource_type,
+                "resource_name": f.resource_name,
+                "instance_id": f.instance_id,
+                "kind": f.kind,
+                "timestamp": f.timestamp.to_rfc3339(),
+                "description": f.description,
+            })
+        })
+        .collect();
+    Ok(json!(result))
 }
 
 // i[shell.stop]

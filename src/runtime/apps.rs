@@ -357,6 +357,35 @@ pub fn delete_one_param(db: &Db, app_name: &str, param_name: &str) -> rusqlite::
     Ok(())
 }
 
+/// Synchronize the in-memory script_error state with the faults DB table.
+/// Call after register/reload to persist fault changes.
+pub fn sync_script_error_fault(db: &Db, entry: &AppEntry) {
+    if entry.script_error.is_some() {
+        let existing = crate::runtime::faults::list_active_faults(db, Some(&entry.name))
+            .unwrap_or_default()
+            .into_iter()
+            .any(|f| f.kind == "script_error");
+        if !existing {
+            let description = entry
+                .script_error
+                .as_ref()
+                .map(|(msg, _)| msg.as_str())
+                .unwrap_or("script error");
+            let _ = crate::runtime::faults::file_fault(
+                db,
+                &entry.name,
+                None,
+                None,
+                None,
+                "script_error",
+                description,
+            );
+        }
+    } else {
+        let _ = crate::runtime::faults::clear_faults_by_kind(db, &entry.name, "script_error");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
