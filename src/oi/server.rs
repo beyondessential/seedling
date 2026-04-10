@@ -60,7 +60,7 @@ pub async fn run(
     state: Arc<OiState>,
     port: u16,
     data_dir: &Path,
-) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(String, Endpoint), Box<dyn std::error::Error + Send + Sync>> {
     let key_path = data_dir.join("oi.key");
     let key = keys::load_or_generate(&key_path)?;
     let spki = keys::spki_der(&key);
@@ -107,9 +107,10 @@ pub async fn run(
 
     tracing::info!("OI listening on {}", endpoint.local_addr()?);
 
+    let ep = endpoint.clone();
     tokio::spawn(accept_loop(endpoint, state));
 
-    Ok(fingerprint)
+    Ok((fingerprint, ep))
 }
 
 async fn accept_loop(endpoint: Endpoint, state: Arc<OiState>) {

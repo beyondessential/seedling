@@ -192,7 +192,7 @@ async fn main() {
         node_prefix,
     });
 
-    oi::run(Arc::clone(&oi_state), oi::DEFAULT_PORT, &data_dir)
+    let (_fingerprint, oi_endpoint) = oi::run(Arc::clone(&oi_state), oi::DEFAULT_PORT, &data_dir)
         .await
         .unwrap_or_else(|e| {
             tracing::error!("OI server failed to start: {e}");
@@ -201,4 +201,6 @@ async fn main() {
 
     tracing::info!("seedling ready");
     tokio::signal::ctrl_c().await.ok();
+    oi_endpoint.close(quinn::VarInt::from_u32(0), b"shutdown");
+    oi_endpoint.wait_idle().await;
 }
