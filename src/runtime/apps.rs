@@ -360,29 +360,36 @@ pub fn delete_one_param(db: &Db, app_name: &str, param_name: &str) -> rusqlite::
 /// Synchronize the in-memory script_error state with the faults DB table.
 /// Call after register/reload to persist fault changes.
 pub fn sync_script_error_fault(db: &Db, entry: &AppEntry) {
-    if entry.script_error.is_some() {
-        let existing = crate::runtime::faults::list_active_faults(db, Some(&entry.name))
-            .unwrap_or_default()
-            .into_iter()
-            .any(|f| f.kind == "script_error");
-        if !existing {
-            let description = entry
-                .script_error
-                .as_ref()
-                .map(|(msg, _)| msg.as_str())
-                .unwrap_or("script error");
-            let _ = crate::runtime::faults::file_fault(
-                db,
-                &entry.name,
-                None,
-                None,
-                None,
-                "script_error",
-                description,
-            );
+    let existing: Vec<_> = crate::runtime::faults::list_active_faults(db, Some(&entry.name))
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|f| f.kind == "script_error")
+        .collect();
+
+    match &entry.script_error {
+        Some((msg, _)) => {
+            let dominated = existing.iter().any(|f| f.description == *msg);
+            if !dominated {
+                // Clear stale fault(s) whose description no longer matches.
+                let _ =
+                    crate::runtime::faults::clear_faults_by_kind(db, &entry.name, "script_error");
+                let _ = crate::runtime::faults::file_fault(
+                    db,
+                    &entry.name,
+                    None,
+                    None,
+                    None,
+                    "script_error",
+                    msg,
+                );
+            }
         }
-    } else {
-        let _ = crate::runtime::faults::clear_faults_by_kind(db, &entry.name, "script_error");
+        None => {
+            if !existing.is_empty() {
+                let _ =
+                    crate::runtime::faults::clear_faults_by_kind(db, &entry.name, "script_error");
+            }
+        }
     }
 }
 
@@ -390,6 +397,8 @@ pub fn sync_script_error_fault(db: &Db, entry: &AppEntry) {
 mod tests {
     use super::*;
     use crate::runtime::db::Db;
+    use std::sync::Arc;
+    use tokio::sync::Notify;
 
     // i[verify param.store]
     #[test]
@@ -416,6 +425,87 @@ mod tests {
             Some("new.example.com")
         );
         assert_eq!(params.len(), 1);
+    }
+
+    fn make_entry(name: &str, script_error: Option<&str>) -> AppEntry {
+        AppEntry {
+            name: name.to_owned(),
+            script: String::new(),
+            app: crate::defs::app::App::default(),
+            phase: Arc::new(parking_lot::Mutex::new(AppPhase::NotInstalled)),
+            active_progress: Arc::new(parking_lot::RwLock::new(None)),
+            tick_notify: Arc::new(Notify::new()),
+            script_error: script_error
+                .map(|msg| (msg.to_owned(), std::time::SystemTime::now().into())),
+        }
+    }
+
+    // i[verify fault.derived]
+    #[test]
+    fn sync_clears_fault_on_successful_reload() {
+        let db = Db::open_in_memory().expect("open");
+
+        let entry = make_entry("myapp", Some("has_value not found"));
+        sync_script_error_fault(&db, &entry);
+        assert_eq!(
+            crate::runtime::faults::list_active_faults(&db, Some("myapp"))
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let entry = make_entry("myapp", None);
+        sync_script_error_fault(&db, &entry);
+        assert!(
+            crate::runtime::faults::list_active_faults(&db, Some("myapp"))
+                .unwrap()
+                .is_empty(),
+            "fault should be cleared after successful reload"
+        );
+    }
+
+    // i[verify fault.derived]
+    #[test]
+    fn sync_replaces_fault_when_error_changes() {
+        let db = Db::open_in_memory().expect("open");
+
+        let entry = make_entry("myapp", Some("has_value not found"));
+        sync_script_error_fault(&db, &entry);
+        let faults = crate::runtime::faults::list_active_faults(&db, Some("myapp")).unwrap();
+        assert_eq!(faults.len(), 1);
+        assert_eq!(faults[0].description, "has_value not found");
+        let old_id = faults[0].id.clone();
+
+        let entry = make_entry("myapp", Some("different error"));
+        sync_script_error_fault(&db, &entry);
+        let faults = crate::runtime::faults::list_active_faults(&db, Some("myapp")).unwrap();
+        assert_eq!(
+            faults.len(),
+            1,
+            "should still have exactly one active fault"
+        );
+        assert_eq!(faults[0].description, "different error");
+        assert_ne!(faults[0].id, old_id, "should be a new fault record");
+    }
+
+    // i[verify fault.derived]
+    #[test]
+    fn sync_is_idempotent_for_same_error() {
+        let db = Db::open_in_memory().expect("open");
+
+        let entry = make_entry("myapp", Some("parse failed"));
+        sync_script_error_fault(&db, &entry);
+        let first = crate::runtime::faults::list_active_faults(&db, Some("myapp")).unwrap();
+        assert_eq!(first.len(), 1);
+        let first_id = first[0].id.clone();
+
+        sync_script_error_fault(&db, &entry);
+        let second = crate::runtime::faults::list_active_faults(&db, Some("myapp")).unwrap();
+        assert_eq!(second.len(), 1);
+        assert_eq!(
+            second[0].id, first_id,
+            "same error should keep the same fault"
+        );
     }
 
     // i[verify param.store]
