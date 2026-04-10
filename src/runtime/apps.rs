@@ -359,7 +359,11 @@ pub fn delete_one_param(db: &Db, app_name: &str, param_name: &str) -> rusqlite::
 
 /// Synchronize the in-memory script_error state with the faults DB table.
 /// Call after register/reload to persist fault changes.
-pub fn sync_script_error_fault(db: &Db, entry: &AppEntry) {
+pub fn sync_script_error_fault(
+    db: &Db,
+    entry: &AppEntry,
+    event_tx: &crate::oi::events::EventSender,
+) {
     let existing: Vec<_> = crate::runtime::faults::list_active_faults(db, Some(&entry.name))
         .unwrap_or_default()
         .into_iter()
@@ -371,9 +375,11 @@ pub fn sync_script_error_fault(db: &Db, entry: &AppEntry) {
             let dominated = existing.iter().any(|f| f.description == *msg);
             if !dominated {
                 // Clear stale fault(s) whose description no longer matches.
-                let _ =
-                    crate::runtime::faults::clear_faults_by_kind(db, &entry.name, "script_error");
-                let _ = crate::runtime::faults::file_fault(
+                for f in &existing {
+                    let _ = crate::runtime::faults::clear_fault(db, &f.id);
+                    crate::oi::events::fault_cleared(event_tx, &f.id, &entry.name);
+                }
+                if let Ok(id) = crate::runtime::faults::file_fault(
                     db,
                     &entry.name,
                     None,
@@ -381,13 +387,24 @@ pub fn sync_script_error_fault(db: &Db, entry: &AppEntry) {
                     None,
                     "script_error",
                     msg,
-                );
+                ) {
+                    crate::oi::events::fault_filed(
+                        event_tx,
+                        &id,
+                        &entry.name,
+                        None,
+                        None,
+                        None,
+                        "script_error",
+                        msg,
+                    );
+                }
             }
         }
         None => {
-            if !existing.is_empty() {
-                let _ =
-                    crate::runtime::faults::clear_faults_by_kind(db, &entry.name, "script_error");
+            for f in &existing {
+                let _ = crate::runtime::faults::clear_fault(db, &f.id);
+                crate::oi::events::fault_cleared(event_tx, &f.id, &entry.name);
             }
         }
     }
@@ -445,8 +462,9 @@ mod tests {
     fn sync_clears_fault_on_successful_reload() {
         let db = Db::open_in_memory().expect("open");
 
+        let tx = crate::oi::events::new_event_channel();
         let entry = make_entry("myapp", Some("has_value not found"));
-        sync_script_error_fault(&db, &entry);
+        sync_script_error_fault(&db, &entry, &tx);
         assert_eq!(
             crate::runtime::faults::list_active_faults(&db, Some("myapp"))
                 .unwrap()
@@ -455,7 +473,7 @@ mod tests {
         );
 
         let entry = make_entry("myapp", None);
-        sync_script_error_fault(&db, &entry);
+        sync_script_error_fault(&db, &entry, &tx);
         assert!(
             crate::runtime::faults::list_active_faults(&db, Some("myapp"))
                 .unwrap()
@@ -469,15 +487,16 @@ mod tests {
     fn sync_replaces_fault_when_error_changes() {
         let db = Db::open_in_memory().expect("open");
 
+        let tx = crate::oi::events::new_event_channel();
         let entry = make_entry("myapp", Some("has_value not found"));
-        sync_script_error_fault(&db, &entry);
+        sync_script_error_fault(&db, &entry, &tx);
         let faults = crate::runtime::faults::list_active_faults(&db, Some("myapp")).unwrap();
         assert_eq!(faults.len(), 1);
         assert_eq!(faults[0].description, "has_value not found");
         let old_id = faults[0].id.clone();
 
         let entry = make_entry("myapp", Some("different error"));
-        sync_script_error_fault(&db, &entry);
+        sync_script_error_fault(&db, &entry, &tx);
         let faults = crate::runtime::faults::list_active_faults(&db, Some("myapp")).unwrap();
         assert_eq!(
             faults.len(),
@@ -493,19 +512,89 @@ mod tests {
     fn sync_is_idempotent_for_same_error() {
         let db = Db::open_in_memory().expect("open");
 
+        let tx = crate::oi::events::new_event_channel();
         let entry = make_entry("myapp", Some("parse failed"));
-        sync_script_error_fault(&db, &entry);
+        sync_script_error_fault(&db, &entry, &tx);
         let first = crate::runtime::faults::list_active_faults(&db, Some("myapp")).unwrap();
         assert_eq!(first.len(), 1);
         let first_id = first[0].id.clone();
 
-        sync_script_error_fault(&db, &entry);
+        sync_script_error_fault(&db, &entry, &tx);
         let second = crate::runtime::faults::list_active_faults(&db, Some("myapp")).unwrap();
         assert_eq!(second.len(), 1);
         assert_eq!(
             second[0].id, first_id,
             "same error should keep the same fault"
         );
+    }
+
+    // i[verify fault.derived]
+    #[test]
+    fn sync_emits_fault_filed_and_cleared_events() {
+        let db = Db::open_in_memory().expect("open");
+        let tx = crate::oi::events::new_event_channel();
+        let mut rx = tx.subscribe();
+
+        let entry = make_entry("myapp", Some("parse failed"));
+        sync_script_error_fault(&db, &entry, &tx);
+
+        let ev = rx.try_recv().expect("should have received FaultFiled");
+        match ev {
+            crate::oi::events::OiEvent::FaultFiled {
+                app,
+                kind,
+                description,
+                ..
+            } => {
+                assert_eq!(app, "myapp");
+                assert_eq!(kind, "script_error");
+                assert_eq!(description, "parse failed");
+            }
+            other => panic!("expected FaultFiled, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "no extra events after filing");
+
+        // Clear by successful reload.
+        let entry = make_entry("myapp", None);
+        sync_script_error_fault(&db, &entry, &tx);
+
+        let ev = rx.try_recv().expect("should have received FaultCleared");
+        match ev {
+            crate::oi::events::OiEvent::FaultCleared { app, .. } => {
+                assert_eq!(app, "myapp");
+            }
+            other => panic!("expected FaultCleared, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "no extra events after clearing");
+    }
+
+    // i[verify fault.derived]
+    #[test]
+    fn sync_emits_clear_then_file_when_error_changes() {
+        let db = Db::open_in_memory().expect("open");
+        let tx = crate::oi::events::new_event_channel();
+        let mut rx = tx.subscribe();
+
+        let entry = make_entry("myapp", Some("old error"));
+        sync_script_error_fault(&db, &entry, &tx);
+        let _ = rx.try_recv().expect("FaultFiled for old error");
+
+        let entry = make_entry("myapp", Some("new error"));
+        sync_script_error_fault(&db, &entry, &tx);
+
+        let ev1 = rx.try_recv().expect("should have received FaultCleared");
+        assert!(
+            matches!(ev1, crate::oi::events::OiEvent::FaultCleared { .. }),
+            "first event should be FaultCleared, got {ev1:?}"
+        );
+
+        let ev2 = rx.try_recv().expect("should have received FaultFiled");
+        match ev2 {
+            crate::oi::events::OiEvent::FaultFiled { description, .. } => {
+                assert_eq!(description, "new error");
+            }
+            other => panic!("expected FaultFiled, got {other:?}"),
+        }
     }
 
     // i[verify param.store]
