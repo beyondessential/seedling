@@ -238,6 +238,20 @@ impl Db {
                 .execute_batch("INSERT INTO schema_version VALUES (9);")?;
         }
 
+        if version < 10 {
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS dynamic_resources (
+                    instance_id   TEXT PRIMARY KEY,
+                    app           TEXT NOT NULL,
+                    operation_id  TEXT NOT NULL,
+                    kind          TEXT NOT NULL,
+                    display_name  TEXT NOT NULL
+                );",
+            )?;
+            self.conn
+                .execute_batch("INSERT INTO schema_version VALUES (10);")?;
+        }
+
         Ok(())
     }
 }
@@ -259,7 +273,7 @@ mod tests {
                 |r| r.get(0),
             )
             .expect("schema_version should exist");
-        assert_eq!(version, 9);
+        assert_eq!(version, 10);
     }
 
     // r[verify history.persistence]
@@ -291,7 +305,7 @@ mod tests {
                 |r| r.get(0),
             )
             .expect("schema_version should exist");
-        assert_eq!(version, 9);
+        assert_eq!(version, 10);
     }
 
     // i[verify app.persist]

@@ -5,6 +5,7 @@ use crate::defs::app::AppDef;
 use crate::defs::resource::{Resource, ResourceId};
 use crate::runtime::InstanceRegistry;
 use crate::runtime::barrier::{ActionLogEntry, CallKind};
+use crate::runtime::db::Db;
 use crate::runtime::identity::ResourceInstance;
 use crate::runtime::lifecycle::LifecycleState;
 
@@ -182,6 +183,75 @@ fn lookup_definition(app_def: &AppDef, instance: &ResourceInstance) -> Option<Re
         name,
     };
     app_def.resources.get(&id).cloned()
+}
+
+/// A persisted dynamic resource record.
+pub struct DynamicResourceRecord {
+    pub instance_id: String,
+    pub app: String,
+    pub operation_id: String,
+    pub kind: String,
+    pub display_name: String,
+}
+
+/// Persist a dynamic resource so it survives restarts.
+pub fn insert_dynamic_resource(
+    db: &Db,
+    instance: &ResourceInstance,
+    operation_id: &str,
+) -> rusqlite::Result<()> {
+    db.conn.execute(
+        "INSERT OR REPLACE INTO dynamic_resources (instance_id, app, operation_id, kind, display_name)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![
+            instance.id.to_hex(),
+            instance.app,
+            operation_id,
+            format!("{:?}", instance.kind),
+            instance.display_name,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Remove a dynamic resource record after cleanup.
+pub fn delete_dynamic_resource(db: &Db, instance_id: &str) -> rusqlite::Result<()> {
+    db.conn.execute(
+        "DELETE FROM dynamic_resources WHERE instance_id = ?1",
+        [instance_id],
+    )?;
+    Ok(())
+}
+
+/// Remove all dynamic resources for an operation.
+pub fn delete_dynamic_resources_for_operation(db: &Db, operation_id: &str) -> rusqlite::Result<()> {
+    db.conn.execute(
+        "DELETE FROM dynamic_resources WHERE operation_id = ?1",
+        [operation_id],
+    )?;
+    Ok(())
+}
+
+/// Load all dynamic resource records (e.g., for startup orphan cleanup).
+pub fn list_dynamic_resources(db: &Db) -> rusqlite::Result<Vec<DynamicResourceRecord>> {
+    let mut stmt = db.conn.prepare(
+        "SELECT instance_id, app, operation_id, kind, display_name
+         FROM dynamic_resources ORDER BY app, instance_id",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(DynamicResourceRecord {
+            instance_id: row.get(0)?,
+            app: row.get(1)?,
+            operation_id: row.get(2)?,
+            kind: row.get(3)?,
+            display_name: row.get(4)?,
+        })
+    })?;
+    let mut records = Vec::new();
+    for row in rows {
+        records.push(row?);
+    }
+    Ok(records)
 }
 
 #[cfg(test)]
