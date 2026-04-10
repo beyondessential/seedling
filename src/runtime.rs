@@ -6,6 +6,7 @@ pub mod apps;
 pub mod barrier;
 pub mod db;
 pub mod desired;
+pub mod faults;
 pub mod history;
 pub mod identity;
 pub mod lifecycle;

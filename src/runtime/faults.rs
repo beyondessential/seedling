@@ -80,7 +80,7 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<FaultRecord> {
     let ts_str: String = row.get(6)?;
     let timestamp = DateTime::parse_from_rfc3339(&ts_str)
         .map(|dt| dt.with_timezone(&Utc))
-        .unwrap_or_else(|_| Utc::now());
+        .unwrap_or_else(|_| std::time::SystemTime::now().into());
     Ok(FaultRecord {
         id: row.get(0)?,
         app: row.get(1)?,
