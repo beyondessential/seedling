@@ -219,6 +219,25 @@ impl Db {
                 .execute_batch("INSERT INTO schema_version VALUES (8);")?;
         }
 
+        if version < 9 {
+            // i[fault.record]
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS faults (
+                    id            TEXT PRIMARY KEY,
+                    app           TEXT NOT NULL,
+                    resource_type TEXT,
+                    resource_name TEXT,
+                    instance_id   TEXT,
+                    kind          TEXT NOT NULL,
+                    timestamp     TEXT NOT NULL,
+                    description   TEXT NOT NULL,
+                    cleared_at    TEXT
+                );",
+            )?;
+            self.conn
+                .execute_batch("INSERT INTO schema_version VALUES (9);")?;
+        }
+
         Ok(())
     }
 }
@@ -240,7 +259,7 @@ mod tests {
                 |r| r.get(0),
             )
             .expect("schema_version should exist");
-        assert_eq!(version, 8);
+        assert_eq!(version, 9);
     }
 
     // r[verify history.persistence]
@@ -272,7 +291,7 @@ mod tests {
                 |r| r.get(0),
             )
             .expect("schema_version should exist");
-        assert_eq!(version, 8);
+        assert_eq!(version, 9);
     }
 
     // i[verify app.persist]
