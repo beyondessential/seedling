@@ -85,7 +85,8 @@ impl NftablesDataPlane {
 
         for rule in &rules.service_dnat {
             for stmts in service_dnat_rule_stmts(rule) {
-                batch.add(rule_obj(CHAIN_PRE, stmts));
+                batch.add(rule_obj(CHAIN_PRE, stmts.clone()));
+                batch.add(rule_obj(CHAIN_OUT, stmts));
             }
         }
 

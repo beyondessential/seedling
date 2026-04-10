@@ -200,6 +200,8 @@ async fn handle_bidi_stream(
 
     let first_obj = serde_json::from_slice::<serde_json::Value>(&line).unwrap_or_default();
 
+    tracing::trace!(line = %String::from_utf8_lossy(&line).trim_end(), "bidi stream dispatch");
+
     // i[stream.forward] — forward data stream, identified by the "forward" key.
     if let Some(forward_id) = first_obj
         .get("forward")
@@ -1024,6 +1026,7 @@ async fn handle_forward_stream(
     };
 
     let target = format!("[{target_addr}]:{port}");
+    tracing::debug!(fwd = %forward_id, %target, "TCP relay: connecting");
     let mut tcp = match tokio::net::TcpStream::connect(&target).await {
         Ok(t) => t,
         Err(e) => {
@@ -1031,6 +1034,7 @@ async fn handle_forward_stream(
             return;
         }
     };
+    tracing::debug!(fwd = %forward_id, %target, "TCP relay: connected");
 
     let (mut tcp_recv, mut tcp_send) = tcp.split();
 
@@ -1071,6 +1075,7 @@ async fn handle_forward_stream(
     }
 
     let _ = send.finish();
+    tracing::debug!(fwd = %forward_id, "TCP relay: closed");
 }
 
 // i[forward.tunnel.udp]
