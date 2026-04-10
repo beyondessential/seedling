@@ -75,6 +75,9 @@ pub(super) async fn observe_and_actuate(
         let is_running = facts
             .iter()
             .any(|(f, _)| matches!(f, ObservationFact::ContainerRunning { .. }));
+        let image_stale = facts
+            .iter()
+            .any(|(f, _)| matches!(f, ObservationFact::ContainerImageStale));
         let unit_failed = facts
             .iter()
             .any(|(f, _)| matches!(f, ObservationFact::UnitFailed));
@@ -94,8 +97,9 @@ pub(super) async fn observe_and_actuate(
         // A unit that is "active" in systemd but whose container is not
         // running (e.g. exited inside a restarting unit) is not healthy —
         // it is stuck in a crash loop managed by systemd's restart logic.
+        // A stale image is also not considered healthy.
         if dr.desired == LifecycleState::Ready {
-            if is_running {
+            if is_running && !image_stale {
                 unit_healthy.push(dr.instance.clone());
             } else if unit_failed || (unit_active && !is_running) {
                 unit_failures.push(dr.instance.clone());
@@ -133,13 +137,13 @@ pub(super) async fn observe_and_actuate(
 
         // Decide and actuate.
         match dr.desired {
-            LifecycleState::Ready if !is_running => {
+            LifecycleState::Ready if !is_running || image_stale => {
                 // r[fault.container-start]
                 // If the unit is in a broken state (failed, or active but the
-                // container is not running), tear it down so the next tick can
-                // start a fresh unit with the current AppDef config. Without
-                // this, a stale unit keeps running the old ExecStart forever.
-                if unit_failed || unit_active {
+                // container is not running), or the running container has a
+                // stale image, tear it down so the next tick can start a fresh
+                // unit with the current AppDef config.
+                if unit_failed || unit_active || image_stale {
                     match actuator.stop(&dr.instance, &dr.definition).await {
                         Ok(()) => {}
                         Err(e) => {

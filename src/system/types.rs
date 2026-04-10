@@ -357,6 +357,9 @@ pub enum ObservationFact {
     },
     ContainerHealthy,
     ContainerUnhealthy,
+    /// The container is running but was started from a different image than
+    /// the one currently desired by the AppDef.
+    ContainerImageStale,
 
     // Network
     NetworkPresent,
@@ -411,6 +414,7 @@ impl ObservationFact {
             // Network observations are used only for pod actuation decisions.
             // Unit and health-failure facts have no direct oracle mapping.
             ObservationFact::ContainerUnhealthy
+            | ObservationFact::ContainerImageStale
             | ObservationFact::NetworkPresent
             | ObservationFact::NetworkMissing
             | ObservationFact::ProxyReachable

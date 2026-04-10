@@ -8,7 +8,7 @@ use crate::{
     runtime::identity::ResourceInstance,
     system::{
         System,
-        types::{ActiveState, ContainerHealth, ContainerStatus, ObservationFact},
+        types::{ActiveState, ContainerHealth, ContainerState, ContainerStatus, ObservationFact},
     },
 };
 
@@ -78,7 +78,8 @@ impl Observer {
 
         match resource {
             Resource::Deployment(_) | Resource::Job(_) => {
-                self.observe_pod_instance(instance, now, &mut facts).await?;
+                self.observe_pod_instance(instance, resource, now, &mut facts)
+                    .await?;
             }
             Resource::Volume(_) => {
                 // r[impl observe.volume]
@@ -130,6 +131,7 @@ impl Observer {
     async fn observe_pod_instance(
         &self,
         instance: &ResourceInstance,
+        resource: &Resource,
         now: SystemTime,
         facts: &mut Vec<(ObservationFact, SystemTime)>,
     ) -> Result<(), ObserveError> {
@@ -172,6 +174,11 @@ impl Observer {
                 };
                 facts.push((lifecycle_fact, now));
 
+                if s.status == ContainerStatus::Running {
+                    self.observe_image_staleness(instance, resource, s, now, facts)
+                        .await?;
+                }
+
                 match s.health {
                     ContainerHealth::Healthy => {
                         facts.push((ObservationFact::ContainerHealthy, now));
@@ -207,6 +214,55 @@ impl Observer {
             Some(ActiveState::Failed) => ObservationFact::UnitFailed,
         };
         facts.push((unit_fact, now));
+
+        Ok(())
+    }
+
+    /// Check whether the running container's image matches the desired image
+    /// from the AppDef. If it doesn't, emit `ContainerImageStale`.
+    async fn observe_image_staleness(
+        &self,
+        _instance: &ResourceInstance,
+        resource: &Resource,
+        container: &ContainerState,
+        now: SystemTime,
+        facts: &mut Vec<(ObservationFact, SystemTime)>,
+    ) -> Result<(), ObserveError> {
+        let desired_image = match resource {
+            Resource::Deployment(dep) => dep.def.lock().pod.lock().container.lock().image.clone(),
+            Resource::Job(job) => job.def.lock().pod.lock().container.lock().image.clone(),
+            _ => return Ok(()),
+        };
+
+        let desired_image = match desired_image {
+            Some(img) if !img.is_empty() => img,
+            _ => return Ok(()),
+        };
+
+        // Look up the local image ID for the desired reference.
+        let desired_id = self
+            .driver
+            .container
+            .local_image_id(&desired_image)
+            .await
+            .map_err(|e| ObserveError::Container { source: e })?;
+
+        // If the desired image isn't present locally yet, we can't compare —
+        // the pull will handle it on the next start attempt.
+        let desired_id = match desired_id {
+            Some(id) => id,
+            None => return Ok(()),
+        };
+
+        // If the running container's image ID doesn't match, it is stale.
+        let running_id = match &container.image_id {
+            Some(id) => id,
+            None => return Ok(()),
+        };
+
+        if *running_id != desired_id {
+            facts.push((ObservationFact::ContainerImageStale, now));
+        }
 
         Ok(())
     }
