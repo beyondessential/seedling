@@ -566,6 +566,14 @@ fn register_app(state: &OiState, params: Value) -> HandlerResult {
             .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db persist: {e}")))?;
     }
 
+    {
+        let reg = state.registry.read();
+        if let Some(entry) = reg.get(name) {
+            let db = state.db.lock();
+            crate::runtime::apps::sync_script_error_fault(&db, entry);
+        }
+    }
+
     tracing::info!(app = %name, "registered app");
     Ok(json!({}))
 }
@@ -622,7 +630,6 @@ fn deregister_app(state: &OiState, params: Value) -> HandlerResult {
         crate::runtime::apps::delete_app_params(&db, name)
             .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db param cleanup: {e}")))?;
     }
-
     {
         let db = state.db.lock();
         let _ = crate::runtime::faults::clear_all_faults_for_app(&db, name);
