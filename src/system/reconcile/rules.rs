@@ -20,11 +20,11 @@ use crate::{
 use super::RunningPod;
 
 /// Collects backends from running pods' bindings.
-/// Returns a map from `(service_name, service_port)` to `Vec<(pod_ip, pod_port)>`.
+/// Returns a map from `(service_name, service_port, proto)` to `Vec<(pod_ip, pod_port)>`.
 fn collect_service_backends(
     running_pods: &[RunningPod],
-) -> HashMap<(String, u16), Vec<(Ipv6Addr, u16)>> {
-    let mut backends: HashMap<(String, u16), Vec<(Ipv6Addr, u16)>> = HashMap::new();
+) -> HashMap<(String, u16, ForwardProto), Vec<(Ipv6Addr, u16)>> {
+    let mut backends: HashMap<(String, u16, ForwardProto), Vec<(Ipv6Addr, u16)>> = HashMap::new();
 
     for pod in running_pods {
         let (http, tcp, udp) = match &pod.resource {
@@ -53,7 +53,7 @@ fn collect_service_backends(
             let svc_name = b.route.http.service.name.as_str().to_owned();
             let svc_port = b.route.http.port;
             backends
-                .entry((svc_name, svc_port))
+                .entry((svc_name, svc_port, ForwardProto::Tcp))
                 .or_default()
                 .push((pod.pod_ip, b.pod_port));
         }
@@ -62,7 +62,7 @@ fn collect_service_backends(
             let svc_name = b.service_port.service.name.as_str().to_owned();
             let svc_port = b.service_port.port;
             backends
-                .entry((svc_name, svc_port))
+                .entry((svc_name, svc_port, ForwardProto::Tcp))
                 .or_default()
                 .push((pod.pod_ip, b.pod_port));
         }
@@ -71,7 +71,7 @@ fn collect_service_backends(
             let svc_name = b.service_port.service.name.as_str().to_owned();
             let svc_port = b.service_port.port;
             backends
-                .entry((svc_name, svc_port))
+                .entry((svc_name, svc_port, ForwardProto::Udp))
                 .or_default()
                 .push((pod.pod_ip, b.pod_port));
         }
@@ -135,7 +135,7 @@ pub(super) fn build_service_dnat_rules(
     let backends = collect_service_backends(running_pods);
     let mut rules = Vec::new();
 
-    for ((svc_name, svc_port), backend_list) in &backends {
+    for ((svc_name, svc_port, proto), backend_list) in &backends {
         let svc_instance =
             registry.get_or_create_singleton(app_name, ResourceKind::Service, Some(svc_name));
         let service_ip = instance_ipv6(node_prefix, &svc_instance);
@@ -144,7 +144,7 @@ pub(super) fn build_service_dnat_rules(
             service_ip,
             service_port: *svc_port,
             backends: backend_list.clone(),
-            proto: ForwardProto::Tcp,
+            proto: *proto,
         });
     }
 
@@ -179,16 +179,22 @@ pub(super) fn build_mount_rules(running_pods: &[RunningPod]) -> Vec<MountRule> {
 
         for sp in &service_mounts {
             let svc_name = sp.service.name.as_str();
-            let key = (svc_name.to_owned(), sp.port);
-            let svc_backends = backend_map.get(&key).cloned().unwrap_or_default();
-
-            rules.push(MountRule {
-                pod_prefix: pod.pod_prefix,
-                mount_addr,
-                mount_port: sp.port,
-                backends: svc_backends,
-                proto: ForwardProto::Tcp,
-            });
+            // Emit a mount rule for each protocol that has backends for this
+            // (service, port) pair.  Most mounts are TCP but UDP is valid too.
+            for proto in [ForwardProto::Tcp, ForwardProto::Udp] {
+                let key = (svc_name.to_owned(), sp.port, proto);
+                let svc_backends = backend_map.get(&key).cloned().unwrap_or_default();
+                if svc_backends.is_empty() {
+                    continue;
+                }
+                rules.push(MountRule {
+                    pod_prefix: pod.pod_prefix,
+                    mount_addr,
+                    mount_port: sp.port,
+                    backends: svc_backends,
+                    proto,
+                });
+            }
         }
     }
 
