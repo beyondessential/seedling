@@ -314,7 +314,9 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     let pending = ctx.lock().take_pending();
     log.commit(&pending);
     if let Some(ap) = &active_progress {
-        *ap.write() = Some(OperationProgress::from_log(&log.load()));
+        let mut progress = OperationProgress::from_log(&log.load());
+        progress.dynamic_defs = ctx.lock().dynamic_defs.clone();
+        *ap.write() = Some(progress);
     }
     if let Some(notify) = &tick_notify {
         notify.notify_one();
