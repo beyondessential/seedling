@@ -133,6 +133,8 @@ async fn main() {
         std::process::exit(1);
     });
 
+    let event_tx = seedling::oi::events::new_event_channel();
+
     let mut reconciler = Reconciler::new(
         Arc::clone(&driver),
         node_prefix,
@@ -141,6 +143,7 @@ async fn main() {
         data_dir.clone(),
         obs_db,
         Arc::clone(&registry),
+        event_tx.clone(),
     );
 
     {
@@ -176,8 +179,6 @@ async fn main() {
     // ---------------------------------------------------------------------------
     // OI server
     // ---------------------------------------------------------------------------
-
-    let event_tx = seedling::oi::events::new_event_channel();
 
     let oi_state = Arc::new(OiState {
         registry: Arc::clone(&registry),

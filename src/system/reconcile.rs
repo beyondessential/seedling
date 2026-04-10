@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
     sync::Arc,
@@ -17,13 +17,16 @@ use tracing::{error, warn};
 
 use crate::{
     defs::app::AppDef,
+    oi::events::EventSender,
     runtime::{
         AppPhase, InstanceRegistry,
         apps::{AppRegistry, transition_phase},
+        barrier::oracle::derive_lifecycle_state,
         db::Db,
         desired::{DesiredState, compute, compute_uninstalling},
-        history::insert_observation,
+        history::{find_instances_for_group, insert_observation, query_observations},
         identity::InstanceId,
+        lifecycle::LifecycleState,
     },
     system::{
         System, actuator::Actuator, caddy, observer::Observer,
@@ -78,9 +81,16 @@ pub struct Reconciler {
     registry: Arc<dyn InstanceRegistry>,
     app_registry: Arc<RwLock<AppRegistry>>,
     written_obs: HashSet<(InstanceId, &'static str)>,
+    event_tx: EventSender,
+    /// Previous tick's lifecycle states, keyed by (app, instance_id_hex).
+    prev_states: BTreeMap<(String, String), LifecycleState>,
 }
 
 impl Reconciler {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "construction requires all subsystem handles"
+    )]
     pub fn new(
         driver: Arc<System>,
         node_prefix: Ipv6Net,
@@ -89,6 +99,7 @@ impl Reconciler {
         data_dir: PathBuf,
         db: Db,
         app_registry: Arc<RwLock<AppRegistry>>,
+        event_tx: EventSender,
     ) -> Self {
         let observer = Observer::new(Arc::clone(&driver));
         let actuator = Actuator::new(Arc::clone(&driver), node_prefix, Arc::clone(&registry));
@@ -104,6 +115,8 @@ impl Reconciler {
             registry,
             app_registry,
             written_obs: HashSet::new(),
+            event_tx,
+            prev_states: BTreeMap::new(),
         }
     }
 
@@ -400,7 +413,63 @@ impl Reconciler {
             }
         }
 
+        // Derive lifecycle states for all instances and emit ResourceStateChanged
+        // events for any that differ from the previous tick.
+        self.emit_state_changes(&apps);
+
         true
+    }
+
+    fn emit_state_changes(&mut self, apps: &[AppSnapshot]) {
+        let db = self.db.lock();
+        let mut new_states = BTreeMap::new();
+
+        for app in apps {
+            for dr in &app.desired.resources {
+                let kind_str = format!("{:?}", dr.instance.kind).to_lowercase();
+                let res_name = dr.instance.name.as_deref().unwrap_or("");
+                let inst_hex = dr.instance.id.to_hex();
+
+                let instances = find_instances_for_group(
+                    &db,
+                    &app.name,
+                    dr.instance.kind,
+                    dr.instance.name.as_deref(),
+                )
+                .unwrap_or_default();
+
+                for inst in &instances {
+                    let hex = inst.id.to_hex();
+                    let obs = query_observations(&db, inst).unwrap_or_default();
+                    let state = derive_lifecycle_state(inst, &obs);
+                    let key = (app.name.clone(), hex.clone());
+
+                    if let Some(&prev) = self.prev_states.get(&key)
+                        && prev != state
+                    {
+                        crate::oi::events::resource_state_changed(
+                            &self.event_tx,
+                            &app.name,
+                            &kind_str,
+                            res_name,
+                            &hex,
+                            &format!("{state:?}"),
+                        );
+                    }
+
+                    new_states.insert(key, state);
+                }
+
+                // If this desired resource itself has no persisted instances yet,
+                // still track it so the first observation triggers a change event.
+                if instances.is_empty() {
+                    let key = (app.name.clone(), inst_hex);
+                    new_states.insert(key, LifecycleState::Pending);
+                }
+            }
+        }
+
+        self.prev_states = new_states;
     }
 
     // r[impl observe.persist]
