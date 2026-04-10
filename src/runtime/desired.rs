@@ -34,16 +34,30 @@ impl DesiredState {
 #[derive(Debug, Default)]
 pub struct OperationProgress {
     resources: HashMap<ResourceInstance, LifecycleState>,
+    /// Definitions of dynamic resources started during the current operation pass.
+    /// These are resources created anonymously inside an action closure that are
+    /// not present in the static AppDef. Repopulated on each pass of run_operation.
+    pub dynamic_defs: HashMap<ResourceInstance, Resource>,
 }
 
 impl OperationProgress {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            resources: HashMap::new(),
+            dynamic_defs: HashMap::new(),
+        }
     }
 
     /// Mark a resource as explicitly started (desired state: `Ready`).
     pub fn started(&mut self, resource: ResourceInstance) {
         self.resources.insert(resource, LifecycleState::Ready);
+    }
+
+    /// Mark a dynamic (anonymous) resource as started and record its definition.
+    pub fn started_dynamic(&mut self, instance: ResourceInstance, def: Resource) {
+        self.resources
+            .insert(instance.clone(), LifecycleState::Ready);
+        self.dynamic_defs.insert(instance, def);
     }
 
     /// Mark a resource as explicitly stopped (desired state: `Unscheduled`).
@@ -63,7 +77,10 @@ impl OperationProgress {
     ///
     /// Later entries for the same resource override earlier ones.
     pub fn from_log(entries: &[ActionLogEntry]) -> Self {
-        let mut this = Self::new();
+        let mut this = Self {
+            resources: HashMap::new(),
+            dynamic_defs: HashMap::new(),
+        };
         for entry in entries {
             match entry.call_kind {
                 CallKind::Start | CallKind::Reconcile => {
@@ -146,7 +163,8 @@ fn compute_during_operation(app_def: &AppDef, progress: &OperationProgress) -> D
         .resources
         .iter()
         .filter_map(|(instance, &desired)| {
-            let definition = lookup_definition(app_def, instance)?;
+            let definition = lookup_definition(app_def, instance)
+                .or_else(|| progress.dynamic_defs.get(instance).cloned())?;
             Some(DesiredResource {
                 instance: instance.clone(),
                 desired,

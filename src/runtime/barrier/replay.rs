@@ -296,8 +296,9 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     let call_ast = engine
         .compile(call_script)
         .expect("static call script must compile");
+    let action_def = Arc::new(Mutex::new(app.def.lock().clone()));
     let result = {
-        let _guard = ActionClosureGuard::new();
+        let _guard = ActionClosureGuard::new(action_def);
         engine.eval_ast_with_scope::<Dynamic>(scope, &call_ast)
     };
 

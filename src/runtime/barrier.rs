@@ -67,6 +67,16 @@ pub struct ReplayContext {
     pub pending_barrier: Option<BarrierCondition>,
     pub now_secs: Arc<dyn Fn() -> u64 + Send + Sync>,
     pub world: Arc<dyn oracle::WorldStateOracle>,
+    /// Definitions of dynamic (anonymous) resources started during this pass.
+    /// Populated by rt.start() calls in the action closure; read by the
+    /// reconciler to compute desired state for resources not in the static AppDef.
+    pub dynamic_defs: std::collections::HashMap<
+        crate::runtime::ResourceInstance,
+        crate::defs::resource::Resource,
+    >,
+    /// Counter for assigning stable operation-scoped IDs to anonymous resources.
+    /// Incremented each time an anonymous resource instance is created.
+    pub anon_counter: u32,
 }
 
 impl fmt::Debug for ReplayContext {
@@ -77,6 +87,11 @@ impl fmt::Debug for ReplayContext {
             .field("committed", &self.committed)
             .field("pending", &self.pending)
             .field("pending_barrier", &self.pending_barrier)
+            .field(
+                "dynamic_defs",
+                &self.dynamic_defs.keys().collect::<Vec<_>>(),
+            )
+            .field("anon_counter", &self.anon_counter)
             .finish_non_exhaustive()
     }
 }
@@ -100,6 +115,8 @@ impl ReplayContext {
                     .as_secs()
             }),
             world,
+            dynamic_defs: std::collections::HashMap::new(),
+            anon_counter: 0,
         }
     }
 

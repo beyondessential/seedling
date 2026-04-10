@@ -187,7 +187,18 @@ This is currently the only value.
 
 > l[app.resources.dynamic]
 > Resources that are not static are said to be **dynamic**.
-> Dynamic resources become anonymous when their scope ends.
+> Dynamic resources are created inside action closures and exist only for the duration of the operation.
+> They are cleaned up automatically when the action ends.
+
+> l[app.resources.context.named]
+> In the **static context** (top-level script), `app.resource(name)` creates and registers a named resource.
+> In the **action context** (inside an action closure), `app.resource(name)` returns a **reference** to an existing static resource.
+> If no static resource with that name exists, it is a script error.
+
+> l[app.resources.context.anonymous]
+> Anonymous resources (those created without a name argument) may only be created in the action context.
+> Attempting to create an anonymous resource at the top level is a script error.
+> `Ingress`, `ExternalService`, and `ExternalVolume` have no anonymous form in any context.
 
 > l[app.resources.names]
 > Most resources are defined with a name.
@@ -200,7 +211,7 @@ This is currently the only value.
 > ```
 >
 > Names are also used to select resources using the Collection methods.
-> Anonymous resources (those that don't have a name) never conflict and can't be selected by name.
+> Named resources created in the action context are references to existing static resources, not new definitions; see `l[app.resources.context.named]`.
 
 # Parameter
 

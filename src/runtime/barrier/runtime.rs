@@ -3,6 +3,7 @@ use std::{cell::RefCell, sync::Arc};
 use parking_lot::Mutex;
 use rhai::{CustomType, Dynamic, EvalAltResult, Map, TypeBuilder};
 
+use crate::defs::app::AppDef;
 use crate::runtime::barrier::{
     ActionLogEntry, BarrierCondition, BarrierRecord, CallKind, SharedContext,
 };
@@ -43,26 +44,49 @@ pub fn is_in_action_closure() -> bool {
     IN_ACTION_CLOSURE.with(|b| b.get())
 }
 
+// ---------------------------------------------------------------------------
+// Thread-local: action-context AppDef, set while an action closure executes.
+// The App BSL methods read from this to enforce static/dynamic context rules.
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    static ACTION_DEF: RefCell<Option<Arc<Mutex<AppDef>>>> = const { RefCell::new(None) };
+}
+
+pub fn action_def() -> Option<Arc<Mutex<AppDef>>> {
+    ACTION_DEF.with(|cell| cell.borrow().clone())
+}
+
+fn set_action_def(def: Arc<Mutex<AppDef>>) {
+    ACTION_DEF.with(|cell| *cell.borrow_mut() = Some(def));
+}
+
+fn clear_action_def() {
+    ACTION_DEF.with(|cell| *cell.borrow_mut() = None);
+}
+
 /// RAII guard that sets the in-action-closure flag on construction and clears
 /// it on drop, ensuring the flag is always cleaned up even on early return.
 pub struct ActionClosureGuard;
 
-impl Default for ActionClosureGuard {
-    fn default() -> Self {
-        Self::new()
+impl ActionClosureGuard {
+    pub fn new(action_def: Arc<Mutex<AppDef>>) -> Self {
+        IN_ACTION_CLOSURE.with(|b| b.set(true));
+        set_action_def(action_def);
+        Self
     }
 }
 
-impl ActionClosureGuard {
-    pub fn new() -> Self {
-        IN_ACTION_CLOSURE.with(|b| b.set(true));
-        Self
+impl Default for ActionClosureGuard {
+    fn default() -> Self {
+        Self::new(Arc::new(Mutex::new(AppDef::default())))
     }
 }
 
 impl Drop for ActionClosureGuard {
     fn drop(&mut self) {
         IN_ACTION_CLOSURE.with(|b| b.set(false));
+        clear_action_def();
     }
 }
 
