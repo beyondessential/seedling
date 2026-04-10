@@ -525,6 +525,7 @@ async fn open_shell_session(
                     tick_notify: None,
                     install_requirements: None,
                     is_shell: true,
+                    db: None,
                 },
                 &mut scope,
             );

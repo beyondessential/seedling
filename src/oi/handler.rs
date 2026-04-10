@@ -1290,6 +1290,7 @@ fn spawn_accepted_operation(
         let action_name_bl = action_name.clone();
         let active_progress_bl = Arc::clone(&active_progress);
         let tick_notify_bl = Arc::clone(&tick_notify);
+        let operation_id_str = operation_id.0.clone();
 
         let success = tokio::task::spawn_blocking(move || {
             let (engine, mut scope, _) = crate::setup_language();
@@ -1325,6 +1326,13 @@ fn spawn_accepted_operation(
                     return false;
                 }
             };
+            let dynamic_db = match crate::runtime::db::Db::open(&db_path) {
+                Ok(db) => Arc::new(parking_lot::Mutex::new(db)),
+                Err(e) => {
+                    tracing::error!(app = %app_name_bl, "open dynamic-resources db: {e}");
+                    return false;
+                }
+            };
 
             let log = DbActionLog::new(
                 action_log_db,
@@ -1351,6 +1359,7 @@ fn spawn_accepted_operation(
                         tick_notify: Some(Arc::clone(&tick_notify_bl)),
                         install_requirements: install_requirements.clone(),
                         is_shell: false,
+                        db: Some(Arc::clone(&dynamic_db)),
                     },
                     &mut scope,
                 );
@@ -1387,6 +1396,20 @@ fn spawn_accepted_operation(
         })
         .await
         .unwrap_or(false);
+
+        // Clean up dynamic resource records for the completed operation.
+        {
+            let db = state.db.lock();
+            if let Err(e) = crate::runtime::desired::delete_dynamic_resources_for_operation(
+                &db,
+                &operation_id_str,
+            ) {
+                tracing::error!(
+                    operation_id = %operation_id_str,
+                    "failed to clean up dynamic resource records: {e}"
+                );
+            }
+        }
 
         // Clear active progress and wake the reconciler.
         *active_progress.write() = None;

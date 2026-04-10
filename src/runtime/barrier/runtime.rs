@@ -7,6 +7,7 @@ use crate::defs::app::AppDef;
 use crate::runtime::barrier::{
     ActionLogEntry, BarrierCondition, BarrierRecord, CallKind, SharedContext,
 };
+use crate::runtime::db::Db;
 use crate::runtime::registry::InstanceRegistry;
 use crate::runtime::{LifecycleState, ResourceInstance};
 
@@ -133,6 +134,7 @@ pub struct RuntimeInstance {
     pub ctx: Option<SharedContext>,
     pub app_name: String,
     pub registry: Arc<dyn InstanceRegistry>,
+    pub db: Option<Arc<parking_lot::Mutex<Db>>>,
 }
 
 impl std::fmt::Debug for RuntimeInstance {
@@ -151,6 +153,7 @@ impl RuntimeInstance {
             ctx: None,
             app_name: String::new(),
             registry: Arc::new(EphemeralInstanceRegistry::new()),
+            db: None,
         }
     }
 
@@ -158,11 +161,13 @@ impl RuntimeInstance {
         ctx: SharedContext,
         app_name: impl Into<String>,
         registry: Arc<dyn InstanceRegistry>,
+        db: Option<Arc<parking_lot::Mutex<Db>>>,
     ) -> Self {
         Self {
             ctx: Some(ctx),
             app_name: app_name.into(),
             registry,
+            db,
         }
     }
 
@@ -323,6 +328,23 @@ impl RuntimeInstance {
             for (instance, maybe_def) in &resources_with_defs {
                 if let Some(def) = maybe_def {
                     g.dynamic_defs.insert(instance.clone(), def.clone());
+                }
+            }
+        }
+
+        if let (Some(db), Some(ctx)) = (&self.db, &self.ctx) {
+            let op_id = ctx.lock().operation_id.0.clone();
+            for (instance, maybe_def) in &resources_with_defs {
+                if maybe_def.is_some() {
+                    let db = db.lock();
+                    if let Err(e) =
+                        crate::runtime::desired::insert_dynamic_resource(&db, instance, &op_id)
+                    {
+                        tracing::warn!(
+                            instance_id = %instance.id.to_hex(),
+                            "failed to persist dynamic resource: {e}"
+                        );
+                    }
                 }
             }
         }

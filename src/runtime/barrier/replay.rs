@@ -171,6 +171,8 @@ pub struct OperationContext<'a, W: WorldStateOracle + 'static> {
     /// `true` when this operation executes a shell action closure.
     /// Affects the call script used to invoke the closure.
     pub is_shell: bool,
+    /// DB handle for persisting dynamic resources created during the operation.
+    pub db: Option<Arc<parking_lot::Mutex<Db>>>,
 }
 
 /// The `log` carries committed entries across calls; pass the same `log`
@@ -194,6 +196,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         tick_notify,
         install_requirements,
         is_shell: _,
+        db,
     } = op;
 
     // Build the replay context from committed log entries.
@@ -208,7 +211,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     clear_barrier_hit();
 
     let app_name = app.def.lock().name.clone();
-    let rt = RuntimeInstance::with_context(Arc::clone(&ctx), app_name.clone(), registry);
+    let rt = RuntimeInstance::with_context(Arc::clone(&ctx), app_name.clone(), registry, db);
 
     // Re-run the BSL script with a fresh scope and App to recover the FnPtr
     // for this action. FnPtrs are not stored in AppDef (which must be Send);
@@ -438,6 +441,7 @@ mod tests {
                 tick_notify: None,
                 install_requirements: None,
                 is_shell: false,
+                db: None,
             },
             &mut scope,
         );
@@ -470,6 +474,7 @@ mod tests {
                 tick_notify: None,
                 install_requirements: None,
                 is_shell: false,
+                db: None,
             },
             &mut scope,
         );
@@ -531,6 +536,7 @@ mod tests {
                 tick_notify: None,
                 install_requirements: None,
                 is_shell: false,
+                db: None,
             },
             &mut scope,
         );
@@ -553,6 +559,7 @@ mod tests {
                 tick_notify: None,
                 install_requirements: None,
                 is_shell: false,
+                db: None,
             },
             &mut scope,
         );
@@ -575,6 +582,7 @@ mod tests {
                 tick_notify: None,
                 install_requirements: None,
                 is_shell: false,
+                db: None,
             },
             &mut scope,
         );
