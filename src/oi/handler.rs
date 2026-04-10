@@ -571,7 +571,7 @@ fn register_app(state: &OiState, params: Value) -> HandlerResult {
         let reg = state.registry.read();
         if let Some(entry) = reg.get(name) {
             let db = state.db.lock();
-            crate::runtime::apps::sync_script_error_fault(&db, entry, &state.event_tx);
+            crate::runtime::apps::sync_script_error_fault(&db, entry);
         }
     }
 
@@ -728,7 +728,7 @@ fn update_app(state: &OiState, params: Value) -> HandlerResult {
             let reg = state.registry.read();
             if let Some(entry) = reg.get(name) {
                 let db = state.db.lock();
-                crate::runtime::apps::sync_script_error_fault(&db, entry, &state.event_tx);
+                crate::runtime::apps::sync_script_error_fault(&db, entry);
             }
         }
         // Wake reconciler to pick up new desired state.
@@ -826,7 +826,7 @@ fn set_param(state: &OiState, params: Value) -> HandlerResult {
         let reg = state.registry.read();
         if let Some(entry) = reg.get(app) {
             let db = state.db.lock();
-            crate::runtime::apps::sync_script_error_fault(&db, entry, &state.event_tx);
+            crate::runtime::apps::sync_script_error_fault(&db, entry);
         }
     }
 
@@ -917,7 +917,7 @@ fn unset_param(state: &OiState, params: Value) -> HandlerResult {
         let reg = state.registry.read();
         if let Some(entry) = reg.get(app) {
             let db = state.db.lock();
-            crate::runtime::apps::sync_script_error_fault(&db, entry, &state.event_tx);
+            crate::runtime::apps::sync_script_error_fault(&db, entry);
         }
     }
 

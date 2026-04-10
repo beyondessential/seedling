@@ -221,7 +221,8 @@ impl PodmanRuntime {
             .images()
             .image_pull_libpod(Some(params))
             .await
-            .map_err(map_api_err)?;
+            .map_err(map_api_err)
+            .inspect_err(|err| tracing::error!("{err}"))?;
         Ok(())
     }
 

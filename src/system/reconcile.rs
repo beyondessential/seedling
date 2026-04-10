@@ -437,7 +437,7 @@ impl Reconciler {
                 });
             if !already_filed {
                 let desc = format!("failed to pull image: {reference}");
-                if let Ok(id) = faults::file_fault(
+                let _ = faults::file_fault(
                     &db,
                     app,
                     Some(&kind_str),
@@ -445,18 +445,7 @@ impl Reconciler {
                     Some(&inst_hex),
                     "image_pull_failed",
                     &desc,
-                ) {
-                    crate::oi::events::fault_filed(
-                        &self.event_tx,
-                        &id,
-                        app,
-                        Some(&kind_str),
-                        instance.name.as_deref(),
-                        Some(&inst_hex),
-                        "image_pull_failed",
-                        &desc,
-                    );
-                }
+                );
             }
         }
         for (instance, _reference) in &update.image_pull_successes {
@@ -469,8 +458,7 @@ impl Reconciler {
                 })
                 .collect();
             for f in cleared {
-                let _ = faults::clear_fault(&db, &f.id);
-                crate::oi::events::fault_cleared(&self.event_tx, &f.id, app);
+                let _ = faults::clear_fault(&db, &f.id, app);
             }
         }
     }

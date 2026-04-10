@@ -134,6 +134,7 @@ async fn main() {
     });
 
     let event_tx = seedling::oi::events::new_event_channel();
+    seedling::runtime::faults::init(event_tx.clone());
 
     let mut reconciler = Reconciler::new(
         Arc::clone(&driver),

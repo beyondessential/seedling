@@ -1,5 +1,40 @@
+use std::sync::OnceLock;
+
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+
+use crate::oi::events::EventSender;
+
+static EVENT_TX: OnceLock<EventSender> = OnceLock::new();
+
+/// Install the broadcast sender used by fault operations.
+/// Call once at startup before any faults are filed.
+pub fn init(tx: EventSender) {
+    EVENT_TX
+        .set(tx)
+        .expect("faults::init must be called exactly once");
+}
+
+fn emit_filed(record: &FaultRecord) {
+    if let Some(tx) = EVENT_TX.get() {
+        crate::oi::events::fault_filed(
+            tx,
+            &record.id,
+            &record.app,
+            record.resource_type.as_deref(),
+            record.resource_name.as_deref(),
+            record.instance_id.as_deref(),
+            &record.kind,
+            &record.description,
+        );
+    }
+}
+
+fn emit_cleared(id: &str, app: &str) {
+    if let Some(tx) = EVENT_TX.get() {
+        crate::oi::events::fault_cleared(tx, id, app);
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FaultRecord {
@@ -31,15 +66,31 @@ pub fn file_fault(
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         rusqlite::params![id, app, resource_type, resource_name, instance_id, kind, timestamp, description],
     )?;
+    let record = FaultRecord {
+        id: id.clone(),
+        app: app.to_owned(),
+        resource_type: resource_type.map(str::to_owned),
+        resource_name: resource_name.map(str::to_owned),
+        instance_id: instance_id.map(str::to_owned),
+        kind: kind.to_owned(),
+        timestamp: now,
+        description: description.to_owned(),
+    };
+    emit_filed(&record);
     Ok(id)
 }
 
-pub fn clear_fault(db: &crate::runtime::db::Db, fault_id: &str) -> rusqlite::Result<()> {
+/// Clear a single fault by ID. The `app` is needed for the event broadcast;
+/// pass it from the context that looked up the fault record.
+pub fn clear_fault(db: &crate::runtime::db::Db, fault_id: &str, app: &str) -> rusqlite::Result<()> {
     let now: DateTime<Utc> = std::time::SystemTime::now().into();
-    db.conn.execute(
-        "UPDATE faults SET cleared_at = ?1 WHERE id = ?2",
+    let changed = db.conn.execute(
+        "UPDATE faults SET cleared_at = ?1 WHERE id = ?2 AND cleared_at IS NULL",
         rusqlite::params![now.to_rfc3339(), fault_id],
     )?;
+    if changed > 0 {
+        emit_cleared(fault_id, app);
+    }
     Ok(())
 }
 
@@ -93,25 +144,29 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<FaultRecord> {
     })
 }
 
+/// Clear all active faults matching an app + kind. Returns how many were cleared.
 pub fn clear_faults_by_kind(
     db: &crate::runtime::db::Db,
     app: &str,
     kind: &str,
 ) -> rusqlite::Result<u64> {
-    let now: DateTime<Utc> = std::time::SystemTime::now().into();
-    let count = db.conn.execute(
-        "UPDATE faults SET cleared_at = ?1 WHERE app = ?2 AND kind = ?3 AND cleared_at IS NULL",
-        rusqlite::params![now.to_rfc3339(), app, kind],
-    )?;
-    Ok(count as u64)
+    let to_clear: Vec<_> = list_active_faults(db, Some(app))?
+        .into_iter()
+        .filter(|f| f.kind == kind)
+        .collect();
+    let count = to_clear.len() as u64;
+    for f in &to_clear {
+        clear_fault(db, &f.id, app)?;
+    }
+    Ok(count)
 }
 
+/// Clear all active faults for an app (used during deregistration).
 pub fn clear_all_faults_for_app(db: &crate::runtime::db::Db, app: &str) -> rusqlite::Result<()> {
-    let now: DateTime<Utc> = std::time::SystemTime::now().into();
-    db.conn.execute(
-        "UPDATE faults SET cleared_at = ?1 WHERE app = ?2 AND cleared_at IS NULL",
-        rusqlite::params![now.to_rfc3339(), app],
-    )?;
+    let to_clear = list_active_faults(db, Some(app))?;
+    for f in &to_clear {
+        clear_fault(db, &f.id, app)?;
+    }
     Ok(())
 }
 
@@ -137,10 +192,17 @@ mod tests {
     use super::*;
     use crate::runtime::db::Db;
 
+    fn init_test_events() {
+        // In tests the OnceLock may already be set from a prior test in the
+        // same process; ignore the error.
+        let _ = EVENT_TX.set(crate::oi::events::new_event_channel());
+    }
+
     // i[verify fault.record]
     #[test]
     fn file_and_list_fault() {
         let db = Db::open_in_memory().expect("open");
+        init_test_events();
         let id = file_fault(
             &db,
             "myapp",
@@ -166,6 +228,7 @@ mod tests {
     #[test]
     fn file_fault_with_resource_fields() {
         let db = Db::open_in_memory().expect("open");
+        init_test_events();
         let id = file_fault(
             &db,
             "myapp",
@@ -189,10 +252,11 @@ mod tests {
     #[test]
     fn clear_fault_sets_cleared_at() {
         let db = Db::open_in_memory().expect("open");
+        init_test_events();
         let id =
             file_fault(&db, "myapp", None, None, None, "script_error", "err").expect("file_fault");
 
-        clear_fault(&db, &id).expect("clear");
+        clear_fault(&db, &id, "myapp").expect("clear");
 
         let active = list_active_faults(&db, Some("myapp")).expect("list");
         assert!(active.is_empty());
@@ -202,6 +266,7 @@ mod tests {
     #[test]
     fn clear_faults_by_kind_clears_matching() {
         let db = Db::open_in_memory().expect("open");
+        init_test_events();
         file_fault(&db, "myapp", None, None, None, "script_error", "err1").expect("file1");
         file_fault(&db, "myapp", None, None, None, "script_error", "err2").expect("file2");
         file_fault(
@@ -227,6 +292,7 @@ mod tests {
     #[test]
     fn list_active_faults_filters_by_app() {
         let db = Db::open_in_memory().expect("open");
+        init_test_events();
         file_fault(&db, "app-a", None, None, None, "script_error", "a err").expect("file a");
         file_fault(&db, "app-b", None, None, None, "script_error", "b err").expect("file b");
 
@@ -242,11 +308,12 @@ mod tests {
     #[test]
     fn list_active_faults_excludes_cleared() {
         let db = Db::open_in_memory().expect("open");
+        init_test_events();
         let id =
             file_fault(&db, "myapp", None, None, None, "script_error", "err").expect("file_fault");
         file_fault(&db, "myapp", None, None, None, "other", "still active").expect("file2");
 
-        clear_fault(&db, &id).expect("clear");
+        clear_fault(&db, &id, "myapp").expect("clear");
 
         let faults = list_active_faults(&db, None).expect("list");
         assert_eq!(faults.len(), 1);
@@ -256,6 +323,7 @@ mod tests {
     #[test]
     fn clear_all_faults_for_app_clears_only_that_app() {
         let db = Db::open_in_memory().expect("open");
+        init_test_events();
         file_fault(&db, "app-a", None, None, None, "script_error", "a err").expect("a");
         file_fault(
             &db,
@@ -281,18 +349,20 @@ mod tests {
     #[test]
     fn has_active_faults_reflects_state() {
         let db = Db::open_in_memory().expect("open");
+        init_test_events();
         assert!(!has_active_faults(&db, "myapp").expect("check"));
 
         let id = file_fault(&db, "myapp", None, None, None, "script_error", "err").expect("file");
         assert!(has_active_faults(&db, "myapp").expect("check"));
 
-        clear_fault(&db, &id).expect("clear");
+        clear_fault(&db, &id, "myapp").expect("clear");
         assert!(!has_active_faults(&db, "myapp").expect("check"));
     }
 
     #[test]
     fn count_active_faults_counts_all_apps() {
         let db = Db::open_in_memory().expect("open");
+        init_test_events();
         assert_eq!(count_active_faults(&db).expect("count"), 0);
 
         file_fault(&db, "app-a", None, None, None, "err", "a").expect("a");
@@ -301,5 +371,52 @@ mod tests {
 
         clear_all_faults_for_app(&db, "app-a").expect("clear");
         assert_eq!(count_active_faults(&db).expect("count"), 1);
+    }
+
+    // i[verify fault.derived]
+    #[test]
+    fn file_fault_emits_fault_filed_event() {
+        let db = Db::open_in_memory().expect("open");
+        init_test_events();
+        let mut rx = EVENT_TX.get().unwrap().subscribe();
+
+        file_fault(&db, "myapp", None, None, None, "script_error", "boom").expect("file");
+
+        let ev = rx.try_recv().expect("should have received FaultFiled");
+        match ev {
+            crate::oi::events::OiEvent::FaultFiled {
+                app,
+                kind,
+                description,
+                ..
+            } => {
+                assert_eq!(app, "myapp");
+                assert_eq!(kind, "script_error");
+                assert_eq!(description, "boom");
+            }
+            other => panic!("expected FaultFiled, got {other:?}"),
+        }
+    }
+
+    // i[verify fault.derived]
+    #[test]
+    fn clear_fault_emits_fault_cleared_event() {
+        let db = Db::open_in_memory().expect("open");
+        init_test_events();
+        let mut rx = EVENT_TX.get().unwrap().subscribe();
+
+        let id = file_fault(&db, "myapp", None, None, None, "script_error", "boom").expect("file");
+        let _ = rx.try_recv(); // consume FaultFiled
+
+        clear_fault(&db, &id, "myapp").expect("clear");
+
+        let ev = rx.try_recv().expect("should have received FaultCleared");
+        match ev {
+            crate::oi::events::OiEvent::FaultCleared { id: eid, app, .. } => {
+                assert_eq!(eid, id);
+                assert_eq!(app, "myapp");
+            }
+            other => panic!("expected FaultCleared, got {other:?}"),
+        }
     }
 }
