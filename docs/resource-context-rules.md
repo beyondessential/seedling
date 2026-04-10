@@ -29,6 +29,27 @@ Resources in BSL are either **static** or **dynamic** depending on where they ar
 | `ExternalService` | ✓ reference | ✓ reference | ✗ error | ✗ error |
 | `ExternalVolume` | ✓ reference | ✓ reference | ✗ error | ✗ error |
 
+### References are frozen
+
+Named resources returned in the dynamic context are **frozen references**. Calling any
+builder method (`.image()`, `.env()`, `.scale()`, `.write()`, etc.) on a frozen reference
+is a script error. This prevents action closures from silently mutating the production
+resource configuration through shared internal state.
+
+To use a resource with modified configuration inside an action, create an anonymous
+resource instead:
+
+```rhai
+app.on_action("migrate", |rt| {
+    // ✗ Error: cannot modify a static resource reference
+    // app.deployment("web").image("new-image");
+
+    // ✓ Create a fresh anonymous deployment with the desired config
+    let helper = app.deployment().image("helper-image:latest");
+    rt.start(helper);
+});
+```
+
 ### Notes
 
 - **Services are allowed as anonymous dynamic resources** because they serve as the
