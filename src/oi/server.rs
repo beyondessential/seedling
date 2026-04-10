@@ -224,6 +224,32 @@ async fn handle_bidi_stream(
         .and_then(|m| m.as_str())
         .map(str::to_owned);
 
+    // i[event.subscribe]
+    if maybe_method.as_deref() == Some("Subscribe") {
+        // Send the response on the bidi stream first.
+        let response = serde_json::to_vec(&serde_json::json!({ "result": {} }))
+            .expect("response serialisation never fails");
+        if let Err(e) = send.write_all(&response).await {
+            tracing::warn!("subscribe: write error: {e}");
+            return;
+        }
+        let _ = send.finish();
+
+        // i[stream.events]
+        // Open a server-initiated unidirectional stream and push events.
+        let uni = match conn.open_uni().await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("subscribe: open_uni failed: {e}");
+                return;
+            }
+        };
+
+        let rx = state.event_tx.subscribe();
+        tokio::spawn(event_stream_task(uni, rx));
+        return;
+    }
+
     if maybe_method.as_deref() == Some("OpenShell") {
         open_shell_session(conn, send, recv, leftover, line, state).await;
         return;
@@ -1149,4 +1175,37 @@ async fn udp_relay_task(
             }
         }
     }
+}
+
+// i[stream.events]
+// i[event.ordering]
+async fn event_stream_task(
+    mut send: quinn::SendStream,
+    mut rx: tokio::sync::broadcast::Receiver<crate::oi::events::OiEvent>,
+) {
+    loop {
+        match rx.recv().await {
+            Ok(event) => {
+                let mut bytes = match serde_json::to_vec(&event) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        tracing::warn!("event serialisation error: {e}");
+                        continue;
+                    }
+                };
+                bytes.push(b'\n');
+                if let Err(e) = send.write_all(&bytes).await {
+                    tracing::debug!("event stream closed: {e}");
+                    break;
+                }
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                tracing::warn!("event subscriber lagged, dropped {n} events");
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                break;
+            }
+        }
+    }
+    let _ = send.finish();
 }
