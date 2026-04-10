@@ -24,6 +24,7 @@ use crate::{
         barrier::oracle::derive_lifecycle_state,
         db::Db,
         desired::{DesiredState, compute, compute_uninstalling},
+        faults,
         history::{find_instances_for_group, insert_observation, query_observations},
         identity::InstanceId,
         lifecycle::LifecycleState,
@@ -199,6 +200,8 @@ impl Reconciler {
             )
             .await;
 
+            // r[fault.image-pull]
+            self.file_image_pull_faults(&app.name, &pod_update);
             self.persist_obs(pod_update.observations);
             running_pods_by_app.insert(app.name.clone(), pod_update.running);
         }
@@ -418,6 +421,58 @@ impl Reconciler {
         self.emit_state_changes(&apps);
 
         true
+    }
+
+    // r[fault.image-pull]
+    fn file_image_pull_faults(&self, app: &str, update: &pods::PodActuationUpdate) {
+        let db = self.db.lock();
+        for (instance, reference) in &update.image_pull_failures {
+            let inst_hex = instance.id.to_hex();
+            let kind_str = format!("{:?}", instance.kind).to_lowercase();
+            let already_filed = faults::list_active_faults(&db, Some(app))
+                .unwrap_or_default()
+                .iter()
+                .any(|f| {
+                    f.kind == "image_pull_failed" && f.instance_id.as_deref() == Some(&inst_hex)
+                });
+            if !already_filed {
+                let desc = format!("failed to pull image: {reference}");
+                if let Ok(id) = faults::file_fault(
+                    &db,
+                    app,
+                    Some(&kind_str),
+                    instance.name.as_deref(),
+                    Some(&inst_hex),
+                    "image_pull_failed",
+                    &desc,
+                ) {
+                    crate::oi::events::fault_filed(
+                        &self.event_tx,
+                        &id,
+                        app,
+                        Some(&kind_str),
+                        instance.name.as_deref(),
+                        Some(&inst_hex),
+                        "image_pull_failed",
+                        &desc,
+                    );
+                }
+            }
+        }
+        for (instance, _reference) in &update.image_pull_successes {
+            let inst_hex = instance.id.to_hex();
+            let cleared: Vec<_> = faults::list_active_faults(&db, Some(app))
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|f| {
+                    f.kind == "image_pull_failed" && f.instance_id.as_deref() == Some(&inst_hex)
+                })
+                .collect();
+            for f in cleared {
+                let _ = faults::clear_fault(&db, &f.id);
+                crate::oi::events::fault_cleared(&self.event_tx, &f.id, app);
+            }
+        }
     }
 
     fn emit_state_changes(&mut self, apps: &[AppSnapshot]) {

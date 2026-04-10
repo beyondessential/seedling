@@ -18,6 +18,10 @@ use super::RunningPod;
 pub(super) struct PodActuationUpdate {
     pub running: Vec<RunningPod>,
     pub observations: Vec<(ResourceInstance, &'static str, serde_json::Value)>,
+    /// Instances whose image pull failed this tick, with the image reference.
+    pub image_pull_failures: Vec<(ResourceInstance, String)>,
+    /// Instances whose image pull succeeded this tick (or was already present).
+    pub image_pull_successes: Vec<(ResourceInstance, String)>,
 }
 
 // r[observe.deployment]
@@ -33,6 +37,8 @@ pub(super) async fn observe_and_actuate(
 ) -> PodActuationUpdate {
     let mut running = Vec::new();
     let mut observations: Vec<(ResourceInstance, &'static str, serde_json::Value)> = Vec::new();
+    let mut image_pull_failures: Vec<(ResourceInstance, String)> = Vec::new();
+    let mut image_pull_successes: Vec<(ResourceInstance, String)> = Vec::new();
 
     for dr in &desired.resources {
         match &dr.definition {
@@ -103,9 +109,29 @@ pub(super) async fn observe_and_actuate(
         // Decide and actuate.
         match dr.desired {
             LifecycleState::Ready if !is_running => {
+                let image_ref = match &dr.definition {
+                    Resource::Deployment(dep) => {
+                        dep.def.lock().pod.lock().container.lock().image.clone()
+                    }
+                    Resource::Job(job) => job.def.lock().pod.lock().container.lock().image.clone(),
+                    _ => None,
+                };
                 match actuator.start(&dr.instance, &dr.definition).await {
-                    Ok(Some(_)) => {}
-                    Ok(None) => {}
+                    Ok(Some(_)) | Ok(None) => {
+                        if let Some(img) = image_ref {
+                            image_pull_successes.push((dr.instance.clone(), img));
+                        }
+                    }
+                    Err(crate::system::actuator::ActuateError::ImageUnavailable {
+                        ref reference,
+                    }) => {
+                        error!(
+                            instance = %dr.instance.display_name,
+                            image = %reference,
+                            "pods: image pull failed"
+                        );
+                        image_pull_failures.push((dr.instance.clone(), reference.clone()));
+                    }
                     Err(e) => {
                         error!(
                             instance = %dr.instance.display_name,
@@ -135,5 +161,7 @@ pub(super) async fn observe_and_actuate(
     PodActuationUpdate {
         running,
         observations,
+        image_pull_failures,
+        image_pull_successes,
     }
 }

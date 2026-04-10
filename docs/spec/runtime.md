@@ -336,6 +336,10 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - A container repeatedly terminates shortly after starting and backoff has been exhausted.
 > - A resource cannot be created due to a persistent external condition.
 
+> r[fault.image-pull]
+> When the reconciler fails to pull a container image required by a resource instance, it must file a fault of kind `image_pull_failed` associated with that instance.
+> The fault is cleared automatically when a subsequent pull of the same image succeeds.
+
 > r[fault.surfacing]
 > Faults must be surfaced to operators through the operator interface (defined in a separate spec).
 > The runtime must not silently discard faults.
