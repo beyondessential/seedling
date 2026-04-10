@@ -53,6 +53,7 @@ pub struct OiState {
     /// Node-wide /48 IPv6 prefix, used to derive pod network addresses for
     /// shell session containers.
     pub node_prefix: ipnet::Ipv6Net,
+    pub event_tx: crate::oi::events::EventSender,
 }
 
 // ---------------------------------------------------------------------------

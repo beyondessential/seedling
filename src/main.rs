@@ -177,6 +177,8 @@ async fn main() {
     // OI server
     // ---------------------------------------------------------------------------
 
+    let event_tx = seedling::oi::events::new_event_channel();
+
     let oi_state = Arc::new(OiState {
         registry: Arc::clone(&registry),
         spki_fingerprint: std::sync::OnceLock::new(),
@@ -190,6 +192,7 @@ async fn main() {
         forwards: seedling::oi::forwards::ForwardRegistry::new(),
         container_runtime: Arc::clone(&driver.container),
         node_prefix,
+        event_tx: event_tx.clone(),
     });
 
     let (_fingerprint, oi_endpoint) = oi::run(Arc::clone(&oi_state), oi::DEFAULT_PORT, &data_dir)

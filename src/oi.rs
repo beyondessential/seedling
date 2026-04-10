@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod client;
 pub mod error;
+pub mod events;
 pub mod forwards;
 pub mod handler;
 pub mod keys;
