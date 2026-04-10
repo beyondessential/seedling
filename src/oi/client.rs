@@ -263,10 +263,11 @@ impl OiClient {
             ClientAuth::TrustAny => Arc::new(TrustAnyVerifier),
         };
 
-        let tls_config = TlsClientConfig::builder()
+        let mut tls_config = TlsClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(verifier)
             .with_client_cert_resolver(build_client_cert_resolver(identity)?);
+        tls_config.key_log = Arc::new(rustls::KeyLogFile::new());
 
         let quic_config = quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
             .map_err(|e| ClientError::Connect(Box::new(e)))?;
@@ -400,10 +401,11 @@ impl OiClient {
             cell: Arc::clone(&cell),
         });
 
-        let tls_config = TlsClientConfig::builder()
+        let mut tls_config = TlsClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(verifier)
             .with_client_cert_resolver(build_client_cert_resolver(identity)?);
+        tls_config.key_log = Arc::new(rustls::KeyLogFile::new());
 
         let quic_config = quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
             .map_err(|e| ClientError::Connect(Box::new(e)))?;

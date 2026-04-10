@@ -236,6 +236,10 @@ async fn main() {
         .install_default()
         .expect("ring crypto provider already installed");
 
+    if std::env::var_os("SSLKEYLOGFILE").is_some() {
+        tracing::warn!("SSLKEYLOGFILE is set — TLS session keys are being logged to disk");
+    }
+
     // Load (or generate) the client identity early; PrintFingerprint needs it
     // before any server connection is attempted.
     let key_path = ClientIdentity::default_path();

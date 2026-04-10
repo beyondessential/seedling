@@ -38,9 +38,11 @@ fn build_tls_config(
 
     let client_verifier = Arc::new(SeedlingClientVerifier { trusted });
 
-    let tls_config = TlsServerConfig::builder()
+    let mut tls_config = TlsServerConfig::builder()
         .with_client_cert_verifier(client_verifier)
         .with_cert_resolver(resolver);
+
+    tls_config.key_log = Arc::new(rustls::KeyLogFile::new());
 
     Ok(tls_config)
 }
@@ -104,6 +106,10 @@ pub async fn run(
 
     let addr: SocketAddr = format!("[::1]:{port}").parse().unwrap();
     let endpoint = Endpoint::server(server_config, addr)?;
+
+    if std::env::var_os("SSLKEYLOGFILE").is_some() {
+        tracing::warn!("SSLKEYLOGFILE is set — TLS session keys are being logged to disk");
+    }
 
     tracing::info!("OI listening on {}", endpoint.local_addr()?);
 
