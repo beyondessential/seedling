@@ -576,6 +576,7 @@ fn register_app(state: &OiState, params: Value) -> HandlerResult {
     }
 
     tracing::info!(app = %name, "registered app");
+    crate::oi::events::app_registered(&state.event_tx, name);
     Ok(json!({}))
 }
 
@@ -640,6 +641,7 @@ fn deregister_app(state: &OiState, params: Value) -> HandlerResult {
     state.registry.write().deregister(name);
 
     tracing::info!(app = %name, "deregistered app");
+    crate::oi::events::app_deregistered(&state.event_tx, name);
     Ok(json!({}))
 }
 
@@ -771,6 +773,7 @@ fn update_app(state: &OiState, params: Value) -> HandlerResult {
     }
 
     tracing::info!(app = %name, "updated app");
+    crate::oi::events::app_updated(&state.event_tx, name);
     Ok(json!({}))
 }
 
@@ -1277,9 +1280,12 @@ fn spawn_accepted_operation(
         }
     };
     let db_path = state.db_path.clone();
+    let event_tx = state.event_tx.clone();
     let is_install = action_name == "install";
 
     tokio::spawn(async move {
+        crate::oi::events::operation_started(&event_tx, &app_name, &action_name, &operation_id.0);
+        let event_tx_bl = event_tx.clone();
         let app_name_bl = app_name.clone();
         let action_name_bl = action_name.clone();
         let active_progress_bl = Arc::clone(&active_progress);
@@ -1349,11 +1355,26 @@ fn spawn_accepted_operation(
                     &mut scope,
                 );
                 match result {
-                    OperationResult::Completed => return true,
+                    OperationResult::Completed => {
+                        crate::oi::events::operation_completed(
+                            &event_tx_bl,
+                            &app_name_bl,
+                            &action_name_bl,
+                            &operation_id.0,
+                        );
+                        return true;
+                    }
                     OperationResult::Failed(e) => {
                         tracing::error!(
                             app = %app_name_bl, action = %action_name_bl,
                             "operation failed: {e}"
+                        );
+                        crate::oi::events::operation_failed(
+                            &event_tx_bl,
+                            &app_name_bl,
+                            &action_name_bl,
+                            &operation_id.0,
+                            &e.to_string(),
                         );
                         return false;
                     }
