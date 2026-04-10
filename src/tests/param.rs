@@ -236,6 +236,7 @@ fn param_used_in_closure_captures_injected_value() {
             tick_notify: None,
             install_requirements: None,
             is_shell: false,
+            db: None,
         },
         &mut scope,
     );
@@ -280,6 +281,7 @@ fn on_change_inside_action_closure_throws() {
             tick_notify: None,
             install_requirements: None,
             is_shell: false,
+            db: None,
         },
         &mut scope,
     );
