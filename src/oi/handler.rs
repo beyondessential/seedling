@@ -623,6 +623,11 @@ fn deregister_app(state: &OiState, params: Value) -> HandlerResult {
             .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db param cleanup: {e}")))?;
     }
 
+    {
+        let db = state.db.lock();
+        let _ = crate::runtime::faults::clear_all_faults_for_app(&db, name);
+    }
+
     // Remove from in-memory registry.
     state.registry.write().deregister(name);
 
@@ -709,6 +714,13 @@ fn update_app(state: &OiState, params: Value) -> HandlerResult {
             .registry
             .write()
             .reload(name, script.to_owned(), &loaded_params);
+        {
+            let reg = state.registry.read();
+            if let Some(entry) = reg.get(name) {
+                let db = state.db.lock();
+                crate::runtime::apps::sync_script_error_fault(&db, entry);
+            }
+        }
         // Wake reconciler to pick up new desired state.
         if let Some(entry) = state.registry.read().get(name) {
             entry.tick_notify.notify_one();
@@ -799,6 +811,14 @@ fn set_param(state: &OiState, params: Value) -> HandlerResult {
     };
     state.registry.write().reload(app, script, &loaded_params);
 
+    {
+        let reg = state.registry.read();
+        if let Some(entry) = reg.get(app) {
+            let db = state.db.lock();
+            crate::runtime::apps::sync_script_error_fault(&db, entry);
+        }
+    }
+
     let (has_on_change, is_installed, tick_notify) = {
         let reg = state.registry.read();
         let entry = reg.get(app).expect("confirmed registered");
@@ -881,6 +901,14 @@ fn unset_param(state: &OiState, params: Value) -> HandlerResult {
             .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?
     };
     state.registry.write().reload(app, script, &loaded_params);
+
+    {
+        let reg = state.registry.read();
+        if let Some(entry) = reg.get(app) {
+            let db = state.db.lock();
+            crate::runtime::apps::sync_script_error_fault(&db, entry);
+        }
+    }
 
     let (has_on_change, is_installed, tick_notify) = {
         let reg = state.registry.read();
