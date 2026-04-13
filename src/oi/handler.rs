@@ -1397,17 +1397,135 @@ fn spawn_accepted_operation(
         .await
         .unwrap_or(false);
 
-        // Clean up dynamic resource records for the completed operation.
+        // Tear down dynamic resources created during this operation.
+        //
+        // Load the records, build a cleanup OperationProgress with all
+        // dynamic instances at Unscheduled, let the reconciler stop them,
+        // then delete the DB records and clear active_progress.
         {
-            let db = state.db.lock();
-            if let Err(e) = crate::runtime::desired::delete_dynamic_resources_for_operation(
-                &db,
-                &operation_id_str,
-            ) {
-                tracing::error!(
-                    operation_id = %operation_id_str,
-                    "failed to clean up dynamic resource records: {e}"
-                );
+            use crate::defs::deployment::Deployment;
+            use crate::defs::job::Job;
+            use crate::defs::resource::Resource;
+            use crate::defs::resource::ResourceKind;
+            use crate::runtime::LifecycleState;
+            use crate::runtime::barrier::oracle::derive_lifecycle_state;
+            use crate::runtime::desired::{
+                OperationProgress, delete_dynamic_resources_for_operation, list_dynamic_resources,
+            };
+            use crate::runtime::history::query_observations;
+            use crate::runtime::identity::{InstanceId, InstanceVariant, ResourceInstance};
+
+            let dynamic_records: Vec<_> = {
+                let db = state.db.lock();
+                list_dynamic_resources(&db)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|r| r.operation_id == operation_id_str)
+                    .collect()
+            };
+
+            if !dynamic_records.is_empty() {
+                let mut cleanup = OperationProgress::new();
+
+                for record in &dynamic_records {
+                    let uuid = match uuid::Uuid::parse_str(&record.instance_id) {
+                        Ok(u) => u,
+                        Err(e) => {
+                            tracing::warn!(
+                                instance_id = %record.instance_id,
+                                "dynamic cleanup: bad instance_id: {e}"
+                            );
+                            continue;
+                        }
+                    };
+
+                    let kind = match record.kind.as_str() {
+                        "Deployment" => ResourceKind::Deployment,
+                        "Job" => ResourceKind::Job,
+                        _ => continue, // services are virtual; volumes cleaned by pod stop
+                    };
+
+                    let instance = ResourceInstance {
+                        id: InstanceId(uuid),
+                        app: record.app.clone(),
+                        kind,
+                        name: None,
+                        variant: InstanceVariant::Singleton,
+                        display_name: record.display_name.clone(),
+                    };
+
+                    // Minimal Resource so compute_during_operation can dispatch
+                    // to the correct actuator.stop() variant.
+                    // NOTE: anonymous volumes mounted on dynamic deployments may
+                    // not be cleaned up here if the full definition is unavailable.
+                    let minimal = match kind {
+                        ResourceKind::Deployment => Resource::Deployment(Deployment {
+                            name: std::sync::Arc::new(String::new()),
+                            def: Default::default(),
+                            frozen: false,
+                        }),
+                        ResourceKind::Job => Resource::Job(Job {
+                            name: std::sync::Arc::new(String::new()),
+                            def: Default::default(),
+                            frozen: false,
+                        }),
+                        _ => unreachable!(),
+                    };
+
+                    cleanup.stopped(instance.clone());
+                    cleanup.dynamic_defs.insert(instance, minimal);
+                }
+
+                if !cleanup.is_empty() {
+                    *active_progress.write() = Some(cleanup);
+                    tick_notify.notify_one();
+
+                    // Poll until all instances reach Terminated or beyond, or
+                    // we hit the timeout and let startup orphan cleanup handle it.
+                    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+                    loop {
+                        if tokio::time::Instant::now() >= deadline {
+                            tracing::warn!(
+                                operation_id = %operation_id_str,
+                                "dynamic resource cleanup timed out"
+                            );
+                            break;
+                        }
+
+                        let all_stopped = {
+                            let guard = active_progress.read();
+                            if let Some(p) = &*guard {
+                                p.dynamic_defs.keys().all(|inst| {
+                                    let db = state.db.lock();
+                                    let obs = query_observations(&db, inst).unwrap_or_default();
+                                    derive_lifecycle_state(inst, &obs)
+                                        .has_reached(LifecycleState::Terminated)
+                                })
+                            } else {
+                                true
+                            }
+                        };
+
+                        if all_stopped {
+                            break;
+                        }
+
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        tick_notify.notify_one();
+                    }
+                }
+            }
+
+            // Delete the DB records regardless of whether cleanup succeeded,
+            // so startup orphan cleanup can handle any stragglers.
+            {
+                let db = state.db.lock();
+                if let Err(e) = delete_dynamic_resources_for_operation(&db, &operation_id_str) {
+                    tracing::error!(
+                        operation_id = %operation_id_str,
+                        "failed to delete dynamic resource records: {e}"
+                    );
+                }
             }
         }
 

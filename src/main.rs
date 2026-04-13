@@ -118,6 +118,86 @@ async fn main() {
     let scheduler = Arc::new(Mutex::new(Scheduler::new()));
 
     // ---------------------------------------------------------------------------
+    // Startup orphan cleanup — remove dynamic resources left by a previous run
+    // ---------------------------------------------------------------------------
+
+    {
+        let db = db.lock();
+        match seedling::runtime::desired::list_dynamic_resources(&db) {
+            Ok(records) if !records.is_empty() => {
+                tracing::warn!(
+                    count = records.len(),
+                    "found orphaned dynamic resources from a previous run; cleaning up"
+                );
+                for record in &records {
+                    // Stop any lingering systemd unit for this instance.
+                    let unit = format!("seedling-{}.service", record.display_name);
+                    tracing::info!(
+                        instance = %record.display_name,
+                        kind = %record.kind,
+                        operation_id = %record.operation_id,
+                        "cleaning up orphaned dynamic resource"
+                    );
+                    // The actual container/unit stop will be handled by the
+                    // reconciler on the first tick — it won't see these in the
+                    // desired state and will ignore them. For systemd units that
+                    // are still loaded, reset them so they don't linger.
+                    let driver_ref = Arc::clone(&driver);
+                    let unit_name = unit.clone();
+                    tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current().block_on(async {
+                            if let Ok(Some(_)) = driver_ref.process.unit_state(&unit_name).await {
+                                let _ = driver_ref.process.stop_unit(&unit_name).await;
+                                let _ = driver_ref.process.reset_failed_unit(&unit_name).await;
+                            }
+                        });
+                    });
+
+                    // Remove the pod network if it exists.
+                    let net_name = format!("seedling-{}", record.display_name);
+                    let driver_ref = Arc::clone(&driver);
+                    tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current().block_on(async {
+                            if driver_ref
+                                .container
+                                .network_exists(&net_name)
+                                .await
+                                .unwrap_or(false)
+                            {
+                                let _ = driver_ref.container.remove_network(&net_name).await;
+                            }
+                        });
+                    });
+
+                    // Force-remove the container if it outlived the unit.
+                    let display = record.display_name.clone();
+                    let driver_ref = Arc::clone(&driver);
+                    tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current().block_on(async {
+                            let _ = driver_ref.container.remove_container(&display, true).await;
+                        });
+                    });
+                }
+
+                if let Err(e) =
+                    seedling::runtime::desired::delete_dynamic_resources_for_operation(&db, "")
+                {
+                    // delete_dynamic_resources_for_operation with "" won't match.
+                    // Use a direct DELETE all instead.
+                    let _ = e;
+                }
+                // Clear all orphaned records.
+                let _ = db.conn.execute("DELETE FROM dynamic_resources", []);
+                tracing::info!("orphaned dynamic resource cleanup complete");
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!("failed to check for orphaned dynamic resources: {e}");
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------------
     // Global reconciler
     // ---------------------------------------------------------------------------
 
