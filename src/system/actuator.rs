@@ -1,7 +1,4 @@
-use std::{
-    collections::{BTreeMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::BTreeMap, sync::Arc, time::Instant};
 
 use ipnet::Ipv6Net;
 use parking_lot::Mutex;
@@ -136,12 +133,32 @@ fn collect_container_volumes(
 // Actuator
 // ---------------------------------------------------------------------------
 
+/// Maximum number of pull attempts per image before giving up until the next
+/// reconciler restart.
+const MAX_PULL_ATTEMPTS: u32 = 5;
+
+/// If a pull task has not completed after this duration, assume it is stuck
+/// (hung podman, panicked task) and allow a fresh attempt.
+const PULL_STALE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+struct PullState {
+    started_at: Instant,
+    attempts: u32,
+    /// `true` while the background tokio task is still running.
+    /// Set to `false` on completion (success or failure) so the next tick
+    /// can decide to retry without waiting for the stale timeout.
+    in_flight: bool,
+    /// Set once `attempts` exceeds `MAX_PULL_ATTEMPTS`. Prevents the
+    /// "exceeded max attempts" error from being logged every tick.
+    exhausted: bool,
+}
+
 pub struct Actuator {
     driver: Arc<System>,
     node_prefix: Ipv6Net,
     registry: Arc<dyn InstanceRegistry>,
-    /// Images currently being pulled in background tasks.
-    pulling: Arc<Mutex<HashSet<String>>>,
+    /// Images currently being pulled or that have exhausted retries.
+    pulling: Arc<Mutex<std::collections::HashMap<String, PullState>>>,
 }
 
 async fn ensure_volumes(driver: &System, volumes: &[ContainerVolume]) -> Result<(), ActuateError> {
@@ -223,7 +240,7 @@ impl Actuator {
             driver,
             node_prefix,
             registry,
-            pulling: Arc::new(Mutex::new(HashSet::new())),
+            pulling: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -507,18 +524,74 @@ impl Actuator {
             .map_err(|e| ActuateError::Container { source: e })?
         {
             let mut pulling = self.pulling.lock();
-            if !pulling.contains(image) {
-                pulling.insert(image.to_owned());
-                let driver = Arc::clone(&self.driver);
-                let image_owned = image.to_owned();
-                let pulling_set = Arc::clone(&self.pulling);
-                tokio::spawn(async move {
-                    let result = driver.container.pull_image(&image_owned).await;
-                    pulling_set.lock().remove(&image_owned);
-                    if let Err(e) = result {
-                        tracing::warn!(image = %image_owned, error = %e, "background image pull failed");
-                    }
-                });
+            let should_spawn = match pulling.get(image) {
+                None => true,
+                Some(state) if state.exhausted => false,
+                Some(state) if !state.in_flight => {
+                    // Previous attempt finished (failed); retry immediately.
+                    true
+                }
+                Some(state) if state.started_at.elapsed() >= PULL_STALE_TIMEOUT => {
+                    tracing::warn!(
+                        image = %image,
+                        elapsed = ?state.started_at.elapsed(),
+                        attempts = state.attempts,
+                        "in-flight image pull appears stale, resubmitting"
+                    );
+                    true
+                }
+                Some(_) => false,
+            };
+            if should_spawn {
+                let attempts = pulling.get(image).map(|s| s.attempts + 1).unwrap_or(1);
+                if attempts > MAX_PULL_ATTEMPTS {
+                    tracing::error!(
+                        image = %image,
+                        attempts = attempts - 1,
+                        "image pull exceeded max attempts, giving up"
+                    );
+                    pulling.insert(
+                        image.to_owned(),
+                        PullState {
+                            started_at: Instant::now(),
+                            attempts,
+                            in_flight: false,
+                            exhausted: true,
+                        },
+                    );
+                } else {
+                    pulling.insert(
+                        image.to_owned(),
+                        PullState {
+                            started_at: Instant::now(),
+                            attempts,
+                            in_flight: true,
+                            exhausted: false,
+                        },
+                    );
+                    let driver = Arc::clone(&self.driver);
+                    let image_owned = image.to_owned();
+                    let pulling_map = Arc::clone(&self.pulling);
+                    tokio::spawn(async move {
+                        let result = driver.container.pull_image(&image_owned).await;
+                        let mut map = pulling_map.lock();
+                        if let Err(e) = result {
+                            tracing::warn!(
+                                image = %image_owned,
+                                error = %e,
+                                "background image pull failed"
+                            );
+                            // Mark as no longer in-flight so the next tick
+                            // retries immediately instead of waiting for the
+                            // stale timeout.
+                            if let Some(state) = map.get_mut(&image_owned) {
+                                state.in_flight = false;
+                            }
+                        } else {
+                            map.remove(&image_owned);
+                        }
+                    });
+                }
             }
             return Err(ActuateError::ImageUnavailable {
                 reference: image.to_owned(),
