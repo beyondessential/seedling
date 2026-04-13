@@ -104,6 +104,112 @@ fn deployment_on_terminate_recreate() {
     }
 }
 
+// l[verify deployment.scale.max-lower-bound]
+#[test]
+fn scale_fixed_rejects_above_10() {
+    let _ = run_test_script_err(
+        r#"
+        app.deployment("web").scale(11);
+    "#,
+    );
+}
+
+// l[verify deployment.scale.max-lower-bound]
+#[test]
+fn scale_fixed_accepts_10() {
+    let app = run_test_script_app(
+        r#"
+        app.deployment("web").scale(10);
+    "#,
+    );
+    let def = app.def.lock();
+    let id = def
+        .resources
+        .keys()
+        .find(|id| id.kind == ResourceKind::Deployment && &*id.name == "web")
+        .unwrap();
+    if let defs::resource::Resource::Deployment(dep) = &def.resources[id] {
+        let dep_def = dep.def.lock();
+        assert_eq!(dep_def.scale, 10..10);
+    } else {
+        panic!("expected Deployment");
+    }
+}
+
+// l[verify deployment.scale.max-lower-bound]
+#[test]
+fn scale_range_lower_bound_rejects_above_10() {
+    let _ = run_test_script_err(
+        r#"
+        app.deployment("web").scale(11..20);
+    "#,
+    );
+}
+
+// l[verify deployment.scale.max-lower-bound]
+#[test]
+fn scale_range_lower_bound_accepts_10() {
+    let app = run_test_script_app(
+        r#"
+        app.deployment("web").scale(10..20);
+    "#,
+    );
+    let def = app.def.lock();
+    let id = def
+        .resources
+        .keys()
+        .find(|id| id.kind == ResourceKind::Deployment && &*id.name == "web")
+        .unwrap();
+    if let defs::resource::Resource::Deployment(dep) = &def.resources[id] {
+        let dep_def = dep.def.lock();
+        assert_eq!(dep_def.scale, 10..20);
+    } else {
+        panic!("expected Deployment");
+    }
+}
+
+// l[verify deployment.scale]
+#[test]
+fn scale_fixed_rejects_zero() {
+    let _ = run_test_script_err(
+        r#"
+        app.deployment("web").scale(0);
+    "#,
+    );
+}
+
+// l[verify deployment.scale]
+#[test]
+fn scale_fixed_rejects_negative() {
+    let _ = run_test_script_err(
+        r#"
+        app.deployment("web").scale(-1);
+    "#,
+    );
+}
+
+// l[verify deployment.scale]
+#[test]
+fn scale_range_allows_zero_lower_bound() {
+    let app = run_test_script_app(
+        r#"
+        app.deployment("web").scale(0..5);
+    "#,
+    );
+    let def = app.def.lock();
+    let id = def
+        .resources
+        .keys()
+        .find(|id| id.kind == ResourceKind::Deployment && &*id.name == "web")
+        .unwrap();
+    if let defs::resource::Resource::Deployment(dep) = &def.resources[id] {
+        let dep_def = dep.def.lock();
+        assert_eq!(dep_def.scale, 0..5);
+    } else {
+        panic!("expected Deployment");
+    }
+}
+
 // l[verify deployment.pod]
 #[test]
 fn deployment_implements_pod_interface() {

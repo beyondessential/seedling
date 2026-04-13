@@ -379,6 +379,9 @@ This is currently the only value.
 >
 > If a Deployment has a lower bound scale of zero it will be scheduled with zero containers initially.
 
+> l[deployment.scale.max-lower-bound]
+> The lower bound of a scale definition must not exceed 10. If a fixed scale or the lower bound of a range exceeds 10, the method must throw.
+
 > l[deployment.on-update]
 > The `deployment.on_update(strategy: OnUpdate)` builder method defines the strategy used when an update is applied to a Deployment.
 > The default is [`OnUpdate.Rolling`](#l--const.on-update.rolling).
