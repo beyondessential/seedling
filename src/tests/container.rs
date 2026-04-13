@@ -205,6 +205,109 @@ fn container_mount_external_volume() {
     );
 }
 
+// l[verify container.env.validation]
+#[test]
+fn env_rejects_path() {
+    let _ = run_test_script_err(
+        r#"
+        app.deployment("web").env("PATH", "/usr/bin");
+    "#,
+    );
+}
+
+// l[verify container.env.validation]
+#[test]
+fn env_rejects_ld_preload() {
+    let _ = run_test_script_err(
+        r#"
+        app.deployment("web").env("LD_PRELOAD", "/tmp/evil.so");
+    "#,
+    );
+}
+
+// l[verify container.env.validation]
+#[test]
+fn env_rejects_ld_library_path() {
+    let _ = run_test_script_err(
+        r#"
+        app.deployment("web").env("LD_LIBRARY_PATH", "/tmp");
+    "#,
+    );
+}
+
+// l[verify container.env.validation]
+#[test]
+fn env_rejects_ld_audit() {
+    let _ = run_test_script_err(
+        r#"
+        app.deployment("web").env("LD_AUDIT", "evil.so");
+    "#,
+    );
+}
+
+// l[verify container.env.validation]
+#[test]
+fn env_rejects_empty_name() {
+    let _ = run_test_script_err(
+        r#"
+        app.deployment("web").env("", "value");
+    "#,
+    );
+}
+
+// l[verify container.env.validation]
+#[test]
+fn env_rejects_name_starting_with_digit() {
+    let _ = run_test_script_err(
+        r#"
+        app.deployment("web").env("1BAD", "value");
+    "#,
+    );
+}
+
+// l[verify container.env.validation]
+#[test]
+fn env_rejects_name_with_special_chars() {
+    let _ = run_test_script_err(
+        r#"
+        app.deployment("web").env("MY-VAR", "value");
+    "#,
+    );
+}
+
+// l[verify container.env.validation]
+#[test]
+fn env_rejects_null_in_value() {
+    let _ = run_test_script_err(
+        r#"
+        app.deployment("web").env("GOOD_NAME", "bad\0value");
+    "#,
+    );
+}
+
+// l[verify container.env.validation]
+#[test]
+fn env_accepts_valid_names() {
+    run_test_script_app(
+        r#"
+        app.deployment("web")
+            .env("MY_VAR", "hello")
+            .env("A", "short")
+            .env("LONG_VARIABLE_NAME_123", "works");
+    "#,
+    );
+}
+
+// l[verify container.env.validation]
+#[test]
+fn env_map_form_rejects_forbidden() {
+    let _ = run_test_script_err(
+        r#"
+        app.deployment("web").env([#{ name: "LD_PRELOAD", value: "/tmp/evil.so" }]);
+    "#,
+    );
+}
+
 // l[verify container.on-exit]
 #[test]
 fn container_on_exit_strategy() {

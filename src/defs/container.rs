@@ -2,6 +2,44 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use rhai::{Array, Dynamic, EvalAltResult, TypeBuilder};
 
+const FORBIDDEN_ENV_NAMES: &[&str] = &[
+    "PATH",
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "LD_AUDIT",
+    "LD_DEBUG",
+    "LD_PROFILE",
+];
+
+// l[impl container.env.validation]
+fn validate_env_name(name: &str) -> Result<(), Box<EvalAltResult>> {
+    if name.is_empty() {
+        return Err("environment variable name must not be empty".into());
+    }
+    if name.starts_with(|c: char| c.is_ascii_digit()) {
+        return Err(
+            format!("environment variable name must not start with a digit: '{name}'").into(),
+        );
+    }
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(format!(
+            "environment variable name must contain only ASCII letters, digits, and underscores: '{name}'"
+        )
+        .into());
+    }
+    if FORBIDDEN_ENV_NAMES.contains(&name) {
+        return Err(format!("environment variable '{name}' is forbidden").into());
+    }
+    Ok(())
+}
+
+fn validate_env_value(value: &str) -> Result<(), Box<EvalAltResult>> {
+    if value.contains('\0') {
+        return Err("environment variable value must not contain null bytes".into());
+    }
+    Ok(())
+}
+
 use super::{
     Freezable, Holder,
     enums::OnExit,
@@ -100,6 +138,8 @@ impl ContainerDef {
                 "env",
                 move |this: &mut T, name: &str, value: &str| -> Result<T, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
+                    validate_env_name(name)?;
+                    validate_env_value(value)?;
                     let holder = ext(this);
                     let mut def = holder.lock();
                     if let Some(pos) = def.env.iter().position(|(k, _)| k == name) {
@@ -126,6 +166,8 @@ impl ContainerDef {
                                 .get("value")
                                 .and_then(|v: &Dynamic| v.clone().into_string().ok())
                                 .unwrap_or_default();
+                            validate_env_name(&name)?;
+                            validate_env_value(&value)?;
                             if let Some(pos) = def.env.iter().position(|(k, _)| k == &name) {
                                 def.env[pos].1 = value;
                             } else {

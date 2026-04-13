@@ -439,6 +439,14 @@ This is currently the only value.
 >
 > Environment variables set with the same name as previous variables override the earlier ones. That is, `.env("MANUKA", "honey").env("MANUKA", "branch")` is equivalent to `.env("MANUKA", "branch")`.
 
+> l[container.env.validation]
+> Environment variable names must be non-empty, consist only of ASCII letters, digits, and underscores, and must not start with a digit.
+>
+> The following environment variable names are forbidden and must cause the method to throw:
+> `PATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `LD_DEBUG`, `LD_PROFILE`.
+>
+> Environment variable values must not contain null bytes. If a value contains a null byte, the method must throw.
+
 > l[container.mount-volume]
 > The `container.mount(mountpoint: string, volume: Volume)` builder method binds a [volume](#l--volume.type) into the filesystem of the container at a given `mountpoint`.
 > An [External Volume](#l--volume.external) can also be used.
