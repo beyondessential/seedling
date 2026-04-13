@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io::Write, net::SocketAddr, path::PathBuf};
+use std::{io::Write, net::SocketAddr};
 
 use clap::{Parser, Subcommand};
 use lloggs::LoggingArgs;
@@ -7,10 +7,16 @@ use seedling::oi::{
     keys::ClientIdentity,
 };
 
+#[path = "ctl/apps.rs"]
+mod apps;
 #[path = "ctl/forward.rs"]
 mod forward;
 #[path = "ctl/known_hosts.rs"]
 mod known_hosts;
+#[path = "ctl/me.rs"]
+mod me;
+#[path = "ctl/op.rs"]
+mod op;
 #[path = "ctl/shell.rs"]
 mod shell;
 #[path = "ctl/subscribe.rs"]
@@ -42,84 +48,21 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Show instance status
-    Status,
-    /// List registered apps
-    ListApps,
-    /// Describe an app
-    DescribeApp { name: String },
-    /// Register an app from a script file
-    RegisterApp { name: String, script_file: PathBuf },
-    /// Deregister an app
-    DeregisterApp { name: String },
-    /// Uninstall an app (stop all resources). The app can be deregistered once done.
-    UninstallApp { name: String },
-    /// Update an app's script
-    UpdateApp { name: String, script_file: PathBuf },
-    /// Set a param value
-    SetParam {
-        app: String,
-        name: String,
-        value: String,
+    /// Manage apps
+    Apps {
+        #[command(subcommand)]
+        command: apps::AppsCommand,
     },
-    /// Unset a param value
-    UnsetParam { app: String, name: String },
-    /// Invoke a lifecycle action
-    InvokeAction { app: String, name: String },
-    /// Invoke the install action
-    InvokeInstall {
-        app: String,
-        /// Requirements as key=value
-        #[arg(long = "req")]
-        requirements: Vec<String>,
+    /// Operator view (status, faults, shells, forwards, events, users)
+    Op {
+        #[command(subcommand)]
+        command: op::OpCommand,
     },
-    /// List faults
-    ListFaults {
-        #[arg(long)]
-        app: Option<String>,
-    },
-    /// List open shell sessions
-    ListShells {
-        #[arg(long)]
-        app: Option<String>,
-    },
-    /// Stop a shell session
-    StopShell { session_id: String },
-    /// List port forwards
-    ListForwards {
-        #[arg(long)]
-        app: Option<String>,
-    },
-    /// Subscribe to event feed (streams JSON to stdout)
-    Subscribe,
-    /// Open an interactive shell session
-    OpenShell { app: String, name: String },
-    /// Forward a local port to a service
-    ForwardPort {
-        app: String,
-        service: String,
-        port: u16,
-        #[arg(long)]
-        proto: String,
-        #[arg(long)]
-        local_port: Option<u16>,
-    },
-    /// Print this client's key fingerprint (no server connection needed)
-    PrintFingerprint,
-    /// List authorized client keys on the server
-    ListKeys,
-    /// Authorize a client key on the server
-    AuthorizeKey {
-        /// Fingerprint to authorize
-        fingerprint: String,
-        /// Human-readable label for this key
-        #[arg(long)]
-        label: String,
-    },
-    /// Revoke an authorized client key on the server
-    RevokeKey {
-        /// Fingerprint to revoke
-        fingerprint: String,
+    /// Self management (fingerprint)
+    #[command(name = "self")]
+    Me {
+        #[command(subcommand)]
+        command: me::MeCommand,
     },
 }
 
@@ -161,7 +104,7 @@ async fn main() {
         tracing::warn!("SSLKEYLOGFILE is set — TLS session keys are being logged to disk");
     }
 
-    // Load (or generate) the client identity early; PrintFingerprint needs it
+    // Load (or generate) the client identity early; `self fingerprint` needs it
     // before any server connection is attempted.
     let key_path = ClientIdentity::default_path();
     let (identity, is_new) = ClientIdentity::load_or_generate(&key_path).unwrap_or_else(|e| {
@@ -179,14 +122,8 @@ async fn main() {
         );
     }
 
-    // Handle commands that don't need a server connection.
-    if let Command::PrintFingerprint = &cli.command {
-        println!("{}", identity.fingerprint);
-        eprintln!("Client key: {}", key_path.display());
-        eprintln!(
-            "\nTo bootstrap a new server, add this line to $data_dir/authorized_keys:\n  {} my-label",
-            identity.fingerprint
-        );
+    if let Command::Me { command } = &cli.command {
+        me::dispatch(command, &identity, &key_path);
         return;
     }
 
@@ -276,179 +213,14 @@ async fn main() {
         client = c;
     }
 
-    dispatch(&client, cli.command).await;
-}
-
-async fn dispatch(client: &OiClient, cmd: Command) {
-    match cmd {
-        Command::PrintFingerprint => unreachable!("handled before connect"),
-        Command::ListKeys => {
-            print_result(client.request("ListKeys", serde_json::json!({})).await);
-        }
-        Command::AuthorizeKey { fingerprint, label } => {
-            print_result(
-                client
-                    .request(
-                        "AuthorizeKey",
-                        serde_json::json!({ "fingerprint": fingerprint, "label": label }),
-                    )
-                    .await,
-            );
-        }
-        Command::RevokeKey { fingerprint } => {
-            print_result(
-                client
-                    .request(
-                        "RevokeKey",
-                        serde_json::json!({ "fingerprint": fingerprint }),
-                    )
-                    .await,
-            );
-        }
-        Command::Status => {
-            print_result(client.request("GetStatus", serde_json::json!({})).await);
-        }
-        Command::ListApps => {
-            print_result(client.request("ListApps", serde_json::json!({})).await);
-        }
-        Command::DescribeApp { name } => {
-            print_result(
-                client
-                    .request("DescribeApp", serde_json::json!({ "name": name }))
-                    .await,
-            );
-        }
-        Command::RegisterApp { name, script_file } => {
-            let script = read_script_file(&script_file);
-            print_result(
-                client
-                    .request(
-                        "RegisterApp",
-                        serde_json::json!({ "name": name, "script": script }),
-                    )
-                    .await,
-            );
-        }
-        Command::DeregisterApp { name } => {
-            print_result(
-                client
-                    .request("DeregisterApp", serde_json::json!({ "name": name }))
-                    .await,
-            );
-        }
-        Command::UninstallApp { name } => {
-            print_result(
-                client
-                    .request("UninstallApp", serde_json::json!({ "name": name }))
-                    .await,
-            );
-        }
-        Command::UpdateApp { name, script_file } => {
-            let script = read_script_file(&script_file);
-            print_result(
-                client
-                    .request(
-                        "UpdateApp",
-                        serde_json::json!({ "name": name, "script": script }),
-                    )
-                    .await,
-            );
-        }
-        Command::SetParam { app, name, value } => {
-            print_result(
-                client
-                    .request(
-                        "SetParam",
-                        serde_json::json!({ "app": app, "name": name, "value": value }),
-                    )
-                    .await,
-            );
-        }
-        Command::UnsetParam { app, name } => {
-            print_result(
-                client
-                    .request(
-                        "UnsetParam",
-                        serde_json::json!({ "app": app, "name": name }),
-                    )
-                    .await,
-            );
-        }
-        Command::InvokeAction { app, name } => {
-            print_result(
-                client
-                    .request(
-                        "InvokeAction",
-                        serde_json::json!({ "app": app, "name": name }),
-                    )
-                    .await,
-            );
-        }
-        Command::InvokeInstall { app, requirements } => {
-            let reqs: HashMap<String, String> = requirements
-                .iter()
-                .filter_map(|r| {
-                    let mut parts = r.splitn(2, '=');
-                    Some((parts.next()?.to_owned(), parts.next()?.to_owned()))
-                })
-                .collect();
-            print_result(
-                client
-                    .request(
-                        "InvokeInstall",
-                        serde_json::json!({ "app": app, "requirements": reqs }),
-                    )
-                    .await,
-            );
-        }
-        Command::ListFaults { app } => {
-            print_result(
-                client
-                    .request("ListFaults", serde_json::json!({ "app": app }))
-                    .await,
-            );
-        }
-        Command::ListShells { app } => {
-            print_result(
-                client
-                    .request("ListShells", serde_json::json!({ "app": app }))
-                    .await,
-            );
-        }
-        Command::StopShell { session_id } => {
-            print_result(
-                client
-                    .request("StopShell", serde_json::json!({ "session_id": session_id }))
-                    .await,
-            );
-        }
-        Command::ListForwards { app } => {
-            print_result(
-                client
-                    .request("ListForwards", serde_json::json!({ "app": app }))
-                    .await,
-            );
-        }
-        Command::Subscribe => {
-            subscribe::subscribe(client).await;
-        }
-        Command::OpenShell { app, name } => {
-            let code = shell::open_shell(client, app, name).await;
-            std::process::exit(code);
-        }
-        Command::ForwardPort {
-            app,
-            service,
-            port,
-            proto,
-            local_port,
-        } => {
-            forward::forward_port(client, app, service, port, proto, local_port).await;
-        }
+    match cli.command {
+        Command::Apps { command } => apps::dispatch(&client, command).await,
+        Command::Op { command } => op::dispatch(&client, command).await,
+        Command::Me { .. } => unreachable!("handled before connect"),
     }
 }
 
-fn print_result(result: Result<serde_json::Value, ClientError>) {
+pub(crate) fn print_result(result: Result<serde_json::Value, ClientError>) {
     match result {
         Ok(v) => println!("{}", serde_json::to_string_pretty(&v).unwrap()),
         Err(e) => {
@@ -456,11 +228,4 @@ fn print_result(result: Result<serde_json::Value, ClientError>) {
             std::process::exit(1);
         }
     }
-}
-
-fn read_script_file(path: &PathBuf) -> String {
-    std::fs::read_to_string(path).unwrap_or_else(|e| {
-        tracing::error!("cannot read {}: {e}", path.display());
-        std::process::exit(1);
-    })
 }
