@@ -2,7 +2,8 @@ use rhai::Dynamic;
 use rhai::{AST, Engine, Scope};
 
 use crate::defs::install::InstallDef;
-use crate::runtime::barrier::runtime::{ActionClosureGuard, RuntimeInstance, shell_attach_fn_ptr};
+use crate::runtime::barrier::runtime::{ActionClosureGuard, RuntimeInstance};
+use crate::runtime::barrier::shell::shell_attach_fn_ptr;
 use crate::{defs, setup_language as setup};
 
 mod action;

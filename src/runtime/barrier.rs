@@ -1,6 +1,7 @@
 pub mod oracle;
 pub mod replay;
 pub mod runtime;
+pub mod shell;
 
 use crate::runtime::{LifecycleState, ResourceInstance};
 use parking_lot::Mutex;

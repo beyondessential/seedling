@@ -13,7 +13,7 @@ use crate::{
             OperationId,
             oracle::DbWorldOracle,
             replay::{DbActionLog, OperationContext, OperationResult, run_operation},
-            runtime::{
+            shell::{
                 ShellAttachCtx, ShellExecTarget, clear_shell_attach_ctx, set_shell_attach_ctx,
             },
         },

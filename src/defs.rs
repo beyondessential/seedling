@@ -7,7 +7,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use rhai::{Engine, Scope};
 
-use crate::runtime::barrier::runtime;
+use crate::runtime::barrier::{runtime, shell};
 
 type Holder<T> = Arc<Mutex<T>>;
 
@@ -61,7 +61,7 @@ pub fn register(engine: &mut Engine) {
     engine.build_type::<runtime::Started>();
     engine.build_type::<runtime::Termination>();
     engine.build_type::<collection::Collection>();
-    runtime::register_shell_attach(engine);
+    shell::register_shell_attach(engine);
 
     // l[impl collection.col]
     engine.register_fn("col", collection::col);
