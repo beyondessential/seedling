@@ -1,8 +1,9 @@
 <llm-rules>
 - This repo uses jujutsu. Commit changes incrementally as you work.
-- Use `jj commit` over `jj describe` so that new changes can be applied as a new description easily; we can always squash to put history together where it makes sense.
-- Remember to use --no-pager for jj commands.
-- Never write documentation files or readmes (plans are fine).
+- Use `jj commit` over `jj describe` so that new changes can be applied as a new description easily.
+- Don't squash commits together unless really necessary. Granular history is more important than aesthetic history.
+- Remember to use --no-pager for jj commands, and to specify --message when using squash/commit/describe, to avoid opening an interactive view (which will block you/agents).
+- Never write documentation files or readmes unless specifically told to (plans are fine).
 - Use conventional commit/describe messages.
 - Never write useless comments that only repeat the code.
 - Never print summaries or unnecessary information.
