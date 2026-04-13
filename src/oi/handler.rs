@@ -51,9 +51,25 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8]) -> HandlerResult {
         "/apps/uninstall" => apps::uninstall_app(state, req.params),
         "/apps/update" => apps::update_app(state, req.params),
         // i[param.set]
-        "/apps/params/set" => params::set_param(state, req.params),
+        "/apps/params/set" => {
+            let p: params::SetParamParams = serde_json::from_value(req.params).map_err(|e| {
+                OiError::new(
+                    ErrorCode::RequirementsInvalid,
+                    format!("invalid params: {e}"),
+                )
+            })?;
+            params::set_param(state, p)
+        }
         // i[param.unset]
-        "/apps/params/unset" => params::unset_param(state, req.params),
+        "/apps/params/unset" => {
+            let p: params::UnsetParamParams = serde_json::from_value(req.params).map_err(|e| {
+                OiError::new(
+                    ErrorCode::RequirementsInvalid,
+                    format!("invalid params: {e}"),
+                )
+            })?;
+            params::unset_param(state, p)
+        }
         // i[action.invoke]
         "/apps/action/invoke" => actions::invoke_action(state, req.params),
         // i[action.invoke.install]

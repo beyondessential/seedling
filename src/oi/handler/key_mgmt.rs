@@ -1,4 +1,5 @@
-use serde_json::{Value, json};
+use serde::Deserialize;
+use serde_json::json;
 
 use crate::oi::{
     error::{ErrorCode, OiError},
@@ -7,12 +8,28 @@ use crate::oi::{
 
 use super::HandlerResult;
 
+#[derive(Deserialize)]
+pub(crate) struct AuthorizeKeyParams {
+    pub fingerprint: String,
+    #[serde(default = "default_label")]
+    pub label: String,
+}
+
+fn default_label() -> String {
+    "unnamed".to_owned()
+}
+
+#[derive(Deserialize)]
+pub(crate) struct RevokeKeyParams {
+    pub fingerprint: String,
+}
+
 // i[key.list]
 pub(crate) fn list_keys(state: &OiState) -> HandlerResult {
     let db = state.db.lock();
     let rows = crate::oi::auth::list_keys(&db)
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
-    let result: Vec<Value> = rows
+    let result: Vec<serde_json::Value> = rows
         .into_iter()
         .map(|(fp, label, added_at)| {
             json!({ "fingerprint": fp, "label": label, "added_at": added_at })
@@ -22,37 +39,26 @@ pub(crate) fn list_keys(state: &OiState) -> HandlerResult {
 }
 
 // i[key.authorize]
-pub(crate) fn authorize_key(state: &OiState, params: Value) -> HandlerResult {
-    let fp = params
-        .get("fingerprint")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            OiError::new(ErrorCode::RequirementsInvalid, "missing param: fingerprint")
-        })?;
-    let label = params
-        .get("label")
-        .and_then(Value::as_str)
-        .unwrap_or("unnamed");
+pub(crate) fn authorize_key(state: &OiState, params: AuthorizeKeyParams) -> HandlerResult {
     let db = state.db.lock();
-    crate::oi::auth::authorize_key(&db, &state.trusted_keys, fp, label)
+    crate::oi::auth::authorize_key(&db, &state.trusted_keys, &params.fingerprint, &params.label)
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
-    tracing::info!(fingerprint = %fp, label = %label, "authorized key");
+    tracing::info!(fingerprint = %params.fingerprint, label = %params.label, "authorized key");
     Ok(json!({}))
 }
 
 // i[key.revoke]
-pub(crate) fn revoke_key(state: &OiState, params: Value) -> HandlerResult {
-    let fp = params
-        .get("fingerprint")
-        .and_then(Value::as_str)
-        .ok_or_else(|| OiError::new(ErrorCode::NotFound, "missing param: fingerprint"))?;
+pub(crate) fn revoke_key(state: &OiState, params: RevokeKeyParams) -> HandlerResult {
     let db = state.db.lock();
-    let removed = crate::oi::auth::revoke_key(&db, &state.trusted_keys, fp)
+    let removed = crate::oi::auth::revoke_key(&db, &state.trusted_keys, &params.fingerprint)
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
     if removed {
-        tracing::info!(fingerprint = %fp, "revoked key");
+        tracing::info!(fingerprint = %params.fingerprint, "revoked key");
         Ok(json!({}))
     } else {
-        Err(OiError::not_found(format!("key not found: {fp}")))
+        Err(OiError::not_found(format!(
+            "key not found: {}",
+            params.fingerprint
+        )))
     }
 }

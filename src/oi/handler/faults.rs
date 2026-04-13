@@ -1,4 +1,5 @@
-use serde_json::{Value, json};
+use serde::Deserialize;
+use serde_json::json;
 
 use crate::{
     oi::{
@@ -10,13 +11,18 @@ use crate::{
 
 use super::HandlerResult;
 
+#[derive(Deserialize)]
+pub(crate) struct ListFaultsParams {
+    pub app: Option<String>,
+}
+
 // i[fault.list]
-pub(crate) fn list_faults(state: &OiState, params: Value) -> HandlerResult {
-    let app = params.get("app").and_then(Value::as_str);
+pub(crate) fn list_faults(state: &OiState, params: ListFaultsParams) -> HandlerResult {
+    let app = params.app.as_deref();
     let db = state.db.lock();
     let records = faults::list_active_faults(&db, app)
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db query: {e}")))?;
-    let result: Vec<Value> = records
+    let result: Vec<serde_json::Value> = records
         .into_iter()
         .map(|f| {
             json!({

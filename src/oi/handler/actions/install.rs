@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use serde_json::{Value, json};
+use serde::Deserialize;
+use serde_json::json;
 
 use crate::{
     defs::install::InstallRequirementKind,
@@ -17,6 +18,13 @@ use crate::{
 };
 
 use super::lifecycle::spawn_accepted_operation;
+
+#[derive(Deserialize)]
+pub(crate) struct InvokeInstallParams {
+    pub app: String,
+    #[serde(default)]
+    pub requirements: Option<BTreeMap<String, String>>,
+}
 
 // i[action.invoke.install.validation]
 fn is_valid_email(email: &str) -> bool {
@@ -114,25 +122,10 @@ fn validate_install_requirements(
 // i[action.not-installed-gate]
 // i[action.invoke.install]
 // i[action.invoke.install.validation]
-pub(crate) fn invoke_install(state: &Arc<OiState>, params: Value) -> HandlerResult {
-    let app_name = params
-        .get("app")
-        .and_then(Value::as_str)
-        .ok_or_else(|| OiError::new(ErrorCode::RequirementsInvalid, "missing param: app"))?;
+pub(crate) fn invoke_install(state: &Arc<OiState>, params: InvokeInstallParams) -> HandlerResult {
+    let app_name = &params.app;
 
-    let submitted: BTreeMap<String, String> = match params.get("requirements") {
-        Some(Value::Object(map)) => map
-            .iter()
-            .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_owned()))
-            .collect(),
-        None | Some(Value::Null) => BTreeMap::new(),
-        _ => {
-            return Err(OiError::new(
-                ErrorCode::RequirementsInvalid,
-                "requirements must be an object",
-            ));
-        }
-    };
+    let submitted = params.requirements.unwrap_or_default();
 
     let has_install_action = {
         let reg = state.registry.read();

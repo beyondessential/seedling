@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use serde_json::{Value, json};
+use serde::Deserialize;
+use serde_json::json;
 
 use crate::{
     oi::{
@@ -15,22 +16,26 @@ use crate::{
 
 use super::HandlerResult;
 
+#[derive(Deserialize)]
+pub(crate) struct SetParamParams {
+    pub app: String,
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct UnsetParamParams {
+    pub app: String,
+    pub name: String,
+}
+
 // i[param.store]
 // i[param.set]
 // i[param.unknown]
-pub(crate) fn set_param(state: &OiState, params: Value) -> HandlerResult {
-    let app = params
-        .get("app")
-        .and_then(Value::as_str)
-        .ok_or_else(|| OiError::new(ErrorCode::RequirementsInvalid, "missing param: app"))?;
-    let param_name = params
-        .get("name")
-        .and_then(Value::as_str)
-        .ok_or_else(|| OiError::new(ErrorCode::RequirementsInvalid, "missing param: name"))?;
-    let value = params
-        .get("value")
-        .and_then(Value::as_str)
-        .ok_or_else(|| OiError::new(ErrorCode::RequirementsInvalid, "missing param: value"))?;
+pub(crate) fn set_param(state: &OiState, params: SetParamParams) -> HandlerResult {
+    let app = params.app.as_str();
+    let param_name = params.name.as_str();
+    let value = params.value.as_str();
 
     {
         let reg = state.registry.read();
@@ -113,15 +118,9 @@ pub(crate) fn set_param(state: &OiState, params: Value) -> HandlerResult {
 }
 
 // i[param.unset]
-pub(crate) fn unset_param(state: &OiState, params: Value) -> HandlerResult {
-    let app = params
-        .get("app")
-        .and_then(Value::as_str)
-        .ok_or_else(|| OiError::new(ErrorCode::RequirementsInvalid, "missing param: app"))?;
-    let param_name = params
-        .get("name")
-        .and_then(Value::as_str)
-        .ok_or_else(|| OiError::new(ErrorCode::RequirementsInvalid, "missing param: name"))?;
+pub(crate) fn unset_param(state: &OiState, params: UnsetParamParams) -> HandlerResult {
+    let app = params.app.as_str();
+    let param_name = params.name.as_str();
 
     {
         let reg = state.registry.read();

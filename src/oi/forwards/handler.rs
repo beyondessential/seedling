@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use serde_json::{Value, json};
+use serde::Deserialize;
+use serde_json::json;
 use uuid::Uuid;
 
 use crate::oi::{
@@ -10,11 +11,21 @@ use crate::oi::{
 
 use super::registry::ForwardId;
 
+#[derive(Deserialize)]
+pub(crate) struct ListForwardsParams {
+    pub app: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct StopForwardParams {
+    pub forward_id: String,
+}
+
 // i[forward.list]
-pub(crate) fn list_forwards(state: &Arc<OiState>, params: Value) -> HandlerResult {
-    let app = params.get("app").and_then(Value::as_str);
+pub(crate) fn list_forwards(state: &Arc<OiState>, params: ListForwardsParams) -> HandlerResult {
+    let app = params.app.as_deref();
     let records = state.forwards.lock().list(app);
-    let list: Vec<Value> = records
+    let list: Vec<serde_json::Value> = records
         .iter()
         .map(|r| {
             json!({
@@ -31,11 +42,8 @@ pub(crate) fn list_forwards(state: &Arc<OiState>, params: Value) -> HandlerResul
 }
 
 // i[forward.stop]
-pub(crate) fn stop_forward(state: &Arc<OiState>, params: Value) -> HandlerResult {
-    let id_str = params
-        .get("forward_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| OiError::new(ErrorCode::NotFound, "missing param: forward_id"))?;
+pub(crate) fn stop_forward(state: &Arc<OiState>, params: StopForwardParams) -> HandlerResult {
+    let id_str = &params.forward_id;
     let forward_id: ForwardId = Uuid::parse_str(id_str)
         .map_err(|_| OiError::not_found(format!("invalid forward_id: {id_str}")))?;
     let entry = state

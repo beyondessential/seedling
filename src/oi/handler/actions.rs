@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use serde_json::{Value, json};
+use serde::Deserialize;
+use serde_json::json;
 
 use crate::{
     oi::{
@@ -20,17 +21,17 @@ pub(crate) mod lifecycle;
 
 use lifecycle::spawn_accepted_operation;
 
+#[derive(Deserialize)]
+pub(crate) struct InvokeActionParams {
+    pub app: String,
+    pub name: String,
+}
+
 // i[action.not-installed-gate]
 // i[action.invoke]
-pub(crate) fn invoke_action(state: &Arc<OiState>, params: Value) -> HandlerResult {
-    let app_name = params
-        .get("app")
-        .and_then(Value::as_str)
-        .ok_or_else(|| OiError::new(ErrorCode::RequirementsInvalid, "missing param: app"))?;
-    let action_name = params
-        .get("name")
-        .and_then(Value::as_str)
-        .ok_or_else(|| OiError::new(ErrorCode::RequirementsInvalid, "missing param: name"))?;
+pub(crate) fn invoke_action(state: &Arc<OiState>, params: InvokeActionParams) -> HandlerResult {
+    let app_name = &params.app;
+    let action_name = &params.name;
 
     {
         let reg = state.registry.read();

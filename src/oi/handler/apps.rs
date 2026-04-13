@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
@@ -20,6 +21,17 @@ use crate::{
 };
 
 use super::HandlerResult;
+
+#[derive(Deserialize)]
+pub(crate) struct AppParams {
+    pub app: String,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct AppScriptParams {
+    pub app: String,
+    pub script: String,
+}
 
 fn validate_name(name: &str) -> Result<(), OiError> {
     // l[bsl.name]: ^[a-zA-Z][a-zA-Z0-9-]{1,60}[a-zA-Z0-9]$
@@ -110,11 +122,8 @@ pub(crate) fn effective_app_status(
 }
 
 // i[app.describe]
-pub(crate) fn describe_app(state: &OiState, params: Value) -> HandlerResult {
-    let name = params
-        .get("app")
-        .and_then(Value::as_str)
-        .ok_or_else(|| OiError::new(ErrorCode::NotFound, "missing param: app"))?;
+pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult {
+    let name = params.app.as_str();
 
     let reg = state.registry.read();
     let entry = reg
@@ -316,15 +325,9 @@ pub(crate) fn describe_app(state: &OiState, params: Value) -> HandlerResult {
 
 // i[app.register]
 // i[app.persist]
-pub(crate) fn register_app(state: &OiState, params: Value) -> HandlerResult {
-    let name = params
-        .get("app")
-        .and_then(Value::as_str)
-        .ok_or_else(|| OiError::new(ErrorCode::RequirementsInvalid, "missing param: app"))?;
-    let script = params
-        .get("script")
-        .and_then(Value::as_str)
-        .ok_or_else(|| OiError::new(ErrorCode::RequirementsInvalid, "missing param: script"))?;
+pub(crate) fn register_app(state: &OiState, params: AppScriptParams) -> HandlerResult {
+    let name = params.app.as_str();
+    let script = params.script.as_str();
 
     validate_name(name)?;
 
@@ -372,11 +375,8 @@ pub(crate) fn register_app(state: &OiState, params: Value) -> HandlerResult {
 }
 
 // i[app.deregister]
-pub(crate) fn deregister_app(state: &OiState, params: Value) -> HandlerResult {
-    let name = params
-        .get("app")
-        .and_then(Value::as_str)
-        .ok_or_else(|| OiError::new(ErrorCode::NotFound, "missing param: app"))?;
+pub(crate) fn deregister_app(state: &OiState, params: AppParams) -> HandlerResult {
+    let name = params.app.as_str();
 
     {
         let reg = state.registry.read();
@@ -438,11 +438,8 @@ pub(crate) fn deregister_app(state: &OiState, params: Value) -> HandlerResult {
     Ok(json!({}))
 }
 
-pub(crate) fn uninstall_app(state: &OiState, params: Value) -> HandlerResult {
-    let name = params
-        .get("app")
-        .and_then(Value::as_str)
-        .ok_or_else(|| OiError::new(ErrorCode::NotFound, "missing param: app"))?;
+pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult {
+    let name = params.app.as_str();
 
     let phase_arc = {
         let reg = state.registry.read();
@@ -477,15 +474,9 @@ pub(crate) fn uninstall_app(state: &OiState, params: Value) -> HandlerResult {
 }
 
 // i[app.update]
-pub(crate) fn update_app(state: &OiState, params: Value) -> HandlerResult {
-    let name = params
-        .get("app")
-        .and_then(Value::as_str)
-        .ok_or_else(|| OiError::new(ErrorCode::NotFound, "missing param: app"))?;
-    let script = params
-        .get("script")
-        .and_then(Value::as_str)
-        .ok_or_else(|| OiError::new(ErrorCode::RequirementsInvalid, "missing param: script"))?;
+pub(crate) fn update_app(state: &OiState, params: AppScriptParams) -> HandlerResult {
+    let name = params.app.as_str();
+    let script = params.script.as_str();
 
     {
         let reg = state.registry.read();
