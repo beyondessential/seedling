@@ -10,6 +10,7 @@ use rustls::{
 use rustls_pki_types::{CertificateDer, ServerName, SubjectPublicKeyInfoDer, UnixTime};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -113,7 +114,7 @@ impl ServerCertVerifier for FingerprintVerifier {
         _now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
         let got = hex_digest(end_entity.as_ref());
-        if got == self.expected {
+        if got.as_bytes().ct_eq(self.expected.as_bytes()).into() {
             Ok(ServerCertVerified::assertion())
         } else {
             Err(rustls::Error::InvalidCertificate(

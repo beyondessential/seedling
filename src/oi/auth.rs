@@ -13,6 +13,7 @@ use rustls::{
     server::danger::{ClientCertVerified, ClientCertVerifier},
 };
 use rustls_pki_types::{CertificateDer, SubjectPublicKeyInfoDer, UnixTime};
+use subtle::ConstantTimeEq;
 
 use crate::runtime::db::Db;
 
@@ -216,7 +217,10 @@ impl ClientCertVerifier for SeedlingClientVerifier {
         _now: UnixTime,
     ) -> Result<ClientCertVerified, rustls::Error> {
         let fp = keys::fingerprint(end_entity.as_ref());
-        if self.trusted.read().contains(&fp) {
+        let fp_bytes = fp.as_bytes();
+        let trusted = self.trusted.read();
+        let found = trusted.iter().any(|t| t.as_bytes().ct_eq(fp_bytes).into());
+        if found {
             Ok(ClientCertVerified::assertion())
         } else {
             tracing::warn!(fingerprint = %fp, "rejected client with unrecognized key");
