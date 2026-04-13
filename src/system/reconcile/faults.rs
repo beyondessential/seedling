@@ -17,7 +17,7 @@ impl Reconciler {
                 });
             if !already_filed {
                 let desc = format!("failed to pull image: {reference}");
-                let _ = faults::file_fault(
+                if let Err(e) = faults::file_fault(
                     &db,
                     app,
                     Some(&kind_str),
@@ -25,7 +25,9 @@ impl Reconciler {
                     Some(&inst_hex),
                     "image_pull_failed",
                     &desc,
-                );
+                ) {
+                    tracing::warn!(app = %app, instance = %inst_hex, "failed to file image-pull fault: {e}");
+                }
             }
         }
         for (instance, _reference) in &update.image_pull_successes {
@@ -38,7 +40,9 @@ impl Reconciler {
                 })
                 .collect();
             for f in cleared {
-                let _ = faults::clear_fault(&db, &f.id, app);
+                if let Err(e) = faults::clear_fault(&db, &f.id, app) {
+                    tracing::warn!(app = %app, fault_id = %f.id, "failed to clear image-pull fault: {e}");
+                }
             }
         }
     }
@@ -58,7 +62,7 @@ impl Reconciler {
                 });
             if !already_filed {
                 let desc = format!("unit for {} entered failed state", instance.display_name);
-                let _ = faults::file_fault(
+                if let Err(e) = faults::file_fault(
                     &db,
                     app,
                     Some(&kind_str),
@@ -66,7 +70,9 @@ impl Reconciler {
                     Some(&inst_hex),
                     "container_start_failed",
                     &desc,
-                );
+                ) {
+                    tracing::warn!(app = %app, instance = %inst_hex, "failed to file unit-failure fault: {e}");
+                }
             }
         }
         for instance in &update.unit_healthy {
@@ -80,7 +86,9 @@ impl Reconciler {
                 })
                 .collect();
             for f in cleared {
-                let _ = faults::clear_fault(&db, &f.id, app);
+                if let Err(e) = faults::clear_fault(&db, &f.id, app) {
+                    tracing::warn!(app = %app, fault_id = %f.id, "failed to clear unit-failure fault: {e}");
+                }
             }
         }
     }

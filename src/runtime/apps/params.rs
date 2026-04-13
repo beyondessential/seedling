@@ -61,9 +61,11 @@ pub fn sync_script_error_fault(db: &Db, entry: &AppEntry) {
             let dominated = existing.iter().any(|f| f.description == *msg);
             if !dominated {
                 for f in &existing {
-                    let _ = crate::runtime::faults::clear_fault(db, &f.id, &entry.name);
+                    if let Err(e) = crate::runtime::faults::clear_fault(db, &f.id, &entry.name) {
+                        tracing::warn!(app = %entry.name, fault_id = %f.id, "failed to clear stale script-error fault: {e}");
+                    }
                 }
-                let _ = crate::runtime::faults::file_fault(
+                if let Err(e) = crate::runtime::faults::file_fault(
                     db,
                     &entry.name,
                     None,
@@ -71,12 +73,16 @@ pub fn sync_script_error_fault(db: &Db, entry: &AppEntry) {
                     None,
                     "script_error",
                     msg,
-                );
+                ) {
+                    tracing::warn!(app = %entry.name, "failed to file script-error fault: {e}");
+                }
             }
         }
         None => {
             for f in &existing {
-                let _ = crate::runtime::faults::clear_fault(db, &f.id, &entry.name);
+                if let Err(e) = crate::runtime::faults::clear_fault(db, &f.id, &entry.name) {
+                    tracing::warn!(app = %entry.name, fault_id = %f.id, "failed to clear script-error fault: {e}");
+                }
             }
         }
     }
