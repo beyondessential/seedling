@@ -1,4 +1,9 @@
-use std::{io, path::Path, sync::Arc};
+use std::{
+    io,
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    path::Path,
+    sync::Arc,
+};
 
 use ed25519_dalek::{
     SigningKey,
@@ -15,8 +20,21 @@ use sha2::{Digest, Sha256};
 
 /// Load an Ed25519 signing key from a PKCS#8 DER file, or generate and
 /// persist one if the file does not exist.
+// r[infra.key.file-permissions]
+// i[key.client.file-permissions]
 pub fn load_or_generate(path: &Path) -> io::Result<SigningKey> {
     if path.exists() {
+        let mode = path.metadata()?.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "key file {} has insecure permissions (0{:o}); expected 0600",
+                    path.display(),
+                    mode
+                ),
+            ));
+        }
         let der = std::fs::read(path)?;
         SigningKey::from_pkcs8_der(&der).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     } else {
@@ -25,7 +43,15 @@ pub fn load_or_generate(path: &Path) -> io::Result<SigningKey> {
         }
         let key = SigningKey::generate(&mut OsRng);
         let doc = key.to_pkcs8_der().map_err(io::Error::other)?;
-        std::fs::write(path, doc.as_bytes())?;
+        {
+            use std::io::Write;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(path)?
+                .write_all(doc.as_bytes())?;
+        }
         Ok(key)
     }
 }

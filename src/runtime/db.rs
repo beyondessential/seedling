@@ -1,5 +1,6 @@
+use std::{os::unix::fs::PermissionsExt, path::Path};
+
 use rusqlite::{Connection, Result as SqlResult};
-use std::path::Path;
 
 // r[impl history.persistence]
 // r[impl history.storage]
@@ -8,8 +9,28 @@ pub struct Db {
 }
 
 impl Db {
-    pub fn open(path: &Path) -> SqlResult<Self> {
+    // r[infra.db.file-permissions]
+    pub fn open(path: &Path) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        if path.exists() {
+            let mode = path.metadata()?.permissions().mode() & 0o777;
+            if mode & 0o077 != 0 {
+                return Err(format!(
+                    "database file {} has insecure permissions (0{:o}); expected 0600",
+                    path.display(),
+                    mode
+                )
+                .into());
+            }
+        }
+
         let conn = Connection::open(path)?;
+
+        if let Ok(meta) = path.metadata()
+            && meta.permissions().mode() & 0o777 != 0o600
+        {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        }
+
         conn.execute_batch("PRAGMA journal_mode=WAL;")?;
         let db = Self { conn };
         db.migrate()?;

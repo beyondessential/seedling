@@ -410,6 +410,16 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 # Infrastructure
 
+> r[infra.key.file-permissions]
+> Private key files must be created with owner-read/write-only permissions. The runtime
+> must refuse to use a key file whose group or world permission bits are set, and must
+> report an error.
+
+> r[infra.db.file-permissions]
+> The database file must be created with owner-read/write-only permissions. The runtime
+> must refuse to open a database file whose group or world permission bits are set, and
+> must report an error.
+
 > r[infra.node.prefix]
 > The runtime must derive a stable per-node /48 IPv6 prefix from the host machine identity.
 > The prefix follows the ULA format `fd5e:edXX:XXXX::/48`, where the 24-bit host portion is

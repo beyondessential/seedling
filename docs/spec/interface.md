@@ -398,3 +398,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > `/keys/revoke` removes a client key from the authorized set.
 > Params: `fingerprint` (string, required).
 > Returns `{}` on success. Returns `not_found` if the fingerprint is not known.
+
+> i[key.client.file-permissions]
+> The client identity key file must be created with owner-read/write-only permissions.
+> Seedling-ctl must refuse to load a client identity key file whose group or world
+> permission bits are set, and must report an error.
