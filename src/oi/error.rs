@@ -36,3 +36,5 @@ impl OiError {
         Self::new(ErrorCode::ScriptError, message)
     }
 }
+
+pub type HandlerResult = Result<serde_json::Value, OiError>;
