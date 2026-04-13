@@ -54,7 +54,7 @@ pub(super) fn collect(
             registry.get_or_create_singleton(app_name, ResourceKind::Service, Some(svc_name));
         let service_ip = instance_ipv6(node_prefix, &svc_instance);
 
-        let upstream_port = find_upstream_port(snapshot, svc_name, def.port);
+        let upstream_port = find_upstream_port(snapshot, svc_name, def.port.get());
 
         let ingress_instance = registry.get_or_create_singleton(
             app_name,
@@ -67,18 +67,18 @@ pub(super) fn collect(
 
             if def.dtls || def.quic {
                 l4_routes.push(L4Route {
-                    port: def.port,
+                    port: def.port.get(),
                     proto: L4Proto::Tcp,
                     upstreams: vec![upstream_url.clone()],
                 });
                 l4_routes.push(L4Route {
-                    port: def.port,
+                    port: def.port.get(),
                     proto: L4Proto::Udp,
                     upstreams: vec![upstream_url],
                 });
             } else {
                 l4_routes.push(L4Route {
-                    port: def.port,
+                    port: def.port.get(),
                     proto: L4Proto::Tcp,
                     upstreams: vec![upstream_url],
                 });

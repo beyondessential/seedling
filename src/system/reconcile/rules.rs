@@ -55,7 +55,7 @@ fn collect_service_backends(
             backends
                 .entry((svc_name, svc_port, ForwardProto::Tcp))
                 .or_default()
-                .push((pod.pod_ip, b.pod_port));
+                .push((pod.pod_ip, b.pod_port.get()));
         }
 
         for b in &tcp {
@@ -64,7 +64,7 @@ fn collect_service_backends(
             backends
                 .entry((svc_name, svc_port, ForwardProto::Tcp))
                 .or_default()
-                .push((pod.pod_ip, b.pod_port));
+                .push((pod.pod_ip, b.pod_port.get()));
         }
 
         for b in &udp {
@@ -73,7 +73,7 @@ fn collect_service_backends(
             backends
                 .entry((svc_name, svc_port, ForwardProto::Udp))
                 .or_default()
-                .push((pod.pod_ip, b.pod_port));
+                .push((pod.pod_ip, b.pod_port.get()));
         }
     }
 
@@ -96,8 +96,8 @@ pub(super) fn build_ingress_rules(
 
         let def = ingress.def.lock();
 
-        let caddy_v6 = SocketAddr::new(IpAddr::V6(caddy_ip), def.port);
-        let caddy_v4_addr = caddy_v4.map(|ip| SocketAddr::new(IpAddr::V4(ip), def.port));
+        let caddy_v6 = SocketAddr::new(IpAddr::V6(caddy_ip), def.port.get());
+        let caddy_v4_addr = caddy_v4.map(|ip| SocketAddr::new(IpAddr::V4(ip), def.port.get()));
 
         let proto = if def.dtls || def.quic {
             ForwardProto::Both
@@ -106,7 +106,7 @@ pub(super) fn build_ingress_rules(
         };
 
         rules.push(IngressRule {
-            external_port: def.port,
+            external_port: def.port.get(),
             proto,
             caddy_v6,
             caddy_v4: caddy_v4_addr,
@@ -114,10 +114,10 @@ pub(super) fn build_ingress_rules(
 
         if let Some(redirect) = &def.redirect {
             rules.push(IngressRule {
-                external_port: redirect.port,
+                external_port: redirect.port.get(),
                 proto: ForwardProto::Tcp,
-                caddy_v6: SocketAddr::new(IpAddr::V6(caddy_ip), redirect.port),
-                caddy_v4: caddy_v4.map(|ip| SocketAddr::new(IpAddr::V4(ip), redirect.port)),
+                caddy_v6: SocketAddr::new(IpAddr::V6(caddy_ip), redirect.port.get()),
+                caddy_v4: caddy_v4.map(|ip| SocketAddr::new(IpAddr::V4(ip), redirect.port.get())),
             });
         }
     }

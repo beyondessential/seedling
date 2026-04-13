@@ -78,6 +78,12 @@ impl From<Port> for u16 {
     }
 }
 
+impl PartialEq<u16> for Port {
+    fn eq(&self, other: &u16) -> bool {
+        self.0 == *other
+    }
+}
+
 pub mod action;
 pub mod app;
 pub mod collection;

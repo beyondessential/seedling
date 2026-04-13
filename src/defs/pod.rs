@@ -19,13 +19,13 @@ pub struct PodDef {
 
 #[derive(Debug, Clone)]
 pub struct HttpBinding {
-    pub pod_port: u16,
+    pub pod_port: Port,
     pub route: HttpServiceRoute,
 }
 
 #[derive(Debug, Clone)]
 pub struct TcpUdpBinding {
-    pub pod_port: u16,
+    pub pod_port: Port,
     pub service_port: ServicePort,
 }
 
@@ -59,7 +59,7 @@ impl PodDef {
                   route: HttpServiceRoute|
                   -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
-                let port = port as u16;
+                let port = Port::new(port)?;
                 ext(this).lock().http_bindings.push(HttpBinding {
                     pod_port: port,
                     route,
@@ -73,7 +73,7 @@ impl PodDef {
             "http",
             move |this: &mut T, port: i64, service: HttpService| -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
-                let port = port as u16;
+                let port = Port::new(port)?;
                 let route = HttpServiceRoute {
                     http: service,
                     prefix: "/".into(),
@@ -91,7 +91,7 @@ impl PodDef {
             "tcp",
             move |this: &mut T, port: i64, svc: ServicePort| -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
-                let port = port as u16;
+                let port = Port::new(port)?;
                 ext(this).lock().tcp_bindings.push(TcpUdpBinding {
                     pod_port: port,
                     service_port: svc,
@@ -108,7 +108,7 @@ impl PodDef {
                 let port = Port::new(port)?;
                 let service_port = ServicePort { service: svc, port };
                 ext(this).lock().tcp_bindings.push(TcpUdpBinding {
-                    pod_port: port.get(),
+                    pod_port: port,
                     service_port,
                 });
                 Ok(this.clone())
@@ -122,7 +122,7 @@ impl PodDef {
                 this.ensure_unfrozen()?;
                 let port = Port::new(port)?;
                 ext(this).lock().udp_bindings.push(TcpUdpBinding {
-                    pod_port: port.get(),
+                    pod_port: port,
                     service_port: svc,
                 });
                 Ok(this.clone())
@@ -137,7 +137,7 @@ impl PodDef {
                 let port = Port::new(port)?;
                 let service_port = ServicePort { service: svc, port };
                 ext(this).lock().udp_bindings.push(TcpUdpBinding {
-                    pod_port: port.get(),
+                    pod_port: port,
                     service_port,
                 });
                 Ok(this.clone())

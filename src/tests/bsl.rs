@@ -129,7 +129,7 @@ fn port_validation_rejects_zero() {
 // l[verify bsl.port]
 #[test]
 fn port_validation_rejects_upper_bound() {
-    let _ = run_test_script_err(r#"app.service("web").port(65535);"#);
+    let _ = run_test_script_err(r#"app.service("web").port(65536);"#);
 }
 
 // l[verify bsl.port]
@@ -146,6 +146,7 @@ fn port_validation_accepts_valid() {
         app.service("web").port(1);
         app.service("web2").port(80);
         app.service("web3").port(65534);
+        app.service("web4").port(65535);
     "#,
     );
 }

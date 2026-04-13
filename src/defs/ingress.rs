@@ -5,7 +5,7 @@ use super::{Freezable, Holder, Port, resource::ResourceName, service::Service};
 #[derive(Debug, Clone)]
 pub struct IngressDef {
     pub hostname: String,
-    pub port: u16,
+    pub port: Port,
     pub tls: bool,
     pub dtls: bool,
     pub quic: bool,
@@ -21,7 +21,7 @@ pub enum HttpTermination {
 
 #[derive(Debug, Clone)]
 pub struct RedirectDef {
-    pub port: u16,
+    pub port: Port,
     pub code: u16,
 }
 
@@ -49,7 +49,7 @@ impl Ingress {
             def: Holder::new(
                 IngressDef {
                     hostname,
-                    port: port.get(),
+                    port,
                     tls: false,
                     dtls: false,
                     quic: false,
@@ -134,7 +134,7 @@ impl CustomType for Ingress {
                     this.ensure_unfrozen()?;
                     require_https(&this.def.lock())?;
                     this.def.lock().redirect = Some(RedirectDef {
-                        port: 80,
+                        port: Port::from_u16(80),
                         code: 307,
                     });
                     Ok(this.clone())
@@ -144,11 +144,9 @@ impl CustomType for Ingress {
                 "redirect",
                 |this: &mut Self, port: i64| -> Result<Ingress, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
+                    let port = Port::new(port)?;
                     require_https(&this.def.lock())?;
-                    this.def.lock().redirect = Some(RedirectDef {
-                        port: port as u16,
-                        code: 307,
-                    });
+                    this.def.lock().redirect = Some(RedirectDef { port, code: 307 });
                     Ok(this.clone())
                 },
             )
@@ -156,9 +154,10 @@ impl CustomType for Ingress {
                 "redirect",
                 |this: &mut Self, port: i64, code: i64| -> Result<Ingress, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
+                    let port = Port::new(port)?;
                     require_https(&this.def.lock())?;
                     this.def.lock().redirect = Some(RedirectDef {
-                        port: port as u16,
+                        port,
                         code: code as u16,
                     });
                     Ok(this.clone())

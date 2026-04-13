@@ -95,7 +95,7 @@ pub fn build_proxy_config(
 
         // Main port listener.
         listener_set.insert(ProxyListener {
-            port: ingress.port,
+            port: ingress.port.get(),
             proto: if is_https {
                 ProxyListenerProto::Https
             } else {
@@ -106,7 +106,7 @@ pub fn build_proxy_config(
         // HTTP/3 QUIC listener on the same port.
         if ingress.quic {
             listener_set.insert(ProxyListener {
-                port: ingress.port,
+                port: ingress.port.get(),
                 proto: ProxyListenerProto::Quic,
             });
         }
@@ -114,7 +114,7 @@ pub fn build_proxy_config(
         // Plain-HTTP listener for the redirect source port.
         if let Some(redirect) = &ingress.redirect {
             listener_set.insert(ProxyListener {
-                port: redirect.port,
+                port: redirect.port.get(),
                 proto: ProxyListenerProto::Http,
             });
         }
@@ -138,7 +138,7 @@ pub fn build_proxy_config(
 
         if let Some(redirect) = &ingress.redirect {
             vhost.redirect = Some(HttpRedirect {
-                from_port: redirect.port,
+                from_port: redirect.port.get(),
                 code: redirect.code,
             });
         }
