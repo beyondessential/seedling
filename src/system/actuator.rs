@@ -108,7 +108,13 @@ fn collect_container_volumes(
         .filter_map(|(path, vm)| match vm {
             VolumeMount::Volume(v) => {
                 let (name, remove_on_stop) = match &v.name {
-                    None => (anon_vol_name(instance, &path.to_string_lossy()), true),
+                    None => {
+                        let vol_name = match &v.anon_id {
+                            Some(id) => id.clone(),
+                            None => anon_vol_name(instance, &path.to_string_lossy()),
+                        };
+                        (vol_name, true)
+                    }
                     Some(n) => (format!("{}-{}", instance.app, n.as_str()), false),
                 };
                 Some(ContainerVolume {

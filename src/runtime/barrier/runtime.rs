@@ -66,21 +66,49 @@ fn clear_action_def() {
     ACTION_DEF.with(|cell| *cell.borrow_mut() = None);
 }
 
+// ---------------------------------------------------------------------------
+// Thread-locals: stable anonymous volume naming within an action closure.
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    static ANON_VOL_OP_ID: RefCell<Option<String>> = const { RefCell::new(None) };
+    static ANON_VOL_COUNTER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Generate a stable anonymous volume name for the current operation.
+/// Returns `None` if not in an action context.
+pub fn next_anon_vol_id() -> Option<String> {
+    ANON_VOL_OP_ID.with(|cell| {
+        let op_id = cell.borrow();
+        op_id.as_ref().map(|id| {
+            let counter = ANON_VOL_COUNTER.with(|c| {
+                let n = c.get();
+                c.set(n + 1);
+                n
+            });
+            let short = &id[..8.min(id.len())];
+            format!("seedling-anon-{short}-vol-{counter}")
+        })
+    })
+}
+
 /// RAII guard that sets the in-action-closure flag on construction and clears
 /// it on drop, ensuring the flag is always cleaned up even on early return.
 pub struct ActionClosureGuard;
 
 impl ActionClosureGuard {
-    pub fn new(action_def: Arc<Mutex<AppDef>>) -> Self {
+    pub fn new(action_def: Arc<Mutex<AppDef>>, op_id: String) -> Self {
         IN_ACTION_CLOSURE.with(|b| b.set(true));
         set_action_def(action_def);
+        ANON_VOL_OP_ID.with(|cell| *cell.borrow_mut() = Some(op_id));
+        ANON_VOL_COUNTER.with(|c| c.set(0));
         Self
     }
 }
 
 impl Default for ActionClosureGuard {
     fn default() -> Self {
-        Self::new(Arc::new(Mutex::new(AppDef::default())))
+        Self::new(Arc::new(Mutex::new(AppDef::default())), String::new())
     }
 }
 
@@ -88,6 +116,8 @@ impl Drop for ActionClosureGuard {
     fn drop(&mut self) {
         IN_ACTION_CLOSURE.with(|b| b.set(false));
         clear_action_def();
+        ANON_VOL_OP_ID.with(|cell| *cell.borrow_mut() = None);
+        ANON_VOL_COUNTER.with(|c| c.set(0));
     }
 }
 

@@ -12,6 +12,10 @@ pub struct VolumeDef {
 #[derive(Debug, Clone)]
 pub struct Volume {
     pub name: Option<ResourceName>,
+    /// Stable identifier for anonymous dynamic volumes.
+    /// Set at creation time inside an action closure from the operation context.
+    /// Used to derive the podman volume name.
+    pub anon_id: Option<String>,
     pub def: Holder<VolumeDef>,
     pub frozen: bool,
 }
@@ -20,6 +24,16 @@ impl Volume {
     pub fn new(name: Option<ResourceName>) -> Self {
         Self {
             name,
+            anon_id: None,
+            def: Default::default(),
+            frozen: false,
+        }
+    }
+
+    pub fn new_anonymous(anon_id: String) -> Self {
+        Self {
+            name: None,
+            anon_id: Some(anon_id),
             def: Default::default(),
             frozen: false,
         }

@@ -199,6 +199,9 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         db,
     } = op;
 
+    // Save the operation ID string before it is moved into the replay context.
+    let op_id_str = operation_id.0.clone();
+
     // Build the replay context from committed log entries.
     let committed = log.load();
     let ctx = Arc::new(Mutex::new(ReplayContext::new(
@@ -301,7 +304,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         .expect("static call script must compile");
     let action_def = Arc::new(Mutex::new(app.def.lock().clone()));
     let result = {
-        let _guard = ActionClosureGuard::new(action_def);
+        let _guard = ActionClosureGuard::new(action_def, op_id_str.clone());
         engine.eval_ast_with_scope::<Dynamic>(scope, &call_ast)
     };
 

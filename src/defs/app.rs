@@ -409,7 +409,11 @@ impl CustomType for App {
                         "anonymous volumes can only be created inside action closures".into(),
                     );
                 }
-                Ok(Volume::new(None))
+                let anon_id =
+                    crate::runtime::barrier::runtime::next_anon_vol_id().unwrap_or_else(|| {
+                        format!("seedling-anon-fallback-vol-{}", uuid::Uuid::new_v4())
+                    });
+                Ok(Volume::new_anonymous(anon_id))
             },
         );
 

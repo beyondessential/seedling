@@ -190,7 +190,10 @@ fn spec_from_pod(
                 VolumeMount::Volume(v) => {
                     let name = match &v.name {
                         Some(n) => format!("{}-{}", instance.app, n.as_str()),
-                        None => anon_vol_name(instance, &path.to_string_lossy()),
+                        None => match &v.anon_id {
+                            Some(id) => id.clone(),
+                            None => anon_vol_name(instance, &path.to_string_lossy()),
+                        },
                     };
                     MountSource::Volume(name)
                 }
