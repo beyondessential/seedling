@@ -8,6 +8,7 @@
 - Never write useless comments that only repeat the code.
 - Never print summaries or unnecessary information.
 - Don't use emojis unless absolutely necessary.
+- Use New Zealand English.
 - When removing code that has already been committed, delete it unless explicitly requested that it be commented out.
 - Prefer using small dependencies instead of reimplementing the wheel. Ask the user to pick a dependency if there is no obvious choice.
 - Imports: merge them and group them by std, then third-party/workspace, then local (crate, super, self).
