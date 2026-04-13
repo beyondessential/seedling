@@ -326,8 +326,19 @@ impl SystemdManager {
 
     async fn write_unit_impl(&self, name: &str, content: &str) -> Result<(), SystemdError> {
         validate_unit_name(name)?;
-        let path = std::path::Path::new(UNIT_DIR).join(name);
-        tokio::fs::write(&path, content).await.context(IoSnafu)?;
+        super::confined_write::write_async(
+            std::path::Path::new(UNIT_DIR),
+            name,
+            content.as_bytes(),
+        )
+        .await
+        .map_err(|e| match e.kind {
+            super::confined_write::ConfinedWriteErrorKind::Io(io_err) => IoSnafu.into_error(io_err),
+            super::confined_write::ConfinedWriteErrorKind::Escape => InvalidUnitNameSnafu {
+                name: name.to_owned(),
+            }
+            .build(),
+        })?;
         Ok(())
     }
 

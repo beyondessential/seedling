@@ -15,6 +15,7 @@ pub mod translate;
 pub mod types;
 
 pub(crate) mod caddy;
+pub(crate) mod confined_write;
 pub(crate) mod data_plane;
 pub(crate) mod podman;
 pub(crate) mod systemd;

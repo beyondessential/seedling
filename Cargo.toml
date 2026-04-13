@@ -27,6 +27,7 @@ reqwest = { version = "0.13.2", features = ["json"] }
 rhai = { version = "1.24.0", features = ["metadata"] }
 rtnetlink = "0.20.0"
 rusqlite = { version = "0.39.0", features = ["bundled"] }
+rustix = { version = "1.0.7", features = ["fs", "process"] }
 rustls = "0.23.37"
 rustls-pki-types = "1.14.0"
 serde = { version = "1.0.228", features = ["derive"] }
@@ -43,3 +44,6 @@ zxcvbn = "2.2.2"
 
 [patch.crates-io]
 smartstring = { git = "https://github.com/bodil/smartstring", rev = "refs/pull/34/head" }
+
+[dev-dependencies]
+tempfile = "3.20.0"
