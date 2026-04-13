@@ -4,14 +4,14 @@ use clap::Subcommand;
 use seedling::oi::keys::ClientIdentity;
 
 #[derive(Subcommand)]
-pub(super) enum MeCommand {
+pub(super) enum ClientCommand {
     /// Print this client's key fingerprint (no server connection needed)
     Fingerprint,
 }
 
-pub(super) fn dispatch(cmd: &MeCommand, identity: &ClientIdentity, key_path: &Path) {
+pub(super) fn dispatch(cmd: &ClientCommand, identity: &ClientIdentity, key_path: &Path) {
     match cmd {
-        MeCommand::Fingerprint => {
+        ClientCommand::Fingerprint => {
             println!("{}", identity.fingerprint);
             eprintln!("Client key: {}", key_path.display());
             eprintln!(

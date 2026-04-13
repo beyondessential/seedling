@@ -9,12 +9,12 @@ use seedling::oi::{
 
 #[path = "ctl/apps.rs"]
 mod apps;
+#[path = "ctl/client.rs"]
+mod client;
 #[path = "ctl/forward.rs"]
 mod forward;
 #[path = "ctl/known_hosts.rs"]
 mod known_hosts;
-#[path = "ctl/me.rs"]
-mod me;
 #[path = "ctl/op.rs"]
 mod op;
 #[path = "ctl/shell.rs"]
@@ -58,11 +58,10 @@ enum Command {
         #[command(subcommand)]
         command: op::OpCommand,
     },
-    /// Self management (fingerprint)
-    #[command(name = "self")]
-    Me {
+    /// Client info (fingerprint)
+    Client {
         #[command(subcommand)]
-        command: me::MeCommand,
+        command: client::ClientCommand,
     },
 }
 
@@ -104,7 +103,7 @@ async fn main() {
         tracing::warn!("SSLKEYLOGFILE is set — TLS session keys are being logged to disk");
     }
 
-    // Load (or generate) the client identity early; `self fingerprint` needs it
+    // Load (or generate) the client identity early; `client fingerprint` needs it
     // before any server connection is attempted.
     let key_path = ClientIdentity::default_path();
     let (identity, is_new) = ClientIdentity::load_or_generate(&key_path).unwrap_or_else(|e| {
@@ -122,8 +121,8 @@ async fn main() {
         );
     }
 
-    if let Command::Me { command } = &cli.command {
-        me::dispatch(command, &identity, &key_path);
+    if let Command::Client { command } = &cli.command {
+        client::dispatch(command, &identity, &key_path);
         return;
     }
 
@@ -216,7 +215,7 @@ async fn main() {
     match cli.command {
         Command::Apps { command } => apps::dispatch(&client, command).await,
         Command::Op { command } => op::dispatch(&client, command).await,
-        Command::Me { .. } => unreachable!("handled before connect"),
+        Command::Client { .. } => unreachable!("handled before connect"),
     }
 }
 
