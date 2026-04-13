@@ -158,57 +158,224 @@ impl Reconciler {
         snapshots
     }
 
+    // -----------------------------------------------------------------------
+    // Tick — main reconciliation loop body
+    // -----------------------------------------------------------------------
+
     // r[reconciliation.loop]
     // r[reconciliation.convergence]
     // r[reconciliation.idempotency]
     // r[fault.non-blocking]
     #[tracing::instrument(skip_all, level = "debug")]
-    /// Returns `true` if there are active apps to reconcile, `false` if the
-    /// system is idle (no apps installed). The caller can use this to suspend
-    /// the tick interval until the next `tick_notify`.
     pub async fn tick(&mut self) -> bool {
         let apps = self.snapshot_all_apps();
 
-        // When no apps are installed (or all have finished uninstalling),
-        // tear down infrastructure so the system is fully clean.
         if apps.is_empty() {
-            // Flush nftables rules (empty set).
-            let empty_rules = DataPlaneRules::default();
-            if let Err(e) = self.driver.data_plane.apply_rules(&empty_rules).await {
-                error!(error = %e, "idle: flush rules failed");
-            }
-            // Remove all service routes.
-            if let Err(e) = self.driver.data_plane.apply_routes(&[]).await {
-                error!(error = %e, "idle: clear routes failed");
-            }
-            // Stop Caddy and remove the proxy network.
-            caddy::teardown_caddy(&*self.driver.container, &*self.driver.process).await;
-            self.caddy_v4_addr = None;
+            self.tear_down_idle().await;
             return false;
         }
 
-        // Per-app phases: pods, uninstall, volumes
-        let mut running_pods_by_app: HashMap<String, Vec<RunningPod>> = HashMap::new();
-
-        for app in &apps {
-            let pod_update = pods::observe_and_actuate(
+        // r[impl reconciliation.liveness]
+        // --- Concurrent phase: pods ∥ volumes ∥ caddy ---
+        let (pod_updates, vol_observations, caddy_result) = tokio::join!(
+            run_pods_phase(
                 &self.observer,
                 &self.actuator,
                 &self.driver,
-                &app.desired,
-                &self.node_prefix,
-            )
-            .await;
+                &apps,
+                &self.node_prefix
+            ),
+            run_volumes_phase(&self.observer, &self.actuator, &apps),
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                caddy::ensure_caddy_running(
+                    &*self.driver.container,
+                    &*self.driver.process,
+                    &self.node_prefix,
+                    &self.data_dir,
+                ),
+            ),
+        );
 
-            // r[fault.image-pull]
-            self.file_image_pull_faults(&app.name, &pod_update);
-            // r[fault.container-start]
-            self.file_unit_failure_faults(&app.name, &pod_update);
-            self.persist_obs(pod_update.observations);
-            running_pods_by_app.insert(app.name.clone(), pod_update.running);
+        // --- Process pod results ---
+        let running_pods_by_app = self.ingest_pod_results(&apps, pod_updates);
+
+        // --- Process volume results ---
+        self.persist_obs(vol_observations);
+
+        // --- Process caddy result ---
+        // r[autonomous.ingress]
+        let caddy_addrs = match caddy_result {
+            Ok(Ok(addrs)) => {
+                *self.caddy_admin_addr.write().await = addrs.v6;
+                self.caddy_v4_addr = addrs.v4.and_then(|sa| match sa.ip() {
+                    IpAddr::V4(ip4) => Some(ip4),
+                    _ => None,
+                });
+                Some(addrs)
+            }
+            Ok(Err(e)) => {
+                error!(error = %e, "caddy health check failed; skipping nftables and proxy this tick");
+                None
+            }
+            Err(_) => {
+                warn!("caddy health check timed out; skipping nftables and proxy this tick");
+                None
+            }
+        };
+
+        // --- Uninstall phase (sequential, needs running_pods_by_app) ---
+        self.run_uninstall_phase(&apps, &running_pods_by_app).await;
+
+        // --- Compute routes (sync) ---
+        let (all_routes, route_obs) = compute_routes(
+            &apps,
+            &running_pods_by_app,
+            &self.node_prefix,
+            &*self.registry,
+        );
+        self.persist_obs(route_obs);
+
+        // --- Compute nftables + proxy (sync, gated on caddy) ---
+        let nft_and_proxy = caddy_addrs.and_then(|addrs| {
+            let caddy_addr = addrs.v6;
+            let caddy_ip = match caddy_addr.ip() {
+                IpAddr::V6(ip) => ip,
+                _ => {
+                    warn!(
+                        "caddy admin address is not yet IPv6; skipping nftables and proxy this tick"
+                    );
+                    return None;
+                }
+            };
+
+            let dp_rules = compute_nftables_rules(
+                &apps,
+                &running_pods_by_app,
+                caddy_ip,
+                self.caddy_v4_addr,
+                &self.node_prefix,
+                &*self.registry,
+            );
+
+            let proxy_build =
+                compute_proxy_config(&apps, &self.node_prefix, &*self.registry, caddy_addr);
+
+            Some((dp_rules, proxy_build, caddy_addr))
+        });
+
+        // --- Apply phase: concurrent network-plane writes ---
+        match nft_and_proxy {
+            Some((dp_rules, proxy_build, caddy_addr)) => {
+                let ProxyBuildResult {
+                    config: proxy_config,
+                    caddy_json,
+                    observations: proxy_obs,
+                    ready_observations: proxy_ready_obs,
+                } = proxy_build;
+                let has_proxy_config =
+                    !proxy_config.virtual_hosts.is_empty() || !proxy_config.l4_routes.is_empty();
+
+                self.persist_obs(proxy_obs);
+
+                let (routes_res, rules_res, proxy_res) = tokio::join!(
+                    self.driver.data_plane.apply_routes(&all_routes),
+                    self.driver.data_plane.apply_rules(&dp_rules),
+                    async {
+                        if has_proxy_config {
+                            self.driver.proxy.apply_config(&proxy_config).await
+                        } else {
+                            Ok(())
+                        }
+                    },
+                );
+
+                if let Err(e) = routes_res {
+                    error!(error = %e, "routes: apply_routes failed");
+                }
+                if let Err(e) = rules_res {
+                    error!(error = %e, "rules: apply_rules failed");
+                }
+                match proxy_res {
+                    Err(e) => {
+                        error!(error = ?e, addr = %caddy_addr, "proxy: apply_config failed");
+                    }
+                    Ok(()) if has_proxy_config => {
+                        self.persist_obs(proxy_ready_obs);
+
+                        // r[impl infra.proxy.upgrade.cache]
+                        if let Err(e) = caddy::write_cached_proxy_json(&self.data_dir, &caddy_json)
+                        {
+                            warn!(
+                                error = %e,
+                                "proxy: failed to cache proxy config; upgrade continuity may be impaired"
+                            );
+                        }
+                    }
+                    Ok(()) => {}
+                }
+            }
+            None => {
+                // Caddy unavailable — still apply routes (they don't need caddy).
+                if let Err(e) = self.driver.data_plane.apply_routes(&all_routes).await {
+                    error!(error = %e, "routes: apply_routes failed");
+                }
+            }
         }
 
-        for app in &apps {
+        self.emit_state_changes(&apps);
+
+        true
+    }
+
+    // -----------------------------------------------------------------------
+    // Idle teardown
+    // -----------------------------------------------------------------------
+
+    async fn tear_down_idle(&mut self) {
+        let empty_rules = DataPlaneRules::default();
+        if let Err(e) = self.driver.data_plane.apply_rules(&empty_rules).await {
+            error!(error = %e, "idle: flush rules failed");
+        }
+        if let Err(e) = self.driver.data_plane.apply_routes(&[]).await {
+            error!(error = %e, "idle: clear routes failed");
+        }
+        caddy::teardown_caddy(&*self.driver.container, &*self.driver.process).await;
+        self.caddy_v4_addr = None;
+    }
+
+    // -----------------------------------------------------------------------
+    // Pod result ingestion
+    // -----------------------------------------------------------------------
+
+    fn ingest_pod_results(
+        &mut self,
+        apps: &[AppSnapshot],
+        pod_updates: Vec<(String, pods::PodActuationUpdate)>,
+    ) -> HashMap<String, Vec<RunningPod>> {
+        let mut running_pods_by_app = HashMap::new();
+        for (app_name, pod_update) in pod_updates {
+            // r[fault.image-pull]
+            self.file_image_pull_faults(&app_name, &pod_update);
+            // r[fault.container-start]
+            self.file_unit_failure_faults(&app_name, &pod_update);
+            self.persist_obs(pod_update.observations);
+            running_pods_by_app.insert(app_name, pod_update.running);
+        }
+        let _ = apps;
+        running_pods_by_app
+    }
+
+    // -----------------------------------------------------------------------
+    // Uninstall phase
+    // -----------------------------------------------------------------------
+
+    async fn run_uninstall_phase(
+        &mut self,
+        apps: &[AppSnapshot],
+        running_pods_by_app: &HashMap<String, Vec<RunningPod>>,
+    ) {
+        for app in apps {
             if app.phase != AppPhase::Uninstalling {
                 continue;
             }
@@ -230,16 +397,10 @@ impl Reconciler {
                         &app.name,
                         "",
                     );
-                    // Delete resource instances so a reinstall gets fresh
-                    // IDs. Old observations under the old IDs become inert
-                    // historical artifacts — the oracle won't see them for
-                    // the new instances.
                     let _ = db.conn.execute(
                         "DELETE FROM resource_instances WHERE app = ?1",
                         rusqlite::params![app.name],
                     );
-                    // Clear the dedup set so fresh observations are written
-                    // on reinstall.
                     let app_instance_ids: HashSet<InstanceId> = app
                         .desired
                         .resources
@@ -266,166 +427,12 @@ impl Reconciler {
                 }
             }
         }
-
-        for app in &apps {
-            if app.phase == AppPhase::Uninstalling {
-                continue;
-            }
-            let vol_obs =
-                volumes::observe_and_actuate(&self.observer, &self.actuator, &app.desired).await;
-            self.persist_obs(vol_obs);
-        }
-
-        // Global: service routes (aggregated across all apps)
-        let mut all_routes = Vec::new();
-        let mut route_obs = Vec::new();
-        for app in &apps {
-            if app.phase == AppPhase::Uninstalling {
-                continue;
-            }
-            let running = running_pods_by_app
-                .get(&app.name)
-                .map(|v| v.as_slice())
-                .unwrap_or(&[]);
-            let (routes, obs) = routes::build(
-                &app.desired,
-                &app.app_def,
-                &self.node_prefix,
-                &*self.registry,
-                running,
-                &app.name,
-            );
-            all_routes.extend(routes);
-            route_obs.extend(obs);
-        }
-        if let Err(e) = self.driver.data_plane.apply_routes(&all_routes).await {
-            error!(error = %e, "routes: apply_routes failed");
-        }
-        self.persist_obs(route_obs);
-
-        // r[autonomous.ingress]
-        match tokio::time::timeout(
-            Duration::from_secs(10),
-            caddy::ensure_caddy_running(
-                &*self.driver.container,
-                &*self.driver.process,
-                &self.node_prefix,
-                &self.data_dir,
-            ),
-        )
-        .await
-        {
-            Ok(Ok(addrs)) => {
-                *self.caddy_admin_addr.write().await = addrs.v6;
-                self.caddy_v4_addr = addrs.v4.and_then(|sa| match sa.ip() {
-                    IpAddr::V4(ip4) => Some(ip4),
-                    _ => None,
-                });
-            }
-            Ok(Err(e)) => {
-                error!(error = %e, "caddy health check failed; skipping nftables and proxy this tick");
-                return true;
-            }
-            Err(_) => {
-                warn!("caddy health check timed out; skipping nftables and proxy this tick");
-                return true;
-            }
-        }
-
-        let caddy_addr = *self.caddy_admin_addr.read().await;
-        let caddy_ip = match caddy_addr.ip() {
-            IpAddr::V6(ip) => ip,
-            _ => {
-                warn!("caddy admin address is not yet IPv6; skipping nftables and proxy this tick");
-                return true;
-            }
-        };
-
-        // Global: nftables rules (aggregated across all apps)
-        let mut all_ingress = Vec::new();
-        let mut all_mounts = Vec::new();
-        let mut all_service_dnat = Vec::new();
-        for app in &apps {
-            if app.phase == AppPhase::Uninstalling {
-                continue;
-            }
-            let running = running_pods_by_app
-                .get(&app.name)
-                .map(|v| v.as_slice())
-                .unwrap_or(&[]);
-            all_ingress.extend(rules::build_ingress_rules(
-                &app.app_def,
-                caddy_ip,
-                self.caddy_v4_addr,
-            ));
-            all_mounts.extend(rules::build_mount_rules(running));
-            all_service_dnat.extend(rules::build_service_dnat_rules(
-                &self.node_prefix,
-                &*self.registry,
-                running,
-                &app.name,
-            ));
-        }
-        let dp_rules = DataPlaneRules {
-            ingress: all_ingress,
-            mounts: all_mounts,
-            service_dnat: all_service_dnat,
-        };
-        if let Err(e) = self.driver.data_plane.apply_rules(&dp_rules).await {
-            error!(error = %e, "rules: apply_rules failed");
-        }
-
-        // Global: proxy config (aggregated across all apps)
-        let mut all_pairs = Vec::new();
-        let mut all_l4_routes = Vec::new();
-        let mut proxy_obs = Vec::new();
-        let mut proxy_ready_obs = Vec::new();
-        for app in &apps {
-            if app.phase == AppPhase::Uninstalling {
-                continue;
-            }
-            let build = proxy::collect(
-                &app.app_def,
-                &app.desired,
-                &self.node_prefix,
-                &*self.registry,
-                &app.name,
-            );
-            all_pairs.extend(build.pairs);
-            all_l4_routes.extend(build.l4_routes);
-            proxy_obs.extend(build.observations);
-            proxy_ready_obs.extend(build.ready_observations);
-        }
-        self.persist_obs(proxy_obs);
-
-        if !all_pairs.is_empty() || !all_l4_routes.is_empty() {
-            let mut config = build_proxy_config(&all_pairs, caddy_addr);
-            config.l4_routes = all_l4_routes.clone();
-            let caddy_json = caddy::build_caddy_config(&config);
-
-            if let Err(e) = self.driver.proxy.apply_config(&config).await {
-                error!(error = ?e, addr = %caddy_addr, "proxy: apply_config failed");
-            } else {
-                self.persist_obs(proxy_ready_obs);
-
-                // r[impl infra.proxy.upgrade.cache]
-                if let Err(e) = caddy::write_cached_proxy_json(&self.data_dir, &caddy_json) {
-                    warn!(
-                        error = %e,
-                        "proxy: failed to cache proxy config; upgrade continuity may be impaired"
-                    );
-                }
-            }
-        }
-
-        // Derive lifecycle states for all instances and emit ResourceStateChanged
-        // events for any that differ from the previous tick.
-        self.emit_state_changes(&apps);
-
-        true
     }
 
-    // r[fault.image-pull]
+    // -----------------------------------------------------------------------
+    // Fault filing
+    // -----------------------------------------------------------------------
+
     fn file_image_pull_faults(&self, app: &str, update: &pods::PodActuationUpdate) {
         let db = self.db.lock();
         for (instance, reference) in &update.image_pull_failures {
@@ -507,6 +514,10 @@ impl Reconciler {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // State-change emission
+    // -----------------------------------------------------------------------
+
     fn emit_state_changes(&mut self, apps: &[AppSnapshot]) {
         let db = self.db.lock();
         let mut new_states = BTreeMap::new();
@@ -547,8 +558,6 @@ impl Reconciler {
                     new_states.insert(key, state);
                 }
 
-                // If this desired resource itself has no persisted instances yet,
-                // still track it so the first observation triggers a change event.
                 if instances.is_empty() {
                     let key = (app.name.clone(), inst_hex);
                     new_states.insert(key, LifecycleState::Pending);
@@ -558,6 +567,10 @@ impl Reconciler {
 
         self.prev_states = new_states;
     }
+
+    // -----------------------------------------------------------------------
+    // Observation persistence
+    // -----------------------------------------------------------------------
 
     // r[impl observe.persist]
     fn persist_obs(
@@ -584,6 +597,191 @@ impl Reconciler {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Concurrent phase: pods (all apps in parallel)
+// ---------------------------------------------------------------------------
+
+async fn run_pods_phase(
+    observer: &Observer,
+    actuator: &Actuator,
+    driver: &Arc<System>,
+    apps: &[AppSnapshot],
+    node_prefix: &Ipv6Net,
+) -> Vec<(String, pods::PodActuationUpdate)> {
+    let futures: Vec<_> = apps
+        .iter()
+        .map(|app| async move {
+            let update =
+                pods::observe_and_actuate(observer, actuator, driver, &app.desired, node_prefix)
+                    .await;
+            (app.name.clone(), update)
+        })
+        .collect();
+    futures_util::future::join_all(futures).await
+}
+
+// ---------------------------------------------------------------------------
+// Concurrent phase: volumes (all non-uninstalling apps in parallel)
+// ---------------------------------------------------------------------------
+
+async fn run_volumes_phase(
+    observer: &Observer,
+    actuator: &Actuator,
+    apps: &[AppSnapshot],
+) -> Vec<(
+    crate::runtime::identity::ResourceInstance,
+    &'static str,
+    serde_json::Value,
+)> {
+    let futures: Vec<_> = apps
+        .iter()
+        .filter(|app| app.phase != AppPhase::Uninstalling)
+        .map(|app| volumes::observe_and_actuate(observer, actuator, &app.desired))
+        .collect();
+    let results = futures_util::future::join_all(futures).await;
+    results.into_iter().flatten().collect()
+}
+
+// ---------------------------------------------------------------------------
+// Sync computation: service routes
+// ---------------------------------------------------------------------------
+
+fn compute_routes(
+    apps: &[AppSnapshot],
+    running_pods_by_app: &HashMap<String, Vec<RunningPod>>,
+    node_prefix: &Ipv6Net,
+    registry: &dyn InstanceRegistry,
+) -> (
+    Vec<crate::system::types::ServiceRoute>,
+    Vec<(
+        crate::runtime::identity::ResourceInstance,
+        &'static str,
+        serde_json::Value,
+    )>,
+) {
+    let mut all_routes = Vec::new();
+    let mut all_obs = Vec::new();
+    for app in apps {
+        if app.phase == AppPhase::Uninstalling {
+            continue;
+        }
+        let running = running_pods_by_app
+            .get(&app.name)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
+        let (routes, obs) = routes::build(
+            &app.desired,
+            &app.app_def,
+            node_prefix,
+            registry,
+            running,
+            &app.name,
+        );
+        all_routes.extend(routes);
+        all_obs.extend(obs);
+    }
+    (all_routes, all_obs)
+}
+
+// ---------------------------------------------------------------------------
+// Sync computation: nftables rules
+// ---------------------------------------------------------------------------
+
+fn compute_nftables_rules(
+    apps: &[AppSnapshot],
+    running_pods_by_app: &HashMap<String, Vec<RunningPod>>,
+    caddy_ip: std::net::Ipv6Addr,
+    caddy_v4_addr: Option<Ipv4Addr>,
+    node_prefix: &Ipv6Net,
+    registry: &dyn InstanceRegistry,
+) -> DataPlaneRules {
+    let mut all_ingress = Vec::new();
+    let mut all_mounts = Vec::new();
+    let mut all_service_dnat = Vec::new();
+    for app in apps {
+        if app.phase == AppPhase::Uninstalling {
+            continue;
+        }
+        let running = running_pods_by_app
+            .get(&app.name)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
+        all_ingress.extend(rules::build_ingress_rules(
+            &app.app_def,
+            caddy_ip,
+            caddy_v4_addr,
+        ));
+        all_mounts.extend(rules::build_mount_rules(running));
+        all_service_dnat.extend(rules::build_service_dnat_rules(
+            node_prefix,
+            registry,
+            running,
+            &app.name,
+        ));
+    }
+    DataPlaneRules {
+        ingress: all_ingress,
+        mounts: all_mounts,
+        service_dnat: all_service_dnat,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sync computation: proxy config
+// ---------------------------------------------------------------------------
+
+struct ProxyBuildResult {
+    config: crate::system::types::ProxyConfig,
+    caddy_json: serde_json::Value,
+    observations: Vec<(
+        crate::runtime::identity::ResourceInstance,
+        &'static str,
+        serde_json::Value,
+    )>,
+    ready_observations: Vec<(
+        crate::runtime::identity::ResourceInstance,
+        &'static str,
+        serde_json::Value,
+    )>,
+}
+
+fn compute_proxy_config(
+    apps: &[AppSnapshot],
+    node_prefix: &Ipv6Net,
+    registry: &dyn InstanceRegistry,
+    caddy_addr: SocketAddr,
+) -> ProxyBuildResult {
+    let mut all_pairs = Vec::new();
+    let mut all_l4_routes = Vec::new();
+    let mut observations = Vec::new();
+    let mut ready_observations = Vec::new();
+    for app in apps {
+        if app.phase == AppPhase::Uninstalling {
+            continue;
+        }
+        let build = proxy::collect(&app.app_def, &app.desired, node_prefix, registry, &app.name);
+        all_pairs.extend(build.pairs);
+        all_l4_routes.extend(build.l4_routes);
+        observations.extend(build.observations);
+        ready_observations.extend(build.ready_observations);
+    }
+
+    let mut config = build_proxy_config(&all_pairs, caddy_addr);
+    config.l4_routes = all_l4_routes;
+    let caddy_json = caddy::build_caddy_config(&config);
+
+    ProxyBuildResult {
+        config,
+        caddy_json,
+        observations,
+        ready_observations,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Node prefix derivation
+// ---------------------------------------------------------------------------
 
 // r[infra.node.prefix]
 /// Derive the node's /48 ULA prefix from `/etc/machine-id`.
