@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::Serialize;
 
 use crate::oi::events::EventSender;
@@ -44,7 +44,7 @@ pub struct FaultRecord {
     pub resource_name: Option<String>,
     pub instance_id: Option<String>,
     pub kind: String,
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: Timestamp,
     pub description: String,
 }
 
@@ -59,8 +59,8 @@ pub fn file_fault(
     description: &str,
 ) -> rusqlite::Result<String> {
     let id = uuid::Uuid::new_v4().to_string();
-    let now: DateTime<Utc> = std::time::SystemTime::now().into();
-    let timestamp = now.to_rfc3339();
+    let now = Timestamp::now();
+    let timestamp = now.to_string();
     db.conn.execute(
         "INSERT INTO faults (id, app, resource_type, resource_name, instance_id, kind, timestamp, description)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -83,10 +83,10 @@ pub fn file_fault(
 /// Clear a single fault by ID. The `app` is needed for the event broadcast;
 /// pass it from the context that looked up the fault record.
 pub fn clear_fault(db: &crate::runtime::db::Db, fault_id: &str, app: &str) -> rusqlite::Result<()> {
-    let now: DateTime<Utc> = std::time::SystemTime::now().into();
+    let now = Timestamp::now();
     let changed = db.conn.execute(
         "UPDATE faults SET cleared_at = ?1 WHERE id = ?2 AND cleared_at IS NULL",
-        rusqlite::params![now.to_rfc3339(), fault_id],
+        rusqlite::params![now.to_string(), fault_id],
     )?;
     if changed > 0 {
         emit_cleared(fault_id, app);
@@ -129,9 +129,9 @@ pub fn list_active_faults(
 
 fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<FaultRecord> {
     let ts_str: String = row.get(6)?;
-    let timestamp = DateTime::parse_from_rfc3339(&ts_str)
-        .map(|dt| dt.with_timezone(&Utc))
-        .unwrap_or_else(|_| std::time::SystemTime::now().into());
+    let timestamp = ts_str
+        .parse::<Timestamp>()
+        .unwrap_or_else(|_| Timestamp::now());
     Ok(FaultRecord {
         id: row.get(0)?,
         app: row.get(1)?,

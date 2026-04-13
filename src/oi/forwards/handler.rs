@@ -23,7 +23,7 @@ pub(crate) fn list_forwards(state: &Arc<OiState>, params: Value) -> HandlerResul
                 "service": r.service,
                 "port": r.port,
                 "proto": r.proto,
-                "opened_at": r.opened_at.to_rfc3339(),
+                "opened_at": r.opened_at.to_string(),
             })
         })
         .collect();

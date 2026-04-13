@@ -162,7 +162,7 @@ pub(crate) async fn forward_port_session(
         port: params.port,
         proto,
         target_addr,
-        opened_at: chrono::DateTime::<chrono::Utc>::from(std::time::SystemTime::now()),
+        opened_at: jiff::Timestamp::now(),
         stop_tx,
         udp_tx,
     });

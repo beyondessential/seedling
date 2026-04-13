@@ -1,10 +1,9 @@
 use std::{
     collections::{BTreeMap, HashMap},
     sync::Arc,
-    time::SystemTime,
 };
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
@@ -76,7 +75,7 @@ pub struct AppEntry {
     pub tick_notify: Arc<Notify>,
     /// Active script-evaluation fault, if the last reload failed.
     /// Cleared on the next successful evaluation.
-    pub script_error: Option<(String, DateTime<Utc>)>,
+    pub script_error: Option<(String, Timestamp)>,
 }
 
 pub struct AppRegistry {
@@ -113,10 +112,7 @@ impl AppRegistry {
             Ok(a) => (a, None),
             Err(e) => {
                 tracing::warn!(app = %name, error = %e, "script has errors at registration; params may need to be set");
-                (
-                    App::default(),
-                    Some((e.to_string(), SystemTime::now().into())),
-                )
+                (App::default(), Some((e.to_string(), Timestamp::now())))
             }
         };
         self.entries.insert(
@@ -158,7 +154,7 @@ impl AppRegistry {
             Err(e) => {
                 if let Some(entry) = self.entries.get_mut(name) {
                     entry.script = script;
-                    entry.script_error = Some((e.to_string(), SystemTime::now().into()));
+                    entry.script_error = Some((e.to_string(), Timestamp::now()));
                 }
             }
         }
@@ -221,10 +217,7 @@ impl AppRegistry {
                 Ok(a) => (a, None),
                 Err(e) => {
                     tracing::warn!("failed to reload script for app '{name}': {e}");
-                    (
-                        App::default(),
-                        Some((e.to_string(), SystemTime::now().into())),
-                    )
+                    (App::default(), Some((e.to_string(), Timestamp::now())))
                 }
             };
             registry.entries.insert(

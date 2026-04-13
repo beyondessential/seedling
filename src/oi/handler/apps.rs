@@ -150,7 +150,7 @@ pub(crate) fn describe_app(state: &OiState, params: Value) -> HandlerResult {
                 "resource_name": f.resource_name,
                 "instance_id": f.instance_id,
                 "kind": f.kind,
-                "timestamp": f.timestamp.to_rfc3339(),
+                "timestamp": f.timestamp.to_string(),
                 "description": f.description,
             })
         })
@@ -246,8 +246,8 @@ pub(crate) fn describe_app(state: &OiState, params: Value) -> HandlerResult {
                                 "id": inst.id.to_hex(),
                                 "display_name": inst.display_name,
                                 "lifecycle": format!("{lifecycle:?}"),
-                                "transition_time": transition_time.map(|t| {
-                                    chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()
+                                "transition_time": transition_time.and_then(|t| {
+                                    jiff::Timestamp::try_from(t).ok().map(|ts| ts.to_string())
                                 }),
                             })
                         })
@@ -271,7 +271,7 @@ pub(crate) fn describe_app(state: &OiState, params: Value) -> HandlerResult {
                             "resource_name": f.resource_name,
                             "instance_id": f.instance_id,
                             "kind": f.kind,
-                            "timestamp": f.timestamp.to_rfc3339(),
+                            "timestamp": f.timestamp.to_string(),
                             "description": f.description,
                         })
                     })

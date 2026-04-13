@@ -43,7 +43,7 @@ pub(crate) fn list_shells(state: &Arc<OiState>, params: Value) -> HandlerResult 
                 "session_id": r.session_id.to_string(),
                 "app": r.app,
                 "name": r.name,
-                "opened_at": r.opened_at.to_rfc3339(),
+                "opened_at": r.opened_at.to_string(),
             })
         })
         .collect();

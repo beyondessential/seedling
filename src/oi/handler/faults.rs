@@ -26,7 +26,7 @@ pub(crate) fn list_faults(state: &OiState, params: Value) -> HandlerResult {
                 "resource_name": f.resource_name,
                 "instance_id": f.instance_id,
                 "kind": f.kind,
-                "timestamp": f.timestamp.to_rfc3339(),
+                "timestamp": f.timestamp.to_string(),
                 "description": f.description,
             })
         })

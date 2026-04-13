@@ -1,6 +1,6 @@
 use std::{collections::HashMap, net::Ipv6Addr, sync::Arc};
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use parking_lot::Mutex;
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
@@ -27,7 +27,7 @@ pub struct ForwardEntry {
     pub proto: ForwardProto,
     /// Resolved IPv6 address of the target service instance.
     pub target_addr: Ipv6Addr,
-    pub opened_at: DateTime<Utc>,
+    pub opened_at: Timestamp,
     /// Broadcast stop to the control-stream holder and, for UDP forwards, the relay task.
     pub stop_tx: watch::Sender<bool>,
     /// UDP only: channel to deliver incoming QUIC datagram payloads to the relay task.
@@ -41,7 +41,7 @@ pub struct ForwardRecord {
     pub service: String,
     pub port: u16,
     pub proto: ForwardProto,
-    pub opened_at: DateTime<Utc>,
+    pub opened_at: Timestamp,
 }
 
 // i[forward.concurrent]

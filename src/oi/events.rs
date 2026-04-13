@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::Serialize;
 use tokio::sync::broadcast;
 
@@ -7,38 +7,38 @@ use tokio::sync::broadcast;
 #[serde(tag = "type")]
 pub enum OiEvent {
     AppRegistered {
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
         app: String,
     },
     AppDeregistered {
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
         app: String,
     },
     AppUpdated {
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
         app: String,
     },
     OperationStarted {
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
         app: String,
         action_name: String,
         operation_id: String,
     },
     OperationCompleted {
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
         app: String,
         action_name: String,
         operation_id: String,
     },
     OperationFailed {
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
         app: String,
         action_name: String,
         operation_id: String,
         error: String,
     },
     FaultFiled {
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
         id: String,
         app: String,
         resource_type: Option<String>,
@@ -48,12 +48,12 @@ pub enum OiEvent {
         description: String,
     },
     FaultCleared {
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
         id: String,
         app: String,
     },
     ResourceStateChanged {
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
         app: String,
         resource_type: String,
         resource_name: String,
@@ -61,19 +61,19 @@ pub enum OiEvent {
         state: String,
     },
     ShellExited {
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
         session_id: String,
         exit_code: i32,
     },
     ForwardStarted {
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
         forward_id: String,
         app: String,
         service: String,
         port: u16,
     },
     ForwardStopped {
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
         forward_id: String,
     },
 }
@@ -85,8 +85,8 @@ pub fn new_event_channel() -> EventSender {
     tx
 }
 
-fn now() -> DateTime<Utc> {
-    std::time::SystemTime::now().into()
+fn now() -> Timestamp {
+    Timestamp::now()
 }
 
 /// Emit an event, ignoring the result (no subscribers is fine).

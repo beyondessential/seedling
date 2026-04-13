@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use parking_lot::Mutex;
 use uuid::Uuid;
 
@@ -10,7 +10,7 @@ pub struct ShellSession {
     pub session_id: SessionId,
     pub app: String,
     pub name: String,
-    pub opened_at: DateTime<Utc>,
+    pub opened_at: Timestamp,
     pub(crate) pty_master_fd: std::os::unix::io::RawFd,
     pub(crate) stop_tx: tokio::sync::oneshot::Sender<()>,
 }
@@ -20,7 +20,7 @@ pub struct ShellRecord {
     pub session_id: SessionId,
     pub app: String,
     pub name: String,
-    pub opened_at: DateTime<Utc>,
+    pub opened_at: Timestamp,
 }
 
 pub struct ShellRegistry {

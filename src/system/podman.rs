@@ -8,8 +8,6 @@ use std::{
     time::SystemTime,
 };
 
-use chrono::DateTime;
-
 use ipnet::Ipv6Net;
 use podman_rest_client::{
     Config, PodmanRestClient,
@@ -670,15 +668,11 @@ fn parse_rfc3339(s: &str) -> Option<SystemTime> {
     if s.is_empty() || s.starts_with("0001-01-01") {
         return None;
     }
-    let dt = DateTime::parse_from_rfc3339(s).ok()?;
-    let secs = dt.timestamp();
-    if secs < 0 {
+    let ts: jiff::Timestamp = s.parse().ok()?;
+    if ts.as_second() < 0 {
         return None;
     }
-    SystemTime::UNIX_EPOCH.checked_add(std::time::Duration::new(
-        secs as u64,
-        dt.timestamp_subsec_nanos(),
-    ))
+    Some(SystemTime::from(ts))
 }
 
 fn build_filters(filter: &ContainerFilter<'_>) -> Option<String> {

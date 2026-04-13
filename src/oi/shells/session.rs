@@ -395,7 +395,7 @@ pub(crate) async fn open_shell_session(
         session_id,
         app: app_name.clone(),
         name: shell_name.clone(),
-        opened_at: chrono::DateTime::<chrono::Utc>::from(std::time::SystemTime::now()),
+        opened_at: jiff::Timestamp::now(),
         pty_master_fd,
         stop_tx,
     });
