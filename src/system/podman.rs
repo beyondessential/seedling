@@ -20,7 +20,7 @@ use podman_rest_client::{
     },
 };
 
-use snafu::Snafu;
+use snafu::{IntoError, Snafu};
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf, unix::AsyncFd},
     process::Command,
@@ -44,11 +44,18 @@ pub(crate) enum PodmanError {
     #[snafu(display("podman API error: {source}"))]
     Api {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        backtrace: snafu::Backtrace,
     },
     #[snafu(display("unexpected response from podman: {message}"))]
-    Protocol { message: String },
+    Protocol {
+        message: String,
+        backtrace: snafu::Backtrace,
+    },
     #[snafu(display("image pull failed: {message}"))]
-    Pull { message: String },
+    Pull {
+        message: String,
+        backtrace: snafu::Backtrace,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -68,6 +75,7 @@ impl PodmanRuntime {
         .await
         .map_err(|e| PodmanError::Api {
             source: Box::new(e),
+            backtrace: std::backtrace::Backtrace::capture(),
         })?;
 
         Ok(Self { client })
@@ -230,7 +238,7 @@ impl PodmanRuntime {
             .await
             .map_err(map_api_err)?;
         if let Some(err) = report.error {
-            return Err(PodmanError::Pull { message: err });
+            return PullSnafu { message: err }.fail();
         }
         Ok(())
     }
@@ -304,11 +312,12 @@ impl PodmanRuntime {
             .await
             .map_err(map_api_err)?;
 
-        let bridge_name = created
-            .network_interface
-            .ok_or_else(|| PodmanError::Protocol {
+        let bridge_name = created.network_interface.ok_or_else(|| {
+            ProtocolSnafu {
                 message: format!("network {name} was created but has no network_interface field"),
-            })?;
+            }
+            .build()
+        })?;
 
         Ok(bridge_name)
     }
@@ -346,9 +355,10 @@ impl PodmanRuntime {
             .map_err(map_api_err)?;
         for r in &reports {
             if let Some(err) = &r.err {
-                return Err(PodmanError::Protocol {
+                return ProtocolSnafu {
                     message: format!("network delete '{name}': {err}"),
-                });
+                }
+                .fail();
             }
         }
         Ok(())
@@ -395,8 +405,11 @@ impl PodmanRuntime {
             .volume_inspect_libpod(name)
             .await
             .map_err(map_api_err)?;
-        let mountpoint = info.mountpoint.ok_or_else(|| PodmanError::Protocol {
-            message: format!("volume '{name}' has no mountpoint"),
+        let mountpoint = info.mountpoint.ok_or_else(|| {
+            ProtocolSnafu {
+                message: format!("volume '{name}' has no mountpoint"),
+            }
+            .build()
         })?;
         Ok(std::path::PathBuf::from(mountpoint))
     }
@@ -436,9 +449,10 @@ impl PodmanRuntime {
             .map_err(map_api_err)?;
         for r in &reports {
             if let Some(err) = &r.err {
-                return Err(PodmanError::Protocol {
+                return ProtocolSnafu {
                     message: format!("container delete '{name}': {err}"),
-                });
+                }
+                .fail();
             }
         }
         Ok(())
@@ -462,8 +476,11 @@ impl PodmanRuntime {
     }
 
     async fn exec_impl(&self, spec: ContainerSpec) -> Result<ExecHandle, PodmanError> {
-        let pty = nix::pty::openpty(None, None).map_err(|e| PodmanError::Protocol {
-            message: e.to_string(),
+        let pty = nix::pty::openpty(None, None).map_err(|e| {
+            ProtocolSnafu {
+                message: e.to_string(),
+            }
+            .build()
         })?;
 
         let master_raw = pty.master.as_raw_fd();
@@ -482,22 +499,25 @@ impl PodmanRuntime {
         let master_read_fd = pty.master.into_raw_fd();
         let master_write_fd = unsafe { libc::dup(master_read_fd) };
         if master_write_fd < 0 {
-            return Err(PodmanError::Protocol {
+            return ProtocolSnafu {
                 message: io::Error::last_os_error().to_string(),
-            });
+            }
+            .fail();
         }
 
         let stdout =
             AsyncPtyHalf::new(unsafe { OwnedFd::from_raw_fd(master_read_fd) }).map_err(|e| {
-                PodmanError::Protocol {
+                ProtocolSnafu {
                     message: e.to_string(),
                 }
+                .build()
             })?;
         let stdin =
             AsyncPtyHalf::new(unsafe { OwnedFd::from_raw_fd(master_write_fd) }).map_err(|e| {
-                PodmanError::Protocol {
+                ProtocolSnafu {
                     message: e.to_string(),
                 }
+                .build()
             })?;
 
         let slave_raw = pty.slave.into_raw_fd();
@@ -528,8 +548,11 @@ impl PodmanRuntime {
             });
         }
 
-        let child = cmd.spawn().map_err(|e| PodmanError::Protocol {
-            message: e.to_string(),
+        let child = cmd.spawn().map_err(|e| {
+            ProtocolSnafu {
+                message: e.to_string(),
+            }
+            .build()
         })?;
 
         Ok(ExecHandle {
@@ -633,9 +656,7 @@ impl AsyncWrite for AsyncPtyHalf {
 // ---------------------------------------------------------------------------
 
 fn map_api_err(e: podman_rest_client::Error) -> PodmanError {
-    PodmanError::Api {
-        source: Box::new(e),
-    }
+    ApiSnafu.into_error(Box::new(e))
 }
 
 fn is_not_found(e: &podman_rest_client::Error) -> bool {

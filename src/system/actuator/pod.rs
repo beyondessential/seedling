@@ -1,4 +1,5 @@
 use ipnet::Ipv6Net;
+use snafu::ResultExt;
 
 use crate::{
     defs::{
@@ -16,7 +17,7 @@ use crate::{
     },
 };
 
-use super::{ActuateError, Actuator};
+use super::{ActuateError, Actuator, ContainerSnafu, ProcessSnafu, VolumeWriteSnafu};
 
 fn pod_network_name(instance: &ResourceInstance) -> String {
     format!("seedling-{}", instance.display_name)
@@ -91,13 +92,13 @@ async fn ensure_volumes(driver: &System, volumes: &[ContainerVolume]) -> Result<
             .container
             .volume_exists(&vol.name)
             .await
-            .map_err(|e| ActuateError::Container { source: e })?
+            .context(ContainerSnafu)?
         {
             driver
                 .container
                 .create_volume(&vol.name)
                 .await
-                .map_err(|e| ActuateError::Container { source: e })?;
+                .context(ContainerSnafu)?;
             true
         } else {
             false
@@ -107,23 +108,17 @@ async fn ensure_volumes(driver: &System, volumes: &[ContainerVolume]) -> Result<
                 .container
                 .volume_mountpoint(&vol.name)
                 .await
-                .map_err(|e| ActuateError::Container { source: e })?;
+                .context(ContainerSnafu)?;
             for (path, contents) in &vol.def.writes {
                 let dest = mountpoint.join(path.trim_start_matches('/'));
                 if let Some(parent) = dest.parent() {
-                    tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                        ActuateError::VolumeWrite {
-                            path: dest.clone(),
-                            source: e,
-                        }
-                    })?;
+                    tokio::fs::create_dir_all(parent)
+                        .await
+                        .context(VolumeWriteSnafu { path: dest.clone() })?;
                 }
                 tokio::fs::write(&dest, contents)
                     .await
-                    .map_err(|e| ActuateError::VolumeWrite {
-                        path: dest.clone(),
-                        source: e,
-                    })?;
+                    .context(VolumeWriteSnafu { path: dest.clone() })?;
             }
         }
     }
@@ -140,14 +135,14 @@ async fn ensure_network(
         .container
         .network_exists(net_name)
         .await
-        .map_err(|e| ActuateError::Container { source: e })?
+        .context(ContainerSnafu)?
     {
         Ok(Some(
             driver
                 .container
                 .create_network(net_name, net_prefix, None)
                 .await
-                .map_err(|e| ActuateError::Container { source: e })?,
+                .context(ContainerSnafu)?,
         ))
     } else {
         Ok(None)
@@ -205,7 +200,7 @@ impl Actuator {
             .process
             .unit_state(&unit)
             .await
-            .map_err(|e| ActuateError::Process { source: e })?
+            .context(ProcessSnafu)?
         {
             match state.active {
                 ActiveState::Active | ActiveState::Activating => return Ok(bridge_name),
@@ -214,7 +209,7 @@ impl Actuator {
                         .process
                         .reset_failed_unit(&unit)
                         .await
-                        .map_err(|e| ActuateError::Process { source: e })?;
+                        .context(ProcessSnafu)?;
                 }
             }
         }
@@ -232,7 +227,7 @@ impl Actuator {
                 restart,
             })
             .await
-            .map_err(|e| ActuateError::Process { source: e })?;
+            .context(ProcessSnafu)?;
 
         Ok(bridge_name)
     }
@@ -250,7 +245,7 @@ impl Actuator {
             .process
             .unit_state(&unit)
             .await
-            .map_err(|e| ActuateError::Process { source: e })?
+            .context(ProcessSnafu)?
         {
             match state.active {
                 ActiveState::Active | ActiveState::Activating | ActiveState::Deactivating => {
@@ -258,7 +253,7 @@ impl Actuator {
                         .process
                         .stop_unit(&unit)
                         .await
-                        .map_err(|e| ActuateError::Process { source: e })?;
+                        .context(ProcessSnafu)?;
                     return Ok(());
                 }
                 ActiveState::Inactive | ActiveState::Failed => {
@@ -266,7 +261,7 @@ impl Actuator {
                         .process
                         .reset_failed_unit(&unit)
                         .await
-                        .map_err(|e| ActuateError::Process { source: e })?;
+                        .context(ProcessSnafu)?;
                 }
             }
         }
@@ -275,7 +270,7 @@ impl Actuator {
             .container
             .remove_container(&instance.display_name, true)
             .await
-            .map_err(|e| ActuateError::Container { source: e })?;
+            .context(ContainerSnafu)?;
 
         let net_name = pod_network_name(instance);
         if self
@@ -283,13 +278,13 @@ impl Actuator {
             .container
             .network_exists(&net_name)
             .await
-            .map_err(|e| ActuateError::Container { source: e })?
+            .context(ContainerSnafu)?
         {
             self.driver
                 .container
                 .remove_network(&net_name)
                 .await
-                .map_err(|e| ActuateError::Container { source: e })?;
+                .context(ContainerSnafu)?;
         }
 
         for vol_name in anon_volume_names {
@@ -298,13 +293,13 @@ impl Actuator {
                 .container
                 .volume_exists(vol_name)
                 .await
-                .map_err(|e| ActuateError::Container { source: e })?
+                .context(ContainerSnafu)?
             {
                 self.driver
                     .container
                     .remove_volume(vol_name)
                     .await
-                    .map_err(|e| ActuateError::Container { source: e })?;
+                    .context(ContainerSnafu)?;
             }
         }
 

@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use ipnet::Ipv6Net;
 use parking_lot::Mutex;
-use snafu::Snafu;
+use snafu::{ResultExt, Snafu};
 
 use crate::{
     defs::resource::{Resource, ResourceKind},
@@ -33,27 +33,38 @@ pub enum ActuateError {
     #[snafu(display("container backend: {source}"))]
     Container {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        backtrace: snafu::Backtrace,
     },
     #[snafu(display("process manager: {source}"))]
     Process {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        backtrace: snafu::Backtrace,
     },
     #[snafu(display("proxy: {source}"))]
     Proxy {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        backtrace: snafu::Backtrace,
     },
     #[snafu(display("data plane: {source}"))]
     DataPlane {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        backtrace: snafu::Backtrace,
     },
     #[snafu(display("image {reference} not found and pull failed"))]
-    ImageUnavailable { reference: String },
+    ImageUnavailable {
+        reference: String,
+        backtrace: snafu::Backtrace,
+    },
     #[snafu(display("resource kind {kind:?} is not supported by this actuator"))]
-    UnsupportedKind { kind: ResourceKind },
+    UnsupportedKind {
+        kind: ResourceKind,
+        backtrace: snafu::Backtrace,
+    },
     #[snafu(display("volume write {path:?}: {source}"))]
     VolumeWrite {
         path: std::path::PathBuf,
         source: std::io::Error,
+        backtrace: snafu::Backtrace,
     },
 }
 
@@ -164,13 +175,13 @@ impl Actuator {
                     .container
                     .volume_exists(&name)
                     .await
-                    .map_err(|e| ActuateError::Container { source: e })?
+                    .context(ContainerSnafu)?
                 {
                     self.driver
                         .container
                         .create_volume(&name)
                         .await
-                        .map_err(|e| ActuateError::Container { source: e })?;
+                        .context(ContainerSnafu)?;
                 }
                 let writes = vol.def.lock().writes.clone();
                 if !writes.is_empty() {
@@ -179,23 +190,17 @@ impl Actuator {
                         .container
                         .volume_mountpoint(&name)
                         .await
-                        .map_err(|e| ActuateError::Container { source: e })?;
+                        .context(ContainerSnafu)?;
                     for (path, contents) in &writes {
                         let dest = mountpoint.join(path.trim_start_matches('/'));
                         if let Some(parent) = dest.parent() {
-                            tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                                ActuateError::VolumeWrite {
-                                    path: dest.clone(),
-                                    source: e,
-                                }
-                            })?;
+                            tokio::fs::create_dir_all(parent)
+                                .await
+                                .context(VolumeWriteSnafu { path: dest.clone() })?;
                         }
-                        tokio::fs::write(&dest, contents).await.map_err(|e| {
-                            ActuateError::VolumeWrite {
-                                path: dest.clone(),
-                                source: e,
-                            }
-                        })?;
+                        tokio::fs::write(&dest, contents)
+                            .await
+                            .context(VolumeWriteSnafu { path: dest.clone() })?;
                     }
                 }
                 Ok(None)
@@ -247,13 +252,13 @@ impl Actuator {
                     .container
                     .volume_exists(&name)
                     .await
-                    .map_err(|e| ActuateError::Container { source: e })?
+                    .context(ContainerSnafu)?
                 {
                     self.driver
                         .container
                         .remove_volume(&name)
                         .await
-                        .map_err(|e| ActuateError::Container { source: e })?;
+                        .context(ContainerSnafu)?;
                 }
                 Ok(())
             }

@@ -2,7 +2,7 @@ use std::{net::SocketAddr, sync::Arc};
 
 use reqwest::Client;
 use serde_json::Value;
-use snafu::Snafu;
+use snafu::{ResultExt, Snafu};
 use tokio::sync::RwLock;
 
 use crate::system::{BoxError, BoxFuture, NetworkProxy, types::ProxyConfig};
@@ -24,9 +24,16 @@ pub(crate) struct CaddyAddrs {
 #[derive(Debug, Snafu)]
 pub(crate) enum CaddyError {
     #[snafu(display("Caddy admin API returned HTTP {status}: {body}"))]
-    Api { status: u16, body: String },
+    Api {
+        status: u16,
+        body: String,
+        backtrace: snafu::Backtrace,
+    },
     #[snafu(display("HTTP request to Caddy admin API failed: {source}"))]
-    Http { source: reqwest::Error },
+    Http {
+        source: reqwest::Error,
+        backtrace: snafu::Backtrace,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -90,12 +97,12 @@ impl CaddyProxy {
             .json(&caddy_json)
             .send()
             .await
-            .map_err(|e| CaddyError::Http { source: e })?;
+            .context(HttpSnafu)?;
 
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
-            return Err(CaddyError::Api { status, body });
+            return ApiSnafu { status, body }.fail();
         }
 
         Ok(())
@@ -109,11 +116,11 @@ impl CaddyProxy {
             .json(json)
             .send()
             .await
-            .map_err(|e| CaddyError::Http { source: e })?;
+            .context(HttpSnafu)?;
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
-            return Err(CaddyError::Api { status, body });
+            return ApiSnafu { status, body }.fail();
         }
         Ok(())
     }

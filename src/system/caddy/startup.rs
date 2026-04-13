@@ -6,7 +6,7 @@ use std::{
 use ipnet::Ipv6Net;
 use rusqlite::OptionalExtension;
 use serde_json::Value;
-use snafu::Snafu;
+use snafu::{ResultExt, Snafu};
 
 use super::proxy::{CaddyAddrs, CaddyProxy};
 use crate::system::{
@@ -53,33 +53,46 @@ pub(crate) enum CaddyStartupError {
     #[snafu(display("container runtime error: {source}"))]
     Container {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        backtrace: snafu::Backtrace,
     },
     #[snafu(display("process manager error: {source}"))]
     Process {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        backtrace: snafu::Backtrace,
     },
     #[snafu(display("I/O error writing admin config: {source}"))]
-    Io { source: std::io::Error },
+    Io {
+        source: std::io::Error,
+        backtrace: snafu::Backtrace,
+    },
     #[snafu(display("Caddy did not become healthy within the timeout"))]
-    Timeout,
+    Timeout { backtrace: snafu::Backtrace },
     #[snafu(display("database error: {source}"))]
-    Db { source: rusqlite::Error },
+    Db {
+        source: rusqlite::Error,
+        backtrace: snafu::Backtrace,
+    },
     #[snafu(display("image ID unavailable for {reference}"))]
-    ImageId { reference: String },
+    ImageId {
+        reference: String,
+        backtrace: snafu::Backtrace,
+    },
     #[snafu(display("image build failed: {message}"))]
-    Build { message: String },
+    Build {
+        message: String,
+        backtrace: snafu::Backtrace,
+    },
 }
 
 /// Build the custom Caddy image from the embedded Containerfile.
 async fn build_caddy_image(data_dir: &std::path::Path) -> Result<(), CaddyStartupError> {
     let containerfile_path = data_dir.join("Containerfile.caddy");
-    std::fs::write(&containerfile_path, CADDY_CONTAINERFILE)
-        .map_err(|e| CaddyStartupError::Io { source: e })?;
+    std::fs::write(&containerfile_path, CADDY_CONTAINERFILE).context(IoSnafu)?;
 
     // podman build needs a context directory; the Containerfile has no
     // local COPY instructions so an empty temp dir suffices.
     let context_dir = data_dir.join("caddy-build-ctx");
-    std::fs::create_dir_all(&context_dir).map_err(|e| CaddyStartupError::Io { source: e })?;
+    std::fs::create_dir_all(&context_dir).context(IoSnafu)?;
 
     tracing::info!("building custom Caddy image (this may take a moment)");
 
@@ -94,13 +107,14 @@ async fn build_caddy_image(data_dir: &std::path::Path) -> Result<(), CaddyStartu
         ])
         .output()
         .await
-        .map_err(|e| CaddyStartupError::Io { source: e })?;
+        .context(IoSnafu)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(CaddyStartupError::Build {
+        return BuildSnafu {
             message: format!("podman build exited {}: {}", output.status, stderr.trim()),
-        });
+        }
+        .fail();
     }
 
     tracing::info!("custom Caddy image built successfully");
@@ -234,7 +248,7 @@ async fn start_slot(
             restart: TransientRestart::Always,
         })
         .await
-        .map_err(|e| CaddyStartupError::Process { source: e })
+        .context(ProcessSnafu)
 }
 
 /// Stop and remove a Caddy container slot. Errors are ignored — the caller
@@ -282,7 +296,7 @@ async fn poll_until_healthy(
 ) -> Result<CaddyAddrs, CaddyStartupError> {
     loop {
         if tokio::time::Instant::now() >= deadline {
-            return Err(CaddyStartupError::Timeout);
+            return TimeoutSnafu.fail();
         }
         if let Ok(Some(state)) = container.inspect(container_name).await
             && matches!(state.status, ContainerStatus::Running)
@@ -331,29 +345,28 @@ pub(crate) async fn ensure_caddy_running(
     if !container
         .network_exists(PROXY_NETWORK)
         .await
-        .map_err(|e| CaddyStartupError::Container { source: e })?
+        .context(ContainerSnafu)?
     {
         let _ = container
             .create_network(PROXY_NETWORK, proxy_prefix, Some(proxy_ipv4_subnet()))
             .await
-            .map_err(|e| CaddyStartupError::Container { source: e })?;
+            .context(ContainerSnafu)?;
     }
 
     // 2. Write admin config so Caddy binds the admin API on all interfaces.
     let admin_config_path = data_dir.join("caddy-admin.json");
-    std::fs::write(&admin_config_path, CADDY_ADMIN_JSON)
-        .map_err(|e| CaddyStartupError::Io { source: e })?;
+    std::fs::write(&admin_config_path, CADDY_ADMIN_JSON).context(IoSnafu)?;
 
     // 3. Ensure the data volume exists.
     if !container
         .volume_exists(CADDY_DATA_VOLUME)
         .await
-        .map_err(|e| CaddyStartupError::Container { source: e })?
+        .context(ContainerSnafu)?
     {
         container
             .create_volume(CADDY_DATA_VOLUME)
             .await
-            .map_err(|e| CaddyStartupError::Container { source: e })?;
+            .context(ContainerSnafu)?;
     }
 
     // 4. Read active container name from DB (default to blue slot).
@@ -361,9 +374,9 @@ pub(crate) async fn ensure_caddy_running(
     //    to the blue/green scheme so upgrades from older installations
     //    converge cleanly.
     let active = {
-        let conn = caddy_db_open(data_dir).map_err(|e| CaddyStartupError::Db { source: e })?;
+        let conn = caddy_db_open(data_dir).context(DbSnafu)?;
         let raw = read_active_container(&conn)
-            .map_err(|e| CaddyStartupError::Db { source: e })?
+            .context(DbSnafu)?
             .unwrap_or_else(|| CADDY_BLUE.to_owned());
         if raw != CADDY_BLUE && raw != CADDY_GREEN {
             tracing::info!(
@@ -376,9 +389,8 @@ pub(crate) async fn ensure_caddy_running(
                 stop_slot(&raw, process, container).await;
             }
             // Persist the normalized name.
-            let conn = caddy_db_open(data_dir).map_err(|e| CaddyStartupError::Db { source: e })?;
-            write_active_container(&conn, CADDY_BLUE)
-                .map_err(|e| CaddyStartupError::Db { source: e })?;
+            let conn = caddy_db_open(data_dir).context(DbSnafu)?;
+            write_active_container(&conn, CADDY_BLUE).context(DbSnafu)?;
             CADDY_BLUE.to_owned()
         } else {
             raw
@@ -397,7 +409,7 @@ pub(crate) async fn ensure_caddy_running(
     if !container
         .image_exists(CADDY_IMAGE)
         .await
-        .map_err(|e| CaddyStartupError::Container { source: e })?
+        .context(ContainerSnafu)?
     {
         build_caddy_image(data_dir).await?;
     }
@@ -406,16 +418,16 @@ pub(crate) async fn ensure_caddy_running(
     let desired_id = container
         .local_image_id(CADDY_IMAGE)
         .await
-        .map_err(|e| CaddyStartupError::Container { source: e })?
-        .ok_or_else(|| CaddyStartupError::ImageId {
-            reference: CADDY_IMAGE.to_owned(),
+        .context(ContainerSnafu)?
+        .ok_or_else(|| {
+            ImageIdSnafu {
+                reference: CADDY_IMAGE.to_owned(),
+            }
+            .build()
         })?;
 
     // 9. Inspect the active container.
-    let active_state = container
-        .inspect(&active)
-        .await
-        .map_err(|e| CaddyStartupError::Container { source: e })?;
+    let active_state = container.inspect(&active).await.context(ContainerSnafu)?;
 
     match active_state {
         Some(state) if matches!(state.status, ContainerStatus::Running) => {
@@ -463,10 +475,8 @@ pub(crate) async fn ensure_caddy_running(
                 }
 
                 // Record the new active slot.
-                let conn =
-                    caddy_db_open(data_dir).map_err(|e| CaddyStartupError::Db { source: e })?;
-                write_active_container(&conn, other)
-                    .map_err(|e| CaddyStartupError::Db { source: e })?;
+                let conn = caddy_db_open(data_dir).context(DbSnafu)?;
+                write_active_container(&conn, other).context(DbSnafu)?;
 
                 return Ok(new_addrs);
             }
@@ -497,8 +507,8 @@ pub(crate) async fn ensure_caddy_running(
         tracing::warn!("failed to apply cached proxy config to fresh Caddy: {e}");
     }
 
-    let conn = caddy_db_open(data_dir).map_err(|e| CaddyStartupError::Db { source: e })?;
-    write_active_container(&conn, &active).map_err(|e| CaddyStartupError::Db { source: e })?;
+    let conn = caddy_db_open(data_dir).context(DbSnafu)?;
+    write_active_container(&conn, &active).context(DbSnafu)?;
 
     Ok(addrs)
 }

@@ -1,6 +1,8 @@
 use std::{sync::Arc, time::Instant};
 
-use super::{ActuateError, Actuator};
+use snafu::ResultExt;
+
+use super::{ActuateError, Actuator, ContainerSnafu, ImageUnavailableSnafu};
 
 const MAX_PULL_ATTEMPTS: u32 = 5;
 
@@ -31,7 +33,7 @@ impl Actuator {
             .container
             .image_exists(image)
             .await
-            .map_err(|e| ActuateError::Container { source: e })?
+            .context(ContainerSnafu)?
         {
             let mut pulling = self.pulling.lock();
             let should_spawn = match pulling.get(image) {
@@ -100,9 +102,10 @@ impl Actuator {
                     });
                 }
             }
-            return Err(ActuateError::ImageUnavailable {
+            return ImageUnavailableSnafu {
                 reference: image.to_owned(),
-            });
+            }
+            .fail();
         }
         Ok(())
     }

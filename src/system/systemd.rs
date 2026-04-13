@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use snafu::Snafu;
+use snafu::{IntoError, ResultExt, Snafu};
 use zbus::{
     Connection,
     zvariant::{Array, OwnedObjectPath, Signature, StructureBuilder, Value},
@@ -20,11 +20,20 @@ const UNIT_DIR: &str = "/etc/systemd/system";
 #[derive(Debug, Snafu)]
 pub(crate) enum SystemdError {
     #[snafu(display("D-Bus error: {source}"))]
-    DBus { source: zbus::Error },
+    DBus {
+        source: zbus::Error,
+        backtrace: snafu::Backtrace,
+    },
     #[snafu(display("I/O error: {source}"))]
-    Io { source: std::io::Error },
+    Io {
+        source: std::io::Error,
+        backtrace: snafu::Backtrace,
+    },
     #[snafu(display("D-Bus response has unexpected type: {message}"))]
-    Protocol { message: String },
+    Protocol {
+        message: String,
+        backtrace: snafu::Backtrace,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -125,9 +134,7 @@ pub(crate) struct SystemdManager {
 impl SystemdManager {
     /// Connect to the system D-Bus. Called once at startup.
     pub(crate) async fn connect() -> Result<Self, SystemdError> {
-        let conn = Connection::system()
-            .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
+        let conn = Connection::system().await.context(DBusSnafu)?;
         Ok(Self {
             conn: Arc::new(conn),
         })
@@ -137,7 +144,7 @@ impl SystemdManager {
     async fn start_transient_impl(&self, spec: TransientUnitSpec) -> Result<(), SystemdError> {
         let proxy = Systemd1ManagerProxy::new(&self.conn)
             .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
+            .context(DBusSnafu)?;
 
         let exec_value = build_exec_start(&spec.exec_start)?;
         let restart = restart_str(spec.restart);
@@ -178,7 +185,7 @@ impl SystemdManager {
         proxy
             .start_transient_unit(&spec.name, "fail", props, aux)
             .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
+            .context(DBusSnafu)?;
 
         Ok(())
     }
@@ -187,18 +194,15 @@ impl SystemdManager {
     async fn stop_unit_impl(&self, name: &str) -> Result<(), SystemdError> {
         let proxy = Systemd1ManagerProxy::new(&self.conn)
             .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
-        proxy
-            .stop_unit(name, "replace")
-            .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
+            .context(DBusSnafu)?;
+        proxy.stop_unit(name, "replace").await.context(DBusSnafu)?;
         Ok(())
     }
 
     async fn reset_failed_unit_impl(&self, name: &str) -> Result<(), SystemdError> {
         let proxy = Systemd1ManagerProxy::new(&self.conn)
             .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
+            .context(DBusSnafu)?;
         match proxy.reset_failed_unit(name).await {
             Ok(()) => Ok(()),
             Err(e) => {
@@ -206,7 +210,7 @@ impl SystemdManager {
                 if msg.contains("no such unit") || msg.contains("not loaded") {
                     Ok(())
                 } else {
-                    Err(SystemdError::DBus { source: e })
+                    Err(DBusSnafu.into_error(e))
                 }
             }
         }
@@ -215,7 +219,7 @@ impl SystemdManager {
     async fn unit_state_impl(&self, name: &str) -> Result<Option<UnitState>, SystemdError> {
         let proxy = Systemd1ManagerProxy::new(&self.conn)
             .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
+            .context(DBusSnafu)?;
 
         let unit_path = match proxy.get_unit(name).await {
             Ok(p) => p,
@@ -224,27 +228,21 @@ impl SystemdManager {
                 if msg.contains("no such unit") || msg.contains("not loaded") {
                     return Ok(None);
                 }
-                return Err(SystemdError::DBus { source: e });
+                return Err(DBusSnafu.into_error(e));
             }
         };
 
         let unit_proxy = Systemd1UnitProxy::builder(&self.conn)
             .destination("org.freedesktop.systemd1")
-            .map_err(|e| SystemdError::DBus { source: e })?
+            .context(DBusSnafu)?
             .path(unit_path)
-            .map_err(|e| SystemdError::DBus { source: e })?
+            .context(DBusSnafu)?
             .build()
             .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
+            .context(DBusSnafu)?;
 
-        let active = unit_proxy
-            .active_state()
-            .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
-        let sub = unit_proxy
-            .sub_state()
-            .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
+        let active = unit_proxy.active_state().await.context(DBusSnafu)?;
+        let sub = unit_proxy.sub_state().await.context(DBusSnafu)?;
 
         Ok(Some(UnitState {
             active: parse_active_state(&active),
@@ -255,12 +253,9 @@ impl SystemdManager {
     async fn list_units_impl(&self, prefix: &str) -> Result<Vec<UnitSummary>, SystemdError> {
         let proxy = Systemd1ManagerProxy::new(&self.conn)
             .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
+            .context(DBusSnafu)?;
 
-        let raw = proxy
-            .list_units()
-            .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
+        let raw = proxy.list_units().await.context(DBusSnafu)?;
 
         let result = raw
             .into_iter()
@@ -279,9 +274,7 @@ impl SystemdManager {
 
     async fn write_unit_impl(&self, name: &str, content: &str) -> Result<(), SystemdError> {
         let path = std::path::Path::new(UNIT_DIR).join(name);
-        tokio::fs::write(&path, content)
-            .await
-            .map_err(|e| SystemdError::Io { source: e })?;
+        tokio::fs::write(&path, content).await.context(IoSnafu)?;
         Ok(())
     }
 
@@ -290,29 +283,23 @@ impl SystemdManager {
         match tokio::fs::remove_file(&path).await {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(SystemdError::Io { source: e }),
+            Err(e) => Err(IoSnafu.into_error(e)),
         }
     }
 
     async fn daemon_reload_impl(&self) -> Result<(), SystemdError> {
         let proxy = Systemd1ManagerProxy::new(&self.conn)
             .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
-        proxy
-            .reload()
-            .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
+            .context(DBusSnafu)?;
+        proxy.reload().await.context(DBusSnafu)?;
         Ok(())
     }
 
     async fn start_unit_impl(&self, name: &str) -> Result<(), SystemdError> {
         let proxy = Systemd1ManagerProxy::new(&self.conn)
             .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
-        proxy
-            .start_unit(name, "replace")
-            .await
-            .map_err(|e| SystemdError::DBus { source: e })?;
+            .context(DBusSnafu)?;
+        proxy.start_unit(name, "replace").await.context(DBusSnafu)?;
         Ok(())
     }
 }
@@ -349,16 +336,20 @@ fn build_exec_start(exec_start: &[String]) -> Result<Value<'static>, SystemdErro
     let path = exec_start.first().cloned().unwrap_or_default();
 
     // Inner array of strings: as
-    let s_sig = Signature::try_from("s").map_err(|e| SystemdError::Protocol {
-        message: format!("building 's' signature: {e}"),
+    let s_sig = Signature::try_from("s").map_err(|e| {
+        ProtocolSnafu {
+            message: format!("building 's' signature: {e}"),
+        }
+        .build()
     })?;
     let mut argv_arr = Array::new(&s_sig);
     for s in exec_start {
-        argv_arr
-            .append(Value::from(s.clone()))
-            .map_err(|e| SystemdError::Protocol {
+        argv_arr.append(Value::from(s.clone())).map_err(|e| {
+            ProtocolSnafu {
                 message: format!("appending argv element: {e}"),
-            })?;
+            }
+            .build()
+        })?;
     }
 
     // Build one (sasb) struct entry. We must use append_field (which pushes the
@@ -370,18 +361,27 @@ fn build_exec_start(exec_start: &[String]) -> Result<Value<'static>, SystemdErro
             .append_field(Value::Array(argv_arr))
             .append_field(Value::from(false))
             .build()
-            .map_err(|e| SystemdError::Protocol {
-                message: format!("building ExecStart entry: {e}"),
+            .map_err(|e| {
+                ProtocolSnafu {
+                    message: format!("building ExecStart entry: {e}"),
+                }
+                .build()
             })?,
     );
 
     // Outer a(sasb) array
-    let entry_sig = Signature::try_from("(sasb)").map_err(|e| SystemdError::Protocol {
-        message: format!("building '(sasb)' signature: {e}"),
+    let entry_sig = Signature::try_from("(sasb)").map_err(|e| {
+        ProtocolSnafu {
+            message: format!("building '(sasb)' signature: {e}"),
+        }
+        .build()
     })?;
     let mut outer = Array::new(&entry_sig);
-    outer.append(entry).map_err(|e| SystemdError::Protocol {
-        message: format!("appending ExecStart entry: {e}"),
+    outer.append(entry).map_err(|e| {
+        ProtocolSnafu {
+            message: format!("appending ExecStart entry: {e}"),
+        }
+        .build()
     })?;
 
     Ok(Value::Array(outer))

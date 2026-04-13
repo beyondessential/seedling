@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use snafu::Snafu;
+use snafu::{ResultExt, Snafu};
 
 use crate::{
     defs::resource::Resource,
@@ -23,18 +23,22 @@ pub enum ObserveError {
     #[snafu(display("container backend: {source}"))]
     Container {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        backtrace: snafu::Backtrace,
     },
     #[snafu(display("process manager: {source}"))]
     Process {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        backtrace: snafu::Backtrace,
     },
     #[snafu(display("proxy: {source}"))]
     Proxy {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        backtrace: snafu::Backtrace,
     },
     #[snafu(display("data plane: {source}"))]
     DataPlane {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        backtrace: snafu::Backtrace,
     },
 }
 
@@ -89,7 +93,7 @@ impl Observer {
                     .container
                     .volume_exists(name)
                     .await
-                    .map_err(|e| ObserveError::Container { source: e })?;
+                    .context(ContainerSnafu)?;
                 facts.push((
                     if exists {
                         ObservationFact::VolumePresent
@@ -101,12 +105,7 @@ impl Observer {
             }
             Resource::Ingress(_) => {
                 // r[impl observe.ingress]
-                let healthy = self
-                    .driver
-                    .proxy
-                    .is_healthy()
-                    .await
-                    .map_err(|e| ObserveError::Proxy { source: e })?;
+                let healthy = self.driver.proxy.is_healthy().await.context(ProxySnafu)?;
                 facts.push((
                     if healthy {
                         ObservationFact::ProxyReachable
@@ -144,21 +143,21 @@ impl Observer {
                     .container
                     .network_exists(&net_name)
                     .await
-                    .map_err(|e| ObserveError::Container { source: e })
+                    .context(ContainerSnafu)
             },
             async {
                 self.driver
                     .container
                     .inspect(&instance.display_name)
                     .await
-                    .map_err(|e| ObserveError::Container { source: e })
+                    .context(ContainerSnafu)
             },
             async {
                 self.driver
                     .process
                     .unit_state(&unit)
                     .await
-                    .map_err(|e| ObserveError::Process { source: e })
+                    .context(ProcessSnafu)
             },
         )?;
 

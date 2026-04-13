@@ -19,10 +19,12 @@ pub(crate) enum DataPlaneError {
     #[snafu(display("nftables error: {source}"))]
     Nftables {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        backtrace: snafu::Backtrace,
     },
     #[snafu(display("rtnetlink error: {source}"))]
     Netlink {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        backtrace: snafu::Backtrace,
     },
 }
 
@@ -78,6 +80,7 @@ impl NftablesDataPlane {
             .await
             .map_err(|e| DataPlaneError::Nftables {
                 source: Box::new(e),
+                backtrace: std::backtrace::Backtrace::capture(),
             })
     }
 

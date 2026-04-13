@@ -18,12 +18,14 @@ impl NftablesDataPlane {
             .await
             .map_err(|e| DataPlaneError::Netlink {
                 source: Box::new(e),
+                backtrace: std::backtrace::Backtrace::capture(),
             })?;
 
         if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr);
             return Err(DataPlaneError::Netlink {
                 source: format!("ip route show failed: {}", stderr.trim()).into(),
+                backtrace: std::backtrace::Backtrace::capture(),
             });
         }
 
@@ -60,6 +62,7 @@ impl NftablesDataPlane {
                 .await
                 .map_err(|e| DataPlaneError::Netlink {
                     source: Box::new(e),
+                    backtrace: std::backtrace::Backtrace::capture(),
                 })?;
 
             if !del.status.success() {
@@ -72,6 +75,7 @@ impl NftablesDataPlane {
                         stderr.trim()
                     )
                     .into(),
+                    backtrace: std::backtrace::Backtrace::capture(),
                 });
             }
         }
@@ -118,6 +122,7 @@ impl NftablesDataPlane {
             .await
             .map_err(|e| DataPlaneError::Netlink {
                 source: Box::new(e),
+                backtrace: std::backtrace::Backtrace::capture(),
             })?;
 
         if !out.status.success() {
@@ -130,6 +135,7 @@ impl NftablesDataPlane {
                     stderr.trim()
                 )
                 .into(),
+                backtrace: std::backtrace::Backtrace::capture(),
             });
         }
 

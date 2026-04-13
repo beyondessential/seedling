@@ -201,7 +201,10 @@ async fn process_one_pod(
                         result.image_pull_success = Some((dr.instance.clone(), img));
                     }
                 }
-                Err(crate::system::actuator::ActuateError::ImageUnavailable { ref reference }) => {
+                Err(crate::system::actuator::ActuateError::ImageUnavailable {
+                    ref reference,
+                    ..
+                }) => {
                     error!(
                         instance = %dr.instance.display_name,
                         image = %reference,
