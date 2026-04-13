@@ -49,7 +49,7 @@ pub(crate) fn invoke_action(state: &Arc<OiState>, params: Value) -> HandlerResul
         let def = entry.app.def.lock();
         if def.shells.contains_key(action_name) {
             return Err(OiError::not_found(format!(
-                "'{action_name}' is a shell action; use OpenShell"
+                "'{action_name}' is a shell action; use /shells/start"
             )));
         }
         if !def.actions.contains_key(action_name) {

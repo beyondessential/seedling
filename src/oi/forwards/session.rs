@@ -25,12 +25,12 @@ pub(crate) async fn forward_port_session(
     state: Arc<OiState>,
 ) {
     #[derive(serde::Deserialize)]
-    struct ForwardPortRequest {
+    struct Request {
         #[serde(default)]
         params: serde_json::Value,
     }
     #[derive(serde::Deserialize)]
-    struct ForwardPortParams {
+    struct Params {
         app: String,
         service: String,
         port: u16,
@@ -46,14 +46,14 @@ pub(crate) async fn forward_port_session(
         let _ = send.finish();
     }
 
-    let req: ForwardPortRequest = match serde_json::from_slice(&initial_line) {
+    let req: Request = match serde_json::from_slice(&initial_line) {
         Ok(r) => r,
         Err(e) => {
             write_err(&mut send, "not_found", &format!("invalid request: {e}")).await;
             return;
         }
     };
-    let params: ForwardPortParams = match serde_json::from_value(req.params) {
+    let params: Params = match serde_json::from_value(req.params) {
         Ok(p) => p,
         Err(e) => {
             write_err(

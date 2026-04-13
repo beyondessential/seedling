@@ -38,19 +38,19 @@ pub(crate) async fn open_shell_session(
     state: Arc<OiState>,
 ) {
     #[derive(serde::Deserialize)]
-    struct OpenShellParams {
+    struct Params {
         app: String,
         name: String,
         rows: u16,
         cols: u16,
     }
     #[derive(serde::Deserialize)]
-    struct OpenShellRequest {
+    struct Request {
         #[serde(default)]
         params: serde_json::Value,
     }
 
-    let req: OpenShellRequest = match serde_json::from_slice(&initial_line) {
+    let req: Request = match serde_json::from_slice(&initial_line) {
         Ok(r) => r,
         Err(e) => {
             let resp = serde_json::to_vec(&serde_json::json!({
@@ -62,7 +62,7 @@ pub(crate) async fn open_shell_session(
             return;
         }
     };
-    let params: OpenShellParams = match serde_json::from_value(req.params) {
+    let params: Params = match serde_json::from_value(req.params) {
         Ok(p) => p,
         Err(e) => {
             let resp = serde_json::to_vec(&serde_json::json!({

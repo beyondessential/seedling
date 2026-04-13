@@ -308,7 +308,7 @@ impl OiClient {
     /// Accept an incoming server-initiated unidirectional stream.
     ///
     /// Used to receive the stdout and stderr streams opened by the server
-    /// during an `OpenShell` session.
+    /// during a `/shells/start` session.
     pub async fn accept_uni(&self) -> Result<quinn::RecvStream, ClientError> {
         self.conn
             .accept_uni()

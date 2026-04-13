@@ -22,7 +22,7 @@ pub(super) enum OpCommand {
         #[command(subcommand)]
         command: ForwardsCommand,
     },
-    /// /events/subscribe to event feed (streams JSON to stdout)
+    /// Subscribe to event feed (streams JSON to stdout)
     Events,
     /// User/key management
     User {
