@@ -71,9 +71,27 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8]) -> HandlerResult {
             params::unset_param(state, p)
         }
         // i[action.invoke]
-        "/apps/action/invoke" => actions::invoke_action(state, req.params),
+        "/apps/action/invoke" => {
+            let p: actions::InvokeActionParams =
+                serde_json::from_value(req.params).map_err(|e| {
+                    OiError::new(
+                        ErrorCode::RequirementsInvalid,
+                        format!("invalid params: {e}"),
+                    )
+                })?;
+            actions::invoke_action(state, p)
+        }
         // i[action.invoke.install]
-        "/apps/install/invoke" => actions::install::invoke_install(state, req.params),
+        "/apps/install/invoke" => {
+            let p: actions::install::InvokeInstallParams = serde_json::from_value(req.params)
+                .map_err(|e| {
+                    OiError::new(
+                        ErrorCode::RequirementsInvalid,
+                        format!("invalid params: {e}"),
+                    )
+                })?;
+            actions::install::invoke_install(state, p)
+        }
         // i[key.list]
         "/keys/list" => key_mgmt::list_keys(state),
         // i[key.authorize]
