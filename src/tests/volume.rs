@@ -189,13 +189,13 @@ fn run_action_with_volumes(
 fn anon_volume_in_action_gets_seedling_prefix() {
     let progress = run_action_with_volumes(
         r#"
-        app.on_action("go", |rt| {
+        app.on_action("goo", |rt| {
             let vol = app.volume();
             let j = app.job().image("busybox").mount("/data", vol);
             rt.start(j);
         });
     "#,
-        "go",
+        "goo",
     );
 
     // The dynamic defs should contain the anonymous job.
@@ -233,7 +233,7 @@ fn anon_volume_in_action_gets_seedling_prefix() {
 fn shared_anon_volume_same_id_across_containers() {
     let progress = run_action_with_volumes(
         r#"
-        app.on_action("go", |rt| {
+        app.on_action("goo", |rt| {
             let vol = app.volume();
             vol.write("/config.txt", "hello");
             let j1 = app.job().image("busybox").mount("/a", vol);
@@ -242,7 +242,7 @@ fn shared_anon_volume_same_id_across_containers() {
             rt.start(j2);
         });
     "#,
-        "go",
+        "goo",
     );
 
     // Collect the anon_ids from all volume mounts across all dynamic resources.
@@ -278,14 +278,14 @@ fn shared_anon_volume_same_id_across_containers() {
 fn distinct_anon_volumes_get_distinct_ids() {
     let progress = run_action_with_volumes(
         r#"
-        app.on_action("go", |rt| {
+        app.on_action("goo", |rt| {
             let vol1 = app.volume();
             let vol2 = app.volume();
             let j = app.job().image("busybox").mount("/a", vol1).mount("/b", vol2);
             rt.start(j);
         });
     "#,
-        "go",
+        "goo",
     );
 
     let mut anon_ids: Vec<String> = Vec::new();
@@ -320,7 +320,7 @@ fn distinct_anon_volumes_get_distinct_ids() {
 fn anon_volume_writes_preserved_through_action() {
     let progress = run_action_with_volumes(
         r#"
-        app.on_action("go", |rt| {
+        app.on_action("goo", |rt| {
             let vol = app.volume();
             vol.write("/init.sql", "CREATE TABLE t;");
             vol.write("/seed.sql", "INSERT INTO t VALUES (1);");
@@ -328,7 +328,7 @@ fn anon_volume_writes_preserved_through_action() {
             rt.start(j);
         });
     "#,
-        "go",
+        "goo",
     );
 
     let mut found_writes = false;
@@ -365,7 +365,7 @@ fn frozen_static_volume_cannot_be_modified_in_action() {
     let (engine, mut scope, app, ast) = run_test_script(
         r#"
         let v = app.volume("data");
-        app.on_action("go", |rt| {
+        app.on_action("goo", |rt| {
             app.volume("data").write("/x", "y");
         });
     "#,
@@ -383,7 +383,7 @@ fn frozen_static_volume_cannot_be_modified_in_action() {
             script_ast: &ast,
             operation_id: op,
             app: &app,
-            action_name: "go",
+            action_name: "goo",
             log: &log,
             world: oracle,
             registry,

@@ -291,11 +291,11 @@ fn barrier_deadline_zero_expires_on_second_pass() {
 fn replay_idempotency() {
     let (engine, mut scope, app, ast) = setup_with_script(
         r#"
-        let a = app.deployment("a").image("img");
-        let b = app.deployment("b").image("img");
+        let a = app.deployment("aaa").image("img");
+        let b = app.deployment("bbb").image("img");
         app.on_start(|rt| {
-            rt.start(app.deployment("a"));
-            rt.start(app.deployment("b")).ready();
+            rt.start(app.deployment("aaa"));
+            rt.start(app.deployment("bbb")).ready();
         });
     "#,
     );
@@ -305,7 +305,7 @@ fn replay_idempotency() {
     let op = OperationId::new();
     let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
 
-    // Pass 1: b not ready → suspend
+    // Pass 1: bbb not ready → suspend
     let r = run_operation(
         OperationContext {
             engine: &engine,
@@ -326,7 +326,7 @@ fn replay_idempotency() {
     );
     assert!(matches!(r, OperationResult::Suspended(_)));
 
-    oracle.set(dep("b"), LifecycleState::Ready);
+    oracle.set(dep("bbb"), LifecycleState::Ready);
 
     // Pass 2: completes
     let r = run_operation(

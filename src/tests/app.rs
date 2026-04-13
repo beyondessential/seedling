@@ -21,14 +21,14 @@ fn app_methods_are_defined() {
         r#"
         app.service("svc");
         app.deployment("dep");
-        app.job("jb");
+        app.job("jbs");
         app.volume("vol");
         app.external_volume("evol");
         app.external_service("esvc");
-        app.param("p");
+        app.param("par");
         app.on_action("act", |rt| {});
         app.on_start(|rt| {});
-        app.on_shell("sh", |rt| { app.job("sh").command("sh") });
+        app.on_shell("shl", |rt| { app.job("shl").command("sh") });
         app.on_install(|rt, reqs| {});
     "#,
     );

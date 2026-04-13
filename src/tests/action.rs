@@ -78,13 +78,13 @@ fn on_shell_registers_shell() {
 fn on_shell_without_options() {
     let app = run_test_script_app(
         r#"
-        app.on_shell("db", |rt| {
-            app.job("shell-db").image("psql").command("psql")
+        app.on_shell("dbs", |rt| {
+            app.job("shell-dbs").image("psql").command("psql")
         });
     "#,
     );
     let def = app.def.lock();
-    let shell = def.shells.get("db").expect("shell should exist");
+    let shell = def.shells.get("dbs").expect("shell should exist");
     assert!(shell.description.is_none());
 }
 
