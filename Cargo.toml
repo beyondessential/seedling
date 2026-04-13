@@ -5,7 +5,7 @@ edition = "2024"
 
 [[bin]]
 name = "seedling-ctl"
-path = "src/bin/seedling_ctl.rs"
+path = "src/ctl.rs"
 
 [dependencies]
 chrono = { version = "0.4.44", default-features = false, features = ["serde", "std"] }
