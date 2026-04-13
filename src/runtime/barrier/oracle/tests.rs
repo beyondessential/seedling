@@ -1,4 +1,7 @@
+use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
+
+use parking_lot::Mutex;
 
 use super::*;
 use crate::defs::resource::ResourceKind;
@@ -504,7 +507,7 @@ fn transition_time_works_for_service() {
 #[test]
 fn db_oracle_empty_gives_pending() {
     let db = Db::open_in_memory().expect("open");
-    let oracle = DbWorldOracle::new(db);
+    let oracle = DbWorldOracle::new(Arc::new(Mutex::new(db)));
     let resource = dep("app", "web");
     assert_eq!(oracle.lifecycle_state(&resource), LifecycleState::Pending);
 }
@@ -521,7 +524,7 @@ fn db_oracle_derives_from_observations() {
     insert_observation(&db, &resource, "container_running", &serde_json::json!({}))
         .expect("insert");
 
-    let oracle = DbWorldOracle::new(db);
+    let oracle = DbWorldOracle::new(Arc::new(Mutex::new(db)));
     assert_eq!(oracle.lifecycle_state(&resource), LifecycleState::Running);
 }
 
@@ -537,7 +540,7 @@ fn db_oracle_full_sequence_to_terminated() {
         insert_observation(&db, &resource, kind, &serde_json::json!({})).expect("insert");
     }
 
-    let oracle = DbWorldOracle::new(db);
+    let oracle = DbWorldOracle::new(Arc::new(Mutex::new(db)));
     assert_eq!(
         oracle.lifecycle_state(&resource),
         LifecycleState::Terminated
@@ -560,6 +563,6 @@ fn db_oracle_uses_query_observations_from_history() {
     let direct_state = derive_lifecycle_state(&resource, &obs_vec);
     assert_eq!(direct_state, LifecycleState::Ready);
 
-    let oracle = DbWorldOracle::new(db);
+    let oracle = DbWorldOracle::new(Arc::new(Mutex::new(db)));
     assert_eq!(oracle.lifecycle_state(&resource), LifecycleState::Ready);
 }

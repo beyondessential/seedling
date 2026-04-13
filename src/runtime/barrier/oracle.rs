@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
@@ -57,12 +58,12 @@ impl WorldStateOracle for TestWorldOracle {
 // ---------------------------------------------------------------------------
 
 pub struct DbWorldOracle {
-    db: Mutex<crate::runtime::db::Db>,
+    db: Arc<Mutex<crate::runtime::db::Db>>,
 }
 
 impl DbWorldOracle {
-    pub fn new(db: crate::runtime::db::Db) -> Self {
-        Self { db: Mutex::new(db) }
+    pub fn new(db: Arc<Mutex<crate::runtime::db::Db>>) -> Self {
+        Self { db }
     }
 }
 

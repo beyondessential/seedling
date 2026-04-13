@@ -1,4 +1,4 @@
-use std::{os::unix::fs::PermissionsExt, path::Path};
+use std::{os::unix::fs::PermissionsExt, path::Path, time::Duration};
 
 use rusqlite::{Connection, Result as SqlResult};
 
@@ -25,6 +25,9 @@ impl Db {
 
         let conn = Connection::open(path)?;
 
+        // r[infra.db.busy-timeout]
+        conn.busy_timeout(Duration::from_secs(5))?;
+
         if let Ok(meta) = path.metadata()
             && meta.permissions().mode() & 0o777 != 0o600
         {
@@ -39,6 +42,7 @@ impl Db {
 
     pub fn open_in_memory() -> SqlResult<Self> {
         let conn = Connection::open_in_memory()?;
+        conn.busy_timeout(Duration::from_secs(5))?;
         let db = Self { conn };
         db.migrate()?;
         Ok(db)

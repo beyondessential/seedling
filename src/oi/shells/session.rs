@@ -172,36 +172,22 @@ pub(crate) async fn open_shell_session(
                 return false;
             }
         };
-        let action_log_db = match crate::runtime::db::Db::open(&db_path) {
-            Ok(db) => db,
+        let db = match crate::runtime::db::Db::open(&db_path) {
+            Ok(db) => Arc::new(Mutex::new(db)),
             Err(e) => {
-                tracing::error!(app = %app_name_for_task, "open action-log db for shell: {e}");
-                return false;
-            }
-        };
-        let world_db = match crate::runtime::db::Db::open(&db_path) {
-            Ok(db) => db,
-            Err(e) => {
-                tracing::error!(app = %app_name_for_task, "open world db for shell: {e}");
-                return false;
-            }
-        };
-        let instance_db = match crate::runtime::db::Db::open(&db_path) {
-            Ok(db) => db,
-            Err(e) => {
-                tracing::error!(app = %app_name_for_task, "open instance db for shell: {e}");
+                tracing::error!(app = %app_name_for_task, "open shell db: {e}");
                 return false;
             }
         };
         let registry: Arc<dyn crate::runtime::InstanceRegistry> =
-            Arc::new(DbInstanceRegistry::new(instance_db));
+            Arc::new(DbInstanceRegistry::new(Arc::clone(&db)));
         let log = DbActionLog::new(
-            action_log_db,
+            Arc::clone(&db),
             op_id_for_log.clone(),
             app_name_for_task.clone(),
             shell_name_for_task.clone(),
         );
-        let world = Arc::new(DbWorldOracle::new(world_db));
+        let world = Arc::new(DbWorldOracle::new(Arc::clone(&db)));
 
         set_shell_attach_ctx(ShellAttachCtx {
             app_name: app_name_for_task.clone(),
@@ -334,7 +320,7 @@ pub(crate) async fn open_shell_session(
         } else {
             match crate::runtime::db::Db::open(&state.db_path) {
                 Ok(db) => {
-                    let mount_registry = DbInstanceRegistry::new(db);
+                    let mount_registry = DbInstanceRegistry::new(Arc::new(Mutex::new(db)));
                     service_mounts
                         .iter()
                         .map(|sp| {

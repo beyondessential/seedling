@@ -420,6 +420,10 @@ Absent specification bugs, anything that is not defined here is either defined i
 > must refuse to open a database file whose group or world permission bits are set, and
 > must report an error.
 
+> r[infra.db.busy-timeout]
+> When a database write is blocked by a concurrent writer, the runtime must wait and retry
+> rather than failing immediately.
+
 > r[infra.node.prefix]
 > The runtime must derive a stable per-node /48 IPv6 prefix from the host machine identity.
 > The prefix follows the ULA format `fd5e:edXX:XXXX::/48`, where the 24-bit host portion is

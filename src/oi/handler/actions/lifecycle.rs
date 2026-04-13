@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use tokio::sync::Notify;
 
 use crate::{
@@ -19,49 +19,20 @@ use crate::{
     },
 };
 
-/// Collected DB handles used by a single lifecycle operation pass.
+/// Collected DB handle used by a single lifecycle operation pass.
 struct OperationDbs {
-    action_log: Db,
-    world: Db,
-    instance: Db,
-    dynamic: Arc<parking_lot::Mutex<Db>>,
+    db: Arc<Mutex<Db>>,
 }
 
 fn open_operation_dbs(db_path: &Path, app_name: &str) -> Option<OperationDbs> {
-    let action_log = match Db::open(db_path) {
-        Ok(db) => db,
+    let db = match Db::open(db_path) {
+        Ok(db) => Arc::new(Mutex::new(db)),
         Err(e) => {
-            tracing::error!(app = %app_name, "open action-log db: {e}");
+            tracing::error!(app = %app_name, "open operation db: {e}");
             return None;
         }
     };
-    let world = match Db::open(db_path) {
-        Ok(db) => db,
-        Err(e) => {
-            tracing::error!(app = %app_name, "open world-oracle db: {e}");
-            return None;
-        }
-    };
-    let instance = match Db::open(db_path) {
-        Ok(db) => db,
-        Err(e) => {
-            tracing::error!(app = %app_name, "open instance-registry db: {e}");
-            return None;
-        }
-    };
-    let dynamic = match Db::open(db_path) {
-        Ok(db) => Arc::new(parking_lot::Mutex::new(db)),
-        Err(e) => {
-            tracing::error!(app = %app_name, "open dynamic-resources db: {e}");
-            return None;
-        }
-    };
-    Some(OperationDbs {
-        action_log,
-        world,
-        instance,
-        dynamic,
-    })
+    Some(OperationDbs { db })
 }
 
 /// Run the operation loop synchronously until completion or failure.
@@ -93,9 +64,15 @@ fn run_operation_loop(
         }
     };
 
-    let log = DbActionLog::new(dbs.action_log, operation_id.clone(), app_name, action_name);
-    let world = Arc::new(DbWorldOracle::new(dbs.world));
-    let registry: Arc<dyn InstanceRegistry> = Arc::new(DbInstanceRegistry::new(dbs.instance));
+    let log = DbActionLog::new(
+        Arc::clone(&dbs.db),
+        operation_id.clone(),
+        app_name,
+        action_name,
+    );
+    let world = Arc::new(DbWorldOracle::new(Arc::clone(&dbs.db)));
+    let registry: Arc<dyn InstanceRegistry> =
+        Arc::new(DbInstanceRegistry::new(Arc::clone(&dbs.db)));
 
     loop {
         let result = run_operation(
@@ -112,7 +89,7 @@ fn run_operation_loop(
                 tick_notify: Some(Arc::clone(&tick_notify)),
                 install_requirements: install_requirements.clone(),
                 is_shell: false,
-                db: Some(Arc::clone(&dbs.dynamic)),
+                db: Some(Arc::clone(&dbs.db)),
             },
             &mut scope,
         );

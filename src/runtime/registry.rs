@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use parking_lot::Mutex;
 
@@ -85,12 +85,12 @@ impl InstanceRegistry for EphemeralInstanceRegistry {
 /// Looks instances up in the SQLite instance registry, creating and persisting
 /// new ones when none exist for the requested `(app, kind, name)` group.
 pub struct DbInstanceRegistry {
-    db: Mutex<Db>,
+    db: Arc<Mutex<Db>>,
 }
 
 impl DbInstanceRegistry {
-    pub fn new(db: Db) -> Self {
-        Self { db: Mutex::new(db) }
+    pub fn new(db: Arc<Mutex<Db>>) -> Self {
+        Self { db }
     }
 }
 

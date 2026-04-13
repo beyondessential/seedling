@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use parking_lot::Mutex;
+
 use super::*;
 use crate::defs::resource::ResourceKind;
 use crate::runtime::barrier::OperationId;
@@ -39,7 +41,7 @@ fn db_action_log_barrier_suspends_then_resumes() {
 
     let make_log = || {
         DbActionLog::new(
-            Db::open_in_memory().expect("in-memory DB"),
+            Arc::new(Mutex::new(Db::open_in_memory().expect("in-memory DB"))),
             op.clone(),
             "test-app",
             "start",
@@ -129,7 +131,7 @@ fn db_action_log_sequential_barriers() {
     let reg: Arc<dyn crate::runtime::registry::InstanceRegistry> =
         Arc::new(crate::runtime::registry::EphemeralInstanceRegistry::new());
     let log = DbActionLog::new(
-        Db::open_in_memory().expect("in-memory DB"),
+        Arc::new(Mutex::new(Db::open_in_memory().expect("in-memory DB"))),
         op.clone(),
         "test-app",
         "start",

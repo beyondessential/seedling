@@ -111,7 +111,7 @@ pub(crate) async fn forward_port_session(
     let target_addr = tokio::task::block_in_place(|| {
         let db =
             crate::runtime::db::Db::open(&state.db_path).map_err(|e| format!("db open: {e}"))?;
-        let registry = DbInstanceRegistry::new(db);
+        let registry = DbInstanceRegistry::new(std::sync::Arc::new(parking_lot::Mutex::new(db)));
         let instance = registry.get_or_create_singleton(
             &params.app,
             ResourceKind::Service,

@@ -287,12 +287,12 @@ async fn main() {
     // Global reconciler
     // ---------------------------------------------------------------------------
 
-    let instance_registry: Arc<dyn InstanceRegistry> = Arc::new(DbInstanceRegistry::new(
-        Db::open(&db_path).unwrap_or_else(|e| {
+    let instance_registry: Arc<dyn InstanceRegistry> = Arc::new(DbInstanceRegistry::new(Arc::new(
+        parking_lot::Mutex::new(Db::open(&db_path).unwrap_or_else(|e| {
             tracing::error!("cannot open instance registry db: {e}");
             std::process::exit(1);
-        }),
-    ));
+        })),
+    )));
 
     let obs_db = Db::open(&db_path).unwrap_or_else(|e| {
         tracing::error!("cannot open observations db: {e}");

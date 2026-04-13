@@ -85,7 +85,7 @@ impl ActionLog for InMemoryActionLog {
 
 // r[impl history.action-log]
 pub struct DbActionLog {
-    db: Mutex<Db>,
+    db: Arc<Mutex<Db>>,
     operation_id: super::OperationId,
     app: String,
     action_name: String,
@@ -93,13 +93,13 @@ pub struct DbActionLog {
 
 impl DbActionLog {
     pub fn new(
-        db: Db,
+        db: Arc<Mutex<Db>>,
         operation_id: super::OperationId,
         app: impl Into<String>,
         action_name: impl Into<String>,
     ) -> Self {
         Self {
-            db: Mutex::new(db),
+            db,
             operation_id,
             app: app.into(),
             action_name: action_name.into(),
