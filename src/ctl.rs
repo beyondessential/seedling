@@ -1,6 +1,6 @@
 use std::{io::Write, net::SocketAddr};
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use lloggs::LoggingArgs;
 use seedling::oi::{
     client::{ClientAuth, ClientError, OiClient},
@@ -43,7 +43,7 @@ struct Cli {
     logging: LoggingArgs,
 
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
@@ -121,7 +121,15 @@ async fn main() {
         );
     }
 
-    if let Command::Client { command } = &cli.command {
+    let top_cmd = match cli.command {
+        Some(cmd) => cmd,
+        None => {
+            print_tree(&Cli::command());
+            return;
+        }
+    };
+
+    if let Command::Client { command } = &top_cmd {
         client::dispatch(command, &identity, &key_path);
         return;
     }
@@ -212,7 +220,7 @@ async fn main() {
         client = c;
     }
 
-    match cli.command {
+    match top_cmd {
         Command::Apps { command } => apps::dispatch(&client, command).await,
         Command::Op { command } => op::dispatch(&client, command).await,
         Command::Client { .. } => unreachable!("handled before connect"),
@@ -227,4 +235,71 @@ pub(crate) fn print_result(result: Result<serde_json::Value, ClientError>) {
             std::process::exit(1);
         }
     }
+}
+
+fn print_tree(root: &clap::Command) {
+    let mut top: Vec<_> = root
+        .get_subcommands()
+        .filter(|s| !s.is_hide_set())
+        .collect();
+    top.sort_by_key(|s| s.get_name());
+    for sub in top {
+        print_subtree(sub, 0);
+    }
+}
+
+fn print_subtree(cmd: &clap::Command, indent: usize) {
+    let pad = "  ".repeat(indent);
+    let mut subs: Vec<_> = cmd.get_subcommands().filter(|s| !s.is_hide_set()).collect();
+    subs.sort_by_key(|s| s.get_name());
+
+    if subs.is_empty() {
+        let args = leaf_args(cmd);
+        if args.is_empty() {
+            println!("{}{}", pad, cmd.get_name());
+        } else {
+            println!("{}{} {}", pad, cmd.get_name(), args);
+        }
+    } else {
+        println!("{}{}", pad, cmd.get_name());
+        for sub in subs {
+            print_subtree(sub, indent + 1);
+        }
+    }
+}
+
+fn leaf_args(cmd: &clap::Command) -> String {
+    let mut parts: Vec<String> = Vec::new();
+
+    // Required named options, excluding clap builtins.
+    for arg in cmd.get_opts() {
+        let id = arg.get_id().as_str();
+        if matches!(id, "help" | "version") {
+            continue;
+        }
+        if arg.is_required_set() {
+            let long = arg.get_long().unwrap_or(id);
+            let val = arg
+                .get_value_names()
+                .and_then(|v| v.first())
+                .map(|n| format!(" <{n}>"))
+                .unwrap_or_default();
+            parts.push(format!("--{long}{val}"));
+        }
+    }
+
+    // Required positionals in declaration order.
+    for arg in cmd.get_positionals() {
+        if !arg.is_required_set() {
+            continue;
+        }
+        let name = arg
+            .get_value_names()
+            .and_then(|v| v.first())
+            .map(|n| format!("<{n}>"))
+            .unwrap_or_else(|| format!("<{}>", arg.get_id().as_str().to_uppercase()));
+        parts.push(name);
+    }
+
+    parts.join(" ")
 }
