@@ -14,6 +14,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
     builder.with_fn(
         "volume",
         |this: &mut App, name: &str| -> Result<Volume, Box<EvalAltResult>> {
+            super::super::validate_name(name)?;
             let rname = ResourceName::new(name.into());
             if is_in_action_closure() {
                 let adef = action_def().ok_or_else(|| -> Box<EvalAltResult> {
@@ -66,20 +67,24 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
     );
 
     // l[impl volume.external]
-    builder.with_fn("external_volume", |this: &mut App, name: &str| -> Dynamic {
-        let rname = ResourceName::new(name.into());
-        let mut def = this.def.lock();
-        let id = ResourceId {
-            kind: ResourceKind::ExternalVolume,
-            name: rname.clone(),
-        };
-        let resource = def
-            .resources
-            .entry(id)
-            .or_insert_with(|| Resource::ExternalVolume(ExternalVolume { name: rname }));
-        match resource {
-            Resource::ExternalVolume(v) => Dynamic::from(v.clone()),
-            _ => unreachable!(),
-        }
-    });
+    builder.with_fn(
+        "external_volume",
+        |this: &mut App, name: &str| -> Result<Dynamic, Box<EvalAltResult>> {
+            super::super::validate_name(name)?;
+            let rname = ResourceName::new(name.into());
+            let mut def = this.def.lock();
+            let id = ResourceId {
+                kind: ResourceKind::ExternalVolume,
+                name: rname.clone(),
+            };
+            let resource = def
+                .resources
+                .entry(id)
+                .or_insert_with(|| Resource::ExternalVolume(ExternalVolume { name: rname }));
+            match resource {
+                Resource::ExternalVolume(v) => Ok(Dynamic::from(v.clone())),
+                _ => unreachable!(),
+            }
+        },
+    );
 }

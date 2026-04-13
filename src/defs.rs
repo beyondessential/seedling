@@ -26,6 +26,26 @@ pub trait Freezable {
     }
 }
 
+// l[impl bsl.name]
+pub fn validate_name(name: &str) -> Result<(), Box<rhai::EvalAltResult>> {
+    let ok = name.len() >= 3
+        && name.len() <= 63
+        && name.starts_with(|c: char| c.is_ascii_alphabetic())
+        && name.ends_with(|c: char| c.is_ascii_alphanumeric())
+        && name[1..name.len() - 1]
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-');
+    if ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "invalid resource name '{name}': must be 3–63 ASCII alphanumeric/hyphen characters, \
+             start with a letter, and not start or end with a hyphen"
+        )
+        .into())
+    }
+}
+
 pub mod action;
 pub mod app;
 pub mod collection;

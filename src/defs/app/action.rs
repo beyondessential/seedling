@@ -1,4 +1,4 @@
-use rhai::{FnPtr, Map, TypeBuilder};
+use rhai::{EvalAltResult, FnPtr, Map, TypeBuilder};
 
 use super::super::action::{Action, ActionDef};
 use super::App;
@@ -9,7 +9,8 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
     builder
         .with_fn(
             "on_action",
-            |this: &mut App, name: &str, closure: FnPtr| -> Action {
+            |this: &mut App, name: &str, closure: FnPtr| -> Result<Action, Box<EvalAltResult>> {
+                super::super::validate_name(name)?;
                 this.def.lock().actions.insert(
                     name.into(),
                     ActionDef {
@@ -18,12 +19,17 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                     },
                 );
                 super::capture_action(name.into(), closure);
-                Action { name: name.into() }
+                Ok(Action { name: name.into() })
             },
         )
         .with_fn(
             "on_action",
-            |this: &mut App, name: &str, closure: FnPtr, options: Map| -> Action {
+            |this: &mut App,
+             name: &str,
+             closure: FnPtr,
+             options: Map|
+             -> Result<Action, Box<EvalAltResult>> {
+                super::super::validate_name(name)?;
                 let desc = super::extract_description(&options);
                 this.def.lock().actions.insert(
                     name.into(),
@@ -33,7 +39,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                     },
                 );
                 super::capture_action(name.into(), closure);
-                Action { name: name.into() }
+                Ok(Action { name: name.into() })
             },
         );
 

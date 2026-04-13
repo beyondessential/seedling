@@ -14,6 +14,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
     builder.with_fn(
         "service",
         |this: &mut App, name: &str| -> Result<Service, Box<EvalAltResult>> {
+            super::super::validate_name(name)?;
             let rname = ResourceName::new(name.into());
             if is_in_action_closure() {
                 let adef = action_def().ok_or_else(|| -> Box<EvalAltResult> {
@@ -70,7 +71,8 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
     // l[impl service.external]
     builder.with_fn(
         "external_service",
-        |this: &mut App, name: &str| -> Dynamic {
+        |this: &mut App, name: &str| -> Result<Dynamic, Box<EvalAltResult>> {
+            super::super::validate_name(name)?;
             let rname = ResourceName::new(name.into());
             let mut def = this.def.lock();
             let id = ResourceId {
@@ -82,7 +84,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                 .entry(id)
                 .or_insert_with(|| Resource::ExternalService(ExternalService { name: rname }));
             match resource {
-                Resource::ExternalService(s) => Dynamic::from(s.clone()),
+                Resource::ExternalService(s) => Ok(Dynamic::from(s.clone())),
                 _ => unreachable!(),
             }
         },

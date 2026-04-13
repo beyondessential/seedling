@@ -14,6 +14,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
     builder.with_fn(
         "job",
         |this: &mut App, name: &str| -> Result<Job, Box<EvalAltResult>> {
+            super::super::validate_name(name)?;
             let rname = ResourceName::new(name.into());
             if is_in_action_closure() {
                 let adef = action_def().ok_or_else(|| -> Box<EvalAltResult> {
