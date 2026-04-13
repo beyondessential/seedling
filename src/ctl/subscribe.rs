@@ -1,9 +1,9 @@
 use seedling::oi::client::OiClient;
 
 pub async fn subscribe(client: &OiClient) {
-    // Send the Subscribe request on a normal bidi stream.
+    // Send the /events/subscribe request on a normal bidi stream.
     let req_bytes = serde_json::to_vec(&serde_json::json!({
-        "method": "Subscribe",
+        "method": "/events/subscribe",
         "params": {},
     }))
     .expect("serialisation");

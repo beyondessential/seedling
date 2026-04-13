@@ -62,12 +62,12 @@ pub(super) enum ParamCommand {
 pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
     match cmd {
         AppsCommand::List => {
-            print_result(client.request("ListApps", serde_json::json!({})).await);
+            print_result(client.request("/apps/list", serde_json::json!({})).await);
         }
         AppsCommand::Show { name } => {
             print_result(
                 client
-                    .request("DescribeApp", serde_json::json!({ "name": name }))
+                    .request("/apps/show", serde_json::json!({ "name": name }))
                     .await,
             );
         }
@@ -76,7 +76,7 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
             print_result(
                 client
                     .request(
-                        "RegisterApp",
+                        "/apps/create",
                         serde_json::json!({ "name": name, "script": script }),
                     )
                     .await,
@@ -85,14 +85,14 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
         AppsCommand::Remove { name } => {
             print_result(
                 client
-                    .request("DeregisterApp", serde_json::json!({ "name": name }))
+                    .request("/apps/remove", serde_json::json!({ "name": name }))
                     .await,
             );
         }
         AppsCommand::Uninstall { name } => {
             print_result(
                 client
-                    .request("UninstallApp", serde_json::json!({ "name": name }))
+                    .request("/apps/uninstall", serde_json::json!({ "name": name }))
                     .await,
             );
         }
@@ -101,7 +101,7 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
             print_result(
                 client
                     .request(
-                        "UpdateApp",
+                        "/apps/update",
                         serde_json::json!({ "name": name, "script": script }),
                     )
                     .await,
@@ -112,7 +112,7 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                 print_result(
                     client
                         .request(
-                            "SetParam",
+                            "/apps/params/set",
                             serde_json::json!({ "app": app, "name": name, "value": value }),
                         )
                         .await,
@@ -122,7 +122,7 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                 print_result(
                     client
                         .request(
-                            "UnsetParam",
+                            "/apps/params/unset",
                             serde_json::json!({ "app": app, "name": name }),
                         )
                         .await,
@@ -133,7 +133,7 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
             print_result(
                 client
                     .request(
-                        "InvokeAction",
+                        "/apps/action/invoke",
                         serde_json::json!({ "app": app, "name": name }),
                     )
                     .await,
@@ -150,7 +150,7 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
             print_result(
                 client
                     .request(
-                        "InvokeInstall",
+                        "/apps/install/invoke",
                         serde_json::json!({ "app": app, "requirements": reqs }),
                     )
                     .await,

@@ -41,41 +41,41 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8]) -> HandlerResult {
 
     let result = match req.method.as_str() {
         // i[status.get]
-        "GetStatus" => status::get_status(state),
+        "/server/status" => status::get_status(state),
         // i[app.list]
-        "ListApps" => apps::list_apps(state),
+        "/apps/list" => apps::list_apps(state),
         // i[app.describe]
-        "DescribeApp" => apps::describe_app(state, req.params),
-        "RegisterApp" => apps::register_app(state, req.params),
-        "DeregisterApp" => apps::deregister_app(state, req.params),
-        "UninstallApp" => apps::uninstall_app(state, req.params),
-        "UpdateApp" => apps::update_app(state, req.params),
+        "/apps/show" => apps::describe_app(state, req.params),
+        "/apps/create" => apps::register_app(state, req.params),
+        "/apps/remove" => apps::deregister_app(state, req.params),
+        "/apps/uninstall" => apps::uninstall_app(state, req.params),
+        "/apps/update" => apps::update_app(state, req.params),
         // i[param.set]
-        "SetParam" => params::set_param(state, req.params),
+        "/apps/params/set" => params::set_param(state, req.params),
         // i[param.unset]
-        "UnsetParam" => params::unset_param(state, req.params),
+        "/apps/params/unset" => params::unset_param(state, req.params),
         // i[action.invoke]
-        "InvokeAction" => actions::invoke_action(state, req.params),
+        "/apps/action/invoke" => actions::invoke_action(state, req.params),
         // i[action.invoke.install]
-        "InvokeInstall" => actions::install::invoke_install(state, req.params),
+        "/apps/install/invoke" => actions::install::invoke_install(state, req.params),
         // i[key.list]
-        "ListKeys" => key_mgmt::list_keys(state),
+        "/keys/list" => key_mgmt::list_keys(state),
         // i[key.authorize]
-        "AuthorizeKey" => key_mgmt::authorize_key(state, req.params),
+        "/keys/authorise" => key_mgmt::authorize_key(state, req.params),
         // i[key.revoke]
-        "RevokeKey" => key_mgmt::revoke_key(state, req.params),
+        "/keys/revoke" => key_mgmt::revoke_key(state, req.params),
         // i[shell.resize]
-        "ResizeShell" => super::shells::resize_shell(state, req.params),
+        "/shells/resize" => super::shells::resize_shell(state, req.params),
         // i[shell.list]
-        "ListShells" => super::shells::list_shells(state, req.params),
+        "/shells/list" => super::shells::list_shells(state, req.params),
         // i[shell.stop]
-        "StopShell" => super::shells::stop_shell(state, req.params),
+        "/shells/stop" => super::shells::stop_shell(state, req.params),
         // i[forward.list]
-        "ListForwards" => super::forwards::handler::list_forwards(state, req.params),
+        "/forwards/list" => super::forwards::handler::list_forwards(state, req.params),
         // i[forward.stop]
-        "StopForward" => super::forwards::handler::stop_forward(state, req.params),
+        "/forwards/stop" => super::forwards::handler::stop_forward(state, req.params),
         // i[fault.list]
-        "ListFaults" => faults::list_faults(state, req.params),
+        "/faults/list" => faults::list_faults(state, req.params),
         other => Err(OiError::not_found(format!("unknown method: {other}"))),
     };
 

@@ -22,7 +22,7 @@ pub(super) enum OpCommand {
         #[command(subcommand)]
         command: ForwardsCommand,
     },
-    /// Subscribe to event feed (streams JSON to stdout)
+    /// /events/subscribe to event feed (streams JSON to stdout)
     Events,
     /// User/key management
     User {
@@ -75,12 +75,16 @@ pub(super) enum UserCommand {
 pub(super) async fn dispatch(client: &OiClient, cmd: OpCommand) {
     match cmd {
         OpCommand::Status => {
-            print_result(client.request("GetStatus", serde_json::json!({})).await);
+            print_result(
+                client
+                    .request("/server/status", serde_json::json!({}))
+                    .await,
+            );
         }
         OpCommand::Faults { app } => {
             print_result(
                 client
-                    .request("ListFaults", serde_json::json!({ "app": app }))
+                    .request("/faults/list", serde_json::json!({ "app": app }))
                     .await,
             );
         }
@@ -88,14 +92,17 @@ pub(super) async fn dispatch(client: &OiClient, cmd: OpCommand) {
             ShellsCommand::List { app } => {
                 print_result(
                     client
-                        .request("ListShells", serde_json::json!({ "app": app }))
+                        .request("/shells/list", serde_json::json!({ "app": app }))
                         .await,
                 );
             }
             ShellsCommand::Stop { session_id } => {
                 print_result(
                     client
-                        .request("StopShell", serde_json::json!({ "session_id": session_id }))
+                        .request(
+                            "/shells/stop",
+                            serde_json::json!({ "session_id": session_id }),
+                        )
                         .await,
                 );
             }
@@ -104,7 +111,7 @@ pub(super) async fn dispatch(client: &OiClient, cmd: OpCommand) {
             ForwardsCommand::List { app } => {
                 print_result(
                     client
-                        .request("ListForwards", serde_json::json!({ "app": app }))
+                        .request("/forwards/list", serde_json::json!({ "app": app }))
                         .await,
                 );
             }
@@ -112,7 +119,7 @@ pub(super) async fn dispatch(client: &OiClient, cmd: OpCommand) {
                 print_result(
                     client
                         .request(
-                            "StopForward",
+                            "/forwards/stop",
                             serde_json::json!({ "forward_id": forward_id }),
                         )
                         .await,
@@ -124,13 +131,13 @@ pub(super) async fn dispatch(client: &OiClient, cmd: OpCommand) {
         }
         OpCommand::User { command } => match command {
             UserCommand::List => {
-                print_result(client.request("ListKeys", serde_json::json!({})).await);
+                print_result(client.request("/keys/list", serde_json::json!({})).await);
             }
             UserCommand::Add { fingerprint, label } => {
                 print_result(
                     client
                         .request(
-                            "AuthorizeKey",
+                            "/keys/authorise",
                             serde_json::json!({ "fingerprint": fingerprint, "label": label }),
                         )
                         .await,
@@ -140,7 +147,7 @@ pub(super) async fn dispatch(client: &OiClient, cmd: OpCommand) {
                 print_result(
                     client
                         .request(
-                            "RevokeKey",
+                            "/keys/revoke",
                             serde_json::json!({ "fingerprint": fingerprint }),
                         )
                         .await,

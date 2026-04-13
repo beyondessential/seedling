@@ -38,16 +38,16 @@ pub async fn open_shell(client: &OiClient, app: String, name: String) -> i32 {
         std::process::exit(1);
     });
 
-    // 3. Send the OpenShell request (newline-terminated JSON).
+    // 3. Send the /shells/start request (newline-terminated JSON).
     {
         let mut req = serde_json::to_vec(&serde_json::json!({
-            "method": "OpenShell",
+            "method": "/shells/start",
             "params": { "app": app, "name": name, "rows": rows, "cols": cols },
         }))
         .expect("serialisation never fails");
         req.push(b'\n');
         if let Err(e) = session_send.write_all(&req).await {
-            eprintln!("error sending OpenShell: {e}");
+            eprintln!("error sending /shells/start: {e}");
             return 1;
         }
     }
@@ -122,7 +122,7 @@ pub async fn open_shell(client: &OiClient, app: String, name: String) -> i32 {
     //    - stdout_recv  → local stdout
     //    - stderr_recv  → local stderr
     //    - session_recv → exit frame accumulation
-    //    - SIGWINCH     → ResizeShell control request
+    //    - SIGWINCH     → /shells/resize control request
     let mut stdin = tokio::io::stdin();
     let mut stdout = tokio::io::stdout();
     let mut stderr = tokio::io::stderr();
@@ -196,7 +196,7 @@ pub async fn open_shell(client: &OiClient, app: String, name: String) -> i32 {
                 let (new_cols, new_rows) = crossterm::terminal::size().unwrap_or((80, 24));
                 client
                     .request(
-                        "ResizeShell",
+                        "/shells/resize",
                         serde_json::json!({
                             "session_id": session_id,
                             "rows": new_rows,

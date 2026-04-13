@@ -225,7 +225,7 @@ async fn handle_bidi_stream(
         .map(str::to_owned);
 
     // i[event.subscribe]
-    if maybe_method.as_deref() == Some("Subscribe") {
+    if maybe_method.as_deref() == Some("/events/subscribe") {
         // Send the response on the bidi stream first.
         let response = serde_json::to_vec(&serde_json::json!({ "result": {} }))
             .expect("response serialisation never fails");
@@ -250,14 +250,14 @@ async fn handle_bidi_stream(
         return;
     }
 
-    if maybe_method.as_deref() == Some("OpenShell") {
+    if maybe_method.as_deref() == Some("/shells/start") {
         open_shell_session(conn, send, recv, leftover, line, state).await;
         return;
     }
 
-    // i[forward.request] — ForwardPort keeps the control stream open for the
+    // i[forward.request] — /forwards/start keeps the control stream open for the
     // duration of the forward; it must be handled outside the normal req/resp path.
-    if maybe_method.as_deref() == Some("ForwardPort") {
+    if maybe_method.as_deref() == Some("/forwards/start") {
         forward_port_session(conn, send, recv, line, state).await;
         return;
     }

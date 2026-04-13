@@ -14,11 +14,11 @@ pub async fn forward_port(
         std::process::exit(1);
     });
 
-    // Send the ForwardPort request (newline-terminated). Do NOT call finish on
+    // Send the /forwards/start request (newline-terminated). Do NOT call finish on
     // ctrl_send — the open stream is how the server detects the forward is alive.
     {
         let mut req = serde_json::to_vec(&serde_json::json!({
-            "method": "ForwardPort",
+            "method": "/forwards/start",
             "params": {
                 "app": app,
                 "service": service,
@@ -29,7 +29,7 @@ pub async fn forward_port(
         .expect("serialisation never fails");
         req.push(b'\n');
         if let Err(e) = ctrl_send.write_all(&req).await {
-            eprintln!("send ForwardPort: {e}");
+            eprintln!("send /forwards/start: {e}");
             std::process::exit(1);
         }
     }
@@ -38,11 +38,11 @@ pub async fn forward_port(
     let resp_bytes = super::shell::read_shell_line(&mut ctrl_recv)
         .await
         .unwrap_or_else(|e| {
-            eprintln!("read ForwardPort response: {e}");
+            eprintln!("read /forwards/start response: {e}");
             std::process::exit(1);
         });
     let resp: serde_json::Value = serde_json::from_slice(&resp_bytes).unwrap_or_else(|e| {
-        eprintln!("parse ForwardPort response: {e}");
+        eprintln!("parse /forwards/start response: {e}");
         std::process::exit(1);
     });
     if let Some(err) = resp.get("error") {
