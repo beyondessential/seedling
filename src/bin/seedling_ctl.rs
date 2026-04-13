@@ -7,9 +7,8 @@ use lloggs::LoggingArgs;
 use seedling::oi::{
     client::{ClientAuth, ClientError, OiClient},
     keys::ClientIdentity,
+    known_hosts,
 };
-
-mod known_hosts;
 
 #[derive(Parser)]
 #[command(name = "seedling-ctl", about = "Seedling operator interface CLI")]

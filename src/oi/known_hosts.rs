@@ -4,19 +4,19 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub(super) enum Status {
+pub enum Status {
     Match,
     Unknown,
     Mismatch { expected: String },
 }
 
-pub(super) struct KnownHosts {
+pub struct KnownHosts {
     path: PathBuf,
     entries: HashMap<String, String>,
 }
 
 impl KnownHosts {
-    pub(super) fn default_path() -> PathBuf {
+    pub fn default_path() -> PathBuf {
         dirs::state_dir()
             .or_else(dirs::data_local_dir)
             .unwrap_or_else(|| PathBuf::from("."))
@@ -24,7 +24,7 @@ impl KnownHosts {
             .join("known_hosts")
     }
 
-    pub(super) fn load(path: &Path) -> io::Result<Self> {
+    pub fn load(path: &Path) -> io::Result<Self> {
         let mut entries = HashMap::new();
         if path.exists() {
             for line in std::fs::read_to_string(path)?.lines() {
@@ -44,14 +44,14 @@ impl KnownHosts {
         })
     }
 
-    pub(super) fn empty(path: PathBuf) -> Self {
+    pub fn empty(path: PathBuf) -> Self {
         Self {
             path,
             entries: HashMap::new(),
         }
     }
 
-    pub(super) fn check(&self, endpoint: &str, fingerprint: &str) -> Status {
+    pub fn check(&self, endpoint: &str, fingerprint: &str) -> Status {
         match self.entries.get(endpoint) {
             Some(saved) if saved == fingerprint => Status::Match,
             Some(saved) => Status::Mismatch {
@@ -61,12 +61,12 @@ impl KnownHosts {
         }
     }
 
-    pub(super) fn add(&mut self, endpoint: &str, fingerprint: &str) {
+    pub fn add(&mut self, endpoint: &str, fingerprint: &str) {
         self.entries
             .insert(endpoint.to_owned(), fingerprint.to_owned());
     }
 
-    pub(super) fn save(&self) -> io::Result<()> {
+    pub fn save(&self) -> io::Result<()> {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
         }
