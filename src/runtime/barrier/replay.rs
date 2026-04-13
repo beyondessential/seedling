@@ -117,13 +117,34 @@ impl ActionLog for DbActionLog {
         let db = self.db.lock();
         // r[impl reconciliation.idempotency]
         for entry in entries {
-            let _ = history::insert_action_log_entry(
+            if let Err(e) = history::insert_action_log_entry(
                 &db,
                 &self.operation_id,
                 &self.app,
                 &self.action_name,
                 entry,
-            );
+            ) {
+                // UNIQUE constraint violations are expected during replay —
+                // the same entry is committed again idempotently.
+                if matches!(
+                    &e,
+                    rusqlite::Error::SqliteFailure(
+                        rusqlite::ffi::Error {
+                            code: rusqlite::ffi::ErrorCode::ConstraintViolation,
+                            ..
+                        },
+                        _,
+                    )
+                ) {
+                    continue;
+                }
+                tracing::warn!(
+                    app = %self.app,
+                    action = %self.action_name,
+                    call_index = entry.call_index,
+                    "failed to commit action log entry: {e}",
+                );
+            }
         }
     }
 }

@@ -391,10 +391,12 @@ impl Reconciler {
                         &app.name,
                         "",
                     );
-                    let _ = db.conn.execute(
+                    if let Err(e) = db.conn.execute(
                         "DELETE FROM resource_instances WHERE app = ?1",
                         rusqlite::params![app.name],
-                    );
+                    ) {
+                        warn!(app = %app.name, "failed to clean up resource instances during uninstall: {e}");
+                    }
                     let app_instance_ids: HashSet<InstanceId> = app
                         .desired
                         .resources

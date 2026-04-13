@@ -290,10 +290,12 @@ pub fn transition_phase(
     *phase_arc.lock() = new_phase.clone();
     let installed = matches!(new_phase, AppPhase::Installed | AppPhase::Uninstalling);
     let uninstalling = matches!(new_phase, AppPhase::Uninstalling);
-    let _ = db.conn.execute(
+    if let Err(e) = db.conn.execute(
         "UPDATE registered_apps SET installed = ?1, uninstalling = ?2 WHERE name = ?3",
         rusqlite::params![installed as i64, uninstalling as i64, app_name],
-    );
+    ) {
+        tracing::error!(app = %app_name, "failed to persist phase transition: {e}");
+    }
 }
 
 fn evaluate_script(

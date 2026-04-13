@@ -184,7 +184,9 @@ async fn main() {
                     let _ = e;
                 }
                 // Clear all orphaned records.
-                let _ = db.conn.execute("DELETE FROM dynamic_resources", []);
+                if let Err(e) = db.conn.execute("DELETE FROM dynamic_resources", []) {
+                    tracing::warn!("failed to clear orphaned dynamic resource records: {e}");
+                }
                 tracing::info!("orphaned dynamic resource cleanup complete");
             }
             Ok(_) => {}
