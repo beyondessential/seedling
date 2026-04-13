@@ -10,10 +10,7 @@ use parking_lot::{Mutex, RwLock};
 use seedling::{
     oi::{self, state::OiState},
     runtime::{AppRegistry, InstanceRegistry, Scheduler, db::Db, registry::DbInstanceRegistry},
-    system::{
-        System,
-        reconcile::{Reconciler, node_prefix_from_machine_id},
-    },
+    system::{System, node_prefix_from_machine_id, reconcile::Reconciler},
 };
 use tokio::sync::Notify;
 

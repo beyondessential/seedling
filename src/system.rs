@@ -1,6 +1,7 @@
 use std::{net::SocketAddr, path::Path, sync::Arc};
 
 use ipnet::{Ipv4Net, Ipv6Net};
+use sha2::{Digest, Sha256};
 
 use crate::system::types::{
     ContainerFilter, ContainerSpec, ContainerState, ContainerSummary, DataPlaneRules, ExecHandle,
@@ -167,6 +168,42 @@ pub struct System {
     pub process: Arc<dyn ProcessManager>,
     pub proxy: Arc<dyn NetworkProxy>,
     pub data_plane: Arc<dyn DataPlane>,
+}
+
+// r[infra.node.prefix]
+/// Derive the node's /48 ULA prefix from `/etc/machine-id`.
+///
+/// The raw machine-id content (whitespace-trimmed) is hashed with SHA-256;
+/// the first four bytes of the digest fill octets 2–5 of the prefix:
+///
+/// ```text
+/// fd5e : <hash[0]><hash[1]> : <hash[2]><hash[3]> :: /48
+/// ```
+///
+/// Hashing instead of direct interpretation means the derivation is
+/// agnostic to the machine-id format (plain hex, UUID with dashes, etc.).
+pub fn node_prefix_from_machine_id() -> std::io::Result<Ipv6Net> {
+    let raw = std::fs::read_to_string("/etc/machine-id")?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "machine-id is empty",
+        ));
+    }
+
+    let digest = Sha256::digest(trimmed.as_bytes());
+
+    let mut octets = [0u8; 16];
+    octets[0] = 0xfd;
+    octets[1] = 0x5e;
+    octets[2] = digest[0];
+    octets[3] = digest[1];
+    octets[4] = digest[2];
+    octets[5] = digest[3];
+
+    Ok(Ipv6Net::new(std::net::Ipv6Addr::from(octets), 48)
+        .expect("48 is a valid IPv6 prefix length"))
 }
 
 impl System {
