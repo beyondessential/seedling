@@ -121,10 +121,8 @@ fn get_or_create_singleton_creates_on_first_call() {
 #[test]
 fn get_or_create_singleton_returns_same_id_on_second_call() {
     let db = Db::open_in_memory().unwrap();
-    let a =
-        get_or_create_singleton(&db, "myapp", ResourceKind::Deployment, Some("web")).unwrap();
-    let b =
-        get_or_create_singleton(&db, "myapp", ResourceKind::Deployment, Some("web")).unwrap();
+    let a = get_or_create_singleton(&db, "myapp", ResourceKind::Deployment, Some("web")).unwrap();
+    let b = get_or_create_singleton(&db, "myapp", ResourceKind::Deployment, Some("web")).unwrap();
     assert_eq!(a.id, b.id);
     assert_eq!(a.display_name, b.display_name);
 }
