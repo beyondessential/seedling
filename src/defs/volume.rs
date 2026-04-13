@@ -1,6 +1,37 @@
+use std::path::{Component, PathBuf};
+
 use rhai::{CustomType, EvalAltResult, TypeBuilder};
 
 use super::{Freezable, Holder, resource::ResourceName};
+
+// l[impl volume.write.validation]
+fn validate_volume_write_path(path: &str) -> Result<(), Box<EvalAltResult>> {
+    if path.contains('\0') {
+        return Err("volume write path must not contain null bytes".into());
+    }
+    if !path.starts_with('/') {
+        return Err(format!("volume write path must be absolute, got '{path}'").into());
+    }
+
+    for component in PathBuf::from(path).components() {
+        if matches!(component, Component::ParentDir) {
+            return Err(
+                format!("volume write path must not contain '..' components: '{path}'").into(),
+            );
+        }
+    }
+
+    // After stripping `.` and redundant `/`, the path must have at least one
+    // real segment (i.e. it must not resolve to just `/`).
+    let has_normal = PathBuf::from(path)
+        .components()
+        .any(|c| matches!(c, Component::Normal(_)));
+    if !has_normal {
+        return Err("volume write path must not resolve to '/'".into());
+    }
+
+    Ok(())
+}
 
 #[derive(Debug, Default, Clone)]
 pub struct VolumeDef {
@@ -67,6 +98,7 @@ impl CustomType for Volume {
                  contents: &str|
                  -> Result<Volume, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
+                    validate_volume_write_path(path)?;
                     this.def.lock().writes.push((path.into(), contents.into()));
                     Ok(this.clone())
                 },

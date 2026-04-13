@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, os::unix::fs::PermissionsExt, path::Path, sync::Arc};
 
 use ipnet::Ipv6Net;
 use parking_lot::Mutex;
@@ -66,6 +66,64 @@ pub enum ActuateError {
         source: std::io::Error,
         backtrace: snafu::Backtrace,
     },
+    #[snafu(display("volume write path escapes volume root: {path:?}"))]
+    VolumePathEscape {
+        path: std::path::PathBuf,
+        backtrace: snafu::Backtrace,
+    },
+}
+
+// l[impl volume.write.validation]
+/// Write a file into a volume, verifying the resolved path stays within
+/// `mountpoint` and setting permissions to 0640.
+pub(crate) async fn safe_volume_write(
+    mountpoint: &Path,
+    rel_path: &str,
+    contents: &str,
+) -> Result<(), ActuateError> {
+    let dest = mountpoint.join(rel_path.trim_start_matches('/'));
+
+    // Canonicalise the destination *logically* (the parent dirs may not exist
+    // yet, so we canonicalise the mountpoint from disk and resolve the
+    // remainder manually).
+    let canon_mount = tokio::fs::canonicalize(mountpoint)
+        .await
+        .context(VolumeWriteSnafu {
+            path: mountpoint.to_path_buf(),
+        })?;
+
+    // Build logical canonical form of dest by starting from canon_mount and
+    // walking the relative portion component-by-component.
+    let rel = rel_path.trim_start_matches('/');
+    let mut canon_dest = canon_mount.clone();
+    for component in Path::new(rel).components() {
+        match component {
+            std::path::Component::Normal(seg) => canon_dest.push(seg),
+            std::path::Component::ParentDir => {
+                canon_dest.pop();
+            }
+            std::path::Component::CurDir | std::path::Component::RootDir => {}
+            std::path::Component::Prefix(_) => {}
+        }
+    }
+
+    if !canon_dest.starts_with(&canon_mount) || canon_dest == canon_mount {
+        return Err(VolumePathEscapeSnafu { path: dest }.build());
+    }
+
+    if let Some(parent) = dest.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .context(VolumeWriteSnafu { path: dest.clone() })?;
+    }
+    tokio::fs::write(&dest, contents)
+        .await
+        .context(VolumeWriteSnafu { path: dest.clone() })?;
+    tokio::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o640))
+        .await
+        .context(VolumeWriteSnafu { path: dest })?;
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -192,15 +250,7 @@ impl Actuator {
                         .await
                         .context(ContainerSnafu)?;
                     for (path, contents) in &writes {
-                        let dest = mountpoint.join(path.trim_start_matches('/'));
-                        if let Some(parent) = dest.parent() {
-                            tokio::fs::create_dir_all(parent)
-                                .await
-                                .context(VolumeWriteSnafu { path: dest.clone() })?;
-                        }
-                        tokio::fs::write(&dest, contents)
-                            .await
-                            .context(VolumeWriteSnafu { path: dest.clone() })?;
+                        safe_volume_write(&mountpoint, path, contents).await?;
                     }
                 }
                 Ok(None)

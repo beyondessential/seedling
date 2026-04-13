@@ -80,6 +80,85 @@ fn volume_write() {
     }
 }
 
+// l[verify volume.write.validation]
+#[test]
+fn volume_write_rejects_path_traversal() {
+    let _ = run_test_script_err(
+        r#"
+        let v = app.volume("cfg");
+        v.write("/../etc/passwd", "evil");
+    "#,
+    );
+}
+
+// l[verify volume.write.validation]
+#[test]
+fn volume_write_rejects_dotdot_escape() {
+    let _ = run_test_script_err(
+        r#"
+        let v = app.volume("cfg");
+        v.write("/sub/../../escape", "evil");
+    "#,
+    );
+}
+
+// l[verify volume.write.validation]
+#[test]
+fn volume_write_rejects_relative_path() {
+    let _ = run_test_script_err(
+        r#"
+        let v = app.volume("cfg");
+        v.write("relative.conf", "data");
+    "#,
+    );
+}
+
+// l[verify volume.write.validation]
+#[test]
+fn volume_write_rejects_null_bytes() {
+    let _ = run_test_script_err(
+        r#"
+        let v = app.volume("cfg");
+        v.write("/app\0.conf", "data");
+    "#,
+    );
+}
+
+// l[verify volume.write.validation]
+#[test]
+fn volume_write_rejects_root() {
+    let _ = run_test_script_err(
+        r#"
+        let v = app.volume("cfg");
+        v.write("/", "data");
+    "#,
+    );
+}
+
+// l[verify volume.write.validation]
+#[test]
+fn volume_write_rejects_dotdot_to_root() {
+    let _ = run_test_script_err(
+        r#"
+        let v = app.volume("cfg");
+        v.write("/foo/..", "data");
+    "#,
+    );
+}
+
+// l[verify volume.write.validation]
+#[test]
+fn volume_write_accepts_nested_paths() {
+    run_test_script_app(
+        r#"
+        let v = app.volume("cfg");
+        v.write("/app.conf", "key=value");
+        v.write("/sub/dir/file.txt", "nested");
+        v.write("/a/b/c/d.yaml", "deep");
+    "#,
+    );
+}
+
 // l[verify volume.write]
 #[test]
 fn volume_write_multiple() {

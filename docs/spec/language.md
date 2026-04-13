@@ -518,6 +518,13 @@ This is currently the only value.
 > `volume.write(path: string, contents: string)` is an instance method which writes some data to the volume at `path`.
 > Any existing content at `path` is discarded or shadowed.
 
+> l[volume.write.validation]
+> The `path` argument must be an absolute path (starting with `/`), must not contain null bytes, and must not escape the volume root after canonicalisation (resolving `.` and `..` segments without touching the filesystem). A path that resolves to `/` itself is also forbidden.
+>
+> If validation fails, the method must throw.
+>
+> At the runtime level, files written into volumes must be created with restrictive permissions (no more than 0640).
+
 ## External Volume
 
 > l[volume.external]

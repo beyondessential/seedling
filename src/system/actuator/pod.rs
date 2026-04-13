@@ -1,6 +1,8 @@
 use ipnet::Ipv6Net;
 use snafu::ResultExt;
 
+use super::safe_volume_write;
+
 use crate::{
     defs::{
         container::VolumeMount, enums::OnExit, resource::ResourceKind, service::ServicePort,
@@ -17,7 +19,7 @@ use crate::{
     },
 };
 
-use super::{ActuateError, Actuator, ContainerSnafu, ProcessSnafu, VolumeWriteSnafu};
+use super::{ActuateError, Actuator, ContainerSnafu, ProcessSnafu};
 
 fn pod_network_name(instance: &ResourceInstance) -> String {
     format!("seedling-{}", instance.display_name)
@@ -110,15 +112,7 @@ async fn ensure_volumes(driver: &System, volumes: &[ContainerVolume]) -> Result<
                 .await
                 .context(ContainerSnafu)?;
             for (path, contents) in &vol.def.writes {
-                let dest = mountpoint.join(path.trim_start_matches('/'));
-                if let Some(parent) = dest.parent() {
-                    tokio::fs::create_dir_all(parent)
-                        .await
-                        .context(VolumeWriteSnafu { path: dest.clone() })?;
-                }
-                tokio::fs::write(&dest, contents)
-                    .await
-                    .context(VolumeWriteSnafu { path: dest.clone() })?;
+                safe_volume_write(&mountpoint, path, contents).await?;
             }
         }
     }
