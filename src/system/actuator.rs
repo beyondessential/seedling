@@ -1,6 +1,10 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashSet},
+    sync::Arc,
+};
 
 use ipnet::Ipv6Net;
+use parking_lot::Mutex;
 use snafu::Snafu;
 
 use crate::{
@@ -136,6 +140,77 @@ pub struct Actuator {
     driver: Arc<System>,
     node_prefix: Ipv6Net,
     registry: Arc<dyn InstanceRegistry>,
+    /// Images currently being pulled in background tasks.
+    pulling: Arc<Mutex<HashSet<String>>>,
+}
+
+async fn ensure_volumes(driver: &System, volumes: &[ContainerVolume]) -> Result<(), ActuateError> {
+    for vol in volumes {
+        let just_created = if !driver
+            .container
+            .volume_exists(&vol.name)
+            .await
+            .map_err(|e| ActuateError::Container { source: e })?
+        {
+            driver
+                .container
+                .create_volume(&vol.name)
+                .await
+                .map_err(|e| ActuateError::Container { source: e })?;
+            true
+        } else {
+            false
+        };
+        if just_created && !vol.def.writes.is_empty() {
+            let mountpoint = driver
+                .container
+                .volume_mountpoint(&vol.name)
+                .await
+                .map_err(|e| ActuateError::Container { source: e })?;
+            for (path, contents) in &vol.def.writes {
+                let dest = mountpoint.join(path.trim_start_matches('/'));
+                if let Some(parent) = dest.parent() {
+                    tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                        ActuateError::VolumeWrite {
+                            path: dest.clone(),
+                            source: e,
+                        }
+                    })?;
+                }
+                tokio::fs::write(&dest, contents)
+                    .await
+                    .map_err(|e| ActuateError::VolumeWrite {
+                        path: dest.clone(),
+                        source: e,
+                    })?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Returns the bridge name if a new network was created, `None` if it already existed.
+async fn ensure_network(
+    driver: &System,
+    net_name: &str,
+    net_prefix: Ipv6Net,
+) -> Result<Option<String>, ActuateError> {
+    if !driver
+        .container
+        .network_exists(net_name)
+        .await
+        .map_err(|e| ActuateError::Container { source: e })?
+    {
+        Ok(Some(
+            driver
+                .container
+                .create_network(net_name, net_prefix, None)
+                .await
+                .map_err(|e| ActuateError::Container { source: e })?,
+        ))
+    } else {
+        Ok(None)
+    }
 }
 
 impl Actuator {
@@ -148,6 +223,7 @@ impl Actuator {
             driver,
             node_prefix,
             registry,
+            pulling: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -421,7 +497,8 @@ impl Actuator {
         volumes: &[ContainerVolume],
         build_argv: impl FnOnce(String, Ipv6Net, &[(u16, std::net::Ipv6Addr, u16)]) -> Vec<String>,
     ) -> Result<Option<String>, ActuateError> {
-        // Ensure the container image is available.
+        // r[impl reconciliation.liveness]
+        // Check image availability; spawn background pull if missing.
         if !self
             .driver
             .container
@@ -429,81 +506,33 @@ impl Actuator {
             .await
             .map_err(|e| ActuateError::Container { source: e })?
         {
-            self.driver.container.pull_image(image).await.map_err(|_| {
-                ActuateError::ImageUnavailable {
-                    reference: image.to_owned(),
-                }
-            })?;
-        }
-
-        // Ensure all container volumes exist. Writes are applied only when the
-        // volume is freshly created — static named volumes managed by the
-        // volumes reconciler already exist and must not have their content
-        // overwritten on every container start.
-        for vol in volumes {
-            let just_created = if !self
-                .driver
-                .container
-                .volume_exists(&vol.name)
-                .await
-                .map_err(|e| ActuateError::Container { source: e })?
-            {
-                self.driver
-                    .container
-                    .create_volume(&vol.name)
-                    .await
-                    .map_err(|e| ActuateError::Container { source: e })?;
-                true
-            } else {
-                false
-            };
-            if just_created && !vol.def.writes.is_empty() {
-                let mountpoint = self
-                    .driver
-                    .container
-                    .volume_mountpoint(&vol.name)
-                    .await
-                    .map_err(|e| ActuateError::Container { source: e })?;
-                for (path, contents) in &vol.def.writes {
-                    let dest = mountpoint.join(path.trim_start_matches('/'));
-                    if let Some(parent) = dest.parent() {
-                        tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                            ActuateError::VolumeWrite {
-                                path: dest.clone(),
-                                source: e,
-                            }
-                        })?;
+            let mut pulling = self.pulling.lock();
+            if !pulling.contains(image) {
+                pulling.insert(image.to_owned());
+                let driver = Arc::clone(&self.driver);
+                let image_owned = image.to_owned();
+                let pulling_set = Arc::clone(&self.pulling);
+                tokio::spawn(async move {
+                    let result = driver.container.pull_image(&image_owned).await;
+                    pulling_set.lock().remove(&image_owned);
+                    if let Err(e) = result {
+                        tracing::warn!(image = %image_owned, error = %e, "background image pull failed");
                     }
-                    tokio::fs::write(&dest, contents).await.map_err(|e| {
-                        ActuateError::VolumeWrite {
-                            path: dest.clone(),
-                            source: e,
-                        }
-                    })?;
-                }
+                });
             }
+            return Err(ActuateError::ImageUnavailable {
+                reference: image.to_owned(),
+            });
         }
 
-        // Ensure the pod network exists.
+        // Set up volumes and network concurrently — neither depends on the other.
         let net_name = pod_network_name(instance);
         let net_prefix = pod_network_prefix(&self.node_prefix, instance);
-        let bridge_name = if !self
-            .driver
-            .container
-            .network_exists(&net_name)
-            .await
-            .map_err(|e| ActuateError::Container { source: e })?
-        {
-            Some(
-                self.driver
-                    .container
-                    .create_network(&net_name, net_prefix, None)
-                    .await
-                    .map_err(|e| ActuateError::Container { source: e })?,
-            )
-        } else {
-            None
-        };
+
+        let ((), bridge_name) = tokio::try_join!(
+            ensure_volumes(&self.driver, volumes),
+            ensure_network(&self.driver, &net_name, net_prefix),
+        )?;
 
         // Handle any pre-existing unit with this name.
         let unit = unit_name(instance);
@@ -515,11 +544,7 @@ impl Actuator {
             .map_err(|e| ActuateError::Process { source: e })?
         {
             match state.active {
-                // Already running — nothing to do.
                 ActiveState::Active | ActiveState::Activating => return Ok(bridge_name),
-                // Lingering after the previous cycle (inactive/failed but still
-                // loaded). reset_failed clears the unit so systemd will accept a
-                // fresh StartTransientUnit with the same name.
                 _ => {
                     self.driver
                         .process
