@@ -1,7 +1,3 @@
-use std::net::{IpAddr, Ipv6Addr};
-
-use ipnet::Ipv6Net;
-
 use super::*;
 
 #[test]
