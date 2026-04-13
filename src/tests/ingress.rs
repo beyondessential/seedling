@@ -103,6 +103,80 @@ fn ingress_certificates_implied_by_http() {
     );
 }
 
+// l[verify ingress.hostname]
+#[test]
+fn hostname_rejects_wildcard() {
+    let _ = run_test_script_err(
+        r#"
+        app.service("web").ingress("*.example.com", 443);
+    "#,
+    );
+}
+
+// l[verify ingress.hostname]
+#[test]
+fn hostname_rejects_leading_hyphen_label() {
+    let _ = run_test_script_err(
+        r#"
+        app.service("web").ingress("-example.com", 443);
+    "#,
+    );
+}
+
+// l[verify ingress.hostname]
+#[test]
+fn hostname_rejects_trailing_hyphen_label() {
+    let _ = run_test_script_err(
+        r#"
+        app.service("web").ingress("example-.com", 443);
+    "#,
+    );
+}
+
+// l[verify ingress.hostname]
+#[test]
+fn hostname_rejects_empty_label() {
+    let _ = run_test_script_err(
+        r#"
+        app.service("web").ingress("example..com", 443);
+    "#,
+    );
+}
+
+// l[verify ingress.hostname]
+#[test]
+fn hostname_rejects_invalid_characters() {
+    let _ = run_test_script_err(
+        r#"
+        app.service("web").ingress("ex ample.com", 443);
+    "#,
+    );
+}
+
+// l[verify ingress.hostname]
+#[test]
+fn hostname_rejects_empty_string() {
+    let _ = run_test_script_err(
+        r#"
+        app.service("web").ingress("", 443);
+    "#,
+    );
+}
+
+// l[verify ingress.hostname]
+#[test]
+fn hostname_accepts_valid_domains() {
+    run_test_script_app(
+        r#"
+        let svc = app.service("web");
+        svc.ingress("example.com", 443);
+        svc.ingress("sub.example.com", 80);
+        svc.ingress("a.b.c.d.example.com", 8080);
+        svc.ingress("localhost", 9000);
+    "#,
+    );
+}
+
 // l[verify ingress.conflicts]
 #[test]
 fn ingress_conflict_within_app_is_catchable() {

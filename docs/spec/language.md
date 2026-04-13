@@ -296,6 +296,13 @@ This is currently the only value.
 >
 > There can be multiple ingresses for a Service.
 
+> l[ingress.hostname]
+> The `hostname` argument must be a valid fully-qualified domain name: one or more labels separated by `.`, where each label is 1–63 ASCII alphanumeric or hyphen characters, must not start or end with a hyphen, and the overall length (including dots) must not exceed 253 characters.
+>
+> Wildcard labels (e.g. `*.example.com`) are not permitted. If wildcard matching is needed in the future it will be designed as a separate feature.
+>
+> If the hostname is not valid, the method must throw.
+
 > l[ingress.conflicts]
 > If more than one ingress matches the same (hostname, port) tuple...
 > - ...within the same application: the latter definition in execution order will throw, and not be registered against the ingress. This can be caught (with `try..catch`) and handled.
