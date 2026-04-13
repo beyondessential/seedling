@@ -95,21 +95,91 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8]) -> HandlerResult {
         // i[key.list]
         "/keys/list" => key_mgmt::list_keys(state),
         // i[key.authorize]
-        "/keys/authorise" => key_mgmt::authorize_key(state, req.params),
+        "/keys/authorise" => {
+            let p: key_mgmt::AuthorizeKeyParams =
+                serde_json::from_value(req.params).map_err(|e| {
+                    OiError::new(
+                        ErrorCode::RequirementsInvalid,
+                        format!("invalid params: {e}"),
+                    )
+                })?;
+            key_mgmt::authorize_key(state, p)
+        }
         // i[key.revoke]
-        "/keys/revoke" => key_mgmt::revoke_key(state, req.params),
+        "/keys/revoke" => {
+            let p: key_mgmt::RevokeKeyParams = serde_json::from_value(req.params).map_err(|e| {
+                OiError::new(
+                    ErrorCode::RequirementsInvalid,
+                    format!("invalid params: {e}"),
+                )
+            })?;
+            key_mgmt::revoke_key(state, p)
+        }
         // i[shell.resize]
-        "/shells/resize" => super::shells::resize_shell(state, req.params),
+        "/shells/resize" => {
+            let p: super::shells::handler::ResizeShellParams = serde_json::from_value(req.params)
+                .map_err(|e| {
+                OiError::new(
+                    ErrorCode::RequirementsInvalid,
+                    format!("invalid params: {e}"),
+                )
+            })?;
+            super::shells::resize_shell(state, p)
+        }
         // i[shell.list]
-        "/shells/list" => super::shells::list_shells(state, req.params),
+        "/shells/list" => {
+            let p: super::shells::handler::ListShellsParams = serde_json::from_value(req.params)
+                .map_err(|e| {
+                    OiError::new(
+                        ErrorCode::RequirementsInvalid,
+                        format!("invalid params: {e}"),
+                    )
+                })?;
+            super::shells::list_shells(state, p)
+        }
         // i[shell.stop]
-        "/shells/stop" => super::shells::stop_shell(state, req.params),
+        "/shells/stop" => {
+            let p: super::shells::handler::StopShellParams = serde_json::from_value(req.params)
+                .map_err(|e| {
+                    OiError::new(
+                        ErrorCode::RequirementsInvalid,
+                        format!("invalid params: {e}"),
+                    )
+                })?;
+            super::shells::stop_shell(state, p)
+        }
         // i[forward.list]
-        "/forwards/list" => super::forwards::handler::list_forwards(state, req.params),
+        "/forwards/list" => {
+            let p: super::forwards::handler::ListForwardsParams =
+                serde_json::from_value(req.params).map_err(|e| {
+                    OiError::new(
+                        ErrorCode::RequirementsInvalid,
+                        format!("invalid params: {e}"),
+                    )
+                })?;
+            super::forwards::handler::list_forwards(state, p)
+        }
         // i[forward.stop]
-        "/forwards/stop" => super::forwards::handler::stop_forward(state, req.params),
+        "/forwards/stop" => {
+            let p: super::forwards::handler::StopForwardParams = serde_json::from_value(req.params)
+                .map_err(|e| {
+                    OiError::new(
+                        ErrorCode::RequirementsInvalid,
+                        format!("invalid params: {e}"),
+                    )
+                })?;
+            super::forwards::handler::stop_forward(state, p)
+        }
         // i[fault.list]
-        "/faults/list" => faults::list_faults(state, req.params),
+        "/faults/list" => {
+            let p: faults::ListFaultsParams = serde_json::from_value(req.params).map_err(|e| {
+                OiError::new(
+                    ErrorCode::RequirementsInvalid,
+                    format!("invalid params: {e}"),
+                )
+            })?;
+            faults::list_faults(state, p)
+        }
         other => Err(OiError::not_found(format!("unknown method: {other}"))),
     };
 
