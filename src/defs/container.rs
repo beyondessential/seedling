@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Component, PathBuf},
+};
 
 use rhai::{Array, Dynamic, EvalAltResult, TypeBuilder};
 
@@ -37,6 +40,48 @@ fn validate_env_value(value: &str) -> Result<(), Box<EvalAltResult>> {
     if value.contains('\0') {
         return Err("environment variable value must not contain null bytes".into());
     }
+    Ok(())
+}
+
+const FORBIDDEN_MOUNTPOINTS: &[&str] = &[
+    "/", "/proc", "/sys", "/dev", "/etc", "/bin", "/sbin", "/lib", "/lib64", "/usr", "/boot",
+    "/run",
+];
+
+// l[impl container.mount-volume.validation]
+fn validate_mountpoint(path: &str) -> Result<(), Box<EvalAltResult>> {
+    if path.contains('\0') {
+        return Err("mountpoint must not contain null bytes".into());
+    }
+    if !path.starts_with('/') {
+        return Err(format!("mountpoint must be an absolute path, got '{path}'").into());
+    }
+
+    // Canonicalise without touching the filesystem: resolve `.`, `..`, and
+    // collapse repeated `/` separators.
+    let mut canonical = PathBuf::from("/");
+    for component in PathBuf::from(path).components() {
+        match component {
+            Component::RootDir | Component::CurDir => {}
+            Component::ParentDir => {
+                canonical.pop();
+            }
+            Component::Normal(seg) => {
+                canonical.push(seg);
+            }
+            Component::Prefix(_) => {}
+        }
+    }
+
+    let canon_str = canonical.to_string_lossy();
+    for &forbidden in FORBIDDEN_MOUNTPOINTS {
+        if canon_str == forbidden {
+            return Err(
+                format!("mountpoint '{path}' resolves to forbidden path '{forbidden}'").into(),
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -185,6 +230,7 @@ impl ContainerDef {
                 "mount",
                 move |this: &mut T, path: &str, volume: Volume| -> Result<T, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
+                    validate_mountpoint(path)?;
                     ext(this)
                         .lock()
                         .volume_mounts
@@ -199,6 +245,7 @@ impl ContainerDef {
                       volume: ExternalVolume|
                       -> Result<T, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
+                    validate_mountpoint(path)?;
                     ext(this)
                         .lock()
                         .volume_mounts

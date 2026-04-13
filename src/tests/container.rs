@@ -205,6 +205,178 @@ fn container_mount_external_volume() {
     );
 }
 
+// l[verify container.mount-volume.validation]
+#[test]
+fn mount_rejects_root() {
+    let _ = run_test_script_err(
+        r#"
+        let vol = app.volume("data");
+        app.deployment("web").mount("/", vol);
+    "#,
+    );
+}
+
+// l[verify container.mount-volume.validation]
+#[test]
+fn mount_rejects_proc() {
+    let _ = run_test_script_err(
+        r#"
+        let vol = app.volume("data");
+        app.deployment("web").mount("/proc", vol);
+    "#,
+    );
+}
+
+// l[verify container.mount-volume.validation]
+#[test]
+fn mount_rejects_sys() {
+    let _ = run_test_script_err(
+        r#"
+        let vol = app.volume("data");
+        app.deployment("web").mount("/sys", vol);
+    "#,
+    );
+}
+
+// l[verify container.mount-volume.validation]
+#[test]
+fn mount_rejects_dev() {
+    let _ = run_test_script_err(
+        r#"
+        let vol = app.volume("data");
+        app.deployment("web").mount("/dev", vol);
+    "#,
+    );
+}
+
+// l[verify container.mount-volume.validation]
+#[test]
+fn mount_rejects_etc() {
+    let _ = run_test_script_err(
+        r#"
+        let vol = app.volume("data");
+        app.deployment("web").mount("/etc", vol);
+    "#,
+    );
+}
+
+// l[verify container.mount-volume.validation]
+#[test]
+fn mount_rejects_bin() {
+    let _ = run_test_script_err(
+        r#"
+        let vol = app.volume("data");
+        app.deployment("web").mount("/bin", vol);
+    "#,
+    );
+}
+
+// l[verify container.mount-volume.validation]
+#[test]
+fn mount_rejects_usr() {
+    let _ = run_test_script_err(
+        r#"
+        let vol = app.volume("data");
+        app.deployment("web").mount("/usr", vol);
+    "#,
+    );
+}
+
+// l[verify container.mount-volume.validation]
+#[test]
+fn mount_rejects_traversal_to_forbidden() {
+    let _ = run_test_script_err(
+        r#"
+        let vol = app.volume("data");
+        app.deployment("web").mount("/data/../proc", vol);
+    "#,
+    );
+}
+
+// l[verify container.mount-volume.validation]
+#[test]
+fn mount_rejects_traversal_to_root() {
+    let _ = run_test_script_err(
+        r#"
+        let vol = app.volume("data");
+        app.deployment("web").mount("/data/..", vol);
+    "#,
+    );
+}
+
+// l[verify container.mount-volume.validation]
+#[test]
+fn mount_rejects_repeated_slashes() {
+    let _ = run_test_script_err(
+        r#"
+        let vol = app.volume("data");
+        app.deployment("web").mount("///etc", vol);
+    "#,
+    );
+}
+
+// l[verify container.mount-volume.validation]
+#[test]
+fn mount_rejects_relative_path() {
+    let _ = run_test_script_err(
+        r#"
+        let vol = app.volume("data");
+        app.deployment("web").mount("data", vol);
+    "#,
+    );
+}
+
+// l[verify container.mount-volume.validation]
+#[test]
+fn mount_rejects_null_bytes() {
+    let _ = run_test_script_err(
+        r#"
+        let vol = app.volume("data");
+        app.deployment("web").mount("/data\0evil", vol);
+    "#,
+    );
+}
+
+// l[verify container.mount-volume.validation]
+#[test]
+fn mount_accepts_valid_paths() {
+    run_test_script_app(
+        r#"
+        let vol = app.volume("data");
+        app.deployment("web")
+            .mount("/data", vol)
+            .mount("/var/lib/app", vol)
+            .mount("/opt/myapp/storage", vol)
+            .mount("/home/app", vol);
+    "#,
+    );
+}
+
+// l[verify container.mount-volume.validation]
+#[test]
+fn mount_accepts_subpath_of_forbidden() {
+    run_test_script_app(
+        r#"
+        let vol = app.volume("data");
+        app.deployment("web")
+            .mount("/etc/myapp", vol)
+            .mount("/proc-data", vol)
+            .mount("/usr/local/share", vol);
+    "#,
+    );
+}
+
+// l[verify container.mount-volume.validation]
+#[test]
+fn mount_rejects_forbidden_external_volume() {
+    let _ = run_test_script_err(
+        r#"
+        let evol = app.external_volume("shared");
+        app.deployment("web").mount("/dev", evol);
+    "#,
+    );
+}
+
 // l[verify container.env.validation]
 #[test]
 fn env_rejects_path() {

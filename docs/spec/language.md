@@ -458,6 +458,14 @@ This is currently the only value.
 >
 > The `mountpoint` argument must be a unix-style path.
 
+> l[container.mount-volume.validation]
+> The `mountpoint` must be an absolute path (starting with `/`).
+>
+> The following mountpoints are forbidden and must cause the method to throw: `/`, `/proc`, `/sys`, `/dev`, `/etc`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/usr`, `/boot`, `/run`.
+> A mountpoint whose canonicalised form (after resolving `.` and `..` segments and collapsing repeated `/` separators, without touching the filesystem) equals any forbidden path is also rejected.
+>
+> The mountpoint must not contain null bytes. If it does, the method must throw.
+
 > l[container.on-exit]
 > The `container.on_exit(strategy: OnExit)` builder method defines the strategy used when the command exits.
 > The default is [`OnExit.Restart`](#l--const.on-exit.restart).
