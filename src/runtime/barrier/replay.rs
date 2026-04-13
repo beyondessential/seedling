@@ -133,6 +133,7 @@ impl ActionLog for DbActionLog {
 // ---------------------------------------------------------------------------
 
 // r[impl operation.lifecycle]
+#[derive(Debug)]
 pub enum OperationResult {
     /// The closure ran to completion.
     Completed,

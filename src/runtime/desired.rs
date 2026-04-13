@@ -32,7 +32,7 @@ impl DesiredState {
 /// Records the resources an in-progress lifecycle operation has placed into
 /// the desired state so far, as directed by `rt.start()`, `rt.stop()`, and
 /// `rt.reconcile()` calls in the action closure.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct OperationProgress {
     resources: HashMap<ResourceInstance, LifecycleState>,
     /// Definitions of dynamic resources started during the current operation pass.
