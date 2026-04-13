@@ -57,7 +57,7 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8]) -> HandlerResult {
         // i[action.invoke]
         "InvokeAction" => actions::invoke_action(state, req.params),
         // i[action.invoke.install]
-        "InvokeInstall" => actions::invoke_install(state, req.params),
+        "InvokeInstall" => actions::install::invoke_install(state, req.params),
         // i[key.list]
         "ListKeys" => key_mgmt::list_keys(state),
         // i[key.authorize]
