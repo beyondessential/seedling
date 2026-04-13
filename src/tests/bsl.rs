@@ -78,6 +78,48 @@ fn name_rules_accepted() {
     );
 }
 
+// l[verify bsl.name]
+#[test]
+fn name_rejects_slashes() {
+    let _ = run_test_script_err(r#"app.service("web/server");"#);
+}
+
+// l[verify bsl.name]
+#[test]
+fn name_rejects_newlines() {
+    let _ = run_test_script_err(r#"app.service("web\nserver");"#);
+}
+
+// l[verify bsl.name]
+#[test]
+fn name_rejects_null_bytes() {
+    let _ = run_test_script_err(r#"app.service("web\0server");"#);
+}
+
+// l[verify bsl.name]
+#[test]
+fn name_rejects_too_short() {
+    let _ = run_test_script_err(r#"app.service("ab");"#);
+}
+
+// l[verify bsl.name]
+#[test]
+fn name_rejects_leading_hyphen() {
+    let _ = run_test_script_err(r#"app.service("-web");"#);
+}
+
+// l[verify bsl.name]
+#[test]
+fn name_rejects_trailing_hyphen() {
+    let _ = run_test_script_err(r#"app.service("web-");"#);
+}
+
+// l[verify bsl.name]
+#[test]
+fn name_rejects_leading_digit() {
+    let _ = run_test_script_err(r#"app.service("1web");"#);
+}
+
 // l[verify bsl.port]
 #[test]
 fn port_validation_rejects_zero() {
