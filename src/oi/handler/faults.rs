@@ -1,7 +1,10 @@
 use serde_json::{Value, json};
 
 use crate::{
-    oi::{error::{ErrorCode, OiError}, state::OiState},
+    oi::{
+        error::{ErrorCode, OiError},
+        state::OiState,
+    },
     runtime::faults,
 };
 

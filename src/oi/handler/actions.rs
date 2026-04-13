@@ -10,7 +10,7 @@ use crate::{
     },
     runtime::{
         AppPhase,
-        apps::{AppRegistry, AppStatus},
+        apps::AppRegistry,
         scheduler::{RejectReason, ScheduleResult},
     },
 };

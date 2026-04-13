@@ -8,7 +8,7 @@ use clap::Parser;
 use lloggs::LoggingArgs;
 use parking_lot::{Mutex, RwLock};
 use seedling::{
-    oi::{self, handler::OiState},
+    oi::{self, state::OiState},
     runtime::{AppRegistry, InstanceRegistry, Scheduler, db::Db, registry::DbInstanceRegistry},
     system::{
         System,

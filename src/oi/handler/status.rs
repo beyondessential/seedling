@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::{oi::state::OiState, runtime::faults};
 
