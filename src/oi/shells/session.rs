@@ -330,7 +330,7 @@ pub(crate) async fn open_shell_session(
                                 Some(sp.service.name.as_str()),
                             );
                             let svc_ip = instance_ipv6(&state.node_prefix, &svc_instance);
-                            (sp.port, svc_ip, sp.port)
+                            (sp.port.get(), svc_ip, sp.port.get())
                         })
                         .collect()
                 }

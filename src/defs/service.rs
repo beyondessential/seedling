@@ -4,7 +4,7 @@ use parking_lot::Mutex;
 use rhai::{CustomType, EvalAltResult, TypeBuilder};
 
 use super::{
-    Freezable, Holder,
+    Freezable, Holder, Port,
     app::AppDef,
     ingress::Ingress,
     resource::{Resource, ResourceId, ResourceKind, ResourceName},
@@ -62,10 +62,10 @@ impl CustomType for Service {
                 "port",
                 |this: &mut Self, port: i64| -> Result<ServicePort, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
-                    validate_port(port)?;
+                    let port = Port::new(port)?;
                     Ok(ServicePort {
                         service: this.clone(),
-                        port: port as u16,
+                        port,
                     })
                 },
             )
@@ -77,7 +77,7 @@ impl CustomType for Service {
                     this.def.lock().http.get_or_insert_default();
                     Ok(HttpService {
                         service: this.clone(),
-                        port: 80,
+                        port: Port::from_u16(80),
                     })
                 },
             )
@@ -85,11 +85,11 @@ impl CustomType for Service {
                 "http",
                 |this: &mut Self, port: i64| -> Result<HttpService, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
-                    validate_port(port)?;
+                    let port = Port::new(port)?;
                     this.def.lock().http.get_or_insert_default();
                     Ok(HttpService {
                         service: this.clone(),
-                        port: port as u16,
+                        port,
                     })
                 },
             )
@@ -100,12 +100,12 @@ impl CustomType for Service {
                  port: i64|
                  -> Result<Ingress, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
-                    validate_port(port)?;
+                    let port = Port::new(port)?;
                     validate_hostname(hostname)?;
                     // l[impl ingress.conflicts]
                     // TODO: check for duplicate (hostname, port) in the app's ingress
                     // registry and throw if a conflict is found.
-                    let ingress = Ingress::new(this.clone(), hostname.into(), port as u16);
+                    let ingress = Ingress::new(this.clone(), hostname.into(), port);
                     // l[impl ingress.type]
                     if let Some(arc) = this.app_def.as_ref().and_then(Weak::upgrade) {
                         let id = ResourceId {
@@ -126,7 +126,7 @@ impl CustomType for Service {
 #[derive(Debug, Clone)]
 pub struct ServicePort {
     pub service: Service,
-    pub port: u16,
+    pub port: Port,
 }
 
 impl CustomType for ServicePort {
@@ -142,7 +142,7 @@ pub struct HttpServiceDef {}
 #[derive(Debug, Clone)]
 pub struct HttpService {
     pub service: Service,
-    pub port: u16,
+    pub port: Port,
 }
 
 impl CustomType for HttpService {
@@ -167,10 +167,10 @@ impl CustomType for HttpService {
             .with_fn(
                 "port",
                 |this: &mut Self, port: i64| -> Result<ServicePort, Box<EvalAltResult>> {
-                    validate_port(port)?;
+                    let port = Port::new(port)?;
                     Ok(ServicePort {
                         service: this.service.clone(),
-                        port: port as u16,
+                        port,
                     })
                 },
             );
@@ -204,22 +204,13 @@ impl CustomType for ExternalService {
             .with_fn(
                 "port",
                 |this: &mut Self, port: i64| -> Result<ServicePort, Box<EvalAltResult>> {
-                    validate_port(port)?;
+                    let port = Port::new(port)?;
                     Ok(ServicePort {
                         service: Service::new(this.name.clone()),
-                        port: port as u16,
+                        port,
                     })
                 },
             );
-    }
-}
-
-// l[impl bsl.port]
-fn validate_port(port: i64) -> Result<(), Box<EvalAltResult>> {
-    if port <= 0 || port >= 65535 {
-        Err(format!("port must be a non-zero positive integer below 65535, got {port}").into())
-    } else {
-        Ok(())
     }
 }
 

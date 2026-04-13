@@ -1,7 +1,7 @@
 use rhai::{EvalAltResult, TypeBuilder};
 
 use super::{
-    Freezable, Holder,
+    Freezable, Holder, Port,
     container::ContainerDef,
     resource::ResourceId,
     service::{HttpService, HttpServiceRoute, Service, ServicePort},
@@ -105,10 +105,10 @@ impl PodDef {
             "tcp",
             move |this: &mut T, port: i64, svc: Service| -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
-                let port = port as u16;
+                let port = Port::new(port)?;
                 let service_port = ServicePort { service: svc, port };
                 ext(this).lock().tcp_bindings.push(TcpUdpBinding {
-                    pod_port: port,
+                    pod_port: port.get(),
                     service_port,
                 });
                 Ok(this.clone())
@@ -120,9 +120,9 @@ impl PodDef {
             "udp",
             move |this: &mut T, port: i64, svc: ServicePort| -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
-                let port = port as u16;
+                let port = Port::new(port)?;
                 ext(this).lock().udp_bindings.push(TcpUdpBinding {
-                    pod_port: port,
+                    pod_port: port.get(),
                     service_port: svc,
                 });
                 Ok(this.clone())
@@ -134,10 +134,10 @@ impl PodDef {
             "udp",
             move |this: &mut T, port: i64, svc: Service| -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
-                let port = port as u16;
+                let port = Port::new(port)?;
                 let service_port = ServicePort { service: svc, port };
                 ext(this).lock().udp_bindings.push(TcpUdpBinding {
-                    pod_port: port,
+                    pod_port: port.get(),
                     service_port,
                 });
                 Ok(this.clone())

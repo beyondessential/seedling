@@ -51,7 +51,7 @@ fn collect_service_backends(
 
         for b in &http {
             let svc_name = b.route.http.service.name.as_str().to_owned();
-            let svc_port = b.route.http.port;
+            let svc_port = b.route.http.port.get();
             backends
                 .entry((svc_name, svc_port, ForwardProto::Tcp))
                 .or_default()
@@ -60,7 +60,7 @@ fn collect_service_backends(
 
         for b in &tcp {
             let svc_name = b.service_port.service.name.as_str().to_owned();
-            let svc_port = b.service_port.port;
+            let svc_port = b.service_port.port.get();
             backends
                 .entry((svc_name, svc_port, ForwardProto::Tcp))
                 .or_default()
@@ -69,7 +69,7 @@ fn collect_service_backends(
 
         for b in &udp {
             let svc_name = b.service_port.service.name.as_str().to_owned();
-            let svc_port = b.service_port.port;
+            let svc_port = b.service_port.port.get();
             backends
                 .entry((svc_name, svc_port, ForwardProto::Udp))
                 .or_default()
@@ -182,7 +182,7 @@ pub(super) fn build_mount_rules(running_pods: &[RunningPod]) -> Vec<MountRule> {
             // Emit a mount rule for each protocol that has backends for this
             // (service, port) pair.  Most mounts are TCP but UDP is valid too.
             for proto in [ForwardProto::Tcp, ForwardProto::Udp] {
-                let key = (svc_name.to_owned(), sp.port, proto);
+                let key = (svc_name.to_owned(), sp.port.get(), proto);
                 let svc_backends = backend_map.get(&key).cloned().unwrap_or_default();
                 if svc_backends.is_empty() {
                     continue;
@@ -190,7 +190,7 @@ pub(super) fn build_mount_rules(running_pods: &[RunningPod]) -> Vec<MountRule> {
                 rules.push(MountRule {
                     pod_prefix: pod.pod_prefix,
                     mount_addr,
-                    mount_port: sp.port,
+                    mount_port: sp.port.get(),
                     backends: svc_backends,
                     proto,
                 });

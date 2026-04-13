@@ -161,7 +161,7 @@ impl Actuator {
                     Some(sp.service.name.as_str()),
                 );
                 let service_ip = instance_ipv6(&self.node_prefix, &svc_instance);
-                (sp.port, service_ip, sp.port)
+                (sp.port.get(), service_ip, sp.port.get())
             })
             .collect()
     }

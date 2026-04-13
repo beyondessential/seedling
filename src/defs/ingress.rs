@@ -1,6 +1,6 @@
 use rhai::{CustomType, EvalAltResult, TypeBuilder};
 
-use super::{Freezable, Holder, resource::ResourceName, service::Service};
+use super::{Freezable, Holder, Port, resource::ResourceName, service::Service};
 
 #[derive(Debug, Clone)]
 pub struct IngressDef {
@@ -41,7 +41,7 @@ impl super::Freezable for Ingress {
 }
 
 impl Ingress {
-    pub fn new(service: Service, hostname: String, port: u16) -> Self {
+    pub fn new(service: Service, hostname: String, port: Port) -> Self {
         let name = service.name.clone();
         Self {
             name,
@@ -49,7 +49,7 @@ impl Ingress {
             def: Holder::new(
                 IngressDef {
                     hostname,
-                    port,
+                    port: port.get(),
                     tls: false,
                     dtls: false,
                     quic: false,

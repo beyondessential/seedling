@@ -46,6 +46,38 @@ pub fn validate_name(name: &str) -> Result<(), Box<rhai::EvalAltResult>> {
     }
 }
 
+// l[impl bsl.port]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Port(u16);
+
+impl Port {
+    pub fn new(raw: i64) -> Result<Self, Box<rhai::EvalAltResult>> {
+        let port = u16::try_from(raw).map_err(|_| -> Box<rhai::EvalAltResult> {
+            format!("port must be an integer between 1 and 65535, got {raw}").into()
+        })?;
+        if port == 0 {
+            return Err("port must be an integer between 1 and 65535, got 0".into());
+        }
+        Ok(Self(port))
+    }
+
+    /// Construct from a known-valid literal. Panics in debug mode if `port == 0`.
+    pub(crate) const fn from_u16(port: u16) -> Self {
+        debug_assert!(port != 0, "port must not be zero");
+        Self(port)
+    }
+
+    pub fn get(self) -> u16 {
+        self.0
+    }
+}
+
+impl From<Port> for u16 {
+    fn from(p: Port) -> Self {
+        p.0
+    }
+}
+
 pub mod action;
 pub mod app;
 pub mod collection;
