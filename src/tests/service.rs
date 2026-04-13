@@ -28,7 +28,7 @@ fn service_port_creates_service_port() {
 #[test]
 fn service_port_rejects_invalid() {
     let _ = run_test_script_err(r#"app.service("web").port(0);"#);
-    let _ = run_test_script_err(r#"app.service("web").port(65535);"#);
+    let _ = run_test_script_err(r#"app.service("web").port(65536);"#);
 }
 
 // l[verify service.routing]
