@@ -84,13 +84,19 @@ pub fn import_bootstrap_file(data_dir: &Path, db: &Db, trusted: &TrustedKeys) ->
             > 0;
 
         if !already {
-            let _ = db.conn.execute(
+            match db.conn.execute(
                 "INSERT INTO authorized_keys (fingerprint, label, added_at) \
                  VALUES (?1, ?2, ?3)",
                 rusqlite::params![fp, label, now],
-            );
-            trusted.write().insert(fp.to_owned());
-            imported += 1;
+            ) {
+                Ok(_) => {
+                    trusted.write().insert(fp.to_owned());
+                    imported += 1;
+                }
+                Err(e) => {
+                    tracing::warn!(fingerprint = %fp, "failed to persist bootstrap key: {e}");
+                }
+            }
         }
     }
 

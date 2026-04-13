@@ -425,7 +425,9 @@ pub(crate) fn deregister_app(state: &OiState, params: Value) -> HandlerResult {
     }
     {
         let db = state.db.lock();
-        let _ = crate::runtime::faults::clear_all_faults_for_app(&db, name);
+        if let Err(e) = crate::runtime::faults::clear_all_faults_for_app(&db, name) {
+            tracing::warn!(app = %name, "failed to clear faults during deregister: {e}");
+        }
     }
 
     // Remove from in-memory registry.
