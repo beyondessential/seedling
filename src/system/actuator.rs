@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc};
 
 use ipnet::Ipv6Net;
 use snafu::Snafu;
@@ -548,6 +548,7 @@ impl Actuator {
         Ok(bridge_name)
     }
 
+    // r[impl reconciliation.liveness]
     async fn stop_pod_instance(
         &self,
         instance: &ResourceInstance,
@@ -555,42 +556,43 @@ impl Actuator {
     ) -> Result<(), ActuateError> {
         let unit = unit_name(instance);
 
-        // Stop the unit if it exists, then wait for it to terminate.
-        if self
+        // Check unit state and act accordingly. Active or deactivating units
+        // get a stop signal but we return immediately — the next reconciler
+        // tick will re-observe and continue cleanup once the unit is gone.
+        if let Some(state) = self
             .driver
             .process
             .unit_state(&unit)
             .await
             .map_err(|e| ActuateError::Process { source: e })?
-            .is_some()
         {
-            self.driver
-                .process
-                .stop_unit(&unit)
-                .await
-                .map_err(|e| ActuateError::Process { source: e })?;
-            self.driver
-                .process
-                .wait_unit_stopped(&unit, Duration::from_secs(30))
-                .await
-                .map_err(|e| ActuateError::Process { source: e })?;
-            // Clear the unit from systemd's memory so it does not linger in
-            // inactive/failed state after teardown.
-            self.driver
-                .process
-                .reset_failed_unit(&unit)
-                .await
-                .map_err(|e| ActuateError::Process { source: e })?;
+            match state.active {
+                ActiveState::Active | ActiveState::Activating | ActiveState::Deactivating => {
+                    self.driver
+                        .process
+                        .stop_unit(&unit)
+                        .await
+                        .map_err(|e| ActuateError::Process { source: e })?;
+                    return Ok(());
+                }
+                ActiveState::Inactive | ActiveState::Failed => {
+                    self.driver
+                        .process
+                        .reset_failed_unit(&unit)
+                        .await
+                        .map_err(|e| ActuateError::Process { source: e })?;
+                }
+            }
         }
 
-        // Force-remove the container in case it outlived the unit.
+        // Unit is gone — clean up remaining resources.
+
         self.driver
             .container
             .remove_container(&instance.display_name, true)
             .await
             .map_err(|e| ActuateError::Container { source: e })?;
 
-        // Remove the pod network.
         let net_name = pod_network_name(instance);
         if self
             .driver
@@ -606,7 +608,6 @@ impl Actuator {
                 .map_err(|e| ActuateError::Container { source: e })?;
         }
 
-        // Remove anonymous volumes that were created for this container.
         for vol_name in anon_volume_names {
             if self
                 .driver

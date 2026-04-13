@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use snafu::Snafu;
 use zbus::{
@@ -21,8 +21,6 @@ const UNIT_DIR: &str = "/etc/systemd/system";
 pub(crate) enum SystemdError {
     #[snafu(display("D-Bus error: {source}"))]
     DBus { source: zbus::Error },
-    #[snafu(display("unit {name} did not stop within the timeout"))]
-    WaitTimeout { name: String },
     #[snafu(display("I/O error: {source}"))]
     Io { source: std::io::Error },
     #[snafu(display("D-Bus response has unexpected type: {message}"))]
@@ -211,29 +209,6 @@ impl SystemdManager {
                     Err(SystemdError::DBus { source: e })
                 }
             }
-        }
-    }
-
-    async fn wait_unit_stopped_impl(
-        &self,
-        name: &str,
-        timeout: Duration,
-    ) -> Result<(), SystemdError> {
-        let deadline = tokio::time::Instant::now() + timeout;
-        loop {
-            if tokio::time::Instant::now() >= deadline {
-                return Err(SystemdError::WaitTimeout {
-                    name: name.to_string(),
-                });
-            }
-            match self.unit_state_impl(name).await? {
-                None => return Ok(()),
-                Some(state) => match state.active {
-                    ActiveState::Inactive | ActiveState::Failed => return Ok(()),
-                    _ => {}
-                },
-            }
-            tokio::time::sleep(Duration::from_millis(250)).await;
         }
     }
 
@@ -430,18 +405,6 @@ impl ProcessManager for SystemdManager {
 
     fn reset_failed_unit<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {
         Box::pin(async move { self.reset_failed_unit_impl(name).await.map_err(Into::into) })
-    }
-
-    fn wait_unit_stopped<'a>(
-        &'a self,
-        name: &'a str,
-        timeout: Duration,
-    ) -> BoxFuture<'a, Result<(), BoxError>> {
-        Box::pin(async move {
-            self.wait_unit_stopped_impl(name, timeout)
-                .await
-                .map_err(Into::into)
-        })
     }
 
     fn unit_state<'a>(

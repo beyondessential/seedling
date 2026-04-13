@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, path::Path, sync::Arc, time::Duration};
+use std::{net::SocketAddr, path::Path, sync::Arc};
 
 use ipnet::{Ipv4Net, Ipv6Net};
 
@@ -113,18 +113,10 @@ pub trait ProcessManager: Send + Sync + 'static {
         spec: TransientUnitSpec,
     ) -> BoxFuture<'a, Result<(), BoxError>>;
     /// Sends the stop signal; returns immediately without waiting.
-    /// Use `wait_unit_stopped` to block until the unit has fully stopped.
     fn stop_unit<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>>;
     /// Clears the failed state of a unit (equivalent to `systemctl reset-failed`).
     /// Required before re-starting a unit that hit its start rate limit.
     fn reset_failed_unit<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>>;
-    /// Polls until the unit reaches an inactive or failed state, or the
-    /// timeout elapses. Required before removing pod networks or volumes.
-    fn wait_unit_stopped<'a>(
-        &'a self,
-        name: &'a str,
-        timeout: Duration,
-    ) -> BoxFuture<'a, Result<(), BoxError>>;
     fn unit_state<'a>(
         &'a self,
         name: &'a str,

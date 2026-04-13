@@ -381,9 +381,6 @@ async fn stop_slot(
 ) {
     let unit = slot_unit(container_name);
     let _ = process.stop_unit(&unit).await;
-    let _ = process
-        .wait_unit_stopped(&unit, Duration::from_secs(10))
-        .await;
     let _ = container.remove_container(container_name, true).await;
 }
 
