@@ -27,6 +27,10 @@ Absent specification bugs, anything that is not defined here is either defined i
 > All operations performed by the reconciler must be idempotent.
 > Performing the same operation twice must not cause errors or duplicate side effects.
 
+> r[reconciliation.liveness]
+> Individual reconciliation operations must not block the loop for an unbounded or long duration.
+> When an operation requires waiting for an external condition (e.g. a process to terminate), the reconciler must release control and re-evaluate the condition on a subsequent iteration rather than polling inline.
+
 # Desired State
 
 > r[desired-state.definition]
