@@ -34,6 +34,54 @@ pub(crate) enum SystemdError {
         message: String,
         backtrace: snafu::Backtrace,
     },
+    #[snafu(display("invalid unit name: {name}"))]
+    InvalidUnitName {
+        name: String,
+        backtrace: snafu::Backtrace,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// Unit name validation
+// ---------------------------------------------------------------------------
+
+/// Reject unit names that could cause path traversal when joined with
+/// `UNIT_DIR`, or that are not valid systemd unit names.
+// TODO: use https://docs.rs/systemd/latest/systemd/unit/fn.escape_name.html
+fn validate_unit_name(name: &str) -> Result<(), SystemdError> {
+    if name.is_empty()
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains('\0')
+        || name == "."
+        || name == ".."
+    {
+        return Err(InvalidUnitNameSnafu {
+            name: name.to_owned(),
+        }
+        .build());
+    }
+
+    const SUFFIXES: &[&str] = &[
+        ".service",
+        ".socket",
+        ".target",
+        ".mount",
+        ".automount",
+        ".swap",
+        ".timer",
+        ".path",
+        ".slice",
+        ".scope",
+    ];
+    if !SUFFIXES.iter().any(|s| name.ends_with(s)) {
+        return Err(InvalidUnitNameSnafu {
+            name: name.to_owned(),
+        }
+        .build());
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -142,6 +190,7 @@ impl SystemdManager {
 
     #[tracing::instrument(skip_all, fields(unit = %spec.name))]
     async fn start_transient_impl(&self, spec: TransientUnitSpec) -> Result<(), SystemdError> {
+        validate_unit_name(&spec.name)?;
         let proxy = Systemd1ManagerProxy::new(&self.conn)
             .await
             .context(DBusSnafu)?;
@@ -192,6 +241,7 @@ impl SystemdManager {
 
     #[tracing::instrument(skip_all, fields(%name))]
     async fn stop_unit_impl(&self, name: &str) -> Result<(), SystemdError> {
+        validate_unit_name(name)?;
         let proxy = Systemd1ManagerProxy::new(&self.conn)
             .await
             .context(DBusSnafu)?;
@@ -200,6 +250,7 @@ impl SystemdManager {
     }
 
     async fn reset_failed_unit_impl(&self, name: &str) -> Result<(), SystemdError> {
+        validate_unit_name(name)?;
         let proxy = Systemd1ManagerProxy::new(&self.conn)
             .await
             .context(DBusSnafu)?;
@@ -217,6 +268,7 @@ impl SystemdManager {
     }
 
     async fn unit_state_impl(&self, name: &str) -> Result<Option<UnitState>, SystemdError> {
+        validate_unit_name(name)?;
         let proxy = Systemd1ManagerProxy::new(&self.conn)
             .await
             .context(DBusSnafu)?;
@@ -273,12 +325,14 @@ impl SystemdManager {
     }
 
     async fn write_unit_impl(&self, name: &str, content: &str) -> Result<(), SystemdError> {
+        validate_unit_name(name)?;
         let path = std::path::Path::new(UNIT_DIR).join(name);
         tokio::fs::write(&path, content).await.context(IoSnafu)?;
         Ok(())
     }
 
     async fn remove_unit_impl(&self, name: &str) -> Result<(), SystemdError> {
+        validate_unit_name(name)?;
         let path = std::path::Path::new(UNIT_DIR).join(name);
         match tokio::fs::remove_file(&path).await {
             Ok(()) => Ok(()),
@@ -296,6 +350,7 @@ impl SystemdManager {
     }
 
     async fn start_unit_impl(&self, name: &str) -> Result<(), SystemdError> {
+        validate_unit_name(name)?;
         let proxy = Systemd1ManagerProxy::new(&self.conn)
             .await
             .context(DBusSnafu)?;
@@ -443,5 +498,75 @@ impl ProcessManager for SystemdManager {
 
     fn start_unit<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {
         Box::pin(async move { self.start_unit_impl(name).await.map_err(Into::into) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_unit_name;
+
+    #[test]
+    fn accepts_valid_service() {
+        validate_unit_name("seedling-myapp-web.service").unwrap();
+    }
+
+    #[test]
+    fn accepts_valid_timer() {
+        validate_unit_name("backup.timer").unwrap();
+    }
+
+    #[test]
+    fn accepts_valid_socket() {
+        validate_unit_name("my-app.socket").unwrap();
+    }
+
+    #[test]
+    fn accepts_valid_scope() {
+        validate_unit_name("session-42.scope").unwrap();
+    }
+
+    #[test]
+    fn rejects_empty() {
+        validate_unit_name("").unwrap_err();
+    }
+
+    #[test]
+    fn rejects_slash() {
+        validate_unit_name("../etc/cron.d/evil.service").unwrap_err();
+    }
+
+    #[test]
+    fn rejects_backslash() {
+        validate_unit_name("foo\\bar.service").unwrap_err();
+    }
+
+    #[test]
+    fn rejects_null_byte() {
+        validate_unit_name("foo\0bar.service").unwrap_err();
+    }
+
+    #[test]
+    fn rejects_dot() {
+        validate_unit_name(".").unwrap_err();
+    }
+
+    #[test]
+    fn rejects_dotdot() {
+        validate_unit_name("..").unwrap_err();
+    }
+
+    #[test]
+    fn rejects_no_suffix() {
+        validate_unit_name("seedling-web").unwrap_err();
+    }
+
+    #[test]
+    fn rejects_path_traversal_relative() {
+        validate_unit_name("../../tmp/evil.service").unwrap_err();
+    }
+
+    #[test]
+    fn rejects_absolute_path() {
+        validate_unit_name("/etc/systemd/system/evil.service").unwrap_err();
     }
 }
