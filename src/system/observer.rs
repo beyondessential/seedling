@@ -136,12 +136,32 @@ impl Observer {
         facts: &mut Vec<(ObservationFact, SystemTime)>,
     ) -> Result<(), ObserveError> {
         let net_name = pod_network_name(instance);
-        let net_exists = self
-            .driver
-            .container
-            .network_exists(&net_name)
-            .await
-            .map_err(|e| ObserveError::Container { source: e })?;
+        let unit = unit_name(instance);
+
+        let (net_exists, container_state, unit_state) = tokio::try_join!(
+            async {
+                self.driver
+                    .container
+                    .network_exists(&net_name)
+                    .await
+                    .map_err(|e| ObserveError::Container { source: e })
+            },
+            async {
+                self.driver
+                    .container
+                    .inspect(&instance.display_name)
+                    .await
+                    .map_err(|e| ObserveError::Container { source: e })
+            },
+            async {
+                self.driver
+                    .process
+                    .unit_state(&unit)
+                    .await
+                    .map_err(|e| ObserveError::Process { source: e })
+            },
+        )?;
+
         facts.push((
             if net_exists {
                 ObservationFact::NetworkPresent
@@ -151,14 +171,7 @@ impl Observer {
             now,
         ));
 
-        let state = self
-            .driver
-            .container
-            .inspect(&instance.display_name)
-            .await
-            .map_err(|e| ObserveError::Container { source: e })?;
-
-        match state {
+        match container_state {
             None => facts.push((ObservationFact::ContainerMissing, now)),
             Some(ref s) => {
                 let lifecycle_fact = match s.status {
@@ -196,13 +209,6 @@ impl Observer {
                 }
             }
         }
-
-        let unit_state = self
-            .driver
-            .process
-            .unit_state(&unit_name(instance))
-            .await
-            .map_err(|e| ObserveError::Process { source: e })?;
 
         let unit_fact = match unit_state.as_ref().map(|s| s.active) {
             None => ObservationFact::UnitGone,
