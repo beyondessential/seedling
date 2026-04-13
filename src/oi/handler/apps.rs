@@ -112,7 +112,7 @@ pub(crate) fn effective_app_status(
 // i[app.describe]
 pub(crate) fn describe_app(state: &OiState, params: Value) -> HandlerResult {
     let name = params
-        .get("name")
+        .get("app")
         .and_then(Value::as_str)
         .ok_or_else(|| OiError::new(ErrorCode::NotFound, "missing param: app"))?;
 
@@ -318,7 +318,7 @@ pub(crate) fn describe_app(state: &OiState, params: Value) -> HandlerResult {
 // i[app.persist]
 pub(crate) fn register_app(state: &OiState, params: Value) -> HandlerResult {
     let name = params
-        .get("name")
+        .get("app")
         .and_then(Value::as_str)
         .ok_or_else(|| OiError::new(ErrorCode::RequirementsInvalid, "missing param: app"))?;
     let script = params
@@ -374,7 +374,7 @@ pub(crate) fn register_app(state: &OiState, params: Value) -> HandlerResult {
 // i[app.deregister]
 pub(crate) fn deregister_app(state: &OiState, params: Value) -> HandlerResult {
     let name = params
-        .get("name")
+        .get("app")
         .and_then(Value::as_str)
         .ok_or_else(|| OiError::new(ErrorCode::NotFound, "missing param: app"))?;
 
@@ -440,7 +440,7 @@ pub(crate) fn deregister_app(state: &OiState, params: Value) -> HandlerResult {
 
 pub(crate) fn uninstall_app(state: &OiState, params: Value) -> HandlerResult {
     let name = params
-        .get("name")
+        .get("app")
         .and_then(Value::as_str)
         .ok_or_else(|| OiError::new(ErrorCode::NotFound, "missing param: app"))?;
 
@@ -479,7 +479,7 @@ pub(crate) fn uninstall_app(state: &OiState, params: Value) -> HandlerResult {
 // i[app.update]
 pub(crate) fn update_app(state: &OiState, params: Value) -> HandlerResult {
     let name = params
-        .get("name")
+        .get("app")
         .and_then(Value::as_str)
         .ok_or_else(|| OiError::new(ErrorCode::NotFound, "missing param: app"))?;
     let script = params
