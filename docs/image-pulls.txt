@@ -1,0 +1,22 @@
+                     image_exists == false
+                            │
+                            v
+              ┌─── pulling.get(image) ───┐
+              │                          │
+           None                     Some(state)
+              │                   ┌──────┼──────────┐
+              v                   │      │          │
+        spawn pull          exhausted  !in_flight  in_flight
+        attempts=1           (give up) (retry now)     │
+              │                          │         elapsed >= 5min?
+              v                          v          yes → stale, retry
+        [in_flight=true] ──────> task completes     no → skip
+              │                   ┌──────┤
+              │                success  failure
+              │                   │       │
+              v                   v       v
+        remove entry       in_flight=false
+                           (next tick retries)
+
+        After MAX_PULL_ATTEMPTS failures:
+        exhausted=true → no more retries until restart
