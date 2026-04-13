@@ -332,9 +332,11 @@ impl SystemdManager {
             content.as_bytes(),
         )
         .await
-        .map_err(|e| match e.kind {
-            super::confined_write::ConfinedWriteErrorKind::Io(io_err) => IoSnafu.into_error(io_err),
-            super::confined_write::ConfinedWriteErrorKind::Escape => InvalidUnitNameSnafu {
+        .map_err(|e| match e {
+            super::confined_write::ConfinedWriteError::Io { source, .. } => {
+                IoSnafu.into_error(source)
+            }
+            super::confined_write::ConfinedWriteError::Escape { .. } => InvalidUnitNameSnafu {
                 name: name.to_owned(),
             }
             .build(),
