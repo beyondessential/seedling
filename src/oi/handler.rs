@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use super::{
@@ -13,6 +14,15 @@ mod faults;
 mod key_mgmt;
 mod params;
 mod status;
+
+fn parse_params<T: DeserializeOwned>(params: Value) -> Result<T, OiError> {
+    serde_json::from_value(params).map_err(|e| {
+        OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!("invalid params: {e}"),
+        )
+    })
+}
 
 /// Parse the newline-terminated JSON request from `buf`, dispatch to a handler,
 /// and return the serialised JSON response (no trailing newline).
@@ -45,181 +55,43 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8]) -> HandlerResult {
         // i[app.list]
         "/apps/list" => apps::list_apps(state),
         // i[app.describe]
-        "/apps/show" => {
-            let p: apps::AppParams = serde_json::from_value(req.params).map_err(|e| {
-                OiError::new(
-                    ErrorCode::RequirementsInvalid,
-                    format!("invalid params: {e}"),
-                )
-            })?;
-            apps::describe_app(state, p)
-        }
-        "/apps/create" => {
-            let p: apps::AppScriptParams = serde_json::from_value(req.params).map_err(|e| {
-                OiError::new(
-                    ErrorCode::RequirementsInvalid,
-                    format!("invalid params: {e}"),
-                )
-            })?;
-            apps::register_app(state, p)
-        }
-        "/apps/remove" => {
-            let p: apps::AppParams = serde_json::from_value(req.params).map_err(|e| {
-                OiError::new(
-                    ErrorCode::RequirementsInvalid,
-                    format!("invalid params: {e}"),
-                )
-            })?;
-            apps::deregister_app(state, p)
-        }
-        "/apps/uninstall" => {
-            let p: apps::AppParams = serde_json::from_value(req.params).map_err(|e| {
-                OiError::new(
-                    ErrorCode::RequirementsInvalid,
-                    format!("invalid params: {e}"),
-                )
-            })?;
-            apps::uninstall_app(state, p)
-        }
-        "/apps/update" => {
-            let p: apps::AppScriptParams = serde_json::from_value(req.params).map_err(|e| {
-                OiError::new(
-                    ErrorCode::RequirementsInvalid,
-                    format!("invalid params: {e}"),
-                )
-            })?;
-            apps::update_app(state, p)
-        }
+        "/apps/show" => apps::describe_app(state, parse_params(req.params)?),
+        "/apps/create" => apps::register_app(state, parse_params(req.params)?),
+        "/apps/remove" => apps::deregister_app(state, parse_params(req.params)?),
+        "/apps/uninstall" => apps::uninstall_app(state, parse_params(req.params)?),
+        "/apps/update" => apps::update_app(state, parse_params(req.params)?),
         // i[param.set]
-        "/apps/params/set" => {
-            let p: params::SetParamParams = serde_json::from_value(req.params).map_err(|e| {
-                OiError::new(
-                    ErrorCode::RequirementsInvalid,
-                    format!("invalid params: {e}"),
-                )
-            })?;
-            params::set_param(state, p)
-        }
+        "/apps/params/set" => params::set_param(state, parse_params(req.params)?),
         // i[param.unset]
-        "/apps/params/unset" => {
-            let p: params::UnsetParamParams = serde_json::from_value(req.params).map_err(|e| {
-                OiError::new(
-                    ErrorCode::RequirementsInvalid,
-                    format!("invalid params: {e}"),
-                )
-            })?;
-            params::unset_param(state, p)
-        }
+        "/apps/params/unset" => params::unset_param(state, parse_params(req.params)?),
         // i[action.invoke]
-        "/apps/action/invoke" => {
-            let p: actions::InvokeActionParams =
-                serde_json::from_value(req.params).map_err(|e| {
-                    OiError::new(
-                        ErrorCode::RequirementsInvalid,
-                        format!("invalid params: {e}"),
-                    )
-                })?;
-            actions::invoke_action(state, p)
-        }
+        "/apps/action/invoke" => actions::invoke_action(state, parse_params(req.params)?),
         // i[action.invoke.install]
         "/apps/install/invoke" => {
-            let p: actions::install::InvokeInstallParams = serde_json::from_value(req.params)
-                .map_err(|e| {
-                    OiError::new(
-                        ErrorCode::RequirementsInvalid,
-                        format!("invalid params: {e}"),
-                    )
-                })?;
-            actions::install::invoke_install(state, p)
+            actions::install::invoke_install(state, parse_params(req.params)?)
         }
         // i[key.list]
         "/keys/list" => key_mgmt::list_keys(state),
         // i[key.authorize]
-        "/keys/authorise" => {
-            let p: key_mgmt::AuthorizeKeyParams =
-                serde_json::from_value(req.params).map_err(|e| {
-                    OiError::new(
-                        ErrorCode::RequirementsInvalid,
-                        format!("invalid params: {e}"),
-                    )
-                })?;
-            key_mgmt::authorize_key(state, p)
-        }
+        "/keys/authorise" => key_mgmt::authorize_key(state, parse_params(req.params)?),
         // i[key.revoke]
-        "/keys/revoke" => {
-            let p: key_mgmt::RevokeKeyParams = serde_json::from_value(req.params).map_err(|e| {
-                OiError::new(
-                    ErrorCode::RequirementsInvalid,
-                    format!("invalid params: {e}"),
-                )
-            })?;
-            key_mgmt::revoke_key(state, p)
-        }
+        "/keys/revoke" => key_mgmt::revoke_key(state, parse_params(req.params)?),
         // i[shell.resize]
-        "/shells/resize" => {
-            let p: super::shells::ResizeShellParams =
-                serde_json::from_value(req.params).map_err(|e| {
-                    OiError::new(
-                        ErrorCode::RequirementsInvalid,
-                        format!("invalid params: {e}"),
-                    )
-                })?;
-            super::shells::resize_shell(state, p)
-        }
+        "/shells/resize" => super::shells::resize_shell(state, parse_params(req.params)?),
         // i[shell.list]
-        "/shells/list" => {
-            let p: super::shells::ListShellsParams =
-                serde_json::from_value(req.params).map_err(|e| {
-                    OiError::new(
-                        ErrorCode::RequirementsInvalid,
-                        format!("invalid params: {e}"),
-                    )
-                })?;
-            super::shells::list_shells(state, p)
-        }
+        "/shells/list" => super::shells::list_shells(state, parse_params(req.params)?),
         // i[shell.stop]
-        "/shells/stop" => {
-            let p: super::shells::StopShellParams =
-                serde_json::from_value(req.params).map_err(|e| {
-                    OiError::new(
-                        ErrorCode::RequirementsInvalid,
-                        format!("invalid params: {e}"),
-                    )
-                })?;
-            super::shells::stop_shell(state, p)
-        }
+        "/shells/stop" => super::shells::stop_shell(state, parse_params(req.params)?),
         // i[forward.list]
         "/forwards/list" => {
-            let p: super::forwards::handler::ListForwardsParams =
-                serde_json::from_value(req.params).map_err(|e| {
-                    OiError::new(
-                        ErrorCode::RequirementsInvalid,
-                        format!("invalid params: {e}"),
-                    )
-                })?;
-            super::forwards::handler::list_forwards(state, p)
+            super::forwards::handler::list_forwards(state, parse_params(req.params)?)
         }
         // i[forward.stop]
         "/forwards/stop" => {
-            let p: super::forwards::handler::StopForwardParams = serde_json::from_value(req.params)
-                .map_err(|e| {
-                    OiError::new(
-                        ErrorCode::RequirementsInvalid,
-                        format!("invalid params: {e}"),
-                    )
-                })?;
-            super::forwards::handler::stop_forward(state, p)
+            super::forwards::handler::stop_forward(state, parse_params(req.params)?)
         }
         // i[fault.list]
-        "/faults/list" => {
-            let p: faults::ListFaultsParams = serde_json::from_value(req.params).map_err(|e| {
-                OiError::new(
-                    ErrorCode::RequirementsInvalid,
-                    format!("invalid params: {e}"),
-                )
-            })?;
-            faults::list_faults(state, p)
-        }
+        "/faults/list" => faults::list_faults(state, parse_params(req.params)?),
         other => Err(OiError::not_found(format!("unknown method: {other}"))),
     };
 
