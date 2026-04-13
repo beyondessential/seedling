@@ -64,6 +64,8 @@ impl Db {
             )
             .unwrap_or(0);
 
+        let tx = self.conn.unchecked_transaction()?;
+
         if version < 2 {
             // Identity overhaul: drop old tables that used (app, kind, name, ordinal)
             // columns; they will be recreated below with instance_id references.
@@ -277,6 +279,7 @@ impl Db {
                 .execute_batch("INSERT INTO schema_version VALUES (10);")?;
         }
 
+        tx.commit()?;
         Ok(())
     }
 }
