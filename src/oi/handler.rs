@@ -45,11 +45,51 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8]) -> HandlerResult {
         // i[app.list]
         "/apps/list" => apps::list_apps(state),
         // i[app.describe]
-        "/apps/show" => apps::describe_app(state, req.params),
-        "/apps/create" => apps::register_app(state, req.params),
-        "/apps/remove" => apps::deregister_app(state, req.params),
-        "/apps/uninstall" => apps::uninstall_app(state, req.params),
-        "/apps/update" => apps::update_app(state, req.params),
+        "/apps/show" => {
+            let p: apps::AppParams = serde_json::from_value(req.params).map_err(|e| {
+                OiError::new(
+                    ErrorCode::RequirementsInvalid,
+                    format!("invalid params: {e}"),
+                )
+            })?;
+            apps::describe_app(state, p)
+        }
+        "/apps/create" => {
+            let p: apps::AppScriptParams = serde_json::from_value(req.params).map_err(|e| {
+                OiError::new(
+                    ErrorCode::RequirementsInvalid,
+                    format!("invalid params: {e}"),
+                )
+            })?;
+            apps::register_app(state, p)
+        }
+        "/apps/remove" => {
+            let p: apps::AppParams = serde_json::from_value(req.params).map_err(|e| {
+                OiError::new(
+                    ErrorCode::RequirementsInvalid,
+                    format!("invalid params: {e}"),
+                )
+            })?;
+            apps::deregister_app(state, p)
+        }
+        "/apps/uninstall" => {
+            let p: apps::AppParams = serde_json::from_value(req.params).map_err(|e| {
+                OiError::new(
+                    ErrorCode::RequirementsInvalid,
+                    format!("invalid params: {e}"),
+                )
+            })?;
+            apps::uninstall_app(state, p)
+        }
+        "/apps/update" => {
+            let p: apps::AppScriptParams = serde_json::from_value(req.params).map_err(|e| {
+                OiError::new(
+                    ErrorCode::RequirementsInvalid,
+                    format!("invalid params: {e}"),
+                )
+            })?;
+            apps::update_app(state, p)
+        }
         // i[param.set]
         "/apps/params/set" => {
             let p: params::SetParamParams = serde_json::from_value(req.params).map_err(|e| {
@@ -117,19 +157,19 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8]) -> HandlerResult {
         }
         // i[shell.resize]
         "/shells/resize" => {
-            let p: super::shells::handler::ResizeShellParams = serde_json::from_value(req.params)
-                .map_err(|e| {
-                OiError::new(
-                    ErrorCode::RequirementsInvalid,
-                    format!("invalid params: {e}"),
-                )
-            })?;
+            let p: super::shells::ResizeShellParams =
+                serde_json::from_value(req.params).map_err(|e| {
+                    OiError::new(
+                        ErrorCode::RequirementsInvalid,
+                        format!("invalid params: {e}"),
+                    )
+                })?;
             super::shells::resize_shell(state, p)
         }
         // i[shell.list]
         "/shells/list" => {
-            let p: super::shells::handler::ListShellsParams = serde_json::from_value(req.params)
-                .map_err(|e| {
+            let p: super::shells::ListShellsParams =
+                serde_json::from_value(req.params).map_err(|e| {
                     OiError::new(
                         ErrorCode::RequirementsInvalid,
                         format!("invalid params: {e}"),
@@ -139,8 +179,8 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8]) -> HandlerResult {
         }
         // i[shell.stop]
         "/shells/stop" => {
-            let p: super::shells::handler::StopShellParams = serde_json::from_value(req.params)
-                .map_err(|e| {
+            let p: super::shells::StopShellParams =
+                serde_json::from_value(req.params).map_err(|e| {
                     OiError::new(
                         ErrorCode::RequirementsInvalid,
                         format!("invalid params: {e}"),

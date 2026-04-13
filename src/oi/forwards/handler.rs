@@ -5,7 +5,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::oi::{
-    error::{ErrorCode, HandlerResult, OiError},
+    error::{HandlerResult, OiError},
     state::OiState,
 };
 
