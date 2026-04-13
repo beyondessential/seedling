@@ -10,15 +10,15 @@ pub(super) enum AppsCommand {
     /// List registered apps
     List,
     /// Describe an app
-    Show { name: String },
+    Show { app: String },
     /// Register an app from a script file
-    Create { name: String, script_file: PathBuf },
+    Create { app: String, script_file: PathBuf },
     /// Deregister an app
-    Remove { name: String },
+    Remove { app: String },
     /// Uninstall an app (stop all resources). The app can be deregistered once done.
-    Uninstall { name: String },
+    Uninstall { app: String },
     /// Update an app's script
-    Update { name: String, script_file: PathBuf },
+    Update { app: String, script_file: PathBuf },
     /// Manage app parameters
     Param {
         #[command(subcommand)]
@@ -40,7 +40,7 @@ pub(super) enum AppsCommand {
         app: String,
         service: String,
         port: u16,
-        #[arg(long)]
+        #[arg(long, default_value = "tcp")]
         proto: String,
         #[arg(long)]
         local_port: Option<u16>,
@@ -64,45 +64,45 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
         AppsCommand::List => {
             print_result(client.request("/apps/list", serde_json::json!({})).await);
         }
-        AppsCommand::Show { name } => {
+        AppsCommand::Show { app } => {
             print_result(
                 client
-                    .request("/apps/show", serde_json::json!({ "name": name }))
+                    .request("/apps/show", serde_json::json!({ "app": app }))
                     .await,
             );
         }
-        AppsCommand::Create { name, script_file } => {
+        AppsCommand::Create { app, script_file } => {
             let script = read_script_file(&script_file);
             print_result(
                 client
                     .request(
                         "/apps/create",
-                        serde_json::json!({ "name": name, "script": script }),
+                        serde_json::json!({ "app": app, "script": script }),
                     )
                     .await,
             );
         }
-        AppsCommand::Remove { name } => {
+        AppsCommand::Remove { app } => {
             print_result(
                 client
-                    .request("/apps/remove", serde_json::json!({ "name": name }))
+                    .request("/apps/remove", serde_json::json!({ "app": app }))
                     .await,
             );
         }
-        AppsCommand::Uninstall { name } => {
+        AppsCommand::Uninstall { app } => {
             print_result(
                 client
-                    .request("/apps/uninstall", serde_json::json!({ "name": name }))
+                    .request("/apps/uninstall", serde_json::json!({ "app": app }))
                     .await,
             );
         }
-        AppsCommand::Update { name, script_file } => {
+        AppsCommand::Update { app, script_file } => {
             let script = read_script_file(&script_file);
             print_result(
                 client
                     .request(
                         "/apps/update",
-                        serde_json::json!({ "name": name, "script": script }),
+                        serde_json::json!({ "app": app, "script": script }),
                     )
                     .await,
             );

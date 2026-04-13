@@ -125,7 +125,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 # App Management
 
 > i[app.register]
-> `/apps/create { name, script }` evaluates the provided BSL script source text.
+> `/apps/create { app, script }` evaluates the provided BSL script source text.
 > On success, the app is added to the managed set in the `NotInstalled` state and an `AppRegistered` event is emitted.
 > On script failure, `script_error` is returned and the app is not registered.
 
@@ -133,12 +133,12 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Registered apps and their BSL scripts are stored durably and reloaded automatically on restart.
 
 > i[app.deregister]
-> `/apps/remove { name }` initiates graceful teardown of all of the app's resources and removes the app from the managed set.
+> `/apps/remove { app }` initiates graceful teardown of all of the app's resources and removes the app from the managed set.
 > If a lifecycle operation is in progress for the app, the request is rejected with `operation_in_progress`.
 > Otherwise the app immediately enters the `Deregistering` state and an `AppDeregistered` event is emitted when teardown completes and the app is fully removed.
 
 > i[app.update]
-> `/apps/update { name, script }` re-evaluates the provided BSL script source text.
+> `/apps/update { app, script }` re-evaluates the provided BSL script source text.
 > If a lifecycle operation is in progress, the new AppDef takes effect at the next evaluation boundary after the operation completes.
 > If the script fails to parse or evaluate, a `script_error` app-level fault is filed, the existing AppDef continues running, and the request still succeeds.
 > On success, any previously active `script_error` fault for this app is cleared.
@@ -165,7 +165,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 # App Description
 
 > i[app.describe]
-> `/apps/show { name }` returns a single object with the following fields:
+> `/apps/show { app }` returns a single object with the following fields:
 >
 > - `status`: the app's current status as defined in [app.status](#i--app.status).
 > - `faults`: array of app-level [fault records](#i--fault.record) not associated with a specific resource instance (e.g. script evaluation errors). Empty when there are no active app-level faults.

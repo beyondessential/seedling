@@ -58,13 +58,7 @@ pub(super) enum UserCommand {
     /// List authorized client keys
     List,
     /// Authorize a client key
-    Add {
-        /// Fingerprint to authorize
-        fingerprint: String,
-        /// Human-readable label for this key
-        #[arg(long)]
-        label: String,
-    },
+    Add { fingerprint: String, label: String },
     /// Revoke an authorized client key
     Remove {
         /// Fingerprint to revoke

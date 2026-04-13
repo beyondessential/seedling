@@ -114,7 +114,7 @@ pub(crate) fn describe_app(state: &OiState, params: Value) -> HandlerResult {
     let name = params
         .get("name")
         .and_then(Value::as_str)
-        .ok_or_else(|| OiError::new(ErrorCode::NotFound, "missing param: name"))?;
+        .ok_or_else(|| OiError::new(ErrorCode::NotFound, "missing param: app"))?;
 
     let reg = state.registry.read();
     let entry = reg
@@ -320,7 +320,7 @@ pub(crate) fn register_app(state: &OiState, params: Value) -> HandlerResult {
     let name = params
         .get("name")
         .and_then(Value::as_str)
-        .ok_or_else(|| OiError::new(ErrorCode::RequirementsInvalid, "missing param: name"))?;
+        .ok_or_else(|| OiError::new(ErrorCode::RequirementsInvalid, "missing param: app"))?;
     let script = params
         .get("script")
         .and_then(Value::as_str)
@@ -376,7 +376,7 @@ pub(crate) fn deregister_app(state: &OiState, params: Value) -> HandlerResult {
     let name = params
         .get("name")
         .and_then(Value::as_str)
-        .ok_or_else(|| OiError::new(ErrorCode::NotFound, "missing param: name"))?;
+        .ok_or_else(|| OiError::new(ErrorCode::NotFound, "missing param: app"))?;
 
     {
         let reg = state.registry.read();
@@ -440,7 +440,7 @@ pub(crate) fn uninstall_app(state: &OiState, params: Value) -> HandlerResult {
     let name = params
         .get("name")
         .and_then(Value::as_str)
-        .ok_or_else(|| OiError::new(ErrorCode::NotFound, "missing param: name"))?;
+        .ok_or_else(|| OiError::new(ErrorCode::NotFound, "missing param: app"))?;
 
     let phase_arc = {
         let reg = state.registry.read();
@@ -479,7 +479,7 @@ pub(crate) fn update_app(state: &OiState, params: Value) -> HandlerResult {
     let name = params
         .get("name")
         .and_then(Value::as_str)
-        .ok_or_else(|| OiError::new(ErrorCode::NotFound, "missing param: name"))?;
+        .ok_or_else(|| OiError::new(ErrorCode::NotFound, "missing param: app"))?;
     let script = params
         .get("script")
         .and_then(Value::as_str)
