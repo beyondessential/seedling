@@ -685,6 +685,8 @@ fn build_filters(filter: &ContainerFilter<'_>) -> Option<String> {
     let mut map: HashMap<&str, Vec<String>> = HashMap::new();
     if let Some((key, val)) = filter.label {
         map.insert("label", vec![format!("{}={}", key, val)]);
+    } else if let Some(key) = filter.label_key {
+        map.insert("label", vec![key.to_string()]);
     }
     if let Some(prefix) = filter.name_prefix {
         map.insert("name", vec![format!("^{}", prefix)]);

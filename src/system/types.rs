@@ -54,9 +54,11 @@ pub struct ContainerSummary {
     pub labels: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct ContainerFilter<'a> {
     pub label: Option<(&'a str, &'a str)>,
+    /// Match containers that have this label key, regardless of value.
+    pub label_key: Option<&'a str>,
     pub name_prefix: Option<&'a str>,
 }
 

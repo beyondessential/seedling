@@ -229,6 +229,63 @@ async fn main() {
         }
     }
 
+    // Podman-level scan for orphaned seedling containers.
+    // Any container with a "seedling.app" label that doesn't belong to a
+    // currently registered app is an orphan.
+    {
+        let known_apps: std::collections::HashSet<String> = {
+            let reg = registry.read();
+            reg.list().into_iter().map(|(name, _)| name).collect()
+        };
+
+        let driver_ref = Arc::clone(&driver);
+        let all_seedling_containers: Vec<seedling::system::types::ContainerSummary> =
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    driver_ref
+                        .container
+                        .list(seedling::system::types::ContainerFilter {
+                            label_key: Some("seedling.app"),
+                            ..Default::default()
+                        })
+                        .await
+                        .unwrap_or_default()
+                })
+            });
+
+        let orphans: Vec<_> = all_seedling_containers
+            .iter()
+            .filter(|c| {
+                c.labels
+                    .get("seedling.app")
+                    .is_none_or(|app| !known_apps.contains(app))
+            })
+            .collect();
+
+        if !orphans.is_empty() {
+            tracing::warn!(
+                count = orphans.len(),
+                "found orphaned seedling containers; removing"
+            );
+            let driver_ref = Arc::clone(&driver);
+            for container in &orphans {
+                tracing::info!(
+                    container = %container.name,
+                    app = container.labels.get("seedling.app").map(|s| s.as_str()).unwrap_or("?"),
+                    "removing orphaned container"
+                );
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        let _ = driver_ref
+                            .container
+                            .remove_container(&container.name, true)
+                            .await;
+                    })
+                });
+            }
+        }
+    }
+
     // ---------------------------------------------------------------------------
     // Global reconciler
     // ---------------------------------------------------------------------------
