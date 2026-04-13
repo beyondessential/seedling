@@ -24,10 +24,12 @@ struct Cli {
     endpoint: SocketAddr,
 
     /// SHA-256 SPKI fingerprint (hex) to pin
-    #[arg(long, conflicts_with = "trust_any")]
+    #[arg(long)]
+    #[cfg_attr(debug_assertions, arg(conflicts_with = "trust_any"))]
     fingerprint: Option<String>,
 
     /// Skip server key verification (development only)
+    #[cfg(debug_assertions)]
     #[arg(long, conflicts_with = "fingerprint")]
     trust_any: bool,
 
@@ -190,7 +192,12 @@ async fn main() {
 
     let client;
 
-    if cli.trust_any {
+    #[cfg(debug_assertions)]
+    let trust_any = cli.trust_any;
+    #[cfg(not(debug_assertions))]
+    let trust_any = false;
+
+    if trust_any {
         client = OiClient::connect(cli.endpoint, ClientAuth::TrustAny, &identity)
             .await
             .unwrap_or_else(|e| {

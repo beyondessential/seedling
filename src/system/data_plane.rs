@@ -647,5 +647,7 @@ fn seedling_forward_stmts() -> Vec<Statement<'static>> {
     ]
 }
 
+mod nft;
+
 #[cfg(test)]
 mod tests;
