@@ -197,6 +197,38 @@ async fn main() {
         }
     }
 
+    // Podman-level scan for orphaned anonymous volumes.
+    // Any volume with the "seedling-anon-" prefix that isn't tracked in the DB
+    // is an orphan from a previous run.
+    {
+        let driver_ref = Arc::clone(&driver);
+        let orphan_vols = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                driver_ref
+                    .container
+                    .list_volumes_by_prefix("seedling-anon-")
+                    .await
+                    .unwrap_or_default()
+            })
+        });
+
+        if !orphan_vols.is_empty() {
+            tracing::warn!(
+                count = orphan_vols.len(),
+                "found orphaned seedling-anon- volumes in podman; removing"
+            );
+            let driver_ref = Arc::clone(&driver);
+            for vol_name in &orphan_vols {
+                tracing::info!(volume = %vol_name, "removing orphaned anonymous volume");
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        let _ = driver_ref.container.remove_volume(vol_name).await;
+                    })
+                });
+            }
+        }
+    }
+
     // ---------------------------------------------------------------------------
     // Global reconciler
     // ---------------------------------------------------------------------------

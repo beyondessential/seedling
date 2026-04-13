@@ -84,6 +84,11 @@ pub trait ContainerRuntime: Send + Sync + 'static {
     fn volume_exists<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<bool, BoxError>>;
     fn create_volume<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>>;
     fn remove_volume<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>>;
+    /// List volume names matching a given prefix.
+    fn list_volumes_by_prefix<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<String>, BoxError>>;
     /// Returns the host filesystem path where the named volume is mounted.
     fn volume_mountpoint<'a>(
         &'a self,
