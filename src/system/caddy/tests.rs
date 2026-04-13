@@ -1,5 +1,7 @@
 use super::*;
-use crate::system::types::{HttpRedirect, ProxyListener, ProxyRoute, VirtualHost};
+use crate::system::types::{
+    HttpRedirect, ProxyConfig, ProxyListener, ProxyListenerProto, ProxyRoute, VirtualHost,
+};
 
 fn http_vhost(hostname: &str, upstream: &str) -> VirtualHost {
     VirtualHost {

@@ -2,7 +2,7 @@ use std::net::{Ipv6Addr, SocketAddr};
 
 use crate::system::types::{ForwardProto, IngressRule};
 
-use super::{ingress_rule_stmts, output_ingress_rule_stmts};
+use super::nft::{ingress_rule_stmts, output_ingress_rule_stmts};
 
 fn test_rule(port: u16, proto: ForwardProto) -> IngressRule {
     IngressRule {
