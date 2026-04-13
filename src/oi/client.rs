@@ -389,14 +389,16 @@ impl OiClient {
 }
 
 impl OiClient {
-    /// Connect and capture the server's SPKI fingerprint.
+    /// Probe the server's SPKI fingerprint without presenting client identity.
     ///
-    /// Accepts any certificate — the fingerprint is returned so the caller
-    /// can validate it against a known-hosts file and prompt the user if needed.
-    pub async fn connect_pinning(
-        addr: SocketAddr,
-        identity: &ClientIdentity,
-    ) -> Result<(Self, String), ClientError> {
+    /// Opens a non-mTLS connection to capture the server's raw public key
+    /// fingerprint. The handshake will typically fail (the server requires
+    /// client auth), but the `RecordingVerifier` captures the fingerprint
+    /// during `verify_server_cert` before client auth is evaluated.
+    ///
+    /// The caller should verify the fingerprint against a known-hosts store
+    /// and then open a full mTLS connection via [`connect`].
+    pub async fn probe_fingerprint(addr: SocketAddr) -> Result<String, ClientError> {
         let cell = Arc::new(std::sync::OnceLock::new());
         let verifier: Arc<dyn ServerCertVerifier> = Arc::new(RecordingVerifier {
             cell: Arc::clone(&cell),
@@ -405,7 +407,7 @@ impl OiClient {
         let mut tls_config = TlsClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(verifier)
-            .with_client_cert_resolver(build_client_cert_resolver(identity)?);
+            .with_no_client_auth();
         tls_config.key_log = Arc::new(rustls::KeyLogFile::new());
 
         let quic_config = quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
@@ -420,18 +422,35 @@ impl OiClient {
             .map_err(|e| ClientError::Connect(Box::new(e)))?;
         endpoint.set_default_client_config(client_cfg);
 
-        let conn = tokio::time::timeout(
+        // The server requires mTLS, so this handshake will likely fail
+        // because we do not present a client certificate. That is expected:
+        // we only need the server's SPKI fingerprint, which the
+        // RecordingVerifier captures during verify_server_cert (before
+        // client auth is evaluated by the server).
+        let result = tokio::time::timeout(
             Duration::from_secs(5),
             endpoint
                 .connect(addr, "seedling")
                 .map_err(|e| ClientError::Connect(Box::new(e)))?,
         )
-        .await
-        .map_err(|_| ClientError::Connect("connection timed out".into()))?
-        .map_err(|e| ClientError::Connect(Box::new(e)))?;
+        .await;
 
-        let fingerprint = cell.get().cloned().unwrap_or_default();
-        Ok((Self { conn }, fingerprint))
+        // Tear down the probe endpoint regardless of outcome.
+        if let Ok(Ok(ref conn)) = result {
+            conn.close(quinn::VarInt::from_u32(0), b"probe");
+        }
+        endpoint.close(quinn::VarInt::from_u32(0), b"probe");
+
+        match cell.get() {
+            Some(fp) => Ok(fp.clone()),
+            None => match result {
+                Ok(Err(e)) => Err(ClientError::Connect(Box::new(e))),
+                Err(_) => Err(ClientError::Connect("connection timed out".into())),
+                Ok(Ok(_)) => Err(ClientError::Protocol(
+                    "handshake succeeded but no fingerprint was recorded".into(),
+                )),
+            },
+        }
     }
 }
 

@@ -162,7 +162,7 @@ async fn main() {
             known_hosts::KnownHosts::empty(kh_path.clone())
         });
 
-        let (c, fp) = OiClient::connect_pinning(cli.endpoint, &identity)
+        let fp = OiClient::probe_fingerprint(cli.endpoint)
             .await
             .unwrap_or_else(|e| {
                 tracing::error!("{e}");
@@ -217,7 +217,12 @@ async fn main() {
             }
         }
 
-        client = c;
+        client = OiClient::connect(cli.endpoint, ClientAuth::Fingerprint(fp), &identity)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::error!("{e}");
+                std::process::exit(1);
+            });
     }
 
     match top_cmd {
