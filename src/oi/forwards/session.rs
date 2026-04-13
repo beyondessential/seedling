@@ -108,23 +108,14 @@ pub(crate) async fn forward_port_session(
         return;
     }
 
-    let target_addr = tokio::task::block_in_place(|| {
-        let db =
-            crate::runtime::db::Db::open(&state.db_path).map_err(|e| format!("db open: {e}"))?;
-        let registry = DbInstanceRegistry::new(std::sync::Arc::new(parking_lot::Mutex::new(db)));
+    let target_addr = {
+        let registry = DbInstanceRegistry::new(Arc::clone(&state.db));
         let instance = registry.get_or_create_singleton(
             &params.app,
             ResourceKind::Service,
             Some(&params.service),
         );
-        Ok::<_, String>(instance_ipv6(&state.node_prefix, &instance))
-    });
-    let target_addr = match target_addr {
-        Ok(a) => a,
-        Err(e) => {
-            write_err(&mut send, "not_found", &e).await;
-            return;
-        }
+        instance_ipv6(&state.node_prefix, &instance)
     };
 
     let conn_id = conn.stable_id();

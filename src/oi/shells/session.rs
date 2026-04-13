@@ -154,7 +154,7 @@ pub(crate) async fn open_shell_session(
 
     let result_slot: Arc<Mutex<Option<ShellExecTarget>>> = Arc::new(Mutex::new(None));
     let result_slot_for_task = Arc::clone(&result_slot);
-    let db_path = state.db_path.clone();
+    let db_for_task = Arc::clone(&state.db);
     let operation_id = OperationId::new();
     let op_id_for_log = operation_id.clone();
     let app_name_for_task = app_name.clone();
@@ -172,13 +172,7 @@ pub(crate) async fn open_shell_session(
                 return false;
             }
         };
-        let db = match crate::runtime::db::Db::open(&db_path) {
-            Ok(db) => Arc::new(Mutex::new(db)),
-            Err(e) => {
-                tracing::error!(app = %app_name_for_task, "open shell db: {e}");
-                return false;
-            }
-        };
+        let db = db_for_task;
         let registry: Arc<dyn crate::runtime::InstanceRegistry> =
             Arc::new(DbInstanceRegistry::new(Arc::clone(&db)));
         let log = DbActionLog::new(
@@ -318,27 +312,19 @@ pub(crate) async fn open_shell_session(
         if service_mounts.is_empty() {
             vec![]
         } else {
-            match crate::runtime::db::Db::open(&state.db_path) {
-                Ok(db) => {
-                    let mount_registry = DbInstanceRegistry::new(Arc::new(Mutex::new(db)));
-                    service_mounts
-                        .iter()
-                        .map(|sp| {
-                            let svc_instance = mount_registry.get_or_create_singleton(
-                                &exec_target.app_name,
-                                ResourceKind::Service,
-                                Some(sp.service.name.as_str()),
-                            );
-                            let svc_ip = instance_ipv6(&state.node_prefix, &svc_instance);
-                            (sp.port.get(), svc_ip, sp.port.get())
-                        })
-                        .collect()
-                }
-                Err(e) => {
-                    tracing::warn!(app = %app_name, "open db for service mounts: {e}");
-                    vec![]
-                }
-            }
+            let mount_registry = DbInstanceRegistry::new(Arc::clone(&state.db));
+            service_mounts
+                .iter()
+                .map(|sp| {
+                    let svc_instance = mount_registry.get_or_create_singleton(
+                        &exec_target.app_name,
+                        ResourceKind::Service,
+                        Some(sp.service.name.as_str()),
+                    );
+                    let svc_ip = instance_ipv6(&state.node_prefix, &svc_instance);
+                    (sp.port.get(), svc_ip, sp.port.get())
+                })
+                .collect()
         }
     };
 
