@@ -195,7 +195,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > - `status`: the app's current status as defined in [app.status](#i--app.status).
 > - `faults`: array of app-level [fault records](#i--fault.record) not associated with a specific resource instance (e.g. script evaluation errors). Empty when there are no active app-level faults.
-> - `resources`: array of objects with fields `name`, `type`, `instances`, and `faults`.
+> - `resources`: array of objects with fields `name`, `type`, `instances`, `faults`, and for Deployment resources, `scale`.
 >   Each instance has fields `id`, `display_name`, and `lifecycle_state`.
 >   Each fault entry is a [fault record](#i--fault.record).
 > - `params`: array of objects with fields `name` and `value`.
@@ -209,6 +209,23 @@ Absent specification bugs, anything that is not defined here is either defined i
 >   Has fields `action_name` and `barrier`.
 >   `barrier` is either `null` (operation is running but not yet at a barrier) or an object with fields `resources`, `required_state`, `deadline_secs`, and `elapsed_secs`.
 > - `version_id`: the current version identifier of the app.
+
+# Scaling
+
+> i[scale.set]
+> `/apps/scale { app, deployment, direction }` adjusts the running scale of a single Deployment within an installed app.
+> `direction` is one of `up` (increment by one), `down` (decrement by one), or `to-min` (set to the deployment's lower bound).
+> The resulting scale is clamped to the deployment's declared bounds; requests that would move outside the bounds succeed but stay at the boundary.
+> The app must be registered and the named deployment must exist in the current AppDef; otherwise `not_found` is returned.
+> On success, the response contains `scale` (the new scale value) and `bounds` with `low` and `high`.
+
+> i[scale.decision-persistence]
+> The effective scale chosen by `/apps/scale` is stored durably and survives process restarts.
+> On startup, the stored decision is loaded and used as the effective scale for the deployment.
+
+> i[scale.describe]
+> `/apps/show` includes, for each Deployment resource, a `scale` object with fields `low` (lower bound), `high` (upper bound), and `current` (the effective scale).
+> `current` is the stored scaling decision clamped to the declared bounds, or the lower bound if no decision has been stored.
 
 # App Script Retrieval
 

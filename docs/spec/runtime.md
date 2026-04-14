@@ -358,6 +358,15 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[autonomous.scale]
 > When a Deployment resource's observed running instance count differs from its declared scale, the reconciler must start or stop instances to converge on the declared count.
 
+> r[scaling.decision]
+> The runtime maintains a persistent record of operator-chosen scale for each Deployment that has been explicitly scaled.
+> When present, this record determines the effective scale used by the reconciler instead of the lower bound default.
+
+> r[scaling.clamp]
+> When an app's BSL script is re-evaluated (e.g. via an update), any stored scaling decision for a Deployment whose declared bounds have changed must be clamped to the new bounds.
+> If the stored value falls below the new lower bound it is raised; if it exceeds the new upper bound it is lowered.
+> Clamping is applied before the reconciler acts on the updated definition.
+
 > r[autonomous.ingress]
 > When an Ingress resource's configuration in the ingress controller does not match the desired configuration, the reconciler must update or rebuild the configuration.
 
