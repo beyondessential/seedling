@@ -18,77 +18,8 @@ use super::{
 /// Default maximum number of concurrently active bidirectional streams.
 pub const DEFAULT_MAX_STREAMS: usize = 64;
 
-/// Default number of reusable read buffers in the pool.
-pub const DEFAULT_BUFFER_POOL_SIZE: usize = 32;
-
-/// Size of each read buffer (4 MiB).
-const BUFFER_SIZE: usize = 4 * 1024 * 1024;
-
-// i[stream.buffer-pool]
-/// A fixed-size pool of reusable read buffers backed by a semaphore.
-///
-/// The pool bounds the memory committed to buffering request/response stream
-/// reads. When no buffer is available the caller is rejected immediately.
-pub struct BufferPool {
-    buffers: parking_lot::Mutex<Vec<Vec<u8>>>,
-    semaphore: Semaphore,
-}
-
-impl BufferPool {
-    /// Create a pool with `capacity` pre-allocated buffers.
-    pub fn new(capacity: usize) -> Self {
-        let mut buffers = Vec::with_capacity(capacity);
-        for _ in 0..capacity {
-            buffers.push(Vec::with_capacity(BUFFER_SIZE));
-        }
-        Self {
-            buffers: parking_lot::Mutex::new(buffers),
-            semaphore: Semaphore::new(capacity),
-        }
-    }
-
-    /// Try to acquire a buffer without waiting. Returns `None` if the pool is
-    /// exhausted.
-    pub fn try_acquire(&self) -> Option<PoolBuffer<'_>> {
-        let permit = self.semaphore.try_acquire().ok()?;
-        let buf = self
-            .buffers
-            .lock()
-            .pop()
-            .unwrap_or_else(|| Vec::with_capacity(BUFFER_SIZE));
-        Some(PoolBuffer {
-            buf: Some(buf),
-            pool: self,
-            _permit: permit,
-        })
-    }
-
-    fn return_buf(&self, mut buf: Vec<u8>) {
-        buf.clear();
-        self.buffers.lock().push(buf);
-    }
-}
-
-/// RAII guard that returns the buffer to the pool on drop.
-pub struct PoolBuffer<'a> {
-    buf: Option<Vec<u8>>,
-    pool: &'a BufferPool,
-    _permit: tokio::sync::SemaphorePermit<'a>,
-}
-
-impl PoolBuffer<'_> {
-    pub fn as_vec_mut(&mut self) -> &mut Vec<u8> {
-        self.buf.as_mut().expect("buffer already taken")
-    }
-}
-
-impl Drop for PoolBuffer<'_> {
-    fn drop(&mut self) {
-        if let Some(buf) = self.buf.take() {
-            self.pool.return_buf(buf);
-        }
-    }
-}
+/// Maximum size of a request body read (4 MiB).
+const MAX_REQUEST_SIZE: usize = 4 * 1024 * 1024;
 
 /// Default OI listen port.
 pub const DEFAULT_PORT: u16 = 7891;
@@ -140,7 +71,6 @@ pub async fn run(
     port: u16,
     data_dir: &Path,
     max_streams: usize,
-    buffer_pool_size: usize,
 ) -> Result<(String, Endpoint), Box<dyn std::error::Error + Send + Sync>> {
     let key_path = data_dir.join("oi.key");
     let key = keys::load_or_generate(&key_path)?;
@@ -193,34 +123,23 @@ pub async fn run(
     tracing::info!("OI listening on {}", endpoint.local_addr()?);
 
     let stream_semaphore = Arc::new(Semaphore::new(max_streams));
-    let buffer_pool = Arc::new(BufferPool::new(buffer_pool_size));
 
-    tracing::info!(
-        max_streams,
-        buffer_pool_size,
-        "OI concurrency limits configured"
-    );
+    tracing::info!(max_streams, "OI concurrency limit configured");
 
     let ep = endpoint.clone();
-    tokio::spawn(accept_loop(endpoint, state, stream_semaphore, buffer_pool));
+    tokio::spawn(accept_loop(endpoint, state, stream_semaphore));
 
     Ok((fingerprint, ep))
 }
 
-async fn accept_loop(
-    endpoint: Endpoint,
-    state: Arc<OiState>,
-    stream_semaphore: Arc<Semaphore>,
-    buffer_pool: Arc<BufferPool>,
-) {
+async fn accept_loop(endpoint: Endpoint, state: Arc<OiState>, stream_semaphore: Arc<Semaphore>) {
     while let Some(incoming) = endpoint.accept().await {
         let state = Arc::clone(&state);
         let stream_semaphore = Arc::clone(&stream_semaphore);
-        let buffer_pool = Arc::clone(&buffer_pool);
         tokio::spawn(async move {
             match incoming.await {
                 Ok(conn) => {
-                    handle_connection(conn, state, stream_semaphore, buffer_pool).await;
+                    handle_connection(conn, state, stream_semaphore).await;
                 }
                 Err(e) => tracing::warn!("incoming connection failed: {e}"),
             }
@@ -236,7 +155,6 @@ async fn handle_connection(
     conn: quinn::Connection,
     state: Arc<OiState>,
     stream_semaphore: Arc<Semaphore>,
-    buffer_pool: Arc<BufferPool>,
 ) {
     let conn_id = conn.stable_id();
     let peer = conn.remote_address();
@@ -260,9 +178,8 @@ async fn handle_connection(
                         let conn = conn.clone();
                         let client = client.clone();
                         let stream_semaphore = Arc::clone(&stream_semaphore);
-                        let buffer_pool = Arc::clone(&buffer_pool);
                         tokio::spawn(
-                            handle_bidi_stream(stream, conn, state, stream_semaphore, buffer_pool)
+                            handle_bidi_stream(stream, conn, state, stream_semaphore)
                                 .instrument(tracing::info_span!("oi", %peer, %client)),
                         );
                     }
@@ -298,7 +215,6 @@ async fn handle_bidi_stream(
     conn: quinn::Connection,
     state: Arc<OiState>,
     stream_semaphore: Arc<Semaphore>,
-    buffer_pool: Arc<BufferPool>,
 ) {
     // i[stream.concurrency-limit]
     let _stream_permit = match stream_semaphore.try_acquire() {
@@ -391,34 +307,10 @@ async fn handle_bidi_stream(
         return;
     }
 
-    // i[stream.buffer-pool]
-    let mut pool_buf = match buffer_pool.try_acquire() {
-        Some(buf) => buf,
-        None => {
-            tracing::warn!(
-                "buffer pool exhausted; rejecting stream \
-                 (adjust with --buffer-pool-size)"
-            );
-            super::events::server_busy(&state.event_tx, "buffer pool exhausted");
-            let resp = json!({
-                "error": {
-                    "code": "server_busy",
-                    "message": "buffer pool exhausted; retry after a delay",
-                }
-            });
-            let bytes = serde_json::to_vec(&resp).expect("response serialisation never fails");
-            let _ = send.write_all(&bytes).await;
-            let _ = send.finish();
-            return;
-        }
-    };
-    let vec = pool_buf.as_vec_mut();
-    vec.extend_from_slice(&line);
-    let rest = recv.read_to_end(BUFFER_SIZE).await.unwrap_or_default();
-    vec.extend_from_slice(&rest);
+    let rest = recv.read_to_end(MAX_REQUEST_SIZE).await.unwrap_or_default();
+    let buf = [line, rest].concat();
 
-    let response = tokio::task::block_in_place(|| dispatch(&state, vec));
-    drop(pool_buf);
+    let response = tokio::task::block_in_place(|| dispatch(&state, &buf));
     if let Err(e) = send.write_all(&response).await {
         tracing::warn!("stream write error: {e}");
     }

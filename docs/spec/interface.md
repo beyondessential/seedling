@@ -75,12 +75,6 @@ Absent specification bugs, anything that is not defined here is either defined i
 > When the limit is reached, the server immediately replies with a `server_busy` error and closes the stream.
 > The limit is configurable at startup; the default value is 64.
 
-> i[stream.buffer-pool]
-> Request/response streams share a fixed-size pool of reusable read buffers.
-> The pool size determines the maximum number of concurrent request/response reads and bounds the memory committed to stream buffering.
-> When no buffer is available, the stream waits until one is returned to the pool.
-> The pool size is configurable at startup; the default value is 32.
-
 # Wire Format
 
 > i[wire.request]

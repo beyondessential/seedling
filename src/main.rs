@@ -8,11 +8,7 @@ use clap::Parser;
 use lloggs::LoggingArgs;
 use parking_lot::{Mutex, RwLock};
 use seedling::{
-    oi::{
-        self,
-        server::{DEFAULT_BUFFER_POOL_SIZE, DEFAULT_MAX_STREAMS},
-        state::OiState,
-    },
+    oi::{self, server::DEFAULT_MAX_STREAMS, state::OiState},
     runtime::{AppRegistry, InstanceRegistry, Scheduler, db::Db, registry::DbInstanceRegistry},
     system::{System, node_prefix_from_machine_id, reconcile::Reconciler},
 };
@@ -35,12 +31,6 @@ struct Args {
     /// connections. Limits overall OI concurrency.
     #[arg(long, default_value_t = DEFAULT_MAX_STREAMS)]
     max_streams: usize,
-
-    /// Number of reusable 4 MiB read buffers for request/response streams.
-    /// Bounds the memory committed to stream buffering and limits concurrent
-    /// RPC reads.
-    #[arg(long, default_value_t = DEFAULT_BUFFER_POOL_SIZE)]
-    buffer_pool_size: usize,
 }
 
 #[derive(clap::Args)]
@@ -432,7 +422,6 @@ async fn main() {
         oi::DEFAULT_PORT,
         &data_dir,
         args.max_streams,
-        args.buffer_pool_size,
     )
     .await
     .unwrap_or_else(|e| {
