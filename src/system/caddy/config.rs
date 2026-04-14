@@ -125,7 +125,7 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
         apps["layer4"] = json!({ "servers": l4_servers });
     }
 
-    json!({ "admin": { "listen": ":2019" }, "apps": apps })
+    json!({ "admin": { "listen": "unix//run/caddy-admin/admin.sock" }, "apps": apps })
 }
 
 fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {

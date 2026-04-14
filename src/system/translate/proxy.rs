@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    net::{Ipv6Addr, SocketAddr},
+    net::Ipv6Addr,
 };
 
 use ipnet::Ipv6Net;
@@ -81,12 +81,7 @@ pub fn node_mount_addr(prefix: &Ipv6Net) -> Ipv6Addr {
 /// The Ingress → Service → running-pod-instance resolution is performed by
 /// the caller; this function receives already-resolved data.
 ///
-/// `_caddy_addr` is the Caddy admin API address, reserved for callers that
-/// also need to build `DataPlaneRules` pointing to the same container.
-pub fn build_proxy_config(
-    ingresses: &[(IngressDef, ServiceUpstream)],
-    _caddy_addr: SocketAddr,
-) -> ProxyConfig {
+pub fn build_proxy_config(ingresses: &[(IngressDef, ServiceUpstream)]) -> ProxyConfig {
     let mut listener_set: BTreeSet<ProxyListener> = BTreeSet::new();
     let mut vhosts: BTreeMap<String, VirtualHost> = BTreeMap::new();
 

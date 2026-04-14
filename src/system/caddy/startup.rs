@@ -1,5 +1,5 @@
 use std::{
-    net::{IpAddr, SocketAddr},
+    path::{Path, PathBuf},
     time::Duration,
 };
 
@@ -20,8 +20,25 @@ pub(crate) const CADDY_IMAGE: &str = "localhost/seedling-caddy:latest";
 pub(crate) const CADDY_DATA_VOLUME: &str = "seedling-caddy-data";
 pub(crate) const PROXY_NETWORK: &str = "seedling-proxy";
 
-/// Minimal Caddy JSON config that binds the admin API on all interfaces.
-const CADDY_ADMIN_JSON: &str = r#"{"admin":{"listen":":2019"}}"#;
+/// Caddy JSON config that binds the admin API on the per-slot Unix socket.
+const CADDY_ADMIN_JSON: &str = r#"{"admin":{"listen":"unix//run/caddy-admin/admin.sock"}}"#;
+
+/// Returns the host-side directory that is bind-mounted into the container
+/// as `/run/caddy-admin/`. The socket file (`admin.sock`) is created inside
+/// this directory by the Caddy process.
+fn socket_run_dir(data_dir: &Path, container_name: &str) -> PathBuf {
+    let slot = if container_name.ends_with("-blue") {
+        "blue"
+    } else {
+        "green"
+    };
+    data_dir.join("caddy-run").join(slot)
+}
+
+/// Returns the host-side path of the admin Unix socket for `container_name`.
+pub(crate) fn admin_socket_path(data_dir: &Path, container_name: &str) -> PathBuf {
+    socket_run_dir(data_dir, container_name).join("admin.sock")
+}
 
 const CADDY_CONTAINERFILE: &str = "\
 FROM docker.io/library/caddy:2.11.2-builder AS builder\n\
@@ -197,7 +214,7 @@ async fn start_slot(
     container_name: &str,
     _container: &dyn ContainerRuntime,
     process: &dyn ProcessManager,
-    data_dir: &std::path::Path,
+    data_dir: &Path,
 ) -> Result<(), CaddyStartupError> {
     let unit_name = &slot_unit(container_name);
 
@@ -223,6 +240,13 @@ async fn start_slot(
 
     let admin_config_path = data_dir.join("caddy-admin.json");
     let admin_config_str = admin_config_path.to_string_lossy().into_owned();
+
+    // Create the per-slot socket directory on the host so podman can
+    // bind-mount it into the container as /run/caddy-admin/.
+    let run_dir = socket_run_dir(data_dir, container_name);
+    std::fs::create_dir_all(&run_dir).context(IoSnafu)?;
+    let run_dir_str = run_dir.to_string_lossy().into_owned();
+
     process
         .start_transient(TransientUnitSpec {
             name: unit_name.clone(),
@@ -239,6 +263,8 @@ async fn start_slot(
                 format!("{CADDY_DATA_VOLUME}:/data"),
                 "--volume".to_owned(),
                 format!("{admin_config_str}:/etc/caddy/admin.json:ro"),
+                "--volume".to_owned(),
+                format!("{run_dir_str}:/run/caddy-admin"),
                 CADDY_IMAGE.to_owned(),
                 "caddy".to_owned(),
                 "run".to_owned(),
@@ -286,14 +312,17 @@ pub(crate) async fn teardown_caddy(container: &dyn ContainerRuntime, process: &d
     }
 }
 
-/// Poll `container_name` until it is running and Caddy's admin API responds,
-/// or until the deadline elapses. Returns `CaddyAddrs` on success.
+/// Poll `container_name` until it is running and Caddy's admin API responds
+/// on the Unix socket, or until the deadline elapses. Returns `CaddyAddrs`
+/// on success.
 #[tracing::instrument(skip_all, fields(%container_name))]
 async fn poll_until_healthy(
     container_name: &str,
     container: &dyn ContainerRuntime,
     deadline: tokio::time::Instant,
+    socket_path: &Path,
 ) -> Result<CaddyAddrs, CaddyStartupError> {
+    let proxy = CaddyProxy::new(socket_path);
     loop {
         if tokio::time::Instant::now() >= deadline {
             return TimeoutSnafu.fail();
@@ -301,14 +330,13 @@ async fn poll_until_healthy(
         if let Ok(Some(state)) = container.inspect(container_name).await
             && matches!(state.status, ContainerStatus::Running)
             && let Some(ip) = state.pod_addr
+            && proxy.is_healthy().await.unwrap_or(false)
         {
-            let v6 = SocketAddr::new(IpAddr::V6(ip), 2019);
-            if CaddyProxy::new(v6).is_healthy().await.unwrap_or(false) {
-                let v4 = state
-                    .pod_addr_v4
-                    .map(|ip4| SocketAddr::new(IpAddr::V4(ip4), 2019));
-                return Ok(CaddyAddrs { v6, v4 });
-            }
+            return Ok(CaddyAddrs {
+                v6: ip,
+                v4: state.pod_addr_v4,
+                admin_socket: socket_path.to_owned(),
+            });
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
@@ -338,7 +366,7 @@ pub(crate) async fn ensure_caddy_running(
     container: &dyn ContainerRuntime,
     process: &dyn ProcessManager,
     node_prefix: &Ipv6Net,
-    data_dir: &std::path::Path,
+    data_dir: &Path,
 ) -> Result<CaddyAddrs, CaddyStartupError> {
     // 1. Ensure the proxy network exists.
     let proxy_prefix = proxy_network_prefix(node_prefix);
@@ -433,17 +461,21 @@ pub(crate) async fn ensure_caddy_running(
         Some(state) if matches!(state.status, ContainerStatus::Running) => {
             if state.image_id.as_deref() == Some(&desired_id) {
                 // Correct image — check if already healthy.
+                let socket_path = admin_socket_path(data_dir, &active);
                 if let Some(ip) = state.pod_addr {
-                    let addr = SocketAddr::new(IpAddr::V6(ip), 2019);
-                    if CaddyProxy::new(addr).is_healthy().await.unwrap_or(false) {
-                        let v4 = state
-                            .pod_addr_v4
-                            .map(|ip4| SocketAddr::new(IpAddr::V4(ip4), 2019));
-                        return Ok(CaddyAddrs { v6: addr, v4 });
+                    if CaddyProxy::new(&socket_path)
+                        .is_healthy()
+                        .await
+                        .unwrap_or(false)
+                    {
+                        return Ok(CaddyAddrs {
+                            v6: ip,
+                            v4: state.pod_addr_v4,
+                            admin_socket: socket_path,
+                        });
                     }
                     tracing::warn!(
                         container = %active,
-                        addr = %addr,
                         "caddy running with correct image but health check failed; restarting"
                     );
                 } else {
@@ -464,12 +496,16 @@ pub(crate) async fn ensure_caddy_running(
                 // r[impl infra.proxy.upgrade]
                 start_slot(other, container, process, data_dir).await?;
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
-                let new_addrs = poll_until_healthy(other, container, deadline).await?;
+                let other_socket = admin_socket_path(data_dir, other);
+                let new_addrs =
+                    poll_until_healthy(other, container, deadline, &other_socket).await?;
 
                 // r[impl infra.proxy.upgrade.cache]
                 // Apply the cached proxy config to the new container.
                 if let Ok(Some(json)) = read_cached_proxy_json(data_dir)
-                    && let Err(e) = CaddyProxy::new(new_addrs.v6).apply_raw_json(&json).await
+                    && let Err(e) = CaddyProxy::new(&new_addrs.admin_socket)
+                        .apply_raw_json(&json)
+                        .await
                 {
                     tracing::warn!("failed to apply cached proxy config to upgraded Caddy: {e}");
                 }
@@ -497,12 +533,15 @@ pub(crate) async fn ensure_caddy_running(
     // 10. Fresh start.
     start_slot(&active, container, process, data_dir).await?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
-    let addrs = poll_until_healthy(&active, container, deadline).await?;
+    let active_socket = admin_socket_path(data_dir, &active);
+    let addrs = poll_until_healthy(&active, container, deadline, &active_socket).await?;
 
     // r[impl infra.proxy.upgrade.cache]
     // Apply the cached proxy config.
     if let Ok(Some(json)) = read_cached_proxy_json(data_dir)
-        && let Err(e) = CaddyProxy::new(addrs.v6).apply_raw_json(&json).await
+        && let Err(e) = CaddyProxy::new(&addrs.admin_socket)
+            .apply_raw_json(&json)
+            .await
     {
         tracing::warn!("failed to apply cached proxy config to fresh Caddy: {e}");
     }

@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::Ipv4Addr,
     path::PathBuf,
     sync::Arc,
     time::Duration,
@@ -69,7 +69,7 @@ pub struct Reconciler {
     node_prefix: Ipv6Net,
     observer: Observer,
     actuator: Actuator,
-    caddy_admin_addr: Arc<AsyncRwLock<SocketAddr>>,
+    caddy_admin_client: Arc<AsyncRwLock<reqwest::Client>>,
     caddy_v4_addr: Option<Ipv4Addr>,
     data_dir: PathBuf,
     db: Arc<Mutex<Db>>,
@@ -90,7 +90,7 @@ impl Reconciler {
         driver: Arc<System>,
         node_prefix: Ipv6Net,
         registry: Arc<dyn InstanceRegistry>,
-        caddy_admin_addr: Arc<AsyncRwLock<SocketAddr>>,
+        caddy_admin_client: Arc<AsyncRwLock<reqwest::Client>>,
         data_dir: PathBuf,
         db: Db,
         app_registry: Arc<RwLock<AppRegistry>>,
@@ -103,7 +103,7 @@ impl Reconciler {
             node_prefix,
             observer,
             actuator,
-            caddy_admin_addr,
+            caddy_admin_client,
             caddy_v4_addr: None,
             data_dir,
             db: Arc::new(Mutex::new(db)),
@@ -216,11 +216,8 @@ impl Reconciler {
         let caddy_addrs = match caddy_result {
             Ok(Ok(addrs)) => {
                 self.clear_system_fault("caddy_failed");
-                *self.caddy_admin_addr.write().await = addrs.v6;
-                self.caddy_v4_addr = addrs.v4.and_then(|sa| match sa.ip() {
-                    IpAddr::V4(ip4) => Some(ip4),
-                    _ => None,
-                });
+                *self.caddy_admin_client.write().await = caddy::build_client(&addrs.admin_socket);
+                self.caddy_v4_addr = addrs.v4;
                 Some(addrs)
             }
             Ok(Err(e)) => {
@@ -248,17 +245,8 @@ impl Reconciler {
         self.persist_obs(route_obs);
 
         // --- Compute nftables + proxy (sync, gated on caddy) ---
-        let nft_and_proxy = caddy_addrs.and_then(|addrs| {
-            let caddy_addr = addrs.v6;
-            let caddy_ip = match caddy_addr.ip() {
-                IpAddr::V6(ip) => ip,
-                _ => {
-                    warn!(
-                        "caddy admin address is not yet IPv6; skipping nftables and proxy this tick"
-                    );
-                    return None;
-                }
-            };
+        let nft_and_proxy = caddy_addrs.map(|addrs| {
+            let caddy_ip = addrs.v6;
 
             let dp_rules = phases::compute_nftables_rules(
                 &apps,
@@ -270,14 +258,14 @@ impl Reconciler {
             );
 
             let proxy_build =
-                phases::compute_proxy_config(&apps, &self.node_prefix, &*self.registry, caddy_addr);
+                phases::compute_proxy_config(&apps, &self.node_prefix, &*self.registry);
 
-            Some((dp_rules, proxy_build, caddy_addr))
+            (dp_rules, proxy_build, caddy_ip)
         });
 
         // --- Apply phase: concurrent network-plane writes ---
         match nft_and_proxy {
-            Some((dp_rules, proxy_build, caddy_addr)) => {
+            Some((dp_rules, proxy_build, caddy_ip)) => {
                 let phases::ProxyBuildResult {
                     config: proxy_config,
                     caddy_json,
@@ -315,7 +303,7 @@ impl Reconciler {
                 }
                 match proxy_res {
                     Err(e) => {
-                        error!(error = ?e, addr = %caddy_addr, "proxy: apply_config failed");
+                        error!(error = ?e, addr = %caddy_ip, "proxy: apply_config failed");
                         self.file_system_fault(
                             "proxy_failed",
                             &format!("apply_config failed: {e}"),

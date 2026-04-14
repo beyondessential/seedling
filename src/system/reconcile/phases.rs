@@ -149,7 +149,6 @@ pub(super) fn compute_proxy_config(
     apps: &[AppSnapshot],
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
-    caddy_addr: std::net::SocketAddr,
 ) -> ProxyBuildResult {
     let mut all_pairs = Vec::new();
     let mut all_l4_routes = Vec::new();
@@ -178,7 +177,7 @@ pub(super) fn compute_proxy_config(
         ready_observations.extend(build.ready_observations);
     }
 
-    let mut config = build_proxy_config(&all_pairs, caddy_addr);
+    let mut config = build_proxy_config(&all_pairs);
     config.l4_routes = all_l4_routes;
     let caddy_json = super::super::caddy::build_caddy_config(&config);
 

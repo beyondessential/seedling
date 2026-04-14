@@ -3,9 +3,9 @@ mod proxy;
 mod startup;
 
 pub(crate) use config::build_caddy_config;
-pub(crate) use proxy::CaddyProxy;
 #[expect(unused_imports, reason = "public API surface")]
 pub(crate) use proxy::{CaddyAddrs, CaddyError};
+pub(crate) use proxy::{CaddyProxy, build_client};
 #[expect(unused_imports, reason = "public API surface")]
 pub(crate) use startup::{
     CADDY_BLUE, CADDY_DATA_VOLUME, CADDY_GREEN, CADDY_IMAGE, CaddyStartupError, PROXY_NETWORK,

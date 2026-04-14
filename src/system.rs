@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, path::Path, sync::Arc};
+use std::{path::Path, sync::Arc};
 
 use ipnet::{Ipv4Net, Ipv6Net};
 use sha2::{Digest, Sha256};
@@ -210,7 +210,7 @@ pub fn node_prefix_from_machine_id() -> std::io::Result<Ipv6Net> {
 impl System {
     // r[infra.proxy.startup]
     /// Initialize all system backends, ensure Caddy is running, and return the
-    /// assembled `System` handle alongside the Caddy admin API address handle.
+    /// assembled `System` handle alongside the Caddy admin client handle.
     ///
     /// Errors from individual backends are returned as boxed trait objects so
     /// callers do not need to depend on internal error types.
@@ -218,7 +218,7 @@ impl System {
         node_prefix: Ipv6Net,
         data_dir: &Path,
     ) -> Result<
-        (Arc<Self>, Arc<tokio::sync::RwLock<SocketAddr>>),
+        (Arc<Self>, Arc<tokio::sync::RwLock<reqwest::Client>>),
         Box<dyn std::error::Error + Send + Sync>,
     > {
         let container: Arc<dyn ContainerRuntime> = Arc::new(podman::PodmanRuntime::new().await?);
@@ -228,8 +228,8 @@ impl System {
 
         let initial =
             caddy::ensure_caddy_running(&*container, &*process, &node_prefix, data_dir).await?;
-        let caddy_proxy = Arc::new(caddy::CaddyProxy::new(initial.v6));
-        let caddy_admin_addr = caddy_proxy.admin_addr_handle();
+        let caddy_proxy = Arc::new(caddy::CaddyProxy::new(&initial.admin_socket));
+        let caddy_admin_client = caddy_proxy.admin_client_handle();
         let proxy: Arc<dyn NetworkProxy> = caddy_proxy;
 
         let system = Arc::new(Self {
@@ -238,6 +238,6 @@ impl System {
             proxy,
             data_plane: data_plane_arc,
         });
-        Ok((system, caddy_admin_addr))
+        Ok((system, caddy_admin_client))
     }
 }

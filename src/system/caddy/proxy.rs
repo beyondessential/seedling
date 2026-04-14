@@ -1,6 +1,9 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::{Ipv4Addr, Ipv6Addr},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
-use reqwest::Client;
 use serde_json::Value;
 use snafu::{ResultExt, Snafu};
 use tokio::sync::RwLock;
@@ -11,10 +14,14 @@ use crate::system::{BoxError, BoxFuture, NetworkProxy, types::ProxyConfig};
 // CaddyAddrs — returned by ensure_caddy_running
 // ---------------------------------------------------------------------------
 
-/// Addresses at which Caddy's admin API is reachable.
+/// Addresses and socket path describing a running Caddy instance.
 pub(crate) struct CaddyAddrs {
-    pub v6: SocketAddr,
-    pub v4: Option<SocketAddr>,
+    /// Container's IPv6 address on the proxy network (used for nftables rules).
+    pub v6: Ipv6Addr,
+    /// Container's IPv4 address on the proxy network, if present.
+    pub v4: Option<Ipv4Addr>,
+    /// Host-side path of the Unix socket for the Caddy admin API.
+    pub admin_socket: PathBuf,
 }
 
 // ---------------------------------------------------------------------------
@@ -47,41 +54,49 @@ pub(crate) enum CaddyError {
 /// `resource_instances` and does not go through the normal `Actuator`
 /// start/stop path. Seedling starts it at startup and manages it directly.
 ///
-/// The admin API is accessed at `http://[<caddy-ip>]:2019` on the
-/// `seedling-proxy` network. The current admin address is stored in an
-/// `Arc<tokio::sync::RwLock<SocketAddr>>` so it can be updated atomically
-/// during a blue/green Caddy upgrade without restarting `CaddyProxy`.
+/// The admin API is reached over a Unix domain socket bind-mounted into the
+/// Caddy container. The active `reqwest::Client` is held behind an
+/// `Arc<RwLock<…>>` so it can be swapped atomically during a blue/green
+/// upgrade without restarting `CaddyProxy`.
 pub(crate) struct CaddyProxy {
-    admin_addr: Arc<RwLock<SocketAddr>>,
-    client: Client,
+    client: Arc<RwLock<reqwest::Client>>,
 }
 
 impl CaddyProxy {
-    /// Create a `CaddyProxy` pointed at the given Caddy admin API address.
-    pub(crate) fn new(admin_addr: SocketAddr) -> Self {
+    /// Create a `CaddyProxy` that connects via the given Unix socket path.
+    pub(crate) fn new(socket_path: &Path) -> Self {
         Self {
-            admin_addr: Arc::new(RwLock::new(admin_addr)),
-            client: Client::new(),
+            client: Arc::new(RwLock::new(build_client(socket_path))),
         }
     }
 
-    /// Returns a handle to the shared admin address, so the caller can swap
-    /// it atomically during a blue/green Caddy upgrade.
-    pub(crate) fn admin_addr_handle(&self) -> Arc<RwLock<SocketAddr>> {
-        Arc::clone(&self.admin_addr)
+    /// Returns a handle to the shared client, so the caller can swap it
+    /// atomically during a blue/green Caddy upgrade.
+    pub(crate) fn admin_client_handle(&self) -> Arc<RwLock<reqwest::Client>> {
+        Arc::clone(&self.client)
     }
 
-    async fn admin_url(&self, path: &str) -> String {
-        let addr = *self.admin_addr.read().await;
-        // SocketAddr formats IPv6 addresses with brackets: [fd5e:ed...]:2019
-        format!("http://{}{}", addr, path)
+    /// Clone the current client out of the lock for use in a single request.
+    ///
+    /// `reqwest::Client` is cheaply clonable (Arc-backed), so this does not
+    /// duplicate any connection pool state.
+    async fn get_client(&self) -> reqwest::Client {
+        self.client.read().await.clone()
     }
+}
+
+/// Build a `reqwest::Client` whose every connection goes through `socket_path`.
+pub(crate) fn build_client(socket_path: &Path) -> reqwest::Client {
+    reqwest::Client::builder()
+        .unix_socket(socket_path)
+        .build()
+        .expect("build reqwest client for caddy admin socket")
 }
 
 impl CaddyProxy {
     async fn is_healthy_impl(&self) -> Result<bool, CaddyError> {
-        let url = self.admin_url("/config/").await;
-        match self.client.get(&url).send().await {
+        let client = self.get_client().await;
+        match client.get("http://localhost/config/").send().await {
             Ok(resp) => Ok(resp.status().is_success()),
             Err(_) => Ok(false),
         }
@@ -89,11 +104,10 @@ impl CaddyProxy {
 
     async fn apply_config_impl(&self, config: &ProxyConfig) -> Result<(), CaddyError> {
         let caddy_json = super::config::build_caddy_config(config);
-        let url = self.admin_url("/config/").await;
+        let client = self.get_client().await;
 
-        let resp = self
-            .client
-            .post(&url)
+        let resp = client
+            .post("http://localhost/config/")
             .json(&caddy_json)
             .send()
             .await
@@ -109,10 +123,9 @@ impl CaddyProxy {
     }
 
     pub(crate) async fn apply_raw_json(&self, json: &Value) -> Result<(), CaddyError> {
-        let url = self.admin_url("/config/").await;
-        let resp = self
-            .client
-            .post(&url)
+        let client = self.get_client().await;
+        let resp = client
+            .post("http://localhost/config/")
             .json(json)
             .send()
             .await

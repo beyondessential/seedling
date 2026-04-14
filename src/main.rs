@@ -141,7 +141,7 @@ async fn main() {
 
     let tick_notify = Arc::new(Notify::new());
 
-    let (driver, caddy_admin_addr) =
+    let (driver, caddy_admin_client) =
         System::setup(node_prefix, &data_dir)
             .await
             .unwrap_or_else(|e| {
@@ -359,7 +359,7 @@ async fn main() {
         Arc::clone(&driver),
         node_prefix,
         instance_registry,
-        Arc::clone(&caddy_admin_addr),
+        Arc::clone(&caddy_admin_client),
         data_dir.clone(),
         obs_db,
         Arc::clone(&registry),
