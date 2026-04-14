@@ -478,6 +478,30 @@ This is currently the only value.
 > The `container.on_exit(strategy: OnExit)` builder method defines the strategy used when the command exits.
 > The default is [`OnExit.Restart`](#l--const.on-exit.restart).
 
+> l[container.memory]
+> The `container.memory(limit: string)` builder method sets the memory limit for the container.
+> The `limit` must be a positive integer followed by a unit suffix: `k` (kibibytes), `m` (mebibytes), or `g` (gibibytes). The suffix is case-insensitive.
+> If no memory limit is set, the container has no memory constraint.
+
+> l[container.cpus]
+> The `container.cpus(limit: float)` builder method sets the CPU limit for the container.
+> The `limit` must be a positive number. Fractional values are permitted (e.g. `0.5` for half a CPU core).
+> If no CPU limit is set, the container has no CPU constraint.
+
+> l[container.cap-add]
+> The `container.cap_add(capability: string)` builder method adds a Linux capability to the container.
+> Containers run with all capabilities dropped by default; this method selectively re-grants individual capabilities.
+> The `capability` must be a valid Linux capability name (e.g. `"NET_RAW"`, `"NET_BIND_SERVICE"`). The name is case-insensitive and is normalised to uppercase.
+
+> l[container.writable-rootfs]
+> The `container.writable_rootfs()` builder method opts the container out of the default read-only root filesystem.
+> By default, the container's root filesystem is mounted read-only; a writable tmpfs is provided at `/tmp`.
+
+> l[container.pids-limit]
+> The `container.pids_limit(limit: int)` builder method sets the maximum number of simultaneous PIDs permitted in the container.
+> The `limit` must be a positive integer.
+> The default PID limit is 256.
+
 # Pod
 
 > l[pod.interface]

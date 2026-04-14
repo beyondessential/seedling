@@ -359,6 +359,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[actuate.deployment.anon-volume.start]
 > When starting a Deployment or Job instance, for each anonymous volume mounted by the container, the runtime must ensure the volume exists and apply any declared file writes to it before the container starts.
 
+> r[actuate.container.hardening]
+> Workload containers must be started with all Linux capabilities dropped, privilege escalation disabled, and a read-only root filesystem with a writable tmpfs at `/tmp`. A default PID limit of 256 and a file-descriptor limit of 65536 are applied. BSL configuration may adjust these defaults.
+
 > r[actuate.volume.start]
 > Starting a Volume instance must create the named volume if it does not already exist, then apply any declared file writes to the volume.
 
