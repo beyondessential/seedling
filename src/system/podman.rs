@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     io,
     net::Ipv6Addr,
-    os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd},
+    os::fd::{AsRawFd, FromRawFd, OwnedFd},
     pin::Pin,
     task::{Context, Poll},
     time::SystemTime,
@@ -483,46 +483,62 @@ impl PodmanRuntime {
             .build()
         })?;
 
-        let master_raw = pty.master.as_raw_fd();
-        let pty_master_fd = master_raw;
+        let pty_master_fd = pty.master.as_raw_fd();
 
         // Set O_NONBLOCK on the PTY master so that AsyncFd can drive it via
-        // epoll rather than blocking threads.  A PTY fd supports epoll unlike
+        // epoll rather than blocking threads. A PTY fd supports epoll unlike
         // regular files, so this is the correct approach.
         unsafe {
-            let flags = libc::fcntl(master_raw, libc::F_GETFL, 0);
-            libc::fcntl(master_raw, libc::F_SETFL, flags | libc::O_NONBLOCK);
+            let flags = libc::fcntl(pty_master_fd, libc::F_GETFL, 0);
+            libc::fcntl(pty_master_fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
         }
 
         // Dup the master so stdin and stdout each own an independent fd.
         // Both fds share the same open file description (including O_NONBLOCK).
-        let master_read_fd = pty.master.into_raw_fd();
-        let master_write_fd = unsafe { libc::dup(master_read_fd) };
-        if master_write_fd < 0 {
+        // We dup *before* consuming pty.master so OwnedFd RAII guards prevent
+        // leaks on every error path.
+        let master_write_raw = unsafe { libc::dup(pty.master.as_raw_fd()) };
+        if master_write_raw < 0 {
             return ProtocolSnafu {
                 message: io::Error::last_os_error().to_string(),
             }
             .fail();
         }
+        // SAFETY: dup succeeded; wrap immediately so the fd is closed on drop.
+        let master_write = unsafe { OwnedFd::from_raw_fd(master_write_raw) };
 
-        let stdout =
-            AsyncPtyHalf::new(unsafe { OwnedFd::from_raw_fd(master_read_fd) }).map_err(|e| {
-                ProtocolSnafu {
-                    message: e.to_string(),
-                }
-                .build()
-            })?;
-        let stdin =
-            AsyncPtyHalf::new(unsafe { OwnedFd::from_raw_fd(master_write_fd) }).map_err(|e| {
-                ProtocolSnafu {
-                    message: e.to_string(),
-                }
-                .build()
-            })?;
+        let stdout = AsyncPtyHalf::new(pty.master).map_err(|e| {
+            ProtocolSnafu {
+                message: e.to_string(),
+            }
+            .build()
+        })?;
+        let stdin = AsyncPtyHalf::new(master_write).map_err(|e| {
+            ProtocolSnafu {
+                message: e.to_string(),
+            }
+            .build()
+        })?;
 
-        let slave_raw = pty.slave.into_raw_fd();
-        let slave_out = unsafe { libc::dup(slave_raw) };
-        let slave_err = unsafe { libc::dup(slave_raw) };
+        // Dup the slave fd for stdout and stderr so each Stdio owns an
+        // independent descriptor. Wrap in OwnedFd immediately after each dup.
+        let slave_out_raw = unsafe { libc::dup(pty.slave.as_raw_fd()) };
+        if slave_out_raw < 0 {
+            return ProtocolSnafu {
+                message: io::Error::last_os_error().to_string(),
+            }
+            .fail();
+        }
+        let slave_out = unsafe { OwnedFd::from_raw_fd(slave_out_raw) };
+
+        let slave_err_raw = unsafe { libc::dup(pty.slave.as_raw_fd()) };
+        if slave_err_raw < 0 {
+            return ProtocolSnafu {
+                message: io::Error::last_os_error().to_string(),
+            }
+            .fail();
+        }
+        let slave_err = unsafe { OwnedFd::from_raw_fd(slave_err_raw) };
 
         // Build argv from the standard translation pipeline, then insert -i -t
         // for interactive PTY use right after "podman run --rm".
@@ -536,9 +552,9 @@ impl PodmanRuntime {
         let mut cmd = Command::new(program);
         cmd.args(&argv);
 
-        cmd.stdin(unsafe { std::process::Stdio::from_raw_fd(slave_raw) });
-        cmd.stdout(unsafe { std::process::Stdio::from_raw_fd(slave_out) });
-        cmd.stderr(unsafe { std::process::Stdio::from_raw_fd(slave_err) });
+        cmd.stdin(std::process::Stdio::from(pty.slave));
+        cmd.stdout(std::process::Stdio::from(slave_out));
+        cmd.stderr(std::process::Stdio::from(slave_err));
 
         unsafe {
             cmd.pre_exec(|| {
