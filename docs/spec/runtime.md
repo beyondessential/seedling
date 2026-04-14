@@ -212,6 +212,48 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[history.action-log.replay]
 > The action execution log must contain enough information to replay an interrupted lifecycle operation from the beginning and fast-forward to the interruption point.
 
+# Audit Log
+
+> r[audit.log]
+> The runtime must maintain a durable, append-only audit log capturing significant system events. The audit log is stored separately from operational data so that operational tables can be garbage-collected without losing the historical record.
+
+> r[audit.log.path]
+> The audit log must be written to a configurable file path, defaulting to `/var/log/seedling/audit.log`. The runtime must create the parent directory if it does not exist.
+
+> r[audit.log.format]
+> Each audit log entry must be a single line of JSON (JSON Lines format). Each entry must include a timestamp and an event type.
+
+> r[audit.log.events]
+> The audit log must record at minimum:
+>
+> - App registration and deregistration.
+> - Lifecycle operation start, completion, and failure.
+> - Faults filed and cleared.
+> - Resource state transitions.
+
+> r[audit.log.rotation]
+> The audit log file must be compatible with external log rotation tools. The runtime must detect when the log file has been rotated (renamed or removed) and reopen the configured path.
+
+> r[audit.log.resilience]
+> Failure to write to the audit log must not block or crash the runtime. Audit write failures must be reported via tracing.
+
+# Garbage Collection
+
+> r[gc.background]
+> The runtime must periodically remove stale rows from operational database tables to bound storage growth. Garbage collection must run as a background task on a configurable interval, defaulting to one hour.
+
+> r[gc.action-log]
+> Completed lifecycle operation entries in the action log must be deleted after a configurable retention period (default: 24 hours). Entries belonging to the current in-flight operation must never be deleted.
+
+> r[gc.faults]
+> Cleared fault records must be deleted after a configurable retention period (default: 7 days).
+
+> r[gc.observations]
+> World observation rows whose instance identity no longer appears in the resource instance registry must be deleted.
+
+> r[gc.autonomous-operations]
+> Completed autonomous operation records must be deleted after a configurable retention period (default: 7 days).
+
 # Lifecycle Operations
 
 > r[operation.lifecycle]
