@@ -88,7 +88,6 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
             "automation": {
                 "policies": [{
                     "subjects": tls_subjects,
-                    "issuers": [{ "module": "acme" }],
                 }]
             }
         });
