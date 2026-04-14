@@ -60,8 +60,7 @@ impl AuditWriter {
     // r[impl audit.log.format]
     pub fn write_event(&mut self, event: &OiEvent) -> io::Result<()> {
         self.reopen_if_rotated()?;
-        serde_json::to_writer(&mut self.writer, event)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        serde_json::to_writer(&mut self.writer, event).map_err(io::Error::other)?;
         self.writer.write_all(b"\n")?;
         self.writer.flush()?;
         Ok(())
