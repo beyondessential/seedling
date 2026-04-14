@@ -143,6 +143,14 @@ async fn process_one_pod(
                 | ObservationFact::UnitFailed
         )
     });
+    let container_exists = facts.iter().any(|(f, _)| {
+        matches!(
+            f,
+            ObservationFact::ContainerCreated
+                | ObservationFact::ContainerRunning { .. }
+                | ObservationFact::ContainerExited { .. }
+        )
+    });
 
     // Track unit health for fault filing/clearing.
     // A unit that is "active" in systemd but whose container is not
@@ -252,7 +260,7 @@ async fn process_one_pod(
                 }
             }
         }
-        LifecycleState::Unscheduled if is_running || unit_loaded => {
+        LifecycleState::Unscheduled if is_running || unit_loaded || container_exists => {
             result.running = None;
             result
                 .observations
