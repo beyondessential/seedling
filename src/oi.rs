@@ -5,6 +5,7 @@ pub mod events;
 pub mod forwards;
 pub mod handler;
 pub mod keys;
+pub mod logs;
 pub mod server;
 pub mod shells;
 pub mod state;

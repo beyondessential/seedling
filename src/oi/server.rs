@@ -295,6 +295,77 @@ async fn handle_bidi_stream(
         return;
     }
 
+    // i[logs.stream]
+    if maybe_method.as_deref() == Some("/logs/stream") {
+        #[derive(serde::Deserialize)]
+        struct Req {
+            #[serde(default)]
+            params: serde_json::Value,
+        }
+        let params: super::logs::LogStreamParams = match serde_json::from_slice::<Req>(&line)
+            .map_err(|e| format!("invalid request: {e}"))
+            .and_then(|r| {
+                serde_json::from_value(r.params).map_err(|e| format!("invalid params: {e}"))
+            }) {
+            Ok(p) => p,
+            Err(e) => {
+                let resp = serde_json::to_vec(&json!({
+                    "error": { "code": "requirements_invalid", "message": e }
+                }))
+                .expect("serialisation");
+                let _ = send.write_all(&resp).await;
+                let _ = send.finish();
+                return;
+            }
+        };
+
+        let opts = match super::logs::validate_params(&state, params) {
+            Ok(o) => o,
+            Err(e) => {
+                let resp = serde_json::to_vec(&json!({
+                    "error": { "code": e.code, "message": e.message }
+                }))
+                .expect("serialisation");
+                let _ = send.write_all(&resp).await;
+                let _ = send.finish();
+                return;
+            }
+        };
+
+        let rx = match crate::system::journal::spawn_log_reader(opts) {
+            Ok(rx) => rx,
+            Err(e) => {
+                tracing::error!("failed to open journal: {e}");
+                let resp = serde_json::to_vec(&json!({
+                    "error": { "code": "server_busy", "message": format!("journal: {e}") }
+                }))
+                .expect("serialisation");
+                let _ = send.write_all(&resp).await;
+                let _ = send.finish();
+                return;
+            }
+        };
+
+        let response = serde_json::to_vec(&json!({ "result": {} })).expect("serialisation");
+        if let Err(e) = send.write_all(&response).await {
+            tracing::warn!("logs: write error: {e}");
+            return;
+        }
+        let _ = send.finish();
+
+        // i[stream.logs]
+        let uni = match conn.open_uni().await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("logs: open_uni failed: {e}");
+                return;
+            }
+        };
+
+        tokio::spawn(super::logs::log_stream_task(uni, rx));
+        return;
+    }
+
     if maybe_method.as_deref() == Some("/shells/start") {
         open_shell_session(conn, send, recv, leftover, line, state).await;
         return;

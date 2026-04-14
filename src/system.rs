@@ -19,6 +19,7 @@ pub(crate) mod caddy;
 pub(crate) mod confined_write;
 pub(crate) mod data_plane;
 pub mod jool;
+pub(crate) mod journal;
 pub(crate) mod podman;
 pub mod resolver;
 pub(crate) mod systemd;
