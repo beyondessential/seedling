@@ -436,3 +436,26 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[registry.remove]
 > `/registries/remove { registry }` removes a registry hostname from the allowlist.
 > All registered apps are re-evaluated after a registry is removed; any app whose images reference the removed registry will receive a `disallowed_registry` fault.
+
+# Client Behaviour
+
+> i[ctl.graceful-shutdown]
+> When the CLI receives a termination signal (SIGINT or SIGTERM), long-running sessions must shut down gracefully:
+>
+> - **Shell sessions:** the client first sends the interrupt character (ETX, `0x03`) over the session stream's stdin direction, then waits up to five seconds for the session to end normally. If the session does not end within that window the client closes the connection.
+> - **Port forwards:** the client closes the control stream and exits.
+> - **Event subscriptions:** the client closes the connection and exits.
+
+> i[ctl.subscribe.reconnect]
+> When the event stream or connection is lost, the client must automatically reconnect and re-subscribe.
+> Reconnection attempts use exponential backoff starting at one second, doubling up to a maximum interval of thirty seconds.
+> If no connection can be established within five minutes of continuous retrying the client must exit with an error.
+
+> i[ctl.forward.stats]
+> While a port forward is active, the client must track:
+>
+> - Total bytes relayed in each direction (client-to-service and service-to-client).
+> - For TCP forwards: the number of connections opened and currently active.
+> - For UDP forwards: the number of datagrams relayed in each direction.
+>
+> On exit, the client prints a summary of these counters to stderr.
