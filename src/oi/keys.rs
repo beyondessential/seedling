@@ -99,6 +99,21 @@ pub struct ClientIdentity {
 }
 
 impl ClientIdentity {
+    /// Generate a fresh key in memory without persisting it.
+    ///
+    /// Used for fingerprint probe connections where the client must present
+    /// an RPK client certificate but must not reveal its real identity.
+    pub fn ephemeral() -> Self {
+        let key = SigningKey::generate(&mut OsRng);
+        let spki = spki_der(&key);
+        let fp = fingerprint(&spki);
+        Self {
+            signing_key: key,
+            spki,
+            fingerprint: fp,
+        }
+    }
+
     /// Load from `path`, or generate a new key and persist it there.
     /// Returns `(identity, is_new)`.
     pub fn load_or_generate(path: &Path) -> io::Result<(Self, bool)> {

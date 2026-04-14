@@ -20,6 +20,16 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Remote operation mode — binding to a non-loopback address, with client authentication and PKI — is reserved for a future extension of this spec.
 > Authentication and certificate verification requirements for remote mode are not defined here yet.
 
+> i[transport.fingerprint-probe]
+> When a client connects to a server whose fingerprint is not yet in its known-hosts store, it must
+> first capture the server's SPKI fingerprint without revealing its real identity to the server.
+> The probe connection must present a raw public key as its mTLS client certificate, but the key
+> used must be a freshly-generated, single-use key that is discarded immediately after the probe.
+> The server will reject the probe connection (the ephemeral key is not authorised), but the
+> server's SPKI fingerprint is captured during the TLS handshake before that rejection occurs.
+> After capturing the fingerprint the client must confirm it with the user before proceeding with
+> an authenticated connection using the real client identity.
+
 > i[transport.client-auth]
 > Every client connection must present a raw public key (RFC 7250 SPKI) as its mTLS certificate.
 > The server maintains a set of authorized client SPKI fingerprints in persistent storage.

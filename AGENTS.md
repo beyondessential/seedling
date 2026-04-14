@@ -27,5 +27,5 @@
 - Only annotate the BSL-facing (public) types described by a spec item, not internal data structures that happen to back them.
 - If an implementation is a stub that doesn't yet do what the spec requires (no-op body, placeholder return, silent discard), mark the function body with `todo!()` so the incompleteness panics loudly rather than silently misbehaving.
 - Do not annotate pure runtime or control-plane behaviors in BSL definition code when there is no corresponding BSL-facing implementation at all.
-- Prefer the tracey MCP tools whenever available over calling the CLI or making changes manually.
+- When we log errors to tracing in the server, we should consider also filing a fault. Also the reverse: wherever we file a fault, we probably also want to log an error.
 </llm-rules>

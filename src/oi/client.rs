@@ -404,10 +404,12 @@ impl OiClient {
             cell: Arc::clone(&cell),
         });
 
+        // l[transport.fingerprint-probe]
+        let ephemeral = super::keys::ClientIdentity::ephemeral();
         let mut tls_config = TlsClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(verifier)
-            .with_no_client_auth();
+            .with_client_cert_resolver(build_client_cert_resolver(&ephemeral)?);
         tls_config.key_log = Arc::new(rustls::KeyLogFile::new());
 
         let quic_config = quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
