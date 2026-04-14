@@ -76,6 +76,10 @@ pub enum OiEvent {
         timestamp: Timestamp,
         forward_id: String,
     },
+    ServerBusy {
+        timestamp: Timestamp,
+        reason: String,
+    },
 }
 
 pub type EventSender = broadcast::Sender<OiEvent>;
@@ -258,6 +262,16 @@ pub fn forward_stopped(tx: &EventSender, forward_id: &str) {
         OiEvent::ForwardStopped {
             timestamp: now(),
             forward_id: forward_id.to_owned(),
+        },
+    );
+}
+
+pub fn server_busy(tx: &EventSender, reason: &str) {
+    emit(
+        tx,
+        OiEvent::ServerBusy {
+            timestamp: now(),
+            reason: reason.to_owned(),
         },
     );
 }

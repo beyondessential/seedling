@@ -2,6 +2,7 @@ use std::{net::SocketAddr, path::Path, sync::Arc, time::Duration};
 
 use quinn::Endpoint;
 use rustls::ServerConfig as TlsServerConfig;
+use serde_json::json;
 use tokio::sync::Semaphore;
 use tracing::Instrument;
 
@@ -27,7 +28,7 @@ const BUFFER_SIZE: usize = 4 * 1024 * 1024;
 /// A fixed-size pool of reusable read buffers backed by a semaphore.
 ///
 /// The pool bounds the memory committed to buffering request/response stream
-/// reads. When no buffer is available the caller waits until one is returned.
+/// reads. When no buffer is available the caller is rejected immediately.
 pub struct BufferPool {
     buffers: parking_lot::Mutex<Vec<Vec<u8>>>,
     semaphore: Semaphore,
@@ -60,25 +61,6 @@ impl BufferPool {
             pool: self,
             _permit: permit,
         })
-    }
-
-    /// Acquire a buffer from the pool, waiting if none are available.
-    pub async fn acquire(&self) -> PoolBuffer<'_> {
-        let permit = self
-            .semaphore
-            .acquire()
-            .await
-            .expect("buffer pool semaphore closed");
-        let buf = self
-            .buffers
-            .lock()
-            .pop()
-            .unwrap_or_else(|| Vec::with_capacity(BUFFER_SIZE));
-        PoolBuffer {
-            buf: Some(buf),
-            pool: self,
-            _permit: permit,
-        }
     }
 
     fn return_buf(&self, mut buf: Vec<u8>) {
@@ -321,17 +303,23 @@ async fn handle_bidi_stream(
     // i[stream.concurrency-limit]
     let _stream_permit = match stream_semaphore.try_acquire() {
         Ok(permit) => permit,
-        Err(tokio::sync::TryAcquireError::NoPermits) => {
+        Err(_) => {
             tracing::warn!(
-                "stream concurrency limit reached; waiting for a slot \
+                "stream concurrency limit reached; rejecting stream \
                  (adjust with --max-streams)"
             );
-            match stream_semaphore.acquire().await {
-                Ok(permit) => permit,
-                Err(_) => return,
-            }
+            super::events::server_busy(&state.event_tx, "stream concurrency limit reached");
+            let resp = json!({
+                "error": {
+                    "code": "server_busy",
+                    "message": "stream concurrency limit reached; retry after a delay",
+                }
+            });
+            let bytes = serde_json::to_vec(&resp).expect("response serialisation never fails");
+            let _ = send.write_all(&bytes).await;
+            let _ = send.finish();
+            return;
         }
-        Err(tokio::sync::TryAcquireError::Closed) => return,
     };
 
     let (line, leftover) = match read_json_line(&mut recv, 64 * 1024).await {
@@ -408,10 +396,20 @@ async fn handle_bidi_stream(
         Some(buf) => buf,
         None => {
             tracing::warn!(
-                "buffer pool exhausted; waiting for a buffer \
+                "buffer pool exhausted; rejecting stream \
                  (adjust with --buffer-pool-size)"
             );
-            buffer_pool.acquire().await
+            super::events::server_busy(&state.event_tx, "buffer pool exhausted");
+            let resp = json!({
+                "error": {
+                    "code": "server_busy",
+                    "message": "buffer pool exhausted; retry after a delay",
+                }
+            });
+            let bytes = serde_json::to_vec(&resp).expect("response serialisation never fails");
+            let _ = send.write_all(&bytes).await;
+            let _ = send.finish();
+            return;
         }
     };
     let vec = pool_buf.as_vec_mut();

@@ -72,7 +72,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > i[stream.concurrency-limit]
 > The server enforces a configurable upper bound on the number of concurrently active bidirectional streams across all connections.
-> When the limit is reached, new streams are held until an active stream completes.
+> When the limit is reached, the server immediately replies with a `server_busy` error and closes the stream.
 > The limit is configurable at startup; the default value is 64.
 
 > i[stream.buffer-pool]
@@ -115,6 +115,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > | `script_error` | The BSL script failed to parse or evaluate; detail is included in `message`. |
 > | `deregistering` | The app is in the `Deregistering` state. |
 > | `unauthorized` | The client's key is not in the authorized set, or the operation is not permitted. |
+> | `server_busy` | The server's stream concurrency limit has been reached; the client should retry after a delay. |
 
 # Status
 
@@ -387,6 +388,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > | `ShellExited` | `session_id`, `exit_code` |
 > | `ForwardStarted` | `forward_id`, `app`, `service`, `port` |
 > | `ForwardStopped` | `forward_id` |
+> | `ServerBusy` | `reason` |
 
 > i[event.ordering]
 > Events on a single connection's event stream are emitted in the order they occur.

@@ -12,6 +12,7 @@ pub enum ErrorCode {
     RequirementsInvalid,
     ScriptError,
     Deregistering,
+    ServerBusy,
 }
 
 #[derive(Debug)]
