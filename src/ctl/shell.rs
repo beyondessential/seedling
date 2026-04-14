@@ -1,5 +1,10 @@
-use seedling::oi::client::OiClient;
+use std::time::Duration;
+
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::signal::unix::SignalKind;
+use tokio::time::Instant;
+
+use seedling::oi::client::OiClient;
 
 /// Drop guard that restores the terminal from raw mode.
 struct RawModeGuard;
@@ -107,15 +112,21 @@ pub async fn open_shell(client: &OiClient, app: String, name: String) -> i32 {
     }
     let _raw = RawModeGuard;
 
-    // 7. SIGWINCH handler for terminal resize.
-    let mut sigwinch =
-        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change()) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("could not install SIGWINCH handler: {e}");
-                return 1;
-            }
-        };
+    // 7. Signal handlers.
+    let mut sigwinch = match tokio::signal::unix::signal(SignalKind::window_change()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("could not install SIGWINCH handler: {e}");
+            return 1;
+        }
+    };
+    let mut sigterm = match tokio::signal::unix::signal(SignalKind::terminate()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("could not install SIGTERM handler: {e}");
+            return 1;
+        }
+    };
 
     // 8. I/O relay loop.
     //    - local stdin  → session_send (raw bytes)
@@ -136,7 +147,9 @@ pub async fn open_shell(client: &OiClient, app: String, name: String) -> i32 {
     let mut stdin_done = false;
     let mut stdout_done = false;
     let mut stderr_done = false;
+    let mut shutdown_deadline: Option<Instant> = None;
 
+    // l[impl ctl.graceful-shutdown]
     let exit_code = loop {
         tokio::select! {
             // stdin: local terminal → container
@@ -205,6 +218,18 @@ pub async fn open_shell(client: &OiClient, app: String, name: String) -> i32 {
                     )
                     .await
                     .ok();
+            }
+            // Graceful shutdown: send ETX then drain with a timeout.
+            _ = tokio::signal::ctrl_c(), if shutdown_deadline.is_none() => {
+                let _ = session_send.write_all(b"\x03").await;
+                shutdown_deadline = Some(Instant::now() + Duration::from_secs(5));
+            }
+            _ = sigterm.recv(), if shutdown_deadline.is_none() => {
+                let _ = session_send.write_all(b"\x03").await;
+                shutdown_deadline = Some(Instant::now() + Duration::from_secs(5));
+            }
+            _ = tokio::time::sleep_until(shutdown_deadline.unwrap_or_else(|| Instant::now() + Duration::from_secs(86400))), if shutdown_deadline.is_some() => {
+                break 130;
             }
         }
     };
