@@ -116,7 +116,11 @@ fn journal_reader_thread(
     loop {
         match journal.next_entry()? {
             Some(entry) => {
-                let log_entry = record_to_entry(&entry);
+                // timestamp_usec() reads from the entry the cursor is currently
+                // positioned on. next_entry() leaves the cursor on the entry it
+                // just returned, so this call refers to the correct entry.
+                let timestamp_us = journal.timestamp_usec().unwrap_or(0);
+                let log_entry = record_to_entry(timestamp_us, &entry);
                 if tx.blocking_send(log_entry).is_err() {
                     break;
                 }
@@ -133,11 +137,9 @@ fn journal_reader_thread(
     Ok(())
 }
 
-fn record_to_entry(fields: &BTreeMap<String, String>) -> LogEntry {
-    let timestamp = fields
-        .get("__REALTIME_TIMESTAMP")
-        .and_then(|us_str| us_str.parse::<i64>().ok())
-        .and_then(|us| jiff::Timestamp::from_microsecond(us).ok())
+fn record_to_entry(timestamp_us: u64, fields: &BTreeMap<String, String>) -> LogEntry {
+    let timestamp = jiff::Timestamp::from_microsecond(timestamp_us as i64)
+        .ok()
         .map(|ts| ts.to_string())
         .unwrap_or_default();
 
