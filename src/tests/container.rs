@@ -48,6 +48,84 @@ fn container_image_sets_uri() {
     }
 }
 
+// l[verify container.image]
+#[test]
+fn image_rejects_bare_name() {
+    let _ = run_test_script_err(r#"app.deployment("web").image("nginx");"#);
+}
+
+// l[verify container.image]
+#[test]
+fn image_rejects_name_with_tag_but_no_registry() {
+    let _ = run_test_script_err(r#"app.deployment("web").image("nginx:latest");"#);
+}
+
+// l[verify container.image]
+#[test]
+fn image_rejects_no_tag_or_digest() {
+    let _ = run_test_script_err(r#"app.deployment("web").image("docker.io/library/nginx");"#);
+}
+
+// l[verify container.image]
+#[test]
+fn image_accepts_registry_with_tag() {
+    let app =
+        run_test_script_app(r#"app.deployment("web").image("docker.io/library/nginx:latest");"#);
+    let def = app.def.lock();
+    let id = def
+        .resources
+        .keys()
+        .find(|id| id.kind == ResourceKind::Deployment && &*id.name == "web")
+        .unwrap();
+    if let defs::resource::Resource::Deployment(dep) = &def.resources[id] {
+        let dep_def = dep.def.lock();
+        let pod = dep_def.pod.lock();
+        let container = pod.container.lock();
+        assert_eq!(
+            container.image.as_deref(),
+            Some("docker.io/library/nginx:latest")
+        );
+    } else {
+        panic!("expected Deployment");
+    }
+}
+
+// l[verify container.image]
+#[test]
+fn image_accepts_digest() {
+    run_test_script_app(
+        r#"app.deployment("web").image("docker.io/library/nginx@sha256:abcdef0123456789abcdef0123456789");"#,
+    );
+}
+
+// l[verify container.image]
+#[test]
+fn image_accepts_registry_with_port() {
+    run_test_script_app(
+        r#"app.deployment("web").image("myregistry.io:5000/myapp/server:v1.2.3");"#,
+    );
+}
+
+// l[verify container.image]
+#[test]
+fn image_accepts_ghcr() {
+    run_test_script_app(r#"app.deployment("web").image("ghcr.io/owner/repo:main");"#);
+}
+
+// l[verify container.image]
+#[test]
+fn image_rejects_empty() {
+    let _ = run_test_script_err(r#"app.deployment("web").image("");"#);
+}
+
+// l[verify container.image]
+#[test]
+fn image_rejects_invalid_digest() {
+    let _ = run_test_script_err(
+        r#"app.deployment("web").image("docker.io/library/nginx@sha256:short");"#,
+    );
+}
+
 // l[verify container.command]
 #[test]
 fn container_command_string() {
