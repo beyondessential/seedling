@@ -2,6 +2,7 @@ use std::sync::OnceLock;
 
 use jiff::Timestamp;
 use serde::Serialize;
+use tracing::warn;
 
 use crate::oi::events::EventSender;
 
@@ -66,6 +67,10 @@ pub fn file_fault(
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         rusqlite::params![id, app, resource_type, resource_name, instance_id, kind, timestamp, description],
     )?;
+    warn!(
+        app,
+        kind, resource_type, resource_name, instance_id, "fault filed: {description}",
+    );
     let record = FaultRecord {
         id: id.clone(),
         app: app.to_owned(),
