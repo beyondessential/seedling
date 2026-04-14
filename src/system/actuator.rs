@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, path::Path, sync::Arc};
+use std::{collections::BTreeMap, net::Ipv6Addr, path::Path, sync::Arc};
 
 use ipnet::Ipv6Net;
 use parking_lot::Mutex;
@@ -105,6 +105,7 @@ pub struct Actuator {
     driver: Arc<System>,
     node_prefix: Ipv6Net,
     registry: Arc<dyn InstanceRegistry>,
+    dns_servers: Vec<Ipv6Addr>,
     /// Images currently being pulled or that have exhausted retries.
     pulling: Arc<Mutex<std::collections::HashMap<String, PullState>>>,
 }
@@ -114,11 +115,13 @@ impl Actuator {
         driver: Arc<System>,
         node_prefix: Ipv6Net,
         registry: Arc<dyn InstanceRegistry>,
+        dns_servers: Vec<Ipv6Addr>,
     ) -> Self {
         Self {
             driver,
             node_prefix,
             registry,
+            dns_servers,
             pulling: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
     }
@@ -158,6 +161,7 @@ impl Actuator {
                             &BTreeMap::new(),
                             &(net_name, net_prefix),
                             mounts,
+                            &self.dns_servers,
                         );
                         podman_args(&spec)
                     },
@@ -190,6 +194,7 @@ impl Actuator {
                             &BTreeMap::new(),
                             &(net_name, net_prefix),
                             mounts,
+                            &self.dns_servers,
                         );
                         podman_args(&spec)
                     },
@@ -329,6 +334,7 @@ impl Actuator {
                     &std::collections::BTreeMap::new(),
                     &(net_name, net_prefix),
                     &mounts,
+                    &self.dns_servers,
                 )
             }
             Resource::Job(job) => {
@@ -347,6 +353,7 @@ impl Actuator {
                     &std::collections::BTreeMap::new(),
                     &(net_name, net_prefix),
                     &mounts,
+                    &self.dns_servers,
                 )
             }
             _ => return None,

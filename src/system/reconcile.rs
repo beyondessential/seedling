@@ -95,9 +95,15 @@ impl Reconciler {
         db: Db,
         app_registry: Arc<RwLock<AppRegistry>>,
         event_tx: EventSender,
+        dns_servers: Vec<std::net::Ipv6Addr>,
     ) -> Self {
         let observer = Observer::new(Arc::clone(&driver));
-        let actuator = Actuator::new(Arc::clone(&driver), node_prefix, Arc::clone(&registry));
+        let actuator = Actuator::new(
+            Arc::clone(&driver),
+            node_prefix,
+            Arc::clone(&registry),
+            dns_servers,
+        );
         Self {
             driver,
             node_prefix,

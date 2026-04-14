@@ -21,9 +21,10 @@ pub fn deployment_spec(
     _params: &BTreeMap<String, String>,
     network: &(String, Ipv6Net),
     mounts: &[(u16, Ipv6Addr, u16)],
+    dns_servers: &[Ipv6Addr],
 ) -> ContainerSpec {
     let pod = def.pod.lock();
-    spec_from_pod(&pod, instance, network, mounts)
+    spec_from_pod(&pod, instance, network, mounts, dns_servers)
 }
 
 /// Builds a `ContainerSpec` for a `Job` instance.
@@ -33,9 +34,10 @@ pub fn job_spec(
     _params: &BTreeMap<String, String>,
     network: &(String, Ipv6Net),
     mounts: &[(u16, Ipv6Addr, u16)],
+    dns_servers: &[Ipv6Addr],
 ) -> ContainerSpec {
     let pod = def.pod.lock();
-    spec_from_pod(&pod, instance, network, mounts)
+    spec_from_pod(&pod, instance, network, mounts, dns_servers)
 }
 
 /// Produces the `podman run [...]` argv from a `ContainerSpec`.
@@ -195,6 +197,7 @@ fn spec_from_pod(
     instance: &ResourceInstance,
     network: &(String, Ipv6Net),
     mounts: &[(u16, Ipv6Addr, u16)],
+    dns_servers: &[Ipv6Addr],
 ) -> ContainerSpec {
     let container = pod.container.lock();
 
@@ -272,7 +275,7 @@ fn spec_from_pod(
         labels,
         health: None,
         hosts,
-        dns_servers: vec![],
+        dns_servers: dns_servers.to_vec(),
         memory: container.memory.clone(),
         cpus: container.cpus,
         extra_caps: container.extra_caps.clone(),

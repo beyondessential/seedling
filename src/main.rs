@@ -417,6 +417,7 @@ async fn main() {
         obs_db,
         Arc::clone(&registry),
         event_tx.clone(),
+        vec![],
     );
 
     {

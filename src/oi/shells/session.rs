@@ -345,6 +345,7 @@ pub(crate) async fn open_shell_session(
         &BTreeMap::new(),
         &(net_name.clone(), net_prefix),
         &resolved_mounts,
+        &[],
     );
     container_spec.health = None;
 
