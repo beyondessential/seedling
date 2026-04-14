@@ -192,6 +192,7 @@ async fn process_one_pod(
             // stale spec, tear it down so the next tick can start a fresh
             // unit with the current AppDef config.
             if unit_failed || unit_active || spec_stale {
+                result.running = None;
                 match actuator.stop(&dr.instance, &dr.definition).await {
                     Ok(()) => {}
                     Err(e) => {
@@ -249,6 +250,7 @@ async fn process_one_pod(
             }
         }
         LifecycleState::Unscheduled if is_running || unit_loaded => {
+            result.running = None;
             result
                 .observations
                 .push((dr.instance.clone(), "stop_sent", json!({})));
