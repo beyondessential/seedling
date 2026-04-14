@@ -1,5 +1,66 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use seedling::oi::client::OiClient;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+// l[impl ctl.forward.stats]
+struct ForwardStats {
+    bytes_to_service: AtomicU64,
+    bytes_from_service: AtomicU64,
+    connections_opened: AtomicU64,
+    connections_active: AtomicU64,
+    datagrams_to_service: AtomicU64,
+    datagrams_from_service: AtomicU64,
+}
+
+impl ForwardStats {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            bytes_to_service: AtomicU64::new(0),
+            bytes_from_service: AtomicU64::new(0),
+            connections_opened: AtomicU64::new(0),
+            connections_active: AtomicU64::new(0),
+            datagrams_to_service: AtomicU64::new(0),
+            datagrams_from_service: AtomicU64::new(0),
+        })
+    }
+
+    fn print_tcp_summary(&self) {
+        let to_svc = self.bytes_to_service.load(Ordering::Relaxed);
+        let from_svc = self.bytes_from_service.load(Ordering::Relaxed);
+        let opened = self.connections_opened.load(Ordering::Relaxed);
+        eprintln!("\n--- Forward stats ---");
+        eprintln!("Connections opened: {opened}");
+        eprintln!("Bytes to service:   {}", format_bytes(to_svc));
+        eprintln!("Bytes from service: {}", format_bytes(from_svc));
+    }
+
+    fn print_udp_summary(&self) {
+        let to_svc = self.bytes_to_service.load(Ordering::Relaxed);
+        let from_svc = self.bytes_from_service.load(Ordering::Relaxed);
+        let dg_to = self.datagrams_to_service.load(Ordering::Relaxed);
+        let dg_from = self.datagrams_from_service.load(Ordering::Relaxed);
+        eprintln!("\n--- Forward stats ---");
+        eprintln!("Datagrams to service:   {dg_to}");
+        eprintln!("Datagrams from service: {dg_from}");
+        eprintln!("Bytes to service:       {}", format_bytes(to_svc));
+        eprintln!("Bytes from service:     {}", format_bytes(from_svc));
+    }
+}
+
+fn format_bytes(n: u64) -> String {
+    if n < 1024 {
+        return format!("{n} B");
+    }
+    if n < 1024 * 1024 {
+        return format!("{:.1} KiB", n as f64 / 1024.0);
+    }
+    if n < 1024 * 1024 * 1024 {
+        return format!("{:.1} MiB", n as f64 / (1024.0 * 1024.0));
+    }
+    format!("{:.1} GiB", n as f64 / (1024.0 * 1024.0 * 1024.0))
+}
 
 pub async fn forward_port(
     client: &OiClient,
@@ -66,6 +127,7 @@ pub async fn forward_port(
         eprintln!("Forwarding tcp://{app}/{service}:{port} -> {bound}");
         eprintln!("forward_id: {forward_id}");
 
+        let stats = ForwardStats::new();
         let mut ctrl_buf = [0u8; 1];
         loop {
             tokio::select! {
@@ -79,7 +141,10 @@ pub async fn forward_port(
                                     continue;
                                 }
                             };
+                            stats.connections_opened.fetch_add(1, Ordering::Relaxed);
+                            stats.connections_active.fetch_add(1, Ordering::Relaxed);
                             let fwd_id = forward_id.clone();
+                            let task_stats = Arc::clone(&stats);
                             tokio::spawn(async move {
                                 // Write the forward data-stream header.
                                 let mut hdr = serde_json::to_vec(
@@ -98,6 +163,7 @@ pub async fn forward_port(
                                         n = fwd_recv.read(&mut qbuf) => {
                                             match n {
                                                 Ok(Some(n)) if n > 0 => {
+                                                    task_stats.bytes_from_service.fetch_add(n as u64, Ordering::Relaxed);
                                                     if tcp_write.write_all(&qbuf[..n]).await.is_err() {
                                                         break;
                                                     }
@@ -109,6 +175,7 @@ pub async fn forward_port(
                                             match n {
                                                 Ok(0) | Err(_) => break,
                                                 Ok(n) => {
+                                                    task_stats.bytes_to_service.fetch_add(n as u64, Ordering::Relaxed);
                                                     if fwd_send.write_all(&tbuf[..n]).await.is_err() {
                                                         break;
                                                     }
@@ -118,6 +185,7 @@ pub async fn forward_port(
                                     }
                                 }
                                 let _ = fwd_send.finish();
+                                task_stats.connections_active.fetch_sub(1, Ordering::Relaxed);
                             });
                         }
                         Err(e) => {
@@ -138,6 +206,7 @@ pub async fn forward_port(
                 _ = tokio::signal::ctrl_c() => break,
             }
         }
+        stats.print_tcp_summary();
     } else if proto == "udp" {
         let socket = tokio::net::UdpSocket::bind(format!("[::1]:{}", local_port.unwrap_or(0)))
             .await
@@ -149,6 +218,7 @@ pub async fn forward_port(
         eprintln!("Forwarding udp://{app}/{service}:{port} -> {bound}");
         eprintln!("forward_id: {forward_id}  forward_key: {forward_key}");
 
+        let stats = ForwardStats::new();
         let key_bytes = forward_key.to_be_bytes();
         let mut buf = vec![0u8; 65535];
         let mut last_client: Option<std::net::SocketAddr> = None;
@@ -161,6 +231,8 @@ pub async fn forward_port(
                     match result {
                         Ok((n, addr)) => {
                             last_client = Some(addr);
+                            stats.datagrams_to_service.fetch_add(1, Ordering::Relaxed);
+                            stats.bytes_to_service.fetch_add(n as u64, Ordering::Relaxed);
                             let mut pkt = Vec::with_capacity(2 + n);
                             pkt.extend_from_slice(&key_bytes);
                             pkt.extend_from_slice(&buf[..n]);
@@ -180,7 +252,10 @@ pub async fn forward_port(
                         Ok(data) if data.len() >= 2 => {
                             let dgram_key = u16::from_be_bytes([data[0], data[1]]);
                             if dgram_key == forward_key && let Some(addr) = last_client {
-                                socket.send_to(&data[2..], addr).await.ok();
+                                let payload = &data[2..];
+                                stats.datagrams_from_service.fetch_add(1, Ordering::Relaxed);
+                                stats.bytes_from_service.fetch_add(payload.len() as u64, Ordering::Relaxed);
+                                socket.send_to(payload, addr).await.ok();
                             }
                         }
                         Err(_) => break,
@@ -199,6 +274,7 @@ pub async fn forward_port(
                 _ = tokio::signal::ctrl_c() => break,
             }
         }
+        stats.print_udp_summary();
     } else {
         eprintln!("unsupported proto: {proto}; expected tcp or udp");
         std::process::exit(1);
