@@ -32,4 +32,6 @@ pub struct OiState {
     pub node_prefix: ipnet::Ipv6Net,
     pub event_tx: crate::oi::events::EventSender,
     pub script_limits: crate::ScriptLimits,
+    /// DNS servers injected into workload containers' /etc/resolv.conf.
+    pub dns_servers: Vec<std::net::Ipv6Addr>,
 }

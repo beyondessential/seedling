@@ -434,7 +434,7 @@ async fn main() {
         obs_db,
         Arc::clone(&registry),
         event_tx.clone(),
-        dns_servers,
+        dns_servers.clone(),
         nat64_active,
     );
 
@@ -504,6 +504,7 @@ async fn main() {
         node_prefix,
         event_tx: event_tx.clone(),
         script_limits,
+        dns_servers,
     });
 
     let (_fingerprint, oi_endpoint) = oi::run(
