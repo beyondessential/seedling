@@ -9,7 +9,10 @@ use lloggs::LoggingArgs;
 use parking_lot::{Mutex, RwLock};
 use seedling::{
     oi::{self, server::DEFAULT_MAX_STREAMS, state::OiState},
-    runtime::{AppRegistry, InstanceRegistry, Scheduler, db::Db, registry::DbInstanceRegistry},
+    runtime::{
+        AppRegistry, InstanceRegistry, Scheduler, audit, db::Db, gc::GcConfig,
+        registry::DbInstanceRegistry,
+    },
     system::{System, node_prefix_from_machine_id, reconcile::Reconciler},
 };
 use tokio::sync::Notify;
@@ -31,6 +34,43 @@ struct Args {
     /// connections. Limits overall OI concurrency.
     #[arg(long, default_value_t = DEFAULT_MAX_STREAMS)]
     max_streams: usize,
+
+    /// Path to the audit log file.
+    #[arg(long, default_value = "/var/log/seedling/audit.log")]
+    audit_log: PathBuf,
+
+    #[command(flatten)]
+    gc: GcArgs,
+}
+
+#[derive(clap::Args)]
+struct GcArgs {
+    /// Garbage collection interval in seconds.
+    #[arg(long, default_value_t = 3600)]
+    gc_interval_secs: u64,
+
+    /// How long to retain completed action log entries, in seconds.
+    #[arg(long, default_value_t = 86400)]
+    gc_retain_action_log_secs: u64,
+
+    /// How long to retain cleared fault records, in seconds.
+    #[arg(long, default_value_t = 604800)]
+    gc_retain_cleared_faults_secs: u64,
+
+    /// How long to retain completed autonomous operation records, in seconds.
+    #[arg(long, default_value_t = 604800)]
+    gc_retain_completed_operations_secs: u64,
+}
+
+impl From<GcArgs> for GcConfig {
+    fn from(a: GcArgs) -> Self {
+        Self {
+            interval: Duration::from_secs(a.gc_interval_secs),
+            retain_action_log: Duration::from_secs(a.gc_retain_action_log_secs),
+            retain_cleared_faults: Duration::from_secs(a.gc_retain_cleared_faults_secs),
+            retain_completed_operations: Duration::from_secs(a.gc_retain_completed_operations_secs),
+        }
+    }
 }
 
 #[derive(clap::Args)]
@@ -354,6 +394,13 @@ async fn main() {
 
     let event_tx = seedling::oi::events::new_event_channel();
     seedling::runtime::faults::init(event_tx.clone());
+
+    // Audit log — subscribe before anything emits events.
+    let _audit_handle =
+        audit::spawn_audit_task(args.audit_log, event_tx.subscribe(), Arc::clone(&db));
+
+    // Periodic garbage collection of operational tables.
+    let _gc_handle = seedling::runtime::gc::spawn_gc_task(Arc::clone(&db), args.gc.into());
 
     let mut reconciler = Reconciler::new(
         Arc::clone(&driver),
