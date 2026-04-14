@@ -18,6 +18,7 @@ pub mod types;
 pub(crate) mod caddy;
 pub(crate) mod confined_write;
 pub(crate) mod data_plane;
+pub(crate) mod jool;
 pub(crate) mod podman;
 pub(crate) mod resolver;
 pub(crate) mod systemd;
