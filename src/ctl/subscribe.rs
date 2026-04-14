@@ -5,11 +5,13 @@ use seedling::oi::{
     keys::ClientIdentity,
 };
 
+const RECONNECT_TIMEOUT: Duration = Duration::from_secs(300);
+const MAX_BACKOFF: Duration = Duration::from_secs(30);
+
 // l[impl ctl.subscribe.reconnect]
 pub async fn subscribe(endpoint: SocketAddr, fingerprint: String, identity: &ClientIdentity) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(300);
+    let mut deadline = tokio::time::Instant::now() + RECONNECT_TIMEOUT;
     let mut backoff = Duration::from_secs(1);
-    const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
     loop {
         let client = match OiClient::connect(
@@ -32,7 +34,10 @@ pub async fn subscribe(endpoint: SocketAddr, fingerprint: String, identity: &Cli
             }
         };
 
+        // Connection succeeded — reset reconnect state so that a future
+        // disconnection gets a fresh timeout window.
         backoff = Duration::from_secs(1);
+        deadline = tokio::time::Instant::now() + RECONNECT_TIMEOUT;
 
         match run_subscribe_session(&client).await {
             SessionOutcome::GracefulClose => return,
