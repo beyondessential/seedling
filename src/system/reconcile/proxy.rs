@@ -65,7 +65,7 @@ pub(super) fn collect(
         if def.http_terminate.is_none() {
             let upstream_url = format!("[{}]:{}", service_ip, upstream_port);
 
-            if def.dtls || def.quic {
+            if def.dtls {
                 l4_routes.push(L4Route {
                     port: def.port.get(),
                     proto: L4Proto::Tcp,

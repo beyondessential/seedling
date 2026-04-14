@@ -328,15 +328,6 @@ This is currently the only value.
 > The Ingress only terminates DTLS, it does not interact with the UDP traffic.
 > If non-DTLS UDP traffic is sent to the ingress, it is rejected.
 
-> l[ingress.quic]
-> The `ingress.quic()` builder method terminates QUIC for the UDP traffic to this ingress.
->
-> The Ingress only terminates QUIC, it does not interact with the application traffic.
-> The traffic is re-emitted _as QUIC_ with another certificate which must be ignored.
-> If non-QUIC UDP traffic is sent to the ingress, it is rejected.
->
-> If you want HTTP/3 termination, use [`ingress.http()`](#l--ingress.http).
-
 > l[ingress.http]
 > The `ingress.http()` builder method terminates HTTPS (HTTP/1.1 and HTTP/2 for TCP, HTTP/3 for UDP) traffic for this ingress.
 >

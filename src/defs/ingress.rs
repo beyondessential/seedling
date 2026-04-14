@@ -8,7 +8,6 @@ pub struct IngressDef {
     pub port: Port,
     pub tls: bool,
     pub dtls: bool,
-    pub quic: bool,
     pub http_terminate: Option<HttpTermination>,
     pub redirect: Option<RedirectDef>,
 }
@@ -52,7 +51,6 @@ impl Ingress {
                     port,
                     tls: false,
                     dtls: false,
-                    quic: false,
                     http_terminate: None,
                     redirect: None,
                 }
@@ -89,15 +87,6 @@ impl CustomType for Ingress {
                 |this: &mut Self| -> Result<Ingress, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
                     this.def.lock().dtls = true;
-                    Ok(this.clone())
-                },
-            )
-            // l[impl ingress.quic]
-            .with_fn(
-                "quic",
-                |this: &mut Self| -> Result<Ingress, Box<EvalAltResult>> {
-                    this.ensure_unfrozen()?;
-                    this.def.lock().quic = true;
                     Ok(this.clone())
                 },
             )

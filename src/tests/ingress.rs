@@ -53,16 +53,6 @@ fn ingress_http2() {
     );
 }
 
-// l[verify ingress.quic]
-#[test]
-fn ingress_quic() {
-    run_test_script_app(
-        r#"
-        let ing = app.service("web").ingress("example.com", 443).quic();
-    "#,
-    );
-}
-
 // l[verify ingress.redirect]
 #[test]
 fn ingress_redirect_defaults() {

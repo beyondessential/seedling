@@ -319,8 +319,6 @@ pub struct ProxyListener {
 pub enum ProxyListenerProto {
     Http,
     Https,
-    /// HTTP/3 over QUIC (UDP). Requires TLS.
-    Quic,
 }
 
 #[derive(Debug, Clone)]

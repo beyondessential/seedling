@@ -135,39 +135,3 @@ fn dial_strips_http_scheme() {
         [0]["dial"];
     assert_eq!(dial, "[fd5e:ed12:3456:0100::3]:3000");
 }
-
-#[test]
-fn quic_listener_appended_to_https_server() {
-    let config = ProxyConfig {
-        listeners: vec![
-            ProxyListener {
-                port: 443,
-                proto: ProxyListenerProto::Https,
-            },
-            ProxyListener {
-                port: 443,
-                proto: ProxyListenerProto::Quic,
-            },
-        ],
-        virtual_hosts: vec![VirtualHost {
-            hostname: "quic.example.com".to_string(),
-            tls_acme: true,
-            redirect: None,
-            routes: vec![ProxyRoute {
-                prefix: "/".to_string(),
-                upstreams: vec!["http://[fd5e::1]:3000".to_string()],
-            }],
-        }],
-        l4_routes: vec![],
-    };
-    let json = build_caddy_config(&config);
-    let listen = &json["apps"]["http"]["servers"]["seedling_https"]["listen"];
-    let listen_strs: Vec<&str> = listen
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|v| v.as_str())
-        .collect();
-    assert!(listen_strs.contains(&":443"));
-    assert!(listen_strs.contains(&":443/quic"));
-}

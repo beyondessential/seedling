@@ -17,20 +17,11 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
         .map(|l| l.port)
         .collect();
 
-    let quic_ports: Vec<u16> = config
-        .listeners
-        .iter()
-        .filter(|l| l.proto == ProxyListenerProto::Quic)
-        .map(|l| l.port)
-        .collect();
-
     let mut servers = serde_json::Map::new();
 
     // --- HTTPS server ---
     let mut https_listens: Vec<String> = https_ports.iter().map(|p| format!(":{p}")).collect();
-    for p in &quic_ports {
-        https_listens.push(format!(":{p}/quic"));
-    }
+
     https_listens.dedup();
 
     if !https_listens.is_empty() {
