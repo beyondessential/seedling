@@ -128,43 +128,51 @@ pub fn get_or_create_singleton(
     name: Option<&str>,
 ) -> rusqlite::Result<ResourceInstance> {
     let kind_str = format!("{:?}", kind);
-    let mut stmt = db.conn.prepare(
+
+    // Atomic insert-or-select: the partial unique index (app, kind, name)
+    // WHERE is_scaled = 0 guarantees at most one singleton row exists.
+    let tx = db.conn.unchecked_transaction()?;
+
+    let candidate = match name {
+        Some(n) => ResourceInstance::new_singleton(app, kind, n),
+        None => ResourceInstance::new_anonymous(app, kind),
+    };
+    tx.execute(
+        "INSERT OR IGNORE INTO resource_instances
+             (id, app, kind, name, is_scaled, display_name, created_at)
+         VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6)",
+        params![
+            candidate.id.to_hex(),
+            candidate.app,
+            &kind_str,
+            candidate.name,
+            candidate.display_name,
+            now_ms(),
+        ],
+    )?;
+
+    let (id_hex, display_name): (String, String) = tx.query_row(
         "SELECT id, display_name
          FROM resource_instances
          WHERE app = ?1 AND kind = ?2 AND name IS ?3 AND is_scaled = 0
          LIMIT 1",
+        params![app, &kind_str, name],
+        |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
 
-    let result = stmt.query_row(params![app, kind_str, name], |row| {
-        let id_hex: String = row.get(0)?;
-        let display_name: String = row.get(1)?;
-        Ok((id_hex, display_name))
-    });
+    tx.commit()?;
 
-    match result {
-        Ok((id_hex, display_name)) => {
-            let id = InstanceId::from_hex(&id_hex).ok_or_else(|| {
-                rusqlite::Error::InvalidColumnType(0, "id".to_string(), rusqlite::types::Type::Text)
-            })?;
-            Ok(ResourceInstance {
-                id,
-                app: app.to_owned(),
-                kind,
-                name: name.map(|s| s.to_owned()),
-                variant: InstanceVariant::Singleton,
-                display_name,
-            })
-        }
-        Err(rusqlite::Error::QueryReturnedNoRows) => {
-            let instance = match name {
-                Some(n) => ResourceInstance::new_singleton(app, kind, n),
-                None => ResourceInstance::new_anonymous(app, kind),
-            };
-            insert_instance(db, &instance)?;
-            Ok(instance)
-        }
-        Err(e) => Err(e),
-    }
+    let id = InstanceId::from_hex(&id_hex).ok_or_else(|| {
+        rusqlite::Error::InvalidColumnType(0, "id".to_string(), rusqlite::types::Type::Text)
+    })?;
+    Ok(ResourceInstance {
+        id,
+        app: app.to_owned(),
+        kind,
+        name: name.map(|s| s.to_owned()),
+        variant: InstanceVariant::Singleton,
+        display_name,
+    })
 }
 
 // ---------------------------------------------------------------------------
