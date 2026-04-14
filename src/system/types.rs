@@ -162,6 +162,9 @@ pub struct TransientUnitSpec {
     /// Full `podman run [...]` argv — produced by `translate::container::podman_args`.
     pub exec_start: Vec<String>,
     pub restart: TransientRestart,
+    /// Structured journal fields attached to every log entry from this unit.
+    /// Each pair is `(KEY, VALUE)`, emitted as `KEY=VALUE`.
+    pub log_extra_fields: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

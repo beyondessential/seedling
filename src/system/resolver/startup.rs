@@ -181,6 +181,7 @@ async fn start_slot(
                 "/Corefile".to_owned(),
             ],
             restart: TransientRestart::Always,
+            log_extra_fields: vec![("SEEDLING_INFRA".to_owned(), "resolver".to_owned())],
         })
         .await
         .context(ProcessSnafu)

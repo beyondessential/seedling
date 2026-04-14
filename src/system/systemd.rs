@@ -198,7 +198,7 @@ impl SystemdManager {
         let exec_value = build_exec_start(&spec.exec_start)?;
         let restart = restart_str(spec.restart);
 
-        let props = vec![
+        let mut props = vec![
             UnitProperty {
                 name: "Description",
                 value: Value::from(spec.description.as_str()),
@@ -229,6 +229,46 @@ impl SystemdManager {
                 value: Value::from("inactive-or-failed"),
             },
         ];
+        // r[impl actuate.container.journal-metadata]
+        // r[impl actuate.infra.journal-metadata]
+        if !spec.log_extra_fields.is_empty() {
+            let ay_sig = Signature::try_from("ay").map_err(|e| {
+                ProtocolSnafu {
+                    message: format!("building 'ay' signature: {e}"),
+                }
+                .build()
+            })?;
+            let mut outer = Array::new(&ay_sig);
+            for (key, val) in &spec.log_extra_fields {
+                let field = format!("{key}={val}");
+                let y_sig = Signature::try_from("y").map_err(|e| {
+                    ProtocolSnafu {
+                        message: format!("building 'y' signature: {e}"),
+                    }
+                    .build()
+                })?;
+                let mut bytes = Array::new(&y_sig);
+                for &b in field.as_bytes() {
+                    bytes.append(Value::U8(b)).map_err(|e| {
+                        ProtocolSnafu {
+                            message: format!("appending LogExtraFields byte: {e}"),
+                        }
+                        .build()
+                    })?;
+                }
+                outer.append(Value::Array(bytes)).map_err(|e| {
+                    ProtocolSnafu {
+                        message: format!("appending LogExtraFields entry: {e}"),
+                    }
+                    .build()
+                })?;
+            }
+            props.push(UnitProperty {
+                name: "LogExtraFields",
+                value: Value::Array(outer),
+            });
+        }
+
         let aux: Vec<AuxUnit<'_>> = vec![];
 
         proxy

@@ -290,6 +290,7 @@ async fn start_slot(
                 "/etc/caddy/admin.json".to_owned(),
             ],
             restart: TransientRestart::Always,
+            log_extra_fields: vec![("SEEDLING_INFRA".to_owned(), "proxy".to_owned())],
         })
         .await
         .context(ProcessSnafu)

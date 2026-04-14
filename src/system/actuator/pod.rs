@@ -222,6 +222,20 @@ impl Actuator {
             .context(RegistrySnafu)?;
         let argv = build_argv(net_name, net_prefix, &mounts);
 
+        let resource_kind_str = match instance.kind {
+            ResourceKind::Parameter => "parameter",
+            ResourceKind::Service => "service",
+            ResourceKind::HttpService => "http_service",
+            ResourceKind::ExternalService => "external_service",
+            ResourceKind::Ingress => "ingress",
+            ResourceKind::Deployment => "deployment",
+            ResourceKind::Job => "job",
+            ResourceKind::Volume => "volume",
+            ResourceKind::ExternalVolume => "external_volume",
+            ResourceKind::Action => "action",
+        };
+        let resource_name = instance.name.as_deref().unwrap_or(&instance.display_name);
+
         self.driver
             .process
             .start_transient(TransientUnitSpec {
@@ -229,6 +243,18 @@ impl Actuator {
                 description: format!("seedling container {}", instance.display_name),
                 exec_start: argv,
                 restart,
+                log_extra_fields: vec![
+                    ("SEEDLING_APP".to_owned(), instance.app.clone()),
+                    (
+                        "SEEDLING_RESOURCE_KIND".to_owned(),
+                        resource_kind_str.to_owned(),
+                    ),
+                    ("SEEDLING_RESOURCE".to_owned(), resource_name.to_owned()),
+                    (
+                        "SEEDLING_INSTANCE".to_owned(),
+                        instance.display_name.clone(),
+                    ),
+                ],
             })
             .await
             .context(ProcessSnafu)?;
