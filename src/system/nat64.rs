@@ -3,20 +3,15 @@ use std::fmt;
 use clap::ValueEnum;
 
 /// Controls whether the runtime provides its own NAT64 translator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
 pub enum Nat64Mode {
     /// Probe for existing NAT64 infrastructure on startup; enable if absent.
+    #[default]
     Auto,
     /// Always provide NAT64.
     Enabled,
     /// Never provide NAT64.
     Disabled,
-}
-
-impl Default for Nat64Mode {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 impl fmt::Display for Nat64Mode {

@@ -115,6 +115,11 @@ pub fn podman_args(spec: &ContainerSpec) -> Vec<String> {
         args.push(format!("{host}:{ip}"));
     }
 
+    for dns in &spec.dns_servers {
+        args.push("--dns".to_string());
+        args.push(dns.to_string());
+    }
+
     if let Some(health) = &spec.health {
         args.push("--health-cmd".to_string());
         // Podman accepts a shell command string or a JSON array for health checks.
@@ -267,6 +272,7 @@ fn spec_from_pod(
         labels,
         health: None,
         hosts,
+        dns_servers: vec![],
         memory: container.memory.clone(),
         cpus: container.cpus,
         extra_caps: container.extra_caps.clone(),
