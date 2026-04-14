@@ -574,16 +574,16 @@ Absent specification bugs, anything that is not defined here is either defined i
 ## Resolver
 
 > r[infra.resolver]
-> The runtime must run a CoreDNS infrastructure container that provides DNS forwarding and
+> The runtime must run a resolver infrastructure container that provides DNS forwarding and
 > caching to all workload containers. The resolver container follows the same lifecycle as
 > the proxy container: it is started when workloads are present and torn down when no
 > workloads remain.
 
 > r[infra.resolver.config]
-> The runtime must generate a CoreDNS configuration (Corefile) that always includes
-> forwarding to the host's upstream resolvers and response caching. When
-> [NAT64 is active](#r--infra.nat64.mode), the configuration must additionally include the
-> `dns64` plugin synthesising AAAA records under the well-known prefix `64:ff9b::/96`.
+> The runtime must generate a resolver configuration that always includes forwarding to the
+> host's upstream resolvers and response caching. When [NAT64 is active](#r--infra.nat64.mode),
+> the configuration must additionally enable DNS64 synthesis of AAAA records under the
+> well-known prefix `64:ff9b::/96`.
 
 > r[infra.resolver.address]
 > The resolver must listen on a stable node-wide IPv6 address derived from the node prefix,
@@ -625,15 +625,15 @@ Absent specification bugs, anything that is not defined here is either defined i
 > is performed once at startup.
 
 > r[infra.nat64.translator]
-> When NAT64 is active, the runtime must configure a Jool stateful NAT64 translator instance
-> using the well-known prefix `64:ff9b::/96`. The translator must be operational before any
-> workload containers are started.
+> When NAT64 is active, the runtime must configure a stateful NAT64 translator using the
+> well-known prefix `64:ff9b::/96`. The translator must be operational before any workload
+> containers are started.
 
 > r[infra.nat64.translator.lifecycle]
-> The runtime must ensure the Jool instance exists on every startup and must remove it during
-> graceful shutdown. If the Jool kernel module is not available and NAT64 is required
-> (`enabled` mode or `auto` mode with no external NAT64 detected), the runtime must report
-> an error and file a fault.
+> The runtime must ensure the NAT64 translator is configured on every startup and must
+> remove it during graceful shutdown. If the translator cannot be initialised and NAT64 is
+> required (`enabled` mode or `auto` mode with no external NAT64 detected), the runtime
+> must report an error and file a fault.
 
 > r[infra.nat64.forwarding]
 > When NAT64 is active, the runtime must ensure that IPv6 and IPv4 forwarding are enabled on
@@ -641,7 +641,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > for the NAT64 prefix reaches the translator.
 
 > r[infra.nat64.dns64]
-> When NAT64 is active, the [resolver configuration](#r--infra.resolver.config) must include
-> the `dns64` plugin so that DNS lookups for IPv4-only names return synthesised AAAA records
-> under `64:ff9b::/96`. When NAT64 is not active, the `dns64` plugin must be omitted from
-> the resolver configuration.
+> When NAT64 is active, the [resolver configuration](#r--infra.resolver.config) must enable
+> DNS64 so that lookups for IPv4-only names return synthesised AAAA records under
+> `64:ff9b::/96`. When NAT64 is not active, DNS64 synthesis must be disabled in the
+> resolver configuration.
