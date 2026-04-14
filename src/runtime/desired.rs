@@ -2,12 +2,19 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::defs::app::AppDef;
-use crate::defs::resource::{Resource, ResourceId};
+use crate::defs::resource::{Resource, ResourceId, ResourceKind};
 use crate::runtime::barrier::{ActionLogEntry, CallKind};
 use crate::runtime::db::Db;
 use crate::runtime::identity::ResourceInstance;
 use crate::runtime::lifecycle::LifecycleState;
 use crate::runtime::{InstanceRegistry, RegistryError};
+
+/// Pre-computed effective scales for all deployments in an app.
+///
+/// Maps deployment name to `(low, high, effective)` where `effective` is the
+/// stored scaling decision clamped to bounds (or the lower bound when no
+/// decision exists).
+pub type EffectiveScales = HashMap<String, (u16, u16, u16)>;
 
 // r[impl desired-state.definition]
 #[derive(Debug)]
@@ -114,9 +121,10 @@ pub fn compute(
     app_def: &AppDef,
     operation_progress: Option<&OperationProgress>,
     registry: &dyn InstanceRegistry,
+    effective_scales: &EffectiveScales,
 ) -> Result<DesiredState, RegistryError> {
     match operation_progress {
-        None => compute_steady(app_name, app_def, registry),
+        None => compute_steady(app_name, app_def, registry, effective_scales),
         Some(progress) => Ok(compute_during_operation(app_def, progress)),
     }
 }
@@ -128,45 +136,91 @@ pub fn compute_uninstalling(
     app_def: &AppDef,
     registry: &dyn InstanceRegistry,
 ) -> Result<DesiredState, RegistryError> {
-    let resources = app_def
-        .resources
-        .iter()
-        .map(|(id, resource)| {
-            Ok(DesiredResource {
-                instance: registry.get_or_create_singleton(
-                    app_name,
-                    id.kind,
-                    Some(id.name.as_str()),
-                )?,
+    let mut resources = Vec::new();
+    for (id, resource) in &app_def.resources {
+        // During uninstall, find every existing instance and mark it Unscheduled.
+        let all = registry.find_all_instances(app_name, id.kind, Some(id.name.as_str()))?;
+        if all.is_empty() {
+            // No instances at all — nothing to tear down for this resource.
+            continue;
+        }
+        for inst in all {
+            resources.push(DesiredResource {
+                instance: inst,
                 desired: LifecycleState::Unscheduled,
                 definition: resource.clone(),
-            })
-        })
-        .collect::<Result<Vec<_>, RegistryError>>()?;
+            });
+        }
+    }
     Ok(DesiredState { resources })
 }
 
+/// Whether a deployment with the given scale bounds should use singleton
+/// identity. Only `scale(1)` (i.e. bounds 1..1, the default) is singleton;
+/// every other combination uses scaled instances so that display names are
+/// stable when the count later changes.
+fn is_singleton_scale(low: u16, high: u16) -> bool {
+    low == 1 && high == 1
+}
+
 // r[impl desired-state.steady]
+// r[impl autonomous.scale]
 fn compute_steady(
     app_name: &str,
     app_def: &AppDef,
     registry: &dyn InstanceRegistry,
+    effective_scales: &EffectiveScales,
 ) -> Result<DesiredState, RegistryError> {
-    let resources = app_def
-        .resources
-        .iter()
-        .map(|(id, resource)| {
-            Ok(DesiredResource {
-                instance: registry.get_or_create_singleton(
+    let mut resources = Vec::new();
+
+    for (id, resource) in &app_def.resources {
+        if id.kind == ResourceKind::Deployment
+            && let Some(&(low, high, effective)) = effective_scales.get(id.name.as_str())
+        {
+            if is_singleton_scale(low, high) {
+                // Fixed scale(1): single singleton instance.
+                let inst =
+                    registry.get_or_create_singleton(app_name, id.kind, Some(id.name.as_str()))?;
+                resources.push(DesiredResource {
+                    instance: inst,
+                    desired: LifecycleState::Ready,
+                    definition: resource.clone(),
+                });
+            } else {
+                // Scalable deployment: ensure the right number of instances.
+                let group = registry.ensure_scaled_group(
                     app_name,
                     id.kind,
                     Some(id.name.as_str()),
-                )?,
-                desired: LifecycleState::Ready,
-                definition: resource.clone(),
-            })
-        })
-        .collect::<Result<Vec<_>, RegistryError>>()?;
+                    effective,
+                )?;
+                for inst in group.keep {
+                    resources.push(DesiredResource {
+                        instance: inst,
+                        desired: LifecycleState::Ready,
+                        definition: resource.clone(),
+                    });
+                }
+                for inst in group.excess {
+                    resources.push(DesiredResource {
+                        instance: inst,
+                        desired: LifecycleState::Unscheduled,
+                        definition: resource.clone(),
+                    });
+                }
+            }
+            continue;
+        }
+
+        // Non-deployment resources (and fallback): singleton.
+        let inst = registry.get_or_create_singleton(app_name, id.kind, Some(id.name.as_str()))?;
+        resources.push(DesiredResource {
+            instance: inst,
+            desired: LifecycleState::Ready,
+            definition: resource.clone(),
+        });
+    }
+
     Ok(DesiredState { resources })
 }
 

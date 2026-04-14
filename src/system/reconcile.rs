@@ -12,15 +12,16 @@ use tokio::sync::RwLock as AsyncRwLock;
 use tracing::{error, warn};
 
 use crate::{
-    defs::app::AppDef,
+    defs::{app::AppDef, resource::Resource},
     oi::{events::EventSender, shells::ShellRegistry},
     runtime::{
         AppPhase, InstanceRegistry,
         apps::{AppRegistry, transition_phase},
         db::Db,
-        desired::{DesiredState, compute, compute_uninstalling},
+        desired::{DesiredState, EffectiveScales, compute, compute_uninstalling},
         identity::InstanceId,
         lifecycle::LifecycleState,
+        scaling,
     },
     system::{
         System, actuator::Actuator, caddy, observer::Observer, resolver, types::DataPlaneRules,
@@ -152,12 +153,18 @@ impl Reconciler {
             let _ = status;
             let progress = entry.active_progress.read();
             let app_def = entry.app.def.lock().clone();
+            // r[impl autonomous.scale]
+            let effective_scales = self.compute_effective_scales(&name, &app_def);
             let desired = match phase {
                 AppPhase::Uninstalling => compute_uninstalling(&name, &app_def, &*self.registry),
                 AppPhase::NotInstalled => unreachable!(),
-                AppPhase::Installed => {
-                    compute(&name, &app_def, (*progress).as_ref(), &*self.registry)
-                }
+                AppPhase::Installed => compute(
+                    &name,
+                    &app_def,
+                    (*progress).as_ref(),
+                    &*self.registry,
+                    &effective_scales,
+                ),
             };
             let desired = match desired {
                 Ok(d) => {
@@ -182,6 +189,24 @@ impl Reconciler {
             });
         }
         snapshots
+    }
+
+    /// Build the effective-scale map for every Deployment in an app.
+    fn compute_effective_scales(&self, app_name: &str, app_def: &AppDef) -> EffectiveScales {
+        let db = self.db.lock();
+        let mut scales = EffectiveScales::new();
+        for (id, resource) in &app_def.resources {
+            if let Resource::Deployment(deployment) = resource {
+                let dep_def = deployment.def.lock();
+                let low = dep_def.scale.start;
+                let high = dep_def.scale.end;
+                let effective =
+                    scaling::effective_scale(&db, app_name, id.name.as_str(), low, high)
+                        .unwrap_or(low);
+                scales.insert(id.name.as_str().to_owned(), (low, high, effective));
+            }
+        }
+        scales
     }
 
     // -----------------------------------------------------------------------
