@@ -17,6 +17,11 @@ fn podman_args_basic_shape() {
         labels: HashMap::new(),
         health: None,
         hosts: vec![],
+        memory: None,
+        cpus: None,
+        extra_caps: vec![],
+        writable_rootfs: false,
+        pids_limit: 256,
     };
 
     let args = podman_args(&spec);
@@ -55,6 +60,11 @@ fn podman_args_volume_mount() {
         labels: HashMap::new(),
         health: None,
         hosts: vec![],
+        memory: None,
+        cpus: None,
+        extra_caps: vec![],
+        writable_rootfs: false,
+        pids_limit: 256,
     };
 
     let args = podman_args(&spec);
@@ -77,6 +87,11 @@ fn podman_args_add_host_ipv6() {
         labels: HashMap::new(),
         health: None,
         hosts: vec![("localmount".to_string(), IpAddr::V6(ip))],
+        memory: None,
+        cpus: None,
+        extra_caps: vec![],
+        writable_rootfs: false,
+        pids_limit: 256,
     };
 
     let args = podman_args(&spec);
