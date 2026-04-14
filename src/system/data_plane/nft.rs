@@ -7,8 +7,8 @@ use std::{
 use ipnet::Ipv6Net;
 use nftables::{
     expr::{
-        CT, Expression, Fib, FibFlag, FibResult, Map, Meta, MetaKey, NamedExpression, NgMode,
-        Numgen, Payload, PayloadField, Prefix, SetItem,
+        BinaryOperation, CT, Expression, Fib, FibFlag, FibResult, Map, Meta, MetaKey,
+        NamedExpression, NgMode, Numgen, Payload, PayloadField, Prefix, SetItem,
     },
     schema::{Chain, NfListObject, Rule, Table},
     stmt::{Match, NAT, NATFamily, Operator, Statement},
@@ -416,9 +416,12 @@ pub(super) fn ct_status_dnat_accept() -> Vec<Statement<'static>> {
     }));
     vec![
         Statement::Match(Match {
-            left: ct_expr,
+            left: Expression::BinaryOperation(Box::new(BinaryOperation::AND(
+                ct_expr,
+                Expression::String(Cow::Borrowed("dnat")),
+            ))),
             right: Expression::String(Cow::Borrowed("dnat")),
-            op: Operator::AND,
+            op: Operator::EQ,
         }),
         Statement::Accept(None),
     ]

@@ -162,7 +162,14 @@ fn ct_status_dnat_accept_json() {
         "must contain status key, got: {json}"
     );
     assert!(json.contains("\"dnat\""), "must contain dnat, got: {json}");
-    assert!(json.contains("\"&\""), "must use AND operator, got: {json}");
+    assert!(
+        json.contains("\"&\""),
+        "must contain bitwise AND expression, got: {json}"
+    );
+    assert!(
+        json.contains("\"==\""),
+        "must use EQ as the match operator, got: {json}"
+    );
 }
 
 // r[verify infra.dataplane.forward-policy]
