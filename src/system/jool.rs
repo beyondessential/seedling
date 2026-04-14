@@ -46,11 +46,6 @@ async fn instance_exists() -> Result<bool, JoolError> {
 }
 
 async fn ensure_instance() -> Result<(), JoolError> {
-    if instance_exists().await? {
-        tracing::debug!("jool NAT64 instance already exists");
-        return Ok(());
-    }
-
     let output = run_command(
         "jool",
         &[
@@ -64,16 +59,23 @@ async fn ensure_instance() -> Result<(), JoolError> {
     )
     .await?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return CommandFailedSnafu {
-            message: format!("failed to create jool instance: {}", stderr.trim()),
-        }
-        .fail();
+    if output.status.success() {
+        tracing::info!("created jool NAT64 instance with prefix {NAT64_PREFIX}");
+        return Ok(());
     }
 
-    tracing::info!("created jool NAT64 instance with prefix {NAT64_PREFIX}");
-    Ok(())
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // EEXIST (errno 17) — the instance already exists, which is fine.
+    if stderr.contains("error 17") || stderr.contains("already has a Jool instance") {
+        tracing::debug!("jool NAT64 instance already exists");
+        return Ok(());
+    }
+
+    CommandFailedSnafu {
+        message: format!("failed to create jool instance: {}", stderr.trim()),
+    }
+    .fail()
 }
 
 async fn remove_instance() -> Result<(), JoolError> {
