@@ -17,12 +17,12 @@ pub(crate) const RESOLVER_IMAGE: &str = "docker.io/coredns/coredns:1.12.1";
 pub(crate) const RESOLVER_NETWORK: &str = "seedling-resolver";
 
 #[derive(Debug)]
-pub(crate) struct ResolverAddrs {
+pub struct ResolverAddrs {
     pub v6: Ipv6Addr,
 }
 
 #[derive(Debug, Snafu)]
-pub(crate) enum ResolverStartupError {
+pub enum ResolverStartupError {
     #[snafu(display("container runtime error: {source}"))]
     Container {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
@@ -235,10 +235,7 @@ async fn poll_until_healthy(
 // ---------------------------------------------------------------------------
 
 #[tracing::instrument(skip_all)]
-pub(crate) async fn teardown_resolver(
-    container: &dyn ContainerRuntime,
-    process: &dyn ProcessManager,
-) {
+pub async fn teardown_resolver(container: &dyn ContainerRuntime, process: &dyn ProcessManager) {
     for slot in [RESOLVER_BLUE, RESOLVER_GREEN] {
         if container.inspect(slot).await.ok().flatten().is_some() {
             tracing::info!(container = slot, "tearing down resolver slot");
@@ -256,7 +253,7 @@ pub(crate) async fn teardown_resolver(
 }
 
 #[tracing::instrument(skip_all, level = "debug")]
-pub(crate) async fn ensure_resolver_running(
+pub async fn ensure_resolver_running(
     container: &dyn ContainerRuntime,
     process: &dyn ProcessManager,
     node_prefix: &Ipv6Net,

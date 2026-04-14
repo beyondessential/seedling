@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    net::Ipv4Addr,
+    net::{Ipv4Addr, Ipv6Addr},
     path::PathBuf,
     sync::Arc,
     time::Duration,
@@ -22,7 +22,9 @@ use crate::{
         identity::InstanceId,
         lifecycle::LifecycleState,
     },
-    system::{System, actuator::Actuator, caddy, observer::Observer, types::DataPlaneRules},
+    system::{
+        System, actuator::Actuator, caddy, observer::Observer, resolver, types::DataPlaneRules,
+    },
 };
 
 mod faults;
@@ -79,6 +81,10 @@ pub struct Reconciler {
     event_tx: EventSender,
     /// Previous tick's lifecycle states, keyed by (app, instance_id_hex).
     prev_states: BTreeMap<(String, String), LifecycleState>,
+    /// Whether seedling is providing its own NAT64 translator.
+    nat64_active: bool,
+    /// The resolver container's IPv6 address (set after resolver startup).
+    resolver_addr: Option<Ipv6Addr>,
 }
 
 impl Reconciler {
@@ -95,7 +101,8 @@ impl Reconciler {
         db: Db,
         app_registry: Arc<RwLock<AppRegistry>>,
         event_tx: EventSender,
-        dns_servers: Vec<std::net::Ipv6Addr>,
+        dns_servers: Vec<Ipv6Addr>,
+        nat64_active: bool,
     ) -> Self {
         let observer = Observer::new(Arc::clone(&driver));
         let actuator = Actuator::new(
@@ -118,6 +125,8 @@ impl Reconciler {
             written_obs: HashSet::new(),
             event_tx,
             prev_states: BTreeMap::new(),
+            nat64_active,
+            resolver_addr: None,
         }
     }
 
@@ -190,8 +199,8 @@ impl Reconciler {
         }
 
         // r[impl reconciliation.liveness]
-        // --- Concurrent phase: pods ∥ volumes ∥ caddy ---
-        let (pod_updates, vol_observations, caddy_result) = tokio::join!(
+        // --- Concurrent phase: pods ∥ volumes ∥ caddy ∥ resolver ---
+        let (pod_updates, vol_observations, caddy_result, resolver_result) = tokio::join!(
             phases::run_pods_phase(
                 &self.observer,
                 &self.actuator,
@@ -209,6 +218,17 @@ impl Reconciler {
                     &self.data_dir,
                 ),
             ),
+            // r[impl infra.resolver.startup]
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                resolver::ensure_resolver_running(
+                    &*self.driver.container,
+                    &*self.driver.process,
+                    &self.node_prefix,
+                    &self.data_dir,
+                    self.nat64_active,
+                ),
+            ),
         );
 
         // --- Process pod results ---
@@ -216,6 +236,22 @@ impl Reconciler {
 
         // --- Process volume results ---
         self.ingest_volume_results(&apps, vol_observations);
+
+        // --- Process resolver result ---
+        match resolver_result {
+            Ok(Ok(addrs)) => {
+                self.clear_system_fault("resolver_failed");
+                self.resolver_addr = Some(addrs.v6);
+            }
+            Ok(Err(e)) => {
+                error!(error = %e, "resolver startup failed this tick");
+                self.file_system_fault("resolver_failed", &format!("resolver startup failed: {e}"));
+            }
+            Err(_) => {
+                warn!("resolver startup timed out this tick");
+                self.file_system_fault("resolver_failed", "resolver startup timed out");
+            }
+        }
 
         // --- Process caddy result ---
         // r[autonomous.ingress]
@@ -370,7 +406,10 @@ impl Reconciler {
             error!(error = %e, "idle: clear routes failed");
         }
         caddy::teardown_caddy(&*self.driver.container, &*self.driver.process).await;
+        // r[impl infra.resolver]
+        resolver::teardown_resolver(&*self.driver.container, &*self.driver.process).await;
         self.caddy_v4_addr = None;
+        self.resolver_addr = None;
     }
 
     // -----------------------------------------------------------------------

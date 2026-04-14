@@ -2,10 +2,8 @@ use std::net::Ipv6Addr;
 
 use ipnet::Ipv6Net;
 
-pub(crate) use config::generate_corefile;
-pub(crate) use startup::{
-    RESOLVER_BLUE, RESOLVER_GREEN, RESOLVER_NETWORK, ResolverAddrs, ResolverStartupError,
-    ensure_resolver_running, teardown_resolver,
+pub use startup::{
+    ResolverAddrs, ResolverStartupError, ensure_resolver_running, teardown_resolver,
 };
 
 mod config;
@@ -15,7 +13,7 @@ mod startup;
 ///
 /// Uses subnet discriminant `0xfd`, distinct from the proxy (`0xff`)
 /// and mount endpoint (`0xfe`) subnets.
-pub(crate) fn resolver_network_prefix(node_prefix: &Ipv6Net) -> Ipv6Net {
+pub fn resolver_network_prefix(node_prefix: &Ipv6Net) -> Ipv6Net {
     let bytes = node_prefix.network().octets();
     let mut addr = [0u8; 16];
     addr[..6].copy_from_slice(&bytes[..6]);
@@ -27,7 +25,7 @@ pub(crate) fn resolver_network_prefix(node_prefix: &Ipv6Net) -> Ipv6Net {
 ///
 /// This is a well-known address at `::53` within the resolver network prefix,
 /// chosen to match the DNS port for memorability.
-pub(crate) fn resolver_addr(node_prefix: &Ipv6Net) -> Ipv6Addr {
+pub fn resolver_addr(node_prefix: &Ipv6Net) -> Ipv6Addr {
     let bytes = node_prefix.network().octets();
     let mut addr = [0u8; 16];
     addr[..6].copy_from_slice(&bytes[..6]);

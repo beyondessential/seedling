@@ -6,7 +6,7 @@ const JOOL_INSTANCE: &str = "seedling";
 const NAT64_PREFIX: &str = "64:ff9b::/96";
 
 #[derive(Debug, Snafu)]
-pub(crate) enum JoolError {
+pub enum JoolError {
     #[snafu(display("jool kernel module is not available: {message}"))]
     ModuleUnavailable { message: String },
 
@@ -94,14 +94,12 @@ async fn remove_instance() -> Result<(), JoolError> {
     Ok(())
 }
 
-#[expect(dead_code, reason = "not yet wired into the system startup path")]
-pub(crate) async fn setup_nat64() -> Result<(), JoolError> {
+pub async fn setup_nat64() -> Result<(), JoolError> {
     ensure_module_loaded().await?;
     ensure_instance().await
 }
 
-#[expect(dead_code, reason = "not yet wired into the system startup path")]
-pub(crate) async fn teardown_nat64() -> Result<(), JoolError> {
+pub async fn teardown_nat64() -> Result<(), JoolError> {
     remove_instance().await
 }
 

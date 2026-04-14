@@ -15,7 +15,10 @@ use seedling::{
         AppRegistry, InstanceRegistry, Scheduler, audit, db::Db, gc::GcConfig,
         registry::DbInstanceRegistry,
     },
-    system::{System, node_prefix_from_machine_id, reconcile::Reconciler},
+    system::{
+        System, nat64::should_activate_nat64, node_prefix_from_machine_id, reconcile::Reconciler,
+        resolver::resolver_addr,
+    },
 };
 use tokio::sync::Notify;
 
@@ -186,6 +189,23 @@ async fn main() {
     });
 
     let tick_notify = Arc::new(Notify::new());
+
+    // r[impl infra.nat64.mode]
+    // r[impl infra.nat64.detection]
+    let nat64_active = should_activate_nat64(args.nat64).await;
+    tracing::info!(nat64_mode = %args.nat64, nat64_active, "NAT64 decision");
+
+    // r[impl infra.nat64.translator]
+    if nat64_active && let Err(e) = seedling::system::jool::setup_nat64().await {
+        tracing::error!(error = %e, "failed to set up NAT64 translator");
+        // r[impl infra.nat64.translator.lifecycle]
+        if args.nat64 == seedling::system::nat64::Nat64Mode::Enabled {
+            tracing::error!("NAT64 mode is 'enabled' but translator setup failed; exiting");
+            std::process::exit(1);
+        }
+    }
+
+    let dns_servers: Vec<std::net::Ipv6Addr> = vec![resolver_addr(&node_prefix)];
 
     let (driver, caddy_admin_client) =
         System::setup(node_prefix, &data_dir)
@@ -417,7 +437,8 @@ async fn main() {
         obs_db,
         Arc::clone(&registry),
         event_tx.clone(),
-        vec![],
+        dns_servers,
+        nat64_active,
     );
 
     {
