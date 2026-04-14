@@ -33,6 +33,12 @@ pub(super) struct PodActuationUpdate {
     pub unit_healthy: Vec<ResourceInstance>,
     /// Instances whose registry lookup failed during start.
     pub registry_failures: Vec<ResourceInstance>,
+    /// Instances whose start failed for reasons other than image pull or registry.
+    pub start_failures: Vec<(ResourceInstance, String)>,
+    /// Instances whose stop failed.
+    pub stop_failures: Vec<(ResourceInstance, String)>,
+    /// Instances whose observation failed.
+    pub observe_failures: Vec<(ResourceInstance, String)>,
 }
 
 struct PodInstanceResult {
@@ -43,6 +49,9 @@ struct PodInstanceResult {
     unit_failure: Option<ResourceInstance>,
     unit_healthy: Option<ResourceInstance>,
     registry_failure: Option<ResourceInstance>,
+    start_failure: Option<(ResourceInstance, String)>,
+    stop_failure: Option<(ResourceInstance, String)>,
+    observe_failure: Option<(ResourceInstance, String)>,
 }
 
 // r[observe.deployment]
@@ -65,6 +74,9 @@ async fn process_one_pod(
         unit_failure: None,
         unit_healthy: None,
         registry_failure: None,
+        start_failure: None,
+        stop_failure: None,
+        observe_failure: None,
     };
 
     // Observe current state before any actuation this tick.
@@ -76,7 +88,8 @@ async fn process_one_pod(
                 error = %e,
                 "pods: observe failed, skipping instance"
             );
-            return None;
+            result.observe_failure = Some((dr.instance.clone(), e.to_string()));
+            return Some(result);
         }
     };
 
@@ -187,6 +200,7 @@ async fn process_one_pod(
                             error = %e,
                             "pods: stop broken unit failed"
                         );
+                        result.stop_failure = Some((dr.instance.clone(), e.to_string()));
                     }
                 }
                 return Some(result);
@@ -230,6 +244,7 @@ async fn process_one_pod(
                         error = %e,
                         "pods: start failed"
                     );
+                    result.start_failure = Some((dr.instance.clone(), e.to_string()));
                 }
             }
         }
@@ -245,6 +260,7 @@ async fn process_one_pod(
                         error = %e,
                         "pods: stop failed"
                     );
+                    result.stop_failure = Some((dr.instance.clone(), e.to_string()));
                 }
             }
         }
@@ -279,6 +295,9 @@ pub(super) async fn observe_and_actuate(
         unit_failures: Vec::new(),
         unit_healthy: Vec::new(),
         registry_failures: Vec::new(),
+        start_failures: Vec::new(),
+        stop_failures: Vec::new(),
+        observe_failures: Vec::new(),
     };
 
     for result in results.into_iter().flatten() {
@@ -300,6 +319,15 @@ pub(super) async fn observe_and_actuate(
         }
         if let Some(f) = result.registry_failure {
             update.registry_failures.push(f);
+        }
+        if let Some(f) = result.start_failure {
+            update.start_failures.push(f);
+        }
+        if let Some(f) = result.stop_failure {
+            update.stop_failures.push(f);
+        }
+        if let Some(f) = result.observe_failure {
+            update.observe_failures.push(f);
         }
     }
 

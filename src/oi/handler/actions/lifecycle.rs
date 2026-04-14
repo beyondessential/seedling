@@ -15,6 +15,7 @@ use crate::{
         },
         db::Db,
         desired::OperationProgress,
+        faults,
         registry::DbInstanceRegistry,
     },
 };
@@ -61,6 +62,16 @@ fn run_operation_loop(
         Ok(a) => a,
         Err(e) => {
             tracing::error!(app = %app_name, action = %action_name, "script compile error: {e}");
+            let db = dbs.db.lock();
+            let _ = faults::file_fault(
+                &db,
+                app_name,
+                None,
+                None,
+                None,
+                "operation_failed",
+                &format!("script compile error in {action_name}: {e}"),
+            );
             return false;
         }
     };
@@ -96,11 +107,23 @@ fn run_operation_loop(
         );
         match result {
             OperationResult::Completed => {
+                let db = dbs.db.lock();
+                faults::clear_faults_by_kind(&db, app_name, "operation_failed").ok();
                 events::operation_completed(event_tx, app_name, action_name, &operation_id.0);
                 return true;
             }
             OperationResult::Failed(e) => {
                 tracing::error!(app = %app_name, action = %action_name, "operation failed: {e}");
+                let db = dbs.db.lock();
+                let _ = faults::file_fault(
+                    &db,
+                    app_name,
+                    None,
+                    None,
+                    None,
+                    "operation_failed",
+                    &format!("{action_name} failed: {e}"),
+                );
                 events::operation_failed(
                     event_tx,
                     app_name,

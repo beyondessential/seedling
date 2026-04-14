@@ -1,6 +1,6 @@
 use crate::runtime::{faults, identity::ResourceInstance};
 
-use super::{Reconciler, pods};
+use super::{Reconciler, pods, volumes};
 
 impl Reconciler {
     // r[fault.image-pull]
@@ -81,8 +81,10 @@ impl Reconciler {
                 .unwrap_or_default()
                 .into_iter()
                 .filter(|f| {
-                    f.kind == "container_start_failed"
-                        && f.instance_id.as_deref() == Some(&inst_hex)
+                    matches!(
+                        f.kind.as_str(),
+                        "container_start_failed" | "start_failed" | "observe_failed"
+                    ) && f.instance_id.as_deref() == Some(&inst_hex)
                 })
                 .collect();
             for f in cleared {
@@ -91,6 +93,24 @@ impl Reconciler {
                 }
             }
         }
+    }
+
+    pub(super) fn file_pod_actuation_faults(&self, app: &str, update: &pods::PodActuationUpdate) {
+        let db = self.db.lock();
+        Self::file_instance_faults(&db, app, &update.start_failures, "start_failed");
+        Self::file_instance_faults(&db, app, &update.stop_failures, "stop_failed");
+        Self::file_instance_faults(&db, app, &update.observe_failures, "observe_failed");
+    }
+
+    pub(super) fn file_volume_actuation_faults(
+        &self,
+        app: &str,
+        update: &volumes::VolumeActuationUpdate,
+    ) {
+        let db = self.db.lock();
+        Self::file_instance_faults(&db, app, &update.observe_failures, "observe_failed");
+        Self::file_instance_faults(&db, app, &update.create_failures, "volume_create_failed");
+        Self::file_instance_faults(&db, app, &update.remove_failures, "volume_remove_failed");
     }
 
     pub(super) fn file_registry_fault(&self, app: &str, description: &str) {
@@ -116,9 +136,50 @@ impl Reconciler {
         for instance in &update.registry_failures {
             Self::file_instance_registry_fault_inner(&db, app, instance);
         }
-        // Any instance that started successfully no longer has a registry problem.
         for (instance, _) in &update.image_pull_successes {
             Self::clear_instance_registry_fault_inner(&db, app, instance);
+        }
+    }
+
+    pub(super) fn file_system_fault(&self, fault_kind: &str, description: &str) {
+        let db = self.db.lock();
+        let already_filed = faults::list_active_faults(&db, Some("_system"))
+            .unwrap_or_default()
+            .iter()
+            .any(|f| f.kind == fault_kind);
+        if !already_filed
+            && let Err(e) =
+                faults::file_fault(&db, "_system", None, None, None, fault_kind, description)
+        {
+            tracing::warn!("failed to file system fault ({fault_kind}): {e}");
+        }
+    }
+
+    pub(super) fn clear_system_fault(&self, fault_kind: &str) {
+        let db = self.db.lock();
+        let cleared: Vec<_> = faults::list_active_faults(&db, Some("_system"))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|f| f.kind == fault_kind)
+            .collect();
+        for f in cleared {
+            if let Err(e) = faults::clear_fault(&db, &f.id, "_system") {
+                tracing::warn!(fault_id = %f.id, "failed to clear system fault ({fault_kind}): {e}");
+            }
+        }
+    }
+
+    pub(super) fn clear_registry_faults(&self, app: &str) {
+        let db = self.db.lock();
+        let cleared: Vec<_> = faults::list_active_faults(&db, Some(app))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|f| f.kind == "registry_error")
+            .collect();
+        for f in cleared {
+            if let Err(e) = faults::clear_fault(&db, &f.id, app) {
+                tracing::warn!(app = %app, fault_id = %f.id, "failed to clear registry fault: {e}");
+            }
         }
     }
 
@@ -170,16 +231,31 @@ impl Reconciler {
         }
     }
 
-    pub(super) fn clear_registry_faults(&self, app: &str) {
-        let db = self.db.lock();
-        let cleared: Vec<_> = faults::list_active_faults(&db, Some(app))
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|f| f.kind == "registry_error")
-            .collect();
-        for f in cleared {
-            if let Err(e) = faults::clear_fault(&db, &f.id, app) {
-                tracing::warn!(app = %app, fault_id = %f.id, "failed to clear registry fault: {e}");
+    fn file_instance_faults(
+        db: &crate::runtime::db::Db,
+        app: &str,
+        failures: &[(ResourceInstance, String)],
+        fault_kind: &str,
+    ) {
+        for (instance, description) in failures {
+            let inst_hex = instance.id.to_hex();
+            let kind_str = format!("{:?}", instance.kind).to_lowercase();
+            let already_filed = faults::list_active_faults(db, Some(app))
+                .unwrap_or_default()
+                .iter()
+                .any(|f| f.kind == fault_kind && f.instance_id.as_deref() == Some(&inst_hex));
+            if !already_filed
+                && let Err(e) = faults::file_fault(
+                    db,
+                    app,
+                    Some(&kind_str),
+                    instance.name.as_deref(),
+                    Some(&inst_hex),
+                    fault_kind,
+                    description,
+                )
+            {
+                tracing::warn!(app = %app, instance = %inst_hex, "failed to file {fault_kind} fault: {e}");
             }
         }
     }

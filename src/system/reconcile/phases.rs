@@ -35,18 +35,16 @@ pub(super) async fn run_volumes_phase(
     observer: &Observer,
     actuator: &Actuator,
     apps: &[AppSnapshot],
-) -> Vec<(
-    crate::runtime::identity::ResourceInstance,
-    &'static str,
-    serde_json::Value,
-)> {
+) -> Vec<(String, volumes::VolumeActuationUpdate)> {
     let futures: Vec<_> = apps
         .iter()
         .filter(|app| app.phase != AppPhase::Uninstalling)
-        .map(|app| volumes::observe_and_actuate(observer, actuator, &app.desired))
+        .map(|app| async move {
+            let update = volumes::observe_and_actuate(observer, actuator, &app.desired).await;
+            (app.name.clone(), update)
+        })
         .collect();
-    let results = futures_util::future::join_all(futures).await;
-    results.into_iter().flatten().collect()
+    futures_util::future::join_all(futures).await
 }
 
 pub(super) fn compute_routes(

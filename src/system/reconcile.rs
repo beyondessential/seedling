@@ -209,12 +209,13 @@ impl Reconciler {
         let running_pods_by_app = self.ingest_pod_results(&apps, pod_updates);
 
         // --- Process volume results ---
-        self.persist_obs(vol_observations);
+        self.ingest_volume_results(&apps, vol_observations);
 
         // --- Process caddy result ---
         // r[autonomous.ingress]
         let caddy_addrs = match caddy_result {
             Ok(Ok(addrs)) => {
+                self.clear_system_fault("caddy_failed");
                 *self.caddy_admin_addr.write().await = addrs.v6;
                 self.caddy_v4_addr = addrs.v4.and_then(|sa| match sa.ip() {
                     IpAddr::V4(ip4) => Some(ip4),
@@ -224,10 +225,12 @@ impl Reconciler {
             }
             Ok(Err(e)) => {
                 error!(error = %e, "caddy health check failed; skipping nftables and proxy this tick");
+                self.file_system_fault("caddy_failed", &format!("caddy health check failed: {e}"));
                 None
             }
             Err(_) => {
                 warn!("caddy health check timed out; skipping nftables and proxy this tick");
+                self.file_system_fault("caddy_failed", "caddy health check timed out");
                 None
             }
         };
@@ -300,15 +303,26 @@ impl Reconciler {
 
                 if let Err(e) = routes_res {
                     error!(error = %e, "routes: apply_routes failed");
+                    self.file_system_fault("routes_failed", &format!("apply_routes failed: {e}"));
+                } else {
+                    self.clear_system_fault("routes_failed");
                 }
                 if let Err(e) = rules_res {
                     error!(error = %e, "rules: apply_rules failed");
+                    self.file_system_fault("nftables_failed", &format!("apply_rules failed: {e}"));
+                } else {
+                    self.clear_system_fault("nftables_failed");
                 }
                 match proxy_res {
                     Err(e) => {
                         error!(error = ?e, addr = %caddy_addr, "proxy: apply_config failed");
+                        self.file_system_fault(
+                            "proxy_failed",
+                            &format!("apply_config failed: {e}"),
+                        );
                     }
                     Ok(()) if has_proxy_config => {
+                        self.clear_system_fault("proxy_failed");
                         self.persist_obs(proxy_ready_obs);
 
                         // r[impl infra.proxy.upgrade.cache]
@@ -327,6 +341,9 @@ impl Reconciler {
                 // Caddy unavailable — still apply routes (they don't need caddy).
                 if let Err(e) = self.driver.data_plane.apply_routes(&all_routes).await {
                     error!(error = %e, "routes: apply_routes failed");
+                    self.file_system_fault("routes_failed", &format!("apply_routes failed: {e}"));
+                } else {
+                    self.clear_system_fault("routes_failed");
                 }
             }
         }
@@ -368,11 +385,24 @@ impl Reconciler {
             // r[fault.container-start]
             self.file_unit_failure_faults(&app_name, &pod_update);
             self.file_instance_registry_faults(&app_name, &pod_update);
+            self.file_pod_actuation_faults(&app_name, &pod_update);
             self.persist_obs(pod_update.observations);
             running_pods_by_app.insert(app_name, pod_update.running);
         }
         let _ = apps;
         running_pods_by_app
+    }
+
+    fn ingest_volume_results(
+        &mut self,
+        apps: &[AppSnapshot],
+        vol_updates: Vec<(String, volumes::VolumeActuationUpdate)>,
+    ) {
+        for (app_name, vol_update) in vol_updates {
+            self.file_volume_actuation_faults(&app_name, &vol_update);
+            self.persist_obs(vol_update.observations);
+        }
+        let _ = apps;
     }
 
     // -----------------------------------------------------------------------

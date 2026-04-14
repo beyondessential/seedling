@@ -12,12 +12,31 @@ use crate::{
     system::{actuator::Actuator, observer::Observer, types::ObservationFact},
 };
 
+struct VolumeInstanceResult {
+    observations: Vec<(ResourceInstance, &'static str, serde_json::Value)>,
+    observe_failure: Option<(ResourceInstance, String)>,
+    create_failure: Option<(ResourceInstance, String)>,
+    remove_failure: Option<(ResourceInstance, String)>,
+}
+
+pub(super) struct VolumeActuationUpdate {
+    pub observations: Vec<(ResourceInstance, &'static str, serde_json::Value)>,
+    pub observe_failures: Vec<(ResourceInstance, String)>,
+    pub create_failures: Vec<(ResourceInstance, String)>,
+    pub remove_failures: Vec<(ResourceInstance, String)>,
+}
+
 async fn process_one_volume(
     observer: &Observer,
     actuator: &Actuator,
     dr: &DesiredResource,
-) -> Option<Vec<(ResourceInstance, &'static str, serde_json::Value)>> {
-    let mut observations: Vec<(ResourceInstance, &'static str, serde_json::Value)> = Vec::new();
+) -> VolumeInstanceResult {
+    let mut result = VolumeInstanceResult {
+        observations: Vec::new(),
+        observe_failure: None,
+        create_failure: None,
+        remove_failure: None,
+    };
 
     // r[observe.volume]
     let facts = match observer.observe(&dr.instance, &dr.definition).await {
@@ -28,13 +47,16 @@ async fn process_one_volume(
                 error = %e,
                 "volumes: observe failed, skipping instance"
             );
-            return None;
+            result.observe_failure = Some((dr.instance.clone(), e.to_string()));
+            return result;
         }
     };
 
     for (fact, _ts) in &facts {
         for (kind, payload) in fact.to_obs_kinds() {
-            observations.push((dr.instance.clone(), kind, payload));
+            result
+                .observations
+                .push((dr.instance.clone(), kind, payload));
         }
     }
 
@@ -51,10 +73,13 @@ async fn process_one_volume(
                     error = %e,
                     "volumes: create failed"
                 );
+                result.create_failure = Some((dr.instance.clone(), e.to_string()));
             }
         }
         LifecycleState::Unscheduled if volume_present => {
-            observations.push((dr.instance.clone(), "stop_sent", json!({})));
+            result
+                .observations
+                .push((dr.instance.clone(), "stop_sent", json!({})));
             // r[actuate.volume.stop]
             if let Err(e) = actuator.stop(&dr.instance, &dr.definition).await {
                 error!(
@@ -62,19 +87,20 @@ async fn process_one_volume(
                     error = %e,
                     "volumes: remove failed"
                 );
+                result.remove_failure = Some((dr.instance.clone(), e.to_string()));
             }
         }
         _ => {}
     }
 
-    Some(observations)
+    result
 }
 
 pub(super) async fn observe_and_actuate(
     observer: &Observer,
     actuator: &Actuator,
     desired: &DesiredState,
-) -> Vec<(ResourceInstance, &'static str, serde_json::Value)> {
+) -> VolumeActuationUpdate {
     let futures: Vec<_> = desired
         .resources
         .iter()
@@ -84,5 +110,25 @@ pub(super) async fn observe_and_actuate(
 
     let results = join_all(futures).await;
 
-    results.into_iter().flatten().flatten().collect()
+    let mut update = VolumeActuationUpdate {
+        observations: Vec::new(),
+        observe_failures: Vec::new(),
+        create_failures: Vec::new(),
+        remove_failures: Vec::new(),
+    };
+
+    for result in results {
+        update.observations.extend(result.observations);
+        if let Some(f) = result.observe_failure {
+            update.observe_failures.push(f);
+        }
+        if let Some(f) = result.create_failure {
+            update.create_failures.push(f);
+        }
+        if let Some(f) = result.remove_failure {
+            update.remove_failures.push(f);
+        }
+    }
+
+    update
 }
