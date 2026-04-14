@@ -219,11 +219,7 @@ pub async fn open_shell(client: &OiClient, app: String, name: String) -> i32 {
                     .await
                     .ok();
             }
-            // Graceful shutdown: send ETX then drain with a timeout.
-            _ = tokio::signal::ctrl_c(), if shutdown_deadline.is_none() => {
-                let _ = session_send.write_all(b"\x03").await;
-                shutdown_deadline = Some(Instant::now() + Duration::from_secs(5));
-            }
+            // SIGTERM: send ETX to the remote shell, then drain with a timeout.
             _ = sigterm.recv(), if shutdown_deadline.is_none() => {
                 let _ = session_send.write_all(b"\x03").await;
                 shutdown_deadline = Some(Instant::now() + Duration::from_secs(5));

@@ -440,11 +440,11 @@ Absent specification bugs, anything that is not defined here is either defined i
 # Client Behaviour
 
 > i[ctl.graceful-shutdown]
-> When the CLI receives a termination signal (SIGINT or SIGTERM), long-running sessions must shut down gracefully:
+> Long-running sessions must shut down gracefully on the appropriate termination signal:
 >
-> - **Shell sessions:** the client first sends the interrupt character (ETX, `0x03`) over the session stream's stdin direction, then waits up to five seconds for the session to end normally. If the session does not end within that window the client closes the connection.
-> - **Port forwards:** the client closes the control stream and exits.
-> - **Event subscriptions:** the client closes the connection and exits.
+> - **Shell sessions:** the terminal is in raw mode, so SIGINT (`Ctrl+C`) and all other control characters flow through the stdin relay to the remote shell naturally — no special handling is needed. Only SIGTERM triggers client-side shutdown: the client sends ETX (`0x03`) over the session stream's stdin direction, then waits up to five seconds for the session to end normally. If the session does not end within that window the client closes the connection.
+> - **Port forwards:** on SIGINT or SIGTERM the client closes the control stream and exits.
+> - **Event subscriptions:** on SIGINT or SIGTERM the client closes the connection and exits.
 
 > i[ctl.subscribe.reconnect]
 > When the event stream or connection is lost, the client must automatically reconnect and re-subscribe.
