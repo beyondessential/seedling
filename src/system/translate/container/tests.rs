@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use super::*;
 
 #[test]
@@ -14,7 +16,7 @@ fn podman_args_basic_shape() {
         env: vec![("PORT".to_string(), "8080".to_string())],
         mounts: vec![],
         network: "seedling-abc123".to_string(),
-        labels: HashMap::new(),
+        labels: BTreeMap::new(),
         health: None,
         hosts: vec![],
         memory: None,
@@ -57,7 +59,7 @@ fn podman_args_volume_mount() {
             read_only: true,
         }],
         network: "net".to_string(),
-        labels: HashMap::new(),
+        labels: BTreeMap::new(),
         health: None,
         hosts: vec![],
         memory: None,
@@ -84,7 +86,7 @@ fn podman_args_add_host_ipv6() {
         env: vec![],
         mounts: vec![],
         network: "net".to_string(),
-        labels: HashMap::new(),
+        labels: BTreeMap::new(),
         health: None,
         hosts: vec![("localmount".to_string(), IpAddr::V6(ip))],
         memory: None,
@@ -109,7 +111,7 @@ fn podman_args_hardening_defaults() {
         env: vec![],
         mounts: vec![],
         network: "net".to_string(),
-        labels: HashMap::new(),
+        labels: BTreeMap::new(),
         health: None,
         hosts: vec![],
         memory: None,
@@ -147,7 +149,7 @@ fn podman_args_hardening_overrides() {
         env: vec![],
         mounts: vec![],
         network: "net".to_string(),
-        labels: HashMap::new(),
+        labels: BTreeMap::new(),
         health: None,
         hosts: vec![],
         memory: Some("512m".to_string()),

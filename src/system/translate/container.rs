@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::BTreeMap,
     net::{IpAddr, Ipv6Addr},
 };
 
@@ -237,7 +237,7 @@ fn spec_from_pod(
         })
         .collect();
 
-    let mut labels = HashMap::new();
+    let mut labels = BTreeMap::new();
     labels.insert("seedling.app".to_string(), instance.app.clone());
     labels.insert("seedling.instance".to_string(), instance.id.to_hex());
     labels.insert("seedling.kind".to_string(), format!("{:?}", instance.kind));

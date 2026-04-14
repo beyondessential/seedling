@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::PathBuf,
     time::{Duration, SystemTime},
@@ -86,7 +86,7 @@ pub struct ContainerSpec {
     pub mounts: Vec<Mount>,
     /// Pod network name.
     pub network: String,
-    pub labels: HashMap<String, String>,
+    pub labels: BTreeMap<String, String>,
     pub health: Option<HealthCheckSpec>,
     /// Entries injected into /etc/hosts inside the container.
     /// Used to map `localmount` to the pod's ::2 mount endpoint address.
