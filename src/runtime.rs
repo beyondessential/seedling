@@ -3,10 +3,12 @@
 #![allow(dead_code, unused_imports)]
 
 pub mod apps;
+pub mod audit;
 pub mod barrier;
 pub mod db;
 pub mod desired;
 pub mod faults;
+pub mod gc;
 pub mod history;
 pub mod identity;
 pub mod lifecycle;
