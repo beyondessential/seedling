@@ -9,20 +9,20 @@ pub mod system;
 mod tests;
 
 /// Configurable limits for the Rhai script engine.
-// l[impl bsl.limits]
+// r[impl engine.limits]
 #[derive(Debug, Clone)]
 pub struct ScriptLimits {
-    // l[impl bsl.limits.operations]
+    // r[impl engine.limits.operations]
     pub max_operations: u64,
-    // l[impl bsl.limits.call-depth]
+    // r[impl engine.limits.call-depth]
     pub max_call_levels: usize,
-    // l[impl bsl.limits.expr-depth]
+    // r[impl engine.limits.expr-depth]
     pub max_expr_depth: usize,
-    // l[impl bsl.limits.string-size]
+    // r[impl engine.limits.string-size]
     pub max_string_size: usize,
-    // l[impl bsl.limits.array-size]
+    // r[impl engine.limits.array-size]
     pub max_array_size: usize,
-    // l[impl bsl.limits.map-size]
+    // r[impl engine.limits.map-size]
     pub max_map_size: usize,
 }
 

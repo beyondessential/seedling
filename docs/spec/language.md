@@ -28,40 +28,6 @@ Absent specification bugs, anything that is not defined here is either defined i
 > If an exception bubbles to the top of the script, execution is considered failed and will not proceed further.
 > Responding to this is a control plane concern and not defined in this spec.
 
-> l[bsl.limits]
-> The runtime must constrain the BSL script engine to prevent unbounded resource consumption.
-
-> l[bsl.limits.operations]
-> The engine must enforce a maximum number of operations per script evaluation.
-> When the limit is reached, evaluation must fail with an error.
-> The default limit is 100 000 operations.
-> The operator may override this limit at startup.
-
-> l[bsl.limits.call-depth]
-> The engine must enforce a maximum function call nesting depth.
-> The default limit is 64.
-> The operator may override this limit at startup.
-
-> l[bsl.limits.expr-depth]
-> The engine must enforce a maximum expression nesting depth.
-> The default limit is 64.
-> The operator may override this limit at startup.
-
-> l[bsl.limits.string-size]
-> The engine must enforce a maximum string length in bytes.
-> The default limit is 1 048 576 (1 MiB).
-> The operator may override this limit at startup.
-
-> l[bsl.limits.array-size]
-> The engine must enforce a maximum array size in elements.
-> The default limit is 10 000.
-> The operator may override this limit at startup.
-
-> l[bsl.limits.map-size]
-> The engine must enforce a maximum object map size in entries.
-> The default limit is 10 000.
-> The operator may override this limit at startup.
-
 > l[bsl.builder]
 > Some methods and functions return "builders", which are types that have further methods which configure one instance of the type piece by piece, rather than all at once.
 >

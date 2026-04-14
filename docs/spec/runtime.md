@@ -31,6 +31,42 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Individual reconciliation operations must not block the loop for an unbounded or long duration.
 > When an operation requires waiting for an external condition (e.g. a process to terminate), the reconciler must release control and re-evaluate the condition on a subsequent iteration rather than polling inline.
 
+# Script Engine Limits
+
+> r[engine.limits]
+> The runtime must constrain the BSL script engine to prevent unbounded resource consumption.
+
+> r[engine.limits.operations]
+> The engine must enforce a maximum number of operations per script evaluation.
+> When the limit is reached, evaluation must fail with an error.
+> The default limit is 100 000 operations.
+> This limit may be overridden at startup.
+
+> r[engine.limits.call-depth]
+> The engine must enforce a maximum function call nesting depth.
+> The default limit is 64.
+> This limit may be overridden at startup.
+
+> r[engine.limits.expr-depth]
+> The engine must enforce a maximum expression nesting depth.
+> The default limit is 64.
+> This limit may be overridden at startup.
+
+> r[engine.limits.string-size]
+> The engine must enforce a maximum string length in bytes.
+> The default limit is 1 048 576 (1 MiB).
+> This limit may be overridden at startup.
+
+> r[engine.limits.array-size]
+> The engine must enforce a maximum array size in elements.
+> The default limit is 10 000.
+> This limit may be overridden at startup.
+
+> r[engine.limits.map-size]
+> The engine must enforce a maximum object map size in entries.
+> The default limit is 10 000.
+> This limit may be overridden at startup.
+
 # Desired State
 
 > r[desired-state.definition]
