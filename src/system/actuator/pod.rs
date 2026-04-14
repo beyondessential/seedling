@@ -88,6 +88,10 @@ pub(super) fn collect_container_volumes(
         .collect()
 }
 
+/// The exists-then-create pattern has an inherent TOCTOU gap, but the reconciler is the sole
+/// actor managing volumes on this node so no concurrent race is possible. If concurrent
+/// reconciliation is ever introduced, call create unconditionally and treat "already exists"
+/// as success.
 async fn ensure_volumes(driver: &System, volumes: &[ContainerVolume]) -> Result<(), ActuateError> {
     for vol in volumes {
         let just_created = if !driver
@@ -120,6 +124,10 @@ async fn ensure_volumes(driver: &System, volumes: &[ContainerVolume]) -> Result<
 }
 
 /// Returns the bridge name if a new network was created, `None` if it already existed.
+///
+/// The check-then-create TOCTOU gap is benign because the reconciler is the sole actor managing
+/// networks on this node. If concurrent reconciliation is ever introduced, call create
+/// unconditionally and treat "already exists" as success.
 async fn ensure_network(
     driver: &System,
     net_name: &str,

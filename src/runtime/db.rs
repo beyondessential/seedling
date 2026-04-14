@@ -291,6 +291,16 @@ impl Db {
                 .execute_batch("INSERT INTO schema_version VALUES (11);")?;
         }
 
+        if version < 12 {
+            self.conn.execute_batch(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_singleton_unique
+                     ON resource_instances (app, kind, name)
+                     WHERE is_scaled = 0;",
+            )?;
+            self.conn
+                .execute_batch("INSERT INTO schema_version VALUES (12);")?;
+        }
+
         tx.commit()?;
         Ok(())
     }
