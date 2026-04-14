@@ -155,14 +155,6 @@ pub fn compute_uninstalling(
     Ok(DesiredState { resources })
 }
 
-/// Whether a deployment with the given scale bounds should use singleton
-/// identity. Only `scale(1)` (i.e. bounds 1..1, the default) is singleton;
-/// every other combination uses scaled instances so that display names are
-/// stable when the count later changes.
-fn is_singleton_scale(low: u16, high: u16) -> bool {
-    low == 1 && high == 1
-}
-
 // r[impl desired-state.steady]
 // r[impl autonomous.scale]
 fn compute_steady(
@@ -175,44 +167,32 @@ fn compute_steady(
 
     for (id, resource) in &app_def.resources {
         if id.kind == ResourceKind::Deployment
-            && let Some(&(low, high, effective)) = effective_scales.get(id.name.as_str())
+            && let Some(&(_low, _high, effective)) = effective_scales.get(id.name.as_str())
         {
-            if is_singleton_scale(low, high) {
-                // Fixed scale(1): single singleton instance.
-                let inst =
-                    registry.get_or_create_singleton(app_name, id.kind, Some(id.name.as_str()))?;
+            let group = registry.ensure_scaled_group(
+                app_name,
+                id.kind,
+                Some(id.name.as_str()),
+                effective,
+            )?;
+            for inst in group.keep {
                 resources.push(DesiredResource {
                     instance: inst,
                     desired: LifecycleState::Ready,
                     definition: resource.clone(),
                 });
-            } else {
-                // Scalable deployment: ensure the right number of instances.
-                let group = registry.ensure_scaled_group(
-                    app_name,
-                    id.kind,
-                    Some(id.name.as_str()),
-                    effective,
-                )?;
-                for inst in group.keep {
-                    resources.push(DesiredResource {
-                        instance: inst,
-                        desired: LifecycleState::Ready,
-                        definition: resource.clone(),
-                    });
-                }
-                for inst in group.excess {
-                    resources.push(DesiredResource {
-                        instance: inst,
-                        desired: LifecycleState::Unscheduled,
-                        definition: resource.clone(),
-                    });
-                }
+            }
+            for inst in group.excess {
+                resources.push(DesiredResource {
+                    instance: inst,
+                    desired: LifecycleState::Unscheduled,
+                    definition: resource.clone(),
+                });
             }
             continue;
         }
 
-        // Non-deployment resources (and fallback): singleton.
+        // Non-deployment resources: singleton.
         let inst = registry.get_or_create_singleton(app_name, id.kind, Some(id.name.as_str()))?;
         resources.push(DesiredResource {
             instance: inst,

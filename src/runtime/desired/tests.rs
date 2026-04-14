@@ -403,7 +403,7 @@ fn scaled_deployment_effective_less_than_existing_marks_excess_unscheduled() {
 
 // r[verify autonomous.scale]
 #[test]
-fn fixed_scale_one_uses_singleton() {
+fn fixed_scale_one_uses_scaled_instance() {
     let app_def = make_app_def(&["web"]);
     let registry = EphemeralInstanceRegistry::new();
     let scales = default_effective_scales(&app_def);
@@ -412,8 +412,8 @@ fn fixed_scale_one_uses_singleton() {
     assert_eq!(state.resources.len(), 1);
     assert_eq!(
         state.resources[0].instance.variant,
-        InstanceVariant::Singleton,
-        "scale(1) should produce a singleton"
+        InstanceVariant::Scaled,
+        "all deployments use scaled instances"
     );
 }
 
@@ -536,36 +536,84 @@ fn scale_up_preserves_existing_instances() {
 
 // r[verify autonomous.scale]
 #[test]
-fn mixed_singleton_and_scaled_deployments() {
+fn mixed_fixed_and_scalable_deployments() {
     let mut def = AppDef::default();
-    let (id1, res1) = make_deployment("singleton-dep");
-    let (id2, res2) = make_deployment_with_scale("scaled-dep", 1..3);
+    let (id1, res1) = make_deployment("fixed-dep");
+    let (id2, res2) = make_deployment_with_scale("scalable-dep", 1..3);
     def.resources.insert(id1, res1);
     def.resources.insert(id2, res2);
 
     let registry = EphemeralInstanceRegistry::new();
-    let scales = custom_effective_scales(&[("singleton-dep", 1, 1, 1), ("scaled-dep", 1, 3, 2)]);
+    let scales = custom_effective_scales(&[("fixed-dep", 1, 1, 1), ("scalable-dep", 1, 3, 2)]);
     let state = compute("myapp", &def, None, &registry, &scales).unwrap();
 
-    let singletons: Vec<_> = state
+    let fixed: Vec<_> = state
         .resources
         .iter()
-        .filter(|r| r.instance.name.as_deref() == Some("singleton-dep"))
+        .filter(|r| r.instance.name.as_deref() == Some("fixed-dep"))
         .collect();
-    let scaled: Vec<_> = state
+    let scalable: Vec<_> = state
         .resources
         .iter()
-        .filter(|r| r.instance.name.as_deref() == Some("scaled-dep"))
+        .filter(|r| r.instance.name.as_deref() == Some("scalable-dep"))
         .collect();
 
-    assert_eq!(singletons.len(), 1);
-    assert_eq!(singletons[0].instance.variant, InstanceVariant::Singleton);
+    assert_eq!(fixed.len(), 1);
+    assert_eq!(
+        fixed[0].instance.variant,
+        InstanceVariant::Scaled,
+        "even fixed-scale deployments use scaled identity"
+    );
 
-    assert_eq!(scaled.len(), 2);
+    assert_eq!(scalable.len(), 2);
     assert!(
-        scaled
+        scalable
             .iter()
             .all(|r| r.instance.variant == InstanceVariant::Scaled)
+    );
+}
+
+// r[verify autonomous.scale]
+#[test]
+fn singleton_to_scaled_transition_marks_old_singleton_excess() {
+    let app_def = make_app_def(&["web"]);
+    let registry = EphemeralInstanceRegistry::new();
+
+    // First, create a singleton instance (simulating pre-upgrade state).
+    let _ = registry
+        .get_or_create_singleton("myapp", ResourceKind::Deployment, Some("web"))
+        .unwrap();
+
+    // Now compute with scaled path — the singleton should appear as excess.
+    let scales = custom_effective_scales(&[("web", 1, 1, 1)]);
+    let state = compute("myapp", &app_def, None, &registry, &scales).unwrap();
+
+    let ready: Vec<_> = state
+        .resources
+        .iter()
+        .filter(|r| r.desired == LifecycleState::Ready)
+        .collect();
+    let unscheduled: Vec<_> = state
+        .resources
+        .iter()
+        .filter(|r| r.desired == LifecycleState::Unscheduled)
+        .collect();
+
+    assert_eq!(ready.len(), 1, "one new scaled instance should be Ready");
+    assert_eq!(
+        ready[0].instance.variant,
+        InstanceVariant::Scaled,
+        "the kept instance should be Scaled"
+    );
+    assert_eq!(
+        unscheduled.len(),
+        1,
+        "the old singleton should be Unscheduled"
+    );
+    assert_eq!(
+        unscheduled[0].instance.variant,
+        InstanceVariant::Singleton,
+        "the excess instance should be the old Singleton"
     );
 }
 

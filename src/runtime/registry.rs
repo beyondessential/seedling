@@ -139,7 +139,7 @@ impl InstanceRegistry for EphemeralInstanceRegistry {
     ) -> Result<ScaledGroup, RegistryError> {
         let key: InstanceRegistryKey = (app.to_owned(), kind, name.map(|s| s.to_owned()));
         let mut scaled_cache = self.scaled_cache.lock();
-        let instances = scaled_cache.entry(key).or_default();
+        let instances = scaled_cache.entry(key.clone()).or_default();
 
         let count = usize::from(count);
         while instances.len() < count {
@@ -148,7 +148,16 @@ impl InstanceRegistry for EphemeralInstanceRegistry {
         }
 
         let keep = instances[..count].to_vec();
-        let excess = instances[count..].to_vec();
+        let mut excess = instances[count..].to_vec();
+
+        // Any lingering singleton for the same group is stale and must be
+        // torn down (e.g. after a scale definition changes from 1..1 to a
+        // range).
+        let cache = self.cache.lock();
+        if let Some(singleton) = cache.get(&key) {
+            excess.push(singleton.clone());
+        }
+
         Ok(ScaledGroup { keep, excess })
     }
 
@@ -213,10 +222,16 @@ impl InstanceRegistry for DbInstanceRegistry {
         let db = self.db.lock();
         let existing = history::find_instances_for_group(&db, app, kind, name)?;
 
-        let mut scaled: Vec<ResourceInstance> = existing
-            .into_iter()
-            .filter(|i| i.variant == InstanceVariant::Scaled)
-            .collect();
+        // Separate singletons (stale after a scale-definition change) from
+        // scaled instances that participate in the group.
+        let mut singletons = Vec::new();
+        let mut scaled = Vec::new();
+        for inst in existing {
+            match inst.variant {
+                InstanceVariant::Singleton => singletons.push(inst),
+                InstanceVariant::Scaled => scaled.push(inst),
+            }
+        }
 
         let count = usize::from(count);
         while scaled.len() < count {
@@ -226,7 +241,12 @@ impl InstanceRegistry for DbInstanceRegistry {
         }
 
         let keep = scaled[..count].to_vec();
-        let excess = scaled[count..].to_vec();
+        let mut excess = scaled[count..].to_vec();
+
+        // Lingering singletons are always excess — the reconciler will
+        // unschedule them so the old container is torn down cleanly.
+        excess.extend(singletons);
+
         Ok(ScaledGroup { keep, excess })
     }
 
