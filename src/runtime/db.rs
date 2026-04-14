@@ -279,6 +279,18 @@ impl Db {
                 .execute_batch("INSERT INTO schema_version VALUES (10);")?;
         }
 
+        if version < 11 {
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS allowed_registries (
+                    registry TEXT PRIMARY KEY
+                );
+                INSERT OR IGNORE INTO allowed_registries (registry) VALUES ('docker.io');
+                INSERT OR IGNORE INTO allowed_registries (registry) VALUES ('ghcr.io');",
+            )?;
+            self.conn
+                .execute_batch("INSERT INTO schema_version VALUES (11);")?;
+        }
+
         tx.commit()?;
         Ok(())
     }

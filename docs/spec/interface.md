@@ -403,3 +403,16 @@ Absent specification bugs, anything that is not defined here is either defined i
 > The client identity key file must be created with owner-read/write-only permissions.
 > Seedling-ctl must refuse to load a client identity key file whose group or world
 > permission bits are set, and must report an error.
+
+## Registry Allowlist
+
+> i[registry.list]
+> `/registries/list` returns the current registry allowlist.
+
+> i[registry.add]
+> `/registries/add { registry }` adds a registry hostname to the allowlist.
+> Adding a registry that is already present is a no-op.
+
+> i[registry.remove]
+> `/registries/remove { registry }` removes a registry hostname from the allowlist.
+> All registered apps are re-evaluated after a registry is removed; any app whose images reference the removed registry will receive a `disallowed_registry` fault.

@@ -10,6 +10,7 @@ pub mod faults;
 pub mod history;
 pub mod identity;
 pub mod lifecycle;
+pub mod registries;
 pub mod registry;
 pub mod scheduler;
 

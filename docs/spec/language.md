@@ -419,10 +419,18 @@ This is currently the only value.
 > Container is an interface (you can't obtain a `Container`-typed value) for the common builder methods, instance methods, and semantics of container workload definitions.
 
 > l[container.image]
-> The `container.image(uri: string)` builder method sets the URI of the container image to be used for using this container.
-> Image URIs are interpreted by the underlying container runtime provider, which may be [Podman](https://docs.podman.io/en/latest/markdown/podman-pull.1.html#source) or [Kubernetes](https://kubernetes.io/docs/concepts/containers/images/#image-names).
+> The `container.image(uri: string)` builder method sets the container image reference.
+> Image references must be fully qualified: `registry/path:tag` or `registry/path@algorithm:hex`.
+> The registry component is the hostname (with optional port) before the first `/` and must contain at least one `.` or a `:` to distinguish it from a path component.
+> A tag or digest must be present; bare `registry/path` references without a version specifier are rejected.
 >
 > A container without an `image` set may be inoperable.
+
+> l[container.image.registry-allowlist]
+> After BSL evaluation, every image reference is checked against the operator-configured registry allowlist.
+> If an image's registry is not in the allowlist, a fault of kind `disallowed_registry` is filed for the app.
+> The fault is cleared when the app is re-evaluated and all image registries pass the check.
+> The default allowlist contains `docker.io` and `ghcr.io`.
 
 > l[container.command]
 > The `container.command(name: string)` or `container.command(entrypoint: string[])` builder method overrides the container's entrypoint (the executable to run).
