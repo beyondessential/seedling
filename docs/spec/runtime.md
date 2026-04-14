@@ -570,3 +570,78 @@ Absent specification bugs, anything that is not defined here is either defined i
 > a prerouting NAT rule (ingress traffic); and traffic whose source and destination both fall
 > within the node's /48 prefix. The chain's default policy must remain accept so that
 > forwarded traffic unrelated to the node's /48 prefix is not affected.
+
+## Resolver
+
+> r[infra.resolver]
+> The runtime must run a CoreDNS infrastructure container that provides DNS forwarding and
+> caching to all workload containers. The resolver container follows the same lifecycle as
+> the proxy container: it is started when workloads are present and torn down when no
+> workloads remain.
+
+> r[infra.resolver.config]
+> The runtime must generate a CoreDNS configuration (Corefile) that always includes
+> forwarding to the host's upstream resolvers and response caching. When
+> [NAT64 is active](#r--infra.nat64.mode), the configuration must additionally include the
+> `dns64` plugin synthesising AAAA records under the well-known prefix `64:ff9b::/96`.
+
+> r[infra.resolver.address]
+> The resolver must listen on a stable node-wide IPv6 address derived from the node prefix,
+> so that all workload containers can reach it at a predictable address.
+
+> r[infra.resolver.startup]
+> The runtime must ensure the resolver container is running and healthy before beginning the
+> reconciliation loop. On each startup, the runtime verifies resolver health and restarts
+> the resolver if necessary.
+
+> r[infra.resolver.upgrade]
+> When the resolver container image changes, the runtime must upgrade it using the same
+> blue/green strategy used for the [proxy](#r--infra.proxy.upgrade).
+
+## Container DNS
+
+> r[infra.pod.dns]
+> Every workload container must be configured to use the [resolver](#r--infra.resolver) as
+> its DNS server. The runtime must pass the resolver's address to the container runtime so
+> that the container's `/etc/resolv.conf` points at the resolver.
+
+## NAT64
+
+> r[infra.nat64.mode]
+> The runtime must accept a NAT64 mode setting via a command-line argument. The accepted
+> values are:
+>
+> - `auto` (default) — the runtime probes for existing NAT64 infrastructure on startup and
+>   enables its own NAT64 only if none is detected.
+> - `enabled` — the runtime always provides NAT64.
+> - `disabled` — the runtime never provides NAT64.
+
+> r[infra.nat64.detection]
+> In `auto` mode, the runtime must detect existing NAT64 infrastructure by resolving the
+> well-known name `ipv4only.arpa` (RFC 7050) for AAAA records. If the response contains a
+> synthesised AAAA record (i.e. an address outside the `ipv4only.arpa` canonical addresses
+> `192.0.0.170` and `192.0.0.171`), the network already provides NAT64 and DNS64; the
+> runtime must not activate its own. Otherwise, the runtime must activate NAT64. Detection
+> is performed once at startup.
+
+> r[infra.nat64.translator]
+> When NAT64 is active, the runtime must configure a Jool stateful NAT64 translator instance
+> using the well-known prefix `64:ff9b::/96`. The translator must be operational before any
+> workload containers are started.
+
+> r[infra.nat64.translator.lifecycle]
+> The runtime must ensure the Jool instance exists on every startup and must remove it during
+> graceful shutdown. If the Jool kernel module is not available and NAT64 is required
+> (`enabled` mode or `auto` mode with no external NAT64 detected), the runtime must report
+> an error and file a fault.
+
+> r[infra.nat64.forwarding]
+> When NAT64 is active, the runtime must ensure that IPv6 and IPv4 forwarding are enabled on
+> the host, and that a route for `64:ff9b::/96` exists so that container traffic destined
+> for the NAT64 prefix reaches the translator.
+
+> r[infra.nat64.dns64]
+> When NAT64 is active, the [resolver configuration](#r--infra.resolver.config) must include
+> the `dns64` plugin so that DNS lookups for IPv4-only names return synthesised AAAA records
+> under `64:ff9b::/96`. When NAT64 is not active, the `dns64` plugin must be omitted from
+> the resolver configuration.
