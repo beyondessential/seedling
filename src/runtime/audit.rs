@@ -111,3 +111,93 @@ pub fn spawn_audit_task(
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use tempfile::TempDir;
+
+    use super::*;
+
+    fn test_event(app: &str) -> OiEvent {
+        OiEvent::AppRegistered {
+            timestamp: jiff::Timestamp::now(),
+            app: app.to_owned(),
+        }
+    }
+
+    #[test]
+    // r[verify audit.log.path]
+    fn open_creates_parent_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let nested = tmp.path().join("a").join("b").join("audit.log");
+
+        let _writer = AuditWriter::open(&nested).unwrap();
+
+        assert!(nested.parent().unwrap().is_dir());
+        assert!(nested.exists());
+    }
+
+    #[test]
+    // r[verify audit.log.format]
+    fn write_event_produces_json_line() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("audit.log");
+
+        let mut writer = AuditWriter::open(&path).unwrap();
+        writer.write_event(&test_event("testapp")).unwrap();
+
+        let contents = fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), 1);
+
+        let val: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(val["type"], "AppRegistered");
+        assert_eq!(val["app"], "testapp");
+        assert!(val["timestamp"].is_string());
+    }
+
+    #[test]
+    // r[verify audit.log.rotation]
+    fn reopen_after_rotation() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("audit.log");
+        let rotated = tmp.path().join("audit.log.1");
+
+        let mut writer = AuditWriter::open(&path).unwrap();
+        writer.write_event(&test_event("before")).unwrap();
+
+        fs::rename(&path, &rotated).unwrap();
+
+        writer.write_event(&test_event("after")).unwrap();
+
+        assert!(path.exists());
+        let contents = fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), 1);
+
+        let val: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(val["app"], "after");
+    }
+
+    #[test]
+    fn write_multiple_events() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("audit.log");
+
+        let mut writer = AuditWriter::open(&path).unwrap();
+        writer.write_event(&test_event("app1")).unwrap();
+        writer.write_event(&test_event("app2")).unwrap();
+        writer.write_event(&test_event("app3")).unwrap();
+
+        let contents = fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), 3);
+
+        for line in &lines {
+            let val: serde_json::Value = serde_json::from_str(line).unwrap();
+            assert_eq!(val["type"], "AppRegistered");
+        }
+    }
+}
