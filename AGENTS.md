@@ -29,4 +29,5 @@
 - Do not annotate pure runtime or control-plane behaviors in BSL definition code when there is no corresponding BSL-facing implementation at all.
 - Use `tracey query uncovered --spec-impl runtime/main` (etc) to select different specs when using tracey.
 - When we log errors to tracing in the server, we should consider also filing a fault. Also the reverse: wherever we file a fault, we probably also want to log an error.
+- There are agent skills available in docs/skill.
 </llm-rules>
