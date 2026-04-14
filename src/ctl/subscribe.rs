@@ -34,18 +34,16 @@ pub async fn subscribe(endpoint: SocketAddr, fingerprint: String, identity: &Cli
             }
         };
 
-        // Connection succeeded — reset reconnect state so that a future
-        // disconnection gets a fresh timeout window.
+        // Connection succeeded — reset backoff so the next retry starts fast.
         backoff = Duration::from_secs(1);
-        deadline = tokio::time::Instant::now() + RECONNECT_TIMEOUT;
 
         match run_subscribe_session(&client).await {
             SessionOutcome::GracefulClose => return,
             SessionOutcome::Error(e) => {
-                if tokio::time::Instant::now() >= deadline {
-                    eprintln!("event stream lost, reconnect timeout exceeded: {e}");
-                    std::process::exit(1);
-                }
+                // Reset the deadline when we start reconnecting, not when the
+                // session began — otherwise a long-lived session causes the
+                // deadline to expire before the first retry.
+                deadline = tokio::time::Instant::now() + RECONNECT_TIMEOUT;
                 eprintln!("event stream lost, reconnecting in {backoff:?}: {e}");
                 tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(MAX_BACKOFF);
