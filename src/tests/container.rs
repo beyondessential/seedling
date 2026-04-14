@@ -13,7 +13,7 @@ fn container_is_an_interface_on_deployment_and_job() {
             .env("PORT", "80");
 
         app.job("task")
-            .image("tools")
+            .image("docker.io/library/tools:latest")
             .command("run")
             .arg("--fast")
             .env("MODE", "batch");
