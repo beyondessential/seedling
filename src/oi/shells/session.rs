@@ -155,13 +155,14 @@ pub(crate) async fn open_shell_session(
     let result_slot: Arc<Mutex<Option<ShellExecTarget>>> = Arc::new(Mutex::new(None));
     let result_slot_for_task = Arc::clone(&result_slot);
     let db_for_task = Arc::clone(&state.db);
+    let script_limits = state.script_limits.clone();
     let operation_id = OperationId::new();
     let op_id_for_log = operation_id.clone();
     let app_name_for_task = app_name.clone();
     let shell_name_for_task = shell_name.clone();
 
     let run_result = tokio::task::spawn_blocking(move || {
-        let (engine, mut scope, _) = crate::setup_language();
+        let (engine, mut scope, _) = crate::setup_language(&script_limits);
         let ast = match engine.compile(&script) {
             Ok(a) => a,
             Err(e) => {

@@ -348,6 +348,7 @@ pub(crate) fn register_app(state: &OiState, params: AppScriptParams) -> HandlerR
             name.to_owned(),
             script.to_owned(),
             Arc::clone(&state.tick_notify),
+            &state.script_limits,
         )
         .map_err(|e| OiError::script_error(e.to_string()))?;
     }
@@ -505,10 +506,12 @@ pub(crate) fn update_app(state: &OiState, params: AppScriptParams) -> HandlerRes
             crate::runtime::apps::load_params_for_app(&db, name)
                 .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db params: {e}")))?
         };
-        state
-            .registry
-            .write()
-            .reload(name, script.to_owned(), &loaded_params);
+        state.registry.write().reload(
+            name,
+            script.to_owned(),
+            &loaded_params,
+            &state.script_limits,
+        );
         {
             let reg = state.registry.read();
             if let Some(entry) = reg.get(name) {

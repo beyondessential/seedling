@@ -67,7 +67,10 @@ fn re_evaluate_all_apps(state: &OiState) {
             let db = state.db.lock();
             apps::load_params_for_app(&db, name).unwrap_or_default()
         };
-        state.registry.write().reload(name, script, &loaded_params);
+        state
+            .registry
+            .write()
+            .reload(name, script, &loaded_params, &state.script_limits);
         {
             let reg = state.registry.read();
             if let Some(entry) = reg.get(name) {

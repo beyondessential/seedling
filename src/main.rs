@@ -23,6 +23,49 @@ struct Args {
 
     #[command(flatten)]
     logging: LoggingArgs,
+
+    #[command(flatten)]
+    script_limits: ScriptLimitArgs,
+}
+
+#[derive(clap::Args)]
+struct ScriptLimitArgs {
+    /// Maximum operations per script evaluation (0 = unlimited)
+    #[arg(long, default_value_t = 100_000)]
+    script_max_operations: u64,
+
+    /// Maximum function call nesting depth (0 = unlimited)
+    #[arg(long, default_value_t = 64)]
+    script_max_call_depth: usize,
+
+    /// Maximum expression nesting depth (0 = unlimited)
+    #[arg(long, default_value_t = 64)]
+    script_max_expr_depth: usize,
+
+    /// Maximum string size in bytes (0 = unlimited)
+    #[arg(long, default_value_t = 1_048_576)]
+    script_max_string_size: usize,
+
+    /// Maximum array size in elements (0 = unlimited)
+    #[arg(long, default_value_t = 10_000)]
+    script_max_array_size: usize,
+
+    /// Maximum object map size in entries (0 = unlimited)
+    #[arg(long, default_value_t = 10_000)]
+    script_max_map_size: usize,
+}
+
+impl From<ScriptLimitArgs> for seedling::ScriptLimits {
+    fn from(a: ScriptLimitArgs) -> Self {
+        Self {
+            max_operations: a.script_max_operations,
+            max_call_levels: a.script_max_call_depth,
+            max_expr_depth: a.script_max_expr_depth,
+            max_string_size: a.script_max_string_size,
+            max_array_size: a.script_max_array_size,
+            max_map_size: a.script_max_map_size,
+        }
+    }
 }
 
 #[tokio::main]
@@ -58,6 +101,8 @@ async fn main() {
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("ring crypto provider already installed");
+
+    let script_limits: seedling::ScriptLimits = args.script_limits.into();
 
     let data_dir = args.data_dir;
 
@@ -103,12 +148,13 @@ async fn main() {
     // App registry — load registered apps from DB
     // ---------------------------------------------------------------------------
 
-    let registry =
-        tokio::task::block_in_place(|| AppRegistry::load_from_db(&db, Arc::clone(&tick_notify)))
-            .unwrap_or_else(|e| {
-                tracing::error!("failed to load registered apps: {e}");
-                std::process::exit(1);
-            });
+    let registry = tokio::task::block_in_place(|| {
+        AppRegistry::load_from_db(&db, Arc::clone(&tick_notify), &script_limits)
+    })
+    .unwrap_or_else(|e| {
+        tracing::error!("failed to load registered apps: {e}");
+        std::process::exit(1);
+    });
 
     let registry = Arc::new(RwLock::new(registry));
     let db = Arc::new(Mutex::new(db));
@@ -363,6 +409,7 @@ async fn main() {
         container_runtime: Arc::clone(&driver.container),
         node_prefix,
         event_tx: event_tx.clone(),
+        script_limits,
     });
 
     let (_fingerprint, oi_endpoint) = oi::run(Arc::clone(&oi_state), oi::DEFAULT_PORT, &data_dir)

@@ -31,4 +31,5 @@ pub struct OiState {
     /// shell session containers.
     pub node_prefix: ipnet::Ipv6Net,
     pub event_tx: crate::oi::events::EventSender,
+    pub script_limits: crate::ScriptLimits,
 }

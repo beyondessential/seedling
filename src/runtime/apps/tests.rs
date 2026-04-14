@@ -209,7 +209,12 @@ fn registry_load_from_db_restores_params() {
 
     upsert_param(&db, "myapp", "hostname", "restored.example.com").expect("upsert");
 
-    let registry = AppRegistry::load_from_db(&db, Arc::new(Notify::new())).expect("load registry");
+    let registry = AppRegistry::load_from_db(
+        &db,
+        Arc::new(Notify::new()),
+        &crate::ScriptLimits::default(),
+    )
+    .expect("load registry");
     let entry = registry.get("myapp").expect("app should be registered");
 
     assert!(

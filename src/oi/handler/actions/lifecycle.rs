@@ -54,8 +54,9 @@ fn run_operation_loop(
     active_progress: Arc<RwLock<Option<OperationProgress>>>,
     tick_notify: Arc<Notify>,
     event_tx: &events::EventSender,
+    script_limits: &crate::ScriptLimits,
 ) -> bool {
-    let (engine, mut scope, _) = crate::setup_language();
+    let (engine, mut scope, _) = crate::setup_language(script_limits);
     let ast = match engine.compile(script) {
         Ok(a) => a,
         Err(e) => {
@@ -283,6 +284,7 @@ pub(crate) fn spawn_accepted_operation(
     };
     let db_path = state.db_path.clone();
     let event_tx = state.event_tx.clone();
+    let script_limits = state.script_limits.clone();
     let is_install = action_name == "install";
 
     tokio::spawn(async move {
@@ -314,6 +316,7 @@ pub(crate) fn spawn_accepted_operation(
                     active_progress,
                     tick_notify,
                     &event_tx,
+                    &script_limits,
                 )
             })
             .await

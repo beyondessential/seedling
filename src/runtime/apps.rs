@@ -109,8 +109,9 @@ impl AppRegistry {
         name: String,
         script: String,
         tick_notify: Arc<Notify>,
+        limits: &crate::ScriptLimits,
     ) -> Result<(), ScriptError> {
-        let (app, script_error) = match evaluate_script(&name, &script, &BTreeMap::new()) {
+        let (app, script_error) = match evaluate_script(&name, &script, &BTreeMap::new(), limits) {
             Ok(a) => (a, None),
             Err(e) => {
                 tracing::warn!(app = %name, error = %e, "script has errors at registration; params may need to be set");
@@ -144,8 +145,14 @@ impl AppRegistry {
     /// On success the entry's app and script are updated and any active
     /// script-error fault is cleared. On failure the existing AppDef keeps
     /// running and the fault is recorded — the caller always succeeds.
-    pub fn reload(&mut self, name: &str, script: String, params: &BTreeMap<String, String>) {
-        match evaluate_script(name, &script, params) {
+    pub fn reload(
+        &mut self,
+        name: &str,
+        script: String,
+        params: &BTreeMap<String, String>,
+        limits: &crate::ScriptLimits,
+    ) {
+        match evaluate_script(name, &script, params, limits) {
             Ok(app) => {
                 if let Some(entry) = self.entries.get_mut(name) {
                     entry.script = script;
@@ -186,7 +193,11 @@ impl AppRegistry {
     }
 
     // i[app.persist]
-    pub fn load_from_db(db: &Db, tick_notify: Arc<Notify>) -> rusqlite::Result<Self> {
+    pub fn load_from_db(
+        db: &Db,
+        tick_notify: Arc<Notify>,
+        limits: &crate::ScriptLimits,
+    ) -> rusqlite::Result<Self> {
         let mut registry = Self::new();
         let mut stmt = db.conn.prepare(
             "SELECT name, script, installed, uninstalling FROM registered_apps ORDER BY name",
@@ -215,7 +226,7 @@ impl AppRegistry {
                     BTreeMap::new()
                 }
             };
-            let (app, script_error) = match evaluate_script(&name, &script, &stored) {
+            let (app, script_error) = match evaluate_script(&name, &script, &stored, limits) {
                 Ok(a) => (a, None),
                 Err(e) => {
                     tracing::warn!("failed to reload script for app '{name}': {e}");
@@ -304,8 +315,9 @@ fn evaluate_script(
     name: &str,
     script: &str,
     params: &BTreeMap<String, String>,
+    limits: &crate::ScriptLimits,
 ) -> Result<App, ScriptError> {
-    let (engine, mut scope, app) = setup_language();
+    let (engine, mut scope, app) = setup_language(limits);
     // i[param.store] — pre-populate stored values so is_set()/value() work
     // during script evaluation. AppDef.params (the BSL-declared set) is
     // populated by the script itself via app.param() calls.

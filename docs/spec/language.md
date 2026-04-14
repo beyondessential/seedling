@@ -30,33 +30,33 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > l[bsl.limits]
 > The runtime must constrain the BSL script engine to prevent unbounded resource consumption.
->
+
 > l[bsl.limits.operations]
 > The engine must enforce a maximum number of operations per script evaluation.
 > When the limit is reached, evaluation must fail with an error.
 > The default limit is 100 000 operations.
 > The operator may override this limit at startup.
->
+
 > l[bsl.limits.call-depth]
 > The engine must enforce a maximum function call nesting depth.
 > The default limit is 64.
 > The operator may override this limit at startup.
->
+
 > l[bsl.limits.expr-depth]
 > The engine must enforce a maximum expression nesting depth.
 > The default limit is 64.
 > The operator may override this limit at startup.
->
+
 > l[bsl.limits.string-size]
 > The engine must enforce a maximum string length in bytes.
 > The default limit is 1 048 576 (1 MiB).
 > The operator may override this limit at startup.
->
+
 > l[bsl.limits.array-size]
 > The engine must enforce a maximum array size in elements.
 > The default limit is 10 000.
 > The operator may override this limit at startup.
->
+
 > l[bsl.limits.map-size]
 > The engine must enforce a maximum object map size in entries.
 > The default limit is 10 000.
@@ -758,5 +758,3 @@ This spec defines the semantics of the Runtime Instance as far as BSL is concern
 > The `termination.ensure_success()` method throws if the resource terminated without succeeding.
 
 <!-- TODO: more Termination methods -->
-
-

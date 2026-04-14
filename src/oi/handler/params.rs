@@ -59,7 +59,10 @@ pub(crate) fn set_param(state: &OiState, params: SetParamParams) -> HandlerResul
         crate::runtime::apps::load_params_for_app(&db, app)
             .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?
     };
-    state.registry.write().reload(app, script, &loaded_params);
+    state
+        .registry
+        .write()
+        .reload(app, script, &loaded_params, &state.script_limits);
 
     {
         let reg = state.registry.read();
@@ -145,7 +148,10 @@ pub(crate) fn unset_param(state: &OiState, params: UnsetParamParams) -> HandlerR
         crate::runtime::apps::load_params_for_app(&db, app)
             .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?
     };
-    state.registry.write().reload(app, script, &loaded_params);
+    state
+        .registry
+        .write()
+        .reload(app, script, &loaded_params, &state.script_limits);
 
     {
         let reg = state.registry.read();
