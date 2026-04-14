@@ -56,7 +56,7 @@ pub fn find_instance(db: &Db, id: InstanceId) -> rusqlite::Result<Option<Resourc
 
     match result {
         Ok((app, kind_str, name, is_scaled, display_name)) => {
-            let kind = parse_resource_kind(&kind_str);
+            let kind = parse_resource_kind(&kind_str)?;
             let variant = if is_scaled != 0 {
                 InstanceVariant::Scaled
             } else {
@@ -228,8 +228,13 @@ pub fn query_observations(
             recorded_at: row.get(1)?,
             resource: instance.clone(),
             obs_kind: row.get(2)?,
-            payload: serde_json::from_str(&row.get::<_, String>(3)?)
-                .unwrap_or(serde_json::Value::Null),
+            payload: serde_json::from_str(&row.get::<_, String>(3)?).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    3,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })?,
         })
     })?;
     rows.collect()
@@ -305,8 +310,13 @@ pub fn query_autonomous_operations(
             recorded_at: row.get(1)?,
             resource_id,
             operation: row.get(2)?,
-            provenance: serde_json::from_str(&row.get::<_, String>(3)?)
-                .unwrap_or(serde_json::Value::Null),
+            provenance: serde_json::from_str(&row.get::<_, String>(3)?).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    3,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })?,
             outcome: row.get(4)?,
             completed_at: row.get(5)?,
         })
@@ -389,15 +399,27 @@ pub fn load_action_log(
             "Stop" => CallKind::Stop,
             "Reconcile" => CallKind::Reconcile,
             "Query" => CallKind::Query,
-            _ => CallKind::Start,
+            other => {
+                return Err(rusqlite::Error::FromSqlConversionFailure(
+                    1,
+                    rusqlite::types::Type::Text,
+                    format!("unknown call kind: {other}").into(),
+                ));
+            }
         };
 
         let resources: Vec<ResourceInstance> =
-            serde_json::from_str(&resources_str).unwrap_or_default();
+            serde_json::from_str(&resources_str).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    2,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })?;
 
         let barrier = match (barrier_state, barrier_deadline, barrier_satisfied) {
             (Some(state_str), Some(deadline), Some(satisfied)) => {
-                let required_state = parse_lifecycle_state(&state_str);
+                let required_state = parse_lifecycle_state(&state_str)?;
                 Some(BarrierRecord {
                     required_state,
                     deadline_secs: deadline as u64,
@@ -468,32 +490,40 @@ pub fn clear_current_operation(db: &Db) -> rusqlite::Result<()> {
     Ok(())
 }
 
-fn parse_lifecycle_state(s: &str) -> LifecycleState {
+fn parse_lifecycle_state(s: &str) -> Result<LifecycleState, rusqlite::Error> {
     match s {
-        "Pending" => LifecycleState::Pending,
-        "Scheduled" => LifecycleState::Scheduled,
-        "Running" => LifecycleState::Running,
-        "Ready" => LifecycleState::Ready,
-        "Terminating" => LifecycleState::Terminating,
-        "Terminated" => LifecycleState::Terminated,
-        "Unscheduled" => LifecycleState::Unscheduled,
-        _ => LifecycleState::Pending,
+        "Pending" => Ok(LifecycleState::Pending),
+        "Scheduled" => Ok(LifecycleState::Scheduled),
+        "Running" => Ok(LifecycleState::Running),
+        "Ready" => Ok(LifecycleState::Ready),
+        "Terminating" => Ok(LifecycleState::Terminating),
+        "Terminated" => Ok(LifecycleState::Terminated),
+        "Unscheduled" => Ok(LifecycleState::Unscheduled),
+        other => Err(rusqlite::Error::FromSqlConversionFailure(
+            0,
+            rusqlite::types::Type::Text,
+            format!("unknown lifecycle state: {other}").into(),
+        )),
     }
 }
 
-fn parse_resource_kind(s: &str) -> ResourceKind {
+fn parse_resource_kind(s: &str) -> Result<ResourceKind, rusqlite::Error> {
     match s {
-        "Parameter" => ResourceKind::Parameter,
-        "Service" => ResourceKind::Service,
-        "HttpService" => ResourceKind::HttpService,
-        "ExternalService" => ResourceKind::ExternalService,
-        "Ingress" => ResourceKind::Ingress,
-        "Deployment" => ResourceKind::Deployment,
-        "Job" => ResourceKind::Job,
-        "Volume" => ResourceKind::Volume,
-        "ExternalVolume" => ResourceKind::ExternalVolume,
-        "Action" => ResourceKind::Action,
-        _ => ResourceKind::Deployment,
+        "Parameter" => Ok(ResourceKind::Parameter),
+        "Service" => Ok(ResourceKind::Service),
+        "HttpService" => Ok(ResourceKind::HttpService),
+        "ExternalService" => Ok(ResourceKind::ExternalService),
+        "Ingress" => Ok(ResourceKind::Ingress),
+        "Deployment" => Ok(ResourceKind::Deployment),
+        "Job" => Ok(ResourceKind::Job),
+        "Volume" => Ok(ResourceKind::Volume),
+        "ExternalVolume" => Ok(ResourceKind::ExternalVolume),
+        "Action" => Ok(ResourceKind::Action),
+        other => Err(rusqlite::Error::FromSqlConversionFailure(
+            0,
+            rusqlite::types::Type::Text,
+            format!("unknown resource kind: {other}").into(),
+        )),
     }
 }
 

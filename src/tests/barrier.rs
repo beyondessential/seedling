@@ -350,7 +350,7 @@ fn replay_idempotency() {
     assert!(matches!(r, OperationResult::Completed));
 
     // No duplicate call_index entries in the log
-    let entries = log.load();
+    let entries = log.load().unwrap();
     let indices: Vec<usize> = entries.iter().map(|e| e.call_index).collect();
     let unique_count = {
         let mut v = indices.clone();

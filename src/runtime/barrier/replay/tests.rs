@@ -70,7 +70,7 @@ fn db_action_log_barrier_suspends_then_resumes() {
     );
     assert!(matches!(result, OperationResult::Suspended(_)));
 
-    let entries = log.load();
+    let entries = log.load().unwrap();
     assert_eq!(entries.len(), 1, "one entry after first pass");
     let barrier = entries[0]
         .barrier
@@ -101,7 +101,7 @@ fn db_action_log_barrier_suspends_then_resumes() {
     );
     assert!(matches!(r, OperationResult::Completed));
 
-    let entries = log.load();
+    let entries = log.load().unwrap();
     assert_eq!(entries.len(), 1, "no duplicate entries after second pass");
 }
 
@@ -204,7 +204,7 @@ fn db_action_log_sequential_barriers() {
     );
     assert!(matches!(r, OperationResult::Completed));
 
-    let entries = log.load();
+    let entries = log.load().unwrap();
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].call_index, 0);
     assert_eq!(entries[1].call_index, 1);

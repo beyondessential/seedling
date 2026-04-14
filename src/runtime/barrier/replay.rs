@@ -28,7 +28,7 @@ use crate::runtime::registry::InstanceRegistry;
 /// history work (items 1–6 of the runtime foundation plan).
 pub trait ActionLog: Send + Sync {
     /// Load all committed entries for replay.
-    fn load(&self) -> Vec<ActionLogEntry>;
+    fn load(&self) -> Result<Vec<ActionLogEntry>, Box<dyn std::error::Error + Send + Sync>>;
 
     /// Commit new or updated entries. Entries are identified by `call_index`;
     /// committing an entry that already exists updates its barrier satisfaction
@@ -53,8 +53,8 @@ impl InMemoryActionLog {
 }
 
 impl ActionLog for InMemoryActionLog {
-    fn load(&self) -> Vec<ActionLogEntry> {
-        self.entries.lock().clone()
+    fn load(&self) -> Result<Vec<ActionLogEntry>, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(self.entries.lock().clone())
     }
 
     fn commit(&self, new_entries: &[ActionLogEntry]) {
@@ -108,9 +108,9 @@ impl DbActionLog {
 }
 
 impl ActionLog for DbActionLog {
-    fn load(&self) -> Vec<super::ActionLogEntry> {
+    fn load(&self) -> Result<Vec<super::ActionLogEntry>, Box<dyn std::error::Error + Send + Sync>> {
         let db = self.db.lock();
-        history::load_action_log(&db, &self.operation_id).unwrap_or_default()
+        Ok(history::load_action_log(&db, &self.operation_id)?)
     }
 
     fn commit(&self, entries: &[super::ActionLogEntry]) {
@@ -225,7 +225,15 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     let op_id_str = operation_id.0.clone();
 
     // Build the replay context from committed log entries.
-    let committed = log.load();
+    let committed = match log.load() {
+        Ok(entries) => entries,
+        Err(e) => {
+            return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
+                format!("failed to load action log: {e}").into(),
+                rhai::Position::NONE,
+            )));
+        }
+    };
     let ctx = Arc::new(Mutex::new(ReplayContext::new(
         operation_id,
         committed,
@@ -342,7 +350,14 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     let pending = ctx.lock().take_pending();
     log.commit(&pending);
     if let Some(ap) = &active_progress {
-        let mut progress = OperationProgress::from_log(&log.load());
+        let loaded = match log.load() {
+            Ok(entries) => entries,
+            Err(e) => {
+                tracing::warn!("failed to load action log for progress update: {e}");
+                vec![]
+            }
+        };
+        let mut progress = OperationProgress::from_log(&loaded);
         progress.dynamic_defs = ctx.lock().dynamic_defs.clone();
         *ap.write() = Some(progress);
     }
