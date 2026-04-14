@@ -29,6 +29,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 > server's SPKI fingerprint is captured during the TLS handshake before that rejection occurs.
 > After capturing the fingerprint the client must confirm it with the user before proceeding with
 > an authenticated connection using the real client identity.
+> The probe connection must be structurally indistinguishable from a normal authenticated
+> connection: a network observer or the server itself cannot determine whether a given connection
+> is a probe or a real session.
 
 > i[transport.client-auth]
 > Every client connection must present a raw public key (RFC 7250 SPKI) as its mTLS certificate.
