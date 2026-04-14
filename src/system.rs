@@ -9,6 +9,7 @@ use crate::system::types::{
 };
 
 pub mod actuator;
+pub mod nat64;
 pub mod observer;
 pub mod reconcile;
 pub mod translate;

@@ -43,6 +43,10 @@ struct Args {
 
     #[command(flatten)]
     gc: GcArgs,
+
+    /// NAT64 mode: auto (default), enabled, or disabled
+    #[arg(long, default_value = "auto")]
+    nat64: seedling::system::nat64::Nat64Mode,
 }
 
 #[derive(clap::Args)]
