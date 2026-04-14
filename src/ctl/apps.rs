@@ -35,6 +35,25 @@ pub(super) enum AppsCommand {
     },
     /// Open an interactive shell session
     Shell { app: String, name: String },
+    /// Stream container logs
+    Logs {
+        /// App name
+        app: String,
+        /// Resource name (optional filter)
+        resource: Option<String>,
+        /// Instance display-name suffix (requires resource)
+        #[arg(long)]
+        instance: Option<String>,
+        /// Follow log output
+        #[arg(short, long)]
+        follow: bool,
+        /// Number of historical lines
+        #[arg(long, default_value = "100")]
+        tail: u64,
+        /// Print raw JSON instead of text
+        #[arg(long)]
+        json: bool,
+    },
     /// Forward a local port to a service
     Forward {
         app: String,
@@ -159,6 +178,27 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
         AppsCommand::Shell { app, name } => {
             let code = super::shell::open_shell(client, app, name).await;
             std::process::exit(code);
+        }
+        AppsCommand::Logs {
+            app,
+            resource,
+            instance,
+            follow,
+            tail,
+            json,
+        } => {
+            let mut params = serde_json::json!({
+                "app": app,
+                "follow": follow,
+                "tail": tail,
+            });
+            if let Some(r) = resource {
+                params["resource"] = serde_json::Value::String(r);
+            }
+            if let Some(i) = instance {
+                params["instance"] = serde_json::Value::String(i);
+            }
+            super::logs::stream_logs(client, params, json, follow).await;
         }
         AppsCommand::Forward {
             app,

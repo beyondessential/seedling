@@ -27,6 +27,7 @@ fn default_tail() -> u64 {
 }
 
 /// Validate log stream params and produce a `LogStreamOptions`, or return an OI error.
+// i[logs.target]
 pub(crate) fn validate_params(
     state: &Arc<OiState>,
     params: LogStreamParams,
@@ -87,7 +88,9 @@ pub(crate) fn validate_params(
 
     Ok(LogStreamOptions {
         target,
+        // i[logs.follow]
         follow: params.follow,
+        // i[logs.tail]
         tail: params.tail,
     })
 }
@@ -95,6 +98,7 @@ pub(crate) fn validate_params(
 /// Stream log entries from the journal to a QUIC unidirectional stream.
 /// Called after the bidi handshake is complete.
 // i[logs.stream]
+// i[logs.entry]
 pub(crate) async fn log_stream_task(
     mut send: quinn::SendStream,
     mut rx: tokio::sync::mpsc::Receiver<crate::system::journal::LogEntry>,

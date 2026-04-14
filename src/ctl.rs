@@ -15,6 +15,8 @@ mod client;
 mod forward;
 #[path = "ctl/known_hosts.rs"]
 mod known_hosts;
+#[path = "ctl/logs.rs"]
+mod logs;
 #[path = "ctl/op.rs"]
 mod op;
 #[path = "ctl/shell.rs"]

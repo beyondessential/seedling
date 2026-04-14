@@ -24,6 +24,20 @@ pub(super) enum OpCommand {
         #[command(subcommand)]
         command: ForwardsCommand,
     },
+    /// Stream infrastructure logs
+    Logs {
+        /// Infrastructure component: "proxy" or "resolver"
+        infra: String,
+        /// Follow log output
+        #[arg(short, long)]
+        follow: bool,
+        /// Number of historical lines
+        #[arg(long, default_value = "100")]
+        tail: u64,
+        /// Print raw JSON instead of text
+        #[arg(long)]
+        json: bool,
+    },
     /// Subscribe to event feed (streams JSON to stdout)
     Events,
     /// Container registry allowlist
@@ -172,6 +186,19 @@ pub(super) async fn dispatch(
                 );
             }
         },
+        OpCommand::Logs {
+            infra,
+            follow,
+            tail,
+            json,
+        } => {
+            let params = serde_json::json!({
+                "infra": infra,
+                "follow": follow,
+                "tail": tail,
+            });
+            super::logs::stream_logs(client, params, json, follow).await;
+        }
         OpCommand::Events => {
             super::subscribe::subscribe(endpoint, fingerprint.to_owned(), identity).await;
         }
