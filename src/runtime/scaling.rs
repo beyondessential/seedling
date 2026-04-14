@@ -2,6 +2,7 @@ use rusqlite::params;
 
 use crate::runtime::db::Db;
 
+// r[impl scaling.decision]
 /// Load the stored scaling decision for a specific deployment.
 /// Returns `None` if no decision has been stored.
 pub fn load_scaling_decision(
@@ -22,6 +23,7 @@ pub fn load_scaling_decision(
     }
 }
 
+// r[impl scaling.decision]
 /// Store a scaling decision for a deployment.
 pub fn save_scaling_decision(
     db: &Db,
@@ -45,6 +47,7 @@ pub fn delete_scaling_decisions_for_app(db: &Db, app: &str) -> rusqlite::Result<
     Ok(())
 }
 
+// r[impl scaling.clamp]
 /// Clamp all stored scaling decisions for an app to the bounds defined
 /// in the provided deployments map. Removes decisions for deployments
 /// that no longer exist.
@@ -82,6 +85,7 @@ pub fn clamp_scaling_decisions(
     Ok(())
 }
 
+// r[impl scaling.decision]
 /// Compute the effective scale for a deployment: the stored decision
 /// clamped to bounds, or the lower bound if no decision exists.
 pub fn effective_scale(

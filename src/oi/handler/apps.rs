@@ -515,6 +515,12 @@ pub(crate) fn deregister_app(state: &OiState, params: AppParams) -> HandlerResul
             tracing::warn!(app = %name, "failed to clear faults during deregister: {e}");
         }
     }
+    {
+        let db = state.db.lock();
+        if let Err(e) = scaling::delete_scaling_decisions_for_app(&db, name) {
+            tracing::warn!(app = %name, "failed to clean up scaling decisions during deregister: {e}");
+        }
+    }
 
     // Remove from in-memory registry.
     state.registry.write().deregister(name);
@@ -607,6 +613,33 @@ pub(crate) fn update_app(state: &OiState, params: AppScriptParams) -> HandlerRes
                 let db = state.db.lock();
                 crate::runtime::apps::sync_script_error_fault(&db, entry);
                 crate::runtime::apps::sync_registry_faults(&db, entry);
+            }
+        }
+        // r[impl scaling.clamp]
+        {
+            let reg = state.registry.read();
+            if let Some(entry) = reg.get(name) {
+                let def = entry.app.def.lock();
+                let deployment_bounds: std::collections::BTreeMap<String, (u16, u16)> = def
+                    .resources
+                    .iter()
+                    .filter_map(|(id, resource)| {
+                        if let Resource::Deployment(deployment) = resource {
+                            let dep_def = deployment.def.lock();
+                            Some((
+                                id.name.as_str().to_owned(),
+                                (dep_def.scale.start, dep_def.scale.end),
+                            ))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                drop(def);
+                let db = state.db.lock();
+                if let Err(e) = scaling::clamp_scaling_decisions(&db, name, &deployment_bounds) {
+                    tracing::error!(app = %name, error = %e, "failed to clamp scaling decisions");
+                }
             }
         }
         // Wake reconciler to pick up new desired state.
