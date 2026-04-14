@@ -13,6 +13,7 @@ mod apps;
 mod faults;
 mod key_mgmt;
 mod params;
+mod registries;
 mod status;
 
 fn parse_params<T: DeserializeOwned>(params: Value) -> Result<T, OiError> {
@@ -92,6 +93,12 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8]) -> HandlerResult {
         }
         // i[fault.list]
         "/faults/list" => faults::list_faults(state, parse_params(req.params)?),
+        // i[registry.list]
+        "/registries/list" => registries::list_registries(state),
+        // i[registry.add]
+        "/registries/add" => registries::add_registry(state, parse_params(req.params)?),
+        // i[registry.remove]
+        "/registries/remove" => registries::remove_registry(state, parse_params(req.params)?),
         other => Err(OiError::not_found(format!("unknown method: {other}"))),
     };
 

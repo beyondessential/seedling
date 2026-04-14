@@ -85,6 +85,99 @@ fn validate_mountpoint(path: &str) -> Result<(), Box<EvalAltResult>> {
     Ok(())
 }
 
+// l[impl container.image]
+fn validate_image_ref(image: &str) -> Result<(), Box<EvalAltResult>> {
+    let (name_tag, digest) = match image.split_once('@') {
+        Some((left, right)) => (left, Some(right)),
+        None => (image, None),
+    };
+
+    if let Some(digest) = digest {
+        let Some((algo, hex)) = digest.split_once(':') else {
+            return Err(format!("invalid image digest (expected algorithm:hex): '{image}'").into());
+        };
+        if algo.is_empty()
+            || !algo
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        {
+            return Err(format!("invalid digest algorithm: '{algo}'").into());
+        }
+        if hex.len() < 32
+            || !hex
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        {
+            return Err(format!(
+                "invalid digest hex (must be at least 32 lowercase hex characters): '{hex}'"
+            )
+            .into());
+        }
+    }
+
+    let Some((registry, rest)) = name_tag.split_once('/') else {
+        return Err(format!(
+            "image must be fully qualified (registry/path[:tag][@digest]): '{image}'"
+        )
+        .into());
+    };
+
+    if !registry.contains('.') && !registry.contains(':') {
+        return Err(format!(
+            "image registry must be a hostname (contain '.' or ':'): '{registry}'"
+        )
+        .into());
+    }
+
+    let (path, tag) = if let Some(colon_pos) = rest.rfind(':') {
+        let (p, t) = rest.split_at(colon_pos);
+        (p, Some(&t[1..]))
+    } else {
+        (rest, None)
+    };
+
+    if tag.is_none() && digest.is_none() {
+        return Err(format!(
+            "image must have a tag or digest (registry/path:tag or registry/path@digest): '{image}'"
+        )
+        .into());
+    }
+
+    if let Some(tag) = tag
+        && (tag.is_empty()
+            || !tag
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-'))
+    {
+        return Err(format!("invalid image tag: '{tag}'").into());
+    }
+
+    if path.is_empty() {
+        return Err(format!("image path must not be empty: '{image}'").into());
+    }
+    for segment in path.split('/') {
+        if segment.is_empty() {
+            return Err(format!("image path contains empty segment: '{image}'").into());
+        }
+        if !segment.chars().all(|c| {
+            c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_' || c == '-'
+        }) {
+            return Err(
+                format!("image path segment contains invalid characters: '{segment}'").into(),
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Extract the registry from a validated image reference.
+/// Returns the part before the first `/` (hostname with optional port).
+pub fn image_registry(image: &str) -> Option<&str> {
+    let name_tag = image.split_once('@').map_or(image, |(left, _)| left);
+    name_tag.split_once('/').map(|(registry, _)| registry)
+}
+
 use super::{
     Freezable, Holder,
     enums::OnExit,
@@ -120,6 +213,7 @@ impl ContainerDef {
             "image",
             move |this: &mut T, image: &str| -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
+                validate_image_ref(image)?;
                 ext(this).lock().image = Some(image.into());
                 Ok(this.clone())
             },

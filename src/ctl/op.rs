@@ -24,6 +24,11 @@ pub(super) enum OpCommand {
     },
     /// Subscribe to event feed (streams JSON to stdout)
     Events,
+    /// Container registry allowlist
+    Registries {
+        #[command(subcommand)]
+        command: RegistriesCommand,
+    },
     /// User/key management
     User {
         #[command(subcommand)]
@@ -51,6 +56,16 @@ pub(super) enum ForwardsCommand {
     },
     /// Stop a port forward from the server side
     Stop { forward_id: String },
+}
+
+#[derive(Subcommand)]
+pub(super) enum RegistriesCommand {
+    /// List allowed registries
+    List,
+    /// Add a registry to the allowlist
+    Add { registry: String },
+    /// Remove a registry from the allowlist
+    Remove { registry: String },
 }
 
 #[derive(Subcommand)]
@@ -115,6 +130,35 @@ pub(super) async fn dispatch(client: &OiClient, cmd: OpCommand) {
                         .request(
                             "/forwards/stop",
                             serde_json::json!({ "forward_id": forward_id }),
+                        )
+                        .await,
+                );
+            }
+        },
+        OpCommand::Registries { command } => match command {
+            RegistriesCommand::List => {
+                print_result(
+                    client
+                        .request("/registries/list", serde_json::json!({}))
+                        .await,
+                );
+            }
+            RegistriesCommand::Add { registry } => {
+                print_result(
+                    client
+                        .request(
+                            "/registries/add",
+                            serde_json::json!({ "registry": registry }),
+                        )
+                        .await,
+                );
+            }
+            RegistriesCommand::Remove { registry } => {
+                print_result(
+                    client
+                        .request(
+                            "/registries/remove",
+                            serde_json::json!({ "registry": registry }),
                         )
                         .await,
                 );
