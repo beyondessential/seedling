@@ -83,7 +83,10 @@ impl Reconciler {
                 .filter(|f| {
                     matches!(
                         f.kind.as_str(),
-                        "container_start_failed" | "start_failed" | "observe_failed"
+                        "container_start_failed"
+                            | "start_failed"
+                            | "observe_failed"
+                            | "stop_failed"
                     ) && f.instance_id.as_deref() == Some(&inst_hex)
                 })
                 .collect();
@@ -100,6 +103,32 @@ impl Reconciler {
         Self::file_instance_faults(&db, app, &update.start_failures, "start_failed");
         Self::file_instance_faults(&db, app, &update.stop_failures, "stop_failed");
         Self::file_instance_faults(&db, app, &update.observe_failures, "observe_failed");
+
+        // Clear stop_failed faults for instances that were successfully stopped
+        // this tick (present in stop_failures last tick but not this tick and
+        // the unit is no longer loaded) or that are now running healthy.
+        // The unit_healthy path above covers the "now healthy" case; here we
+        // cover instances whose desired state is Unscheduled and whose unit has
+        // disappeared (the stop ultimately succeeded).
+        let stopped_instances: Vec<_> = update
+            .observations
+            .iter()
+            .filter(|(_, kind, _)| *kind == "stop_sent")
+            .map(|(inst, _, _)| inst.id.to_hex())
+            .collect();
+        if !stopped_instances.is_empty() {
+            let active_faults = faults::list_active_faults(&db, Some(app)).unwrap_or_default();
+            for f in active_faults {
+                if f.kind == "stop_failed"
+                    && f.instance_id
+                        .as_ref()
+                        .is_some_and(|id| stopped_instances.contains(id))
+                    && let Err(e) = faults::clear_fault(&db, &f.id, app)
+                {
+                    tracing::warn!(app = %app, fault_id = %f.id, "failed to clear stop_failed fault: {e}");
+                }
+            }
+        }
     }
 
     pub(super) fn file_volume_actuation_faults(

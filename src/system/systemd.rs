@@ -285,8 +285,17 @@ impl SystemdManager {
         let proxy = Systemd1ManagerProxy::new(&self.conn)
             .await
             .context(DBusSnafu)?;
-        proxy.stop_unit(name, "replace").await.context(DBusSnafu)?;
-        Ok(())
+        match proxy.stop_unit(name, "replace").await {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                let msg = e.to_string().to_lowercase();
+                if msg.contains("no such unit") || msg.contains("not loaded") {
+                    Ok(())
+                } else {
+                    Err(DBusSnafu.into_error(e))
+                }
+            }
+        }
     }
 
     async fn reset_failed_unit_impl(&self, name: &str) -> Result<(), SystemdError> {
