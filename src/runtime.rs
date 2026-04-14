@@ -14,6 +14,7 @@ pub mod identity;
 pub mod lifecycle;
 pub mod registries;
 pub mod registry;
+pub mod scaling;
 pub mod scheduler;
 
 pub use apps::{AppEntry, AppPhase, AppRegistry, AppStatus, ScriptError, transition_phase};

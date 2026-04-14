@@ -356,6 +356,20 @@ impl Db {
                 .execute_batch("INSERT INTO schema_version VALUES (14);")?;
         }
 
+        if version < 15 {
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS scaling_decisions (
+                    app        TEXT NOT NULL,
+                    deployment TEXT NOT NULL,
+                    scale      INTEGER NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (app, deployment)
+                );",
+            )?;
+            self.conn
+                .execute_batch("INSERT INTO schema_version VALUES (15);")?;
+        }
+
         tx.commit()?;
         Ok(())
     }
