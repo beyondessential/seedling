@@ -81,6 +81,15 @@ pub enum OiEvent {
         timestamp: Timestamp,
         forward_id: String,
     },
+    ScaleChanged {
+        timestamp: Timestamp,
+        app: String,
+        deployment: String,
+        scale: u16,
+        previous_scale: u16,
+        bounds_low: u16,
+        bounds_high: u16,
+    },
     ServerBusy {
         timestamp: Timestamp,
         reason: String,
@@ -275,6 +284,29 @@ pub fn forward_stopped(tx: &EventSender, forward_id: &str) {
         OiEvent::ForwardStopped {
             timestamp: now(),
             forward_id: forward_id.to_owned(),
+        },
+    );
+}
+
+pub fn scale_changed(
+    tx: &EventSender,
+    app: &str,
+    deployment: &str,
+    scale: u16,
+    previous_scale: u16,
+    bounds_low: u16,
+    bounds_high: u16,
+) {
+    emit(
+        tx,
+        OiEvent::ScaleChanged {
+            timestamp: now(),
+            app: app.to_owned(),
+            deployment: deployment.to_owned(),
+            scale,
+            previous_scale,
+            bounds_low,
+            bounds_high,
         },
     );
 }

@@ -743,7 +743,7 @@ pub(crate) fn scale_app(state: &OiState, params: ScaleParams) -> HandlerResult {
     };
     drop(def);
 
-    let new_scale = {
+    let (previous_scale, new_scale) = {
         let db = state.db.lock();
         let current = scaling::effective_scale(&db, name, deployment_name, low, high)
             .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
@@ -764,10 +764,20 @@ pub(crate) fn scale_app(state: &OiState, params: ScaleParams) -> HandlerResult {
         scaling::save_scaling_decision(&db, name, deployment_name, new_scale)
             .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
 
-        new_scale
+        (current, new_scale)
     };
 
     entry.tick_notify.notify_one();
+
+    crate::oi::events::scale_changed(
+        &state.event_tx,
+        name,
+        deployment_name,
+        new_scale,
+        previous_scale,
+        low,
+        high,
+    );
 
     Ok(json!({
         "scale": new_scale,

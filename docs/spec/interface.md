@@ -475,6 +475,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > | `ShellExited` | `session_id`, `exit_code` |
 > | `ForwardStarted` | `forward_id`, `app`, `service`, `port` |
 > | `ForwardStopped` | `forward_id` |
+> | `ScaleChanged` | `app`, `deployment`, `scale`, `previous_scale`, `bounds_low`, `bounds_high` |
 > | `ServerBusy` | `reason` |
 
 > i[event.ordering]
