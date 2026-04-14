@@ -42,6 +42,8 @@ fn make_entry(name: &str, script_error: Option<&str>) -> AppEntry {
         active_progress: Arc::new(parking_lot::RwLock::new(None)),
         tick_notify: Arc::new(Notify::new()),
         script_error: script_error.map(|msg| (msg.to_owned(), Timestamp::now())),
+        version_id: String::new(),
+        previous_version_id: None,
     }
 }
 

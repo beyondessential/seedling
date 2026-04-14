@@ -286,6 +286,7 @@ impl AppRegistry {
 }
 
 /// Insert a new app version row and return its ID.
+// i[app.version]
 pub fn insert_app_version(db: &Db, app: &str, script: &str) -> rusqlite::Result<String> {
     let id = uuid::Uuid::new_v4().to_string();
     let now = jiff::Timestamp::now().to_string();

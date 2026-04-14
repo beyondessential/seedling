@@ -33,6 +33,12 @@ pub(crate) struct AppScriptParams {
     pub script: String,
 }
 
+#[derive(Deserialize)]
+pub(crate) struct GetScriptParams {
+    pub app: String,
+    pub version: Option<String>,
+}
+
 fn validate_name(name: &str) -> Result<(), OiError> {
     // l[bsl.name]: ^[a-zA-Z][a-zA-Z0-9-]{1,60}[a-zA-Z0-9]$
     let ok = name.len() >= 3
@@ -129,6 +135,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     let entry = reg
         .get(name)
         .ok_or_else(|| OiError::not_found(format!("app not found: {name}")))?;
+    let version_id = entry.version_id.clone();
 
     let base_status = reg.status_of(name).unwrap();
     let status = effective_app_status(base_status, entry, &state.db.lock());
@@ -298,6 +305,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
 
     let mut desc = json!({
         "status": status.name(),
+        "version_id": version_id,
         "faults": app_faults_json,
         "resources": resources_json,
         "params": params_json,
@@ -321,6 +329,41 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     }
 
     Ok(desc)
+}
+
+// i[app.script]
+pub(crate) fn get_app_script(state: &OiState, params: GetScriptParams) -> HandlerResult {
+    let name = params.app.as_str();
+
+    {
+        let reg = state.registry.read();
+        if !reg.is_registered(name) {
+            return Err(OiError::not_found(format!("app not found: {name}")));
+        }
+    }
+
+    let db = state.db.lock();
+    let (version_id, script) = match &params.version {
+        Some(vid) => {
+            let (app, script) = crate::runtime::apps::get_version_script(&db, vid)
+                .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?
+                .ok_or_else(|| OiError::not_found(format!("version not found: {vid}")))?;
+            if app != name {
+                return Err(OiError::not_found(format!(
+                    "version {vid} does not belong to app {name}"
+                )));
+            }
+            (vid.clone(), script)
+        }
+        None => {
+            let (vid, script) = crate::runtime::apps::get_current_script(&db, name)
+                .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?
+                .ok_or_else(|| OiError::not_found(format!("no script found for app: {name}")))?;
+            (vid, script)
+        }
+    };
+
+    Ok(json!({ "script": script, "version_id": version_id }))
 }
 
 // i[app.register]
@@ -362,6 +405,19 @@ pub(crate) fn register_app(state: &OiState, params: AppScriptParams) -> HandlerR
             .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db persist: {e}")))?;
     }
 
+    // Create initial version.
+    let version_id = {
+        let db = state.db.lock();
+        crate::runtime::apps::insert_app_version(&db, name, script)
+            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db version: {e}")))?
+    };
+    {
+        let mut reg = state.registry.write();
+        if let Some(entry) = reg.get_mut(name) {
+            entry.version_id = version_id.clone();
+        }
+    }
+
     {
         let reg = state.registry.read();
         if let Some(entry) = reg.get(name) {
@@ -372,7 +428,7 @@ pub(crate) fn register_app(state: &OiState, params: AppScriptParams) -> HandlerR
     }
 
     tracing::info!(app = %name, "registered app");
-    crate::oi::events::app_registered(&state.event_tx, name);
+    crate::oi::events::app_registered(&state.event_tx, name, &version_id);
     Ok(json!({}))
 }
 
@@ -487,6 +543,11 @@ pub(crate) fn update_app(state: &OiState, params: AppScriptParams) -> HandlerRes
         }
     }
 
+    let previous_version_id = {
+        let reg = state.registry.read();
+        reg.get(name).map(|e| e.version_id.clone())
+    };
+
     let op_in_progress = state
         .registry
         .read()
@@ -535,6 +596,28 @@ pub(crate) fn update_app(state: &OiState, params: AppScriptParams) -> HandlerRes
             .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db update: {e}")))?;
     }
 
+    // Create new version.
+    let version_id = {
+        let db = state.db.lock();
+        crate::runtime::apps::insert_app_version(&db, name, script)
+            .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db version: {e}")))?
+    };
+    {
+        let mut reg = state.registry.write();
+        if let Some(entry) = reg.get_mut(name) {
+            entry.previous_version_id = previous_version_id.clone();
+            entry.version_id = version_id.clone();
+        }
+    }
+    // Persist again with updated version_id.
+    {
+        let reg = state.registry.read();
+        let entry = reg.get(name).expect("confirmed registered");
+        let db = state.db.lock();
+        AppRegistry::persist_app(&db, entry)
+            .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db update version: {e}")))?;
+    }
+
     // i[forward.script-update] — tear down any forward whose target service is
     // no longer present in the new AppDef (only when the AppDef was reloaded
     // immediately; deferred reload at evaluation boundary is handled separately).
@@ -562,6 +645,11 @@ pub(crate) fn update_app(state: &OiState, params: AppScriptParams) -> HandlerRes
     }
 
     tracing::info!(app = %name, "updated app");
-    crate::oi::events::app_updated(&state.event_tx, name);
+    crate::oi::events::app_updated(
+        &state.event_tx,
+        name,
+        &version_id,
+        previous_version_id.as_deref(),
+    );
     Ok(json!({}))
 }

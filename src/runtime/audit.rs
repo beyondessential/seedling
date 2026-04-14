@@ -124,6 +124,7 @@ mod tests {
         OiEvent::AppRegistered {
             timestamp: jiff::Timestamp::now(),
             app: app.to_owned(),
+            version_id: "test-version".to_owned(),
         }
     }
 

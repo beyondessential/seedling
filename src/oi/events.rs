@@ -6,6 +6,7 @@ use tokio::sync::broadcast;
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
 pub enum OiEvent {
+    // r[audit.log.version-ids]
     AppRegistered {
         timestamp: Timestamp,
         app: String,
@@ -15,6 +16,7 @@ pub enum OiEvent {
         timestamp: Timestamp,
         app: String,
     },
+    // r[audit.log.version-ids]
     AppUpdated {
         timestamp: Timestamp,
         app: String,
