@@ -83,6 +83,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[stream.events]
 > After a client sends a `/events/subscribe` request, the server opens one server-initiated unidirectional QUIC stream per connection and pushes events as newline-delimited JSON objects for the duration of the connection.
 
+> i[stream.logs]
+> After a client sends a `/logs/stream` request, the server opens one server-initiated unidirectional QUIC stream and pushes log entries as newline-delimited JSON objects. When follow mode is not requested, the stream closes after historical entries are exhausted. When follow mode is requested, the stream remains open and new entries are pushed as they appear until the client drops the connection.
+
 > i[stream.concurrency-limit]
 > The server enforces a configurable upper bound on the number of concurrently active bidirectional streams across all connections.
 > When the limit is reached, the server immediately replies with a `server_busy` error and closes the stream.
@@ -370,6 +373,54 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[forward.concurrent]
 > Multiple port forwards may be active concurrently, including to the same service.
 
+# Log Streaming
+
+> i[logs.stream]
+> `/logs/stream` opens a log stream for the specified target. The server acknowledges
+> the request on the bidirectional stream and then delivers log entries on a
+> server-initiated unidirectional stream as defined in [stream.logs](#i--stream.logs).
+
+> i[logs.target]
+> Exactly one of the following target selectors must be present in the request params:
+>
+> - `app` (string) — stream logs from workload containers belonging to the named app.
+>   May be combined with `resource` (string) to restrict to a single resource name,
+>   and further with `instance` (string) to restrict to a single instance display-name
+>   suffix.
+> - `infra` (string) — stream logs from an infrastructure component. Accepted values
+>   are `"proxy"` and `"resolver"`.
+>
+> Providing both `app` and `infra`, or neither, is an error (`requirements_invalid`).
+> Providing `resource` or `instance` without `app` is an error.
+> Providing `instance` without `resource` is an error.
+
+> i[logs.follow]
+> The boolean param `follow` (default `false`) controls whether the stream remains
+> open after historical entries are exhausted. When `true`, new log entries are pushed
+> as they are written.
+
+> i[logs.tail]
+> The integer param `tail` (default `100`) controls how many historical log entries
+> are delivered before switching to live entries (or closing the stream when follow
+> is `false`). A value of `0` skips history entirely.
+
+> i[logs.entry]
+> Each log entry is a JSON object with at least the following fields:
+>
+> | Field | Type | Description |
+> |---|---|---|
+> | `timestamp` | string (RFC 3339, microsecond precision) | When the entry was recorded |
+> | `message` | string | The log line content |
+> | `unit` | string | The process supervision unit that produced the entry |
+> | `stream` | string | `"stdout"` or `"stderr"` |
+>
+> For workload container logs the entry additionally includes `app` (string),
+> `resource_kind` (string), `resource` (string), and `instance` (string).
+> For infrastructure logs the entry includes `infra` (string).
+
+> i[logs.not-found]
+> If the `app` named in the request is not registered, the server returns `not_found`.
+
 # Fault Surface
 
 > i[fault.record]
@@ -462,6 +513,15 @@ Absent specification bugs, anything that is not defined here is either defined i
 > When the event stream or connection is lost, the client must automatically reconnect and re-subscribe.
 > Reconnection attempts use exponential backoff starting at one second, doubling up to a maximum interval of thirty seconds.
 > If no connection can be established within five minutes of continuous retrying the client must exit with an error.
+
+> i[ctl.logs.display]
+> By default the CLI formats log entries as human-readable text: each line shows the
+> timestamp, unit name, and message. When `--json` is passed, entries are printed as
+> raw JSON objects (one per line) exactly as received from the server.
+
+> i[ctl.logs.follow-interrupt]
+> In follow mode, the client must exit cleanly on SIGINT or SIGTERM by closing the
+> connection.
 
 > i[ctl.forward.stats]
 > While a port forward is active, the client must track:

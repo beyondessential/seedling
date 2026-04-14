@@ -407,6 +407,20 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[actuate.container.hardening]
 > Workload containers must be started with all Linux capabilities dropped, privilege escalation disabled, and a read-only root filesystem with a writable tmpfs at `/tmp`. A default PID limit of 256 and a file-descriptor limit of 65536 are applied. BSL configuration may adjust these defaults.
 
+> r[actuate.container.journal-metadata]
+> Workload containers must have their stdout and stderr directed to the system journal.
+> Each supervised container process must be tagged with structured journal fields that
+> identify the owning app, resource kind, resource name, and instance. These fields
+> must be present on every journal entry produced by the container so that log queries
+> can filter at any granularity (app, resource, or individual instance) without
+> relying on unit name conventions.
+
+> r[actuate.infra.journal-metadata]
+> Infrastructure containers (proxy, resolver) must have their stdout and stderr directed
+> to the system journal. Each infrastructure container must be tagged with a structured
+> journal field that identifies the infrastructure component so that log queries can
+> target infrastructure logs independently of workload logs.
+
 > r[actuate.volume.start]
 > Starting a Volume instance must create the named volume if it does not already exist, then apply any declared file writes to the volume.
 
