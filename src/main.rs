@@ -425,6 +425,8 @@ async fn main() {
     // Periodic garbage collection of operational tables.
     let _gc_handle = seedling::runtime::gc::spawn_gc_task(Arc::clone(&db), args.gc.into());
 
+    let shells = seedling::oi::shells::ShellRegistry::new();
+
     let mut reconciler = Reconciler::new(
         Arc::clone(&driver),
         node_prefix,
@@ -436,6 +438,7 @@ async fn main() {
         event_tx.clone(),
         dns_servers.clone(),
         nat64_active,
+        Arc::clone(&shells),
     );
 
     {
@@ -498,7 +501,7 @@ async fn main() {
         tick_notify: Arc::clone(&tick_notify),
         db_path: db_path.clone(),
         trusted_keys: seedling::oi::auth::new_trusted_keys(),
-        shells: seedling::oi::shells::ShellRegistry::new(),
+        shells,
         forwards: seedling::oi::forwards::ForwardRegistry::new(),
         container_runtime: Arc::clone(&driver.container),
         node_prefix,

@@ -11,6 +11,8 @@ pub struct ShellSession {
     pub app: String,
     pub name: String,
     pub opened_at: Timestamp,
+    /// The podman container name (display_name) for this session.
+    pub container_name: String,
     pub(crate) pty_master_fd: std::os::unix::io::RawFd,
     pub(crate) stop_tx: tokio::sync::oneshot::Sender<()>,
 }
@@ -21,6 +23,7 @@ pub struct ShellRecord {
     pub app: String,
     pub name: String,
     pub opened_at: Timestamp,
+    pub container_name: String,
 }
 
 pub struct ShellRegistry {
@@ -80,7 +83,18 @@ impl ShellRegistry {
                 app: s.app.clone(),
                 name: s.name.clone(),
                 opened_at: s.opened_at,
+                container_name: s.container_name.clone(),
             })
+            .collect()
+    }
+
+    /// Returns the set of container names for all currently active shell sessions.
+    /// Used by the reconciler to identify stray shell containers after a restart.
+    pub fn active_container_names(&self) -> std::collections::HashSet<String> {
+        self.sessions
+            .lock()
+            .values()
+            .map(|s| s.container_name.clone())
             .collect()
     }
 }

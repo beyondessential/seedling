@@ -348,6 +348,9 @@ pub(crate) async fn open_shell_session(
         &state.dns_servers,
     );
     container_spec.health = None;
+    container_spec
+        .labels
+        .insert("seedling.session".to_string(), "shell".to_string());
 
     let mut exec_handle = match state.container_runtime.exec(container_spec).await {
         Ok(h) => h,
@@ -380,6 +383,7 @@ pub(crate) async fn open_shell_session(
         app: app_name.clone(),
         name: shell_name.clone(),
         opened_at: jiff::Timestamp::now(),
+        container_name: container_name.clone(),
         pty_master_fd,
         stop_tx,
     });

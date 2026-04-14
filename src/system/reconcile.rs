@@ -13,7 +13,7 @@ use tracing::{error, warn};
 
 use crate::{
     defs::app::AppDef,
-    oi::events::EventSender,
+    oi::{events::EventSender, shells::ShellRegistry},
     runtime::{
         AppPhase, InstanceRegistry,
         apps::{AppRegistry, transition_phase},
@@ -79,6 +79,7 @@ pub struct Reconciler {
     app_registry: Arc<RwLock<AppRegistry>>,
     written_obs: HashSet<(InstanceId, &'static str)>,
     event_tx: EventSender,
+    shells: Arc<ShellRegistry>,
     /// Previous tick's lifecycle states, keyed by (app, instance_id_hex).
     prev_states: BTreeMap<(String, String), LifecycleState>,
     /// Whether seedling is providing its own NAT64 translator.
@@ -103,6 +104,7 @@ impl Reconciler {
         event_tx: EventSender,
         dns_servers: Vec<Ipv6Addr>,
         nat64_active: bool,
+        shells: Arc<ShellRegistry>,
     ) -> Self {
         let observer = Observer::new(Arc::clone(&driver));
         let actuator = Actuator::new(
@@ -127,6 +129,7 @@ impl Reconciler {
             prev_states: BTreeMap::new(),
             nat64_active,
             resolver_addr: None,
+            shells,
         }
     }
 
@@ -191,6 +194,8 @@ impl Reconciler {
     // r[fault.non-blocking]
     #[tracing::instrument(skip_all, level = "debug")]
     pub async fn tick(&mut self) -> bool {
+        self.reconcile_stray_shells().await;
+
         let apps = self.snapshot_all_apps();
 
         if apps.is_empty() {
@@ -396,6 +401,51 @@ impl Reconciler {
     // -----------------------------------------------------------------------
     // Idle teardown
     // -----------------------------------------------------------------------
+
+    /// Stop and remove any shell containers (labelled `seedling.session=shell`)
+    /// that have no corresponding active entry in the shell registry.
+    /// This cleans up containers and their pod networks that were left behind
+    /// after a seedling restart or an unclean session exit.
+    async fn reconcile_stray_shells(&self) {
+        use crate::system::types::ContainerFilter;
+
+        let active = self.shells.active_container_names();
+
+        let containers = match self
+            .driver
+            .container
+            .list(ContainerFilter {
+                label: Some(("seedling.session", "shell")),
+                ..Default::default()
+            })
+            .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("stray shell reconciliation: list containers failed: {e}");
+                return;
+            }
+        };
+
+        for container in containers {
+            let display_name = container
+                .labels
+                .get("seedling.display-name")
+                .cloned()
+                .unwrap_or_else(|| container.name.clone());
+
+            if !active.contains(&display_name) {
+                tracing::info!(container = %display_name, "removing stray shell container");
+                let _ = self
+                    .driver
+                    .container
+                    .remove_container(&display_name, true)
+                    .await;
+                let net_name = format!("seedling-{display_name}");
+                let _ = self.driver.container.remove_network(&net_name).await;
+            }
+        }
+    }
 
     async fn tear_down_idle(&mut self) {
         let empty_rules = DataPlaneRules::default();
