@@ -1,69 +1,122 @@
-use seedling::oi::client::OiClient;
+use std::{net::SocketAddr, time::Duration};
 
-pub async fn subscribe(client: &OiClient) {
-    // Send the /events/subscribe request on a normal bidi stream.
+use seedling::oi::{
+    client::{ClientAuth, OiClient},
+    keys::ClientIdentity,
+};
+
+// l[impl ctl.subscribe.reconnect]
+pub async fn subscribe(endpoint: SocketAddr, fingerprint: String, identity: &ClientIdentity) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(300);
+    let mut backoff = Duration::from_secs(1);
+    const MAX_BACKOFF: Duration = Duration::from_secs(30);
+
+    loop {
+        let client = match OiClient::connect(
+            endpoint,
+            ClientAuth::Fingerprint(fingerprint.clone()),
+            identity,
+        )
+        .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                if tokio::time::Instant::now() >= deadline {
+                    eprintln!("failed to reconnect within timeout: {e}");
+                    std::process::exit(1);
+                }
+                eprintln!("connection failed, retrying in {backoff:?}: {e}");
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(MAX_BACKOFF);
+                continue;
+            }
+        };
+
+        backoff = Duration::from_secs(1);
+
+        match run_subscribe_session(&client).await {
+            SessionOutcome::GracefulClose => return,
+            SessionOutcome::Error(e) => {
+                if tokio::time::Instant::now() >= deadline {
+                    eprintln!("event stream lost, reconnect timeout exceeded: {e}");
+                    std::process::exit(1);
+                }
+                eprintln!("event stream lost, reconnecting in {backoff:?}: {e}");
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(MAX_BACKOFF);
+            }
+            SessionOutcome::Interrupted => return,
+        }
+    }
+}
+
+enum SessionOutcome {
+    GracefulClose,
+    Error(String),
+    Interrupted,
+}
+
+// l[impl ctl.graceful-shutdown]
+async fn run_subscribe_session(client: &OiClient) -> SessionOutcome {
     let req_bytes = serde_json::to_vec(&serde_json::json!({
         "method": "/events/subscribe",
         "params": {},
     }))
     .expect("serialisation");
 
-    let (mut send, mut recv) = client.open_bi().await.unwrap_or_else(|e| {
-        tracing::error!("open_bi: {e}");
-        std::process::exit(1);
-    });
+    let (mut send, mut recv) = match client.open_bi().await {
+        Ok(s) => s,
+        Err(e) => return SessionOutcome::Error(format!("open_bi: {e}")),
+    };
 
-    send.write_all(&req_bytes).await.unwrap_or_else(|e| {
-        tracing::error!("write: {e}");
-        std::process::exit(1);
-    });
+    if let Err(e) = send.write_all(&req_bytes).await {
+        return SessionOutcome::Error(format!("write: {e}"));
+    }
     let _ = send.finish();
 
-    // Read the response to confirm success.
-    let resp = recv.read_to_end(64 * 1024).await.unwrap_or_else(|e| {
-        tracing::error!("read response: {e}");
-        std::process::exit(1);
-    });
+    let resp = match recv.read_to_end(64 * 1024).await {
+        Ok(r) => r,
+        Err(e) => return SessionOutcome::Error(format!("read response: {e}")),
+    };
 
     if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&resp)
         && v.get("error").is_some()
     {
         eprintln!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
-        std::process::exit(1);
+        return SessionOutcome::GracefulClose;
     }
 
-    // Accept the server-initiated unidirectional event stream.
-    let mut event_stream = client.accept_uni().await.unwrap_or_else(|e| {
-        tracing::error!("accept_uni: {e}");
-        std::process::exit(1);
-    });
+    let mut event_stream = match client.accept_uni().await {
+        Ok(s) => s,
+        Err(e) => return SessionOutcome::Error(format!("accept_uni: {e}")),
+    };
 
-    // Read newline-delimited JSON events and print them.
     let mut buf = Vec::new();
     let mut tmp = [0u8; 4096];
     loop {
-        match event_stream.read(&mut tmp).await {
-            Ok(Some(n)) => {
-                buf.extend_from_slice(&tmp[..n]);
-                // Process complete lines.
-                while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
-                    let line = &buf[..pos];
-                    if !line.is_empty() {
-                        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(line) {
-                            println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
-                        } else {
-                            println!("{}", String::from_utf8_lossy(line));
+        tokio::select! {
+            result = event_stream.read(&mut tmp) => {
+                match result {
+                    Ok(Some(n)) => {
+                        buf.extend_from_slice(&tmp[..n]);
+                        while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+                            let line = &buf[..pos];
+                            if !line.is_empty() {
+                                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(line) {
+                                    println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+                                } else {
+                                    println!("{}", String::from_utf8_lossy(line));
+                                }
+                            }
+                            buf.drain(..=pos);
                         }
                     }
-                    buf.drain(..=pos);
+                    Ok(None) => return SessionOutcome::Error("event stream closed".into()),
+                    Err(e) => return SessionOutcome::Error(format!("event stream: {e}")),
                 }
             }
-            Ok(None) => {
-                break;
-            }
-            Err(e) => {
-                tracing::error!("event stream error: {e}");
-                break;
+            _ = tokio::signal::ctrl_c() => {
+                return SessionOutcome::Interrupted;
             }
         }
     }

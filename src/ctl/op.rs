@@ -1,5 +1,7 @@
+use std::net::SocketAddr;
+
 use clap::Subcommand;
-use seedling::oi::client::OiClient;
+use seedling::oi::{client::OiClient, keys::ClientIdentity};
 
 use super::print_result;
 
@@ -81,7 +83,13 @@ pub(super) enum UserCommand {
     },
 }
 
-pub(super) async fn dispatch(client: &OiClient, cmd: OpCommand) {
+pub(super) async fn dispatch(
+    client: &OiClient,
+    cmd: OpCommand,
+    endpoint: SocketAddr,
+    fingerprint: &str,
+    identity: &ClientIdentity,
+) {
     match cmd {
         OpCommand::Status => {
             print_result(
@@ -165,7 +173,7 @@ pub(super) async fn dispatch(client: &OiClient, cmd: OpCommand) {
             }
         },
         OpCommand::Events => {
-            super::subscribe::subscribe(client).await;
+            super::subscribe::subscribe(endpoint, fingerprint.to_owned(), identity).await;
         }
         OpCommand::User { command } => match command {
             UserCommand::List => {

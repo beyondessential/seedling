@@ -141,7 +141,10 @@ async fn main() {
     #[cfg(not(debug_assertions))]
     let trust_any = false;
 
+    let resolved_fingerprint: String;
+
     if trust_any {
+        resolved_fingerprint = String::new();
         client = OiClient::connect(cli.endpoint, ClientAuth::TrustAny, &identity)
             .await
             .unwrap_or_else(|e| {
@@ -149,12 +152,13 @@ async fn main() {
                 std::process::exit(1);
             });
     } else if let Some(fp) = cli.fingerprint {
-        client = OiClient::connect(cli.endpoint, ClientAuth::Fingerprint(fp), &identity)
+        client = OiClient::connect(cli.endpoint, ClientAuth::Fingerprint(fp.clone()), &identity)
             .await
             .unwrap_or_else(|e| {
                 tracing::error!("{e}");
                 std::process::exit(1);
             });
+        resolved_fingerprint = fp;
     } else {
         let kh_path = known_hosts::KnownHosts::default_path();
         let mut kh = known_hosts::KnownHosts::load(&kh_path).unwrap_or_else(|e| {
@@ -217,17 +221,27 @@ async fn main() {
             }
         }
 
-        client = OiClient::connect(cli.endpoint, ClientAuth::Fingerprint(fp), &identity)
+        client = OiClient::connect(cli.endpoint, ClientAuth::Fingerprint(fp.clone()), &identity)
             .await
             .unwrap_or_else(|e| {
                 tracing::error!("{e}");
                 std::process::exit(1);
             });
+        resolved_fingerprint = fp;
     }
 
     match top_cmd {
         Command::Apps { command } => apps::dispatch(&client, command).await,
-        Command::Op { command } => op::dispatch(&client, command).await,
+        Command::Op { command } => {
+            op::dispatch(
+                &client,
+                command,
+                cli.endpoint,
+                &resolved_fingerprint,
+                &identity,
+            )
+            .await
+        }
         Command::Client { .. } => unreachable!("handled before connect"),
     }
 }
