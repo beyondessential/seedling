@@ -2,12 +2,14 @@ use std::net::Ipv6Addr;
 
 use ipnet::Ipv6Net;
 
-/// Network name for the resolver bridge.
-pub(crate) const RESOLVER_NETWORK: &str = "seedling-resolver";
+pub(crate) use config::generate_corefile;
+pub(crate) use startup::{
+    RESOLVER_BLUE, RESOLVER_GREEN, RESOLVER_NETWORK, ResolverAddrs, ResolverStartupError,
+    ensure_resolver_running, teardown_resolver,
+};
 
-/// Resolver blue/green container names.
-pub(crate) const RESOLVER_BLUE: &str = "seedling-resolver-blue";
-pub(crate) const RESOLVER_GREEN: &str = "seedling-resolver-green";
+mod config;
+mod startup;
 
 /// Derives the resolver network /64 prefix from the node prefix.
 ///
