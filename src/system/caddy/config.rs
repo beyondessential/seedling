@@ -30,9 +30,10 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
     let mut https_listens: Vec<String> = https_ports.iter().map(|p| format!(":{p}")).collect();
 
     for p in &quic_ports {
-        https_listens.push(format!(":{p}/quic"));
+        https_listens.push(format!(":{p}"));
     }
 
+    https_listens.sort();
     https_listens.dedup();
 
     if !https_listens.is_empty() {

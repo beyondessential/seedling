@@ -169,5 +169,9 @@ fn https_server_includes_quic_listener() {
         .filter_map(|v| v.as_str())
         .collect();
     assert!(listen_strs.contains(&":443"));
-    assert!(listen_strs.contains(&":443/quic"));
+    assert_eq!(
+        listen_strs.len(),
+        1,
+        "QUIC port duplicates HTTPS port, dedup should collapse them"
+    );
 }
