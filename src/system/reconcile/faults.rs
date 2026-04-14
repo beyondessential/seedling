@@ -1,4 +1,4 @@
-use crate::runtime::faults;
+use crate::runtime::{faults, identity::ResourceInstance};
 
 use super::{Reconciler, pods};
 
@@ -89,6 +89,97 @@ impl Reconciler {
                 if let Err(e) = faults::clear_fault(&db, &f.id, app) {
                     tracing::warn!(app = %app, fault_id = %f.id, "failed to clear unit-failure fault: {e}");
                 }
+            }
+        }
+    }
+
+    pub(super) fn file_registry_fault(&self, app: &str, description: &str) {
+        let db = self.db.lock();
+        let already_filed = faults::list_active_faults(&db, Some(app))
+            .unwrap_or_default()
+            .iter()
+            .any(|f| f.kind == "registry_error");
+        if !already_filed
+            && let Err(e) =
+                faults::file_fault(&db, app, None, None, None, "registry_error", description)
+        {
+            tracing::warn!(app = %app, "failed to file registry fault: {e}");
+        }
+    }
+
+    pub(super) fn file_instance_registry_faults(
+        &self,
+        app: &str,
+        update: &pods::PodActuationUpdate,
+    ) {
+        let db = self.db.lock();
+        for instance in &update.registry_failures {
+            Self::file_instance_registry_fault_inner(&db, app, instance);
+        }
+        // Any instance that started successfully no longer has a registry problem.
+        for (instance, _) in &update.image_pull_successes {
+            Self::clear_instance_registry_fault_inner(&db, app, instance);
+        }
+    }
+
+    fn file_instance_registry_fault_inner(
+        db: &crate::runtime::db::Db,
+        app: &str,
+        instance: &ResourceInstance,
+    ) {
+        let inst_hex = instance.id.to_hex();
+        let kind_str = format!("{:?}", instance.kind).to_lowercase();
+        let already_filed = faults::list_active_faults(db, Some(app))
+            .unwrap_or_default()
+            .iter()
+            .any(|f| f.kind == "registry_error" && f.instance_id.as_deref() == Some(&inst_hex));
+        if !already_filed {
+            let desc = format!(
+                "instance registry lookup failed for {}",
+                instance.display_name,
+            );
+            if let Err(e) = faults::file_fault(
+                db,
+                app,
+                Some(&kind_str),
+                instance.name.as_deref(),
+                Some(&inst_hex),
+                "registry_error",
+                &desc,
+            ) {
+                tracing::warn!(app = %app, instance = %inst_hex, "failed to file registry fault: {e}");
+            }
+        }
+    }
+
+    fn clear_instance_registry_fault_inner(
+        db: &crate::runtime::db::Db,
+        app: &str,
+        instance: &ResourceInstance,
+    ) {
+        let inst_hex = instance.id.to_hex();
+        let cleared: Vec<_> = faults::list_active_faults(db, Some(app))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|f| f.kind == "registry_error" && f.instance_id.as_deref() == Some(&inst_hex))
+            .collect();
+        for f in cleared {
+            if let Err(e) = faults::clear_fault(db, &f.id, app) {
+                tracing::warn!(app = %app, fault_id = %f.id, "failed to clear registry fault: {e}");
+            }
+        }
+    }
+
+    pub(super) fn clear_registry_faults(&self, app: &str) {
+        let db = self.db.lock();
+        let cleared: Vec<_> = faults::list_active_faults(&db, Some(app))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|f| f.kind == "registry_error")
+            .collect();
+        for f in cleared {
+            if let Err(e) = faults::clear_fault(&db, &f.id, app) {
+                tracing::warn!(app = %app, fault_id = %f.id, "failed to clear registry fault: {e}");
             }
         }
     }

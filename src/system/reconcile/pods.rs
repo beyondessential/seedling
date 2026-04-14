@@ -31,6 +31,8 @@ pub(super) struct PodActuationUpdate {
     pub unit_failures: Vec<ResourceInstance>,
     /// Instances whose backing unit was observed active/activating (clears prior failures).
     pub unit_healthy: Vec<ResourceInstance>,
+    /// Instances whose registry lookup failed during start.
+    pub registry_failures: Vec<ResourceInstance>,
 }
 
 struct PodInstanceResult {
@@ -40,6 +42,7 @@ struct PodInstanceResult {
     image_pull_success: Option<(ResourceInstance, String)>,
     unit_failure: Option<ResourceInstance>,
     unit_healthy: Option<ResourceInstance>,
+    registry_failure: Option<ResourceInstance>,
 }
 
 // r[observe.deployment]
@@ -61,6 +64,7 @@ async fn process_one_pod(
         image_pull_success: None,
         unit_failure: None,
         unit_healthy: None,
+        registry_failure: None,
     };
 
     // Observe current state before any actuation this tick.
@@ -212,6 +216,14 @@ async fn process_one_pod(
                     );
                     result.image_pull_failure = Some((dr.instance.clone(), reference.clone()));
                 }
+                Err(ref e @ crate::system::actuator::ActuateError::Registry { .. }) => {
+                    error!(
+                        instance = %dr.instance.display_name,
+                        error = %e,
+                        "pods: registry lookup failed during start"
+                    );
+                    result.registry_failure = Some(dr.instance.clone());
+                }
                 Err(e) => {
                     error!(
                         instance = %dr.instance.display_name,
@@ -266,6 +278,7 @@ pub(super) async fn observe_and_actuate(
         image_pull_successes: Vec::new(),
         unit_failures: Vec::new(),
         unit_healthy: Vec::new(),
+        registry_failures: Vec::new(),
     };
 
     for result in results.into_iter().flatten() {
@@ -284,6 +297,9 @@ pub(super) async fn observe_and_actuate(
         }
         if let Some(h) = result.unit_healthy {
             update.unit_healthy.push(h);
+        }
+        if let Some(f) = result.registry_failure {
+            update.registry_failures.push(f);
         }
     }
 

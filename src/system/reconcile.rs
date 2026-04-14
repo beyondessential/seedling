@@ -142,9 +142,16 @@ impl Reconciler {
                 }
             };
             let desired = match desired {
-                Ok(d) => d,
+                Ok(d) => {
+                    self.clear_registry_faults(&name);
+                    d
+                }
                 Err(e) => {
                     error!(app = %name, error = %e, "failed to compute desired state; skipping app this tick");
+                    self.file_registry_fault(
+                        &name,
+                        &format!("failed to compute desired state: {e}"),
+                    );
                     continue;
                 }
             };
@@ -229,18 +236,12 @@ impl Reconciler {
         self.run_uninstall_phase(&apps, &running_pods_by_app).await;
 
         // --- Compute routes (sync) ---
-        let (all_routes, route_obs) = match phases::compute_routes(
+        let (all_routes, route_obs) = phases::compute_routes(
             &apps,
             &running_pods_by_app,
             &self.node_prefix,
             &*self.registry,
-        ) {
-            Ok(pair) => pair,
-            Err(e) => {
-                error!(error = %e, "routes: registry lookup failed; skipping routes this tick");
-                (Vec::new(), Vec::new())
-            }
-        };
+        );
         self.persist_obs(route_obs);
 
         // --- Compute nftables + proxy (sync, gated on caddy) ---
@@ -256,33 +257,17 @@ impl Reconciler {
                 }
             };
 
-            let dp_rules = match phases::compute_nftables_rules(
+            let dp_rules = phases::compute_nftables_rules(
                 &apps,
                 &running_pods_by_app,
                 caddy_ip,
                 self.caddy_v4_addr,
                 &self.node_prefix,
                 &*self.registry,
-            ) {
-                Ok(rules) => rules,
-                Err(e) => {
-                    error!(error = %e, "nftables: registry lookup failed; skipping nftables and proxy this tick");
-                    return None;
-                }
-            };
+            );
 
-            let proxy_build = match phases::compute_proxy_config(
-                &apps,
-                &self.node_prefix,
-                &*self.registry,
-                caddy_addr,
-            ) {
-                Ok(build) => build,
-                Err(e) => {
-                    error!(error = %e, "proxy: registry lookup failed; skipping proxy this tick");
-                    return None;
-                }
-            };
+            let proxy_build =
+                phases::compute_proxy_config(&apps, &self.node_prefix, &*self.registry, caddy_addr);
 
             Some((dp_rules, proxy_build, caddy_addr))
         });
@@ -382,6 +367,7 @@ impl Reconciler {
             self.file_image_pull_faults(&app_name, &pod_update);
             // r[fault.container-start]
             self.file_unit_failure_faults(&app_name, &pod_update);
+            self.file_instance_registry_faults(&app_name, &pod_update);
             self.persist_obs(pod_update.observations);
             running_pods_by_app.insert(app_name, pod_update.running);
         }
