@@ -164,8 +164,13 @@ fn evaluate_script_injects_params_into_stored() {
     let mut params = BTreeMap::new();
     params.insert("hostname".to_owned(), "prod.example.com".to_owned());
 
-    let app = evaluate_script("test-app", r#"let h = app.param("hostname");"#, &params)
-        .expect("script should evaluate");
+    let app = evaluate_script(
+        "test-app",
+        r#"let h = app.param("hostname");"#,
+        &params,
+        &crate::ScriptLimits::default(),
+    )
+    .expect("script should evaluate");
 
     assert!(
         app.def.lock().params.contains("hostname"),
@@ -182,8 +187,13 @@ fn evaluate_script_injects_params_into_stored() {
 #[test]
 fn evaluate_script_absent_param_has_no_stored_value() {
     let params = BTreeMap::new();
-    let app = evaluate_script("test-app", r#"let h = app.param("hostname");"#, &params)
-        .expect("script should evaluate");
+    let app = evaluate_script(
+        "test-app",
+        r#"let h = app.param("hostname");"#,
+        &params,
+        &crate::ScriptLimits::default(),
+    )
+    .expect("script should evaluate");
 
     assert!(
         app.def.lock().params.contains("hostname"),

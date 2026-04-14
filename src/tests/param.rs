@@ -123,7 +123,7 @@ fn on_change_twice_on_same_param_throws() {
 fn stored_param_is_set_returns_true() {
     use std::collections::BTreeMap;
 
-    let (engine, mut scope, app) = crate::setup_language();
+    let (engine, mut scope, app) = crate::setup_language(&crate::ScriptLimits::default());
     {
         let mut stored = BTreeMap::new();
         stored.insert("hostname".to_owned(), "injected.example.com".to_owned());
@@ -150,7 +150,7 @@ fn stored_param_is_set_returns_true() {
 // i[verify param.store]
 #[test]
 fn unset_param_is_set_returns_false() {
-    let (engine, mut scope, app) = crate::setup_language();
+    let (engine, mut scope, app) = crate::setup_language(&crate::ScriptLimits::default());
     // No stored values pre-populated.
     crate::tests::run_script(
         &engine,
@@ -193,7 +193,7 @@ fn param_used_in_closure_captures_injected_value() {
     let mut stored = BTreeMap::new();
     stored.insert("version".to_owned(), "2.0".to_owned());
 
-    let (engine, mut scope, app) = crate::setup_language();
+    let (engine, mut scope, app) = crate::setup_language(&crate::ScriptLimits::default());
     *app.stored.lock() = stored;
 
     let ast = crate::tests::run_script(

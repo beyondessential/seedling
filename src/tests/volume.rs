@@ -22,7 +22,7 @@ fn volume_named() {
 // l[verify volume.type]
 #[test]
 fn volume_anonymous_disallowed_at_top_level() {
-    let (engine, mut scope, _app) = crate::setup_language();
+    let (engine, mut scope, _app) = crate::setup_language(&crate::ScriptLimits::default());
     let result = super::run_script(&engine, &mut scope, r#"let v = app.volume();"#);
     assert!(
         result.is_err(),

@@ -23,7 +23,7 @@ mod service;
 mod volume;
 
 pub fn run_test_script(source: &str) -> (Engine, Scope<'static>, defs::app::App, AST) {
-    let (engine, mut scope, app) = setup();
+    let (engine, mut scope, app) = setup(&crate::ScriptLimits::default());
     let ast = run_script(&engine, &mut scope, source).expect("script should run without error");
     (engine, scope, app, ast)
 }
@@ -34,7 +34,7 @@ pub fn run_test_script_app(source: &str) -> defs::app::App {
 }
 
 pub fn run_test_script_err(source: &str) -> Box<rhai::EvalAltResult> {
-    let (engine, mut scope, _app) = setup();
+    let (engine, mut scope, _app) = setup(&crate::ScriptLimits::default());
     run_script(&engine, &mut scope, source).expect_err("script should fail")
 }
 

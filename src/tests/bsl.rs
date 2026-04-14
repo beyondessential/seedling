@@ -16,10 +16,10 @@ fn bsl_is_rhai() {
 // l[verify bsl.scope]
 #[test]
 fn distinct_scope_per_script() {
-    let (engine1, mut scope1, _app1) = setup();
+    let (engine1, mut scope1, _app1) = setup(&crate::ScriptLimits::default());
     run_script(&engine1, &mut scope1, r#"let unique_var = 42;"#).unwrap();
 
-    let (engine2, mut scope2, _app2) = setup();
+    let (engine2, mut scope2, _app2) = setup(&crate::ScriptLimits::default());
     let result = run_script(&engine2, &mut scope2, r#"let x = unique_var;"#);
     assert!(
         result.is_err(),
