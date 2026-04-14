@@ -100,6 +100,77 @@ fn podman_args_add_host_ipv6() {
 }
 
 #[test]
+fn podman_args_hardening_defaults() {
+    let spec = ContainerSpec {
+        name: "n".to_string(),
+        image: "img".to_string(),
+        command: vec![],
+        entrypoint: vec![],
+        env: vec![],
+        mounts: vec![],
+        network: "net".to_string(),
+        labels: HashMap::new(),
+        health: None,
+        hosts: vec![],
+        memory: None,
+        cpus: None,
+        extra_caps: vec![],
+        writable_rootfs: false,
+        pids_limit: 256,
+    };
+
+    let args = podman_args(&spec);
+
+    assert!(args.contains(&"--cap-drop=ALL".to_string()));
+    assert!(!args.iter().any(|a| a.starts_with("--cap-add")));
+    assert!(args.contains(&"--security-opt".to_string()));
+    let secopt_pos = args.iter().position(|a| a == "--security-opt").unwrap();
+    assert_eq!(args[secopt_pos + 1], "no-new-privileges");
+    assert!(args.contains(&"--read-only".to_string()));
+    let tmpfs_pos = args.iter().position(|a| a == "--tmpfs").unwrap();
+    assert_eq!(args[tmpfs_pos + 1], "/tmp");
+    let pids_pos = args.iter().position(|a| a == "--pids-limit").unwrap();
+    assert_eq!(args[pids_pos + 1], "256");
+    let ulimit_pos = args.iter().position(|a| a == "--ulimit").unwrap();
+    assert_eq!(args[ulimit_pos + 1], "nofile=65536:65536");
+    assert!(!args.iter().any(|a| a.starts_with("--memory")));
+    assert!(!args.iter().any(|a| a.starts_with("--cpus")));
+}
+
+#[test]
+fn podman_args_hardening_overrides() {
+    let spec = ContainerSpec {
+        name: "n".to_string(),
+        image: "img".to_string(),
+        command: vec![],
+        entrypoint: vec![],
+        env: vec![],
+        mounts: vec![],
+        network: "net".to_string(),
+        labels: HashMap::new(),
+        health: None,
+        hosts: vec![],
+        memory: Some("512m".to_string()),
+        cpus: Some(1.5),
+        extra_caps: vec!["NET_RAW".to_string(), "NET_BIND_SERVICE".to_string()],
+        writable_rootfs: true,
+        pids_limit: 1024,
+    };
+
+    let args = podman_args(&spec);
+
+    assert!(args.contains(&"--cap-drop=ALL".to_string()));
+    assert!(args.contains(&"--cap-add=NET_RAW".to_string()));
+    assert!(args.contains(&"--cap-add=NET_BIND_SERVICE".to_string()));
+    assert!(!args.contains(&"--read-only".to_string()));
+    assert!(!args.iter().any(|a| a == "--tmpfs"));
+    let pids_pos = args.iter().position(|a| a == "--pids-limit").unwrap();
+    assert_eq!(args[pids_pos + 1], "1024");
+    assert!(args.contains(&"--memory=512m".to_string()));
+    assert!(args.contains(&"--cpus=1.5".to_string()));
+}
+
+#[test]
 fn node_mount_endpoint_is_fffe_one() {
     let prefix: Ipv6Net = "fd5e:ed12:3456:0500::/64".parse().unwrap();
     let endpoint = node_mount_addr(&prefix);
