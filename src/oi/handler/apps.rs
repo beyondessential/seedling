@@ -122,10 +122,22 @@ pub(crate) fn effective_app_status(
         if instances.is_empty() {
             return false;
         }
-        instances.iter().all(|inst| {
+        let mut has_ready = false;
+        for inst in &instances {
             let obs = query_observations(db, inst).unwrap_or_default();
-            matches!(derive_lifecycle_state(inst, &obs), LifecycleState::Ready)
-        })
+            let state = derive_lifecycle_state(inst, &obs);
+            if state == LifecycleState::Ready {
+                has_ready = true;
+            } else if state != LifecycleState::Unscheduled {
+                // Any instance in a non-terminal, non-ready state means
+                // this resource group is not fully healthy.
+                return false;
+            }
+            // Unscheduled instances (e.g. old singletons after a
+            // singleton-to-scaled transition) are inert — they have been
+            // intentionally torn down and must not drag the app to Degraded.
+        }
+        has_ready
     });
 
     if has_faults {
