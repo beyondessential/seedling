@@ -5,7 +5,7 @@ use parking_lot::Mutex;
 use crate::defs::resource::ResourceKind;
 use crate::runtime::db::Db;
 use crate::runtime::history;
-use crate::runtime::identity::ResourceInstance;
+use crate::runtime::identity::{InstanceVariant, ResourceInstance};
 
 /// Failure to look up or create an instance in the registry.
 #[derive(Debug)]
@@ -29,6 +29,14 @@ impl From<rusqlite::Error> for RegistryError {
     }
 }
 
+/// The result of resolving a scaled deployment group.
+pub struct ScaledGroup {
+    /// Instances that should be kept (length == the requested count).
+    pub keep: Vec<ResourceInstance>,
+    /// Pre-existing instances beyond the requested count that should be removed.
+    pub excess: Vec<ResourceInstance>,
+}
+
 /// Provides access to the instance registry during action-closure execution.
 ///
 /// The registry is the authoritative source for which instances exist and
@@ -44,6 +52,27 @@ pub trait InstanceRegistry: Send + Sync {
         kind: ResourceKind,
         name: Option<&str>,
     ) -> Result<ResourceInstance, RegistryError>;
+
+    /// Return exactly `count` scaled instances for the given group, creating
+    /// new ones if fewer than `count` exist, and returning any excess.
+    /// Existing instances are kept in creation order (oldest first).
+    fn ensure_scaled_group(
+        &self,
+        app: &str,
+        kind: ResourceKind,
+        name: Option<&str>,
+        count: u16,
+    ) -> Result<ScaledGroup, RegistryError>;
+
+    /// Return all existing instances (singleton + scaled) for the group.
+    /// Does not create anything. Used during uninstall to find everything
+    /// that needs to be torn down.
+    fn find_all_instances(
+        &self,
+        app: &str,
+        kind: ResourceKind,
+        name: Option<&str>,
+    ) -> Result<Vec<ResourceInstance>, RegistryError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -63,12 +92,14 @@ type InstanceRegistryKey = (String, ResourceKind, Option<String>);
 /// oracle is keyed with a separately-created instance.
 pub struct EphemeralInstanceRegistry {
     cache: Mutex<HashMap<InstanceRegistryKey, ResourceInstance>>,
+    scaled_cache: Mutex<HashMap<InstanceRegistryKey, Vec<ResourceInstance>>>,
 }
 
 impl EphemeralInstanceRegistry {
     pub fn new() -> Self {
         Self {
             cache: Mutex::new(HashMap::new()),
+            scaled_cache: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -98,6 +129,51 @@ impl InstanceRegistry for EphemeralInstanceRegistry {
         cache.insert(key, instance.clone());
         Ok(instance)
     }
+
+    fn ensure_scaled_group(
+        &self,
+        app: &str,
+        kind: ResourceKind,
+        name: Option<&str>,
+        count: u16,
+    ) -> Result<ScaledGroup, RegistryError> {
+        let key: InstanceRegistryKey = (app.to_owned(), kind, name.map(|s| s.to_owned()));
+        let mut scaled_cache = self.scaled_cache.lock();
+        let instances = scaled_cache.entry(key).or_default();
+
+        let count = usize::from(count);
+        while instances.len() < count {
+            let instance = ResourceInstance::new_scaled(app, kind, name.unwrap_or(""));
+            instances.push(instance);
+        }
+
+        let keep = instances[..count].to_vec();
+        let excess = instances[count..].to_vec();
+        Ok(ScaledGroup { keep, excess })
+    }
+
+    fn find_all_instances(
+        &self,
+        app: &str,
+        kind: ResourceKind,
+        name: Option<&str>,
+    ) -> Result<Vec<ResourceInstance>, RegistryError> {
+        let key: InstanceRegistryKey = (app.to_owned(), kind, name.map(|s| s.to_owned()));
+        let mut result = Vec::new();
+
+        let cache = self.cache.lock();
+        if let Some(singleton) = cache.get(&key) {
+            result.push(singleton.clone());
+        }
+        drop(cache);
+
+        let scaled_cache = self.scaled_cache.lock();
+        if let Some(scaled) = scaled_cache.get(&key) {
+            result.extend(scaled.iter().cloned());
+        }
+
+        Ok(result)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -125,5 +201,42 @@ impl InstanceRegistry for DbInstanceRegistry {
     ) -> Result<ResourceInstance, RegistryError> {
         let db = self.db.lock();
         Ok(history::get_or_create_singleton(&db, app, kind, name)?)
+    }
+
+    fn ensure_scaled_group(
+        &self,
+        app: &str,
+        kind: ResourceKind,
+        name: Option<&str>,
+        count: u16,
+    ) -> Result<ScaledGroup, RegistryError> {
+        let db = self.db.lock();
+        let existing = history::find_instances_for_group(&db, app, kind, name)?;
+
+        let mut scaled: Vec<ResourceInstance> = existing
+            .into_iter()
+            .filter(|i| i.variant == InstanceVariant::Scaled)
+            .collect();
+
+        let count = usize::from(count);
+        while scaled.len() < count {
+            let instance = ResourceInstance::new_scaled(app, kind, name.unwrap_or(""));
+            history::insert_instance(&db, &instance)?;
+            scaled.push(instance);
+        }
+
+        let keep = scaled[..count].to_vec();
+        let excess = scaled[count..].to_vec();
+        Ok(ScaledGroup { keep, excess })
+    }
+
+    fn find_all_instances(
+        &self,
+        app: &str,
+        kind: ResourceKind,
+        name: Option<&str>,
+    ) -> Result<Vec<ResourceInstance>, RegistryError> {
+        let db = self.db.lock();
+        Ok(history::find_instances_for_group(&db, app, kind, name)?)
     }
 }
