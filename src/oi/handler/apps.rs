@@ -39,6 +39,13 @@ pub(crate) struct GetScriptParams {
     pub version: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub(crate) struct ScaleParams {
+    pub app: String,
+    pub deployment: String,
+    pub direction: String,
+}
+
 fn validate_name(name: &str) -> Result<(), OiError> {
     // l[bsl.name]: ^[a-zA-Z][a-zA-Z0-9-]{1,60}[a-zA-Z0-9]$
     let ok = name.len() >= 3
@@ -652,4 +659,9 @@ pub(crate) fn update_app(state: &OiState, params: AppScriptParams) -> HandlerRes
         previous_version_id.as_deref(),
     );
     Ok(json!({}))
+}
+
+// i[scale.set]
+pub(crate) fn scale_app(state: &OiState, params: ScaleParams) -> HandlerResult {
+    todo!()
 }

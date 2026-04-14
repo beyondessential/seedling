@@ -54,6 +54,13 @@ pub(super) enum AppsCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Adjust deployment scale
+    Scale {
+        app: String,
+        deployment: String,
+        #[command(subcommand)]
+        direction: ScaleDirection,
+    },
     /// Forward a local port to a service
     Forward {
         app: String,
@@ -64,6 +71,16 @@ pub(super) enum AppsCommand {
         #[arg(long)]
         local_port: Option<u16>,
     },
+}
+
+#[derive(Subcommand)]
+pub(super) enum ScaleDirection {
+    /// Scale up by one instance
+    Up,
+    /// Scale down by one instance
+    Down,
+    /// Scale to the minimum (lower bound)
+    ToMin,
 }
 
 #[derive(Subcommand)]
@@ -199,6 +216,25 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                 params["instance"] = serde_json::Value::String(i);
             }
             super::logs::stream_logs(client, params, json, follow).await;
+        }
+        AppsCommand::Scale {
+            app,
+            deployment,
+            direction,
+        } => {
+            let dir = match direction {
+                ScaleDirection::Up => "up",
+                ScaleDirection::Down => "down",
+                ScaleDirection::ToMin => "to-min",
+            };
+            print_result(
+                client
+                    .request(
+                        "/apps/scale",
+                        serde_json::json!({ "app": app, "deployment": deployment, "direction": dir }),
+                    )
+                    .await,
+            );
         }
         AppsCommand::Forward {
             app,

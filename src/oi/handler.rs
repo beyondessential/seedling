@@ -61,6 +61,8 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8]) -> HandlerResult {
         "/apps/remove" => apps::deregister_app(state, parse_params(req.params)?),
         "/apps/uninstall" => apps::uninstall_app(state, parse_params(req.params)?),
         "/apps/update" => apps::update_app(state, parse_params(req.params)?),
+        // i[scale.set]
+        "/apps/scale" => apps::scale_app(state, parse_params(req.params)?),
         // i[app.script]
         "/apps/script" => apps::get_app_script(state, parse_params(req.params)?),
         // i[param.set]
