@@ -185,6 +185,78 @@ use super::{
     volume::{ExternalVolume, Volume},
 };
 
+fn validate_memory_limit(limit: &str) -> Result<(), Box<EvalAltResult>> {
+    let (num, suffix) = if limit.ends_with(|c: char| c.is_ascii_alphabetic()) {
+        let (n, s) = limit.split_at(limit.len() - 1);
+        (n, s)
+    } else {
+        return Err("memory limit must end with a unit suffix (k, m, or g)".into());
+    };
+    if num.is_empty() || !num.chars().all(|c| c.is_ascii_digit()) || num.starts_with('0') {
+        return Err(format!(
+            "memory limit must be a positive integer followed by k, m, or g: '{limit}'"
+        )
+        .into());
+    }
+    match suffix.to_ascii_lowercase().as_str() {
+        "k" | "m" | "g" => Ok(()),
+        _ => Err(format!("memory limit suffix must be k, m, or g, got '{suffix}'").into()),
+    }
+}
+
+const ALLOWED_CAPS: &[&str] = &[
+    "AUDIT_CONTROL",
+    "AUDIT_READ",
+    "AUDIT_WRITE",
+    "BLOCK_SUSPEND",
+    "BPF",
+    "CHECKPOINT_RESTORE",
+    "CHOWN",
+    "DAC_OVERRIDE",
+    "DAC_READ_SEARCH",
+    "FOWNER",
+    "FSETID",
+    "IPC_LOCK",
+    "IPC_OWNER",
+    "KILL",
+    "LEASE",
+    "LINUX_IMMUTABLE",
+    "MAC_ADMIN",
+    "MAC_OVERRIDE",
+    "MKNOD",
+    "NET_ADMIN",
+    "NET_BIND_SERVICE",
+    "NET_BROADCAST",
+    "NET_RAW",
+    "PERFMON",
+    "SETFCAP",
+    "SETGID",
+    "SETPCAP",
+    "SETUID",
+    "SYS_ADMIN",
+    "SYS_BOOT",
+    "SYS_CHROOT",
+    "SYS_MODULE",
+    "SYS_NICE",
+    "SYS_PACCT",
+    "SYS_PTRACE",
+    "SYS_RAWIO",
+    "SYS_RESOURCE",
+    "SYS_TIME",
+    "SYS_TTY_CONFIG",
+    "SYSLOG",
+    "WAKE_ALARM",
+];
+
+fn validate_capability(cap: &str) -> Result<String, Box<EvalAltResult>> {
+    let normalised = cap.to_ascii_uppercase();
+    if ALLOWED_CAPS.contains(&normalised.as_str()) {
+        Ok(normalised)
+    } else {
+        Err(format!("unknown Linux capability: '{cap}'").into())
+    }
+}
+
 // l[impl container.interface]
 #[derive(Debug, Default, Clone)]
 pub struct ContainerDef {
@@ -194,6 +266,11 @@ pub struct ContainerDef {
     pub env: Vec<(String, String)>,
     pub volume_mounts: BTreeMap<PathBuf, VolumeMount>,
     pub on_exit: OnExit,
+    pub memory: Option<String>,
+    pub cpus: Option<f64>,
+    pub extra_caps: Vec<String>,
+    pub writable_rootfs: bool,
+    pub pids_limit: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -354,6 +431,70 @@ impl ContainerDef {
             move |this: &mut T, strategy: OnExit| -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
                 ext(this).lock().on_exit = strategy;
+                Ok(this.clone())
+            },
+        );
+
+        // l[impl container.memory]
+        builder.with_fn(
+            "memory",
+            move |this: &mut T, limit: &str| -> Result<T, Box<EvalAltResult>> {
+                this.ensure_unfrozen()?;
+                validate_memory_limit(limit)?;
+                ext(this).lock().memory = Some(limit.to_ascii_lowercase());
+                Ok(this.clone())
+            },
+        );
+
+        // l[impl container.cpus]
+        builder.with_fn(
+            "cpus",
+            move |this: &mut T, limit: f64| -> Result<T, Box<EvalAltResult>> {
+                this.ensure_unfrozen()?;
+                if limit <= 0.0 || !limit.is_finite() {
+                    return Err(format!("cpus limit must be a positive number, got {limit}").into());
+                }
+                ext(this).lock().cpus = Some(limit);
+                Ok(this.clone())
+            },
+        );
+
+        // l[impl container.cap-add]
+        builder.with_fn(
+            "cap_add",
+            move |this: &mut T, cap: &str| -> Result<T, Box<EvalAltResult>> {
+                this.ensure_unfrozen()?;
+                let normalised = validate_capability(cap)?;
+                let holder = ext(this);
+                let mut def = holder.lock();
+                if !def.extra_caps.contains(&normalised) {
+                    def.extra_caps.push(normalised);
+                }
+                Ok(this.clone())
+            },
+        );
+
+        // l[impl container.writable-rootfs]
+        builder.with_fn(
+            "writable_rootfs",
+            move |this: &mut T| -> Result<T, Box<EvalAltResult>> {
+                this.ensure_unfrozen()?;
+                ext(this).lock().writable_rootfs = true;
+                Ok(this.clone())
+            },
+        );
+
+        // l[impl container.pids-limit]
+        builder.with_fn(
+            "pids_limit",
+            move |this: &mut T, limit: i64| -> Result<T, Box<EvalAltResult>> {
+                this.ensure_unfrozen()?;
+                if limit <= 0 {
+                    return Err(
+                        format!("pids_limit must be a positive integer, got {limit}").into(),
+                    );
+                }
+                ext(this).lock().pids_limit = Some(limit as u32);
                 Ok(this.clone())
             },
         );
