@@ -223,7 +223,8 @@ impl System {
     > {
         let container: Arc<dyn ContainerRuntime> = Arc::new(podman::PodmanRuntime::new().await?);
         let process: Arc<dyn ProcessManager> = Arc::new(systemd::SystemdManager::connect().await?);
-        let data_plane_arc: Arc<dyn DataPlane> = Arc::new(data_plane::NftablesDataPlane::new()?);
+        let data_plane_arc: Arc<dyn DataPlane> =
+            Arc::new(data_plane::NftablesDataPlane::new(node_prefix)?);
 
         let initial =
             caddy::ensure_caddy_running(&*container, &*process, &node_prefix, data_dir).await?;

@@ -1,8 +1,13 @@
 use std::net::{Ipv6Addr, SocketAddr};
 
+use ipnet::Ipv6Net;
+
 use crate::system::types::{ForwardProto, IngressRule};
 
-use super::nft::{ingress_rule_stmts, output_ingress_rule_stmts};
+use super::nft::{
+    ct_state_established_related_accept, ct_status_dnat_accept, drop_unsolicited_inbound_stmts,
+    ingress_rule_stmts, output_ingress_rule_stmts, seedling_forward_stmts,
+};
 
 fn test_rule(port: u16, proto: ForwardProto) -> IngressRule {
     IngressRule {
@@ -112,5 +117,86 @@ fn output_rules_match_dport() {
     assert!(
         json.contains("8443"),
         "output rules must match on the external port (8443), got: {json}"
+    );
+}
+
+fn sample_prefix() -> Ipv6Net {
+    "fd5e:1234:5678::/48".parse().expect("valid prefix")
+}
+
+// r[verify infra.dataplane.forward-policy]
+#[test]
+fn ct_state_established_related_accept_json() {
+    let stmts = ct_state_established_related_accept();
+    let json = serde_json::to_string(&stmts).expect("serialize");
+    assert!(
+        json.contains("\"ct\""),
+        "must contain ct expression, got: {json}"
+    );
+    assert!(
+        json.contains("\"state\""),
+        "must contain state key, got: {json}"
+    );
+    assert!(
+        json.contains("\"established\""),
+        "must contain established, got: {json}"
+    );
+    assert!(
+        json.contains("\"related\""),
+        "must contain related, got: {json}"
+    );
+    assert!(json.contains("\"in\""), "must use IN operator, got: {json}");
+}
+
+// r[verify infra.dataplane.forward-policy]
+#[test]
+fn ct_status_dnat_accept_json() {
+    let stmts = ct_status_dnat_accept();
+    let json = serde_json::to_string(&stmts).expect("serialize");
+    assert!(
+        json.contains("\"ct\""),
+        "must contain ct expression, got: {json}"
+    );
+    assert!(
+        json.contains("\"status\""),
+        "must contain status key, got: {json}"
+    );
+    assert!(json.contains("\"dnat\""), "must contain dnat, got: {json}");
+    assert!(json.contains("\"&\""), "must use AND operator, got: {json}");
+}
+
+// r[verify infra.dataplane.forward-policy]
+#[test]
+fn drop_unsolicited_inbound_stmts_json() {
+    let prefix = sample_prefix();
+    let stmts = drop_unsolicited_inbound_stmts(&prefix);
+    let json = serde_json::to_string(&stmts).expect("serialize");
+    assert!(json.contains("\"daddr\""), "must match daddr, got: {json}");
+    assert!(
+        json.contains("\"fd5e:1234:5678::\""),
+        "must contain node prefix addr, got: {json}"
+    );
+    assert!(
+        json.contains("\"48\"") || json.contains("48"),
+        "must contain prefix len 48, got: {json}"
+    );
+    assert!(json.contains("\"drop\""), "must contain drop, got: {json}");
+    assert!(
+        !json.contains("\"accept\""),
+        "must NOT contain accept, got: {json}"
+    );
+}
+
+// r[verify infra.dataplane.forward-policy]
+#[test]
+fn seedling_forward_stmts_json() {
+    let prefix = sample_prefix();
+    let stmts = seedling_forward_stmts(&prefix);
+    let json = serde_json::to_string(&stmts).expect("serialize");
+    assert!(json.contains("\"saddr\""), "must match saddr, got: {json}");
+    assert!(json.contains("\"daddr\""), "must match daddr, got: {json}");
+    assert!(
+        json.contains("\"accept\""),
+        "must contain accept, got: {json}"
     );
 }

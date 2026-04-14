@@ -1,3 +1,4 @@
+use ipnet::Ipv6Net;
 use nftables::{
     batch::Batch,
     helper,
@@ -28,11 +29,13 @@ pub(crate) enum DataPlaneError {
     },
 }
 
-pub(crate) struct NftablesDataPlane {}
+pub(crate) struct NftablesDataPlane {
+    node_prefix: Ipv6Net,
+}
 
 impl NftablesDataPlane {
-    pub(crate) fn new() -> std::io::Result<Self> {
-        Ok(Self {})
+    pub(crate) fn new(node_prefix: Ipv6Net) -> std::io::Result<Self> {
+        Ok(Self { node_prefix })
     }
 }
 
@@ -73,7 +76,20 @@ impl NftablesDataPlane {
             batch.add(nft::rule_obj(nft::CHAIN_POST, stmts));
         }
 
-        batch.add(nft::rule_obj(nft::CHAIN_FWD, nft::seedling_forward_stmts()));
+        // r[impl infra.dataplane.forward-policy]
+        batch.add(nft::rule_obj(
+            nft::CHAIN_FWD,
+            nft::ct_state_established_related_accept(),
+        ));
+        batch.add(nft::rule_obj(nft::CHAIN_FWD, nft::ct_status_dnat_accept()));
+        batch.add(nft::rule_obj(
+            nft::CHAIN_FWD,
+            nft::seedling_forward_stmts(&self.node_prefix),
+        ));
+        batch.add(nft::rule_obj(
+            nft::CHAIN_FWD,
+            nft::drop_unsolicited_inbound_stmts(&self.node_prefix),
+        ));
 
         let ruleset = batch.to_nftables();
         helper::apply_ruleset_async(&ruleset)

@@ -514,3 +514,11 @@ Absent specification bugs, anything that is not defined here is either defined i
 > port to a backing pod's address and pod-side port, without an intermediate hop through
 > the service address. When multiple backends are available, the runtime must distribute
 > new connections across them.
+
+> r[infra.dataplane.forward-policy]
+> The nftables forward chain must drop unsolicited new inbound forwarded connections directed
+> at any address within the node's /48 prefix. The forward chain must explicitly permit:
+> conntrack-established and related connections; new connections that have been redirected by
+> a prerouting NAT rule (ingress traffic); and traffic whose source and destination both fall
+> within the node's /48 prefix. The chain's default policy must remain accept so that
+> forwarded traffic unrelated to the node's /48 prefix is not affected.

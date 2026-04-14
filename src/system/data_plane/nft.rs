@@ -4,10 +4,11 @@ use std::{
     net::{IpAddr, Ipv6Addr},
 };
 
+use ipnet::Ipv6Net;
 use nftables::{
     expr::{
-        Expression, Fib, FibFlag, FibResult, Map, Meta, MetaKey, NamedExpression, NgMode, Numgen,
-        Payload, PayloadField, Prefix, SetItem,
+        CT, Expression, Fib, FibFlag, FibResult, Map, Meta, MetaKey, NamedExpression, NgMode,
+        Numgen, Payload, PayloadField, Prefix, SetItem,
     },
     schema::{Chain, NfListObject, Rule, Table},
     stmt::{Match, NAT, NATFamily, Operator, Statement},
@@ -385,11 +386,59 @@ pub(super) fn loopback_masquerade_stmts() -> Vec<Vec<Statement<'static>>> {
     ]
 }
 
-pub(super) fn seedling_forward_stmts() -> Vec<Statement<'static>> {
-    let pfx = prefix_expr("fd5e:ed::".to_owned(), 24);
+// r[impl infra.dataplane.forward-policy]
+pub(super) fn ct_state_established_related_accept() -> Vec<Statement<'static>> {
+    let ct_expr = Expression::Named(NamedExpression::CT(CT {
+        key: Cow::Borrowed("state"),
+        family: None,
+        dir: None,
+    }));
+    let states = Expression::List(vec![
+        Expression::String(Cow::Borrowed("established")),
+        Expression::String(Cow::Borrowed("related")),
+    ]);
+    vec![
+        Statement::Match(Match {
+            left: ct_expr,
+            right: states,
+            op: Operator::IN,
+        }),
+        Statement::Accept(None),
+    ]
+}
+
+// r[impl infra.dataplane.forward-policy]
+pub(super) fn ct_status_dnat_accept() -> Vec<Statement<'static>> {
+    let ct_expr = Expression::Named(NamedExpression::CT(CT {
+        key: Cow::Borrowed("status"),
+        family: None,
+        dir: None,
+    }));
+    vec![
+        Statement::Match(Match {
+            left: ct_expr,
+            right: Expression::String(Cow::Borrowed("dnat")),
+            op: Operator::AND,
+        }),
+        Statement::Accept(None),
+    ]
+}
+
+// r[impl infra.dataplane.forward-policy]
+pub(super) fn seedling_forward_stmts(node_prefix: &Ipv6Net) -> Vec<Statement<'static>> {
+    let pfx = prefix_expr(node_prefix.network().to_string(), node_prefix.prefix_len());
     vec![
         match_eq(payload_expr("ip6", "saddr"), pfx.clone()),
         match_eq(payload_expr("ip6", "daddr"), pfx),
         Statement::Accept(None),
+    ]
+}
+
+// r[impl infra.dataplane.forward-policy]
+pub(super) fn drop_unsolicited_inbound_stmts(node_prefix: &Ipv6Net) -> Vec<Statement<'static>> {
+    let pfx = prefix_expr(node_prefix.network().to_string(), node_prefix.prefix_len());
+    vec![
+        match_eq(payload_expr("ip6", "daddr"), pfx),
+        Statement::Drop(None),
     ]
 }
