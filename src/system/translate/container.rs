@@ -254,6 +254,9 @@ fn spec_from_pod(
         "seedling.display-name".to_string(),
         instance.display_name.clone(),
     );
+    // Changing this value forces a spec-hash change and container restart,
+    // ensuring all running containers pick up new systemd unit properties.
+    labels.insert("seedling.unit-gen".to_string(), "1".to_string());
 
     // Inject the mount endpoint host entry so that containers can reach
     // mounted services via `localmount:<port>`. The ::2 address lives on
