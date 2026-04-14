@@ -197,12 +197,9 @@ async fn main() {
 
     // r[impl infra.nat64.translator]
     if nat64_active && let Err(e) = seedling::system::jool::setup_nat64().await {
-        tracing::error!(error = %e, "failed to set up NAT64 translator");
         // r[impl infra.nat64.translator.lifecycle]
-        if args.nat64 == seedling::system::nat64::Nat64Mode::Enabled {
-            tracing::error!("NAT64 mode is 'enabled' but translator setup failed; exiting");
-            std::process::exit(1);
-        }
+        tracing::error!(error = %e, "failed to set up NAT64 translator; exiting");
+        std::process::exit(1);
     }
 
     let dns_servers: Vec<std::net::Ipv6Addr> = vec![resolver_addr(&node_prefix)];
