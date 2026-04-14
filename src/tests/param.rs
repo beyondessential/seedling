@@ -201,9 +201,9 @@ fn param_used_in_closure_captures_injected_value() {
         &mut scope,
         r#"
         let ver = app.param("version");
-        let dep = app.deployment("web").image("placeholder");
+        let dep = app.deployment("web").image("docker.io/library/placeholder:latest");
         app.on_start(|rt| {
-            rt.start(app.deployment().image(`myapp:${ver.value()}`));
+            rt.start(app.deployment().image(`docker.io/library/myapp:${ver.value()}`));
         });
         "#,
     )

@@ -32,10 +32,10 @@ fn collect_image_registries(entry: &AppEntry) -> BTreeSet<String> {
             _ => None,
         };
 
-        if let Some(ref img) = image {
-            if let Some(reg) = image_registry(img) {
-                registries.insert(reg.to_owned());
-            }
+        if let Some(ref img) = image
+            && let Some(reg) = image_registry(img)
+        {
+            registries.insert(reg.to_owned());
         }
     }
 

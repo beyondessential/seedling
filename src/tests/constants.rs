@@ -110,7 +110,7 @@ fn on_exit_restart() {
     let app = run_test_script_app(
         r#"
         app.deployment("web")
-            .image("nginx")
+            .image("docker.io/library/nginx:latest")
             .on_exit(OnExit.Restart);
     "#,
     );
@@ -136,7 +136,7 @@ fn on_exit_terminate() {
     let app = run_test_script_app(
         r#"
         app.deployment("web")
-            .image("nginx")
+            .image("docker.io/library/nginx:latest")
             .on_exit(OnExit.Terminate);
     "#,
     );
@@ -162,7 +162,7 @@ fn on_exit_restart_on_failure() {
     let app = run_test_script_app(
         r#"
         app.deployment("web")
-            .image("nginx")
+            .image("docker.io/library/nginx:latest")
             .on_exit(OnExit.RestartOnFailure);
     "#,
     );

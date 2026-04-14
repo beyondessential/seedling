@@ -21,7 +21,7 @@ fn rt_methods_are_defined() {
     exercise(
         r#"
         app.on_start(|rt| {
-            let dep = app.deployment("web").image("nginx");
+            let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             let started = rt.start(dep);
             started.ready();
             rt.query(dep);
@@ -37,7 +37,7 @@ fn rt_lifecycle_states_accessible() {
     exercise(
         r#"
         app.on_start(|rt| {
-            let dep = app.deployment("web").image("nginx");
+            let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             let started = rt.start(dep);
             started.scheduled();
             started.running();
@@ -56,7 +56,7 @@ fn exercise_start_action() {
         r#"
         app.on_start(|rt| {
             let svc = app.service("web");
-            let dep = app.deployment("web").image("nginx");
+            let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             rt.start(svc);
             rt.start(dep).ready();
         });
@@ -70,7 +70,7 @@ fn exercise_stop() {
     exercise(
         r#"
         app.on_start(|rt| {
-            let dep = app.deployment("web").image("nginx");
+            let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             let started = rt.start(dep);
             started.ready();
             rt.stop(dep);
@@ -85,7 +85,7 @@ fn exercise_stop_with_deadline() {
     exercise(
         r#"
         app.on_start(|rt| {
-            let dep = app.deployment("web").image("nginx");
+            let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             rt.start(dep).ready();
             rt.stop(dep, 10);
         });
@@ -99,7 +99,7 @@ fn exercise_query() {
     exercise(
         r#"
         app.on_start(|rt| {
-            let dep = app.deployment("web").image("nginx");
+            let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             let queried = rt.query(dep);
             queried.ready();
         });
@@ -126,7 +126,7 @@ fn started_is_a_collection() {
     exercise(
         r#"
         app.on_start(|rt| {
-            let dep = app.deployment("web").image("nginx");
+            let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             let svc = app.service("web");
             let started = rt.start(dep);
             started.one();
@@ -144,7 +144,7 @@ fn started_state_methods_with_deadline() {
     exercise(
         r#"
         app.on_start(|rt| {
-            let dep = app.deployment("web").image("nginx");
+            let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             let started = rt.start(dep);
             started.scheduled(30);
             started.running(30);
@@ -163,7 +163,7 @@ fn exercise_terminated_ensure_success() {
     exercise(
         r#"
         app.on_start(|rt| {
-            let job = app.job("init").image("tools").command("setup");
+            let job = app.job("init").image("docker.io/library/tools:latest").command("setup");
             rt.start(job).terminated().ensure_success();
         });
     "#,
@@ -176,7 +176,7 @@ fn termination_type_is_opaque() {
     exercise(
         r#"
         app.on_start(|rt| {
-            let job = app.job("init").image("tools").command("setup");
+            let job = app.job("init").image("docker.io/library/tools:latest").command("setup");
             let term = rt.start(job).terminated();
             let t = term.type_of();
             if t != "Termination" { throw "expected Termination, got: " + t; }

@@ -10,13 +10,13 @@ fn pod_is_an_interface_on_deployment_and_job() {
         let sp = svc.port(8080);
 
         app.deployment("web")
-            .image("nginx")
+            .image("docker.io/library/nginx:latest")
             .mount(sp)
             .tcp(8080, svc)
             .http(3000, svc.http(80));
 
         app.job("task")
-            .image("tools")
+            .image("docker.io/library/tools:latest")
             .mount(sp)
             .tcp(9090, svc);
     "#,
@@ -31,7 +31,7 @@ fn pod_mount_serviceport() {
         let svc = app.service("ctrl");
         let sp = svc.port(5432);
         app.deployment("web")
-            .image("nginx")
+            .image("docker.io/library/nginx:latest")
             .mount(sp);
     "#,
     );

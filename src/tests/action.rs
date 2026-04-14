@@ -62,7 +62,7 @@ fn on_shell_registers_shell() {
     let app = run_test_script_app(
         r#"
         app.on_shell("node", |rt| {
-            app.job("shell-node").image("node:20").command("node")
+            app.job("shell-node").image("docker.io/library/node:20").command("node")
         }, #{
             description: "Node REPL",
         });
@@ -79,7 +79,7 @@ fn on_shell_without_options() {
     let app = run_test_script_app(
         r#"
         app.on_shell("dbs", |rt| {
-            app.job("shell-dbs").image("psql").command("psql")
+            app.job("shell-dbs").image("docker.io/library/psql:latest").command("psql")
         });
     "#,
     );
@@ -95,7 +95,7 @@ fn shells_in_separate_namespace_from_actions() {
         r#"
         app.on_action("debug", |rt| {});
         app.on_shell("debug", |rt| {
-            app.job("shell-debug").image("tools").command("sh")
+            app.job("shell-debug").image("docker.io/library/tools:latest").command("sh")
         });
     "#,
     );
@@ -110,7 +110,7 @@ fn exercise_shell_return_job() {
     exercise(
         r#"
         app.on_shell("node", |rt| {
-            app.job("shell-node").image("node:20").command("node")
+            app.job("shell-node").image("docker.io/library/node:20").command("node")
         });
     "#,
     );
@@ -241,7 +241,7 @@ fn exercise_install_action() {
     exercise(
         r#"
         app.on_install(|rt, reqs| {
-            rt.start(app.deployment("web").image("nginx")).ready();
+            rt.start(app.deployment("web").image("docker.io/library/nginx:latest")).ready();
         }, #{
             admin_email: #{
                 kind: "email",

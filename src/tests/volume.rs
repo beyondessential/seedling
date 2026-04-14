@@ -206,7 +206,7 @@ fn external_volume_can_be_mounted() {
         r#"
         let evol = app.external_volume("shared");
         app.deployment("web")
-            .image("nginx")
+            .image("docker.io/library/nginx:latest")
             .mount("/shared", evol);
     "#,
     );
@@ -270,7 +270,7 @@ fn anon_volume_in_action_gets_seedling_prefix() {
         r#"
         app.on_action("goo", |rt| {
             let vol = app.volume();
-            let j = app.job().image("busybox").mount("/data", vol);
+            let j = app.job().image("docker.io/library/busybox:latest").mount("/data", vol);
             rt.start(j);
         });
     "#,
@@ -315,8 +315,8 @@ fn shared_anon_volume_same_id_across_containers() {
         app.on_action("goo", |rt| {
             let vol = app.volume();
             vol.write("/config.txt", "hello");
-            let j1 = app.job().image("busybox").mount("/a", vol);
-            let j2 = app.job().image("busybox").mount("/b", vol);
+            let j1 = app.job().image("docker.io/library/busybox:latest").mount("/a", vol);
+            let j2 = app.job().image("docker.io/library/busybox:latest").mount("/b", vol);
             rt.start(j1);
             rt.start(j2);
         });
@@ -360,7 +360,7 @@ fn distinct_anon_volumes_get_distinct_ids() {
         app.on_action("goo", |rt| {
             let vol1 = app.volume();
             let vol2 = app.volume();
-            let j = app.job().image("busybox").mount("/a", vol1).mount("/b", vol2);
+            let j = app.job().image("docker.io/library/busybox:latest").mount("/a", vol1).mount("/b", vol2);
             rt.start(j);
         });
     "#,
@@ -403,7 +403,7 @@ fn anon_volume_writes_preserved_through_action() {
             let vol = app.volume();
             vol.write("/init.sql", "CREATE TABLE t;");
             vol.write("/seed.sql", "INSERT INTO t VALUES (1);");
-            let j = app.job().image("busybox").mount("/docker-entrypoint-initdb.d", vol);
+            let j = app.job().image("docker.io/library/busybox:latest").mount("/docker-entrypoint-initdb.d", vol);
             rt.start(j);
         });
     "#,

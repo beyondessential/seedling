@@ -9,7 +9,7 @@ fn deployment_with_image_and_scale() {
     let app = run_test_script_app(
         r#"
         app.deployment("web")
-            .image("nginx:latest")
+            .image("docker.io/library/nginx:latest")
             .scale(3);
     "#,
     );
@@ -24,7 +24,10 @@ fn deployment_with_image_and_scale() {
         assert_eq!(dep_def.scale, 3..3);
         let pod = dep_def.pod.lock();
         let container = pod.container.lock();
-        assert_eq!(container.image.as_deref(), Some("nginx:latest"));
+        assert_eq!(
+            container.image.as_deref(),
+            Some("docker.io/library/nginx:latest")
+        );
     } else {
         panic!("expected Deployment");
     }
@@ -217,7 +220,7 @@ fn deployment_implements_pod_interface() {
         r#"
         let svc = app.service("ctrl");
         app.deployment("web")
-            .image("nginx")
+            .image("docker.io/library/nginx:latest")
             .command("nginx")
             .tcp(8080, svc)
             .env("PORT", "8080");
@@ -234,7 +237,10 @@ fn deployment_implements_pod_interface() {
         let pod = dep_def.pod.lock();
         assert_eq!(pod.tcp_bindings.len(), 1);
         let container = pod.container.lock();
-        assert_eq!(container.image.as_deref(), Some("nginx"));
+        assert_eq!(
+            container.image.as_deref(),
+            Some("docker.io/library/nginx:latest")
+        );
         assert_eq!(container.env.len(), 1);
     } else {
         panic!("expected Deployment");

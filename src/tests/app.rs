@@ -74,7 +74,7 @@ fn closures_create_dynamic_resources() {
     let app = run_test_script_app(
         r#"
         let make_job = || app.job("ephemeral")
-            .image("tools:1")
+            .image("docker.io/library/tools:1")
             .command("run");
 
         app.on_start(|rt| {

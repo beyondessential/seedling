@@ -7,7 +7,7 @@ fn container_is_an_interface_on_deployment_and_job() {
     run_test_script_app(
         r#"
         app.deployment("web")
-            .image("nginx")
+            .image("docker.io/library/nginx:latest")
             .command("nginx")
             .arg("-g")
             .env("PORT", "80");
@@ -26,7 +26,7 @@ fn container_is_an_interface_on_deployment_and_job() {
 fn container_image_sets_uri() {
     let app = run_test_script_app(
         r#"
-        app.deployment("web").image("nginx:latest");
+        app.deployment("web").image("docker.io/library/nginx:latest");
     "#,
     );
     let def = app.def.lock();
@@ -39,7 +39,10 @@ fn container_image_sets_uri() {
         let dep_def = dep.def.lock();
         let pod = dep_def.pod.lock();
         let container = pod.container.lock();
-        assert_eq!(container.image.as_deref(), Some("nginx:latest"));
+        assert_eq!(
+            container.image.as_deref(),
+            Some("docker.io/library/nginx:latest")
+        );
     } else {
         panic!("expected Deployment");
     }
@@ -157,7 +160,7 @@ fn container_env_override() {
     let app = run_test_script_app(
         r#"
         app.deployment("web")
-            .image("app:1")
+            .image("docker.io/library/app:1")
             .env("KEY", "old")
             .env("KEY", "new");
     "#,
@@ -186,7 +189,7 @@ fn container_mount_volume() {
         r#"
         let vol = app.volume("data");
         app.deployment("web")
-            .image("nginx")
+            .image("docker.io/library/nginx:latest")
             .mount("/data", vol);
     "#,
     );
@@ -199,7 +202,7 @@ fn container_mount_external_volume() {
         r#"
         let evol = app.external_volume("shared");
         app.deployment("web")
-            .image("nginx")
+            .image("docker.io/library/nginx:latest")
             .mount("/shared", evol);
     "#,
     );
@@ -486,7 +489,7 @@ fn container_on_exit_strategy() {
     let app = run_test_script_app(
         r#"
         app.deployment("web")
-            .image("nginx")
+            .image("docker.io/library/nginx:latest")
             .on_exit(OnExit.Terminate);
     "#,
     );

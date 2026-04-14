@@ -9,7 +9,7 @@ fn job_with_deadline() {
     let app = run_test_script_app(
         r#"
         app.job("migrate")
-            .image("db-tools:1.0")
+            .image("docker.io/library/db-tools:1.0")
             .command("migrate")
             .deadline(300);
     "#,
@@ -35,7 +35,7 @@ fn job_implements_pod_interface() {
         r#"
         let svc = app.service("ctrl");
         app.job("setup")
-            .image("tools:1")
+            .image("docker.io/library/tools:1")
             .command("setup")
             .arg("--verbose")
             .env("MODE", "init")
@@ -53,7 +53,10 @@ fn job_implements_pod_interface() {
         let pod = job_def.pod.lock();
         assert_eq!(pod.tcp_bindings.len(), 1);
         let container = pod.container.lock();
-        assert_eq!(container.image.as_deref(), Some("tools:1"));
+        assert_eq!(
+            container.image.as_deref(),
+            Some("docker.io/library/tools:1")
+        );
         assert_eq!(
             container.command.as_deref(),
             Some(&["setup".to_string()][..])

@@ -189,7 +189,7 @@ fn builder_methods_chain() {
     run_test_script_app(
         r#"
         app.deployment("web")
-            .image("nginx:latest")
+            .image("docker.io/library/nginx:latest")
             .command("nginx")
             .arg("-g")
             .arg("daemon off;")
