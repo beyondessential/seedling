@@ -91,6 +91,11 @@ pub struct ContainerSpec {
     /// Entries injected into /etc/hosts inside the container.
     /// Used to map `localmount` to the pod's ::2 mount endpoint address.
     pub hosts: Vec<(String, IpAddr)>,
+    pub memory: Option<String>,
+    pub cpus: Option<f64>,
+    pub extra_caps: Vec<String>,
+    pub writable_rootfs: bool,
+    pub pids_limit: u32,
 }
 
 #[derive(Debug, Clone)]

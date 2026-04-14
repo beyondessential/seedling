@@ -46,6 +46,29 @@ pub fn job_spec(
 pub fn podman_args(spec: &ContainerSpec) -> Vec<String> {
     let mut args = vec!["podman".to_string(), "run".to_string(), "--rm".to_string()];
 
+    // r[impl actuate.container.hardening]
+    args.push("--cap-drop=ALL".to_string());
+    for cap in &spec.extra_caps {
+        args.push(format!("--cap-add={cap}"));
+    }
+    args.push("--security-opt".to_string());
+    args.push("no-new-privileges".to_string());
+    if !spec.writable_rootfs {
+        args.push("--read-only".to_string());
+        args.push("--tmpfs".to_string());
+        args.push("/tmp".to_string());
+    }
+    args.push("--pids-limit".to_string());
+    args.push(spec.pids_limit.to_string());
+    args.push("--ulimit".to_string());
+    args.push("nofile=65536:65536".to_string());
+    if let Some(mem) = &spec.memory {
+        args.push(format!("--memory={mem}"));
+    }
+    if let Some(cpus) = spec.cpus {
+        args.push(format!("--cpus={cpus}"));
+    }
+
     args.push("--name".to_string());
     args.push(spec.name.clone());
 
@@ -244,6 +267,11 @@ fn spec_from_pod(
         labels,
         health: None,
         hosts,
+        memory: container.memory.clone(),
+        cpus: container.cpus,
+        extra_caps: container.extra_caps.clone(),
+        writable_rootfs: container.writable_rootfs,
+        pids_limit: container.pids_limit.unwrap_or(256),
     };
     let hash = spec_hash(&spec);
     spec.labels.insert("seedling.spec-hash".to_string(), hash);
