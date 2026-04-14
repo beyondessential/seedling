@@ -18,6 +18,7 @@ pub(crate) mod caddy;
 pub(crate) mod confined_write;
 pub(crate) mod data_plane;
 pub(crate) mod podman;
+pub(crate) mod resolver;
 pub(crate) mod systemd;
 
 pub use actuator::{ActuateError, Actuator};
