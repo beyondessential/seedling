@@ -99,7 +99,7 @@ pub(super) fn build_ingress_rules(
         let caddy_v6 = SocketAddr::new(IpAddr::V6(caddy_ip), def.port.get());
         let caddy_v4_addr = caddy_v4.map(|ip| SocketAddr::new(IpAddr::V4(ip), def.port.get()));
 
-        let proto = if def.dtls {
+        let proto = if def.dtls || def.http_terminate.is_some() {
             ForwardProto::Both
         } else {
             ForwardProto::Tcp
