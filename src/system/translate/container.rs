@@ -117,6 +117,7 @@ pub fn podman_args(spec: &ContainerSpec) -> Vec<String> {
         args.push(format!("{host}:{ip}"));
     }
 
+    // r[impl infra.pod.dns]
     for dns in &spec.dns_servers {
         args.push("--dns".to_string());
         args.push(dns.to_string());

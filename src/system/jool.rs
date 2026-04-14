@@ -95,12 +95,33 @@ async fn remove_instance() -> Result<(), JoolError> {
 }
 
 pub async fn setup_nat64() -> Result<(), JoolError> {
+    // r[impl infra.nat64.forwarding]
+    ensure_forwarding_enabled().await?;
     ensure_module_loaded().await?;
     ensure_instance().await
 }
 
 pub async fn teardown_nat64() -> Result<(), JoolError> {
     remove_instance().await
+}
+
+async fn ensure_forwarding_enabled() -> Result<(), JoolError> {
+    let checks = [
+        ("net.ipv6.conf.all.forwarding", "1"),
+        ("net.ipv4.conf.all.forwarding", "1"),
+    ];
+    for (key, val) in checks {
+        let output = run_command("sysctl", &["-w", &format!("{key}={val}")]).await?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return CommandFailedSnafu {
+                message: format!("failed to set {key}: {}", stderr.trim()),
+            }
+            .fail();
+        }
+    }
+    tracing::info!("IPv4 and IPv6 forwarding enabled");
+    Ok(())
 }
 
 async fn run_command(program: &str, args: &[&str]) -> Result<Output, JoolError> {

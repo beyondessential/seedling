@@ -344,6 +344,7 @@ pub async fn ensure_resolver_running(
                 );
                 stop_slot(&active, process, container).await;
             } else {
+                // r[impl infra.resolver.upgrade]
                 tracing::info!(
                     container = %active,
                     running_image = ?state.image_id,

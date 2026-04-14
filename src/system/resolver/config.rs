@@ -2,10 +2,12 @@
 ///
 /// When `nat64_active` is true, the dns64 plugin is included to synthesise
 /// AAAA records under the well-known prefix `64:ff9b::/96`.
+// r[impl infra.resolver.config]
 pub(crate) fn generate_corefile(nat64_active: bool) -> String {
     let mut config = String::from(".:53 {\n");
     config.push_str("    forward . /etc/resolv.conf\n");
     config.push_str("    cache 30\n");
+    // r[impl infra.nat64.dns64]
     if nat64_active {
         config.push_str("    dns64 {\n");
         config.push_str("        prefix 64:ff9b::/96\n");

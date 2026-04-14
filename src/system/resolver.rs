@@ -25,6 +25,7 @@ pub fn resolver_network_prefix(node_prefix: &Ipv6Net) -> Ipv6Net {
 ///
 /// This is a well-known address at `::53` within the resolver network prefix,
 /// chosen to match the DNS port for memorability.
+// r[impl infra.resolver.address]
 pub fn resolver_addr(node_prefix: &Ipv6Net) -> Ipv6Addr {
     let bytes = node_prefix.network().octets();
     let mut addr = [0u8; 16];
