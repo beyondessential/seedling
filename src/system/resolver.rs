@@ -1,6 +1,6 @@
 use std::net::Ipv6Addr;
 
-use ipnet::Ipv6Net;
+use ipnet::{Ipv4Net, Ipv6Net};
 
 pub use startup::{
     ResolverAddrs, ResolverStartupError, ensure_resolver_running, teardown_resolver,
@@ -33,4 +33,12 @@ pub fn resolver_addr(node_prefix: &Ipv6Net) -> Ipv6Addr {
     addr[6] = 0xfd;
     addr[15] = 53;
     Ipv6Addr::from(addr)
+}
+
+/// Fixed IPv4 subnet for the resolver network.
+///
+/// The resolver network is dual-stack so that CoreDNS can forward queries
+/// to upstream IPv4 DNS servers.
+pub fn resolver_ipv4_subnet() -> Ipv4Net {
+    "10.89.254.0/24".parse().expect("valid IPv4 subnet")
 }

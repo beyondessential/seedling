@@ -9,7 +9,7 @@ use crate::system::{
     types::{ContainerStatus, TransientRestart, TransientUnitSpec},
 };
 
-use super::{resolver_addr, resolver_network_prefix};
+use super::{resolver_addr, resolver_ipv4_subnet, resolver_network_prefix};
 
 pub(crate) const RESOLVER_BLUE: &str = "seedling-resolver-blue";
 pub(crate) const RESOLVER_GREEN: &str = "seedling-resolver-green";
@@ -174,6 +174,8 @@ async fn start_slot(
                 resolver_ip.to_string(),
                 "--volume".to_owned(),
                 format!("{corefile_str}:/Corefile:ro"),
+                "--volume".to_owned(),
+                "/etc/resolv.conf:/etc/resolv.host.conf:ro".to_owned(),
                 RESOLVER_IMAGE.to_owned(),
                 "-conf".to_owned(),
                 "/Corefile".to_owned(),
@@ -263,14 +265,19 @@ pub async fn ensure_resolver_running(
     let resolver_prefix = resolver_network_prefix(node_prefix);
     let resolver_ip = resolver_addr(node_prefix);
 
-    // 1. Ensure resolver network exists (IPv6 only).
+    // 1. Ensure resolver network exists (dual-stack so CoreDNS can forward
+    //    to IPv4 upstream DNS servers).
     if !container
         .network_exists(RESOLVER_NETWORK)
         .await
         .context(ContainerSnafu)?
     {
         let _ = container
-            .create_network(RESOLVER_NETWORK, resolver_prefix, None)
+            .create_network(
+                RESOLVER_NETWORK,
+                resolver_prefix,
+                Some(resolver_ipv4_subnet()),
+            )
             .await
             .context(ContainerSnafu)?;
     }

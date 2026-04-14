@@ -5,7 +5,7 @@
 // r[impl infra.resolver.config]
 pub(crate) fn generate_corefile(nat64_active: bool) -> String {
     let mut config = String::from(".:53 {\n");
-    config.push_str("    forward . /etc/resolv.conf\n");
+    config.push_str("    forward . /etc/resolv.host.conf\n");
     config.push_str("    cache 30\n");
     // r[impl infra.nat64.dns64]
     if nat64_active {
@@ -26,7 +26,7 @@ mod tests {
     #[test]
     fn corefile_without_nat64() {
         let cf = generate_corefile(false);
-        assert!(cf.contains("forward . /etc/resolv.conf"));
+        assert!(cf.contains("forward . /etc/resolv.host.conf"));
         assert!(cf.contains("cache 30"));
         assert!(cf.contains("health :8080"));
         assert!(!cf.contains("dns64"));
