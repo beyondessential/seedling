@@ -294,16 +294,6 @@ impl Actuator {
         }
     }
 
-    /// In-place update (e.g. rolling a container to a new image or config).
-    pub async fn update(
-        &self,
-        _instance: &ResourceInstance,
-        _old: &Resource,
-        _new: &Resource,
-    ) -> Result<(), ActuateError> {
-        todo!("actuator update: not yet implemented")
-    }
-
     /// Compute the spec hash that would be used if this instance were started
     /// right now. Returns `None` for resource kinds that have no container spec.
     ///
