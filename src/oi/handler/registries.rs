@@ -73,6 +73,7 @@ fn re_evaluate_all_apps(state: &OiState) {
             if let Some(entry) = reg.get(name) {
                 let db = state.db.lock();
                 apps::sync_script_error_fault(&db, entry);
+                apps::sync_registry_faults(&db, entry);
             }
         }
     }

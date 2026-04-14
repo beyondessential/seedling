@@ -366,6 +366,7 @@ pub(crate) fn register_app(state: &OiState, params: AppScriptParams) -> HandlerR
         if let Some(entry) = reg.get(name) {
             let db = state.db.lock();
             crate::runtime::apps::sync_script_error_fault(&db, entry);
+            crate::runtime::apps::sync_registry_faults(&db, entry);
         }
     }
 
@@ -513,6 +514,7 @@ pub(crate) fn update_app(state: &OiState, params: AppScriptParams) -> HandlerRes
             if let Some(entry) = reg.get(name) {
                 let db = state.db.lock();
                 crate::runtime::apps::sync_script_error_fault(&db, entry);
+                crate::runtime::apps::sync_registry_faults(&db, entry);
             }
         }
         // Wake reconciler to pick up new desired state.

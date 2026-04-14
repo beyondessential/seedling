@@ -66,6 +66,7 @@ pub(crate) fn set_param(state: &OiState, params: SetParamParams) -> HandlerResul
         if let Some(entry) = reg.get(app) {
             let db = state.db.lock();
             crate::runtime::apps::sync_script_error_fault(&db, entry);
+            crate::runtime::apps::sync_registry_faults(&db, entry);
         }
     }
 
@@ -151,6 +152,7 @@ pub(crate) fn unset_param(state: &OiState, params: UnsetParamParams) -> HandlerR
         if let Some(entry) = reg.get(app) {
             let db = state.db.lock();
             crate::runtime::apps::sync_script_error_fault(&db, entry);
+            crate::runtime::apps::sync_registry_faults(&db, entry);
         }
     }
 
