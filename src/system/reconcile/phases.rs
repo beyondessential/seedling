@@ -3,7 +3,7 @@ use std::{collections::HashMap, net::Ipv4Addr};
 use ipnet::Ipv6Net;
 
 use crate::{
-    runtime::{AppPhase, InstanceRegistry},
+    runtime::{AppPhase, InstanceRegistry, registry::RegistryError},
     system::{
         System, actuator::Actuator, observer::Observer, translate::proxy::build_proxy_config,
         types::DataPlaneRules,
@@ -49,19 +49,26 @@ pub(super) async fn run_volumes_phase(
     results.into_iter().flatten().collect()
 }
 
+#[expect(
+    clippy::type_complexity,
+    reason = "flattening the tuple would hurt readability"
+)]
 pub(super) fn compute_routes(
     apps: &[AppSnapshot],
     running_pods_by_app: &HashMap<String, Vec<RunningPod>>,
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
-) -> (
-    Vec<crate::system::types::ServiceRoute>,
-    Vec<(
-        crate::runtime::identity::ResourceInstance,
-        &'static str,
-        serde_json::Value,
-    )>,
-) {
+) -> Result<
+    (
+        Vec<crate::system::types::ServiceRoute>,
+        Vec<(
+            crate::runtime::identity::ResourceInstance,
+            &'static str,
+            serde_json::Value,
+        )>,
+    ),
+    RegistryError,
+> {
     let mut all_routes = Vec::new();
     let mut all_obs = Vec::new();
     for app in apps {
@@ -79,11 +86,11 @@ pub(super) fn compute_routes(
             registry,
             running,
             &app.name,
-        );
+        )?;
         all_routes.extend(routes);
         all_obs.extend(obs);
     }
-    (all_routes, all_obs)
+    Ok((all_routes, all_obs))
 }
 
 pub(super) fn compute_nftables_rules(
@@ -93,7 +100,7 @@ pub(super) fn compute_nftables_rules(
     caddy_v4_addr: Option<Ipv4Addr>,
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
-) -> DataPlaneRules {
+) -> Result<DataPlaneRules, RegistryError> {
     let mut all_ingress = Vec::new();
     let mut all_mounts = Vec::new();
     let mut all_service_dnat = Vec::new();
@@ -116,13 +123,13 @@ pub(super) fn compute_nftables_rules(
             registry,
             running,
             &app.name,
-        ));
+        )?);
     }
-    DataPlaneRules {
+    Ok(DataPlaneRules {
         ingress: all_ingress,
         mounts: all_mounts,
         service_dnat: all_service_dnat,
-    }
+    })
 }
 
 pub(super) struct ProxyBuildResult {
@@ -145,7 +152,7 @@ pub(super) fn compute_proxy_config(
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
     caddy_addr: std::net::SocketAddr,
-) -> ProxyBuildResult {
+) -> Result<ProxyBuildResult, RegistryError> {
     let mut all_pairs = Vec::new();
     let mut all_l4_routes = Vec::new();
     let mut observations = Vec::new();
@@ -154,7 +161,7 @@ pub(super) fn compute_proxy_config(
         if app.phase == AppPhase::Uninstalling {
             continue;
         }
-        let build = proxy::collect(&app.app_def, &app.desired, node_prefix, registry, &app.name);
+        let build = proxy::collect(&app.app_def, &app.desired, node_prefix, registry, &app.name)?;
         all_pairs.extend(build.pairs);
         all_l4_routes.extend(build.l4_routes);
         observations.extend(build.observations);
@@ -165,10 +172,10 @@ pub(super) fn compute_proxy_config(
     config.l4_routes = all_l4_routes;
     let caddy_json = super::super::caddy::build_caddy_config(&config);
 
-    ProxyBuildResult {
+    Ok(ProxyBuildResult {
         config,
         caddy_json,
         observations,
         ready_observations,
-    }
+    })
 }

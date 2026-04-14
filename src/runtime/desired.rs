@@ -3,11 +3,11 @@ use std::sync::Arc;
 
 use crate::defs::app::AppDef;
 use crate::defs::resource::{Resource, ResourceId};
-use crate::runtime::InstanceRegistry;
 use crate::runtime::barrier::{ActionLogEntry, CallKind};
 use crate::runtime::db::Db;
 use crate::runtime::identity::ResourceInstance;
 use crate::runtime::lifecycle::LifecycleState;
+use crate::runtime::{InstanceRegistry, RegistryError};
 
 // r[impl desired-state.definition]
 #[derive(Debug)]
@@ -114,10 +114,10 @@ pub fn compute(
     app_def: &AppDef,
     operation_progress: Option<&OperationProgress>,
     registry: &dyn InstanceRegistry,
-) -> DesiredState {
+) -> Result<DesiredState, RegistryError> {
     match operation_progress {
         None => compute_steady(app_name, app_def, registry),
-        Some(progress) => compute_during_operation(app_def, progress),
+        Some(progress) => Ok(compute_during_operation(app_def, progress)),
     }
 }
 
@@ -127,17 +127,23 @@ pub fn compute_uninstalling(
     app_name: &str,
     app_def: &AppDef,
     registry: &dyn InstanceRegistry,
-) -> DesiredState {
+) -> Result<DesiredState, RegistryError> {
     let resources = app_def
         .resources
         .iter()
-        .map(|(id, resource)| DesiredResource {
-            instance: registry.get_or_create_singleton(app_name, id.kind, Some(id.name.as_str())),
-            desired: LifecycleState::Unscheduled,
-            definition: resource.clone(),
+        .map(|(id, resource)| {
+            Ok(DesiredResource {
+                instance: registry.get_or_create_singleton(
+                    app_name,
+                    id.kind,
+                    Some(id.name.as_str()),
+                )?,
+                desired: LifecycleState::Unscheduled,
+                definition: resource.clone(),
+            })
         })
-        .collect();
-    DesiredState { resources }
+        .collect::<Result<Vec<_>, RegistryError>>()?;
+    Ok(DesiredState { resources })
 }
 
 // r[impl desired-state.steady]
@@ -145,17 +151,23 @@ fn compute_steady(
     app_name: &str,
     app_def: &AppDef,
     registry: &dyn InstanceRegistry,
-) -> DesiredState {
+) -> Result<DesiredState, RegistryError> {
     let resources = app_def
         .resources
         .iter()
-        .map(|(id, resource)| DesiredResource {
-            instance: registry.get_or_create_singleton(app_name, id.kind, Some(id.name.as_str())),
-            desired: LifecycleState::Ready,
-            definition: resource.clone(),
+        .map(|(id, resource)| {
+            Ok(DesiredResource {
+                instance: registry.get_or_create_singleton(
+                    app_name,
+                    id.kind,
+                    Some(id.name.as_str()),
+                )?,
+                desired: LifecycleState::Ready,
+                definition: resource.clone(),
+            })
         })
-        .collect();
-    DesiredState { resources }
+        .collect::<Result<Vec<_>, RegistryError>>()?;
+    Ok(DesiredState { resources })
 }
 
 // r[impl desired-state.during-operation]

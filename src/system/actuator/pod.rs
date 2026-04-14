@@ -8,7 +8,7 @@ use crate::{
         container::VolumeMount, enums::OnExit, resource::ResourceKind, service::ServicePort,
         volume::VolumeDef,
     },
-    runtime::identity::ResourceInstance,
+    runtime::{identity::ResourceInstance, registry::RegistryError},
     system::{
         System,
         translate::{
@@ -19,7 +19,7 @@ use crate::{
     },
 };
 
-use super::{ActuateError, Actuator, ContainerSnafu, ProcessSnafu};
+use super::{ActuateError, Actuator, ContainerSnafu, ProcessSnafu, RegistrySnafu};
 
 fn pod_network_name(instance: &ResourceInstance) -> String {
     format!("seedling-{}", instance.display_name)
@@ -159,7 +159,7 @@ impl Actuator {
         &self,
         instance: &ResourceInstance,
         mounts: &[ServicePort],
-    ) -> Vec<(u16, std::net::Ipv6Addr, u16)> {
+    ) -> Result<Vec<(u16, std::net::Ipv6Addr, u16)>, RegistryError> {
         mounts
             .iter()
             .map(|sp| {
@@ -167,11 +167,11 @@ impl Actuator {
                     &instance.app,
                     ResourceKind::Service,
                     Some(sp.service.name.as_str()),
-                );
+                )?;
                 let service_ip = instance_ipv6(&self.node_prefix, &svc_instance);
-                (sp.port.get(), service_ip, sp.port.get())
+                Ok((sp.port.get(), service_ip, sp.port.get()))
             })
-            .collect()
+            .collect::<Result<Vec<_>, _>>()
     }
 
     // r[impl actuate.deployment.anon-volume.start]
@@ -217,7 +217,9 @@ impl Actuator {
         }
 
         // Resolve service mounts and build the argv.
-        let mounts = self.resolve_service_mounts(instance, raw_mounts);
+        let mounts = self
+            .resolve_service_mounts(instance, raw_mounts)
+            .context(RegistrySnafu)?;
         let argv = build_argv(net_name, net_prefix, &mounts);
 
         self.driver

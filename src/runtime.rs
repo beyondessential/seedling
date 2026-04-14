@@ -24,7 +24,9 @@ pub use desired::{
 };
 pub use identity::{InstanceId, InstanceVariant, ResourceInstance};
 pub use lifecycle::LifecycleState;
-pub use registry::{DbInstanceRegistry, EphemeralInstanceRegistry, InstanceRegistry};
+pub use registry::{
+    DbInstanceRegistry, EphemeralInstanceRegistry, InstanceRegistry, RegistryError,
+};
 pub use scheduler::{
     ActiveOperation, CycleError, QueuedOperation, RejectReason, ScheduleResult, Scheduler,
     should_back_off,

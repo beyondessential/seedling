@@ -110,11 +110,17 @@ pub(crate) async fn forward_port_session(
 
     let target_addr = {
         let registry = DbInstanceRegistry::new(Arc::clone(&state.db));
-        let instance = registry.get_or_create_singleton(
+        let instance = match registry.get_or_create_singleton(
             &params.app,
             ResourceKind::Service,
             Some(&params.service),
-        );
+        ) {
+            Ok(i) => i,
+            Err(e) => {
+                write_err(&mut send, "internal", &format!("registry error: {e}")).await;
+                return;
+            }
+        };
         instance_ipv6(&state.node_prefix, &instance)
     };
 

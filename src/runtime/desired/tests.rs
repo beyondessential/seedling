@@ -70,7 +70,7 @@ fn to_map(state: DesiredState) -> HashMap<String, LifecycleState> {
 fn steady_state_all_resources_are_ready() {
     let app_def = make_app_def(&["web", "api"]);
     let registry = EphemeralInstanceRegistry::new();
-    let state = compute("myapp", &app_def, None, &registry);
+    let state = compute("myapp", &app_def, None, &registry).unwrap();
 
     assert_eq!(state.resources.len(), 2);
     assert!(
@@ -86,7 +86,7 @@ fn steady_state_all_resources_are_ready() {
 fn steady_state_resource_names_match_app_def() {
     let app_def = make_app_def(&["web", "api"]);
     let registry = EphemeralInstanceRegistry::new();
-    let state = compute("myapp", &app_def, None, &registry);
+    let state = compute("myapp", &app_def, None, &registry).unwrap();
 
     let map = to_map(state);
     assert!(map.contains_key("web"));
@@ -98,7 +98,7 @@ fn steady_state_resource_names_match_app_def() {
 fn steady_state_instances_carry_app_name() {
     let app_def = make_app_def(&["web"]);
     let registry = EphemeralInstanceRegistry::new();
-    let state = compute("myapp", &app_def, None, &registry);
+    let state = compute("myapp", &app_def, None, &registry).unwrap();
 
     assert_eq!(state.resources[0].instance.app, "myapp");
 }
@@ -108,7 +108,7 @@ fn steady_state_instances_carry_app_name() {
 fn steady_state_empty_app_def_gives_empty_desired_state() {
     let app_def = AppDef::default();
     let registry = EphemeralInstanceRegistry::new();
-    let state = compute("myapp", &app_def, None, &registry);
+    let state = compute("myapp", &app_def, None, &registry).unwrap();
     assert!(state.is_empty());
 }
 
@@ -122,7 +122,7 @@ fn operation_with_no_starts_gives_empty_desired_state() {
     let app_def = make_app_def(&["web", "api"]);
     let progress = OperationProgress::new();
     let registry = EphemeralInstanceRegistry::new();
-    let state = compute("myapp", &app_def, Some(&progress), &registry);
+    let state = compute("myapp", &app_def, Some(&progress), &registry).unwrap();
     assert!(state.is_empty());
 }
 
@@ -134,7 +134,7 @@ fn started_resource_is_desired_at_ready() {
     progress.started(dep("myapp", "web"));
 
     let registry = EphemeralInstanceRegistry::new();
-    let state = compute("myapp", &app_def, Some(&progress), &registry);
+    let state = compute("myapp", &app_def, Some(&progress), &registry).unwrap();
 
     assert_eq!(state.resources.len(), 1);
     assert_eq!(state.resources[0].desired, LifecycleState::Ready);
@@ -149,7 +149,7 @@ fn stopped_resource_is_desired_at_unscheduled() {
     progress.stopped(dep("myapp", "web"));
 
     let registry = EphemeralInstanceRegistry::new();
-    let state = compute("myapp", &app_def, Some(&progress), &registry);
+    let state = compute("myapp", &app_def, Some(&progress), &registry).unwrap();
 
     assert_eq!(state.resources.len(), 1);
     assert_eq!(state.resources[0].desired, LifecycleState::Unscheduled);
@@ -165,7 +165,7 @@ fn stop_after_start_overrides_to_unscheduled() {
     progress.stopped(web);
 
     let registry = EphemeralInstanceRegistry::new();
-    let state = compute("myapp", &app_def, Some(&progress), &registry);
+    let state = compute("myapp", &app_def, Some(&progress), &registry).unwrap();
 
     assert_eq!(state.resources.len(), 1);
     assert_eq!(state.resources[0].desired, LifecycleState::Unscheduled);
@@ -179,7 +179,7 @@ fn started_resource_not_in_app_def_is_dropped() {
     progress.started(dep("myapp", "unknown"));
 
     let registry = EphemeralInstanceRegistry::new();
-    let state = compute("myapp", &app_def, Some(&progress), &registry);
+    let state = compute("myapp", &app_def, Some(&progress), &registry).unwrap();
 
     assert!(state.is_empty());
 }
@@ -196,7 +196,7 @@ fn from_log_start_entry_maps_to_ready() {
     let progress = OperationProgress::from_log(&entries);
 
     let registry = EphemeralInstanceRegistry::new();
-    let state = compute("myapp", &app_def, Some(&progress), &registry);
+    let state = compute("myapp", &app_def, Some(&progress), &registry).unwrap();
 
     let map = to_map(state);
     assert_eq!(map["web"], LifecycleState::Ready);
@@ -210,7 +210,7 @@ fn from_log_stop_entry_maps_to_unscheduled() {
     let progress = OperationProgress::from_log(&entries);
 
     let registry = EphemeralInstanceRegistry::new();
-    let state = compute("myapp", &app_def, Some(&progress), &registry);
+    let state = compute("myapp", &app_def, Some(&progress), &registry).unwrap();
 
     let map = to_map(state);
     assert_eq!(map["web"], LifecycleState::Unscheduled);
@@ -224,7 +224,7 @@ fn from_log_reconcile_entry_maps_to_ready() {
     let progress = OperationProgress::from_log(&entries);
 
     let registry = EphemeralInstanceRegistry::new();
-    let state = compute("myapp", &app_def, Some(&progress), &registry);
+    let state = compute("myapp", &app_def, Some(&progress), &registry).unwrap();
 
     let map = to_map(state);
     assert_eq!(map["web"], LifecycleState::Ready);
@@ -250,7 +250,7 @@ fn from_log_later_entry_overrides_earlier_for_same_resource() {
     let progress = OperationProgress::from_log(&entries);
 
     let registry = EphemeralInstanceRegistry::new();
-    let state = compute("myapp", &app_def, Some(&progress), &registry);
+    let state = compute("myapp", &app_def, Some(&progress), &registry).unwrap();
 
     let map = to_map(state);
     assert_eq!(map["web"], LifecycleState::Unscheduled);
@@ -267,7 +267,7 @@ fn from_log_multiple_resources_in_one_entry() {
     let progress = OperationProgress::from_log(&entries);
 
     let registry = EphemeralInstanceRegistry::new();
-    let state = compute("myapp", &app_def, Some(&progress), &registry);
+    let state = compute("myapp", &app_def, Some(&progress), &registry).unwrap();
 
     assert_eq!(state.resources.len(), 2);
     assert!(
@@ -283,7 +283,7 @@ fn from_log_multiple_resources_in_one_entry() {
 fn definition_field_is_populated_from_app_def() {
     let app_def = make_app_def(&["web"]);
     let registry = EphemeralInstanceRegistry::new();
-    let state = compute("myapp", &app_def, None, &registry);
+    let state = compute("myapp", &app_def, None, &registry).unwrap();
 
     assert_eq!(state.resources.len(), 1);
     assert!(matches!(

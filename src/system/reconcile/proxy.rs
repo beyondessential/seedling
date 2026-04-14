@@ -9,7 +9,7 @@ use crate::{
     },
     runtime::{
         InstanceRegistry, desired::DesiredState, identity::ResourceInstance,
-        lifecycle::LifecycleState,
+        lifecycle::LifecycleState, registry::RegistryError,
     },
     system::{
         translate::proxy::{ServiceUpstream, instance_ipv6},
@@ -34,7 +34,7 @@ pub(super) fn collect(
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
     app_name: &str,
-) -> ProxyBuildOutput {
+) -> Result<ProxyBuildOutput, RegistryError> {
     let mut observations: Vec<(ResourceInstance, &'static str, serde_json::Value)> = Vec::new();
     let mut ready_observations: Vec<(ResourceInstance, &'static str, serde_json::Value)> =
         Vec::new();
@@ -51,7 +51,7 @@ pub(super) fn collect(
         let svc_name = ingress.service.name.as_str();
 
         let svc_instance =
-            registry.get_or_create_singleton(app_name, ResourceKind::Service, Some(svc_name));
+            registry.get_or_create_singleton(app_name, ResourceKind::Service, Some(svc_name))?;
         let service_ip = instance_ipv6(node_prefix, &svc_instance);
 
         let upstream_port = find_upstream_port(snapshot, svc_name, def.port.get());
@@ -60,7 +60,7 @@ pub(super) fn collect(
             app_name,
             ResourceKind::Ingress,
             Some(ingress.service.name.as_str()),
-        );
+        )?;
 
         if def.http_terminate.is_none() {
             let upstream_url = format!("[{}]:{}", service_ip, upstream_port);
@@ -123,7 +123,7 @@ pub(super) fn collect(
             app_name,
             ResourceKind::Ingress,
             Some(ingress.service.name.as_str()),
-        );
+        )?;
         observations.push((ingress_instance.clone(), "stop_sent", serde_json::json!({})));
         observations.push((
             ingress_instance.clone(),
@@ -137,12 +137,12 @@ pub(super) fn collect(
         ));
     }
 
-    ProxyBuildOutput {
+    Ok(ProxyBuildOutput {
         pairs,
         l4_routes,
         observations,
         ready_observations,
-    }
+    })
 }
 
 /// Scan all Deployment and Job pod definitions for the first TCP or HTTP

@@ -8,7 +8,7 @@ use crate::runtime::barrier::{
     ActionLogEntry, BarrierCondition, BarrierRecord, CallKind, SharedContext,
 };
 use crate::runtime::db::Db;
-use crate::runtime::registry::InstanceRegistry;
+use crate::runtime::registry::{InstanceRegistry, RegistryError};
 use crate::runtime::{LifecycleState, ResourceInstance};
 
 // ---------------------------------------------------------------------------
@@ -210,7 +210,8 @@ impl RuntimeInstance {
     fn extract_instances(
         &self,
         resources: Dynamic,
-    ) -> Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)> {
+    ) -> Result<Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)>, RegistryError>
+    {
         use crate::defs::deployment::Deployment;
         use crate::defs::job::Job;
         use crate::defs::resource::{Resource, ResourceKind};
@@ -238,16 +239,16 @@ impl RuntimeInstance {
                     variant: InstanceVariant::Singleton,
                     display_name: display,
                 };
-                return vec![(instance, Some(Resource::Deployment(dep)))];
+                return Ok(vec![(instance, Some(Resource::Deployment(dep)))]);
             }
-            return vec![(
+            return Ok(vec![(
                 self.registry.get_or_create_singleton(
                     &self.app_name,
                     ResourceKind::Deployment,
                     Some(&dep.name),
-                ),
+                )?,
                 None,
-            )];
+            )]);
         }
 
         if let Some(job) = resources.clone().try_cast::<Job>() {
@@ -271,7 +272,7 @@ impl RuntimeInstance {
                     variant: InstanceVariant::Singleton,
                     display_name: display,
                 };
-                return vec![(instance, Some(Resource::Job(job)))];
+                return Ok(vec![(instance, Some(Resource::Job(job)))]);
             }
             // r[impl identity.job]
             // Named jobs inside an action closure get an instance ID derived
@@ -303,9 +304,9 @@ impl RuntimeInstance {
                     &self.app_name,
                     ResourceKind::Job,
                     Some(job.name.as_str()),
-                )
+                )?
             };
-            return vec![(instance, None)];
+            return Ok(vec![(instance, None)]);
         }
 
         if let Some(svc) = resources.clone().try_cast::<Service>() {
@@ -329,20 +330,20 @@ impl RuntimeInstance {
                     variant: InstanceVariant::Singleton,
                     display_name: display,
                 };
-                return vec![(instance, Some(Resource::Service(svc)))];
+                return Ok(vec![(instance, Some(Resource::Service(svc)))]);
             }
-            return vec![(
+            return Ok(vec![(
                 self.registry.get_or_create_singleton(
                     &self.app_name,
                     ResourceKind::Service,
                     Some(&svc.name),
-                ),
+                )?,
                 None,
-            )];
+            )]);
         }
 
         // Unknown / Collection stub — no resources to track.
-        vec![]
+        Ok(vec![])
     }
 
     // r[impl desired-state.during-operation]
@@ -516,7 +517,12 @@ impl CustomType for RuntimeInstance {
             .with_fn(
                 "start",
                 |this: &mut Self, resources: Dynamic| -> Result<Started, Box<EvalAltResult>> {
-                    let resources_with_defs = this.extract_instances(resources);
+                    let resources_with_defs = this.extract_instances(resources).map_err(|e| {
+                        Box::new(EvalAltResult::ErrorRuntime(
+                            e.to_string().into(),
+                            rhai::Position::NONE,
+                        ))
+                    })?;
                     this.do_start(resources_with_defs)
                 },
             )
@@ -526,6 +532,12 @@ impl CustomType for RuntimeInstance {
                 |this: &mut Self, resources: Dynamic| -> Result<(), Box<EvalAltResult>> {
                     let instances = this
                         .extract_instances(resources)
+                        .map_err(|e| {
+                            Box::new(EvalAltResult::ErrorRuntime(
+                                e.to_string().into(),
+                                rhai::Position::NONE,
+                            ))
+                        })?
                         .into_iter()
                         .map(|(r, _)| r)
                         .collect();
@@ -540,6 +552,12 @@ impl CustomType for RuntimeInstance {
                  -> Result<(), Box<EvalAltResult>> {
                     let instances = this
                         .extract_instances(resources)
+                        .map_err(|e| {
+                            Box::new(EvalAltResult::ErrorRuntime(
+                                e.to_string().into(),
+                                rhai::Position::NONE,
+                            ))
+                        })?
                         .into_iter()
                         .map(|(r, _)| r)
                         .collect();
@@ -550,7 +568,12 @@ impl CustomType for RuntimeInstance {
             .with_fn(
                 "query",
                 |this: &mut Self, resources: Dynamic| -> Result<Started, Box<EvalAltResult>> {
-                    let resources_with_defs = this.extract_instances(resources);
+                    let resources_with_defs = this.extract_instances(resources).map_err(|e| {
+                        Box::new(EvalAltResult::ErrorRuntime(
+                            e.to_string().into(),
+                            rhai::Position::NONE,
+                        ))
+                    })?;
                     this.do_start(resources_with_defs)
                 },
             )

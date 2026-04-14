@@ -7,6 +7,28 @@ use crate::runtime::db::Db;
 use crate::runtime::history;
 use crate::runtime::identity::ResourceInstance;
 
+/// Failure to look up or create an instance in the registry.
+#[derive(Debug)]
+pub struct RegistryError(Box<dyn std::error::Error + Send + Sync>);
+
+impl std::fmt::Display for RegistryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "instance registry error: {}", self.0)
+    }
+}
+
+impl std::error::Error for RegistryError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&*self.0)
+    }
+}
+
+impl From<rusqlite::Error> for RegistryError {
+    fn from(e: rusqlite::Error) -> Self {
+        Self(Box::new(e))
+    }
+}
+
 /// Provides access to the instance registry during action-closure execution.
 ///
 /// The registry is the authoritative source for which instances exist and
@@ -21,7 +43,7 @@ pub trait InstanceRegistry: Send + Sync {
         app: &str,
         kind: ResourceKind,
         name: Option<&str>,
-    ) -> ResourceInstance;
+    ) -> Result<ResourceInstance, RegistryError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -63,18 +85,18 @@ impl InstanceRegistry for EphemeralInstanceRegistry {
         app: &str,
         kind: ResourceKind,
         name: Option<&str>,
-    ) -> ResourceInstance {
+    ) -> Result<ResourceInstance, RegistryError> {
         let key: InstanceRegistryKey = (app.to_owned(), kind, name.map(|s| s.to_owned()));
         let mut cache = self.cache.lock();
         if let Some(instance) = cache.get(&key) {
-            return instance.clone();
+            return Ok(instance.clone());
         }
         let instance = match name {
             Some(n) => ResourceInstance::new_singleton(app, kind, n),
             None => ResourceInstance::new_anonymous(app, kind),
         };
         cache.insert(key, instance.clone());
-        instance
+        Ok(instance)
     }
 }
 
@@ -100,11 +122,8 @@ impl InstanceRegistry for DbInstanceRegistry {
         app: &str,
         kind: ResourceKind,
         name: Option<&str>,
-    ) -> ResourceInstance {
+    ) -> Result<ResourceInstance, RegistryError> {
         let db = self.db.lock();
-        history::get_or_create_singleton(&db, app, kind, name).unwrap_or_else(|_| match name {
-            Some(n) => ResourceInstance::new_singleton(app, kind, n),
-            None => ResourceInstance::new_anonymous(app, kind),
-        })
+        Ok(history::get_or_create_singleton(&db, app, kind, name)?)
     }
 }

@@ -10,7 +10,7 @@ use crate::{
         app::AppDef,
         resource::{Resource, ResourceKind},
     },
-    runtime::InstanceRegistry,
+    runtime::{InstanceRegistry, registry::RegistryError},
     system::{
         translate::proxy::instance_ipv6,
         types::{ForwardProto, IngressRule, MountRule, ServiceDnatRule},
@@ -131,13 +131,13 @@ pub(super) fn build_service_dnat_rules(
     registry: &dyn InstanceRegistry,
     running_pods: &[RunningPod],
     app_name: &str,
-) -> Vec<ServiceDnatRule> {
+) -> Result<Vec<ServiceDnatRule>, RegistryError> {
     let backends = collect_service_backends(running_pods);
     let mut rules = Vec::new();
 
     for ((svc_name, svc_port, proto), backend_list) in &backends {
         let svc_instance =
-            registry.get_or_create_singleton(app_name, ResourceKind::Service, Some(svc_name));
+            registry.get_or_create_singleton(app_name, ResourceKind::Service, Some(svc_name))?;
         let service_ip = instance_ipv6(node_prefix, &svc_instance);
 
         rules.push(ServiceDnatRule {
@@ -148,7 +148,7 @@ pub(super) fn build_service_dnat_rules(
         });
     }
 
-    rules
+    Ok(rules)
 }
 
 // r[impl infra.dataplane.mount-dnat]

@@ -18,8 +18,7 @@ use crate::{
             },
         },
         identity::{InstanceVariant, ResourceInstance},
-        registry::DbInstanceRegistry,
-        registry::InstanceRegistry,
+        registry::{DbInstanceRegistry, InstanceRegistry, RegistryError},
     },
     system::translate::{
         container::job_spec,
@@ -314,18 +313,29 @@ pub(crate) async fn open_shell_session(
             vec![]
         } else {
             let mount_registry = DbInstanceRegistry::new(Arc::clone(&state.db));
-            service_mounts
+            let result: Result<Vec<_>, RegistryError> = service_mounts
                 .iter()
                 .map(|sp| {
                     let svc_instance = mount_registry.get_or_create_singleton(
                         &exec_target.app_name,
                         ResourceKind::Service,
                         Some(sp.service.name.as_str()),
-                    );
+                    )?;
                     let svc_ip = instance_ipv6(&state.node_prefix, &svc_instance);
-                    (sp.port.get(), svc_ip, sp.port.get())
+                    Ok((sp.port.get(), svc_ip, sp.port.get()))
                 })
-                .collect()
+                .collect();
+            match result {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(app = %app_name, shell = %shell_name, "service mount registry lookup failed: {e}");
+                    let resp = serde_json::to_vec(&serde_json::json!({ "exit_code": -1 }))
+                        .unwrap_or_default();
+                    let _ = send.write_all(&resp).await;
+                    let _ = send.finish();
+                    return;
+                }
+            }
         }
     };
 

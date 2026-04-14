@@ -10,7 +10,7 @@ use crate::{
     },
     runtime::{
         InstanceRegistry, desired::DesiredState, identity::ResourceInstance,
-        lifecycle::LifecycleState,
+        lifecycle::LifecycleState, registry::RegistryError,
     },
     system::{translate::proxy::instance_ipv6, types::ServiceRoute},
 };
@@ -19,6 +19,10 @@ use super::RunningPod;
 
 // r[autonomous.network]
 // r[fault.non-blocking]
+#[expect(
+    clippy::type_complexity,
+    reason = "flattening the tuple would hurt readability"
+)]
 pub(super) fn build(
     desired: &DesiredState,
     snapshot: &AppDef,
@@ -26,10 +30,13 @@ pub(super) fn build(
     registry: &dyn InstanceRegistry,
     running_pods: &[RunningPod],
     app_name: &str,
-) -> (
-    Vec<ServiceRoute>,
-    Vec<(ResourceInstance, &'static str, serde_json::Value)>,
-) {
+) -> Result<
+    (
+        Vec<ServiceRoute>,
+        Vec<(ResourceInstance, &'static str, serde_json::Value)>,
+    ),
+    RegistryError,
+> {
     let mut observations: Vec<(ResourceInstance, &'static str, serde_json::Value)> = Vec::new();
     let mut routes: Vec<ServiceRoute> = Vec::new();
 
@@ -51,7 +58,7 @@ pub(super) fn build(
         // regardless of whether the resource entry is Service or HttpService.
         let _ = id; // name used directly; kind normalised below
         let svc_instance =
-            registry.get_or_create_singleton(app_name, ResourceKind::Service, Some(svc_name));
+            registry.get_or_create_singleton(app_name, ResourceKind::Service, Some(svc_name))?;
         let service_ip = instance_ipv6(node_prefix, &svc_instance);
 
         let backends: Vec<Ipv6Addr> = running_pods
@@ -94,7 +101,7 @@ pub(super) fn build(
                     app_name,
                     ResourceKind::Service,
                     Some(svc_name),
-                );
+                )?;
                 observations.push((svc_instance.clone(), "stop_sent", serde_json::json!({})));
                 observations.push((
                     svc_instance.clone(),
@@ -116,7 +123,7 @@ pub(super) fn build(
                     app_name,
                     ResourceKind::Service,
                     Some(svc_name),
-                );
+                )?;
                 observations.push((svc_instance.clone(), "stop_sent", serde_json::json!({})));
                 observations.push((
                     svc_instance.clone(),
@@ -133,7 +140,7 @@ pub(super) fn build(
         }
     }
 
-    (routes, observations)
+    Ok((routes, observations))
 }
 
 /// Returns `true` if the pod's definition contains any TCP, UDP, or HTTP

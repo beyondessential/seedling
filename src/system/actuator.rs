@@ -71,6 +71,11 @@ pub enum ActuateError {
         path: std::path::PathBuf,
         backtrace: snafu::Backtrace,
     },
+    #[snafu(display("instance registry error: {source}"))]
+    Registry {
+        source: crate::runtime::registry::RegistryError,
+        backtrace: snafu::Backtrace,
+    },
 }
 
 // l[impl volume.write.validation]
@@ -311,7 +316,13 @@ impl Actuator {
             Resource::Deployment(dep) => {
                 let def = dep.def.lock();
                 let raw_mounts = def.pod.lock().service_mounts.clone();
-                let mounts = self.resolve_service_mounts(instance, &raw_mounts);
+                let mounts = match self.resolve_service_mounts(instance, &raw_mounts) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        tracing::error!(instance = %instance.display_name, error = %e, "registry lookup failed computing spec hash");
+                        return None;
+                    }
+                };
                 deployment_spec(
                     &def,
                     instance,
@@ -323,7 +334,13 @@ impl Actuator {
             Resource::Job(job) => {
                 let def = job.def.lock();
                 let raw_mounts = def.pod.lock().service_mounts.clone();
-                let mounts = self.resolve_service_mounts(instance, &raw_mounts);
+                let mounts = match self.resolve_service_mounts(instance, &raw_mounts) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        tracing::error!(instance = %instance.display_name, error = %e, "registry lookup failed computing spec hash");
+                        return None;
+                    }
+                };
                 job_spec(
                     &def,
                     instance,
