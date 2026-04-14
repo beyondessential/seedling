@@ -214,12 +214,22 @@ impl Reconciler {
         // --- Process caddy result ---
         // r[autonomous.ingress]
         let caddy_addrs = match caddy_result {
-            Ok(Ok(addrs)) => {
-                self.clear_system_fault("caddy_failed");
-                *self.caddy_admin_client.write().await = caddy::build_client(&addrs.admin_socket);
-                self.caddy_v4_addr = addrs.v4;
-                Some(addrs)
-            }
+            Ok(Ok(addrs)) => match caddy::build_client(&addrs.admin_socket) {
+                Ok(client) => {
+                    self.clear_system_fault("caddy_failed");
+                    *self.caddy_admin_client.write().await = client;
+                    self.caddy_v4_addr = addrs.v4;
+                    Some(addrs)
+                }
+                Err(e) => {
+                    error!(error = %e, "failed to build caddy admin client");
+                    self.file_system_fault(
+                        "caddy_failed",
+                        &format!("failed to build caddy admin client: {e}"),
+                    );
+                    None
+                }
+            },
             Ok(Err(e)) => {
                 error!(error = %e, "caddy health check failed; skipping nftables and proxy this tick");
                 self.file_system_fault("caddy_failed", &format!("caddy health check failed: {e}"));

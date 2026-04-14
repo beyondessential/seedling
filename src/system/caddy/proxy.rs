@@ -64,10 +64,10 @@ pub(crate) struct CaddyProxy {
 
 impl CaddyProxy {
     /// Create a `CaddyProxy` that connects via the given Unix socket path.
-    pub(crate) fn new(socket_path: &Path) -> Self {
-        Self {
-            client: Arc::new(RwLock::new(build_client(socket_path))),
-        }
+    pub(crate) fn new(socket_path: &Path) -> Result<Self, reqwest::Error> {
+        Ok(Self {
+            client: Arc::new(RwLock::new(build_client(socket_path)?)),
+        })
     }
 
     /// Returns a handle to the shared client, so the caller can swap it
@@ -86,11 +86,8 @@ impl CaddyProxy {
 }
 
 /// Build a `reqwest::Client` whose every connection goes through `socket_path`.
-pub(crate) fn build_client(socket_path: &Path) -> reqwest::Client {
-    reqwest::Client::builder()
-        .unix_socket(socket_path)
-        .build()
-        .expect("build reqwest client for caddy admin socket")
+pub(crate) fn build_client(socket_path: &Path) -> Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder().unix_socket(socket_path).build()
 }
 
 impl CaddyProxy {

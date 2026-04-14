@@ -1,10 +1,12 @@
 use std::{
+    panic::AssertUnwindSafe,
     path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
 };
 
 use clap::Parser;
+use futures_util::FutureExt;
 use lloggs::LoggingArgs;
 use parking_lot::{Mutex, RwLock};
 use seedling::{
@@ -433,9 +435,26 @@ async fn main() {
                         _ = tick_notify.notified() => {},
                     }
                 }
-                let active = reconciler.tick().await;
-                if !active {
-                    idle = true;
+                match AssertUnwindSafe(reconciler.tick()).catch_unwind().await {
+                    Ok(active) => {
+                        if !active {
+                            idle = true;
+                        }
+                    }
+                    Err(payload) => {
+                        let msg = match payload.downcast_ref::<&str>() {
+                            Some(s) => (*s).to_owned(),
+                            None => match payload.downcast_ref::<String>() {
+                                Some(s) => s.clone(),
+                                None => "unknown panic".to_owned(),
+                            },
+                        };
+                        tracing::error!(panic = %msg, "reconciler tick panicked; recovering");
+                        reconciler.file_system_fault(
+                            "reconciler_panic",
+                            &format!("reconciler tick panicked: {msg}"),
+                        );
+                    }
                 }
             }
         });

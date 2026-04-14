@@ -228,7 +228,7 @@ impl System {
 
         let initial =
             caddy::ensure_caddy_running(&*container, &*process, &node_prefix, data_dir).await?;
-        let caddy_proxy = Arc::new(caddy::CaddyProxy::new(&initial.admin_socket));
+        let caddy_proxy = Arc::new(caddy::CaddyProxy::new(&initial.admin_socket)?);
         let caddy_admin_client = caddy_proxy.admin_client_handle();
         let proxy: Arc<dyn NetworkProxy> = caddy_proxy;
 

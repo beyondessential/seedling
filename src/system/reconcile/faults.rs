@@ -141,7 +141,7 @@ impl Reconciler {
         }
     }
 
-    pub(super) fn file_system_fault(&self, fault_kind: &str, description: &str) {
+    pub fn file_system_fault(&self, fault_kind: &str, description: &str) {
         let db = self.db.lock();
         let already_filed = faults::list_active_faults(&db, Some("_system"))
             .unwrap_or_default()

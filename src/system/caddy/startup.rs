@@ -99,6 +99,11 @@ pub(crate) enum CaddyStartupError {
         message: String,
         backtrace: snafu::Backtrace,
     },
+    #[snafu(display("failed to build caddy admin HTTP client: {source}"))]
+    ClientBuild {
+        source: reqwest::Error,
+        backtrace: snafu::Backtrace,
+    },
 }
 
 /// Build the custom Caddy image from the embedded Containerfile.
@@ -335,7 +340,7 @@ async fn poll_until_healthy(
     deadline: tokio::time::Instant,
     socket_path: &Path,
 ) -> Result<CaddyAddrs, CaddyStartupError> {
-    let proxy = CaddyProxy::new(socket_path);
+    let proxy = CaddyProxy::new(socket_path).context(ClientBuildSnafu)?;
     loop {
         if tokio::time::Instant::now() >= deadline {
             return TimeoutSnafu.fail();
@@ -476,11 +481,11 @@ pub(crate) async fn ensure_caddy_running(
                 // Correct image — check if already healthy.
                 let socket_path = admin_socket_path(data_dir, &active);
                 if let Some(ip) = state.pod_addr {
-                    if CaddyProxy::new(&socket_path)
-                        .is_healthy()
-                        .await
-                        .unwrap_or(false)
-                    {
+                    let healthy = match CaddyProxy::new(&socket_path) {
+                        Ok(p) => p.is_healthy().await.unwrap_or(false),
+                        Err(_) => false,
+                    };
+                    if healthy {
                         return Ok(CaddyAddrs {
                             v6: ip,
                             v4: state.pod_addr_v4,
@@ -516,9 +521,8 @@ pub(crate) async fn ensure_caddy_running(
                 // r[impl infra.proxy.upgrade.cache]
                 // Apply the cached proxy config to the new container.
                 if let Ok(Some(json)) = read_cached_proxy_json(data_dir)
-                    && let Err(e) = CaddyProxy::new(&new_addrs.admin_socket)
-                        .apply_raw_json(&json)
-                        .await
+                    && let Ok(proxy) = CaddyProxy::new(&new_addrs.admin_socket)
+                    && let Err(e) = proxy.apply_raw_json(&json).await
                 {
                     tracing::warn!("failed to apply cached proxy config to upgraded Caddy: {e}");
                 }
@@ -552,9 +556,8 @@ pub(crate) async fn ensure_caddy_running(
     // r[impl infra.proxy.upgrade.cache]
     // Apply the cached proxy config.
     if let Ok(Some(json)) = read_cached_proxy_json(data_dir)
-        && let Err(e) = CaddyProxy::new(&addrs.admin_socket)
-            .apply_raw_json(&json)
-            .await
+        && let Ok(proxy) = CaddyProxy::new(&addrs.admin_socket)
+        && let Err(e) = proxy.apply_raw_json(&json).await
     {
         tracing::warn!("failed to apply cached proxy config to fresh Caddy: {e}");
     }
