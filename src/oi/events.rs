@@ -9,6 +9,7 @@ pub enum OiEvent {
     AppRegistered {
         timestamp: Timestamp,
         app: String,
+        version_id: String,
     },
     AppDeregistered {
         timestamp: Timestamp,
@@ -17,6 +18,8 @@ pub enum OiEvent {
     AppUpdated {
         timestamp: Timestamp,
         app: String,
+        version_id: String,
+        previous_version_id: Option<String>,
     },
     OperationStarted {
         timestamp: Timestamp,
@@ -98,12 +101,13 @@ pub fn emit(tx: &EventSender, event: OiEvent) {
     let _ = tx.send(event);
 }
 
-pub fn app_registered(tx: &EventSender, app: &str) {
+pub fn app_registered(tx: &EventSender, app: &str, version_id: &str) {
     emit(
         tx,
         OiEvent::AppRegistered {
             timestamp: now(),
             app: app.to_owned(),
+            version_id: version_id.to_owned(),
         },
     );
 }
@@ -118,12 +122,19 @@ pub fn app_deregistered(tx: &EventSender, app: &str) {
     );
 }
 
-pub fn app_updated(tx: &EventSender, app: &str) {
+pub fn app_updated(
+    tx: &EventSender,
+    app: &str,
+    version_id: &str,
+    previous_version_id: Option<&str>,
+) {
     emit(
         tx,
         OiEvent::AppUpdated {
             timestamp: now(),
             app: app.to_owned(),
+            version_id: version_id.to_owned(),
+            previous_version_id: previous_version_id.map(str::to_owned),
         },
     );
 }

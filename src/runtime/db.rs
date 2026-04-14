@@ -317,6 +317,45 @@ impl Db {
                 .execute_batch("INSERT INTO schema_version VALUES (13);")?;
         }
 
+        if version < 14 {
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS app_versions (
+                    id         TEXT PRIMARY KEY,
+                    app        TEXT NOT NULL,
+                    script     TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                ALTER TABLE registered_apps ADD COLUMN current_version_id TEXT;",
+            )?;
+            // Backfill: create a version row for every existing registered app
+            // and point current_version_id at it.
+            {
+                let mut sel = self
+                    .conn
+                    .prepare("SELECT name, script FROM registered_apps")?;
+                let apps: Vec<(String, String)> = sel
+                    .query_map([], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })?
+                    .collect::<rusqlite::Result<_>>()?;
+                drop(sel);
+                let now = jiff::Timestamp::now().to_string();
+                for (name, script) in apps {
+                    let vid = uuid::Uuid::new_v4().to_string();
+                    self.conn.execute(
+                        "INSERT INTO app_versions (id, app, script, created_at) VALUES (?1, ?2, ?3, ?4)",
+                        rusqlite::params![vid, name, script, now],
+                    )?;
+                    self.conn.execute(
+                        "UPDATE registered_apps SET current_version_id = ?1 WHERE name = ?2",
+                        rusqlite::params![vid, name],
+                    )?;
+                }
+            }
+            self.conn
+                .execute_batch("INSERT INTO schema_version VALUES (14);")?;
+        }
+
         tx.commit()?;
         Ok(())
     }

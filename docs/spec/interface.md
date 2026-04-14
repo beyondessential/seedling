@@ -162,6 +162,10 @@ Absent specification bugs, anything that is not defined here is either defined i
 > If the script fails to parse or evaluate, a `script_error` app-level fault is filed, the existing AppDef continues running, and the request still succeeds.
 > On success, any previously active `script_error` fault for this app is cleared.
 
+> i[app.version]
+> Every registered app has a current version identifier. The version identifier is an opaque string assigned when the app is first registered and updated each time `/apps/update` is called.
+> Previous versions and their scripts are retained durably so that operators and automation can retrieve any historical version.
+
 > i[app.list]
 > `/apps/list` returns an array of objects with fields `name` and `status`.
 
@@ -201,6 +205,14 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - `current_operation`: present only when status is `Operating`.
 >   Has fields `action_name` and `barrier`.
 >   `barrier` is either `null` (operation is running but not yet at a barrier) or an object with fields `resources`, `required_state`, `deadline_secs`, and `elapsed_secs`.
+> - `version_id`: the current version identifier of the app.
+
+# App Script Retrieval
+
+> i[app.script]
+> `/apps/script { app, version? }` returns the BSL script source text for the specified app.
+> If `version` is provided, the script for that specific version is returned; otherwise the current version's script is returned.
+> The response contains the fields `script` (the source text) and `version_id` (the version identifier of the returned script).
 
 # Param Management
 
@@ -383,9 +395,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > | `type` | Additional fields |
 > |---|---|
-> | `AppRegistered` | `app` |
+> | `AppRegistered` | `app`, `version_id` |
 > | `AppDeregistered` | `app` |
-> | `AppUpdated` | `app` |
+> | `AppUpdated` | `app`, `version_id`, `previous_version_id` |
 > | `OperationStarted` | `app`, `action_name`, `operation_id` |
 > | `OperationCompleted` | `app`, `action_name`, `operation_id` |
 > | `OperationFailed` | `app`, `action_name`, `operation_id`, `error` |

@@ -78,6 +78,10 @@ pub struct AppEntry {
     /// Active script-evaluation fault, if the last reload failed.
     /// Cleared on the next successful evaluation.
     pub script_error: Option<(String, Timestamp)>,
+    /// Current app version identifier.
+    pub version_id: String,
+    /// Previous app version identifier, if the app has been updated.
+    pub previous_version_id: Option<String>,
 }
 
 pub struct AppRegistry {
@@ -128,6 +132,8 @@ impl AppRegistry {
                 active_progress: Arc::new(RwLock::new(None)),
                 tick_notify,
                 script_error,
+                version_id: String::new(),
+                previous_version_id: None,
             },
         );
         Ok(())
@@ -200,20 +206,21 @@ impl AppRegistry {
     ) -> rusqlite::Result<Self> {
         let mut registry = Self::new();
         let mut stmt = db.conn.prepare(
-            "SELECT name, script, installed, uninstalling FROM registered_apps ORDER BY name",
+            "SELECT name, script, installed, uninstalling, current_version_id FROM registered_apps ORDER BY name",
         )?;
-        let rows: Vec<(String, String, bool, bool)> = stmt
+        let rows: Vec<(String, String, bool, bool, Option<String>)> = stmt
             .query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, bool>(2)?,
                     row.get::<_, bool>(3)?,
+                    row.get::<_, Option<String>>(4)?,
                 ))
             })?
             .collect::<rusqlite::Result<_>>()?;
 
-        for (name, script, installed, uninstalling) in rows {
+        for (name, script, installed, uninstalling, version_id) in rows {
             let phase = match (installed, uninstalling) {
                 (_, true) => AppPhase::Uninstalling,
                 (true, _) => AppPhase::Installed,
@@ -243,6 +250,8 @@ impl AppRegistry {
                     active_progress: Arc::new(RwLock::new(None)),
                     tick_notify: Arc::clone(&tick_notify),
                     script_error,
+                    version_id: version_id.unwrap_or_default(),
+                    previous_version_id: None,
                 },
             );
         }
@@ -256,13 +265,14 @@ impl AppRegistry {
         let installed = matches!(*phase, AppPhase::Installed | AppPhase::Uninstalling);
         let uninstalling = matches!(*phase, AppPhase::Uninstalling);
         db.conn.execute(
-            "INSERT OR REPLACE INTO registered_apps (name, script, installed, uninstalling) \
-             VALUES (?1, ?2, ?3, ?4)",
+            "INSERT OR REPLACE INTO registered_apps (name, script, installed, uninstalling, current_version_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
             rusqlite::params![
                 entry.name,
                 entry.script,
                 installed as i64,
-                uninstalling as i64
+                uninstalling as i64,
+                entry.version_id
             ],
         )?;
         Ok(())
@@ -272,6 +282,49 @@ impl AppRegistry {
         db.conn
             .execute("DELETE FROM registered_apps WHERE name = ?1", [name])?;
         Ok(())
+    }
+}
+
+/// Insert a new app version row and return its ID.
+pub fn insert_app_version(db: &Db, app: &str, script: &str) -> rusqlite::Result<String> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = jiff::Timestamp::now().to_string();
+    db.conn.execute(
+        "INSERT INTO app_versions (id, app, script, created_at) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![id, app, script, now],
+    )?;
+    Ok(id)
+}
+
+/// Retrieve the script text for a specific version.
+pub fn get_version_script(db: &Db, version_id: &str) -> rusqlite::Result<Option<(String, String)>> {
+    let mut stmt = db
+        .conn
+        .prepare("SELECT app, script FROM app_versions WHERE id = ?1")?;
+    let result = stmt.query_row([version_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    });
+    match result {
+        Ok(pair) => Ok(Some(pair)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Retrieve the script text for the current version of an app.
+pub fn get_current_script(db: &Db, app: &str) -> rusqlite::Result<Option<(String, String)>> {
+    let mut stmt = db.conn.prepare(
+        "SELECT v.id, v.script FROM app_versions v
+         INNER JOIN registered_apps a ON a.current_version_id = v.id
+         WHERE a.name = ?1",
+    )?;
+    let result = stmt.query_row([app], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    });
+    match result {
+        Ok(pair) => Ok(Some(pair)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e),
     }
 }
 

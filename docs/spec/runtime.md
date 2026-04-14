@@ -231,6 +231,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - Faults filed and cleared.
 > - Resource state transitions.
 
+> r[audit.log.version-ids]
+> App registration and update audit entries must include the version identifier of the new app version. Update entries must also include the previous version identifier.
+
 > r[audit.log.rotation]
 > The audit log file must be compatible with external log rotation tools. The runtime must detect when the log file has been rotated (renamed or removed) and reopen the configured path.
 
