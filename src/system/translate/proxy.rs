@@ -98,6 +98,14 @@ pub fn build_proxy_config(ingresses: &[(IngressDef, ServiceUpstream)]) -> ProxyC
             },
         });
 
+        // HTTP/3 QUIC listener alongside HTTPS.
+        if is_https {
+            listener_set.insert(ProxyListener {
+                port: ingress.port.get(),
+                proto: ProxyListenerProto::Quic,
+            });
+        }
+
         // Plain-HTTP listener for the redirect source port.
         if let Some(redirect) = &ingress.redirect {
             listener_set.insert(ProxyListener {
