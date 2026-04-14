@@ -120,9 +120,12 @@ async fn process_one_pod(
         None
     };
 
-    // The spec is stale when both hashes are known and they differ.
+    // The spec is stale when the desired hash is known and either differs
+    // from the observed hash or the observed hash is absent (container
+    // predates the spec-hash label).
     let spec_stale = match (observed_spec_hash, desired_spec_hash) {
         (Some(observed), Some(desired)) => observed != desired,
+        (None, Some(_)) => true,
         _ => false,
     };
 
