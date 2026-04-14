@@ -13,7 +13,7 @@ fn open_in_memory_succeeds() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 12);
+    assert_eq!(version, 13);
 }
 
 // r[verify history.persistence]
@@ -45,7 +45,7 @@ fn params_table_exists() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 12);
+    assert_eq!(version, 13);
 }
 
 // i[verify app.persist]
