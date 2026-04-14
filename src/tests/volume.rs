@@ -285,12 +285,12 @@ fn anon_volume_in_action_gets_seedling_prefix() {
 
     // Check that the anonymous volume got a seedling-anon- prefixed name
     // by examining the job's container spec through the captured resource.
-    for (_inst, resource) in &progress.dynamic_defs {
+    for resource in progress.dynamic_defs.values() {
         if let defs::resource::Resource::Job(job) = resource {
             let def = job.def.lock();
             let pod = def.pod.lock();
             let container = pod.container.lock();
-            for (_path, vm) in &container.volume_mounts {
+            for vm in container.volume_mounts.values() {
                 if let defs::container::VolumeMount::Volume(v) = vm {
                     assert!(v.name.is_none(), "anonymous volume should have no BSL name");
                     let anon_id = v
@@ -326,16 +326,16 @@ fn shared_anon_volume_same_id_across_containers() {
 
     // Collect the anon_ids from all volume mounts across all dynamic resources.
     let mut anon_ids: Vec<String> = Vec::new();
-    for (_inst, resource) in &progress.dynamic_defs {
+    for resource in progress.dynamic_defs.values() {
         if let defs::resource::Resource::Job(job) = resource {
             let def = job.def.lock();
             let pod = def.pod.lock();
             let container = pod.container.lock();
-            for (_path, vm) in &container.volume_mounts {
-                if let defs::container::VolumeMount::Volume(v) = vm {
-                    if let Some(id) = &v.anon_id {
-                        anon_ids.push(id.clone());
-                    }
+            for vm in container.volume_mounts.values() {
+                if let defs::container::VolumeMount::Volume(v) = vm
+                    && let Some(id) = &v.anon_id
+                {
+                    anon_ids.push(id.clone());
                 }
             }
         }
@@ -368,16 +368,16 @@ fn distinct_anon_volumes_get_distinct_ids() {
     );
 
     let mut anon_ids: Vec<String> = Vec::new();
-    for (_inst, resource) in &progress.dynamic_defs {
+    for resource in progress.dynamic_defs.values() {
         if let defs::resource::Resource::Job(job) = resource {
             let def = job.def.lock();
             let pod = def.pod.lock();
             let container = pod.container.lock();
-            for (_path, vm) in &container.volume_mounts {
-                if let defs::container::VolumeMount::Volume(v) = vm {
-                    if let Some(id) = &v.anon_id {
-                        anon_ids.push(id.clone());
-                    }
+            for vm in container.volume_mounts.values() {
+                if let defs::container::VolumeMount::Volume(v) = vm
+                    && let Some(id) = &v.anon_id
+                {
+                    anon_ids.push(id.clone());
                 }
             }
         }
@@ -411,12 +411,12 @@ fn anon_volume_writes_preserved_through_action() {
     );
 
     let mut found_writes = false;
-    for (_inst, resource) in &progress.dynamic_defs {
+    for resource in progress.dynamic_defs.values() {
         if let defs::resource::Resource::Job(job) = resource {
             let def = job.def.lock();
             let pod = def.pod.lock();
             let container = pod.container.lock();
-            for (_path, vm) in &container.volume_mounts {
+            for vm in container.volume_mounts.values() {
                 if let defs::container::VolumeMount::Volume(v) = vm {
                     let vol_def = v.def.lock();
                     assert_eq!(vol_def.writes.len(), 2);
