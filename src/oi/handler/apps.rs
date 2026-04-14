@@ -4,7 +4,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
-    defs::{install::InstallRequirementKind, resource::ResourceKind},
+    defs::{
+        install::InstallRequirementKind,
+        resource::{Resource, ResourceKind},
+    },
     oi::{
         error::{ErrorCode, OiError},
         state::OiState,
@@ -16,7 +19,7 @@ use crate::{
         faults,
         history::{find_instances_for_group, query_observations},
         lifecycle::LifecycleState,
-        transition_phase,
+        scaling, transition_phase,
     },
 };
 
@@ -300,12 +303,30 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                     })
                     .collect();
 
-                json!({
+                let mut resource_obj = json!({
                     "name": id.name.as_str(),
                     "type": resource_type_str,
                     "instances": instances_json,
                     "faults": resource_faults,
-                })
+                });
+
+                // i[impl scale.describe]
+                if id.kind == ResourceKind::Deployment
+                    && let Some(Resource::Deployment(deployment)) = def.resources.get(id)
+                {
+                    let dep_def = deployment.def.lock();
+                    let low = dep_def.scale.start;
+                    let high = dep_def.scale.end;
+                    let current = scaling::effective_scale(&db, name, id.name.as_str(), low, high)
+                        .unwrap_or(low);
+                    resource_obj["scale"] = json!({
+                        "low": low,
+                        "high": high,
+                        "current": current,
+                    });
+                }
+
+                resource_obj
             })
             .collect()
     };
@@ -661,7 +682,62 @@ pub(crate) fn update_app(state: &OiState, params: AppScriptParams) -> HandlerRes
     Ok(json!({}))
 }
 
-// i[scale.set]
+// i[impl scale.set]
 pub(crate) fn scale_app(state: &OiState, params: ScaleParams) -> HandlerResult {
-    todo!()
+    let name = params.app.as_str();
+    let deployment_name = params.deployment.as_str();
+    let direction = params.direction.as_str();
+
+    let reg = state.registry.read();
+    let entry = reg
+        .get(name)
+        .ok_or_else(|| OiError::not_found(format!("app not found: {name}")))?;
+
+    let def = entry.app.def.lock();
+    let (low, high) = {
+        let mut found = None;
+        for (id, resource) in &def.resources {
+            if let Resource::Deployment(deployment) = resource
+                && id.name.as_str() == deployment_name
+            {
+                let dep_def = deployment.def.lock();
+                found = Some((dep_def.scale.start, dep_def.scale.end));
+                break;
+            }
+        }
+        found
+            .ok_or_else(|| OiError::not_found(format!("deployment not found: {deployment_name}")))?
+    };
+    drop(def);
+
+    let new_scale = {
+        let db = state.db.lock();
+        let current = scaling::effective_scale(&db, name, deployment_name, low, high)
+            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
+
+        let new_scale = match direction {
+            "up" => current.saturating_add(1).min(high),
+            "down" => current.saturating_sub(1).max(low),
+            "to-min" => low,
+            _ => {
+                return Err(OiError::new(
+                    ErrorCode::RequirementsInvalid,
+                    format!("invalid scale direction: {direction}"),
+                ));
+            }
+        };
+
+        // i[impl scale.decision-persistence]
+        scaling::save_scaling_decision(&db, name, deployment_name, new_scale)
+            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
+
+        new_scale
+    };
+
+    entry.tick_notify.notify_one();
+
+    Ok(json!({
+        "scale": new_scale,
+        "bounds": { "low": low, "high": high },
+    }))
 }
