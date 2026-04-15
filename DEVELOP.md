@@ -3,7 +3,7 @@
 Development on anything else than Linux is impractical.
 
 You'll need the `jool` and `jool-tools` packages (Arch calls the first one `jool-dkms`) so that NAT64 is available.
-There's no need to configure NAT64 yourself: seedling does that.
+There's no need to configure NAT64 yourself: Seedling does that.
 
 You'll need podman >=5.0 installed, and for your OS to be on systemd.
 
@@ -32,14 +32,14 @@ The state/data-dir is set to /opt/seedling to simulate an install without puttin
 
 ## Controlling
 
-You can then use `target/debug/seedling-ctl` to interact with seedling.
+You can then use `target/debug/seedling-ctl` to interact with Seedling.
 You'll need to follow the bootstrap guide in the README on first start to authenticate to the instance, and then it will work without further issue.
 
 Keeping `target/debug/seedling-ctl op events` running in another window is a good way to keep an eye on the server event feed while it's working.
 
 ## Principles
 
-- Restart and reboot resilience: if seedling stops, workloads should continue unimpeded (for the most part, some things might not be possible); when it starts again, it must take back control with the least possible disruption. This makes restarting/upgrading seedling painless. When the server as a whole reboots, seedling must restore all workloads to their desired state, so there's minimal downtime.
-- Quiet and lightweight: seedling is designed to use few resources, to leave as much as possible to the actual workloads. When there are no active workloads, it even stops infrastructure services to reduce its footprint further.
-- Feels like Kubernetes: while seedling is higher level than Kubernetes, someone familiar with K8s should feel reasonable comfortable: terminology is similar, behaviour is comparable. At the same time, seedling is more opinionated, we don't want to emulate K8s 1:1.
+- Restart and reboot resilience: if Seedling stops, workloads should continue unimpeded (for the most part, some things might not be possible); when it starts again, it must take back control with the least possible disruption. This makes restarting/upgrading Seedling painless. When the server as a whole reboots, Seedling must restore all workloads to their desired state, so there's minimal downtime.
+- Quiet and lightweight: Seedling is designed to use few resources, to leave as much as possible to the actual workloads. When there are no active workloads, it even stops infrastructure services to reduce its footprint further.
+- Feels like Kubernetes: while Seedling is higher level than Kubernetes, someone familiar with K8s should feel reasonable comfortable: terminology is similar, behaviour is comparable. At the same time, Seedling is more opinionated, we don't want to emulate K8s 1:1.
 - Comfy interfaces: CLI/API/Web UI/etc should be comfy, and not frustrate operators. Have consistent command design, don't have a million options, don't require arcane invocations. If we can make it easier for the user without surprising them, do so.
