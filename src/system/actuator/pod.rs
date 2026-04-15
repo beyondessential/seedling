@@ -218,11 +218,12 @@ impl Actuator {
 
         // Remove any orphaned container left behind by a previous stop that
         // returned before cleanup finished (e.g. unit was Deactivating).
-        self.driver
+        // Ignore errors — the container may not exist, which is the common case.
+        let _ = self
+            .driver
             .container
             .remove_container(&instance.display_name, true)
-            .await
-            .context(ContainerSnafu)?;
+            .await;
 
         // Resolve service mounts and build the argv.
         let mounts = self
