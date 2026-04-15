@@ -95,25 +95,38 @@ impl NftablesDataPlane {
             0 => {
                 args.push("blackhole".into());
                 args.push(dst);
+                args.extend([
+                    "proto".into(),
+                    "static".into(),
+                    "table".into(),
+                    "main".into(),
+                ]);
             }
             1 => {
                 args.push(dst);
                 args.extend(["via".into(), svc.backends[0].to_string()]);
+                args.extend([
+                    "proto".into(),
+                    "static".into(),
+                    "table".into(),
+                    "main".into(),
+                ]);
             }
             _ => {
+                // For multipath routes, proto/table must precede the nexthop
+                // list — `ip route` rejects them after a `nexthop` keyword.
                 args.push(dst);
+                args.extend([
+                    "proto".into(),
+                    "static".into(),
+                    "table".into(),
+                    "main".into(),
+                ]);
                 for b in &svc.backends {
                     args.extend(["nexthop".into(), "via".into(), b.to_string()]);
                 }
             }
         }
-
-        args.extend([
-            "proto".into(),
-            "static".into(),
-            "table".into(),
-            "main".into(),
-        ]);
 
         let out = tokio::process::Command::new("ip")
             .arg("-6")
