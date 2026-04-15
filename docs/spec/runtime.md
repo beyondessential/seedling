@@ -257,6 +257,10 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[gc.autonomous-operations]
 > Completed autonomous operation records must be deleted after a configurable retention period (default: 7 days).
 
+> r[gc.instances]
+> Resource instance records that have remained in the Unscheduled lifecycle state for longer than a configurable retention period (default: 10 minutes) must be deleted, along with their associated world observation rows.
+> Instances that are part of the active desired state (i.e. in the `keep` set of a scaled group or a singleton) must never be deleted regardless of their lifecycle state.
+
 # Lifecycle Operations
 
 > r[operation.lifecycle]

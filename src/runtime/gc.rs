@@ -13,6 +13,7 @@ pub struct GcConfig {
     pub retain_action_log: Duration,
     pub retain_cleared_faults: Duration,
     pub retain_completed_operations: Duration,
+    pub retain_unscheduled_instances: Duration,
 }
 
 impl Default for GcConfig {
@@ -22,6 +23,7 @@ impl Default for GcConfig {
             retain_action_log: Duration::from_secs(24 * 60 * 60),
             retain_cleared_faults: Duration::from_secs(7 * 24 * 60 * 60),
             retain_completed_operations: Duration::from_secs(7 * 24 * 60 * 60),
+            retain_unscheduled_instances: Duration::from_secs(10 * 60),
         }
     }
 }
@@ -57,6 +59,11 @@ fn run_gc_cycle(db: &Db, config: &GcConfig) {
     match gc_completed_operations(db, config.retain_completed_operations) {
         Ok(n) if n > 0 => debug!(rows = n, "gc: pruned completed operations"),
         Err(e) => error!(error = %e, "gc: completed operations cleanup failed"),
+        _ => {}
+    }
+    match gc_unscheduled_instances(db, config.retain_unscheduled_instances) {
+        Ok(n) if n > 0 => debug!(rows = n, "gc: pruned unscheduled instances"),
+        Err(e) => error!(error = %e, "gc: unscheduled instances cleanup failed"),
         _ => {}
     }
 }
@@ -107,6 +114,80 @@ fn gc_completed_operations(db: &Db, retain: Duration) -> rusqlite::Result<usize>
         "DELETE FROM autonomous_operations WHERE completed_at IS NOT NULL AND completed_at < ?1",
         rusqlite::params![cutoff],
     )
+}
+
+/// Terminal observation kinds that correspond to the Unscheduled lifecycle state.
+const UNSCHEDULED_OBS_KINDS: &[&str] = &[
+    "container_removed",
+    "network_cleaned_up",
+    "ingress_cleaned_up",
+    "volume_cleaned_up",
+];
+
+// r[impl gc.instances]
+fn gc_unscheduled_instances(db: &Db, retain: Duration) -> rusqlite::Result<usize> {
+    let cutoff = now_ms() - retain.as_millis() as i64;
+
+    // Find instances whose most recent observation is a terminal
+    // (Unscheduled) kind and was recorded before the cutoff.
+    let placeholders: String = UNSCHEDULED_OBS_KINDS
+        .iter()
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let query = format!(
+        "SELECT ri.id
+         FROM resource_instances ri
+         INNER JOIN (
+             SELECT instance_id, obs_kind, recorded_at
+             FROM world_observations wo1
+             WHERE recorded_at = (
+                 SELECT MAX(wo2.recorded_at)
+                 FROM world_observations wo2
+                 WHERE wo2.instance_id = wo1.instance_id
+             )
+         ) latest ON latest.instance_id = ri.id
+         WHERE latest.obs_kind IN ({placeholders})
+           AND latest.recorded_at < ?{param}",
+        placeholders = placeholders,
+        param = UNSCHEDULED_OBS_KINDS.len() + 1,
+    );
+
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = UNSCHEDULED_OBS_KINDS
+        .iter()
+        .map(|k| Box::new(k.to_string()) as Box<dyn rusqlite::types::ToSql>)
+        .collect();
+    params.push(Box::new(cutoff));
+
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| &**p).collect();
+
+    let mut stmt = db.conn.prepare(&query)?;
+    let ids: Vec<String> = stmt
+        .query_map(param_refs.as_slice(), |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if ids.is_empty() {
+        return Ok(0);
+    }
+
+    let mut total = 0;
+    for id in &ids {
+        total += db.conn.execute(
+            "DELETE FROM world_observations WHERE instance_id = ?1",
+            rusqlite::params![id],
+        )?;
+        total += db.conn.execute(
+            "DELETE FROM faults WHERE instance_id = ?1",
+            rusqlite::params![id],
+        )?;
+        total += db.conn.execute(
+            "DELETE FROM resource_instances WHERE id = ?1",
+            rusqlite::params![id],
+        )?;
+    }
+
+    Ok(total)
 }
 
 #[cfg(test)]
@@ -342,5 +423,136 @@ mod tests {
             })
             .unwrap();
         assert_eq!(remaining, 0);
+    }
+
+    // r[verify gc.instances]
+    #[test]
+    fn gc_unscheduled_instances_removes_old() {
+        let db = Db::open_in_memory().unwrap();
+
+        let unscheduled = dep("app", "old-web");
+        history::insert_instance(&db, &unscheduled).unwrap();
+        history::insert_observation(
+            &db,
+            &unscheduled,
+            "container_running",
+            &serde_json::json!({}),
+        )
+        .unwrap();
+        history::insert_observation(
+            &db,
+            &unscheduled,
+            "container_removed",
+            &serde_json::json!({}),
+        )
+        .unwrap();
+
+        // Backdate the terminal observation well past the retention period.
+        let old_ts = now_ms() - 20 * 60 * 1000;
+        db.conn
+            .execute(
+                "UPDATE world_observations SET recorded_at = ?1 WHERE instance_id = ?2",
+                params![old_ts, unscheduled.id.to_hex()],
+            )
+            .unwrap();
+
+        let deleted = gc_unscheduled_instances(&db, Duration::from_secs(10 * 60)).unwrap();
+        assert!(deleted > 0);
+
+        let remaining: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM resource_instances WHERE id = ?1",
+                params![unscheduled.id.to_hex()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 0);
+
+        let obs_remaining: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM world_observations WHERE instance_id = ?1",
+                params![unscheduled.id.to_hex()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(obs_remaining, 0);
+    }
+
+    #[test]
+    fn gc_unscheduled_instances_preserves_recent() {
+        let db = Db::open_in_memory().unwrap();
+
+        let recent = dep("app", "just-stopped");
+        history::insert_instance(&db, &recent).unwrap();
+        history::insert_observation(&db, &recent, "container_removed", &serde_json::json!({}))
+            .unwrap();
+
+        let deleted = gc_unscheduled_instances(&db, Duration::from_secs(10 * 60)).unwrap();
+        assert_eq!(deleted, 0);
+
+        let remaining: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM resource_instances WHERE id = ?1",
+                params![recent.id.to_hex()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 1);
+    }
+
+    #[test]
+    fn gc_unscheduled_instances_preserves_running() {
+        let db = Db::open_in_memory().unwrap();
+
+        let running = dep("app", "active-web");
+        history::insert_instance(&db, &running).unwrap();
+        history::insert_observation(&db, &running, "container_running", &serde_json::json!({}))
+            .unwrap();
+
+        // Backdate so it would be old enough to GC if it were unscheduled.
+        let old_ts = now_ms() - 20 * 60 * 1000;
+        db.conn
+            .execute(
+                "UPDATE world_observations SET recorded_at = ?1 WHERE instance_id = ?2",
+                params![old_ts, running.id.to_hex()],
+            )
+            .unwrap();
+
+        let deleted = gc_unscheduled_instances(&db, Duration::from_secs(10 * 60)).unwrap();
+        assert_eq!(deleted, 0);
+
+        let remaining: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM resource_instances WHERE id = ?1",
+                params![running.id.to_hex()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 1);
+    }
+
+    #[test]
+    fn gc_unscheduled_instances_preserves_no_observations() {
+        let db = Db::open_in_memory().unwrap();
+
+        let fresh = dep("app", "brand-new");
+        history::insert_instance(&db, &fresh).unwrap();
+
+        let deleted = gc_unscheduled_instances(&db, Duration::from_secs(10 * 60)).unwrap();
+        assert_eq!(deleted, 0);
+
+        let remaining: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM resource_instances WHERE id = ?1",
+                params![fresh.id.to_hex()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 1);
     }
 }

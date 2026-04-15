@@ -69,6 +69,10 @@ struct GcArgs {
     /// How long to retain completed autonomous operation records, in seconds.
     #[arg(long, default_value_t = 604800)]
     gc_retain_completed_operations_secs: u64,
+
+    /// How long to retain unscheduled resource instances, in seconds.
+    #[arg(long, default_value_t = 600)]
+    gc_retain_unscheduled_instances_secs: u64,
 }
 
 impl From<GcArgs> for GcConfig {
@@ -78,6 +82,9 @@ impl From<GcArgs> for GcConfig {
             retain_action_log: Duration::from_secs(a.gc_retain_action_log_secs),
             retain_cleared_faults: Duration::from_secs(a.gc_retain_cleared_faults_secs),
             retain_completed_operations: Duration::from_secs(a.gc_retain_completed_operations_secs),
+            retain_unscheduled_instances: Duration::from_secs(
+                a.gc_retain_unscheduled_instances_secs,
+            ),
         }
     }
 }
