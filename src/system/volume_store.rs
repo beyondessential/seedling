@@ -47,12 +47,28 @@ impl VolumeStore {
         if !path.exists() {
             return Ok(());
         }
-        if self.use_btrfs {
+        // Always check whether the path is actually a BTRFS subvolume,
+        // regardless of the current use_btrfs setting. A volume created
+        // under BTRFS mode must be removed with `btrfs subvolume delete`
+        // even if seedling was restarted with --without-btrfs.
+        if is_btrfs_subvolume(&path).await {
             btrfs_delete_subvolume(&path).await
         } else {
             tokio::fs::remove_dir_all(&path).await
         }
     }
+}
+
+async fn is_btrfs_subvolume(path: &Path) -> bool {
+    // `btrfs subvolume show` exits 0 only for subvolumes.
+    tokio::process::Command::new("btrfs")
+        .args(["subvolume", "show"])
+        .arg(path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await
+        .is_ok_and(|s| s.success())
 }
 
 // r[impl startup.btrfs]
