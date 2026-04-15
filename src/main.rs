@@ -50,6 +50,10 @@ struct Args {
     /// NAT64 mode: auto (default), enabled, or disabled
     #[arg(long, default_value = "auto")]
     nat64: seedling::system::nat64::Nat64Mode,
+
+    /// Run without BTRFS support; use plain directories for named volumes
+    #[arg(long)]
+    without_btrfs: bool,
 }
 
 #[derive(clap::Args)]
@@ -180,6 +184,35 @@ async fn main() {
         std::process::exit(1);
     });
 
+    // r[impl startup.btrfs]
+    let use_btrfs = match seedling::system::volume_store::is_btrfs(&data_dir) {
+        Ok(true) => {
+            tracing::info!("data directory is on BTRFS; using subvolumes for named volumes");
+            true
+        }
+        Ok(false) if args.without_btrfs => {
+            tracing::info!(
+                "data directory is not on BTRFS; using plain directories (--without-btrfs)"
+            );
+            false
+        }
+        Ok(false) => {
+            tracing::error!(
+                "data directory {} is not on a BTRFS filesystem; \
+                 pass --without-btrfs to use plain directories instead",
+                data_dir.display()
+            );
+            std::process::exit(1);
+        }
+        Err(e) => {
+            tracing::error!(
+                "cannot determine filesystem type for {}: {e}",
+                data_dir.display()
+            );
+            std::process::exit(1);
+        }
+    };
+
     let db_path = data_dir.join("seedling.db");
     let db = Db::open(&db_path).unwrap_or_else(|e| {
         tracing::error!("cannot open database {}: {e}", db_path.display());
@@ -211,13 +244,12 @@ async fn main() {
 
     let dns_servers: Vec<std::net::Ipv6Addr> = vec![resolver_addr(&node_prefix)];
 
-    let (driver, caddy_admin_client) =
-        System::setup(node_prefix, &data_dir)
-            .await
-            .unwrap_or_else(|e| {
-                tracing::error!("system setup failed: {e}");
-                std::process::exit(1);
-            });
+    let (driver, caddy_admin_client) = System::setup(node_prefix, &data_dir, use_btrfs)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::error!("system setup failed: {e}");
+            std::process::exit(1);
+        });
 
     // ---------------------------------------------------------------------------
     // App registry — load registered apps from DB

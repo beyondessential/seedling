@@ -69,13 +69,10 @@ async fn btrfs_create_subvolume(path: &Path) -> std::io::Result<()> {
         .output()
         .await?;
     if !output.status.success() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!(
-                "btrfs subvolume create failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ),
-        ));
+        return Err(std::io::Error::other(format!(
+            "btrfs subvolume create failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
     }
     Ok(())
 }
@@ -87,13 +84,10 @@ async fn btrfs_delete_subvolume(path: &Path) -> std::io::Result<()> {
         .output()
         .await?;
     if !output.status.success() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!(
-                "btrfs subvolume delete failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ),
-        ));
+        return Err(std::io::Error::other(format!(
+            "btrfs subvolume delete failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
     }
     Ok(())
 }

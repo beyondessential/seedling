@@ -144,7 +144,11 @@ impl Actuator {
                     let raw_mounts = pod.service_mounts.clone();
                     let restart = map_on_exit(container.on_exit);
                     drop(container);
-                    let vols = collect_container_volumes(&pod, instance);
+                    let vols = collect_container_volumes(
+                        &pod,
+                        instance,
+                        Some(self.driver.volume_store.volumes_dir()),
+                    );
                     (image, raw_mounts, restart, vols)
                 };
                 self.start_pod_instance(
@@ -162,6 +166,7 @@ impl Actuator {
                             &(net_name, net_prefix),
                             mounts,
                             &self.dns_servers,
+                            Some(self.driver.volume_store.volumes_dir()),
                         );
                         podman_args(&spec)
                     },
@@ -177,7 +182,11 @@ impl Actuator {
                     let raw_mounts = pod.service_mounts.clone();
                     let restart = map_on_exit(container.on_exit);
                     drop(container);
-                    let vols = collect_container_volumes(&pod, instance);
+                    let vols = collect_container_volumes(
+                        &pod,
+                        instance,
+                        Some(self.driver.volume_store.volumes_dir()),
+                    );
                     (image, raw_mounts, restart, vols)
                 };
                 self.start_pod_instance(
@@ -195,6 +204,7 @@ impl Actuator {
                             &(net_name, net_prefix),
                             mounts,
                             &self.dns_servers,
+                            Some(self.driver.volume_store.volumes_dir()),
                         );
                         podman_args(&spec)
                     },
@@ -208,37 +218,53 @@ impl Actuator {
                     let def = vol.def.lock();
                     (def.tmpfs, def.writes.clone())
                 };
-                // r[impl actuate.volume.tmpfs]
-                let just_created = if !self
-                    .driver
-                    .container
-                    .volume_exists(&name)
-                    .await
-                    .context(ContainerSnafu)?
-                {
-                    self.driver
-                        .container
-                        .create_volume(&name, tmpfs)
-                        .await
-                        .context(ContainerSnafu)?;
-                    true
-                } else {
-                    false
-                };
-                // For tmpfs volumes, always re-apply writes: contents do not
-                // survive a host reboot, but the volume metadata may persist.
-                // For regular volumes, only apply on first creation so that
-                // container-written state is not overwritten.
-                let needs_writes = just_created || tmpfs;
-                if needs_writes && !writes.is_empty() {
-                    let mountpoint = self
+                if tmpfs {
+                    // Tmpfs volumes are managed by podman with the tmpfs driver.
+                    // r[impl actuate.volume.tmpfs]
+                    if !self
                         .driver
                         .container
-                        .volume_mountpoint(&name)
+                        .volume_exists(&name)
                         .await
-                        .context(ContainerSnafu)?;
-                    for (path, contents) in &writes {
-                        safe_volume_write(&mountpoint, path, contents).await?;
+                        .context(ContainerSnafu)?
+                    {
+                        self.driver
+                            .container
+                            .create_volume(&name, true)
+                            .await
+                            .context(ContainerSnafu)?;
+                    }
+                    // Tmpfs contents don't survive a reboot; always re-apply writes.
+                    if !writes.is_empty() {
+                        let mountpoint = self
+                            .driver
+                            .container
+                            .volume_mountpoint(&name)
+                            .await
+                            .context(ContainerSnafu)?;
+                        for (path, contents) in &writes {
+                            safe_volume_write(&mountpoint, path, contents).await?;
+                        }
+                    }
+                } else {
+                    // r[impl actuate.volume.storage]
+                    let vol_store = &self.driver.volume_store;
+                    let just_created = if !vol_store.exists(&name) {
+                        vol_store.create(&name).await.map_err(|e| {
+                            VolumeWriteSnafu {
+                                path: vol_store.path(&name),
+                            }
+                            .into_error(e)
+                        })?;
+                        true
+                    } else {
+                        false
+                    };
+                    if just_created && !writes.is_empty() {
+                        let mountpoint = vol_store.path(&name);
+                        for (path, contents) in &writes {
+                            safe_volume_write(&mountpoint, path, contents).await?;
+                        }
                     }
                 }
                 Ok(None)
@@ -263,11 +289,15 @@ impl Actuator {
                 let anon_names: Vec<String> = {
                     let def = dep.def.lock();
                     let pod = def.pod.lock();
-                    collect_container_volumes(&pod, instance)
-                        .into_iter()
-                        .filter(|v| v.remove_on_stop)
-                        .map(|v| v.name)
-                        .collect()
+                    collect_container_volumes(
+                        &pod,
+                        instance,
+                        Some(self.driver.volume_store.volumes_dir()),
+                    )
+                    .into_iter()
+                    .filter(|v| v.remove_on_stop)
+                    .map(|v| v.name)
+                    .collect()
                 };
                 self.stop_pod_instance(instance, &anon_names).await
             }
@@ -275,28 +305,43 @@ impl Actuator {
                 let anon_names: Vec<String> = {
                     let def = job.def.lock();
                     let pod = def.pod.lock();
-                    collect_container_volumes(&pod, instance)
-                        .into_iter()
-                        .filter(|v| v.remove_on_stop)
-                        .map(|v| v.name)
-                        .collect()
+                    collect_container_volumes(
+                        &pod,
+                        instance,
+                        Some(self.driver.volume_store.volumes_dir()),
+                    )
+                    .into_iter()
+                    .filter(|v| v.remove_on_stop)
+                    .map(|v| v.name)
+                    .collect()
                 };
                 self.stop_pod_instance(instance, &anon_names).await
             }
-            Resource::Volume(_) => {
+            Resource::Volume(vol) => {
                 let name = instance.display_name.clone();
-                if self
-                    .driver
-                    .container
-                    .volume_exists(&name)
-                    .await
-                    .context(ContainerSnafu)?
-                {
-                    self.driver
+                let tmpfs = vol.def.lock().tmpfs;
+                if tmpfs {
+                    if self
+                        .driver
                         .container
-                        .remove_volume(&name)
+                        .volume_exists(&name)
                         .await
-                        .context(ContainerSnafu)?;
+                        .context(ContainerSnafu)?
+                    {
+                        self.driver
+                            .container
+                            .remove_volume(&name)
+                            .await
+                            .context(ContainerSnafu)?;
+                    }
+                } else {
+                    let vol_store = &self.driver.volume_store;
+                    vol_store.remove(&name).await.map_err(|e| {
+                        VolumeWriteSnafu {
+                            path: vol_store.path(&name),
+                        }
+                        .into_error(e)
+                    })?;
                 }
                 Ok(())
             }
@@ -337,6 +382,7 @@ impl Actuator {
                     &(net_name, net_prefix),
                     &mounts,
                     &self.dns_servers,
+                    Some(self.driver.volume_store.volumes_dir()),
                 )
             }
             Resource::Job(job) => {
@@ -356,6 +402,7 @@ impl Actuator {
                     &(net_name, net_prefix),
                     &mounts,
                     &self.dns_servers,
+                    Some(self.driver.volume_store.volumes_dir()),
                 )
             }
             _ => return None,

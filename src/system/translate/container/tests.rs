@@ -231,6 +231,7 @@ fn volume_mount_uses_app_prefixed_display_name() {
         &network,
         &[],
         &[],
+        None,
     );
 
     // The volume mount source must be the app-prefixed display name, not the raw BSL name.

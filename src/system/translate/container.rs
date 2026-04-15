@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     net::{IpAddr, Ipv6Addr},
+    path::Path,
 };
 
 use ipnet::Ipv6Net;
@@ -22,9 +23,10 @@ pub fn deployment_spec(
     network: &(String, Ipv6Net),
     mounts: &[(u16, Ipv6Addr, u16)],
     dns_servers: &[Ipv6Addr],
+    volumes_dir: Option<&Path>,
 ) -> ContainerSpec {
     let pod = def.pod.lock();
-    spec_from_pod(&pod, instance, network, mounts, dns_servers)
+    spec_from_pod(&pod, instance, network, mounts, dns_servers, volumes_dir)
 }
 
 /// Builds a `ContainerSpec` for a `Job` instance.
@@ -35,9 +37,10 @@ pub fn job_spec(
     network: &(String, Ipv6Net),
     mounts: &[(u16, Ipv6Addr, u16)],
     dns_servers: &[Ipv6Addr],
+    volumes_dir: Option<&Path>,
 ) -> ContainerSpec {
     let pod = def.pod.lock();
-    spec_from_pod(&pod, instance, network, mounts, dns_servers)
+    spec_from_pod(&pod, instance, network, mounts, dns_servers, volumes_dir)
 }
 
 /// Produces the `podman run [...]` argv from a `ContainerSpec`.
@@ -199,6 +202,7 @@ fn spec_from_pod(
     network: &(String, Ipv6Net),
     mounts: &[(u16, Ipv6Addr, u16)],
     dns_servers: &[Ipv6Addr],
+    volumes_dir: Option<&Path>,
 ) -> ContainerSpec {
     let container = pod.container.lock();
 
@@ -227,7 +231,17 @@ fn spec_from_pod(
                             None => anon_vol_name(instance, &path.to_string_lossy()),
                         },
                     };
-                    MountSource::Volume(name)
+                    // r[impl actuate.volume.storage]
+                    let is_named = v.name.is_some();
+                    let tmpfs = v.def.lock().tmpfs;
+                    if is_named
+                        && !tmpfs
+                        && let Some(dir) = volumes_dir
+                    {
+                        MountSource::Bind(dir.join(&name))
+                    } else {
+                        MountSource::Volume(name)
+                    }
                 }
                 VolumeMount::ExternalVolume(ev) => {
                     // TODO: ExternalVolume is external to this BSL app but still within

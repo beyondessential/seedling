@@ -85,15 +85,19 @@ impl Observer {
                 self.observe_pod_instance(instance, resource, now, &mut facts)
                     .await?;
             }
-            Resource::Volume(_) => {
+            Resource::Volume(vol) => {
                 // r[impl observe.volume]
                 let name = &instance.display_name;
-                let exists = self
-                    .driver
-                    .container
-                    .volume_exists(name)
-                    .await
-                    .context(ContainerSnafu)?;
+                let tmpfs = vol.def.lock().tmpfs;
+                let exists = if tmpfs {
+                    self.driver
+                        .container
+                        .volume_exists(name)
+                        .await
+                        .context(ContainerSnafu)?
+                } else {
+                    self.driver.volume_store.exists(name)
+                };
                 facts.push((
                     if exists {
                         ObservationFact::VolumePresent

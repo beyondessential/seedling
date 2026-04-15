@@ -23,6 +23,7 @@ pub(crate) mod journal;
 pub(crate) mod podman;
 pub mod resolver;
 pub(crate) mod systemd;
+pub mod volume_store;
 
 pub use actuator::{ActuateError, Actuator};
 pub use observer::{ObserveError, Observer};
@@ -177,6 +178,7 @@ pub struct System {
     pub process: Arc<dyn ProcessManager>,
     pub proxy: Arc<dyn NetworkProxy>,
     pub data_plane: Arc<dyn DataPlane>,
+    pub volume_store: volume_store::VolumeStore,
 }
 
 // r[infra.node.prefix]
@@ -225,6 +227,7 @@ impl System {
     pub async fn setup(
         node_prefix: Ipv6Net,
         data_dir: &Path,
+        use_btrfs: bool,
     ) -> Result<
         (Arc<Self>, Arc<tokio::sync::RwLock<reqwest::Client>>),
         Box<dyn std::error::Error + Send + Sync>,
@@ -240,11 +243,14 @@ impl System {
         let caddy_admin_client = caddy_proxy.admin_client_handle();
         let proxy: Arc<dyn NetworkProxy> = caddy_proxy;
 
+        let volume_store = volume_store::VolumeStore::new(data_dir, use_btrfs)?;
+
         let system = Arc::new(Self {
             container,
             process,
             proxy,
             data_plane: data_plane_arc,
+            volume_store,
         });
         Ok((system, caddy_admin_client))
     }

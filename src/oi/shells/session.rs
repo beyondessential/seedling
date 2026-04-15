@@ -346,6 +346,7 @@ pub(crate) async fn open_shell_session(
         &(net_name.clone(), net_prefix),
         &resolved_mounts,
         &state.dns_servers,
+        None,
     );
     container_spec.health = None;
     container_spec

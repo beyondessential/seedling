@@ -1,5 +1,5 @@
 use ipnet::Ipv6Net;
-use snafu::ResultExt;
+use snafu::{IntoError, ResultExt};
 
 use super::safe_volume_write;
 
@@ -48,6 +48,9 @@ pub(crate) struct ContainerVolume {
     /// True for anonymous volumes (ephemeral per-container), false for named
     /// volumes (static reconciler-managed or dynamic user-named).
     pub(super) remove_on_stop: bool,
+    /// Host path for bind-mounted volumes (named non-tmpfs volumes managed
+    /// by the VolumeStore). None for podman-managed volumes.
+    pub(super) host_path: Option<std::path::PathBuf>,
 }
 
 /// Collect all volumes declared in the pod's container mounts.
@@ -59,6 +62,7 @@ pub(crate) struct ContainerVolume {
 pub(super) fn collect_container_volumes(
     pod_def: &crate::defs::pod::PodDef,
     instance: &ResourceInstance,
+    volumes_dir: Option<&std::path::Path>,
 ) -> Vec<ContainerVolume> {
     pod_def
         .container
@@ -67,20 +71,30 @@ pub(super) fn collect_container_volumes(
         .iter()
         .filter_map(|(path, vm)| match vm {
             VolumeMount::Volume(v) => {
-                let (name, remove_on_stop) = match &v.name {
+                let (name, remove_on_stop, host_path) = match &v.name {
                     None => {
                         let vol_name = match &v.anon_id {
                             Some(id) => id.clone(),
                             None => anon_vol_name(instance, &path.to_string_lossy()),
                         };
-                        (vol_name, true)
+                        (vol_name, true, None)
                     }
-                    Some(n) => (format!("{}-{}", instance.app, n.as_str()), false),
+                    Some(n) => {
+                        let vol_name = format!("{}-{}", instance.app, n.as_str());
+                        let tmpfs = v.def.lock().tmpfs;
+                        let host_path = if !tmpfs {
+                            volumes_dir.map(|dir| dir.join(&vol_name))
+                        } else {
+                            None
+                        };
+                        (vol_name, false, host_path)
+                    }
                 };
                 Some(ContainerVolume {
                     name,
                     def: v.def.lock().clone(),
                     remove_on_stop,
+                    host_path,
                 })
             }
             _ => None,
@@ -94,31 +108,47 @@ pub(super) fn collect_container_volumes(
 /// as success.
 async fn ensure_volumes(driver: &System, volumes: &[ContainerVolume]) -> Result<(), ActuateError> {
     for vol in volumes {
-        let just_created = if !driver
-            .container
-            .volume_exists(&vol.name)
-            .await
-            .context(ContainerSnafu)?
-        {
-            driver
-                .container
-                .create_volume(&vol.name, vol.def.tmpfs)
-                .await
-                .context(ContainerSnafu)?;
-            true
+        if let Some(host_path) = &vol.host_path {
+            // r[impl actuate.volume.storage]
+            // Named non-tmpfs volume managed by VolumeStore; ensure the
+            // host directory/subvolume exists.
+            if !host_path.exists() {
+                driver.volume_store.create(&vol.name).await.map_err(|e| {
+                    super::VolumeWriteSnafu {
+                        path: host_path.clone(),
+                    }
+                    .into_error(e)
+                })?;
+            }
+            // Named volumes only get writes on first creation.
+            // (The reconciler handles their lifecycle.)
         } else {
-            false
-        };
-        // r[impl actuate.volume.tmpfs]
-        let needs_writes = just_created || vol.def.tmpfs;
-        if needs_writes && !vol.def.writes.is_empty() {
-            let mountpoint = driver
+            let just_created = if !driver
                 .container
-                .volume_mountpoint(&vol.name)
+                .volume_exists(&vol.name)
                 .await
-                .context(ContainerSnafu)?;
-            for (path, contents) in &vol.def.writes {
-                safe_volume_write(&mountpoint, path, contents).await?;
+                .context(ContainerSnafu)?
+            {
+                driver
+                    .container
+                    .create_volume(&vol.name, vol.def.tmpfs)
+                    .await
+                    .context(ContainerSnafu)?;
+                true
+            } else {
+                false
+            };
+            // r[impl actuate.volume.tmpfs]
+            let needs_writes = just_created || vol.def.tmpfs;
+            if needs_writes && !vol.def.writes.is_empty() {
+                let mountpoint = driver
+                    .container
+                    .volume_mountpoint(&vol.name)
+                    .await
+                    .context(ContainerSnafu)?;
+                for (path, contents) in &vol.def.writes {
+                    safe_volume_write(&mountpoint, path, contents).await?;
+                }
             }
         }
     }
