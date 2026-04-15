@@ -372,9 +372,22 @@ impl PodmanRuntime {
         }
     }
 
-    async fn create_volume_impl(&self, name: &str) -> Result<(), PodmanError> {
+    async fn create_volume_impl(&self, name: &str, tmpfs: bool) -> Result<(), PodmanError> {
         let body = VolumeCreateOptions {
             name: Some(name.to_string()),
+            driver: if tmpfs {
+                Some("local".to_string())
+            } else {
+                None
+            },
+            options: if tmpfs {
+                Some(std::collections::HashMap::from([(
+                    "type".to_string(),
+                    "tmpfs".to_string(),
+                )]))
+            } else {
+                None
+            },
             ..Default::default()
         };
         self.client
@@ -799,8 +812,16 @@ impl ContainerRuntime for PodmanRuntime {
         Box::pin(async move { self.volume_exists_impl(name).await.map_err(Into::into) })
     }
 
-    fn create_volume<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {
-        Box::pin(async move { self.create_volume_impl(name).await.map_err(Into::into) })
+    fn create_volume<'a>(
+        &'a self,
+        name: &'a str,
+        tmpfs: bool,
+    ) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move {
+            self.create_volume_impl(name, tmpfs)
+                .await
+                .map_err(Into::into)
+        })
     }
 
     fn remove_volume<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {

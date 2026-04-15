@@ -204,6 +204,11 @@ impl Actuator {
             // r[impl actuate.volume.start]
             Resource::Volume(vol) => {
                 let name = instance.display_name.clone();
+                let (tmpfs, writes) = {
+                    let def = vol.def.lock();
+                    (def.tmpfs, def.writes.clone())
+                };
+                // r[impl actuate.volume.tmpfs]
                 if !self
                     .driver
                     .container
@@ -213,11 +218,12 @@ impl Actuator {
                 {
                     self.driver
                         .container
-                        .create_volume(&name)
+                        .create_volume(&name, tmpfs)
                         .await
                         .context(ContainerSnafu)?;
                 }
-                let writes = vol.def.lock().writes.clone();
+                // For tmpfs volumes, always re-apply writes: contents do not
+                // survive a host reboot, but the volume metadata may persist.
                 if !writes.is_empty() {
                     let mountpoint = self
                         .driver

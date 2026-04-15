@@ -88,7 +88,11 @@ pub trait ContainerRuntime: Send + Sync + 'static {
 
     // Volumes
     fn volume_exists<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<bool, BoxError>>;
-    fn create_volume<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>>;
+    fn create_volume<'a>(
+        &'a self,
+        name: &'a str,
+        tmpfs: bool,
+    ) -> BoxFuture<'a, Result<(), BoxError>>;
     fn remove_volume<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>>;
     /// List volume names matching a given prefix.
     fn list_volumes_by_prefix<'a>(

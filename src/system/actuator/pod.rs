@@ -102,14 +102,16 @@ async fn ensure_volumes(driver: &System, volumes: &[ContainerVolume]) -> Result<
         {
             driver
                 .container
-                .create_volume(&vol.name)
+                .create_volume(&vol.name, vol.def.tmpfs)
                 .await
                 .context(ContainerSnafu)?;
             true
         } else {
             false
         };
-        if just_created && !vol.def.writes.is_empty() {
+        // r[impl actuate.volume.tmpfs]
+        let needs_writes = just_created || vol.def.tmpfs;
+        if needs_writes && !vol.def.writes.is_empty() {
             let mountpoint = driver
                 .container
                 .volume_mountpoint(&vol.name)

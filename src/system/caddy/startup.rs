@@ -411,7 +411,7 @@ pub(crate) async fn ensure_caddy_running(
         .context(ContainerSnafu)?
     {
         container
-            .create_volume(CADDY_DATA_VOLUME)
+            .create_volume(CADDY_DATA_VOLUME, false)
             .await
             .context(ContainerSnafu)?;
     }
