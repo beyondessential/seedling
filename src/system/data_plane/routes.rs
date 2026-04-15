@@ -1,157 +1,227 @@
+use std::net::Ipv6Addr;
+
+use futures_util::TryStreamExt;
+use rtnetlink::{
+    Handle, RouteMessageBuilder,
+    packet_route::route::{RouteAttribute, RouteProtocol, RouteType},
+};
+
 use super::{DataPlaneError, NftablesDataPlane};
 use crate::system::types::ServiceRoute;
 
+/// Format an rtnetlink error into a descriptive message similar to iproute2 output.
+fn format_rtnetlink_error(err: &rtnetlink::Error, context: &str) -> String {
+    match err {
+        rtnetlink::Error::NetlinkError(msg) => {
+            // `to_io()` gives us the standard OS error description (e.g.
+            // "File exists", "No such file or directory") from the kernel
+            // errno, which mirrors what iproute2 would print.
+            let io_err = msg.to_io();
+            let errno = msg.code.map(|c| c.get().unsigned_abs());
+            let hint = match errno {
+                Some(e) if e == libc::EEXIST as u32 => " (route already exists)",
+                Some(e) if e == libc::EPERM as u32 => " (missing CAP_NET_ADMIN?)",
+                Some(e) if e == libc::ESRCH as u32 => " (stale nexthop?)",
+                _ => "",
+            };
+            format!("{context}: {io_err}{hint}")
+        }
+        other => format!("{context}: {other}"),
+    }
+}
+
+/// Extract the IPv6 destination address and prefix length from a route message.
+fn route_destination(msg: &rtnetlink::packet_route::route::RouteMessage) -> Option<(Ipv6Addr, u8)> {
+    for attr in &msg.attributes {
+        if let RouteAttribute::Destination(rtnetlink::packet_route::route::RouteAddress::Inet6(
+            addr,
+        )) = attr
+        {
+            return Some((*addr, msg.header.destination_prefix_length));
+        }
+    }
+    None
+}
+
 impl NftablesDataPlane {
     /// Delete all seedling-managed IPv6 static /128 routes in the fd5e::/16
-    /// range using the `ip` CLI. Using the CLI instead of rtnetlink directly
-    /// allows us to isolate whether EINVAL is a library/message-construction
-    /// issue or genuine kernel behaviour.
+    /// range using rtnetlink.
     #[tracing::instrument(level = "trace", skip(self))]
-    pub(super) async fn delete_managed_routes(&self) -> Result<(), DataPlaneError> {
-        // `ip -j route show` emits JSON; each element has a "dst" key.
-        // For IPv6 host (/128) routes, iproute2 may omit the prefix length.
-        let out = tokio::process::Command::new("ip")
-            .args([
-                "-6", "-j", "route", "show", "proto", "static", "table", "main",
-            ])
-            .output()
+    pub(super) async fn delete_managed_routes(
+        &self,
+        handle: &Handle,
+    ) -> Result<(), DataPlaneError> {
+        let query = RouteMessageBuilder::<Ipv6Addr>::new()
+            .protocol(RouteProtocol::Static)
+            .build();
+
+        let mut stream = handle.route().get(query).execute();
+
+        // Collect matching routes first so we don't hold the stream across deletes.
+        let mut to_delete = Vec::new();
+        while let Some(route) = stream
+            .try_next()
             .await
             .map_err(|e| DataPlaneError::Netlink {
-                source: Box::new(e),
+                source: format_rtnetlink_error(&e, "listing IPv6 static routes").into(),
                 backtrace: std::backtrace::Backtrace::capture(),
-            })?;
+            })?
+        {
+            // Filter: must be protocol static, table main, /128, in fd5e::/16.
+            if route.header.protocol != RouteProtocol::Static {
+                continue;
+            }
 
-        if !out.status.success() {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            return Err(DataPlaneError::Netlink {
-                source: format!("ip route show failed: {}", stderr.trim()).into(),
-                backtrace: std::backtrace::Backtrace::capture(),
-            });
+            let table = effective_table(&route);
+            if table != 254 {
+                continue;
+            }
+
+            if let Some((addr, prefix_len)) = route_destination(&route) {
+                if prefix_len != 128 {
+                    continue;
+                }
+                let octets = addr.octets();
+                if octets[0] != 0xfd || octets[1] != 0x5e {
+                    continue;
+                }
+                to_delete.push(route);
+            }
         }
 
-        let routes: Vec<serde_json::Value> =
-            serde_json::from_slice(&out.stdout).unwrap_or_default();
+        for route in to_delete {
+            let dst_desc = route_destination(&route)
+                .map(|(a, l)| format!("{a}/{l}"))
+                .unwrap_or_else(|| "unknown".to_owned());
 
-        for route in routes {
-            let dst = match route["dst"].as_str() {
-                Some(d) => d,
-                None => continue,
-            };
-
-            // Only touch /128 routes in our managed range.
-            // Host routes may appear without the "/128" suffix.
-            let addr_part = dst.split('/').next().unwrap_or(dst);
-            let prefix_len = dst
-                .split('/')
-                .nth(1)
-                .and_then(|s| s.parse::<u8>().ok())
-                .unwrap_or(128); // no slash → host route → /128
-
-            if prefix_len != 128 {
-                continue;
-            }
-            if !addr_part.starts_with("fd5e") {
-                continue;
-            }
-
-            let del = tokio::process::Command::new("ip")
-                .args([
-                    "-6", "route", "del", dst, "proto", "static", "table", "main",
-                ])
-                .output()
+            handle
+                .route()
+                .del(route)
+                .execute()
                 .await
                 .map_err(|e| DataPlaneError::Netlink {
-                    source: Box::new(e),
+                    source: format_rtnetlink_error(&e, &format!("deleting route {dst_desc}"))
+                        .into(),
                     backtrace: std::backtrace::Backtrace::capture(),
                 })?;
-
-            if !del.status.success() {
-                let stderr = String::from_utf8_lossy(&del.stderr);
-                return Err(DataPlaneError::Netlink {
-                    source: format!(
-                        "ip route del {} failed (exit {:?}): {}",
-                        dst,
-                        del.status.code(),
-                        stderr.trim()
-                    )
-                    .into(),
-                    backtrace: std::backtrace::Backtrace::capture(),
-                });
-            }
         }
 
         Ok(())
     }
 
-    /// Add or replace a service route using the `ip` CLI.
+    /// Add or replace a service route using rtnetlink.
     #[tracing::instrument(level = "trace", skip(self))]
-    pub(super) async fn add_service_route(&self, svc: &ServiceRoute) -> Result<(), DataPlaneError> {
-        let dst = format!("{}/128", svc.service_ip);
-
-        // Build the argument list for: ip -6 route replace <args>
-        let mut args: Vec<String> = vec!["route".into(), "replace".into()];
+    pub(super) async fn add_service_route(
+        &self,
+        handle: &Handle,
+        svc: &ServiceRoute,
+    ) -> Result<(), DataPlaneError> {
+        let dst_desc = format!("{}/128", svc.service_ip);
 
         match svc.backends.len() {
             0 => {
-                args.push("blackhole".into());
-                args.push(dst);
-                args.extend([
-                    "proto".into(),
-                    "static".into(),
-                    "table".into(),
-                    "main".into(),
-                ]);
+                let route = RouteMessageBuilder::<Ipv6Addr>::new()
+                    .destination_prefix(svc.service_ip, 128)
+                    .protocol(RouteProtocol::Static)
+                    .kind(RouteType::BlackHole)
+                    .table_id(254)
+                    .build();
+
+                handle
+                    .route()
+                    .add(route)
+                    .replace()
+                    .execute()
+                    .await
+                    .map_err(|e| DataPlaneError::Netlink {
+                        source: format_rtnetlink_error(
+                            &e,
+                            &format!("replacing blackhole route {dst_desc}"),
+                        )
+                        .into(),
+                        backtrace: std::backtrace::Backtrace::capture(),
+                    })?;
             }
             1 => {
-                args.push(dst);
-                args.extend(["via".into(), svc.backends[0].to_string()]);
-                args.extend([
-                    "proto".into(),
-                    "static".into(),
-                    "table".into(),
-                    "main".into(),
-                ]);
+                let route = RouteMessageBuilder::<Ipv6Addr>::new()
+                    .destination_prefix(svc.service_ip, 128)
+                    .gateway(svc.backends[0])
+                    .protocol(RouteProtocol::Static)
+                    .table_id(254)
+                    .build();
+
+                handle
+                    .route()
+                    .add(route)
+                    .replace()
+                    .execute()
+                    .await
+                    .map_err(|e| DataPlaneError::Netlink {
+                        source: format_rtnetlink_error(
+                            &e,
+                            &format!("replacing route {dst_desc} via {}", svc.backends[0]),
+                        )
+                        .into(),
+                        backtrace: std::backtrace::Backtrace::capture(),
+                    })?;
             }
             _ => {
-                // For multipath routes, proto/table must precede the nexthop
-                // list — `ip route` rejects them after a `nexthop` keyword.
-                args.push(dst);
-                args.extend([
-                    "proto".into(),
-                    "static".into(),
-                    "table".into(),
-                    "main".into(),
-                ]);
-                for b in &svc.backends {
-                    args.extend(["nexthop".into(), "via".into(), b.to_string()]);
-                }
+                let nexthops: Vec<_> = svc
+                    .backends
+                    .iter()
+                    .map(|b| {
+                        rtnetlink::RouteNextHopBuilder::new_ipv6()
+                            .via(std::net::IpAddr::V6(*b))
+                            .expect("IPv6 address for IPv6 nexthop builder")
+                            .build()
+                    })
+                    .collect();
+
+                let route = RouteMessageBuilder::<Ipv6Addr>::new()
+                    .destination_prefix(svc.service_ip, 128)
+                    .protocol(RouteProtocol::Static)
+                    .table_id(254)
+                    .multipath(nexthops)
+                    .build();
+
+                handle
+                    .route()
+                    .add(route)
+                    .replace()
+                    .execute()
+                    .await
+                    .map_err(|e| {
+                        let backends: Vec<_> =
+                            svc.backends.iter().map(ToString::to_string).collect();
+                        DataPlaneError::Netlink {
+                            source: format_rtnetlink_error(
+                                &e,
+                                &format!(
+                                    "replacing multipath route {dst_desc} nexthops [{}]",
+                                    backends.join(", ")
+                                ),
+                            )
+                            .into(),
+                            backtrace: std::backtrace::Backtrace::capture(),
+                        }
+                    })?;
             }
-        }
-
-        let out = tokio::process::Command::new("ip")
-            .arg("-6")
-            .args(&args)
-            .output()
-            .await
-            .map_err(|e| DataPlaneError::Netlink {
-                source: Box::new(e),
-                backtrace: std::backtrace::Backtrace::capture(),
-            })?;
-
-        if !out.status.success() {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            return Err(DataPlaneError::Netlink {
-                source: format!(
-                    "ip -6 {} failed (exit {:?}): {}",
-                    args.join(" "),
-                    out.status.code(),
-                    stderr.trim()
-                )
-                .into(),
-                backtrace: std::backtrace::Backtrace::capture(),
-            });
         }
 
         Ok(())
     }
+}
+
+/// Get the effective routing table ID from a route message.
+///
+/// The kernel stores table IDs in two places: a u8 field in the header (max
+/// 255) and an optional `RTA_TABLE` attribute for larger values. The attribute
+/// takes precedence when present.
+fn effective_table(msg: &rtnetlink::packet_route::route::RouteMessage) -> u32 {
+    for attr in &msg.attributes {
+        if let RouteAttribute::Table(t) = attr {
+            return *t;
+        }
+    }
+    msg.header.table as u32
 }

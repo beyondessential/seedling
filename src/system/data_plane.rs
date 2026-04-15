@@ -4,6 +4,7 @@ use nftables::{
     helper,
     schema::{FlushObject, NfCmd, NfListObject},
 };
+use rtnetlink::Handle;
 use snafu::Snafu;
 use tracing::error;
 
@@ -31,11 +32,17 @@ pub(crate) enum DataPlaneError {
 
 pub(crate) struct NftablesDataPlane {
     node_prefix: Ipv6Net,
+    handle: Handle,
 }
 
 impl NftablesDataPlane {
     pub(crate) fn new(node_prefix: Ipv6Net) -> std::io::Result<Self> {
-        Ok(Self { node_prefix })
+        let (connection, handle, _) = rtnetlink::new_connection()?;
+        tokio::spawn(connection);
+        Ok(Self {
+            node_prefix,
+            handle,
+        })
     }
 }
 
@@ -101,20 +108,24 @@ impl NftablesDataPlane {
     }
 
     async fn apply_routes_impl(&self, routes: &[ServiceRoute]) -> Result<(), DataPlaneError> {
-        self.delete_managed_routes().await.map_err(|e| {
-            error!(error = %e, "data_plane: delete_managed_routes failed");
-            e
-        })?;
-        for svc in routes {
-            self.add_service_route(svc).await.map_err(|e| {
-                error!(
-                    error = %e,
-                    service_ip = %svc.service_ip,
-                    backends = svc.backends.len(),
-                    "data_plane: add_service_route failed"
-                );
+        self.delete_managed_routes(&self.handle)
+            .await
+            .map_err(|e| {
+                error!(error = %e, "data_plane: delete_managed_routes failed");
                 e
             })?;
+        for svc in routes {
+            self.add_service_route(&self.handle, svc)
+                .await
+                .map_err(|e| {
+                    error!(
+                        error = %e,
+                        service_ip = %svc.service_ip,
+                        backends = svc.backends.len(),
+                        "data_plane: add_service_route failed"
+                    );
+                    e
+                })?;
         }
         Ok(())
     }
@@ -124,7 +135,7 @@ impl NftablesDataPlane {
         batch.add_cmd(NfCmd::Delete(NfListObject::Table(nft::table())));
         let ruleset = batch.to_nftables();
         let _ = helper::apply_ruleset_async(&ruleset).await;
-        self.delete_managed_routes().await
+        self.delete_managed_routes(&self.handle).await
     }
 }
 
