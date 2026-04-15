@@ -126,7 +126,19 @@ pub(crate) async fn forward_port_session(
 
     let conn_id = conn.stable_id();
     let forward_id = Uuid::new_v4();
-    let forward_key = state.forwards.lock().alloc_key(conn_id);
+    let forward_key_result = state.forwards.lock().alloc_key(conn_id);
+    let forward_key = match forward_key_result {
+        Ok(k) => k,
+        Err(e) => {
+            write_err(
+                &mut send,
+                "internal",
+                &format!("forward key allocation: {e}"),
+            )
+            .await;
+            return;
+        }
+    };
 
     let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
 

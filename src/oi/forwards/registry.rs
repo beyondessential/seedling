@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::Ipv6Addr, sync::Arc};
+use std::{collections::HashMap, fmt, net::Ipv6Addr, sync::Arc};
 
 use jiff::Timestamp;
 use parking_lot::Mutex;
@@ -14,6 +14,24 @@ pub enum ForwardProto {
     Tcp,
     Udp,
 }
+
+/// Errors that can occur when managing forwards.
+#[derive(Debug)]
+pub enum ForwardError {
+    KeySpaceExhausted,
+}
+
+impl fmt::Display for ForwardError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::KeySpaceExhausted => {
+                f.write_str("all 65536 forward keys are in use for this connection")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ForwardError {}
 
 /// A live port-forward entry held in the registry for the lifetime of the forward.
 pub struct ForwardEntry {
@@ -65,12 +83,22 @@ impl ForwardRegistry {
         }))
     }
 
-    /// Allocate the next `forward_key` for a connection, wrapping around on overflow.
-    pub fn alloc_key(&mut self, conn_id: usize) -> u16 {
+    // i[forward.key-exhaustion]
+    /// Allocate the next available `forward_key` for a connection, scanning
+    /// past keys that are still in use by active forwards.
+    pub fn alloc_key(&mut self, conn_id: usize) -> Result<u16, ForwardError> {
         let counter = self.key_counters.entry(conn_id).or_insert(0);
-        let key = *counter;
-        *counter = counter.wrapping_add(1);
-        key
+        let start = *counter;
+        loop {
+            let candidate = *counter;
+            *counter = counter.wrapping_add(1);
+            if !self.conn_key_to_id.contains_key(&(conn_id, candidate)) {
+                return Ok(candidate);
+            }
+            if *counter == start {
+                return Err(ForwardError::KeySpaceExhausted);
+            }
+        }
     }
 
     pub fn insert(&mut self, entry: ForwardEntry) {

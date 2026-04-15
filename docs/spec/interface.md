@@ -73,7 +73,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[datagram.forward]
 > Each tunneled UDP datagram within a port forward is carried as a QUIC datagram (RFC 9221).
 > Every datagram begins with a 2-byte big-endian `forward_key` followed immediately by the UDP payload.
-> QUIC datagrams are path-MTU constrained; payloads that exceed the limit reported by `max_datagram_size()` cannot be delivered and are silently dropped.
+> QUIC datagrams are path-MTU constrained; payloads that exceed the limit are dropped and reported via a status message (see [forward.status](#i--forward.status)).
 
 > i[stream.dispatch]
 > All client-initiated bidirectional streams begin with a newline-terminated JSON object.
@@ -360,6 +360,17 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Each UDP datagram forwarded through a UDP port forward is carried as a QUIC datagram as defined in [datagram.forward](#i--datagram.forward).
 > The server extracts the `forward_key`, looks up the target service address and port, and forwards the payload as a UDP datagram.
 > Responses from the service are sent back as QUIC datagrams with the same `forward_key` prefix.
+
+> i[forward.key-exhaustion]
+> `forward_key` is a 16-bit value; each connection can therefore have at most 65536 concurrent UDP forwards.
+> When allocating a new key, the server scans for an unused slot and reuses keys freed by closed forwards.
+> If all 65536 keys are in use the request fails with an `"internal"` error.
+
+> i[forward.status]
+> After the initial response, the server may send additional newline-terminated JSON objects on the control stream's send half to report runtime conditions.
+> Each status message has the shape `{ "status": { "level": "<level>", "message": "<text>" } }` where `level` is `"warn"` or `"error"`.
+> Clients should display these messages but must not treat them as fatal; the forward remains active unless the control stream closes.
+> Conditions reported include oversized UDP datagrams dropped due to path-MTU limits, relay task failures, and datagram backpressure.
 
 > i[forward.lifetime]
 > A port forward remains active until any of the following occur:
