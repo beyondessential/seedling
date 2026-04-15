@@ -214,7 +214,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > i[scale.set]
 > `/apps/scale { app, deployment, direction }` adjusts the running scale of a single Deployment within an installed app.
-> `direction` is one of `up` (increment by one), `down` (decrement by one), or `to-min` (set to the deployment's lower bound).
+> `direction` is one of `up` (increment by one), `down` (decrement by one), `to-min` (set to the deployment's lower bound), or a non-negative integer (set to that exact count).
 > The resulting scale is clamped to the deployment's declared bounds; requests that would move outside the bounds succeed but stay at the boundary.
 > The app must be registered and the named deployment must exist in the current AppDef; otherwise `not_found` is returned.
 > On success, the response contains `scale` (the new scale value) and `bounds` with `low` and `high`.

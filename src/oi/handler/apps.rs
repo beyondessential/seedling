@@ -764,12 +764,15 @@ pub(crate) fn scale_app(state: &OiState, params: ScaleParams) -> HandlerResult {
             "up" => current.saturating_add(1).min(high),
             "down" => current.saturating_sub(1).max(low),
             "to-min" => low,
-            _ => {
-                return Err(OiError::new(
-                    ErrorCode::RequirementsInvalid,
-                    format!("invalid scale direction: {direction}"),
-                ));
-            }
+            other => match other.parse::<u16>() {
+                Ok(n) => n.clamp(low, high),
+                Err(_) => {
+                    return Err(OiError::new(
+                        ErrorCode::RequirementsInvalid,
+                        format!("invalid scale direction: {direction}"),
+                    ));
+                }
+            },
         };
 
         // i[impl scale.decision-persistence]

@@ -81,6 +81,8 @@ pub(super) enum ScaleDirection {
     Down,
     /// Scale to the minimum (lower bound)
     ToMin,
+    /// Scale to an exact instance count (clamped to bounds)
+    To { count: u16 },
 }
 
 #[derive(Subcommand)]
@@ -223,9 +225,10 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
             direction,
         } => {
             let dir = match direction {
-                ScaleDirection::Up => "up",
-                ScaleDirection::Down => "down",
-                ScaleDirection::ToMin => "to-min",
+                ScaleDirection::Up => "up".to_owned(),
+                ScaleDirection::Down => "down".to_owned(),
+                ScaleDirection::ToMin => "to-min".to_owned(),
+                ScaleDirection::To { count } => count.to_string(),
             };
             print_result(
                 client
