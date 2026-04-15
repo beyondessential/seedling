@@ -440,6 +440,12 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[actuate.volume.tmpfs]
 > When starting a tmpfs-backed Volume, the runtime must create the volume with the tmpfs driver. Because tmpfs contents do not survive a host reboot, any declared file writes must be re-applied unconditionally — not only when the volume is first created.
 
+> r[actuate.volume.storage]
+> Named non-tmpfs volumes are stored as host-managed directories under the data directory and bind-mounted into containers. Anonymous volumes remain managed by the container runtime.
+
+> r[actuate.volume.btrfs]
+> When the data directory resides on a BTRFS filesystem, named non-tmpfs volumes must be created as BTRFS subvolumes.
+
 > r[actuate.volume.stop]
 > Stopping a Volume instance must remove the named volume.
 
@@ -565,6 +571,11 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[reconcile.ingress]
 > Reconciling one Ingress into another must not drop in-flight traffic.
 > The runtime must update the ingress configuration atomically, transitioning backends from old to new as new backends become available.
+
+# Startup
+
+> r[startup.btrfs]
+> At startup, the runtime must verify that the data directory resides on a BTRFS filesystem. If BTRFS is not available and the `--without-btrfs` flag has not been passed, the runtime must exit with an error that mentions the `--without-btrfs` flag.
 
 # Infrastructure
 
