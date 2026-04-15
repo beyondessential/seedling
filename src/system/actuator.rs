@@ -209,7 +209,7 @@ impl Actuator {
                     (def.tmpfs, def.writes.clone())
                 };
                 // r[impl actuate.volume.tmpfs]
-                if !self
+                let just_created = if !self
                     .driver
                     .container
                     .volume_exists(&name)
@@ -221,10 +221,16 @@ impl Actuator {
                         .create_volume(&name, tmpfs)
                         .await
                         .context(ContainerSnafu)?;
-                }
+                    true
+                } else {
+                    false
+                };
                 // For tmpfs volumes, always re-apply writes: contents do not
                 // survive a host reboot, but the volume metadata may persist.
-                if !writes.is_empty() {
+                // For regular volumes, only apply on first creation so that
+                // container-written state is not overwritten.
+                let needs_writes = just_created || tmpfs;
+                if needs_writes && !writes.is_empty() {
                     let mountpoint = self
                         .driver
                         .container
