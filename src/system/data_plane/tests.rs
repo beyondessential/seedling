@@ -5,8 +5,9 @@ use ipnet::Ipv6Net;
 use crate::system::types::{ForwardProto, IngressRule};
 
 use super::nft::{
-    ct_state_established_related_accept, ct_status_dnat_accept, drop_unsolicited_inbound_stmts,
-    ingress_rule_stmts, output_ingress_rule_stmts, seedling_forward_stmts,
+    ct_state_established_related_accept, ct_status_dnat_accept, dnat_lb,
+    drop_unsolicited_inbound_stmts, ingress_rule_stmts, output_ingress_rule_stmts,
+    seedling_forward_stmts,
 };
 
 fn test_rule(port: u16, proto: ForwardProto) -> IngressRule {
@@ -191,6 +192,86 @@ fn drop_unsolicited_inbound_stmts_json() {
     assert!(
         !json.contains("\"accept\""),
         "must NOT contain accept, got: {json}"
+    );
+}
+
+// l[verify service.routing]
+#[test]
+fn dnat_lb_single_backend() {
+    let backends = vec![(Ipv6Addr::new(0xfd5e, 0, 0, 0, 0, 0, 0, 1), 8080)];
+    let stmt = dnat_lb(&backends);
+    let json = serde_json::to_string(&stmt).expect("serialize");
+    assert!(json.contains("\"dnat\""), "must be a dnat, got: {json}");
+    assert!(
+        json.contains("fd5e::1"),
+        "must contain backend addr, got: {json}"
+    );
+    assert!(
+        json.contains("8080"),
+        "must contain backend port, got: {json}"
+    );
+    assert!(
+        !json.contains("\"numgen\""),
+        "single backend must not use numgen, got: {json}"
+    );
+}
+
+// l[verify service.routing]
+#[test]
+fn dnat_lb_multiple_backends_uniform_port() {
+    let backends = vec![
+        (Ipv6Addr::new(0xfd5e, 0, 0, 0, 0, 0, 0, 1), 8080),
+        (Ipv6Addr::new(0xfd5e, 0, 0, 0, 0, 0, 0, 2), 8080),
+    ];
+    let stmt = dnat_lb(&backends);
+    let json = serde_json::to_string(&stmt).expect("serialize");
+    assert!(
+        json.contains("\"numgen\""),
+        "multiple backends must use numgen round-robin, got: {json}"
+    );
+    assert!(
+        json.contains("\"concat\""),
+        "map values must be addr.port concatenations, got: {json}"
+    );
+    assert!(
+        json.contains("fd5e::1"),
+        "must contain first backend addr, got: {json}"
+    );
+    assert!(
+        json.contains("fd5e::2"),
+        "must contain second backend addr, got: {json}"
+    );
+}
+
+// l[verify service.routing]
+#[test]
+fn dnat_lb_multiple_backends_mixed_ports() {
+    let backends = vec![
+        (Ipv6Addr::new(0xfd5e, 0, 0, 0, 0, 0, 0, 1), 8080),
+        (Ipv6Addr::new(0xfd5e, 0, 0, 0, 0, 0, 0, 2), 9090),
+    ];
+    let stmt = dnat_lb(&backends);
+    let json = serde_json::to_string(&stmt).expect("serialize");
+    assert!(
+        json.contains("\"numgen\""),
+        "multiple backends must use numgen round-robin, got: {json}"
+    );
+    assert!(
+        json.contains("\"concat\""),
+        "map values must be addr.port concatenations, got: {json}"
+    );
+    assert!(
+        json.contains("8080"),
+        "must contain first backend port, got: {json}"
+    );
+    assert!(
+        json.contains("9090"),
+        "must contain second backend port, got: {json}"
+    );
+    // The DNAT port field must be None (embedded in concat), not a top-level port.
+    assert!(
+        !json.contains("\"port\""),
+        "port must not appear as a separate DNAT field when using concat, got: {json}"
     );
 }
 

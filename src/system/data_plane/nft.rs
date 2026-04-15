@@ -317,7 +317,8 @@ pub(super) fn service_dnat_rule_stmts(rule: &ServiceDnatRule) -> Vec<Vec<Stateme
 }
 
 /// DNAT to one or more backends. Single backend: plain DNAT. Multiple
-/// backends: round-robin via `numgen inc mod N` mapping to addresses.
+/// backends: round-robin via `numgen inc mod N` mapping to `addr . port`
+/// concatenations so each backend can have its own pod-side port.
 pub(super) fn dnat_lb(backends: &[(Ipv6Addr, u16)]) -> Statement<'static> {
     assert!(!backends.is_empty(), "dnat_lb called with no backends");
 
@@ -325,8 +326,6 @@ pub(super) fn dnat_lb(backends: &[(Ipv6Addr, u16)]) -> Statement<'static> {
         let (ip, port) = &backends[0];
         return dnat_ip6(ip.to_string(), *port);
     }
-
-    let port = backends[0].1;
 
     let numgen = Expression::Named(NamedExpression::Numgen(Numgen {
         mode: NgMode::Inc,
@@ -337,23 +336,26 @@ pub(super) fn dnat_lb(backends: &[(Ipv6Addr, u16)]) -> Statement<'static> {
     let mapping_set: Vec<SetItem<'_>> = backends
         .iter()
         .enumerate()
-        .map(|(i, (ip, _))| {
+        .map(|(i, (ip, port))| {
             SetItem::Mapping(
                 Expression::Number(i as u32),
-                Expression::String(Cow::Owned(ip.to_string())),
+                Expression::Named(NamedExpression::Concat(vec![
+                    Expression::String(Cow::Owned(ip.to_string())),
+                    Expression::Number(*port as u32),
+                ])),
             )
         })
         .collect();
 
-    let mapped_addr = Expression::Named(NamedExpression::Map(Box::new(Map {
+    let mapped_target = Expression::Named(NamedExpression::Map(Box::new(Map {
         key: numgen,
         data: Expression::Named(NamedExpression::Set(mapping_set)),
     })));
 
     Statement::DNAT(Some(NAT {
-        addr: Some(mapped_addr),
+        addr: Some(mapped_target),
         family: Some(NATFamily::IP6),
-        port: Some(Expression::Number(port as u32)),
+        port: None,
         flags: None,
     }))
 }
