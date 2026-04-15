@@ -537,6 +537,10 @@ This is currently the only value.
 > `volume.readonly()` is a builder method which declares this volume to be read-only.
 > A read-only volume cannot be written to.
 
+> l[volume.tmpfs]
+> `volume.tmpfs()` is a builder method which declares this volume to be backed by tmpfs (a RAM-based filesystem).
+> The contents of a tmpfs volume do not survive a host reboot.
+
 > l[volume.write]
 > `volume.write(path: string, contents: string)` is an instance method which writes some data to the volume at `path`.
 > Any existing content at `path` is discarded or shadowed.

@@ -36,6 +36,7 @@ fn validate_volume_write_path(path: &str) -> Result<(), Box<EvalAltResult>> {
 #[derive(Debug, Default, Clone)]
 pub struct VolumeDef {
     pub read_only: bool,
+    pub tmpfs: bool,
     pub writes: Vec<(String, String)>,
 }
 
@@ -87,6 +88,15 @@ impl CustomType for Volume {
                 |this: &mut Self| -> Result<Volume, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
                     this.def.lock().read_only = true;
+                    Ok(this.clone())
+                },
+            )
+            // l[impl volume.tmpfs]
+            .with_fn(
+                "tmpfs",
+                |this: &mut Self| -> Result<Volume, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
+                    this.def.lock().tmpfs = true;
                     Ok(this.clone())
                 },
             )

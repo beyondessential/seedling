@@ -437,6 +437,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[actuate.volume.start]
 > Starting a Volume instance must create the named volume if it does not already exist, then apply any declared file writes to the volume.
 
+> r[actuate.volume.tmpfs]
+> When starting a tmpfs-backed Volume, the runtime must create the volume with the tmpfs driver. Because tmpfs contents do not survive a host reboot, any declared file writes must be re-applied unconditionally — not only when the volume is first created.
+
 > r[actuate.volume.stop]
 > Stopping a Volume instance must remove the named volume.
 
