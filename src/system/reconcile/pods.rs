@@ -1,12 +1,12 @@
-use std::sync::Arc;
+use std::{collections::HashMap, collections::HashSet, sync::Arc};
 
 use futures_util::future::join_all;
 use ipnet::Ipv6Net;
 use serde_json::json;
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::{
-    defs::resource::Resource,
+    defs::{enums::OnUpdate, resource::Resource},
     runtime::{
         desired::{DesiredResource, DesiredState},
         identity::ResourceInstance,
@@ -39,6 +39,13 @@ pub(super) struct PodActuationUpdate {
     pub stop_failures: Vec<(ResourceInstance, String)>,
     /// Instances whose observation failed.
     pub observe_failures: Vec<(ResourceInstance, String)>,
+    /// Deployment names with an active rolling update (stale instances still
+    /// being drained). The reconciler uses this to bump effective scale +1.
+    #[expect(
+        dead_code,
+        reason = "set by pods phase; consumed by reconciler scale logic"
+    )]
+    pub rolling_deployments: HashSet<String>,
 }
 
 struct PodInstanceResult {
@@ -54,18 +61,26 @@ struct PodInstanceResult {
     observe_failure: Option<(ResourceInstance, String)>,
 }
 
+/// Per-instance observation collected before any actuation decisions are made.
+struct ObservedInstance<'a> {
+    dr: &'a DesiredResource,
+    is_running: bool,
+    spec_stale: bool,
+    unit_failed: bool,
+    unit_active: bool,
+    unit_loaded: bool,
+    container_exists: bool,
+    result: PodInstanceResult,
+}
+
 // r[observe.deployment]
-// r[actuate.deployment.start]
-// r[actuate.deployment.stop]
-// r[fault.non-blocking]
-// r[fault.container-start]
-async fn process_one_pod(
+async fn observe_one_pod<'a>(
     observer: &Observer,
     actuator: &Actuator,
     driver: &Arc<System>,
-    dr: &DesiredResource,
+    dr: &'a DesiredResource,
     node_prefix: &Ipv6Net,
-) -> Option<PodInstanceResult> {
+) -> Option<ObservedInstance<'a>> {
     let mut result = PodInstanceResult {
         running: None,
         observations: Vec::new(),
@@ -79,7 +94,6 @@ async fn process_one_pod(
         observe_failure: None,
     };
 
-    // Observe current state before any actuation this tick.
     let facts = match observer.observe(&dr.instance, &dr.definition).await {
         Ok(f) => f,
         Err(e) => {
@@ -89,7 +103,16 @@ async fn process_one_pod(
                 "pods: observe failed, skipping instance"
             );
             result.observe_failure = Some((dr.instance.clone(), e.to_string()));
-            return Some(result);
+            return Some(ObservedInstance {
+                dr,
+                is_running: false,
+                spec_stale: false,
+                unit_failed: false,
+                unit_active: false,
+                unit_loaded: false,
+                container_exists: false,
+                result,
+            });
         }
     };
 
@@ -104,7 +127,8 @@ async fn process_one_pod(
     let is_running = facts
         .iter()
         .any(|(f, _)| matches!(f, ObservationFact::ContainerRunning { .. }));
-    // Extract the spec hash observed on the running container, if any.
+
+    // r[update.spec-hash]
     let observed_spec_hash = facts.iter().find_map(|(f, _)| {
         if let ObservationFact::ContainerSpecHash(h) = f {
             Some(h.clone())
@@ -113,7 +137,6 @@ async fn process_one_pod(
         }
     });
 
-    // Compute the desired spec hash from the current AppDef.
     let desired_spec_hash = if is_running {
         actuator.desired_spec_hash(&dr.instance, &dr.definition)
     } else {
@@ -152,19 +175,6 @@ async fn process_one_pod(
         )
     });
 
-    // Track unit health for fault filing/clearing.
-    // A unit that is "active" in systemd but whose container is not
-    // running (e.g. exited inside a restarting unit) is not healthy —
-    // it is stuck in a crash loop managed by systemd's restart logic.
-    // A stale spec is also not considered healthy.
-    if dr.desired == LifecycleState::Ready {
-        if is_running && !spec_stale {
-            result.unit_healthy = Some(dr.instance.clone());
-        } else if unit_failed || (unit_active && !is_running) {
-            result.unit_failure = Some(dr.instance.clone());
-        }
-    }
-
     // Collect running pods from the pre-actuation observation.
     //
     // A container started during this tick will not yet have a SLAAC
@@ -194,15 +204,56 @@ async fn process_one_pod(
         }
     }
 
-    // Decide and actuate.
+    Some(ObservedInstance {
+        dr,
+        is_running,
+        spec_stale,
+        unit_failed,
+        unit_active,
+        unit_loaded,
+        container_exists,
+        result,
+    })
+}
+
+// r[actuate.deployment.start]
+// r[actuate.deployment.stop]
+// r[fault.non-blocking]
+// r[fault.container-start]
+async fn actuate_one_pod(
+    actuator: &Actuator,
+    mut obs: ObservedInstance<'_>,
+    inhibit_stop: bool,
+) -> Option<PodInstanceResult> {
+    let dr = obs.dr;
+    let result = &mut obs.result;
+
+    // Track unit health for fault filing/clearing.
+    // A unit that is "active" in systemd but whose container is not
+    // running (e.g. exited inside a restarting unit) is not healthy —
+    // it is stuck in a crash loop managed by systemd's restart logic.
+    if dr.desired == LifecycleState::Ready {
+        if obs.is_running && (!obs.spec_stale || inhibit_stop) {
+            // Running and either current-spec or kept alive by rolling strategy.
+            result.unit_healthy = Some(dr.instance.clone());
+        } else if obs.unit_failed || (obs.unit_active && !obs.is_running) {
+            result.unit_failure = Some(dr.instance.clone());
+        }
+    }
+
     match dr.desired {
-        LifecycleState::Ready if !is_running || spec_stale => {
+        LifecycleState::Ready if !obs.is_running || obs.spec_stale => {
+            if obs.spec_stale && inhibit_stop {
+                // Rolling strategy decided to keep this stale instance alive.
+                return Some(obs.result);
+            }
+
             // r[fault.container-start]
             // If the unit is in a broken state (failed, or active but the
             // container is not running), or the running container has a
             // stale spec, tear it down so the next tick can start a fresh
             // unit with the current AppDef config.
-            if unit_failed || unit_active || spec_stale {
+            if obs.unit_failed || obs.unit_active || obs.spec_stale {
                 result.running = None;
                 match actuator.stop(&dr.instance, &dr.definition).await {
                     Ok(()) => {}
@@ -215,7 +266,7 @@ async fn process_one_pod(
                         result.stop_failure = Some((dr.instance.clone(), e.to_string()));
                     }
                 }
-                return Some(result);
+                return Some(obs.result);
             }
 
             let image_ref = match &dr.definition {
@@ -260,7 +311,9 @@ async fn process_one_pod(
                 }
             }
         }
-        LifecycleState::Unscheduled if is_running || unit_loaded || container_exists => {
+        LifecycleState::Unscheduled
+            if obs.is_running || obs.unit_loaded || obs.container_exists =>
+        {
             result.running = None;
             result
                 .observations
@@ -280,7 +333,81 @@ async fn process_one_pod(
         _ => {}
     }
 
-    Some(result)
+    Some(obs.result)
+}
+
+/// Determine which stale instances should have their stop inhibited based on
+/// the deployment's update strategy.
+///
+/// Returns a set of instance display names that must NOT be stopped this tick,
+/// and whether a rolling update is still active for the deployment.
+fn compute_stop_inhibitions(
+    deployment_name: &str,
+    on_update: OnUpdate,
+    instances: &[&ObservedInstance<'_>],
+) -> (HashSet<String>, bool) {
+    let stale_running: Vec<&str> = instances
+        .iter()
+        .filter(|o| o.spec_stale && o.is_running)
+        .map(|o| o.dr.instance.display_name.as_str())
+        .collect();
+
+    if stale_running.is_empty() {
+        return (HashSet::new(), false);
+    }
+
+    match on_update {
+        // r[update.replace]
+        OnUpdate::Replace => {
+            debug!(
+                deployment = deployment_name,
+                stale_count = stale_running.len(),
+                "replace: stopping all stale instances"
+            );
+            (HashSet::new(), false)
+        }
+        // r[update.rolling]
+        OnUpdate::Rolling => {
+            let has_current_healthy = instances
+                .iter()
+                .any(|o| !o.spec_stale && o.is_running && o.dr.desired == LifecycleState::Ready);
+
+            if !has_current_healthy {
+                // No current-hash instance is running+healthy yet. Keep all
+                // stale instances alive (they're serving traffic). Signal that
+                // a rolling update is active so the reconciler can bump scale.
+                debug!(
+                    deployment = deployment_name,
+                    stale_count = stale_running.len(),
+                    "rolling: no current-hash instance healthy, inhibiting all stale stops"
+                );
+                let inhibited: HashSet<String> =
+                    stale_running.iter().map(|s| (*s).to_owned()).collect();
+                (inhibited, true)
+            } else {
+                // At least one current-hash instance is healthy. Allow stopping
+                // exactly one stale instance; inhibit the rest.
+                let mut inhibited: HashSet<String> =
+                    stale_running.iter().map(|s| (*s).to_owned()).collect();
+                // Remove one to allow it to be stopped.
+                if let Some(victim) = stale_running.first() {
+                    debug!(
+                        deployment = deployment_name,
+                        victim = *victim,
+                        remaining_stale = stale_running.len() - 1,
+                        "rolling: stopping one stale instance"
+                    );
+                    inhibited.remove(*victim);
+                }
+                let still_active = inhibited.iter().any(|name| {
+                    instances
+                        .iter()
+                        .any(|o| o.dr.instance.display_name == *name && o.spec_stale)
+                });
+                (inhibited, still_active)
+            }
+        }
+    }
 }
 
 // r[impl reconciliation.liveness]
@@ -291,14 +418,74 @@ pub(super) async fn observe_and_actuate(
     desired: &DesiredState,
     node_prefix: &Ipv6Net,
 ) -> PodActuationUpdate {
-    let futures: Vec<_> = desired
+    // Phase 1: observe all instances concurrently.
+    let pod_resources: Vec<&DesiredResource> = desired
         .resources
         .iter()
         .filter(|dr| matches!(&dr.definition, Resource::Deployment(_) | Resource::Job(_)))
-        .map(|dr| process_one_pod(observer, actuator, driver, dr, node_prefix))
         .collect();
 
-    let results = join_all(futures).await;
+    let observe_futures: Vec<_> = pod_resources
+        .iter()
+        .map(|dr| observe_one_pod(observer, actuator, driver, dr, node_prefix))
+        .collect();
+
+    let observed: Vec<ObservedInstance<'_>> = join_all(observe_futures)
+        .await
+        .into_iter()
+        .flatten()
+        .collect();
+
+    // Phase 2: group deployments and compute stop inhibitions.
+    let mut deployment_groups: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut job_indices: Vec<usize> = Vec::new();
+
+    for (idx, obs) in observed.iter().enumerate() {
+        match &obs.dr.definition {
+            // r[update.jobs]
+            Resource::Job(_) => job_indices.push(idx),
+            Resource::Deployment(_) => {
+                let dep_name = obs
+                    .dr
+                    .instance
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| obs.dr.instance.display_name.clone());
+                deployment_groups.entry(dep_name).or_default().push(idx);
+            }
+            _ => {}
+        }
+    }
+
+    let mut inhibited_instances: HashSet<String> = HashSet::new();
+    let mut rolling_deployments: HashSet<String> = HashSet::new();
+
+    for (dep_name, indices) in &deployment_groups {
+        let group_refs: Vec<&ObservedInstance<'_>> =
+            indices.iter().map(|&i| &observed[i]).collect();
+
+        let on_update = match &group_refs[0].dr.definition {
+            Resource::Deployment(dep) => dep.def.lock().on_update,
+            _ => OnUpdate::Replace,
+        };
+
+        let (inhibited, rolling_active) =
+            compute_stop_inhibitions(dep_name, on_update, &group_refs);
+
+        inhibited_instances.extend(inhibited);
+        if rolling_active {
+            rolling_deployments.insert(dep_name.clone());
+        }
+    }
+
+    // Phase 3: actuate all instances, passing stop decisions.
+    let mut actuate_futures = Vec::with_capacity(observed.len());
+    for obs in observed {
+        let inhibit = inhibited_instances.contains(&obs.dr.instance.display_name);
+        actuate_futures.push(actuate_one_pod(actuator, obs, inhibit));
+    }
+
+    let results = join_all(actuate_futures).await;
 
     let mut update = PodActuationUpdate {
         running: Vec::new(),
@@ -311,6 +498,7 @@ pub(super) async fn observe_and_actuate(
         start_failures: Vec::new(),
         stop_failures: Vec::new(),
         observe_failures: Vec::new(),
+        rolling_deployments,
     };
 
     for result in results.into_iter().flatten() {
