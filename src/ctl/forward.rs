@@ -30,10 +30,12 @@ impl ForwardStats {
         let to_svc = self.bytes_to_service.load(Ordering::Relaxed);
         let from_svc = self.bytes_from_service.load(Ordering::Relaxed);
         let opened = self.connections_opened.load(Ordering::Relaxed);
-        eprintln!("\n--- Forward stats ---");
-        eprintln!("Connections opened: {opened}");
-        eprintln!("Bytes to service:   {}", format_bytes(to_svc));
-        eprintln!("Bytes from service: {}", format_bytes(from_svc));
+        tracing::info!(
+            connections_opened = opened,
+            bytes_to_service = %format_bytes(to_svc),
+            bytes_from_service = %format_bytes(from_svc),
+            "forward stats"
+        );
     }
 
     fn print_udp_summary(&self) {
@@ -41,11 +43,13 @@ impl ForwardStats {
         let from_svc = self.bytes_from_service.load(Ordering::Relaxed);
         let dg_to = self.datagrams_to_service.load(Ordering::Relaxed);
         let dg_from = self.datagrams_from_service.load(Ordering::Relaxed);
-        eprintln!("\n--- Forward stats ---");
-        eprintln!("Datagrams to service:   {dg_to}");
-        eprintln!("Datagrams from service: {dg_from}");
-        eprintln!("Bytes to service:       {}", format_bytes(to_svc));
-        eprintln!("Bytes from service:     {}", format_bytes(from_svc));
+        tracing::info!(
+            datagrams_to_service = dg_to,
+            datagrams_from_service = dg_from,
+            bytes_to_service = %format_bytes(to_svc),
+            bytes_from_service = %format_bytes(from_svc),
+            "forward stats"
+        );
     }
 }
 
@@ -62,6 +66,30 @@ fn format_bytes(n: u64) -> String {
     format!("{:.1} GiB", n as f64 / (1024.0 * 1024.0 * 1024.0))
 }
 
+/// Drain complete newline-delimited JSON status messages from `line_buf` and
+/// log them via tracing at the appropriate level.
+fn drain_status_messages(line_buf: &mut Vec<u8>) {
+    while let Some(pos) = line_buf.iter().position(|&b| b == b'\n') {
+        let line: Vec<u8> = line_buf.drain(..=pos).collect();
+        let Ok(val) = serde_json::from_slice::<serde_json::Value>(&line) else {
+            continue;
+        };
+        let Some(status) = val.get("status") else {
+            continue;
+        };
+        let level = status
+            .get("level")
+            .and_then(|l| l.as_str())
+            .unwrap_or("info");
+        let message = status.get("message").and_then(|m| m.as_str()).unwrap_or("");
+        match level {
+            "error" => tracing::error!(target: "seedling_ctl::forward::status", "{message}"),
+            "warn" => tracing::warn!(target: "seedling_ctl::forward::status", "{message}"),
+            _ => tracing::info!(target: "seedling_ctl::forward::status", "{message}"),
+        }
+    }
+}
+
 pub async fn forward_port(
     client: &OiClient,
     app: String,
@@ -71,7 +99,7 @@ pub async fn forward_port(
     local_port: Option<u16>,
 ) {
     let (mut ctrl_send, mut ctrl_recv) = client.open_bi().await.unwrap_or_else(|e| {
-        eprintln!("open control stream: {e}");
+        tracing::error!("open control stream: {e}");
         std::process::exit(1);
     });
 
@@ -90,7 +118,7 @@ pub async fn forward_port(
         .expect("serialisation never fails");
         req.push(b'\n');
         if let Err(e) = ctrl_send.write_all(&req).await {
-            eprintln!("send /forwards/start: {e}");
+            tracing::error!("send /forwards/start: {e}");
             std::process::exit(1);
         }
     }
@@ -99,17 +127,17 @@ pub async fn forward_port(
     let resp_bytes = super::shell::read_shell_line(&mut ctrl_recv)
         .await
         .unwrap_or_else(|e| {
-            eprintln!("read /forwards/start response: {e}");
+            tracing::error!("read /forwards/start response: {e}");
             std::process::exit(1);
         });
     let resp: serde_json::Value = serde_json::from_slice(&resp_bytes).unwrap_or_else(|e| {
-        eprintln!("parse /forwards/start response: {e}");
+        tracing::error!("parse /forwards/start response: {e}");
         std::process::exit(1);
     });
     if let Some(err) = resp.get("error") {
         let code = err.get("code").and_then(|c| c.as_str()).unwrap_or("error");
         let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("");
-        eprintln!("[{code}] {msg}");
+        tracing::error!("[{code}] {msg}");
         std::process::exit(1);
     }
     let result = &resp["result"];
@@ -120,12 +148,12 @@ pub async fn forward_port(
         let listener = tokio::net::TcpListener::bind(format!("[::1]:{}", local_port.unwrap_or(0)))
             .await
             .unwrap_or_else(|e| {
-                eprintln!("bind TCP listener: {e}");
+                tracing::error!("bind TCP listener: {e}");
                 std::process::exit(1);
             });
         let bound = listener.local_addr().unwrap();
-        eprintln!("Forwarding tcp://{app}/{service}:{port} -> {bound}");
-        eprintln!("forward_id: {forward_id}");
+        tracing::info!("Forwarding tcp://{app}/{service}:{port} -> {bound}");
+        tracing::info!(%forward_id, "forward started");
 
         let stats = ForwardStats::new();
         let mut ctrl_buf = [0u8; 1024];
@@ -138,7 +166,7 @@ pub async fn forward_port(
                             let (mut fwd_send, mut fwd_recv) = match client.open_bi().await {
                                 Ok(s) => s,
                                 Err(e) => {
-                                    eprintln!("open relay stream: {e}");
+                                    tracing::warn!("open relay stream: {e}");
                                     continue;
                                 }
                             };
@@ -190,7 +218,7 @@ pub async fn forward_port(
                             });
                         }
                         Err(e) => {
-                            eprintln!("TCP accept error: {e}");
+                            tracing::error!("TCP accept error: {e}");
                             break;
                         }
                     }
@@ -199,18 +227,10 @@ pub async fn forward_port(
                     match n {
                         Ok(Some(n)) if n > 0 => {
                             ctrl_line_buf.extend_from_slice(&ctrl_buf[..n]);
-                            while let Some(pos) = ctrl_line_buf.iter().position(|&b| b == b'\n') {
-                                let line = ctrl_line_buf.drain(..=pos).collect::<Vec<_>>();
-                                if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&line)
-                                    && let Some(status) = val.get("status") {
-                                        let level = status.get("level").and_then(|l| l.as_str()).unwrap_or("info");
-                                        let message = status.get("message").and_then(|m| m.as_str()).unwrap_or("");
-                                        eprintln!("[{level}] {message}");
-                                    }
-                            }
+                            drain_status_messages(&mut ctrl_line_buf);
                         }
                         Ok(Some(_)) | Ok(None) | Err(_) => {
-                            eprintln!("Control stream closed by server");
+                            tracing::warn!("control stream closed by server");
                             break;
                         }
                     }
@@ -223,12 +243,12 @@ pub async fn forward_port(
         let socket = tokio::net::UdpSocket::bind(format!("[::1]:{}", local_port.unwrap_or(0)))
             .await
             .unwrap_or_else(|e| {
-                eprintln!("bind UDP socket: {e}");
+                tracing::error!("bind UDP socket: {e}");
                 std::process::exit(1);
             });
         let bound = socket.local_addr().unwrap();
-        eprintln!("Forwarding udp://{app}/{service}:{port} -> {bound}");
-        eprintln!("forward_id: {forward_id}  forward_key: {forward_key}");
+        tracing::info!("Forwarding udp://{app}/{service}:{port} -> {bound}");
+        tracing::info!(%forward_id, forward_key, "forward started");
 
         let stats = ForwardStats::new();
         let key_bytes = forward_key.to_be_bytes();
@@ -254,7 +274,7 @@ pub async fn forward_port(
                             }
                         }
                         Err(e) => {
-                            eprintln!("UDP recv error: {e}");
+                            tracing::error!("UDP recv error: {e}");
                             break;
                         }
                     }
@@ -279,18 +299,10 @@ pub async fn forward_port(
                     match n {
                         Ok(Some(n)) if n > 0 => {
                             ctrl_line_buf.extend_from_slice(&ctrl_buf[..n]);
-                            while let Some(pos) = ctrl_line_buf.iter().position(|&b| b == b'\n') {
-                                let line = ctrl_line_buf.drain(..=pos).collect::<Vec<_>>();
-                                if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&line)
-                                    && let Some(status) = val.get("status") {
-                                        let level = status.get("level").and_then(|l| l.as_str()).unwrap_or("info");
-                                        let message = status.get("message").and_then(|m| m.as_str()).unwrap_or("");
-                                        eprintln!("[{level}] {message}");
-                                    }
-                            }
+                            drain_status_messages(&mut ctrl_line_buf);
                         }
                         Ok(Some(_)) | Ok(None) | Err(_) => {
-                            eprintln!("Control stream closed by server");
+                            tracing::warn!("control stream closed by server");
                             break;
                         }
                     }
@@ -300,7 +312,7 @@ pub async fn forward_port(
         }
         stats.print_udp_summary();
     } else {
-        eprintln!("unsupported proto: {proto}; expected tcp or udp");
+        tracing::error!("unsupported proto: {proto}; expected tcp or udp");
         std::process::exit(1);
     }
 
