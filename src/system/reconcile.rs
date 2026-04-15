@@ -38,6 +38,65 @@ pub mod routes;
 pub mod rules;
 pub mod volumes;
 
+/// Obs-kind values are a closed set of `&'static str`. Map DB strings back
+/// to their static equivalents so they can live in the dedup `HashSet`.
+const OBS_KINDS: &[&str] = &[
+    "container_created",
+    "container_running",
+    "container_exited",
+    "container_removed",
+    "health_check_pass",
+    "image_pull_started",
+    "stop_sent",
+    "volume_created",
+    "volume_ready",
+    "volume_removed",
+    "volume_cleaned_up",
+    "network_created",
+    "backend_healthy",
+    "network_removed",
+    "network_cleaned_up",
+    "ingress_configured",
+    "ingress_ready",
+    "ingress_removed",
+    "ingress_cleaned_up",
+];
+
+/// Load all existing `(instance_id, obs_kind)` pairs from the DB so that
+/// observations persisted in a previous session are not re-written with a
+/// fresh timestamp on restart.
+fn seed_written_obs(db: &Db) -> HashSet<(InstanceId, &'static str)> {
+    fn intern(s: &str) -> Option<&'static str> {
+        OBS_KINDS.iter().find(|&&k| k == s).copied()
+    }
+
+    let mut set = HashSet::new();
+    let Ok(mut stmt) = db
+        .conn
+        .prepare("SELECT DISTINCT instance_id, obs_kind FROM world_observations")
+    else {
+        return set;
+    };
+    let Ok(rows) = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }) else {
+        return set;
+    };
+    for row in rows {
+        let Ok((id_hex, kind_str)) = row else {
+            continue;
+        };
+        let Some(kind) = intern(&kind_str) else {
+            continue;
+        };
+        let Ok(n) = u128::from_str_radix(&id_hex, 16) else {
+            continue;
+        };
+        set.insert((InstanceId(uuid::Uuid::from_u128(n)), kind));
+    }
+    set
+}
+
 /// A pod instance observed to be running before this tick's actuations.
 ///
 /// Running pod IPs are collected from the pre-actuation observation.
@@ -119,6 +178,7 @@ impl Reconciler {
             Arc::clone(&registry),
             dns_servers,
         );
+        let written_obs = seed_written_obs(&db);
         Self {
             driver,
             node_prefix,
@@ -130,7 +190,7 @@ impl Reconciler {
             db: Arc::new(Mutex::new(db)),
             registry,
             app_registry,
-            written_obs: HashSet::new(),
+            written_obs,
             event_tx,
             prev_states: BTreeMap::new(),
             rolling_updates: HashSet::new(),
