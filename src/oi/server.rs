@@ -3,7 +3,7 @@ use std::{net::SocketAddr, path::Path, sync::Arc, time::Duration};
 use quinn::Endpoint;
 use rustls::ServerConfig as TlsServerConfig;
 use serde_json::json;
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, mpsc};
 use tracing::Instrument;
 
 use super::{
@@ -191,12 +191,26 @@ async fn handle_connection(
                 }
             }
             datagram = conn.read_datagram() => {
-                if let Ok(data) = datagram && data.len() >= 2 {
-                    let key = u16::from_be_bytes([data[0], data[1]]);
-                    let payload = data[2..].to_vec();
-                    let fwds = state.forwards.lock();
-                    if let Some(sender) = fwds.get_udp_sender(conn_id, key) {
-                        let _ = sender.try_send(payload);
+                match datagram {
+                    Ok(data) if data.len() >= 2 => {
+                        let key = u16::from_be_bytes([data[0], data[1]]);
+                        let payload = data[2..].to_vec();
+                        let fwds = state.forwards.lock();
+                        if let Some(sender) = fwds.get_udp_sender(conn_id, key) {
+                            if let Err(mpsc::error::TrySendError::Closed(_)) = sender.try_send(payload) {
+                                tracing::debug!(key, "UDP relay channel closed, dropping datagram");
+                            }
+                        } else {
+                            tracing::debug!(key, "datagram for unknown forward key");
+                        }
+                    }
+                    Ok(data) => {
+                        tracing::debug!(len = data.len(), "datagram too short, ignoring");
+                    }
+                    Err(quinn::ConnectionError::ApplicationClosed { .. }) => break,
+                    Err(e) => {
+                        tracing::warn!("read_datagram error: {e}");
+                        break;
                     }
                 }
             }

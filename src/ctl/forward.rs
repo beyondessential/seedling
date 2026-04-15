@@ -128,7 +128,8 @@ pub async fn forward_port(
         eprintln!("forward_id: {forward_id}");
 
         let stats = ForwardStats::new();
-        let mut ctrl_buf = [0u8; 1];
+        let mut ctrl_buf = [0u8; 1024];
+        let mut ctrl_line_buf = Vec::new();
         loop {
             tokio::select! {
                 accept = listener.accept() => {
@@ -196,8 +197,19 @@ pub async fn forward_port(
                 }
                 n = ctrl_recv.read(&mut ctrl_buf) => {
                     match n {
-                        Ok(Some(_)) => {} // ignore any bytes on the control stream
-                        _ => {
+                        Ok(Some(n)) if n > 0 => {
+                            ctrl_line_buf.extend_from_slice(&ctrl_buf[..n]);
+                            while let Some(pos) = ctrl_line_buf.iter().position(|&b| b == b'\n') {
+                                let line = ctrl_line_buf.drain(..=pos).collect::<Vec<_>>();
+                                if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&line)
+                                    && let Some(status) = val.get("status") {
+                                        let level = status.get("level").and_then(|l| l.as_str()).unwrap_or("info");
+                                        let message = status.get("message").and_then(|m| m.as_str()).unwrap_or("");
+                                        eprintln!("[{level}] {message}");
+                                    }
+                            }
+                        }
+                        Ok(Some(_)) | Ok(None) | Err(_) => {
                             eprintln!("Control stream closed by server");
                             break;
                         }
@@ -222,7 +234,8 @@ pub async fn forward_port(
         let key_bytes = forward_key.to_be_bytes();
         let mut buf = vec![0u8; 65535];
         let mut last_client: Option<std::net::SocketAddr> = None;
-        let mut ctrl_buf = [0u8; 1];
+        let mut ctrl_buf = [0u8; 1024];
+        let mut ctrl_line_buf = Vec::new();
 
         loop {
             tokio::select! {
@@ -264,8 +277,19 @@ pub async fn forward_port(
                 }
                 n = ctrl_recv.read(&mut ctrl_buf) => {
                     match n {
-                        Ok(Some(_)) => {}
-                        _ => {
+                        Ok(Some(n)) if n > 0 => {
+                            ctrl_line_buf.extend_from_slice(&ctrl_buf[..n]);
+                            while let Some(pos) = ctrl_line_buf.iter().position(|&b| b == b'\n') {
+                                let line = ctrl_line_buf.drain(..=pos).collect::<Vec<_>>();
+                                if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&line)
+                                    && let Some(status) = val.get("status") {
+                                        let level = status.get("level").and_then(|l| l.as_str()).unwrap_or("info");
+                                        let message = status.get("message").and_then(|m| m.as_str()).unwrap_or("");
+                                        eprintln!("[{level}] {message}");
+                                    }
+                            }
+                        }
+                        Ok(Some(_)) | Ok(None) | Err(_) => {
                             eprintln!("Control stream closed by server");
                             break;
                         }

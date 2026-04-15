@@ -15,6 +15,11 @@ use crate::{
 
 use super::registry::{ForwardEntry, ForwardProto};
 
+struct StatusMsg {
+    level: &'static str,
+    message: String,
+}
+
 // i[forward.request]
 // i[forward.mtu]
 pub(crate) async fn forward_port_session(
@@ -148,14 +153,23 @@ pub(crate) async fn forward_port_session(
         ForwardProto::Tcp => None,
     };
 
+    let (status_tx, status_rx) = tokio::sync::mpsc::channel::<StatusMsg>(16);
+    let mut status_rx: Option<tokio::sync::mpsc::Receiver<StatusMsg>> =
+        if matches!(proto, ForwardProto::Udp) {
+            Some(status_rx)
+        } else {
+            None
+        };
+
     let udp_tx: Option<tokio::sync::mpsc::Sender<Vec<u8>>> = if matches!(proto, ForwardProto::Udp) {
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let conn_clone = conn.clone();
         let fkey = forward_key;
         let taddr = target_addr;
         let tport = params.port;
+        let status_tx = status_tx.clone();
         tokio::spawn(async move {
-            udp_relay_task(rx, conn_clone, fkey, taddr, tport).await;
+            udp_relay_task(rx, conn_clone, fkey, taddr, tport, status_tx).await;
         });
         Some(tx)
     } else {
@@ -201,6 +215,12 @@ pub(crate) async fn forward_port_session(
 
     let mut ctrl_buf = [0u8; 1];
     loop {
+        let status_fut = async {
+            match status_rx.as_mut() {
+                Some(rx) => rx.recv().await,
+                None => std::future::pending().await,
+            }
+        };
         tokio::select! {
             n = recv.read(&mut ctrl_buf) => {
                 match n {
@@ -211,6 +231,19 @@ pub(crate) async fn forward_port_session(
             result = stop_rx.changed() => {
                 if result.is_err() || *stop_rx.borrow() {
                     break;
+                }
+            }
+            msg = status_fut => {
+                if let Some(msg) = msg {
+                    // i[forward.status]
+                    let line = serde_json::to_vec(&serde_json::json!({
+                        "status": { "level": msg.level, "message": msg.message }
+                    })).unwrap_or_default();
+                    let mut buf = line;
+                    buf.push(b'\n');
+                    if send.write_all(&buf).await.is_err() {
+                        break;
+                    }
                 }
             }
         }
@@ -306,6 +339,7 @@ async fn udp_relay_task(
     forward_key: u16,
     target_addr: std::net::Ipv6Addr,
     port: u16,
+    status_tx: tokio::sync::mpsc::Sender<StatusMsg>,
 ) {
     let target = std::net::SocketAddr::V6(std::net::SocketAddrV6::new(target_addr, port, 0, 0));
     let socket = match tokio::net::UdpSocket::bind("[::]:0").await {
@@ -344,6 +378,10 @@ async fn udp_relay_task(
                                 key = forward_key, size = n + 2, max = max_size,
                                 "UDP response too large, dropping"
                             );
+                            let _ = status_tx.try_send(StatusMsg {
+                                level: "warn",
+                                message: format!("UDP response too large ({} bytes, max {}), dropping", n + 2, max_size),
+                            });
                             continue;
                         }
                         let mut pkt = Vec::with_capacity(2 + n);
@@ -352,7 +390,13 @@ async fn udp_relay_task(
                         match conn.send_datagram(pkt.into()) {
                             Ok(()) => {}
                             Err(quinn::SendDatagramError::ConnectionLost(_)) => break,
-                            Err(e) => tracing::warn!(key = forward_key, "send_datagram: {e}"),
+                            Err(e) => {
+                                tracing::warn!(key = forward_key, "send_datagram: {e}");
+                                let _ = status_tx.try_send(StatusMsg {
+                                    level: "warn",
+                                    message: format!("send_datagram: {e}"),
+                                });
+                            }
                         }
                     }
                     _ => break,
