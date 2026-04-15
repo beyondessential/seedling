@@ -46,7 +46,7 @@ pub(crate) struct GetScriptParams {
 pub(crate) struct ScaleParams {
     pub app: String,
     pub deployment: String,
-    pub direction: String,
+    pub scale: u16,
 }
 
 fn validate_name(name: &str) -> Result<(), OiError> {
@@ -731,7 +731,6 @@ pub(crate) fn update_app(state: &OiState, params: AppScriptParams) -> HandlerRes
 pub(crate) fn scale_app(state: &OiState, params: ScaleParams) -> HandlerResult {
     let name = params.app.as_str();
     let deployment_name = params.deployment.as_str();
-    let direction = params.direction.as_str();
 
     let reg = state.registry.read();
     let entry = reg
@@ -760,20 +759,7 @@ pub(crate) fn scale_app(state: &OiState, params: ScaleParams) -> HandlerResult {
         let current = scaling::effective_scale(&db, name, deployment_name, low, high)
             .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
 
-        let new_scale = match direction {
-            "up" => current.saturating_add(1).min(high),
-            "down" => current.saturating_sub(1).max(low),
-            "to-min" => low,
-            other => match other.parse::<u16>() {
-                Ok(n) => n.clamp(low, high),
-                Err(_) => {
-                    return Err(OiError::new(
-                        ErrorCode::RequirementsInvalid,
-                        format!("invalid scale direction: {direction}"),
-                    ));
-                }
-            },
-        };
+        let new_scale = params.scale.clamp(low, high);
 
         // i[impl scale.decision-persistence]
         scaling::save_scaling_decision(&db, name, deployment_name, new_scale)

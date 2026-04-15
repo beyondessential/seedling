@@ -224,17 +224,48 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
             deployment,
             direction,
         } => {
-            let dir = match direction {
-                ScaleDirection::Up => "up".to_owned(),
-                ScaleDirection::Down => "down".to_owned(),
-                ScaleDirection::ToMin => "to-min".to_owned(),
-                ScaleDirection::To { count } => count.to_string(),
+            let scale = match direction {
+                ScaleDirection::To { count } => count,
+                relative => {
+                    // Fetch current scale info from /apps/show.
+                    let show = client
+                        .request("/apps/show", serde_json::json!({ "app": app }))
+                        .await;
+                    let info = match show {
+                        Ok(v) => v,
+                        Err(e) => {
+                            print_result(Err(e));
+                            return;
+                        }
+                    };
+                    let resource = info["resources"]
+                        .as_array()
+                        .and_then(|rs| rs.iter().find(|r| r["name"].as_str() == Some(&deployment)));
+                    let scale_obj = match resource.and_then(|r| r.get("scale")) {
+                        Some(s) => s,
+                        None => {
+                            eprintln!(
+                                "error: deployment {deployment:?} not found or has no scale info"
+                            );
+                            std::process::exit(1);
+                        }
+                    };
+                    let current = scale_obj["current"].as_u64().unwrap_or(0) as u16;
+                    let low = scale_obj["low"].as_u64().unwrap_or(0) as u16;
+                    let high = scale_obj["high"].as_u64().unwrap_or(0) as u16;
+                    match relative {
+                        ScaleDirection::Up => current.saturating_add(1).min(high),
+                        ScaleDirection::Down => current.saturating_sub(1).max(low),
+                        ScaleDirection::ToMin => low,
+                        ScaleDirection::To { .. } => unreachable!(),
+                    }
+                }
             };
             print_result(
                 client
                     .request(
                         "/apps/scale",
-                        serde_json::json!({ "app": app, "deployment": deployment, "direction": dir }),
+                        serde_json::json!({ "app": app, "deployment": deployment, "scale": scale }),
                     )
                     .await,
             );
