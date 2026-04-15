@@ -41,10 +41,6 @@ pub(super) struct PodActuationUpdate {
     pub observe_failures: Vec<(ResourceInstance, String)>,
     /// Deployment names with an active rolling update (stale instances still
     /// being drained). The reconciler uses this to bump effective scale +1.
-    #[expect(
-        dead_code,
-        reason = "set by pods phase; consumed by reconciler scale logic"
-    )]
     pub rolling_deployments: HashSet<String>,
 }
 
@@ -411,6 +407,8 @@ fn compute_stop_inhibitions(
 }
 
 // r[impl reconciliation.liveness]
+// r[impl update.rolling.restart-resume]
+// r[impl update.rolling.reboot-resume]
 pub(super) async fn observe_and_actuate(
     observer: &Observer,
     actuator: &Actuator,

@@ -83,6 +83,11 @@ pub struct Reconciler {
     shells: Arc<ShellRegistry>,
     /// Previous tick's lifecycle states, keyed by (app, instance_id_hex).
     prev_states: BTreeMap<(String, String), LifecycleState>,
+    /// Deployments with an active rolling update, keyed by (app, deployment_name).
+    /// Set from pod actuation results; read by `compute_effective_scales` to bump
+    /// the effective instance count by one during rollouts.
+    // r[impl update.rolling.over-provision]
+    rolling_updates: HashSet<(String, String)>,
     /// Whether seedling is providing its own NAT64 translator.
     nat64_active: bool,
     /// The resolver container's IPv6 address (set after resolver startup).
@@ -128,6 +133,7 @@ impl Reconciler {
             written_obs: HashSet::new(),
             event_tx,
             prev_states: BTreeMap::new(),
+            rolling_updates: HashSet::new(),
             nat64_active,
             resolver_addr: None,
             shells,
@@ -192,6 +198,7 @@ impl Reconciler {
     }
 
     /// Build the effective-scale map for every Deployment in an app.
+    // r[impl update.rolling.over-provision]
     fn compute_effective_scales(&self, app_name: &str, app_def: &AppDef) -> EffectiveScales {
         let db = self.db.lock();
         let mut scales = EffectiveScales::new();
@@ -200,9 +207,15 @@ impl Reconciler {
                 let dep_def = deployment.def.lock();
                 let low = dep_def.scale.start;
                 let high = dep_def.scale.end;
-                let effective =
+                let mut effective =
                     scaling::effective_scale(&db, app_name, id.name.as_str(), low, high)
                         .unwrap_or(low);
+                if self
+                    .rolling_updates
+                    .contains(&(app_name.to_owned(), id.name.as_str().to_owned()))
+                {
+                    effective = effective.saturating_add(1);
+                }
                 scales.insert(id.name.as_str().to_owned(), (low, high, effective));
             }
         }
@@ -497,6 +510,10 @@ impl Reconciler {
         pod_updates: Vec<(String, pods::PodActuationUpdate)>,
     ) -> HashMap<String, Vec<RunningPod>> {
         let mut running_pods_by_app = HashMap::new();
+        // r[impl update.rolling.over-provision]
+        // Rebuild rolling_updates from scratch each tick so that completed
+        // rollouts are automatically cleared.
+        self.rolling_updates.clear();
         for (app_name, pod_update) in pod_updates {
             // r[fault.image-pull]
             self.file_image_pull_faults(&app_name, &pod_update);
@@ -504,6 +521,10 @@ impl Reconciler {
             self.file_unit_failure_faults(&app_name, &pod_update);
             self.file_instance_registry_faults(&app_name, &pod_update);
             self.file_pod_actuation_faults(&app_name, &pod_update);
+            for dep_name in &pod_update.rolling_deployments {
+                self.rolling_updates
+                    .insert((app_name.clone(), dep_name.clone()));
+            }
             self.persist_obs(pod_update.observations);
             running_pods_by_app.insert(app_name, pod_update.running);
         }
