@@ -231,7 +231,7 @@ async fn handle_bidi_stream(
     stream_semaphore: Arc<Semaphore>,
 ) {
     // i[stream.concurrency-limit]
-    let _stream_permit = match stream_semaphore.try_acquire() {
+    let stream_permit = match stream_semaphore.try_acquire() {
         Ok(permit) => permit,
         Err(_) => {
             tracing::warn!(
@@ -274,6 +274,7 @@ async fn handle_bidi_stream(
         .and_then(|v| v.as_str())
         .map(str::to_owned)
     {
+        drop(stream_permit);
         handle_forward_stream((send, recv), forward_id, leftover, state).await;
         return;
     }
@@ -285,6 +286,7 @@ async fn handle_bidi_stream(
 
     // i[event.subscribe]
     if maybe_method.as_deref() == Some("/events/subscribe") {
+        drop(stream_permit);
         // Send the response on the bidi stream first.
         let response = serde_json::to_vec(&serde_json::json!({ "result": {} }))
             .expect("response serialisation never fails");
@@ -311,6 +313,7 @@ async fn handle_bidi_stream(
 
     // i[logs.stream]
     if maybe_method.as_deref() == Some("/logs/stream") {
+        drop(stream_permit);
         #[derive(serde::Deserialize)]
         struct Req {
             #[serde(default)]
@@ -381,6 +384,7 @@ async fn handle_bidi_stream(
     }
 
     if maybe_method.as_deref() == Some("/shells/start") {
+        drop(stream_permit);
         open_shell_session(conn, send, recv, leftover, line, state).await;
         return;
     }
@@ -388,6 +392,7 @@ async fn handle_bidi_stream(
     // i[forward.request] — /forwards/start keeps the control stream open for the
     // duration of the forward; it must be handled outside the normal req/resp path.
     if maybe_method.as_deref() == Some("/forwards/start") {
+        drop(stream_permit);
         forward_port_session(conn, send, recv, line, state).await;
         return;
     }

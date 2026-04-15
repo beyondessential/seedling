@@ -87,7 +87,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > After a client sends a `/logs/stream` request, the server opens one server-initiated unidirectional QUIC stream and pushes log entries as newline-delimited JSON objects. When follow mode is not requested, the stream closes after historical entries are exhausted. When follow mode is requested, the stream remains open and new entries are pushed as they appear until the client drops the connection.
 
 > i[stream.concurrency-limit]
-> The server enforces a configurable upper bound on the number of concurrently active bidirectional streams across all connections.
+> The server enforces a configurable upper bound on the number of concurrently active request/response streams across all connections.
+> Long-lived sessions (forwards, shells, event subscriptions, log streams) release the permit after initial dispatch and do not count against the limit for their lifetime; the limit exists to bound the memory used by concurrent request body reads.
 > When the limit is reached, the server immediately replies with a `server_busy` error and closes the stream.
 > The limit is configurable at startup; the default value is 64.
 
