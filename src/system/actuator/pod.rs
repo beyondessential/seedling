@@ -195,7 +195,7 @@ impl Actuator {
             ensure_network(&self.driver, &net_name, net_prefix),
         )?;
 
-        // Handle any pre-existing unit with this name.
+        // Handle any pre-existing unit or orphaned container with this name.
         let unit = unit_name(instance);
         if let Some(state) = self
             .driver
@@ -215,6 +215,14 @@ impl Actuator {
                 }
             }
         }
+
+        // Remove any orphaned container left behind by a previous stop that
+        // returned before cleanup finished (e.g. unit was Deactivating).
+        self.driver
+            .container
+            .remove_container(&instance.display_name, true)
+            .await
+            .context(ContainerSnafu)?;
 
         // Resolve service mounts and build the argv.
         let mounts = self
@@ -284,6 +292,15 @@ impl Actuator {
                         .stop_unit(&unit)
                         .await
                         .context(ProcessSnafu)?;
+                    // Remove the container now rather than deferring to the
+                    // next tick. If we return without removing it, the
+                    // container name stays occupied and a subsequent start
+                    // will fail with "name already in use".
+                    self.driver
+                        .container
+                        .remove_container(&instance.display_name, true)
+                        .await
+                        .context(ContainerSnafu)?;
                     return Ok(());
                 }
                 ActiveState::Inactive | ActiveState::Failed => {

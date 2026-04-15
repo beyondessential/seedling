@@ -364,28 +364,47 @@ fn compute_stop_inhibitions(
         }
         // r[update.rolling]
         OnUpdate::Rolling => {
-            let has_current_healthy = instances
+            let current_ready: Vec<&ObservedInstance<'_>> = instances
                 .iter()
-                .any(|o| !o.spec_stale && o.is_running && o.dr.desired == LifecycleState::Ready);
+                .filter(|o| !o.spec_stale && o.dr.desired == LifecycleState::Ready)
+                .copied()
+                .collect();
 
-            if !has_current_healthy {
-                // No current-hash instance is running+healthy yet. Keep all
-                // stale instances alive (they're serving traffic). Signal that
-                // a rolling update is active so the reconciler can bump scale.
+            let current_running = current_ready.iter().filter(|o| o.is_running).count();
+            let current_pending = current_ready.len() - current_running;
+
+            if current_running == 0 {
+                // No current-hash instance is running yet. Keep all stale
+                // instances alive (they're serving traffic). Signal that a
+                // rolling update is active so the reconciler bumps scale.
                 debug!(
                     deployment = deployment_name,
                     stale_count = stale_running.len(),
+                    current_pending,
                     "rolling: no current-hash instance healthy, inhibiting all stale stops"
                 );
                 let inhibited: HashSet<String> =
                     stale_running.iter().map(|s| (*s).to_owned()).collect();
                 (inhibited, true)
+            } else if current_pending > 0 {
+                // At least one current-hash instance is healthy, but another
+                // is still starting up (a previous replacement). Wait for it
+                // to be confirmed running before retiring more stale instances.
+                debug!(
+                    deployment = deployment_name,
+                    current_running,
+                    current_pending,
+                    stale_count = stale_running.len(),
+                    "rolling: replacement still starting, inhibiting all stale stops"
+                );
+                let inhibited: HashSet<String> =
+                    stale_running.iter().map(|s| (*s).to_owned()).collect();
+                (inhibited, true)
             } else {
-                // At least one current-hash instance is healthy. Allow stopping
+                // All current-hash instances are running. Safe to retire
                 // exactly one stale instance; inhibit the rest.
                 let mut inhibited: HashSet<String> =
                     stale_running.iter().map(|s| (*s).to_owned()).collect();
-                // Remove one to allow it to be stopped.
                 if let Some(victim) = stale_running.first() {
                     debug!(
                         deployment = deployment_name,

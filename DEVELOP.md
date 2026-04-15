@@ -22,7 +22,7 @@ watchexec cargo build
 One to restart the server on successful builds:
 
 ```
-watchexec -IrW target/debug --ignore-nothing -E SSLKEYLOGFILE=/tmp/seedling.keylog 'sudo --preserve-env=SEEDLING_LOG --preserve-env=SSLKEYLOGFILE target/debug/seedling --data-dir /opt/seedling -v | tee seedling.log'
+watchexec -IrW target/debug --ignore-nothing -E SSLKEYLOGFILE=/tmp/seedling.keylog 'sudo --preserve-env=SEEDLING_LOG --preserve-env=SSLKEYLOGFILE target/debug/seedling --data-dir /opt/seedling -v 2>&1 | tee -a seedling.log'
 ```
 
 This starts the server with debug logging, you can remove the `-v` or add more e.g. `-vvv` to change that.
