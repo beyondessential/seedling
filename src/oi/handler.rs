@@ -15,6 +15,7 @@ mod key_mgmt;
 mod params;
 mod registries;
 mod status;
+mod volumes;
 
 fn parse_params<T: DeserializeOwned>(params: Value) -> Result<T, OiError> {
     serde_json::from_value(params).map_err(|e| {
@@ -103,6 +104,8 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8]) -> HandlerResult {
         "/registries/add" => registries::add_registry(state, parse_params(req.params)?),
         // i[registry.remove]
         "/registries/remove" => registries::remove_registry(state, parse_params(req.params)?),
+        "/volumes/held/list" => volumes::list_held(state),
+        "/volumes/held/delete" => volumes::delete_held(state, parse_params(req.params)?),
         other => Err(OiError::not_found(format!("unknown method: {other}"))),
     };
 

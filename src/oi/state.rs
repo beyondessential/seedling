@@ -27,6 +27,7 @@ pub struct OiState {
     pub shells: Arc<crate::oi::shells::ShellRegistry>,
     pub forwards: Arc<parking_lot::Mutex<ForwardRegistry>>,
     pub container_runtime: Arc<dyn crate::system::ContainerRuntime>,
+    pub driver: Arc<crate::system::System>,
     /// Node-wide /48 IPv6 prefix, used to derive pod network addresses for
     /// shell session containers.
     pub node_prefix: ipnet::Ipv6Net,

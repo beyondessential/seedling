@@ -13,6 +13,7 @@ pub enum ErrorCode {
     ScriptError,
     Deregistering,
     ServerBusy,
+    Internal,
 }
 
 #[derive(Debug)]

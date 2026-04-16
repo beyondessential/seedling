@@ -64,7 +64,36 @@ async fn process_one_volume(
         .iter()
         .any(|(f, _)| matches!(f, ObservationFact::VolumePresent));
 
+    let backend_mismatch = facts
+        .iter()
+        .any(|(f, _)| matches!(f, ObservationFact::VolumeBackendMismatch));
+
     match dr.desired {
+        // r[impl actuate.volume.hold]
+        LifecycleState::Ready if backend_mismatch => {
+            // Storage backend changed; hold old volume and recreate.
+            if let Err(e) = actuator
+                .hold_volume(&dr.instance, &dr.definition, "storage backend changed")
+                .await
+            {
+                error!(
+                    instance = %dr.instance.display_name,
+                    error = %e,
+                    "volumes: hold for migration failed"
+                );
+                result.remove_failure = Some((dr.instance.clone(), e.to_string()));
+                return result;
+            }
+            // Now create a fresh volume with the current backend.
+            if let Err(e) = actuator.start(&dr.instance, &dr.definition).await {
+                error!(
+                    instance = %dr.instance.display_name,
+                    error = %e,
+                    "volumes: recreate after migration failed"
+                );
+                result.create_failure = Some((dr.instance.clone(), e.to_string()));
+            }
+        }
         LifecycleState::Ready if !volume_present => {
             // r[actuate.volume.start]
             if let Err(e) = actuator.start(&dr.instance, &dr.definition).await {
@@ -76,7 +105,7 @@ async fn process_one_volume(
                 result.create_failure = Some((dr.instance.clone(), e.to_string()));
             }
         }
-        LifecycleState::Unscheduled if volume_present => {
+        LifecycleState::Unscheduled if volume_present || backend_mismatch => {
             result
                 .observations
                 .push((dr.instance.clone(), "stop_sent", json!({})));

@@ -382,6 +382,7 @@ pub enum ObservationFact {
     // Volume
     VolumePresent,
     VolumeMissing,
+    VolumeBackendMismatch,
 
     // Systemd unit
     UnitActive,
@@ -424,6 +425,9 @@ impl ObservationFact {
                 vec![("volume_created", json!({})), ("volume_ready", json!({}))]
             }
             ObservationFact::VolumeMissing => vec![("volume_cleaned_up", json!({}))],
+            ObservationFact::VolumeBackendMismatch => {
+                vec![("volume_backend_mismatch", json!({}))]
+            }
             // Ingress observations are emitted by proxy::apply, not here.
             // Network observations are used only for pod actuation decisions.
             // Unit and health-failure facts have no direct oracle mapping.

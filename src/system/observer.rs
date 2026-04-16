@@ -89,23 +89,34 @@ impl Observer {
                 // r[impl observe.volume]
                 let name = &instance.display_name;
                 let tmpfs = vol.def.lock().tmpfs;
-                let exists = if tmpfs {
-                    self.driver
+                if tmpfs {
+                    let exists = self
+                        .driver
                         .container
                         .volume_exists(name)
                         .await
-                        .context(ContainerSnafu)?
+                        .context(ContainerSnafu)?;
+                    facts.push((
+                        if exists {
+                            ObservationFact::VolumePresent
+                        } else {
+                            ObservationFact::VolumeMissing
+                        },
+                        now,
+                    ));
                 } else {
-                    self.driver.volume_store.exists(name)
-                };
-                facts.push((
-                    if exists {
-                        ObservationFact::VolumePresent
+                    let vol_store = &self.driver.volume_store;
+                    if vol_store.exists(name) {
+                        // r[impl observe.volume.backend-mismatch]
+                        if vol_store.is_backend_match(name).await {
+                            facts.push((ObservationFact::VolumePresent, now));
+                        } else {
+                            facts.push((ObservationFact::VolumeBackendMismatch, now));
+                        }
                     } else {
-                        ObservationFact::VolumeMissing
-                    },
-                    now,
-                ));
+                        facts.push((ObservationFact::VolumeMissing, now));
+                    }
+                }
             }
             Resource::Ingress(_) => {
                 // r[impl observe.ingress]

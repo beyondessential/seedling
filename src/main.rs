@@ -543,6 +543,7 @@ async fn main() {
         shells,
         forwards: seedling::oi::forwards::ForwardRegistry::new(),
         container_runtime: Arc::clone(&driver.container),
+        driver: Arc::clone(&driver),
         node_prefix,
         event_tx: event_tx.clone(),
         script_limits,
