@@ -31,8 +31,8 @@ pub use types::{
     ActiveState, ContainerHealth, ContainerStatus, DataPlaneRules as SystemDataPlaneRules,
     ExecHandle as SystemExecHandle, ForwardProto, HealthCheckSpec, HttpRedirect, IngressRule,
     Mount, MountRule, MountSource, ObservationFact, ProxyConfig as SystemProxyConfig,
-    ProxyListener, ProxyListenerProto, ProxyRoute, ServiceRoute as SystemServiceRoute,
-    TransientRestart, VirtualHost,
+    ProxyListener, ProxyListenerProto, ProxyRoute, ResolvedExternalMount,
+    ServiceRoute as SystemServiceRoute, TransientRestart, VirtualHost,
 };
 
 // ---------------------------------------------------------------------------

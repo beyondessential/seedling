@@ -115,6 +115,12 @@ pub enum MountSource {
 }
 
 #[derive(Debug, Clone)]
+pub struct ResolvedExternalMount {
+    pub source: MountSource,
+    pub read_only: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct HealthCheckSpec {
     pub command: Vec<String>,
     pub interval: Duration,

@@ -383,6 +383,20 @@ impl Db {
             self.conn
                 .execute_batch("INSERT INTO schema_version VALUES (16);")?;
         }
+        if version < 17 {
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS external_volume_mappings (
+                    app             TEXT NOT NULL,
+                    external_name   TEXT NOT NULL,
+                    target_kind     TEXT NOT NULL,
+                    target_app      TEXT,
+                    target_volume   TEXT NOT NULL,
+                    PRIMARY KEY (app, external_name)
+                );",
+            )?;
+            self.conn
+                .execute_batch("INSERT INTO schema_version VALUES (17);")?;
+        }
         tx.commit()?;
         Ok(())
     }

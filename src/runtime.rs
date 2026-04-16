@@ -7,6 +7,7 @@ pub mod audit;
 pub mod barrier;
 pub mod db;
 pub mod desired;
+pub mod external_volume_mappings;
 pub mod faults;
 pub mod gc;
 pub mod history;
