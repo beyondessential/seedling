@@ -466,6 +466,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[volume.site.lifecycle]
 > Site volumes are created and deleted exclusively through operator commands. The runtime must create the backing storage for managed site volumes at creation time and remove it at deletion time.
 
+> r[volume.site.snapshot]
+> A snapshot site volume is a read-only point-in-time snapshot of a named volume (app volume or managed site volume) that supports snapshotting. Only BTRFS-backed volumes support snapshotting. Snapshot site volumes carry metadata identifying their source. They are inherently read-only: even when mapped without the read-only flag, mounts of snapshot site volumes are always read-only.
+
 > r[actuate.volume.stop]
 > Stopping a Volume instance must remove the named volume.
 

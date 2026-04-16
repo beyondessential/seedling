@@ -53,6 +53,13 @@ pub(super) enum SiteCommand {
         /// Volume name
         name: String,
     },
+    /// Create a read-only BTRFS snapshot of a named volume
+    Snapshot {
+        /// Name for the new snapshot site volume
+        name: String,
+        /// Source volume: _site/<name> or <app>/<volume>
+        source: String,
+    },
 }
 
 pub(super) async fn dispatch(client: &OiClient, cmd: VolumesCommand) {
@@ -124,6 +131,19 @@ pub(super) async fn dispatch(client: &OiClient, cmd: VolumesCommand) {
                 print_result(
                     client
                         .request("/volumes/site/delete", serde_json::json!({ "name": name }))
+                        .await,
+                );
+            }
+            SiteCommand::Snapshot { name, source } => {
+                print_result(
+                    client
+                        .request(
+                            "/volumes/site/snapshot",
+                            serde_json::json!({
+                                "name": name,
+                                "source": source,
+                            }),
+                        )
                         .await,
                 );
             }

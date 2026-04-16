@@ -193,8 +193,11 @@ pub(crate) fn list_site_volumes(state: &OiState) -> HandlerResult {
                 source_volume,
             } = &v.kind
             {
-                obj["source_app"] = json!(source_app);
-                obj["source_volume"] = json!(source_volume);
+                if let Some(app) = source_app {
+                    obj["source"] = json!(format!("{app}/{source_volume}"));
+                } else {
+                    obj["source"] = json!(format!("_site/{source_volume}"));
+                }
             }
             obj
         })
@@ -252,6 +255,83 @@ pub(crate) fn delete_site_volume(state: &OiState, params: DeleteSiteVolumeParams
     })?;
 
     Ok(json!({ "deleted": true }))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct SnapshotSiteVolumeParams {
+    /// Name for the new snapshot site volume
+    pub name: String,
+    /// Source volume ID: _site/<name> for a managed site volume, or <app>/<volume> for an app volume
+    pub source: String,
+}
+
+// r[impl volume.site.snapshot]
+pub(crate) fn snapshot_site_volume(
+    state: &OiState,
+    params: SnapshotSiteVolumeParams,
+) -> HandlerResult {
+    use crate::runtime::site_volumes::{SiteVolumeDef, SiteVolumeKind};
+
+    let (source_app, source_volume, source_path) =
+        parse_source_vol_id(&params.source, &state.driver.volume_store)
+            .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e))?;
+
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            state
+                .driver
+                .volume_store
+                .snapshot_site(&params.name, &source_path)
+                .await
+                .map_err(|e| {
+                    OiError::new(
+                        ErrorCode::Internal,
+                        format!("failed to create snapshot: {e}"),
+                    )
+                })
+        })
+    })?;
+
+    let def = SiteVolumeDef {
+        name: params.name.clone(),
+        kind: SiteVolumeKind::Snapshot {
+            source_app,
+            source_volume,
+        },
+        created_at: jiff::Timestamp::now().to_string(),
+    };
+
+    let db = state.db.lock();
+    crate::runtime::site_volumes::create(&db, &def).map_err(|e| {
+        OiError::new(
+            ErrorCode::Internal,
+            format!("failed to store snapshot site volume: {e}"),
+        )
+    })?;
+
+    Ok(json!({ "created": true, "name": params.name }))
+}
+
+fn parse_source_vol_id(
+    vol_id: &str,
+    vol_store: &crate::system::volume_store::VolumeStore,
+) -> Result<(Option<String>, String, std::path::PathBuf), String> {
+    let (prefix, vol) = vol_id.split_once('/').ok_or_else(|| {
+        format!("invalid source {vol_id:?}: expected _site/<name> or <app>/<volume>")
+    })?;
+    if prefix.is_empty() || vol.is_empty() {
+        return Err(format!(
+            "invalid source {vol_id:?}: neither part may be empty"
+        ));
+    }
+    if prefix == "_site" {
+        let path = vol_store.site_path(vol);
+        Ok((None, vol.to_owned(), path))
+    } else {
+        let vol_name = format!("{prefix}-{vol}");
+        let path = vol_store.path(&vol_name);
+        Ok((Some(prefix.to_owned()), vol.to_owned(), path))
+    }
 }
 
 #[derive(Deserialize)]
