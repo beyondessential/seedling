@@ -376,7 +376,6 @@ impl Db {
                     name       TEXT    PRIMARY KEY,
                     kind       TEXT    NOT NULL,
                     host_path  TEXT,
-                    read_only  INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT    NOT NULL
                 );",
             )?;
@@ -399,36 +398,10 @@ impl Db {
                 .execute_batch("INSERT INTO schema_version VALUES (17);")?;
         }
         if version < 18 {
-            self.conn.execute_batch(
-                "ALTER TABLE site_volumes
-                    DROP COLUMN
-                        read_only;
-                ",
-            )?;
-            self.conn.execute_batch(
-                "ALTER TABLE external_volume_mappings
-                    ADD COLUMN
-                        read_only INTEGER NOT NULL DEFAULT 0;
-                ",
-            )?;
+            self.conn
+                .execute_batch("ALTER TABLE registered_apps DROP COLUMN script;")?;
             self.conn
                 .execute_batch("INSERT INTO schema_version VALUES (18);")?;
-        }
-        if version < 19 {
-            self.conn.execute_batch(
-                "ALTER TABLE registered_apps
-                    DROP COLUMN
-                        script;
-                ",
-            )?;
-            self.conn.execute_batch(
-                "ALTER TABLE registered_apps
-                    ALTER COLUMN
-                        current_version_id SET NOT NULL;
-                ",
-            )?;
-            self.conn
-                .execute_batch("INSERT INTO schema_version VALUES (19);")?;
         }
         tx.commit()?;
         Ok(())

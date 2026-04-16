@@ -212,10 +212,22 @@ fn evaluate_script_absent_param_has_no_stored_value() {
 fn registry_load_from_db_restores_params() {
     let db = Db::open_in_memory().expect("open");
 
+    let version_id = "test-version-1";
     db.conn
         .execute(
-            "INSERT INTO registered_apps (name, script, installed) VALUES (?1, ?2, 0)",
-            rusqlite::params!["myapp", r#"let h = app.param("hostname");"#],
+            "INSERT INTO app_versions (id, app, script, created_at) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                version_id,
+                "myapp",
+                r#"let h = app.param("hostname");"#,
+                "2024-01-01T00:00:00Z",
+            ],
+        )
+        .expect("insert app version");
+    db.conn
+        .execute(
+            "INSERT INTO registered_apps (name, installed, current_version_id) VALUES (?1, 0, ?2)",
+            rusqlite::params!["myapp", version_id],
         )
         .expect("insert app");
 

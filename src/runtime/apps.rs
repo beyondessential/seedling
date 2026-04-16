@@ -208,13 +208,13 @@ impl AppRegistry {
         let mut stmt = db.conn.prepare(
             "SELECT name, installed, uninstalling, current_version_id FROM registered_apps ORDER BY name",
         )?;
-        let rows: Vec<(String, bool, bool, String)> = stmt
+        let rows: Vec<(String, bool, bool, Option<String>)> = stmt
             .query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, bool>(1)?,
                     row.get::<_, bool>(2)?,
-                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(3)?,
                 ))
             })?
             .collect::<rusqlite::Result<_>>()?;
@@ -232,12 +232,20 @@ impl AppRegistry {
                     BTreeMap::new()
                 }
             };
-            let mut stmt = db
+            let Some(version_id) = version_id else {
+                tracing::warn!(app = %name, "skipping app with no current version");
+                continue;
+            };
+            let mut vstmt = db
                 .conn
-                .prepare("SELECT script FROM app_versions WHERE app = ? AND id = ?")?;
-            let script: String = stmt.query_one([name.clone(), version_id.clone()], |row| {
-                Ok(row.get::<_, String>(0)?)
-            })?;
+                .prepare("SELECT script FROM app_versions WHERE id = ?1")?;
+            let script: String = match vstmt.query_row([&version_id], |row| row.get(0)) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(app = %name, version = %version_id, "failed to load app version script: {e}");
+                    continue;
+                }
+            };
             let (app, script_error) = match evaluate_script(&name, &script, &stored, limits) {
                 Ok(a) => (a, None),
                 Err(e) => {
@@ -271,12 +279,12 @@ impl AppRegistry {
         let uninstalling = matches!(*phase, AppPhase::Uninstalling);
         db.conn.execute(
             "INSERT OR REPLACE INTO registered_apps (name, installed, uninstalling, current_version_id) \
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+             VALUES (?1, ?2, ?3, ?4)",
             rusqlite::params![
                 entry.name,
                 installed as i64,
                 uninstalling as i64,
-                entry.version_id
+                if entry.version_id.is_empty() { None } else { Some(&entry.version_id) },
             ],
         )?;
         Ok(())
