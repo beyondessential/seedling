@@ -370,6 +370,20 @@ impl Db {
                 .execute_batch("INSERT INTO schema_version VALUES (15);")?;
         }
 
+
+        if version < 16 {
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS site_volumes (
+                    name       TEXT    PRIMARY KEY,
+                    kind       TEXT    NOT NULL,
+                    host_path  TEXT,
+                    read_only  INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT    NOT NULL
+                );",
+            )?;
+            self.conn
+                .execute_batch("INSERT INTO schema_version VALUES (16);")?;
+        }
         tx.commit()?;
         Ok(())
     }

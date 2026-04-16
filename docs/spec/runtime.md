@@ -455,6 +455,17 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[actuate.volume.hold.confirm]
 > An operator must explicitly confirm deletion of a held volume before its data is removed.
 
+> r[volume.site]
+> A site volume is a named volume managed by operators, independent of any app. Site volumes come in two kinds:
+>
+> - **Managed**: a host directory (or BTRFS subvolume) created and maintained by the runtime under the data directory.
+> - **Bind**: an arbitrary host path provided by the operator, mounted as-is.
+>
+> Site volumes may be read-write or read-only. Tmpfs site volumes are not supported.
+
+> r[volume.site.lifecycle]
+> Site volumes are created and deleted exclusively through operator commands. The runtime must create the backing storage for managed site volumes at creation time and remove it at deletion time.
+
 > r[actuate.volume.stop]
 > Stopping a Volume instance must remove the named volume.
 
