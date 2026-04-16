@@ -414,6 +414,22 @@ impl Db {
             self.conn
                 .execute_batch("INSERT INTO schema_version VALUES (18);")?;
         }
+        if version < 19 {
+            self.conn.execute_batch(
+                "ALTER TABLE registered_apps
+                    DROP COLUMN
+                        script;
+                ",
+            )?;
+            self.conn.execute_batch(
+                "ALTER TABLE registered_apps
+                    ALTER COLUMN
+                        current_version_id SET NOT NULL;
+                ",
+            )?;
+            self.conn
+                .execute_batch("INSERT INTO schema_version VALUES (19);")?;
+        }
         tx.commit()?;
         Ok(())
     }

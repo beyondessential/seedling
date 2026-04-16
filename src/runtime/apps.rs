@@ -206,21 +206,20 @@ impl AppRegistry {
     ) -> rusqlite::Result<Self> {
         let mut registry = Self::new();
         let mut stmt = db.conn.prepare(
-            "SELECT name, script, installed, uninstalling, current_version_id FROM registered_apps ORDER BY name",
+            "SELECT name, installed, uninstalling, current_version_id FROM registered_apps ORDER BY name",
         )?;
-        let rows: Vec<(String, String, bool, bool, Option<String>)> = stmt
+        let rows: Vec<(String, bool, bool, String)> = stmt
             .query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
+                    row.get::<_, bool>(1)?,
                     row.get::<_, bool>(2)?,
-                    row.get::<_, bool>(3)?,
-                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, String>(3)?,
                 ))
             })?
             .collect::<rusqlite::Result<_>>()?;
 
-        for (name, script, installed, uninstalling, version_id) in rows {
+        for (name, installed, uninstalling, version_id) in rows {
             let phase = match (installed, uninstalling) {
                 (_, true) => AppPhase::Uninstalling,
                 (true, _) => AppPhase::Installed,
@@ -233,6 +232,12 @@ impl AppRegistry {
                     BTreeMap::new()
                 }
             };
+            let mut stmt = db
+                .conn
+                .prepare("SELECT script FROM app_versions WHERE app = ? AND id = ?")?;
+            let script: String = stmt.query_one([name.clone(), version_id.clone()], |row| {
+                Ok(row.get::<_, String>(0)?)
+            })?;
             let (app, script_error) = match evaluate_script(&name, &script, &stored, limits) {
                 Ok(a) => (a, None),
                 Err(e) => {
@@ -250,7 +255,7 @@ impl AppRegistry {
                     active_progress: Arc::new(RwLock::new(None)),
                     tick_notify: Arc::clone(&tick_notify),
                     script_error,
-                    version_id: version_id.unwrap_or_default(),
+                    version_id,
                     previous_version_id: None,
                 },
             );
