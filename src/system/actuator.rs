@@ -171,10 +171,16 @@ impl Actuator {
                                 site_volumes::SiteVolumeKind::Bind { host_path } => {
                                     std::path::PathBuf::from(host_path)
                                 }
+                                site_volumes::SiteVolumeKind::Snapshot { .. } => {
+                                    vol_store.site_path(&sv.name)
+                                }
                             };
+                            // r[impl volume.site.snapshot]
+                            // Snapshot volumes are inherently read-only at the filesystem level.
+                            let effective_read_only = mapping.read_only || sv.is_read_only();
                             ResolvedExternalMount {
                                 source: MountSource::Bind(path),
-                                read_only: mapping.read_only,
+                                read_only: effective_read_only,
                             }
                         }
                         None => {

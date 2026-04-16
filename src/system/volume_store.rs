@@ -199,6 +199,29 @@ impl VolumeStore {
             tokio::fs::remove_dir_all(&path).await
         }
     }
+
+    // r[impl volume.site.snapshot]
+    /// Create a read-only BTRFS snapshot at `site-{name}` from `source_path`.
+    /// Errors if BTRFS is not in use.
+    pub async fn snapshot_site(
+        &self,
+        name: &str,
+        source_path: &std::path::Path,
+    ) -> std::io::Result<()> {
+        if !self.use_btrfs {
+            return Err(std::io::Error::other(
+                "snapshotting requires BTRFS; restart without --without-btrfs",
+            ));
+        }
+        if !source_path.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("source path {} does not exist", source_path.display()),
+            ));
+        }
+        let dest = self.site_path(name);
+        btrfs_snapshot_readonly(source_path, &dest).await
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -255,6 +278,22 @@ async fn btrfs_delete_subvolume(path: &Path) -> std::io::Result<()> {
     if !output.status.success() {
         return Err(std::io::Error::other(format!(
             "btrfs subvolume delete failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(())
+}
+
+async fn btrfs_snapshot_readonly(source: &Path, dest: &Path) -> std::io::Result<()> {
+    let output = tokio::process::Command::new("btrfs")
+        .args(["subvolume", "snapshot", "-r"])
+        .arg(source)
+        .arg(dest)
+        .output()
+        .await?;
+    if !output.status.success() {
+        return Err(std::io::Error::other(format!(
+            "btrfs subvolume snapshot failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
