@@ -347,6 +347,7 @@ pub(crate) async fn open_shell_session(
         &resolved_mounts,
         &state.dns_servers,
         None,
+        &std::collections::HashMap::new(),
     );
     container_spec.health = None;
     container_spec

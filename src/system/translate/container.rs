@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     net::{IpAddr, Ipv6Addr},
     path::Path,
 };
@@ -11,7 +11,7 @@ use crate::{
     runtime::identity::ResourceInstance,
     system::{
         translate::proxy::node_mount_addr,
-        types::{ContainerSpec, Mount, MountSource},
+        types::{ContainerSpec, Mount, MountSource, ResolvedExternalMount},
     },
 };
 
@@ -24,9 +24,18 @@ pub fn deployment_spec(
     mounts: &[(u16, Ipv6Addr, u16)],
     dns_servers: &[Ipv6Addr],
     volumes_dir: Option<&Path>,
+    external_volumes: &HashMap<String, ResolvedExternalMount>,
 ) -> ContainerSpec {
     let pod = def.pod.lock();
-    spec_from_pod(&pod, instance, network, mounts, dns_servers, volumes_dir)
+    spec_from_pod(
+        &pod,
+        instance,
+        network,
+        mounts,
+        dns_servers,
+        volumes_dir,
+        external_volumes,
+    )
 }
 
 /// Builds a `ContainerSpec` for a `Job` instance.
@@ -38,9 +47,18 @@ pub fn job_spec(
     mounts: &[(u16, Ipv6Addr, u16)],
     dns_servers: &[Ipv6Addr],
     volumes_dir: Option<&Path>,
+    external_volumes: &HashMap<String, ResolvedExternalMount>,
 ) -> ContainerSpec {
     let pod = def.pod.lock();
-    spec_from_pod(&pod, instance, network, mounts, dns_servers, volumes_dir)
+    spec_from_pod(
+        &pod,
+        instance,
+        network,
+        mounts,
+        dns_servers,
+        volumes_dir,
+        external_volumes,
+    )
 }
 
 /// Produces the `podman run [...]` argv from a `ContainerSpec`.
@@ -203,6 +221,7 @@ fn spec_from_pod(
     mounts: &[(u16, Ipv6Addr, u16)],
     dns_servers: &[Ipv6Addr],
     volumes_dir: Option<&Path>,
+    external_volumes: &HashMap<String, ResolvedExternalMount>,
 ) -> ContainerSpec {
     let container = pod.container.lock();
 
@@ -222,6 +241,17 @@ fn spec_from_pod(
         .volume_mounts
         .iter()
         .map(|(path, vm)| {
+            // Handle resolved external volumes specially (they carry their own read_only).
+            if let VolumeMount::ExternalVolume(ev) = vm {
+                if let Some(resolved) = external_volumes.get(ev.name.as_ref()) {
+                    return Mount {
+                        source: resolved.source.clone(),
+                        target: path.to_string_lossy().into_owned(),
+                        read_only: resolved.read_only,
+                    };
+                }
+            }
+
             let source = match vm {
                 VolumeMount::Volume(v) => {
                     let name = match &v.name {

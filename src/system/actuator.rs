@@ -1,12 +1,20 @@
-use std::{collections::BTreeMap, net::Ipv6Addr, path::Path, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    net::Ipv6Addr,
+    path::Path,
+    sync::Arc,
+};
 
 use ipnet::Ipv6Net;
-use parking_lot::Mutex;
+use parking_lot::{Mutex as ParkingMutex, RwLock};
 use snafu::{IntoError, ResultExt, Snafu};
 
 use crate::{
     defs::resource::{Resource, ResourceKind},
-    runtime::{identity::ResourceInstance, registry::InstanceRegistry},
+    runtime::{
+        apps::AppRegistry, db::Db, external_volume_mappings, identity::ResourceInstance,
+        registry::InstanceRegistry, site_volumes,
+    },
     system::{
         System,
         translate::{
@@ -107,7 +115,9 @@ pub struct Actuator {
     registry: Arc<dyn InstanceRegistry>,
     dns_servers: Vec<Ipv6Addr>,
     /// Images currently being pulled or that have exhausted retries.
-    pulling: Arc<Mutex<std::collections::HashMap<String, PullState>>>,
+    pulling: Arc<ParkingMutex<HashMap<String, PullState>>>,
+    db: Arc<ParkingMutex<Db>>,
+    app_registry: Arc<RwLock<AppRegistry>>,
 }
 
 impl Actuator {
@@ -116,14 +126,108 @@ impl Actuator {
         node_prefix: Ipv6Net,
         registry: Arc<dyn InstanceRegistry>,
         dns_servers: Vec<Ipv6Addr>,
+        db: Arc<ParkingMutex<Db>>,
+        app_registry: Arc<RwLock<AppRegistry>>,
     ) -> Self {
         Self {
             driver,
             node_prefix,
             registry,
             dns_servers,
-            pulling: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            pulling: Arc::new(ParkingMutex::new(HashMap::new())),
+            db,
+            app_registry,
         }
+    }
+
+    fn resolve_external_volumes(
+        &self,
+        app: &str,
+    ) -> HashMap<String, crate::system::types::ResolvedExternalMount> {
+        use crate::system::types::{MountSource, ResolvedExternalMount};
+
+        let db = self.db.lock();
+        let mappings = match external_volume_mappings::list_for_app(&db, app) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(app = app, error = %e, "failed to load external volume mappings");
+                return HashMap::new();
+            }
+        };
+
+        let site_vols = site_volumes::list(&db).unwrap_or_default();
+        drop(db);
+
+        let vol_store = &self.driver.volume_store;
+        let mut resolved = HashMap::new();
+
+        for mapping in mappings {
+            let mount = match &mapping.target {
+                external_volume_mappings::MappingTarget::Site { target_volume } => {
+                    let site_vol = site_vols.iter().find(|s| s.name == *target_volume);
+                    match site_vol {
+                        Some(sv) => {
+                            let path = match &sv.kind {
+                                site_volumes::SiteVolumeKind::Managed => {
+                                    vol_store.site_path(&sv.name)
+                                }
+                                site_volumes::SiteVolumeKind::Bind { host_path } => {
+                                    std::path::PathBuf::from(host_path)
+                                }
+                            };
+                            ResolvedExternalMount {
+                                source: MountSource::Bind(path),
+                                read_only: sv.read_only,
+                            }
+                        }
+                        None => {
+                            tracing::warn!(
+                                app = app,
+                                external = %mapping.external_name,
+                                target = %target_volume,
+                                "site volume not found for external volume mapping"
+                            );
+                            continue;
+                        }
+                    }
+                }
+                external_volume_mappings::MappingTarget::Exported {
+                    target_app,
+                    target_volume,
+                } => {
+                    let vol_name = format!("{target_app}-{target_volume}");
+                    let path = vol_store.path(&vol_name);
+                    let read_only = {
+                        let reg = self.app_registry.read();
+                        reg.get(target_app)
+                            .and_then(|entry| {
+                                let def = entry.app.def.lock();
+                                let id = crate::defs::resource::ResourceId {
+                                    kind: crate::defs::resource::ResourceKind::Volume,
+                                    name: crate::defs::resource::ResourceName::new(
+                                        target_volume.clone().into(),
+                                    ),
+                                };
+                                def.resources.get(&id).and_then(|r| {
+                                    if let crate::defs::resource::Resource::Volume(v) = r {
+                                        Some(v.def.lock().read_only)
+                                    } else {
+                                        None
+                                    }
+                                })
+                            })
+                            .unwrap_or(false)
+                    };
+                    ResolvedExternalMount {
+                        source: MountSource::Bind(path),
+                        read_only,
+                    }
+                }
+            };
+            resolved.insert(mapping.external_name, mount);
+        }
+
+        resolved
     }
 
     // r[impl actuate.deployment.start]
@@ -151,6 +255,7 @@ impl Actuator {
                     );
                     (image, raw_mounts, restart, vols)
                 };
+                let external_vols = self.resolve_external_volumes(&instance.app);
                 self.start_pod_instance(
                     instance,
                     &image,
@@ -167,6 +272,7 @@ impl Actuator {
                             mounts,
                             &self.dns_servers,
                             Some(self.driver.volume_store.volumes_dir()),
+                            &external_vols,
                         );
                         podman_args(&spec)
                     },
@@ -189,6 +295,7 @@ impl Actuator {
                     );
                     (image, raw_mounts, restart, vols)
                 };
+                let external_vols = self.resolve_external_volumes(&instance.app);
                 self.start_pod_instance(
                     instance,
                     &image,
@@ -205,6 +312,7 @@ impl Actuator {
                             mounts,
                             &self.dns_servers,
                             Some(self.driver.volume_store.volumes_dir()),
+                            &external_vols,
                         );
                         podman_args(&spec)
                     },
@@ -422,6 +530,7 @@ impl Actuator {
                     &mounts,
                     &self.dns_servers,
                     Some(self.driver.volume_store.volumes_dir()),
+                    &self.resolve_external_volumes(&instance.app),
                 )
             }
             Resource::Job(job) => {
@@ -442,6 +551,7 @@ impl Actuator {
                     &mounts,
                     &self.dns_servers,
                     Some(self.driver.volume_store.volumes_dir()),
+                    &self.resolve_external_volumes(&instance.app),
                 )
             }
             _ => return None,

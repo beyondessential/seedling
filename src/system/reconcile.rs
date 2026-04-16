@@ -65,11 +65,12 @@ const OBS_KINDS: &[&str] = &[
 /// Load all existing `(instance_id, obs_kind)` pairs from the DB so that
 /// observations persisted in a previous session are not re-written with a
 /// fresh timestamp on restart.
-fn seed_written_obs(db: &Db) -> HashSet<(InstanceId, &'static str)> {
+fn seed_written_obs_arc(db: &Arc<Mutex<Db>>) -> HashSet<(InstanceId, &'static str)> {
     fn intern(s: &str) -> Option<&'static str> {
         OBS_KINDS.iter().find(|&&k| k == s).copied()
     }
 
+    let db = db.lock();
     let mut set = HashSet::new();
     let Ok(mut stmt) = db
         .conn
@@ -172,13 +173,16 @@ impl Reconciler {
         shells: Arc<ShellRegistry>,
     ) -> Self {
         let observer = Observer::new(Arc::clone(&driver));
+        let db = Arc::new(Mutex::new(db));
+        let written_obs = seed_written_obs_arc(&db);
         let actuator = Actuator::new(
             Arc::clone(&driver),
             node_prefix,
             Arc::clone(&registry),
             dns_servers,
+            Arc::clone(&db),
+            Arc::clone(&app_registry),
         );
-        let written_obs = seed_written_obs(&db);
         Self {
             driver,
             node_prefix,
@@ -187,7 +191,7 @@ impl Reconciler {
             caddy_admin_client,
             caddy_v4_addr: None,
             data_dir,
-            db: Arc::new(Mutex::new(db)),
+            db,
             registry,
             app_registry,
             written_obs,

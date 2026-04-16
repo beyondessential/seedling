@@ -232,6 +232,7 @@ fn volume_mount_uses_app_prefixed_display_name() {
         &[],
         &[],
         None,
+        &std::collections::HashMap::new(),
     );
 
     // The volume mount source must be the app-prefixed display name, not the raw BSL name.
