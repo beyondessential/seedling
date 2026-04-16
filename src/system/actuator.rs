@@ -205,7 +205,7 @@ impl Actuator {
                                 let id = crate::defs::resource::ResourceId {
                                     kind: crate::defs::resource::ResourceKind::Volume,
                                     name: crate::defs::resource::ResourceName::new(
-                                        target_volume.clone().into(),
+                                        target_volume.clone(),
                                     ),
                                 };
                                 def.resources.get(&id).and_then(|r| {
