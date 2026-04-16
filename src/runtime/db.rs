@@ -376,7 +376,6 @@ impl Db {
                     name       TEXT    PRIMARY KEY,
                     kind       TEXT    NOT NULL,
                     host_path  TEXT,
-                    read_only  INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT    NOT NULL
                 );",
             )?;
@@ -391,6 +390,7 @@ impl Db {
                     target_kind     TEXT NOT NULL,
                     target_app      TEXT,
                     target_volume   TEXT NOT NULL,
+                    read_only       INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY (app, external_name)
                 );",
             )?;

@@ -177,7 +177,7 @@ impl Actuator {
                             };
                             ResolvedExternalMount {
                                 source: MountSource::Bind(path),
-                                read_only: sv.read_only,
+                                read_only: mapping.read_only,
                             }
                         }
                         None => {
@@ -197,30 +197,9 @@ impl Actuator {
                 } => {
                     let vol_name = format!("{target_app}-{target_volume}");
                     let path = vol_store.path(&vol_name);
-                    let read_only = {
-                        let reg = self.app_registry.read();
-                        reg.get(target_app)
-                            .and_then(|entry| {
-                                let def = entry.app.def.lock();
-                                let id = crate::defs::resource::ResourceId {
-                                    kind: crate::defs::resource::ResourceKind::Volume,
-                                    name: crate::defs::resource::ResourceName::new(
-                                        target_volume.clone(),
-                                    ),
-                                };
-                                def.resources.get(&id).and_then(|r| {
-                                    if let crate::defs::resource::Resource::Volume(v) = r {
-                                        Some(v.def.lock().read_only)
-                                    } else {
-                                        None
-                                    }
-                                })
-                            })
-                            .unwrap_or(false)
-                    };
                     ResolvedExternalMount {
                         source: MountSource::Bind(path),
-                        read_only,
+                        read_only: mapping.read_only,
                     }
                 }
             };

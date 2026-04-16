@@ -7,7 +7,6 @@ use crate::runtime::db::Db;
 pub struct SiteVolumeDef {
     pub name: String,
     pub kind: SiteVolumeKind,
-    pub read_only: bool,
     pub created_at: String,
 }
 
@@ -23,22 +22,21 @@ pub fn create(db: &Db, def: &SiteVolumeDef) -> rusqlite::Result<()> {
         SiteVolumeKind::Bind { host_path } => ("bind", Some(host_path.as_str())),
     };
     db.conn.execute(
-        "INSERT INTO site_volumes (name, kind, host_path, read_only, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![def.name, kind_str, host_path, def.read_only as i32, def.created_at],
+        "INSERT INTO site_volumes (name, kind, host_path, created_at) VALUES (?1, ?2, ?3, ?4)",
+        params![def.name, kind_str, host_path, def.created_at],
     )?;
     Ok(())
 }
 
 pub fn list(db: &Db) -> rusqlite::Result<Vec<SiteVolumeDef>> {
     let mut stmt = db.conn.prepare(
-        "SELECT name, kind, host_path, read_only, created_at FROM site_volumes ORDER BY name",
+        "SELECT name, kind, host_path, created_at FROM site_volumes ORDER BY name",
     )?;
     let rows = stmt.query_map([], |row| {
         let name: String = row.get(0)?;
         let kind_str: String = row.get(1)?;
         let host_path: Option<String> = row.get(2)?;
-        let read_only: bool = row.get(3)?;
-        let created_at: String = row.get(4)?;
+        let created_at: String = row.get(3)?;
         let kind = match kind_str.as_str() {
             "bind" => SiteVolumeKind::Bind {
                 host_path: host_path.unwrap_or_default(),
@@ -48,7 +46,6 @@ pub fn list(db: &Db) -> rusqlite::Result<Vec<SiteVolumeDef>> {
         Ok(SiteVolumeDef {
             name,
             kind,
-            read_only,
             created_at,
         })
     })?;
@@ -57,14 +54,13 @@ pub fn list(db: &Db) -> rusqlite::Result<Vec<SiteVolumeDef>> {
 
 pub fn get(db: &Db, name: &str) -> rusqlite::Result<Option<SiteVolumeDef>> {
     let mut stmt = db.conn.prepare(
-        "SELECT name, kind, host_path, read_only, created_at FROM site_volumes WHERE name = ?1",
+        "SELECT name, kind, host_path, created_at FROM site_volumes WHERE name = ?1",
     )?;
     let mut rows = stmt.query_map(params![name], |row| {
         let name: String = row.get(0)?;
         let kind_str: String = row.get(1)?;
         let host_path: Option<String> = row.get(2)?;
-        let read_only: bool = row.get(3)?;
-        let created_at: String = row.get(4)?;
+        let created_at: String = row.get(3)?;
         let kind = match kind_str.as_str() {
             "bind" => SiteVolumeKind::Bind {
                 host_path: host_path.unwrap_or_default(),
@@ -74,7 +70,6 @@ pub fn get(db: &Db, name: &str) -> rusqlite::Result<Option<SiteVolumeDef>> {
         Ok(SiteVolumeDef {
             name,
             kind,
-            read_only,
             created_at,
         })
     })?;
