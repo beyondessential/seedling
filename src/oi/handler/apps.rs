@@ -338,6 +338,19 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                     });
                 }
 
+                if id.kind == ResourceKind::Volume
+                    && let Some(Resource::Volume(vol)) = def.resources.get(id)
+                {
+                    let vol_def = vol.def.lock();
+                    if let Some(export_opts) = &vol_def.exported {
+                        let mut export = json!({ "exported": true });
+                        if let Some(desc) = &export_opts.description {
+                            export["description"] = json!(desc);
+                        }
+                        resource_obj["export"] = export;
+                    }
+                }
+
                 resource_obj
             })
             .collect()

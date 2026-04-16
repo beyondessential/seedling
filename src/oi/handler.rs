@@ -106,6 +106,7 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8]) -> HandlerResult {
         "/registries/remove" => registries::remove_registry(state, parse_params(req.params)?),
         "/volumes/held/list" => volumes::list_held(state),
         "/volumes/held/delete" => volumes::delete_held(state, parse_params(req.params)?),
+        "/volumes/exported/list" => volumes::list_exported(state),
         other => Err(OiError::not_found(format!("unknown method: {other}"))),
     };
 

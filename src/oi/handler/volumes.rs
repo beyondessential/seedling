@@ -58,3 +58,32 @@ pub(crate) fn delete_held(state: &OiState, params: DeleteHeldParams) -> HandlerR
 
     Ok(json!({ "deleted": true }))
 }
+
+pub(crate) fn list_exported(state: &OiState) -> HandlerResult {
+    let registry = state.registry.read();
+    let mut exported = Vec::new();
+
+    for (app_name, _status) in registry.list() {
+        let Some(entry) = registry.get(&app_name) else {
+            continue;
+        };
+        let def = entry.app.def.lock();
+        for (id, resource) in &def.resources {
+            if let crate::defs::resource::Resource::Volume(vol) = resource {
+                let vol_def = vol.def.lock();
+                if let Some(export_opts) = &vol_def.exported {
+                    let mut entry = json!({
+                        "app": app_name,
+                        "volume_name": id.name.as_str(),
+                    });
+                    if let Some(desc) = &export_opts.description {
+                        entry["description"] = json!(desc);
+                    }
+                    exported.push(entry);
+                }
+            }
+        }
+    }
+
+    Ok(json!(exported))
+}

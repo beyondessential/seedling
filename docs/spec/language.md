@@ -552,6 +552,11 @@ This is currently the only value.
 >
 > At the runtime level, files written into volumes must be created with restrictive permissions (no more than 0640).
 
+> l[volume.export]
+> `volume.export(options?: #{ description?: string })` is a builder method which marks the volume as exported. Exported volumes are advertised to the control plane and operators.
+>
+> Only named static volumes can be exported. Calling `export()` on an anonymous volume must throw.
+
 ## External Volume
 
 > l[volume.external]

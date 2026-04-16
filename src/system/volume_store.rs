@@ -100,8 +100,7 @@ impl VolumeStore {
         };
 
         let meta_path = held_dir.join(format!("{id}.meta.json"));
-        let json = serde_json::to_string_pretty(&meta)
-            .map_err(std::io::Error::other)?;
+        let json = serde_json::to_string_pretty(&meta).map_err(std::io::Error::other)?;
         tokio::fs::write(&meta_path, json).await?;
 
         tracing::info!(

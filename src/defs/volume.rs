@@ -1,6 +1,6 @@
 use std::path::{Component, PathBuf};
 
-use rhai::{CustomType, EvalAltResult, TypeBuilder};
+use rhai::{CustomType, EvalAltResult, Map, TypeBuilder};
 
 use super::{Freezable, Holder, resource::ResourceName};
 
@@ -33,11 +33,17 @@ fn validate_volume_write_path(path: &str) -> Result<(), Box<EvalAltResult>> {
     Ok(())
 }
 
+#[derive(Debug, Clone)]
+pub struct ExportOptions {
+    pub description: Option<String>,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct VolumeDef {
     pub read_only: bool,
     pub tmpfs: bool,
     pub writes: Vec<(String, String)>,
+    pub exported: Option<ExportOptions>,
 }
 
 // l[impl volume.type]
@@ -110,6 +116,41 @@ impl CustomType for Volume {
                     this.ensure_unfrozen()?;
                     validate_volume_write_path(path)?;
                     this.def.lock().writes.push((path.into(), contents.into()));
+                    Ok(this.clone())
+                },
+            )
+            // l[impl volume.export]
+            .with_fn(
+                "export",
+                |this: &mut Self| -> Result<Volume, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
+                    if this.name.is_none() {
+                        return Err("only named volumes can be exported".into());
+                    }
+                    this.def.lock().exported = Some(ExportOptions { description: None });
+                    Ok(this.clone())
+                },
+            )
+            // l[impl volume.export]
+            .with_fn(
+                "export",
+                |this: &mut Self, options: Map| -> Result<Volume, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
+                    if this.name.is_none() {
+                        return Err("only named volumes can be exported".into());
+                    }
+                    let description = if let Some(desc) = options.get("description") {
+                        Some(
+                            desc.clone()
+                                .into_string()
+                                .map_err(|e| -> Box<EvalAltResult> {
+                                    format!("export description must be a string: {e}").into()
+                                })?,
+                        )
+                    } else {
+                        None
+                    };
+                    this.def.lock().exported = Some(ExportOptions { description });
                     Ok(this.clone())
                 },
             );
