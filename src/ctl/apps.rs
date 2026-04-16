@@ -7,6 +7,11 @@ use super::print_result;
 
 #[derive(Subcommand)]
 pub(super) enum AppsCommand {
+    /// Manage volumes for an app
+    Volumes {
+        #[command(subcommand)]
+        command: VolumesCommand,
+    },
     /// List registered apps
     List,
     /// Describe an app
@@ -74,6 +79,34 @@ pub(super) enum AppsCommand {
 }
 
 #[derive(Subcommand)]
+pub(super) enum VolumesCommand {
+    /// List exported volumes and external volume mappings for an app
+    List { app: String },
+    /// Attach an external volume to a target (_site/name or app/name)
+    Attach {
+        /// App declaring the external volume
+        app: String,
+        /// External volume name (as declared in BSL with app.external_volume())
+        external_volume: String,
+        /// Target volume ID: _site/<name> or <app>/<volume>
+        vol_id: String,
+        /// Mount as read-only
+        #[arg(long)]
+        read_only: bool,
+        /// Remap if already attached
+        #[arg(long)]
+        force: bool,
+    },
+    /// Detach an external volume mapping
+    Detach {
+        /// App declaring the external volume
+        app: String,
+        /// External volume name
+        external_volume: String,
+    },
+}
+
+#[derive(Subcommand)]
 pub(super) enum ScaleDirection {
     /// Scale up by one instance
     Up,
@@ -97,8 +130,91 @@ pub(super) enum ParamCommand {
     Unset { app: String, name: String },
 }
 
+fn parse_vol_id(vol_id: &str) -> Result<(&str, &str), String> {
+    let (prefix, vol) = vol_id.split_once('/').ok_or_else(|| {
+        format!("invalid volume ID {vol_id:?}: expected _site/<name> or <app>/<volume>")
+    })?;
+    if prefix.is_empty() || vol.is_empty() {
+        return Err(format!(
+            "invalid volume ID {vol_id:?}: neither part may be empty"
+        ));
+    }
+    Ok((prefix, vol))
+}
+
 pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
     match cmd {
+        AppsCommand::Volumes { command } => match command {
+            VolumesCommand::List { app } => {
+                print_result(
+                    client
+                        .request("/apps/show", serde_json::json!({ "app": app }))
+                        .await
+                        .map(|v| {
+                            let resources = v["resources"].as_array().cloned().unwrap_or_default();
+                            let vols: Vec<_> = resources
+                                .iter()
+                                .filter(|r| {
+                                    r["type"] == "externalvolume"
+                                        || (r["type"] == "volume" && r.get("export").is_some())
+                                })
+                                .cloned()
+                                .collect();
+                            serde_json::Value::Array(vols)
+                        }),
+                );
+            }
+            VolumesCommand::Attach {
+                app,
+                external_volume,
+                vol_id,
+                read_only,
+                force,
+            } => {
+                let (prefix, vol) = match parse_vol_id(&vol_id) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        std::process::exit(1);
+                    }
+                };
+                let (target_kind, target_app, target_volume) = if prefix == "_site" {
+                    ("site", None, vol.to_owned())
+                } else {
+                    ("exported", Some(prefix.to_owned()), vol.to_owned())
+                };
+                let params = serde_json::json!({
+                    "app": app,
+                    "external_name": external_volume,
+                    "target_kind": target_kind,
+                    "target_app": target_app,
+                    "target_volume": target_volume,
+                    "read_only": read_only,
+                });
+                let route = if force {
+                    "/volumes/external/remap"
+                } else {
+                    "/volumes/external/map"
+                };
+                print_result(client.request(route, params).await);
+            }
+            VolumesCommand::Detach {
+                app,
+                external_volume,
+            } => {
+                print_result(
+                    client
+                        .request(
+                            "/volumes/external/unmap",
+                            serde_json::json!({
+                                "app": app,
+                                "external_name": external_volume,
+                            }),
+                        )
+                        .await,
+                );
+            }
+        },
         AppsCommand::List => {
             print_result(client.request("/apps/list", serde_json::json!({})).await);
         }

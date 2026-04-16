@@ -23,6 +23,8 @@ mod op;
 mod shell;
 #[path = "ctl/subscribe.rs"]
 mod subscribe;
+#[path = "ctl/volumes.rs"]
+mod volumes;
 
 #[derive(Parser)]
 #[command(name = "seedling-ctl", about = "Seedling operator interface CLI")]
@@ -59,6 +61,11 @@ enum Command {
     Op {
         #[command(subcommand)]
         command: op::OpCommand,
+    },
+    /// Volume management (held, site)
+    Volumes {
+        #[command(subcommand)]
+        command: volumes::VolumesCommand,
     },
     /// Client info (fingerprint)
     Client {
@@ -244,6 +251,7 @@ async fn main() {
             )
             .await
         }
+        Command::Volumes { command } => volumes::dispatch(&client, command).await,
         Command::Client { .. } => unreachable!("handled before connect"),
     }
 }
