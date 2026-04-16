@@ -36,6 +36,7 @@ pub(crate) struct DeleteHeldParams {
     pub id: String,
 }
 
+// r[impl actuate.volume.hold.confirm]
 pub(crate) fn delete_held(state: &OiState, params: DeleteHeldParams) -> HandlerResult {
     // confirm_delete_held is async, but OI handlers are sync.
     // Use block_in_place to run the async operation.

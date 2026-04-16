@@ -335,13 +335,19 @@ impl Actuator {
                             .context(ContainerSnafu)?;
                     }
                 } else {
+                    // r[impl actuate.volume.hold]
                     let vol_store = &self.driver.volume_store;
-                    vol_store.remove(&name).await.map_err(|e| {
-                        VolumeWriteSnafu {
-                            path: vol_store.path(&name),
-                        }
-                        .into_error(e)
-                    })?;
+                    if vol_store.exists(&name) {
+                        vol_store
+                            .hold(&name, &instance.app, "removed from app definition")
+                            .await
+                            .map_err(|e| {
+                                VolumeWriteSnafu {
+                                    path: vol_store.path(&name),
+                                }
+                                .into_error(e)
+                            })?;
+                    }
                 }
                 Ok(())
             }
@@ -349,6 +355,39 @@ impl Actuator {
             Resource::Service(_) | Resource::HttpService(_) => Ok(()),
             Resource::Ingress(_) => Ok(()),
         }
+    }
+
+    /// Hold a named volume's data for operator review instead of deleting it.
+    ///
+    /// Used when a volume's storage backend needs migration: the old data is
+    /// held and a fresh volume will be created by a subsequent `start` call.
+    // r[impl actuate.volume.hold]
+    #[tracing::instrument(skip_all, fields(instance = %instance.display_name))]
+    pub async fn hold_volume(
+        &self,
+        instance: &ResourceInstance,
+        resource: &Resource,
+        reason: &str,
+    ) -> Result<(), ActuateError> {
+        if let Resource::Volume(vol) = resource {
+            let name = instance.display_name.clone();
+            let tmpfs = vol.def.lock().tmpfs;
+            if !tmpfs {
+                let vol_store = &self.driver.volume_store;
+                if vol_store.exists(&name) {
+                    vol_store
+                        .hold(&name, &instance.app, reason)
+                        .await
+                        .map_err(|e| {
+                            VolumeWriteSnafu {
+                                path: vol_store.path(&name),
+                            }
+                            .into_error(e)
+                        })?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Compute the spec hash that would be used if this instance were started
