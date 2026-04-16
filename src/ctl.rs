@@ -57,16 +57,50 @@ enum Command {
         #[command(subcommand)]
         command: apps::AppsCommand,
     },
-    /// Operator view (status, faults, shells, forwards, events, users)
-    Op {
-        #[command(subcommand)]
-        command: op::OpCommand,
-    },
     /// Volume management (held, site)
     Volumes {
         #[command(subcommand)]
         command: volumes::VolumesCommand,
     },
+    /// Proxy management
+    Proxy {
+        #[command(subcommand)]
+        command: op::ProxyCommand,
+    },
+    /// DNS resolver management
+    Dns {
+        #[command(subcommand)]
+        command: op::DnsCommand,
+    },
+    /// Shell session management
+    Shells {
+        #[command(subcommand)]
+        command: op::ShellsCommand,
+    },
+    /// Port forward management
+    Forwards {
+        #[command(subcommand)]
+        command: op::ForwardsCommand,
+    },
+    /// Container registry allowlist
+    Registries {
+        #[command(subcommand)]
+        command: op::RegistriesCommand,
+    },
+    /// User/key management
+    User {
+        #[command(subcommand)]
+        command: op::UserCommand,
+    },
+    /// Show server status
+    Status,
+    /// List faults
+    Faults {
+        #[arg(long)]
+        app: Option<String>,
+    },
+    /// Subscribe to event feed (streams JSON to stdout)
+    Events,
     /// Client info (fingerprint)
     Client {
         #[command(subcommand)]
@@ -241,17 +275,30 @@ async fn main() {
 
     match top_cmd {
         Command::Apps { command } => apps::dispatch(&client, command).await,
-        Command::Op { command } => {
-            op::dispatch(
-                &client,
-                command,
-                cli.endpoint,
-                &resolved_fingerprint,
-                &identity,
-            )
-            .await
-        }
         Command::Volumes { command } => volumes::dispatch(&client, command).await,
+        Command::Proxy { command } => op::dispatch_proxy(&client, command).await,
+        Command::Dns { command } => op::dispatch_dns(&client, command).await,
+        Command::Shells { command } => op::dispatch_shells(&client, command).await,
+        Command::Forwards { command } => op::dispatch_forwards(&client, command).await,
+        Command::Registries { command } => op::dispatch_registries(&client, command).await,
+        Command::User { command } => op::dispatch_user(&client, command).await,
+        Command::Status => {
+            print_result(
+                client
+                    .request("/server/status", serde_json::json!({}))
+                    .await,
+            );
+        }
+        Command::Faults { app } => {
+            print_result(
+                client
+                    .request("/faults/list", serde_json::json!({ "app": app }))
+                    .await,
+            );
+        }
+        Command::Events => {
+            op::dispatch_events(cli.endpoint, resolved_fingerprint, &identity).await;
+        }
         Command::Client { .. } => unreachable!("handled before connect"),
     }
 }
