@@ -50,6 +50,12 @@ pub(crate) struct ScaleParams {
 }
 
 fn validate_name(name: &str) -> Result<(), OiError> {
+    if name.starts_with('_') {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            "name must not start with an underscore".to_string(),
+        ));
+    }
     // l[bsl.name]: ^[a-zA-Z][a-zA-Z0-9-]{1,60}[a-zA-Z0-9]$
     let ok = name.len() >= 3
         && name.len() <= 63

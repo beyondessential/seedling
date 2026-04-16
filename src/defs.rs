@@ -28,6 +28,9 @@ pub trait Freezable {
 
 // l[impl bsl.name]
 pub fn validate_name(name: &str) -> Result<(), Box<rhai::EvalAltResult>> {
+    if name.starts_with('_') {
+        return Err("name must not start with an underscore".into());
+    }
     let ok = name.len() >= 3
         && name.len() <= 63
         && name.starts_with(|c: char| c.is_ascii_alphabetic())

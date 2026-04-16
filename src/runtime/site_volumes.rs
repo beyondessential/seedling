@@ -29,9 +29,9 @@ pub fn create(db: &Db, def: &SiteVolumeDef) -> rusqlite::Result<()> {
 }
 
 pub fn list(db: &Db) -> rusqlite::Result<Vec<SiteVolumeDef>> {
-    let mut stmt = db.conn.prepare(
-        "SELECT name, kind, host_path, created_at FROM site_volumes ORDER BY name",
-    )?;
+    let mut stmt = db
+        .conn
+        .prepare("SELECT name, kind, host_path, created_at FROM site_volumes ORDER BY name")?;
     let rows = stmt.query_map([], |row| {
         let name: String = row.get(0)?;
         let kind_str: String = row.get(1)?;
@@ -53,9 +53,9 @@ pub fn list(db: &Db) -> rusqlite::Result<Vec<SiteVolumeDef>> {
 }
 
 pub fn get(db: &Db, name: &str) -> rusqlite::Result<Option<SiteVolumeDef>> {
-    let mut stmt = db.conn.prepare(
-        "SELECT name, kind, host_path, created_at FROM site_volumes WHERE name = ?1",
-    )?;
+    let mut stmt = db
+        .conn
+        .prepare("SELECT name, kind, host_path, created_at FROM site_volumes WHERE name = ?1")?;
     let mut rows = stmt.query_map(params![name], |row| {
         let name: String = row.get(0)?;
         let kind_str: String = row.get(1)?;

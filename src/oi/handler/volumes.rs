@@ -95,8 +95,6 @@ pub(crate) struct CreateSiteVolumeParams {
     pub kind: String,
     /// Required when kind is "bind"
     pub host_path: Option<String>,
-    #[serde(default)]
-    pub read_only: bool,
 }
 
 // r[impl volume.site.lifecycle]
@@ -131,7 +129,6 @@ pub(crate) fn create_site_volume(state: &OiState, params: CreateSiteVolumeParams
     let def = SiteVolumeDef {
         name: params.name.clone(),
         kind: kind.clone(),
-        read_only: params.read_only,
         created_at: jiff::Timestamp::now().to_string(),
     };
 
@@ -185,7 +182,6 @@ pub(crate) fn list_site_volumes(state: &OiState) -> HandlerResult {
                     SiteVolumeKind::Managed => "managed",
                     SiteVolumeKind::Bind { .. } => "bind",
                 },
-                "read_only": v.read_only,
                 "created_at": v.created_at,
             });
             if let SiteVolumeKind::Bind { host_path } = &v.kind {
@@ -258,6 +254,8 @@ pub(crate) struct MapExternalVolumeParams {
     /// Required when target_kind is "exported"
     pub target_app: Option<String>,
     pub target_volume: String,
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 pub(crate) fn map_external_volume(
@@ -276,6 +274,7 @@ pub(crate) fn map_external_volume(
         app: params.app,
         external_name: params.external_name,
         target,
+        read_only: params.read_only,
     };
 
     let db = state.db.lock();
@@ -362,6 +361,7 @@ pub(crate) fn remap_external_volume(
         app: params.app.clone(),
         external_name: params.external_name.clone(),
         target,
+        read_only: params.read_only,
     };
 
     let db = state.db.lock();
@@ -412,6 +412,7 @@ pub(crate) fn list_external_mappings(
             let mut obj = json!({
                 "app": m.app,
                 "external_name": m.external_name,
+                "read_only": m.read_only,
             });
             match &m.target {
                 MappingTarget::Exported {
