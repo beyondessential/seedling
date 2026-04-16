@@ -181,11 +181,20 @@ pub(crate) fn list_site_volumes(state: &OiState) -> HandlerResult {
                 "kind": match &v.kind {
                     SiteVolumeKind::Managed => "managed",
                     SiteVolumeKind::Bind { .. } => "bind",
+                    SiteVolumeKind::Snapshot { .. } => "snapshot",
                 },
                 "created_at": v.created_at,
             });
             if let SiteVolumeKind::Bind { host_path } = &v.kind {
                 obj["host_path"] = json!(host_path);
+            }
+            if let SiteVolumeKind::Snapshot {
+                source_app,
+                source_volume,
+            } = &v.kind
+            {
+                obj["source_app"] = json!(source_app);
+                obj["source_volume"] = json!(source_volume);
             }
             obj
         })

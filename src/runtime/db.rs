@@ -403,6 +403,14 @@ impl Db {
             self.conn
                 .execute_batch("INSERT INTO schema_version VALUES (18);")?;
         }
+        if version < 19 {
+            self.conn.execute_batch(
+                "ALTER TABLE site_volumes ADD COLUMN source_app TEXT;
+                 ALTER TABLE site_volumes ADD COLUMN source_volume TEXT;",
+            )?;
+            self.conn
+                .execute_batch("INSERT INTO schema_version VALUES (19);")?;
+        }
         tx.commit()?;
         Ok(())
     }
