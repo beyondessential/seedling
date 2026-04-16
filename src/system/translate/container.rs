@@ -16,6 +16,10 @@ use crate::{
 };
 
 /// Builds a `ContainerSpec` for one instance of a `Deployment`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "spec building requires all context"
+)]
 pub fn deployment_spec(
     def: &DeploymentDef,
     instance: &ResourceInstance,
@@ -39,6 +43,10 @@ pub fn deployment_spec(
 }
 
 /// Builds a `ContainerSpec` for a `Job` instance.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "spec building requires all context"
+)]
 pub fn job_spec(
     def: &JobDef,
     instance: &ResourceInstance,
@@ -242,14 +250,14 @@ fn spec_from_pod(
         .iter()
         .map(|(path, vm)| {
             // Handle resolved external volumes specially (they carry their own read_only).
-            if let VolumeMount::ExternalVolume(ev) = vm {
-                if let Some(resolved) = external_volumes.get(ev.name.as_ref()) {
-                    return Mount {
-                        source: resolved.source.clone(),
-                        target: path.to_string_lossy().into_owned(),
-                        read_only: resolved.read_only,
-                    };
-                }
+            if let VolumeMount::ExternalVolume(ev) = vm
+                && let Some(resolved) = external_volumes.get(ev.name.as_ref())
+            {
+                return Mount {
+                    source: resolved.source.clone(),
+                    target: path.to_string_lossy().into_owned(),
+                    read_only: resolved.read_only,
+                };
             }
 
             let source = match vm {
