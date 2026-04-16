@@ -404,7 +404,7 @@ impl OiClient {
             cell: Arc::clone(&cell),
         });
 
-        // l[transport.fingerprint-probe]
+        // i[transport.fingerprint-probe]
         let ephemeral = super::keys::ClientIdentity::ephemeral();
         let mut tls_config = TlsClientConfig::builder()
             .dangerous()

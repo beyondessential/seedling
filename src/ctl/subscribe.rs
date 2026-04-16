@@ -8,7 +8,7 @@ use seedling::oi::{
 const RECONNECT_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
-// l[impl ctl.subscribe.reconnect]
+// i[impl ctl.subscribe.reconnect]
 pub async fn subscribe(endpoint: SocketAddr, fingerprint: String, identity: &ClientIdentity) {
     let mut deadline = tokio::time::Instant::now() + RECONNECT_TIMEOUT;
     let mut backoff = Duration::from_secs(1);
@@ -59,7 +59,7 @@ enum SessionOutcome {
     Interrupted,
 }
 
-// l[impl ctl.graceful-shutdown]
+// i[impl ctl.graceful-shutdown]
 async fn run_subscribe_session(client: &OiClient) -> SessionOutcome {
     let req_bytes = serde_json::to_vec(&serde_json::json!({
         "method": "/events/subscribe",

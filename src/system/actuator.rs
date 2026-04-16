@@ -6,14 +6,14 @@ use std::{
 };
 
 use ipnet::Ipv6Net;
-use parking_lot::{Mutex as ParkingMutex, RwLock};
+use parking_lot::Mutex as ParkingMutex;
 use snafu::{IntoError, ResultExt, Snafu};
 
 use crate::{
     defs::resource::{Resource, ResourceKind},
     runtime::{
-        apps::AppRegistry, db::Db, external_volume_mappings, identity::ResourceInstance,
-        registry::InstanceRegistry, site_volumes,
+        db::Db, external_volume_mappings, identity::ResourceInstance, registry::InstanceRegistry,
+        site_volumes,
     },
     system::{
         System,
@@ -117,7 +117,6 @@ pub struct Actuator {
     /// Images currently being pulled or that have exhausted retries.
     pulling: Arc<ParkingMutex<HashMap<String, PullState>>>,
     db: Arc<ParkingMutex<Db>>,
-    app_registry: Arc<RwLock<AppRegistry>>,
 }
 
 impl Actuator {
@@ -127,7 +126,6 @@ impl Actuator {
         registry: Arc<dyn InstanceRegistry>,
         dns_servers: Vec<Ipv6Addr>,
         db: Arc<ParkingMutex<Db>>,
-        app_registry: Arc<RwLock<AppRegistry>>,
     ) -> Self {
         Self {
             driver,
@@ -136,7 +134,6 @@ impl Actuator {
             dns_servers,
             pulling: Arc::new(ParkingMutex::new(HashMap::new())),
             db,
-            app_registry,
         }
     }
 

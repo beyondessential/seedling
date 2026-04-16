@@ -149,7 +149,7 @@ pub async fn open_shell(client: &OiClient, app: String, name: String) -> i32 {
     let mut stderr_done = false;
     let mut shutdown_deadline: Option<Instant> = None;
 
-    // l[impl ctl.graceful-shutdown]
+    // i[impl ctl.graceful-shutdown]
     let exit_code = loop {
         tokio::select! {
             // stdin: local terminal → container

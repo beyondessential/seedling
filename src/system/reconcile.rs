@@ -181,7 +181,6 @@ impl Reconciler {
             Arc::clone(&registry),
             dns_servers,
             Arc::clone(&db),
-            Arc::clone(&app_registry),
         );
         Self {
             driver,

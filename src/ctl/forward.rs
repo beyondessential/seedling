@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use seedling::oi::client::OiClient;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-// l[impl ctl.forward.stats]
+// i[impl ctl.forward.stats]
 struct ForwardStats {
     bytes_to_service: AtomicU64,
     bytes_from_service: AtomicU64,
