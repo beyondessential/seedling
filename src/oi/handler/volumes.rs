@@ -248,3 +248,218 @@ pub(crate) fn delete_site_volume(state: &OiState, params: DeleteSiteVolumeParams
 
     Ok(json!({ "deleted": true }))
 }
+
+#[derive(Deserialize)]
+pub(crate) struct MapExternalVolumeParams {
+    pub app: String,
+    pub external_name: String,
+    /// "exported" or "site"
+    pub target_kind: String,
+    /// Required when target_kind is "exported"
+    pub target_app: Option<String>,
+    pub target_volume: String,
+}
+
+pub(crate) fn map_external_volume(
+    state: &OiState,
+    params: MapExternalVolumeParams,
+) -> HandlerResult {
+    use crate::runtime::external_volume_mappings::{self, ExternalVolumeMapping};
+
+    let target = parse_mapping_target(
+        &params.target_kind,
+        params.target_app.as_deref(),
+        &params.target_volume,
+    )?;
+
+    let mapping = ExternalVolumeMapping {
+        app: params.app,
+        external_name: params.external_name,
+        target,
+    };
+
+    let db = state.db.lock();
+    external_volume_mappings::create(&db, &mapping).map_err(|e| {
+        OiError::new(
+            ErrorCode::Internal,
+            format!("failed to create mapping: {e}"),
+        )
+    })?;
+
+    state.tick_notify.notify_one();
+    Ok(json!({ "mapped": true }))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct UnmapExternalVolumeParams {
+    pub app: String,
+    pub external_name: String,
+}
+
+pub(crate) fn unmap_external_volume(
+    state: &OiState,
+    params: UnmapExternalVolumeParams,
+) -> HandlerResult {
+    use crate::runtime::external_volume_mappings;
+
+    // Check if the app is installed (volume potentially in use).
+    {
+        let reg = state.registry.read();
+        if let Some(entry) = reg.get(&params.app) {
+            let def = entry.app.def.lock();
+            let has_volume = def.resources.keys().any(|id| {
+                id.kind == crate::defs::resource::ResourceKind::ExternalVolume
+                    && id.name.as_str() == params.external_name
+            });
+            if has_volume {
+                return Err(OiError::new(
+                    ErrorCode::RequirementsInvalid,
+                    format!(
+                        "external volume {:?} is declared by app {:?}; \
+                         uninstall the app or remove the volume reference first",
+                        params.external_name, params.app
+                    ),
+                ));
+            }
+        }
+    }
+
+    let db = state.db.lock();
+    let deleted = external_volume_mappings::delete(&db, &params.app, &params.external_name)
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("failed to delete mapping: {e}"),
+            )
+        })?;
+
+    if !deleted {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!(
+                "no mapping for {:?} in app {:?}",
+                params.external_name, params.app
+            ),
+        ));
+    }
+
+    Ok(json!({ "unmapped": true }))
+}
+
+pub(crate) fn remap_external_volume(
+    state: &OiState,
+    params: MapExternalVolumeParams,
+) -> HandlerResult {
+    use crate::runtime::external_volume_mappings::{self, ExternalVolumeMapping};
+
+    let target = parse_mapping_target(
+        &params.target_kind,
+        params.target_app.as_deref(),
+        &params.target_volume,
+    )?;
+
+    let mapping = ExternalVolumeMapping {
+        app: params.app.clone(),
+        external_name: params.external_name.clone(),
+        target,
+    };
+
+    let db = state.db.lock();
+    let updated = external_volume_mappings::update(&db, &mapping).map_err(|e| {
+        OiError::new(
+            ErrorCode::Internal,
+            format!("failed to update mapping: {e}"),
+        )
+    })?;
+
+    if !updated {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!(
+                "no existing mapping for {:?} in app {:?}",
+                params.external_name, params.app
+            ),
+        ));
+    }
+
+    // Trigger reconciliation so containers pick up the new mapping.
+    state.tick_notify.notify_one();
+    Ok(json!({ "remapped": true }))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ListExternalMappingsParams {
+    pub app: Option<String>,
+}
+
+pub(crate) fn list_external_mappings(
+    state: &OiState,
+    params: ListExternalMappingsParams,
+) -> HandlerResult {
+    use crate::runtime::external_volume_mappings::{self, MappingTarget};
+
+    let db = state.db.lock();
+    let mappings = if let Some(app) = &params.app {
+        external_volume_mappings::list_for_app(&db, app)
+    } else {
+        external_volume_mappings::list_all(&db)
+    }
+    .map_err(|e| OiError::new(ErrorCode::Internal, format!("failed to list mappings: {e}")))?;
+
+    let items: Vec<_> = mappings
+        .iter()
+        .map(|m| {
+            let mut obj = json!({
+                "app": m.app,
+                "external_name": m.external_name,
+            });
+            match &m.target {
+                MappingTarget::Exported {
+                    target_app,
+                    target_volume,
+                } => {
+                    obj["target_kind"] = json!("exported");
+                    obj["target_app"] = json!(target_app);
+                    obj["target_volume"] = json!(target_volume);
+                }
+                MappingTarget::Site { target_volume } => {
+                    obj["target_kind"] = json!("site");
+                    obj["target_volume"] = json!(target_volume);
+                }
+            }
+            obj
+        })
+        .collect();
+
+    Ok(json!(items))
+}
+
+fn parse_mapping_target(
+    kind: &str,
+    target_app: Option<&str>,
+    target_volume: &str,
+) -> Result<crate::runtime::external_volume_mappings::MappingTarget, OiError> {
+    use crate::runtime::external_volume_mappings::MappingTarget;
+
+    match kind {
+        "exported" => {
+            let app = target_app.ok_or_else(|| {
+                OiError::new(
+                    ErrorCode::RequirementsInvalid,
+                    "target_app is required for exported volume mappings".to_string(),
+                )
+            })?;
+            Ok(MappingTarget::Exported {
+                target_app: app.to_owned(),
+                target_volume: target_volume.to_owned(),
+            })
+        }
+        "site" => Ok(MappingTarget::Site {
+            target_volume: target_volume.to_owned(),
+        }),
+        other => Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!("invalid target_kind: {other:?}, expected \"exported\" or \"site\""),
+        )),
+    }
+}

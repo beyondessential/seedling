@@ -110,6 +110,16 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8]) -> HandlerResult {
         "/volumes/site/create" => volumes::create_site_volume(state, parse_params(req.params)?),
         "/volumes/site/list" => volumes::list_site_volumes(state),
         "/volumes/site/delete" => volumes::delete_site_volume(state, parse_params(req.params)?),
+        "/volumes/external/map" => volumes::map_external_volume(state, parse_params(req.params)?),
+        "/volumes/external/unmap" => {
+            volumes::unmap_external_volume(state, parse_params(req.params)?)
+        }
+        "/volumes/external/remap" => {
+            volumes::remap_external_volume(state, parse_params(req.params)?)
+        }
+        "/volumes/external/list" => {
+            volumes::list_external_mappings(state, parse_params(req.params)?)
+        }
         other => Err(OiError::not_found(format!("unknown method: {other}"))),
     };
 
