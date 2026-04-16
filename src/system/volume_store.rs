@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 /// Manages host-backed storage for named volumes.
 ///
 /// Named non-tmpfs volumes are stored as directories (or BTRFS subvolumes)
@@ -57,6 +59,128 @@ impl VolumeStore {
             tokio::fs::remove_dir_all(&path).await
         }
     }
+
+    fn held_dir(&self) -> PathBuf {
+        self.volumes_dir
+            .parent()
+            .expect("volumes_dir has a parent")
+            .join("held-volumes")
+    }
+
+    // r[impl actuate.volume.hold]
+    pub async fn hold(
+        &self,
+        name: &str,
+        app: &str,
+        reason: &str,
+    ) -> std::io::Result<HeldVolumeMeta> {
+        let src = self.path(name);
+        if !src.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("volume {name} does not exist"),
+            ));
+        }
+
+        let held_dir = self.held_dir();
+        tokio::fs::create_dir_all(&held_dir).await?;
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let dest = held_dir.join(&id);
+        tokio::fs::rename(&src, &dest).await?;
+
+        let meta = HeldVolumeMeta {
+            id: id.clone(),
+            app: app.to_owned(),
+            volume_name: name.to_owned(),
+            display_name: name.to_owned(),
+            reason: reason.to_owned(),
+            held_at: jiff::Timestamp::now().to_string(),
+            path: dest,
+        };
+
+        let meta_path = held_dir.join(format!("{id}.meta.json"));
+        let json = serde_json::to_string_pretty(&meta)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        tokio::fs::write(&meta_path, json).await?;
+
+        tracing::info!(
+            app = app,
+            volume = name,
+            held_id = %id,
+            reason = reason,
+            "volume held for operator review"
+        );
+
+        Ok(meta)
+    }
+
+    pub fn list_held(&self) -> std::io::Result<Vec<HeldVolumeMeta>> {
+        let held_dir = self.held_dir();
+        if !held_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut results = Vec::new();
+        for entry in std::fs::read_dir(&held_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                let data = std::fs::read_to_string(&path)?;
+                if let Ok(meta) = serde_json::from_str::<HeldVolumeMeta>(&data) {
+                    results.push(meta);
+                }
+            }
+        }
+        Ok(results)
+    }
+
+    pub async fn confirm_delete_held(&self, id: &str) -> std::io::Result<()> {
+        let held_dir = self.held_dir();
+        let data_path = held_dir.join(id);
+        let meta_path = held_dir.join(format!("{id}.meta.json"));
+
+        if !meta_path.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("no held volume with id {id}"),
+            ));
+        }
+
+        // Remove the data (could be a BTRFS subvolume or plain directory).
+        if data_path.exists() {
+            if is_btrfs_subvolume(&data_path).await {
+                btrfs_delete_subvolume(&data_path).await?;
+            } else {
+                tokio::fs::remove_dir_all(&data_path).await?;
+            }
+        }
+
+        tokio::fs::remove_file(&meta_path).await?;
+
+        tracing::info!(held_id = %id, "held volume deleted by operator");
+        Ok(())
+    }
+
+    pub async fn is_backend_match(&self, name: &str) -> bool {
+        let path = self.path(name);
+        if !path.exists() {
+            return true;
+        }
+        let is_subvol = is_btrfs_subvolume(&path).await;
+        is_subvol == self.use_btrfs
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeldVolumeMeta {
+    pub id: String,
+    pub app: String,
+    pub volume_name: String,
+    pub display_name: String,
+    pub reason: String,
+    pub held_at: String,
+    pub path: PathBuf,
 }
 
 async fn is_btrfs_subvolume(path: &Path) -> bool {

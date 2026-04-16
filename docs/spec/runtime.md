@@ -391,6 +391,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[observe.volume]
 > For Volume resource instances, the runtime must observe whether the named volume exists.
 
+> r[observe.volume.backend-mismatch]
+> When observing a named non-tmpfs volume, if the volume exists but its storage backend does not match the current configuration (e.g. a plain directory exists but BTRFS subvolumes are required, or vice versa), the observer must report this as a backend mismatch rather than as a present volume.
+
 > r[observe.ingress]
 > For Ingress resource instances, the runtime must observe whether the proxy is reachable.
 
@@ -445,6 +448,12 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > r[actuate.volume.btrfs]
 > When the data directory resides on a BTRFS filesystem, named non-tmpfs volumes must be created as BTRFS subvolumes.
+
+> r[actuate.volume.hold]
+> When a named non-tmpfs volume would be removed — either because the volume name has been removed from the app definition, or because the volume's storage backend cannot be updated in-place — the runtime must preserve the volume's data in a held state instead of deleting it. The held volume remains linked to the originating app context. If the app still requires a volume under the same name, a fresh volume is created and the old one is held alongside it.
+
+> r[actuate.volume.hold.confirm]
+> An operator must explicitly confirm deletion of a held volume before its data is removed.
 
 > r[actuate.volume.stop]
 > Stopping a Volume instance must remove the named volume.
