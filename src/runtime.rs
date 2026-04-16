@@ -16,6 +16,7 @@ pub mod registries;
 pub mod registry;
 pub mod scaling;
 pub mod scheduler;
+pub mod site_volumes;
 
 pub use apps::{AppEntry, AppPhase, AppRegistry, AppStatus, ScriptError, transition_phase};
 pub use barrier::oracle::{DbWorldOracle, TestWorldOracle, WorldStateOracle};

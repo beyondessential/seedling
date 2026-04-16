@@ -169,6 +169,36 @@ impl VolumeStore {
         let is_subvol = is_btrfs_subvolume(&path).await;
         is_subvol == self.use_btrfs
     }
+
+    pub fn site_path(&self, name: &str) -> PathBuf {
+        self.volumes_dir.join(format!("site-{name}"))
+    }
+
+    pub fn site_exists(&self, name: &str) -> bool {
+        self.site_path(name).exists()
+    }
+
+    // r[impl volume.site.lifecycle]
+    pub async fn create_site(&self, name: &str) -> std::io::Result<()> {
+        let path = self.site_path(name);
+        if self.use_btrfs {
+            btrfs_create_subvolume(&path).await
+        } else {
+            tokio::fs::create_dir_all(&path).await
+        }
+    }
+
+    pub async fn remove_site(&self, name: &str) -> std::io::Result<()> {
+        let path = self.site_path(name);
+        if !path.exists() {
+            return Ok(());
+        }
+        if is_btrfs_subvolume(&path).await {
+            btrfs_delete_subvolume(&path).await
+        } else {
+            tokio::fs::remove_dir_all(&path).await
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

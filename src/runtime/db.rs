@@ -370,7 +370,6 @@ impl Db {
                 .execute_batch("INSERT INTO schema_version VALUES (15);")?;
         }
 
-
         if version < 16 {
             self.conn.execute_batch(
                 "CREATE TABLE IF NOT EXISTS site_volumes (

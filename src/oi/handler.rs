@@ -107,6 +107,9 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8]) -> HandlerResult {
         "/volumes/held/list" => volumes::list_held(state),
         "/volumes/held/delete" => volumes::delete_held(state, parse_params(req.params)?),
         "/volumes/exported/list" => volumes::list_exported(state),
+        "/volumes/site/create" => volumes::create_site_volume(state, parse_params(req.params)?),
+        "/volumes/site/list" => volumes::list_site_volumes(state),
+        "/volumes/site/delete" => volumes::delete_site_volume(state, parse_params(req.params)?),
         other => Err(OiError::not_found(format!("unknown method: {other}"))),
     };
 
