@@ -270,11 +270,10 @@ impl AppRegistry {
         let installed = matches!(*phase, AppPhase::Installed | AppPhase::Uninstalling);
         let uninstalling = matches!(*phase, AppPhase::Uninstalling);
         db.conn.execute(
-            "INSERT OR REPLACE INTO registered_apps (name, script, installed, uninstalling, current_version_id) \
+            "INSERT OR REPLACE INTO registered_apps (name, installed, uninstalling, current_version_id) \
              VALUES (?1, ?2, ?3, ?4, ?5)",
             rusqlite::params![
                 entry.name,
-                entry.script,
                 installed as i64,
                 uninstalling as i64,
                 entry.version_id
