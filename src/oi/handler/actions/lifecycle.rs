@@ -114,7 +114,14 @@ fn run_operation_loop(
             OperationResult::Completed => {
                 let db = dbs.db.lock();
                 faults::clear_faults_by_kind(&db, app_name, "operation_failed").ok();
-                events::operation_completed(event_tx, app_name, action_name, &operation_id.0);
+                events::operation_completed(
+                    event_tx,
+                    app_name,
+                    action_name,
+                    &operation_id.0,
+                    source_generation,
+                    target_generation,
+                );
                 return true;
             }
             OperationResult::Failed(e) => {
@@ -134,6 +141,8 @@ fn run_operation_loop(
                     app_name,
                     action_name,
                     &operation_id.0,
+                    source_generation,
+                    target_generation,
                     &e.to_string(),
                 );
                 return false;
@@ -318,7 +327,14 @@ pub(crate) fn spawn_accepted_operation(
     let is_install = action_name == "install";
 
     tokio::spawn(async move {
-        events::operation_started(&event_tx, &app_name, &action_name, &operation_id.0);
+        events::operation_started(
+            &event_tx,
+            &app_name,
+            &action_name,
+            &operation_id.0,
+            source_generation,
+            target_generation,
+        );
         let operation_id_str = operation_id.0.clone();
 
         // --- Run the operation on a blocking thread ---

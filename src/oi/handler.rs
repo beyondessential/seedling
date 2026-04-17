@@ -66,6 +66,8 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8]) -> HandlerResult {
         "/apps/scale" => apps::scale_app(state, parse_params(req.params)?),
         // i[app.script]
         "/apps/script" => apps::get_app_script(state, parse_params(req.params)?),
+        // i[generation.history]
+        "/apps/generations" => apps::list_generations(state, parse_params(req.params)?),
         // i[param.set]
         "/apps/params/set" => params::set_param(state, parse_params(req.params)?),
         // i[param.unset]

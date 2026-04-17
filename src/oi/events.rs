@@ -42,23 +42,32 @@ pub enum OiEvent {
         generation: u64,
         previous_generation: u64,
     },
+    // r[impl operation.lifecycle.generations]
     OperationStarted {
         timestamp: Timestamp,
         app: String,
         action_name: String,
         operation_id: String,
+        source_generation: u64,
+        target_generation: u64,
     },
+    // r[impl operation.lifecycle.generations]
     OperationCompleted {
         timestamp: Timestamp,
         app: String,
         action_name: String,
         operation_id: String,
+        source_generation: u64,
+        target_generation: u64,
     },
+    // r[impl operation.lifecycle.generations]
     OperationFailed {
         timestamp: Timestamp,
         app: String,
         action_name: String,
         operation_id: String,
+        source_generation: u64,
+        target_generation: u64,
         error: String,
     },
     FaultFiled {
@@ -208,7 +217,14 @@ pub fn param_unset(
     );
 }
 
-pub fn operation_started(tx: &EventSender, app: &str, action_name: &str, operation_id: &str) {
+pub fn operation_started(
+    tx: &EventSender,
+    app: &str,
+    action_name: &str,
+    operation_id: &str,
+    source_generation: u64,
+    target_generation: u64,
+) {
     emit(
         tx,
         OiEvent::OperationStarted {
@@ -216,11 +232,20 @@ pub fn operation_started(tx: &EventSender, app: &str, action_name: &str, operati
             app: app.to_owned(),
             action_name: action_name.to_owned(),
             operation_id: operation_id.to_owned(),
+            source_generation,
+            target_generation,
         },
     );
 }
 
-pub fn operation_completed(tx: &EventSender, app: &str, action_name: &str, operation_id: &str) {
+pub fn operation_completed(
+    tx: &EventSender,
+    app: &str,
+    action_name: &str,
+    operation_id: &str,
+    source_generation: u64,
+    target_generation: u64,
+) {
     emit(
         tx,
         OiEvent::OperationCompleted {
@@ -228,15 +253,23 @@ pub fn operation_completed(tx: &EventSender, app: &str, action_name: &str, opera
             app: app.to_owned(),
             action_name: action_name.to_owned(),
             operation_id: operation_id.to_owned(),
+            source_generation,
+            target_generation,
         },
     );
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors all fields of OiEvent::OperationFailed"
+)]
 pub fn operation_failed(
     tx: &EventSender,
     app: &str,
     action_name: &str,
     operation_id: &str,
+    source_generation: u64,
+    target_generation: u64,
     error: &str,
 ) {
     emit(
@@ -246,6 +279,8 @@ pub fn operation_failed(
             app: app.to_owned(),
             action_name: action_name.to_owned(),
             operation_id: operation_id.to_owned(),
+            source_generation,
+            target_generation,
             error: error.to_owned(),
         },
     );

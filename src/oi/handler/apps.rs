@@ -43,6 +43,15 @@ pub(crate) struct GetScriptParams {
 }
 
 #[derive(Deserialize)]
+pub(crate) struct ListGenerationsParams {
+    pub app: String,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub before: Option<u64>,
+}
+
+#[derive(Deserialize)]
 pub(crate) struct ScaleParams {
     pub app: String,
     pub deployment: String,
@@ -420,6 +429,96 @@ pub(crate) fn get_app_script(state: &OiState, params: GetScriptParams) -> Handle
     };
 
     Ok(json!({ "script": script, "generation": generation }))
+}
+
+// i[generation.history]
+pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -> HandlerResult {
+    let name = params.app.as_str();
+    {
+        let reg = state.registry.read();
+        if !reg.is_registered(name) {
+            return Err(OiError::not_found(format!("app not found: {name}")));
+        }
+    }
+
+    let limit = params.limit.unwrap_or(50).clamp(1, 200);
+    let db = state.db.lock();
+    let entries = crate::runtime::generations::list(&db, name, params.before, limit)
+        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
+
+    // Determine for each entry whether the script content changed relative to
+    // the immediately preceding generation (informational, per i[generation.history]).
+    let mut script_changed_for: std::collections::BTreeMap<u64, bool> =
+        std::collections::BTreeMap::new();
+    for entry in &entries {
+        let prior = if entry.generation > 1 {
+            crate::runtime::generations::script_hash_at(&db, name, entry.generation - 1).ok()
+        } else {
+            None
+        };
+        let changed = matches!(
+            entry.kind,
+            crate::runtime::generations::Kind::Register
+                | crate::runtime::generations::Kind::ScriptUpdate
+        ) || prior.as_deref() != Some(entry.script_hash.as_str());
+        script_changed_for.insert(entry.generation, changed);
+    }
+
+    let result: Vec<Value> = entries
+        .into_iter()
+        .map(|e| {
+            let mut obj = serde_json::Map::new();
+            obj.insert("generation".into(), json!(e.generation));
+            obj.insert("timestamp".into(), json!(e.created_at));
+            obj.insert("kind".into(), json!(e.kind.as_str()));
+            if let Some(name) = &e.param_name {
+                obj.insert("param_name".into(), json!(name));
+            }
+            if matches!(
+                e.kind,
+                crate::runtime::generations::Kind::ParamSet
+                    | crate::runtime::generations::Kind::ParamUnset
+            ) {
+                obj.insert(
+                    "previous_value".into(),
+                    e.previous_value.map_or(Value::Null, Value::String),
+                );
+                obj.insert(
+                    "new_value".into(),
+                    e.new_value.map_or(Value::Null, Value::String),
+                );
+            }
+            obj.insert(
+                "script_changed".into(),
+                json!(
+                    script_changed_for
+                        .get(&e.generation)
+                        .copied()
+                        .unwrap_or(false)
+                ),
+            );
+            obj.insert(
+                "operation_id".into(),
+                e.operation_id.map_or(Value::Null, Value::String),
+            );
+            obj.insert(
+                "outcome".into(),
+                e.outcome
+                    .as_ref()
+                    .map_or(Value::Null, |o| json!(o.as_str())),
+            );
+            if matches!(
+                e.outcome,
+                Some(crate::runtime::generations::Outcome::Failed)
+            ) && let Some(err) = e.outcome_error
+            {
+                obj.insert("error".into(), json!(err));
+            }
+            Value::Object(obj)
+        })
+        .collect();
+
+    Ok(json!(result))
 }
 
 // i[app.register]
