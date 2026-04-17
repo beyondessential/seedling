@@ -167,9 +167,21 @@ pub(crate) fn invoke_install(state: &Arc<OiState>, params: InvokeInstallParams) 
         Some(filled)
     };
 
+    // Operator-invoked install: source and target generation are both the
+    // current generation (install does not produce a new generation).
+    let current_generation = {
+        let reg = state.registry.read();
+        reg.get(app_name).map(|e| e.current_generation).unwrap_or(0)
+    };
     let (result, op_id_opt) = {
         let mut sched = state.scheduler.lock();
-        let result = sched.request(app_name, "install", install_reqs.clone());
+        let result = sched.request(
+            app_name,
+            "install",
+            install_reqs.clone(),
+            current_generation,
+            current_generation,
+        );
         let op_id = if matches!(result, ScheduleResult::Accepted) {
             sched.active().map(|a| a.operation_id.clone())
         } else {
@@ -187,6 +199,8 @@ pub(crate) fn invoke_install(state: &Arc<OiState>, params: InvokeInstallParams) 
                     "install".to_owned(),
                     op_id,
                     install_reqs,
+                    current_generation,
+                    current_generation,
                 );
             }
             tracing::info!(app = %app_name, schedule = "accepted", "invoke_install");

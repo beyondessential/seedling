@@ -530,6 +530,19 @@ impl Db {
             self.conn
                 .execute_batch("INSERT INTO schema_version VALUES (20);")?;
         }
+        if version < 21 {
+            // r[impl operation.lifecycle.generations]
+            // Plumb source/target generation through the operation record so
+            // replay can reconstruct the right AppDef and `old`.
+            self.conn.execute_batch(
+                "ALTER TABLE current_operation
+                    ADD COLUMN source_generation INTEGER NOT NULL DEFAULT 0;
+                 ALTER TABLE current_operation
+                    ADD COLUMN target_generation INTEGER NOT NULL DEFAULT 0;",
+            )?;
+            self.conn
+                .execute_batch("INSERT INTO schema_version VALUES (21);")?;
+        }
         tx.commit()?;
         Ok(())
     }

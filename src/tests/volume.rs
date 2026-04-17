@@ -250,6 +250,8 @@ fn run_action_with_volumes(
             install_requirements: None,
             is_shell: false,
             db: None,
+            source_generation: 0,
+            target_generation: 0,
         },
         &mut scope,
     );
@@ -471,6 +473,8 @@ fn frozen_static_volume_cannot_be_modified_in_action() {
             install_requirements: None,
             is_shell: false,
             db: None,
+            source_generation: 0,
+            target_generation: 0,
         },
         &mut scope,
     );

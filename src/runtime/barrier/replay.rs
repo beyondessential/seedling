@@ -195,6 +195,15 @@ pub struct OperationContext<'a, W: WorldStateOracle + 'static> {
     pub is_shell: bool,
     /// DB handle for persisting dynamic resources created during the operation.
     pub db: Option<Arc<parking_lot::Mutex<Db>>>,
+    /// Generation that was current immediately before the change that
+    /// triggered this operation. Used to materialise `old` for `on_change`
+    /// handlers.
+    // r[impl operation.lifecycle.generations]
+    pub source_generation: u64,
+    /// Generation produced by the change that triggered this operation, or
+    /// the current generation at dispatch for operator-invoked actions.
+    // r[impl operation.lifecycle.generations]
+    pub target_generation: u64,
 }
 
 /// The `log` carries committed entries across calls; pass the same `log`
@@ -219,6 +228,8 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         install_requirements,
         is_shell: _,
         db,
+        source_generation: _,
+        target_generation: _,
     } = op;
 
     // Save the operation ID string before it is moved into the replay context.

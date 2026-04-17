@@ -64,6 +64,8 @@ fn barrier_satisfied_on_first_pass() {
             install_requirements: None,
             is_shell: false,
             db: None,
+            source_generation: 0,
+            target_generation: 0,
         },
         &mut scope,
     );
@@ -105,6 +107,8 @@ fn barrier_suspends_then_resumes() {
             install_requirements: None,
             is_shell: false,
             db: None,
+            source_generation: 0,
+            target_generation: 0,
         },
         &mut scope,
     );
@@ -129,6 +133,8 @@ fn barrier_suspends_then_resumes() {
             install_requirements: None,
             is_shell: false,
             db: None,
+            source_generation: 0,
+            target_generation: 0,
         },
         &mut scope,
     );
@@ -172,6 +178,8 @@ fn sequential_barriers() {
             install_requirements: None,
             is_shell: false,
             db: None,
+            source_generation: 0,
+            target_generation: 0,
         },
         &mut scope,
     );
@@ -195,6 +203,8 @@ fn sequential_barriers() {
             install_requirements: None,
             is_shell: false,
             db: None,
+            source_generation: 0,
+            target_generation: 0,
         },
         &mut scope,
     );
@@ -218,6 +228,8 @@ fn sequential_barriers() {
             install_requirements: None,
             is_shell: false,
             db: None,
+            source_generation: 0,
+            target_generation: 0,
         },
         &mut scope,
     );
@@ -257,6 +269,8 @@ fn barrier_deadline_zero_expires_on_second_pass() {
             install_requirements: None,
             is_shell: false,
             db: None,
+            source_generation: 0,
+            target_generation: 0,
         },
         &mut scope,
     );
@@ -278,6 +292,8 @@ fn barrier_deadline_zero_expires_on_second_pass() {
             install_requirements: None,
             is_shell: false,
             db: None,
+            source_generation: 0,
+            target_generation: 0,
         },
         &mut scope,
     );
@@ -321,6 +337,8 @@ fn replay_idempotency() {
             install_requirements: None,
             is_shell: false,
             db: None,
+            source_generation: 0,
+            target_generation: 0,
         },
         &mut scope,
     );
@@ -344,6 +362,8 @@ fn replay_idempotency() {
             install_requirements: None,
             is_shell: false,
             db: None,
+            source_generation: 0,
+            target_generation: 0,
         },
         &mut scope,
     );
@@ -401,6 +421,8 @@ fn rt_stop_acts_as_barrier() {
             install_requirements: None,
             is_shell: false,
             db: None,
+            source_generation: 0,
+            target_generation: 0,
         },
         &mut scope,
     );
@@ -424,6 +446,8 @@ fn rt_stop_acts_as_barrier() {
             install_requirements: None,
             is_shell: false,
             db: None,
+            source_generation: 0,
+            target_generation: 0,
         },
         &mut scope,
     );

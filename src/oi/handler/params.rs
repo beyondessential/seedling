@@ -109,8 +109,9 @@ fn schedule_on_change(
     if !(has_on_change && is_installed) {
         return Ok("not_scheduled");
     }
+    let source_generation = generation.saturating_sub(1);
     let mut sched = state.scheduler.lock();
-    let result = sched.request(app, param_name, None);
+    let result = sched.request(app, param_name, None, source_generation, generation);
     match result {
         ScheduleResult::Accepted => {
             // Attach the operation to the generation history entry so the

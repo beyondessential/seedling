@@ -448,19 +448,30 @@ pub fn load_action_log(
 /// Persists the identity of the one in-progress lifecycle operation so that
 /// a runtime restart can detect it and replay rather than starting fresh.
 // r[impl operation.lifecycle.events]
+// r[impl operation.lifecycle.generations]
 // r[impl barrier.replay]
 pub struct CurrentOperation {
     pub operation_id: OperationId,
     pub app: String,
     pub action_name: String,
+    pub source_generation: u64,
+    pub target_generation: u64,
 }
 
 // r[impl operation.lifecycle.events]
+// r[impl operation.lifecycle.generations]
 pub fn save_current_operation(db: &Db, op: &CurrentOperation) -> rusqlite::Result<()> {
     db.conn.execute(
-        "INSERT OR REPLACE INTO current_operation (singleton, operation_id, app, action_name)
-         VALUES (1, ?1, ?2, ?3)",
-        params![op.operation_id.0, op.app, op.action_name],
+        "INSERT OR REPLACE INTO current_operation
+            (singleton, operation_id, app, action_name, source_generation, target_generation)
+         VALUES (1, ?1, ?2, ?3, ?4, ?5)",
+        params![
+            op.operation_id.0,
+            op.app,
+            op.action_name,
+            op.source_generation as i64,
+            op.target_generation as i64,
+        ],
     )?;
     Ok(())
 }
@@ -468,13 +479,16 @@ pub fn save_current_operation(db: &Db, op: &CurrentOperation) -> rusqlite::Resul
 // r[impl barrier.replay]
 pub fn load_current_operation(db: &Db) -> rusqlite::Result<Option<CurrentOperation>> {
     let result = db.conn.query_row(
-        "SELECT operation_id, app, action_name FROM current_operation WHERE singleton = 1",
+        "SELECT operation_id, app, action_name, source_generation, target_generation
+         FROM current_operation WHERE singleton = 1",
         [],
         |row| {
             Ok(CurrentOperation {
                 operation_id: OperationId(row.get(0)?),
                 app: row.get(1)?,
                 action_name: row.get(2)?,
+                source_generation: row.get::<_, i64>(3)? as u64,
+                target_generation: row.get::<_, i64>(4)? as u64,
             })
         },
     );

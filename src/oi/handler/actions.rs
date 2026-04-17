@@ -60,9 +60,21 @@ pub(crate) fn invoke_action(state: &Arc<OiState>, params: InvokeActionParams) ->
         }
     }
 
+    // Operator-invoked action: source and target generation are equal to the
+    // app's current generation at dispatch.
+    let current_generation = {
+        let reg = state.registry.read();
+        reg.get(app_name).map(|e| e.current_generation).unwrap_or(0)
+    };
     let (result, op_id_opt) = {
         let mut sched = state.scheduler.lock();
-        let result = sched.request(app_name, action_name, None);
+        let result = sched.request(
+            app_name,
+            action_name,
+            None,
+            current_generation,
+            current_generation,
+        );
         let op_id = if matches!(result, ScheduleResult::Accepted) {
             sched.active().map(|a| a.operation_id.clone())
         } else {
@@ -80,6 +92,8 @@ pub(crate) fn invoke_action(state: &Arc<OiState>, params: InvokeActionParams) ->
                     action_name.to_owned(),
                     op_id,
                     None,
+                    current_generation,
+                    current_generation,
                 );
             }
             tracing::info!(app = %app_name, action = %action_name, schedule = "accepted", "invoke_action");

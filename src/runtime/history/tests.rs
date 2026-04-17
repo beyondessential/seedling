@@ -21,12 +21,16 @@ fn save_and_load_current_operation() {
         operation_id: OperationId("test-op-id".into()),
         app: "myapp".into(),
         action_name: "start".into(),
+        source_generation: 3,
+        target_generation: 4,
     };
     save_current_operation(&db, &op).unwrap();
     let loaded = load_current_operation(&db).unwrap().unwrap();
     assert_eq!(loaded.operation_id.0, "test-op-id");
     assert_eq!(loaded.app, "myapp");
     assert_eq!(loaded.action_name, "start");
+    assert_eq!(loaded.source_generation, 3);
+    assert_eq!(loaded.target_generation, 4);
 }
 
 #[test]
@@ -42,6 +46,8 @@ fn clear_current_operation_removes_record() {
         operation_id: OperationId("op-1".into()),
         app: "app".into(),
         action_name: "start".into(),
+        source_generation: 1,
+        target_generation: 1,
     };
     save_current_operation(&db, &op).unwrap();
     clear_current_operation(&db).unwrap();
@@ -55,11 +61,15 @@ fn save_overwrites_previous_current_operation() {
         operation_id: OperationId("op-1".into()),
         app: "app".into(),
         action_name: "start".into(),
+        source_generation: 1,
+        target_generation: 1,
     };
     let op2 = CurrentOperation {
         operation_id: OperationId("op-2".into()),
         app: "app".into(),
         action_name: "stop".into(),
+        source_generation: 1,
+        target_generation: 1,
     };
     save_current_operation(&db, &op1).unwrap();
     save_current_operation(&db, &op2).unwrap();

@@ -16,6 +16,15 @@ pub struct ActiveOperation {
     pub app: String,
     pub action: String,
     pub operation_id: OperationId,
+    /// Generation that was current immediately before the change that
+    /// triggered this operation. Equal to target for operations not
+    /// triggered by a generation bump.
+    // r[impl operation.lifecycle.generations]
+    pub source_generation: u64,
+    /// Generation produced by the change that triggered this operation, or
+    /// the current generation at dispatch for operator-invoked actions.
+    // r[impl operation.lifecycle.generations]
+    pub target_generation: u64,
 }
 
 // r[impl operation.lifecycle]
@@ -25,6 +34,10 @@ pub struct QueuedOperation {
     pub action: String,
     pub operation_id: OperationId,
     pub install_requirements: Option<BTreeMap<String, String>>,
+    // r[impl operation.lifecycle.generations]
+    pub source_generation: u64,
+    // r[impl operation.lifecycle.generations]
+    pub target_generation: u64,
 }
 
 // r[impl operation.lifecycle.single]
@@ -115,6 +128,8 @@ impl Scheduler {
         app: &str,
         action: &str,
         install_requirements: Option<BTreeMap<String, String>>,
+        source_generation: u64,
+        target_generation: u64,
     ) -> ScheduleResult {
         match &self.active {
             None => {
@@ -124,6 +139,8 @@ impl Scheduler {
                     app: app.to_owned(),
                     action: action.to_owned(),
                     operation_id: OperationId::new(),
+                    source_generation,
+                    target_generation,
                 });
                 ScheduleResult::Accepted
             }
@@ -141,6 +158,8 @@ impl Scheduler {
                     action: action.to_owned(),
                     operation_id: OperationId::new(),
                     install_requirements,
+                    source_generation,
+                    target_generation,
                 });
                 ScheduleResult::Queued
             }
@@ -160,6 +179,8 @@ impl Scheduler {
             app: next.app.clone(),
             action: next.action.clone(),
             operation_id: next.operation_id.clone(),
+            source_generation: next.source_generation,
+            target_generation: next.target_generation,
         });
         Some(next)
     }

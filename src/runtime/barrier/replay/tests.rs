@@ -65,6 +65,8 @@ fn db_action_log_barrier_suspends_then_resumes() {
             install_requirements: None,
             is_shell: false,
             db: None,
+            source_generation: 0,
+            target_generation: 0,
         },
         &mut scope,
     );
@@ -96,6 +98,8 @@ fn db_action_log_barrier_suspends_then_resumes() {
             install_requirements: None,
             is_shell: false,
             db: None,
+            source_generation: 0,
+            target_generation: 0,
         },
         &mut scope,
     );
@@ -153,6 +157,8 @@ fn db_action_log_sequential_barriers() {
             install_requirements: None,
             is_shell: false,
             db: None,
+            source_generation: 0,
+            target_generation: 0,
         },
         &mut scope,
     );
@@ -176,6 +182,8 @@ fn db_action_log_sequential_barriers() {
             install_requirements: None,
             is_shell: false,
             db: None,
+            source_generation: 0,
+            target_generation: 0,
         },
         &mut scope,
     );
@@ -199,6 +207,8 @@ fn db_action_log_sequential_barriers() {
             install_requirements: None,
             is_shell: false,
             db: None,
+            source_generation: 0,
+            target_generation: 0,
         },
         &mut scope,
     );

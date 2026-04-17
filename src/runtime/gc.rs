@@ -246,6 +246,8 @@ mod tests {
                 operation_id: current_op.clone(),
                 app: "app".into(),
                 action_name: "start".into(),
+                source_generation: 1,
+                target_generation: 1,
             },
         )
         .unwrap();

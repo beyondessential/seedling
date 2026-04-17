@@ -36,7 +36,10 @@ fn now_from_ms(ms: i64) -> SystemTime {
 #[test]
 fn empty_scheduler_accepts_first_request() {
     let mut s = Scheduler::new();
-    assert_eq!(s.request("app1", "start", None), ScheduleResult::Accepted);
+    assert_eq!(
+        s.request("app1", "start", None, 1, 1),
+        ScheduleResult::Accepted
+    );
     let active = s.active().expect("should be active");
     assert_eq!(active.app, "app1");
     assert_eq!(active.action, "start");
@@ -46,9 +49,9 @@ fn empty_scheduler_accepts_first_request() {
 #[test]
 fn same_app_second_request_rejected() {
     let mut s = Scheduler::new();
-    s.request("app1", "start", None);
+    s.request("app1", "start", None, 1, 1);
     assert_eq!(
-        s.request("app1", "start", None),
+        s.request("app1", "start", None, 1, 1),
         ScheduleResult::Rejected(RejectReason::SameAppOperationInProgress)
     );
 }
@@ -57,9 +60,9 @@ fn same_app_second_request_rejected() {
 #[test]
 fn same_app_different_action_still_rejected() {
     let mut s = Scheduler::new();
-    s.request("app1", "start", None);
+    s.request("app1", "start", None, 1, 1);
     assert_eq!(
-        s.request("app1", "deploy", None),
+        s.request("app1", "deploy", None, 1, 1),
         ScheduleResult::Rejected(RejectReason::SameAppOperationInProgress)
     );
 }
@@ -72,8 +75,11 @@ fn same_app_different_action_still_rejected() {
 #[test]
 fn different_app_request_is_queued() {
     let mut s = Scheduler::new();
-    s.request("app1", "start", None);
-    assert_eq!(s.request("app2", "start", None), ScheduleResult::Queued);
+    s.request("app1", "start", None, 1, 1);
+    assert_eq!(
+        s.request("app2", "start", None, 1, 1),
+        ScheduleResult::Queued
+    );
     // app2 is queued, not yet active.
     assert_eq!(s.active().unwrap().app, "app1");
     assert_eq!(s.queue.len(), 1);
@@ -84,10 +90,10 @@ fn different_app_request_is_queued() {
 #[test]
 fn already_queued_app_is_rejected() {
     let mut s = Scheduler::new();
-    s.request("app1", "start", None);
-    s.request("app2", "start", None); // queued
+    s.request("app1", "start", None, 1, 1);
+    s.request("app2", "start", None, 1, 1); // queued
     assert_eq!(
-        s.request("app2", "start", None),
+        s.request("app2", "start", None, 1, 1),
         ScheduleResult::Rejected(RejectReason::SameAppAlreadyQueued)
     );
 }
@@ -96,9 +102,15 @@ fn already_queued_app_is_rejected() {
 #[test]
 fn two_different_apps_can_both_queue() {
     let mut s = Scheduler::new();
-    s.request("app1", "start", None);
-    assert_eq!(s.request("app2", "start", None), ScheduleResult::Queued);
-    assert_eq!(s.request("app3", "start", None), ScheduleResult::Queued);
+    s.request("app1", "start", None, 1, 1);
+    assert_eq!(
+        s.request("app2", "start", None, 1, 1),
+        ScheduleResult::Queued
+    );
+    assert_eq!(
+        s.request("app3", "start", None, 1, 1),
+        ScheduleResult::Queued
+    );
     assert_eq!(s.queue.len(), 2);
 }
 
@@ -106,10 +118,10 @@ fn two_different_apps_can_both_queue() {
 #[test]
 fn queued_app_rejected_regardless_of_action_name() {
     let mut s = Scheduler::new();
-    s.request("app1", "start", None);
-    s.request("app2", "start", None);
+    s.request("app1", "start", None, 1, 1);
+    s.request("app2", "start", None, 1, 1);
     assert_eq!(
-        s.request("app2", "deploy", None),
+        s.request("app2", "deploy", None, 1, 1),
         ScheduleResult::Rejected(RejectReason::SameAppAlreadyQueued)
     );
 }
@@ -122,7 +134,7 @@ fn queued_app_rejected_regardless_of_action_name() {
 #[test]
 fn complete_current_with_empty_queue_clears_active() {
     let mut s = Scheduler::new();
-    s.request("app1", "start", None);
+    s.request("app1", "start", None, 1, 1);
     let next = s.complete_current();
     assert!(next.is_none());
     assert!(s.active().is_none());
@@ -133,8 +145,8 @@ fn complete_current_with_empty_queue_clears_active() {
 #[test]
 fn complete_current_dequeues_next_and_makes_it_active() {
     let mut s = Scheduler::new();
-    s.request("app1", "start", None);
-    s.request("app2", "deploy", None);
+    s.request("app1", "start", None, 1, 1);
+    s.request("app2", "deploy", None, 1, 1);
 
     let next = s.complete_current().expect("should dequeue app2");
     assert_eq!(next.app, "app2");
@@ -150,9 +162,9 @@ fn complete_current_dequeues_next_and_makes_it_active() {
 #[test]
 fn queue_is_drained_in_fifo_order() {
     let mut s = Scheduler::new();
-    s.request("app1", "start", None);
-    s.request("app2", "start", None);
-    s.request("app3", "start", None);
+    s.request("app1", "start", None, 1, 1);
+    s.request("app2", "start", None, 1, 1);
+    s.request("app3", "start", None, 1, 1);
 
     let first = s.complete_current().expect("app2");
     assert_eq!(first.app, "app2");
@@ -169,10 +181,13 @@ fn queue_is_drained_in_fifo_order() {
 #[test]
 fn after_complete_same_app_can_be_requested_again() {
     let mut s = Scheduler::new();
-    s.request("app1", "start", None);
+    s.request("app1", "start", None, 1, 1);
     s.complete_current();
     // No active operation; app1 should be accepted again.
-    assert_eq!(s.request("app1", "start", None), ScheduleResult::Accepted);
+    assert_eq!(
+        s.request("app1", "start", None, 1, 1),
+        ScheduleResult::Accepted
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -183,7 +198,7 @@ fn after_complete_same_app_can_be_requested_again() {
 #[test]
 fn push_call_with_no_cycle_succeeds() {
     let mut s = Scheduler::new();
-    s.request("app1", "start", None);
+    s.request("app1", "start", None, 1, 1);
     assert!(s.push_call("start").is_ok());
     assert!(s.push_call("setup").is_ok());
     assert!(s.push_call("configure").is_ok());
@@ -193,7 +208,7 @@ fn push_call_with_no_cycle_succeeds() {
 #[test]
 fn push_call_detects_direct_cycle() {
     let mut s = Scheduler::new();
-    s.request("app1", "start", None);
+    s.request("app1", "start", None, 1, 1);
     s.push_call("start").unwrap();
     let err = s.push_call("start").unwrap_err();
     assert_eq!(err.action, "start");
@@ -204,7 +219,7 @@ fn push_call_detects_direct_cycle() {
 #[test]
 fn push_call_detects_transitive_cycle() {
     let mut s = Scheduler::new();
-    s.request("app1", "start", None);
+    s.request("app1", "start", None, 1, 1);
     s.push_call("start").unwrap();
     s.push_call("setup").unwrap();
     s.push_call("configure").unwrap();
@@ -217,7 +232,7 @@ fn push_call_detects_transitive_cycle() {
 #[test]
 fn pop_call_allows_reuse_of_action_name() {
     let mut s = Scheduler::new();
-    s.request("app1", "start", None);
+    s.request("app1", "start", None, 1, 1);
     s.push_call("setup").unwrap();
     s.pop_call();
     // After popping "setup", pushing it again must not be a cycle.
@@ -228,8 +243,8 @@ fn pop_call_allows_reuse_of_action_name() {
 #[test]
 fn complete_current_clears_call_stack() {
     let mut s = Scheduler::new();
-    s.request("app1", "start", None);
-    s.request("app2", "start", None);
+    s.request("app1", "start", None, 1, 1);
+    s.request("app2", "start", None, 1, 1);
     s.push_call("start").unwrap();
     s.push_call("setup").unwrap();
 
@@ -241,7 +256,7 @@ fn complete_current_clears_call_stack() {
 #[test]
 fn call_stack_is_empty_at_start_of_new_operation() {
     let mut s = Scheduler::new();
-    s.request("app1", "start", None);
+    s.request("app1", "start", None, 1, 1);
     // Immediately after the very first request, stack is empty.
     assert!(s.call_stack().is_empty());
 }

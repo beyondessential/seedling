@@ -56,6 +56,8 @@ fn run_operation_loop(
     tick_notify: Arc<Notify>,
     event_tx: &events::EventSender,
     script_limits: &crate::ScriptLimits,
+    source_generation: u64,
+    target_generation: u64,
 ) -> bool {
     let (engine, mut scope, _) = crate::setup_language(script_limits);
     let ast = match engine.compile(script) {
@@ -102,6 +104,8 @@ fn run_operation_loop(
                 install_requirements: install_requirements.clone(),
                 is_shell: false,
                 db: Some(Arc::clone(&dbs.db)),
+                source_generation,
+                target_generation,
             },
             &mut scope,
         );
@@ -289,6 +293,8 @@ pub(crate) fn spawn_accepted_operation(
     action_name: String,
     operation_id: OperationId,
     install_requirements: Option<BTreeMap<String, String>>,
+    source_generation: u64,
+    target_generation: u64,
 ) {
     let (app, active_progress, tick_notify, script) = {
         let reg = state.registry.read();
@@ -340,6 +346,8 @@ pub(crate) fn spawn_accepted_operation(
                     tick_notify,
                     &event_tx,
                     &script_limits,
+                    source_generation,
+                    target_generation,
                 )
             })
             .await
@@ -367,6 +375,8 @@ pub(crate) fn spawn_accepted_operation(
                 queued.action,
                 queued.operation_id,
                 queued.install_requirements,
+                queued.source_generation,
+                queued.target_generation,
             );
         }
     });
