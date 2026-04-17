@@ -470,7 +470,7 @@ fn rt_stop_acts_as_barrier() {
     assert!(matches!(r, OperationResult::Completed));
 }
 
-// r[verify rt.warm-certs]
+// l[verify rt.warm-certs]
 // r[verify observe.ingress.certs]
 #[test]
 fn warm_certs_barrier_uses_cert_oracle() {
@@ -519,7 +519,7 @@ fn warm_certs_barrier_uses_cert_oracle() {
     );
 }
 
-// r[verify rt.warm-certs]
+// l[verify rt.warm-certs]
 #[test]
 fn warm_certs_barrier_suspends_when_cert_not_valid() {
     let (engine, mut scope, app, ast) = setup_with_script(

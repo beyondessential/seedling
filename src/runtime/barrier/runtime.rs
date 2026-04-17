@@ -757,7 +757,7 @@ impl Started {
         // the oracle, since the standard ingress `Ready` lifecycle requires
         // both routing and cert validity, but warm_certs intentionally does
         // not route traffic.
-        // r[impl rt.warm-certs]
+        // l[impl rt.warm-certs]
         let all_reached = if self.is_warm && required == LifecycleState::Ready {
             !self.resources.is_empty() && self.resources.iter().all(|r| g.world.cert_valid_for(r))
         } else {
