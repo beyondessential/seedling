@@ -206,6 +206,7 @@ pub(crate) async fn open_shell_session(
                     db: None,
                     source_generation: 0,
                     target_generation: 0,
+                    script_limits: None,
                 },
                 &mut scope,
             );

@@ -106,6 +106,7 @@ fn run_operation_loop(
                 db: Some(Arc::clone(&dbs.db)),
                 source_generation,
                 target_generation,
+                script_limits: Some(script_limits.clone()),
             },
             &mut scope,
         );

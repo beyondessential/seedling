@@ -252,6 +252,7 @@ fn run_action_with_volumes(
             db: None,
             source_generation: 0,
             target_generation: 0,
+            script_limits: None,
         },
         &mut scope,
     );
@@ -475,6 +476,7 @@ fn frozen_static_volume_cannot_be_modified_in_action() {
             db: None,
             source_generation: 0,
             target_generation: 0,
+            script_limits: None,
         },
         &mut scope,
     );

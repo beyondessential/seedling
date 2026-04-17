@@ -239,6 +239,7 @@ fn param_used_in_closure_captures_injected_value() {
             db: None,
             source_generation: 0,
             target_generation: 0,
+            script_limits: None,
         },
         &mut scope,
     );
@@ -286,6 +287,7 @@ fn on_change_inside_action_closure_throws() {
             db: None,
             source_generation: 0,
             target_generation: 0,
+            script_limits: None,
         },
         &mut scope,
     );

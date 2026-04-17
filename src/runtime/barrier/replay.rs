@@ -7,6 +7,7 @@ use tokio::sync::Notify;
 
 use crate::runtime::db::Db;
 use crate::runtime::desired::OperationProgress;
+use crate::runtime::generations;
 use crate::runtime::history;
 
 use crate::defs::app::{App, AppDef, begin_closure_capture, end_closure_capture};
@@ -204,6 +205,10 @@ pub struct OperationContext<'a, W: WorldStateOracle + 'static> {
     /// the current generation at dispatch for operator-invoked actions.
     // r[impl operation.lifecycle.generations]
     pub target_generation: u64,
+    /// Script limits to use when reconstructing the prior `App` for
+    /// `on_change` handlers. Required only when source_generation > 0 and
+    /// the action is a parameter-change handler.
+    pub script_limits: Option<crate::ScriptLimits>,
 }
 
 /// The `log` carries committed entries across calls; pass the same `log`
@@ -228,8 +233,9 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         install_requirements,
         is_shell: _,
         db,
-        source_generation: _,
+        source_generation,
         target_generation: _,
+        script_limits,
     } = op;
 
     // Save the operation ID string before it is moved into the replay context.
@@ -255,7 +261,8 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     clear_barrier_hit();
 
     let app_name = app.def.lock().name.clone();
-    let rt = RuntimeInstance::with_context(Arc::clone(&ctx), app_name.clone(), registry, db);
+    let rt =
+        RuntimeInstance::with_context(Arc::clone(&ctx), app_name.clone(), registry, db.clone());
 
     // Re-run the BSL script with a fresh scope and App to recover the FnPtr
     // for this action. FnPtrs are not stored in AppDef (which must be Send);
@@ -303,7 +310,44 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         // captured, fresh_scope, and fresh_app are all dropped here.
     };
 
-    let old_app = App::default();
+    // r[impl param.on-change.old]
+    // For param-change handlers, materialise `old` from the previous
+    // generation (= source_generation). For other operations, leave it
+    // empty: the spec only defines `old` for on_change handlers, but the
+    // closure-call script still references the variable.
+    let old_app = if is_param_change && source_generation > 0 {
+        match (&db, &script_limits) {
+            (Some(db_arc), Some(limits)) => {
+                let app_name_owned = app.def.lock().name.clone();
+                let db_locked = db_arc.lock();
+                match generations::reconstruct_app_def(
+                    &db_locked,
+                    &app_name_owned,
+                    source_generation,
+                    limits,
+                ) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        tracing::warn!(
+                            app = %app_name_owned,
+                            source_generation,
+                            "failed to reconstruct old App for on_change; using empty: {e}"
+                        );
+                        App::default()
+                    }
+                }
+            }
+            _ => {
+                debug_assert!(
+                    false,
+                    "param_change replay missing db or script_limits in OperationContext"
+                );
+                App::default()
+            }
+        }
+    } else {
+        App::default()
+    };
 
     scope.push("__bsl_rt", rt);
     scope.push("__bsl_closure", closure);

@@ -67,6 +67,7 @@ fn db_action_log_barrier_suspends_then_resumes() {
             db: None,
             source_generation: 0,
             target_generation: 0,
+            script_limits: None,
         },
         &mut scope,
     );
@@ -100,6 +101,7 @@ fn db_action_log_barrier_suspends_then_resumes() {
             db: None,
             source_generation: 0,
             target_generation: 0,
+            script_limits: None,
         },
         &mut scope,
     );
@@ -159,6 +161,7 @@ fn db_action_log_sequential_barriers() {
             db: None,
             source_generation: 0,
             target_generation: 0,
+            script_limits: None,
         },
         &mut scope,
     );
@@ -184,6 +187,7 @@ fn db_action_log_sequential_barriers() {
             db: None,
             source_generation: 0,
             target_generation: 0,
+            script_limits: None,
         },
         &mut scope,
     );
@@ -209,6 +213,7 @@ fn db_action_log_sequential_barriers() {
             db: None,
             source_generation: 0,
             target_generation: 0,
+            script_limits: None,
         },
         &mut scope,
     );

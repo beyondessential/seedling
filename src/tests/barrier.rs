@@ -66,6 +66,7 @@ fn barrier_satisfied_on_first_pass() {
             db: None,
             source_generation: 0,
             target_generation: 0,
+            script_limits: None,
         },
         &mut scope,
     );
@@ -109,6 +110,7 @@ fn barrier_suspends_then_resumes() {
             db: None,
             source_generation: 0,
             target_generation: 0,
+            script_limits: None,
         },
         &mut scope,
     );
@@ -135,6 +137,7 @@ fn barrier_suspends_then_resumes() {
             db: None,
             source_generation: 0,
             target_generation: 0,
+            script_limits: None,
         },
         &mut scope,
     );
@@ -180,6 +183,7 @@ fn sequential_barriers() {
             db: None,
             source_generation: 0,
             target_generation: 0,
+            script_limits: None,
         },
         &mut scope,
     );
@@ -205,6 +209,7 @@ fn sequential_barriers() {
             db: None,
             source_generation: 0,
             target_generation: 0,
+            script_limits: None,
         },
         &mut scope,
     );
@@ -230,6 +235,7 @@ fn sequential_barriers() {
             db: None,
             source_generation: 0,
             target_generation: 0,
+            script_limits: None,
         },
         &mut scope,
     );
@@ -271,6 +277,7 @@ fn barrier_deadline_zero_expires_on_second_pass() {
             db: None,
             source_generation: 0,
             target_generation: 0,
+            script_limits: None,
         },
         &mut scope,
     );
@@ -294,6 +301,7 @@ fn barrier_deadline_zero_expires_on_second_pass() {
             db: None,
             source_generation: 0,
             target_generation: 0,
+            script_limits: None,
         },
         &mut scope,
     );
@@ -339,6 +347,7 @@ fn replay_idempotency() {
             db: None,
             source_generation: 0,
             target_generation: 0,
+            script_limits: None,
         },
         &mut scope,
     );
@@ -364,6 +373,7 @@ fn replay_idempotency() {
             db: None,
             source_generation: 0,
             target_generation: 0,
+            script_limits: None,
         },
         &mut scope,
     );
@@ -423,6 +433,7 @@ fn rt_stop_acts_as_barrier() {
             db: None,
             source_generation: 0,
             target_generation: 0,
+            script_limits: None,
         },
         &mut scope,
     );
@@ -448,6 +459,7 @@ fn rt_stop_acts_as_barrier() {
             db: None,
             source_generation: 0,
             target_generation: 0,
+            script_limits: None,
         },
         &mut scope,
     );
