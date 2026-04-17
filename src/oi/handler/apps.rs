@@ -399,16 +399,18 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     });
 
     if let AppStatus::Operating { .. } = &status {
-        let action_name = state
+        let (action_name, source_generation, target_generation) = state
             .scheduler
             .lock()
             .active()
             .filter(|a| a.app == name)
-            .map(|a| a.action.clone())
-            .unwrap_or_default();
+            .map(|a| (a.action.clone(), a.source_generation, a.target_generation))
+            .unwrap_or_else(|| (String::new(), 0, 0));
         desc["current_operation"] = json!({
             "action_name": action_name,
             "barrier": null,
+            "source_generation": source_generation,
+            "target_generation": target_generation,
         });
     }
 
