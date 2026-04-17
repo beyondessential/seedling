@@ -172,28 +172,71 @@ Tests: existing on_change tests still pass; no surprises in the test corpus.
 
 ### Phase 6 — `rt.warm_certs`
 
-- Rhai API: `rt.warm_certs(collection) -> Started`. Selects TLS-terminating
-  ingresses from the collection. Returns a `Started` whose `.ready()` barrier
-  is satisfied when all selected ingresses' certs are observed `valid`.
-- Cert observation: extend the proxy reconciler to query Caddy's certificate
-  state per hostname, persisting facts (`cert_status`, `cert_expiry`) to the
-  observation history. New observation kinds drive both the standard ingress
-  `Ready` lifecycle and the warm_certs barrier.
-- Caddy config: refactor `system::translate::proxy::build_proxy_config` to
-  support a "warm-only" entry per ingress — a TLS-automation declaration
-  without an associated route. Push this when warm_certs targets an ingress
-  that hasn't been `rt.start`-ed.
-- Action log: record `warm_certs` calls so replay is idempotent. Re-issuing
-  warm_certs against an already-`valid` cert returns immediately.
-- Faults: file `cert_acquisition_failed` on persistent failure; clear on
-  subsequent `valid` observation.
+**Spike validation (done):** Tested against an isolated Caddy 2 container.
+Confirmed: `tls.automation.policies` alone does not trigger acquisition;
+`tls.certificates.automate` + matching policy does; cached cert is reused
+when http server routes are added later (mtime unchanged); Caddy's data
+volume persists certs at `<data>/caddy/certificates/<issuer>/<host>/<host>.crt`.
 
-Tests: barrier blocks until cert observed valid; replay across restart
-finds the cert already valid and resumes; persistent ACME failure files
-fault and barrier eventually deadlines.
+**Risk reassessment after reading code:** The `build_proxy_config` refactor
+risk was overstated. `VirtualHost` already separates `tls_acme` from `routes`,
+and the warm-cert path is fully additive — it only emits new `tls.certificates.automate`
+entries and adds subjects to the existing automation policy. No structural
+change to the existing builder.
 
-Risk: refactoring the proxy config builder to carry "cert-only" entries
-alongside route-bearing entries. Worth a focused review.
+#### Step 1 — Rhai surface (done, commit `d77bb43d`)
+
+- `CallKind::WarmCerts` variant.
+- `RuntimeInstance.do_warm_certs` filters to TLS-terminating Ingresses,
+  records the call in the action log, returns a `Started`.
+- `OperationProgress.warm_cert_hostnames: BTreeSet<String>` populated by
+  `from_log` for `WarmCerts` entries (separate from the standard desired
+  state — reconciler does not start routing the ingress).
+
+#### Step 3 — Caddy config emission (done, commit `d77bb43d`)
+
+- `ProxyConfig.warm_cert_hostnames` field; `augment_with_warm_certs` adds
+  hostnames not already covered by routed vhosts.
+- `compute_proxy_config` resolves ingress resource names to hostnames via
+  `AppDef`, filters to `tls=true` ingresses, calls augment.
+- `build_caddy_config` emits both policy subjects and
+  `tls.certificates.automate` entries when warm hostnames are present.
+- Tests pin the new behaviour and the no-double-listing case.
+
+#### Step 2 — Cert observation (todo)
+
+- Read Caddy data volume mount path via `podman volume inspect seedling-caddy-data`
+  at startup, cache on `Reconciler`.
+- Each tick, check `<data>/caddy/certificates/<issuer>/<host>/<host>.crt` for
+  every hostname in any app's `warm_cert_hostnames`. If present, parse the
+  cert (e.g. `x509-parser`) to extract expiry. Persist `cert_valid` observation
+  against the corresponding ingress instance.
+- Add new obs kinds `cert_valid` and `cert_acquisition_failed`. Do NOT map
+  `cert_valid` to `LifecycleState::Ready` for ingress (would conflate with
+  routing readiness — see lifecycle.ingress: "accepting traffic AND certs valid").
+
+#### Step 4 — Barrier resolution + fault (todo)
+
+- Add `is_warm: bool` flag to `Started`. `do_warm_certs` sets it true.
+- `WorldStateOracle::cert_valid_for(instance) -> bool`. `DbWorldOracle` checks
+  for a `cert_valid` observation; `TestWorldOracle` defaults to false (set
+  via helper).
+- `check_barrier`: when `is_warm` and required is `Ready`, use `cert_valid_for`
+  instead of `lifecycle_state(...).has_reached(Ready)`. Standard barrier
+  semantics for non-warm Starteds unchanged.
+- Add `r[impl fault.cert-acquisition]`: file `cert_acquisition_failed` when
+  cert observation hasn't appeared after a configurable threshold (e.g.
+  3 minutes), include the most recent Caddy error log line if available.
+  Clear on subsequent `cert_valid` observation.
+- Tests: end-to-end with a stub Caddy data dir; barrier blocks until cert
+  file appears; replay across restart finds existing cert and resumes;
+  fault filed when cert never appears.
+
+**Until step 2+4 land:** `rt.warm_certs(...).ready()` resolves immediately
+when `Started.ctx` is `None` (test mode) and blocks indefinitely otherwise
+(production mode), because the standard ingress `Ready` lifecycle never
+fires for non-routed ingresses. Production callers should not yet rely on
+the barrier — only the API surface and Caddy emission are usable.
 
 ### Phase 7 — interface surface
 
