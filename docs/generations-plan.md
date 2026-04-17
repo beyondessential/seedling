@@ -143,15 +143,20 @@ as `old`.
 
 ### Phase 4 — `on_change` transition semantics
 
-- Schedule `on_change` only when the transition matches one of the three
-  defined transitions (`None → Some`, `Some(s₁) → Some(s₂)` with `s₁ ≠ s₂`,
-  `Some → None`). Setting a param to its current value should still bump the
-  generation? *Open question — see below.* Working assumption: bumping happens
-  only when the value actually changes (no-op set returns
-  `schedule = "not_scheduled"` and does not bump).
-- OI: return `{ "schedule": ..., "generation": <int> }` per spec.
+- A no-op set/unset (value already matches; unset of an already-unset param)
+  short-circuits at the OI handler before any persistence: no generation
+  bump, no `on_change`, response is `{ "schedule": "not_scheduled",
+  "generation": <current> }`.
+- For real transitions (`None → Some`, `Some(s₁) → Some(s₂)` with `s₁ ≠ s₂`,
+  `Some → None`), bump the generation, then schedule `on_change` if a handler
+  is registered and the app is installed.
+- Reject `set_param` / `unset_param` with `operation_in_progress` when an op
+  is in flight or queued. Same for `/apps/update`.
+- OI: return `{ "schedule": "accepted" | "not_scheduled", "generation": <int> }`
+  per spec.
 
-Tests: each transition triggers `on_change`; same-value set does not.
+Tests: each transition triggers `on_change`; same-value set is no-op; updates
+during in-flight ops are rejected.
 
 ### Phase 5 — drop `rt.reconcile`
 
@@ -231,24 +236,18 @@ returns errors.
   rule; remove annotations for deleted spec rules; run `tracey query
   uncovered`.
 
-## Open questions to resolve before / during implementation
+## Resolved design points
 
-1. **Same-value set:** does `set_param("x", "v")` when the current value is
-   already `"v"` bump the generation? Working assumption: no. Confirm.
-2. **Script update during in-flight op:** spec says new AppDef takes effect
-   "at the next evaluation boundary after the operation completes." Does the
-   generation bump immediately (at update time) or only at the boundary?
-   Working assumption: immediately, but the in-flight op continues at its
-   target_generation. This means the current generation can be ahead of the
-   reconciler's effective AppDef during the window. Probably fine — confirm.
-3. **Param set during in-flight op:** spec defers to the lifecycle queue
-   (`SameAppOperationInProgress` rejection or queued). Same question for
-   generation bump timing. Working assumption: bump only on accept (queued
-   counts as accepted).
-4. **Cert warming for ingresses with multiple hostnames:** does each hostname
-   need to reach `valid` independently before the barrier resolves, or is
-   any-one enough? Spec says "every selected ingress" but doesn't pin
-   per-hostname. Working assumption: all hostnames of all selected ingresses.
+1. **Same-value set is a no-op.** `set_param("x", "v")` when the current value
+   is already `"v"` does not persist, does not bump the generation, does not
+   schedule a handler. Same for `unset_param` against an already-unset param.
+2. **Script and param updates during in-flight ops are RPC-rejected** with
+   `operation_in_progress`, not queued or deferred. There is therefore no
+   window where the current generation is ahead of the reconciler's effective
+   AppDef. The previous spec text on `i[app.update]` ("takes effect at the
+   next evaluation boundary") is replaced by the rejection rule.
+3. **Cert warming barrier:** all hostnames of all selected ingresses must be
+   `valid` before `.ready()` resolves.
 
 ## Suggested commit granularity
 

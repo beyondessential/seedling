@@ -162,7 +162,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > i[app.update]
 > `/apps/update { app, script }` re-evaluates the provided BSL script source text.
-> If a lifecycle operation is in progress, the new AppDef takes effect at the next evaluation boundary after the operation completes.
+> If a lifecycle operation is in progress for the app, or one is queued, the request is rejected with `operation_in_progress`.
 > If the script fails to parse or evaluate, a `script_error` app-level fault is filed, the existing AppDef continues running, and the request still succeeds.
 > On success, any previously active `script_error` fault for this app is cleared, and the app's [generation](#r--generation.definition) is bumped with a `ScriptUpdate` history entry.
 
@@ -281,9 +281,15 @@ Absent specification bugs, anything that is not defined here is either defined i
 > A param with no stored value is treated as absent.
 
 > i[param.set]
-> `/apps/params/set { app, name, value }` persists the value and bumps the app's [generation](#r--generation.definition) with a `ParamSet` history entry. If the change matches one of the [transitions](#l--param.on-change.transitions) defined in the language spec, an `on_change` handler is registered for that param, and the app is installed, the handler is scheduled as a lifecycle operation subject to the same concurrency rules as all lifecycle operations.
+> `/apps/params/set { app, name, value }` persists the value and bumps the app's [generation](#r--generation.definition) with a `ParamSet` history entry. If the change matches one of the [transitions](#l--param.on-change.transitions) defined in the language spec, an `on_change` handler is registered for that param, and the app is installed, the handler is scheduled as a lifecycle operation.
+>
+> If a lifecycle operation is in progress for the app, or one is queued, the request is rejected with `operation_in_progress`; neither the value nor the generation is changed.
+>
+> If the requested value is equal to the current value, the request is a no-op: nothing is persisted, no generation bump occurs, and no handler is scheduled.
+>
 > The script is re-evaluated after the value is persisted; if evaluation fails, a `script_error` app-level fault is filed and the request still succeeds.
-> Returns `{ "schedule": "accepted" | "queued" | "not_scheduled", "generation": <int> }` on success, or an error. `not_scheduled` means the generation was bumped but no `on_change` handler ran (for example, the value did not change, or no handler is registered).
+>
+> Returns `{ "schedule": "accepted" | "not_scheduled", "generation": <int> }` on success, or an error. `not_scheduled` means the generation was bumped but no `on_change` handler ran (for example, no handler is registered for the parameter, or the app is not installed). The returned `generation` is the app's current generation after the call (unchanged if the call was a no-op).
 
 > i[param.unknown]
 > Setting a param whose name does not appear in the app's current script evaluation is permitted.
@@ -291,9 +297,16 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > i[param.unset]
 > `/apps/params/unset { app, name }` removes the stored value for the named parameter and reloads the script.
-> If the parameter previously had a stored value, the app's [generation](#r--generation.definition) is bumped with a `ParamUnset` history entry. If the change matches one of the [transitions](#l--param.on-change.transitions), an `on_change` handler is registered, and the app is installed, the handler is scheduled as a lifecycle operation.
+>
+> If a lifecycle operation is in progress for the app, or one is queued, the request is rejected with `operation_in_progress`; neither the value nor the generation is changed.
+>
+> If the parameter has no stored value, the request is a no-op: nothing is changed, no generation bump occurs, and no handler is scheduled.
+>
+> Otherwise the app's [generation](#r--generation.definition) is bumped with a `ParamUnset` history entry. If an `on_change` handler is registered for the parameter and the app is installed, the handler is scheduled as a lifecycle operation.
+>
 > The script is re-evaluated after the value is removed; if evaluation fails, a `script_error` app-level fault is filed and the request still succeeds.
-> Returns `{ "schedule": "accepted" | "queued" | "not_scheduled", "generation": <int> }` on success, or an error. If the parameter had no stored value, the generation is not bumped, the response carries `"schedule": "not_scheduled"`, and the response's `generation` reflects the unchanged current generation.
+>
+> Returns `{ "schedule": "accepted" | "not_scheduled", "generation": <int> }` on success, or an error.
 
 # Action Invocation
 
