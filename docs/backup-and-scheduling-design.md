@@ -70,7 +70,7 @@ Remove the one-argument `|rt|`-returning-Job shortcut form entirely.
 Update i[action.invoke]:
 > `/apps/action/invoke { app, name, params? }` schedules the named action as a lifecycle operation.
 > `params` is an optional JSON object. Keys ending in `_volume` are reserved and must be rejected.
-> Returns `{ "schedule": "accepted" }` or `{ "schedule": "queued" }` on success, or an error.
+> Returns `{ "schedule": "accepted", "operation_id": "<string>" }` or `{ "schedule": "queued", "operation_id": "<string>" }` on success, or an error. The `operation_id` is always present and uniquely identifies this operation.
 
 Update i[action.invoke.install]:
 > `/apps/install/invoke { app, requirements? }` schedules the install action.
@@ -141,7 +141,7 @@ Update i[event.types], add `trigger` field to `OperationStarted`:
 > i[backup.run]
 > `/backups/run { strategy, volume? }` triggers an immediate backup for the named strategy. If `volume` is provided, only that volume is backed up; otherwise all volumes in the strategy are backed up.
 >
-> Returns `{ "schedule": "accepted" }` on success.
+> Returns `{ "schedule": "accepted", "operation_id": "<string>" }` on success. Each volume produces a separate operation; if multiple volumes are triggered, an array of `{ volume, operation_id }` objects is returned.
 
 ### Backup Snapshot Listing
 
