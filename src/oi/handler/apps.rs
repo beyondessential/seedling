@@ -613,23 +613,26 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams) -> HandlerResult
             }));
         }
     }
-    for id in cur_def.resources.keys() {
-        if !prop_def.resources.contains_key(id) {
+    for (id, cur_resource) in &cur_def.resources {
+        if let Some(prop_resource) = prop_def.resources.get(id) {
+            // Both present — compare by `ResourceSummary` and only emit a
+            // `modified` entry when fields actually differ.
+            let cur_summary = cur_resource.summary();
+            let prop_summary = prop_resource.summary();
+            let fields = crate::defs::summary::diff_fields(&cur_summary, &prop_summary);
+            if !fields.is_empty() {
+                diff.push(json!({
+                    "resource_type": format!("{:?}", id.kind),
+                    "resource_name": id.name.as_str(),
+                    "change": "modified",
+                    "fields": fields,
+                }));
+            }
+        } else {
             diff.push(json!({
                 "resource_type": format!("{:?}", id.kind),
                 "resource_name": id.name.as_str(),
                 "change": "removed",
-            }));
-        } else {
-            // Both present — emit "modified" without field-level detail for V1.
-            // The set membership of resources is the most operator-actionable
-            // signal; field-level diffing requires a serialisable Resource
-            // representation that's outside this scope.
-            diff.push(json!({
-                "resource_type": format!("{:?}", id.kind),
-                "resource_name": id.name.as_str(),
-                "change": "modified",
-                "fields": Vec::<String>::new(),
             }));
         }
     }
