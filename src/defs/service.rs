@@ -21,8 +21,7 @@ pub struct Service {
     pub name: ResourceName,
     pub def: Holder<ServiceDef>,
     /// Weak back-reference to the owning `AppDef` so that `ingress()` can
-    /// register the created `Ingress` into `app_def.resources`. `None` for
-    /// services created outside of an `App` context (e.g. via `ExternalService`).
+    /// register the created `Ingress` into `app_def.resources`.
     pub(super) app_def: Option<Weak<Mutex<AppDef>>>,
     pub frozen: bool,
 }
@@ -187,30 +186,6 @@ pub struct HttpServiceRoute {
 impl CustomType for HttpServiceRoute {
     fn build(mut builder: TypeBuilder<Self>) {
         builder.with_name("HttpServiceRoute");
-    }
-}
-
-// l[impl service.external]
-#[derive(Debug, Clone)]
-pub struct ExternalService {
-    pub name: ResourceName,
-}
-
-impl CustomType for ExternalService {
-    fn build(mut builder: TypeBuilder<Self>) {
-        builder
-            .with_name("ExternalService")
-            // l[impl service.external.port]
-            .with_fn(
-                "port",
-                |this: &mut Self, port: i64| -> Result<ServicePort, Box<EvalAltResult>> {
-                    let port = Port::new(port)?;
-                    Ok(ServicePort {
-                        service: Service::new(this.name.clone()),
-                        port,
-                    })
-                },
-            );
     }
 }
 

@@ -107,36 +107,3 @@ fn http_service_route_rejects_no_slash() {
     "#,
     );
 }
-
-// l[verify service.external]
-#[test]
-fn external_service_creates_resource() {
-    let app = run_test_script_app(
-        r#"
-        let s = app.external_service("redis");
-    "#,
-    );
-    let def = app.def.lock();
-    assert!(
-        def.resources
-            .keys()
-            .any(|id| id.kind == ResourceKind::ExternalService && &*id.name == "redis")
-    );
-}
-
-// l[verify service.external.port]
-#[test]
-fn external_service_port() {
-    run_test_script_app(
-        r#"
-        let es = app.external_service("redis");
-        let sp = es.port(6379);
-    "#,
-    );
-}
-
-// l[verify service.external.port]
-#[test]
-fn external_service_port_rejects_invalid() {
-    let _ = run_test_script_err(r#"app.external_service("redis").port(0);"#);
-}

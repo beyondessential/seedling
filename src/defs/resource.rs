@@ -7,7 +7,7 @@ use super::{
     deployment::Deployment,
     ingress::Ingress,
     job::Job,
-    service::{ExternalService, HttpService, Service},
+    service::{HttpService, Service},
     volume::{ExternalVolume, Volume},
 };
 
@@ -25,7 +25,6 @@ pub enum ResourceKind {
     Parameter,
     Service,
     HttpService,
-    ExternalService,
     Ingress,
     Deployment,
     Job,
@@ -40,10 +39,6 @@ impl ResourceKind {
         map.insert("Parameter".into(), Dynamic::from(Self::Parameter));
         map.insert("Service".into(), Dynamic::from(Self::Service));
         map.insert("HttpService".into(), Dynamic::from(Self::HttpService));
-        map.insert(
-            "ExternalService".into(),
-            Dynamic::from(Self::ExternalService),
-        );
         map.insert("Ingress".into(), Dynamic::from(Self::Ingress));
         map.insert("Deployment".into(), Dynamic::from(Self::Deployment));
         map.insert("Job".into(), Dynamic::from(Self::Job));
@@ -59,7 +54,6 @@ impl ResourceKind {
 pub enum Resource {
     Service(Service),
     HttpService(HttpService),
-    ExternalService(ExternalService),
     Ingress(Ingress),
     Deployment(Deployment),
     Job(Job),
@@ -72,7 +66,6 @@ impl Resource {
         match self {
             Self::Service(_) => ResourceKind::Service,
             Self::HttpService(_) => ResourceKind::HttpService,
-            Self::ExternalService(_) => ResourceKind::ExternalService,
             Self::Ingress(_) => ResourceKind::Ingress,
             Self::Deployment(_) => ResourceKind::Deployment,
             Self::Job(_) => ResourceKind::Job,
@@ -85,7 +78,6 @@ impl Resource {
         match self {
             Self::Service(s) => &s.name,
             Self::HttpService(h) => &h.service.name,
-            Self::ExternalService(s) => &s.name,
             Self::Ingress(i) => &i.name,
             Self::Deployment(d) => &d.name,
             Self::Job(j) => &j.name,
@@ -101,7 +93,6 @@ impl Resource {
         match self {
             Self::Service(s) => Dynamic::from(s.clone()),
             Self::HttpService(h) => Dynamic::from(h.clone()),
-            Self::ExternalService(s) => Dynamic::from(s.clone()),
             Self::Ingress(i) => Dynamic::from(i.clone()),
             Self::Deployment(d) => Dynamic::from(d.clone()),
             Self::Job(j) => Dynamic::from(j.clone()),

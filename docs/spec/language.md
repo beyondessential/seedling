@@ -96,7 +96,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > The following values are accepted:
 > - A `Collection` — returned as-is.
 > - An `App` — yields a Collection of all its named resources and actions.
-> - Any named Resource (Deployment, Service, HttpService, ExternalService, Job, Ingress, named Volume, ExternalVolume, Action) — yields a Collection of that single resource.
+> - Any named Resource (Deployment, Service, HttpService, Job, Ingress, named Volume, ExternalVolume, Action) — yields a Collection of that single resource.
 > - An array — yields a Collection of all elements coerced the same way (a union).
 > - An anonymous Volume (without a name) — yields an empty Collection.
 > - Any other value — yields an empty Collection.
@@ -155,7 +155,6 @@ This is currently the only value.
 > - `Parameter`
 > - `Service`
 > - `HttpService`
-> - `ExternalService`
 > - `Ingress`
 > - `Deployment`
 > - `Job`
@@ -198,7 +197,7 @@ This is currently the only value.
 > l[app.resources.context.anonymous]
 > Anonymous resources (those created without a name argument) may only be created in the action context.
 > Attempting to create an anonymous resource at the top level is a script error.
-> `Ingress`, `ExternalService`, and `ExternalVolume` have no anonymous form in any context.
+> `Ingress` and `ExternalVolume` have no anonymous form in any context.
 
 > l[app.resources.names]
 > Most resources are defined with a name.
@@ -292,19 +291,6 @@ This is currently the only value.
 > The URL prefix is _not_ stripped for the pod: `GET /api/books` routed through a `route("/api")` will appear as `GET /api/books` to the container.
 >
 > Prefix-matching is done by length: for any given URL, the longest matching prefix is selected. If more complicated logic is required, an application should embed an HTTP "reverse proxy" container of its choice.
-
-## External Service
-
-> l[service.external]
-> An External Service is a Service provided by the Seedling control plane to a BSL script, at a particular name.
->
-> External Services are defined using the `app.external_service(name: string)` method, which returns a `ExternalService`.
->
-> External Services can't be modified, only [mounted](#l--pod.mount-service).
-
-> l[service.external.port]
-> `extsvc.port(port: number)` returns a [ServicePort](#l--service.port) _if the port is defined_ by the control plane on the external service.
-> If the port is not defined, this will throw.
 
 # Ingress
 

@@ -22,7 +22,7 @@ use super::{
     job::Job,
     pod::{HttpBinding, PodDef, TcpUdpBinding},
     resource::Resource,
-    service::{ExternalService, HttpService, Service},
+    service::{HttpService, Service},
     volume::{ExternalVolume, Volume},
 };
 
@@ -31,7 +31,6 @@ use super::{
 pub enum ResourceSummary {
     Service(ServiceSummary),
     HttpService(HttpServiceSummary),
-    ExternalService(ExternalServiceSummary),
     Ingress(IngressSummary),
     Deployment(DeploymentSummary),
     Job(JobSummary),
@@ -49,9 +48,6 @@ pub struct HttpServiceSummary {
     pub service: String,
     pub port: u16,
 }
-
-#[derive(Serialize, Debug, PartialEq)]
-pub struct ExternalServiceSummary {}
 
 #[derive(Serialize, Debug, PartialEq)]
 pub struct IngressSummary {
@@ -147,7 +143,6 @@ impl Resource {
         match self {
             Self::Service(s) => ResourceSummary::Service(s.summary()),
             Self::HttpService(h) => ResourceSummary::HttpService(h.summary()),
-            Self::ExternalService(s) => ResourceSummary::ExternalService(s.summary()),
             Self::Ingress(i) => ResourceSummary::Ingress(i.summary()),
             Self::Deployment(d) => ResourceSummary::Deployment(d.summary()),
             Self::Job(j) => ResourceSummary::Job(j.summary()),
@@ -172,12 +167,6 @@ impl HttpService {
             service: self.service.name.as_str().to_owned(),
             port: self.port.get(),
         }
-    }
-}
-
-impl ExternalService {
-    pub fn summary(&self) -> ExternalServiceSummary {
-        ExternalServiceSummary {}
     }
 }
 

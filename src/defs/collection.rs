@@ -9,7 +9,7 @@ use super::deployment::Deployment;
 use super::ingress::Ingress;
 use super::job::Job;
 use super::resource::{ResourceId, ResourceKind};
-use super::service::{ExternalService, HttpService, Service};
+use super::service::{HttpService, Service};
 use super::volume::{ExternalVolume, Volume};
 
 mod bag;
@@ -193,17 +193,6 @@ pub fn col(val: Dynamic) -> Collection {
             }));
         }
         return Collection::empty();
-    }
-
-    if let Some(ext) = val.clone().try_cast::<ExternalService>() {
-        let id = ResourceId {
-            kind: ResourceKind::ExternalService,
-            name: ext.name.clone(),
-        };
-        return Collection::from_bag(Rc::new(ItemBag {
-            id,
-            value: Dynamic::from(ext),
-        }));
     }
 
     if let Some(vol) = val.clone().try_cast::<ExternalVolume>() {

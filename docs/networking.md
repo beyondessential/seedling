@@ -30,13 +30,12 @@ The `KK` byte is a `ResourceKind` discriminant:
 | 0     | Parameter       |
 | 1     | Service         |
 | 2     | HttpService     |
-| 3     | ExternalService |
-| 4     | Ingress         |
-| 5     | Deployment      |
-| 6     | Job             |
-| 7     | Volume          |
-| 8     | ExternalVolume  |
-| 9     | Action          |
+| 3     | Ingress         |
+| 4     | Deployment      |
+| 5     | Job             |
+| 6     | Volume          |
+| 7     | ExternalVolume  |
+| 8     | Action          |
 
 The `UU` byte and bytes 8–15 come from the resource instance's persisted
 UUID (bytes 0–8 of the UUID). This makes every resource instance's /128

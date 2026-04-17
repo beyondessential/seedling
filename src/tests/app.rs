@@ -24,7 +24,6 @@ fn app_methods_are_defined() {
         app.job("jbs");
         app.volume("vol");
         app.external_volume("evol");
-        app.external_service("esvc");
         app.param("par");
         app.on_action("act", |rt| {});
         app.on_start(|rt| {});

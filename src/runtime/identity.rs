@@ -147,7 +147,6 @@ fn kind_slug(kind: ResourceKind) -> &'static str {
         ResourceKind::Parameter => "parameter",
         ResourceKind::Service => "service",
         ResourceKind::HttpService => "http-service",
-        ResourceKind::ExternalService => "ext-service",
         ResourceKind::Ingress => "ingress",
         ResourceKind::Deployment => "deployment",
         ResourceKind::Job => "job",

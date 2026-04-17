@@ -193,7 +193,6 @@ fn resource_type_enum_variants_accessible() {
         let _p = ResourceType.Parameter;
         let _s = ResourceType.Service;
         let _h = ResourceType.HttpService;
-        let _e = ResourceType.ExternalService;
         let _i = ResourceType.Ingress;
         let _d = ResourceType.Deployment;
         let _j = ResourceType.Job;

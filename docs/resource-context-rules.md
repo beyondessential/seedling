@@ -26,7 +26,6 @@ Resources in BSL are either **static** or **dynamic** depending on where they ar
 | `HttpService` | ✓ create | ✓ reference | ✗ error | ✓ create |
 | `Volume` | ✓ create | ✓ reference | ✗ error | ✓ create |
 | `Ingress` | ✓ create | ✓ reference | ✗ error | ✗ error |
-| `ExternalService` | ✓ reference | ✓ reference | ✗ error | ✗ error |
 | `ExternalVolume` | ✓ reference | ✓ reference | ✗ error | ✗ error |
 
 ### References are frozen
@@ -60,8 +59,8 @@ app.on_action("migrate", |rt| {
 - **Ingress has no anonymous form** in any context. An ingress is always an explicitly
   configured, externally-visible routing rule and has no meaningful transient equivalent.
 
-- **ExternalService and ExternalVolume are always references.** They point to resources
-  that Seedling does not own or manage, so creation does not apply.
+- **ExternalVolume is always a reference.** It points to a resource that Seedling
+  apps do not own or manage themselves, so creation does not apply.
 
 ## Volume lifecycle
 

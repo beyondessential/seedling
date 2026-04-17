@@ -267,7 +267,6 @@ impl Actuator {
             ResourceKind::Parameter => "parameter",
             ResourceKind::Service => "service",
             ResourceKind::HttpService => "http_service",
-            ResourceKind::ExternalService => "external_service",
             ResourceKind::Ingress => "ingress",
             ResourceKind::Deployment => "deployment",
             ResourceKind::Job => "job",

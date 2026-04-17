@@ -205,7 +205,10 @@ fn eval_merged(
 fn build_install_reqs_map(install: &InstallDef) -> rhai::Map {
     let mut map = rhai::Map::new();
     for (key, req) in &install.requirements {
-        map.insert(key.as_str().into(), Dynamic::from(req.default_value.clone()));
+        map.insert(
+            key.as_str().into(),
+            Dynamic::from(req.default_value.clone()),
+        );
     }
     map
 }

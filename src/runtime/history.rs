@@ -526,7 +526,6 @@ fn parse_resource_kind(s: &str) -> Result<ResourceKind, rusqlite::Error> {
         "Parameter" => Ok(ResourceKind::Parameter),
         "Service" => Ok(ResourceKind::Service),
         "HttpService" => Ok(ResourceKind::HttpService),
-        "ExternalService" => Ok(ResourceKind::ExternalService),
         "Ingress" => Ok(ResourceKind::Ingress),
         "Deployment" => Ok(ResourceKind::Deployment),
         "Job" => Ok(ResourceKind::Job),
