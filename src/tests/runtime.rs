@@ -107,6 +107,36 @@ fn exercise_query() {
     );
 }
 
+// l[verify rt.warm-certs]
+#[test]
+fn exercise_warm_certs() {
+    exercise(
+        r#"
+        app.on_start(|rt| {
+            let svc = app.service("public");
+            let ing = svc.ingress("test.example.com", 443).tls();
+            let warm = rt.warm_certs(ing);
+            warm.ready();
+        });
+    "#,
+    );
+}
+
+// l[verify rt.warm-certs]
+#[test]
+fn warm_certs_ignores_non_ingress_resources() {
+    exercise(
+        r#"
+        app.on_start(|rt| {
+            let dep = app.deployment("web").image("docker.io/library/nginx:latest");
+            // Passing a non-ingress should not throw — just be ignored.
+            let warm = rt.warm_certs(dep);
+            warm.ready();
+        });
+    "#,
+    );
+}
+
 // l[verify rt.started.type]
 #[test]
 fn started_is_a_collection() {

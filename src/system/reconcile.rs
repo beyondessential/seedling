@@ -124,6 +124,10 @@ struct AppSnapshot {
     app_def: AppDef,
     phase: AppPhase,
     phase_handle: Arc<Mutex<AppPhase>>,
+    /// Hostnames whose certs should be pre-warmed. Captured from the in-flight
+    /// `OperationProgress`, if any.
+    // r[impl actuate.ingress.warm-certs]
+    warm_cert_hostnames: std::collections::BTreeSet<String>,
 }
 
 /// Single global reconciler that processes all installed apps each tick.
@@ -249,12 +253,17 @@ impl Reconciler {
                     continue;
                 }
             };
+            let warm_cert_hostnames = (*progress)
+                .as_ref()
+                .map(|p| p.warm_cert_hostnames.clone())
+                .unwrap_or_default();
             snapshots.push(AppSnapshot {
                 name,
                 desired,
                 app_def,
                 phase,
                 phase_handle: Arc::clone(&entry.phase),
+                warm_cert_hostnames,
             });
         }
         snapshots

@@ -154,6 +154,7 @@ pub(super) fn compute_proxy_config(
     let mut all_l4_routes = Vec::new();
     let mut observations = Vec::new();
     let mut ready_observations = Vec::new();
+    let mut all_warm: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for app in apps {
         if app.phase == AppPhase::Uninstalling {
             continue;
@@ -175,10 +176,30 @@ pub(super) fn compute_proxy_config(
         all_l4_routes.extend(build.l4_routes);
         observations.extend(build.observations);
         ready_observations.extend(build.ready_observations);
+        // r[impl actuate.ingress.warm-certs]
+        // Translate ingress resource *names* in OperationProgress to ingress
+        // *hostnames* by looking them up in the AppDef. Ignore non-TLS
+        // ingresses; Caddy can't pre-warm a cert without TLS configured.
+        for ing_name in &app.warm_cert_hostnames {
+            if let Some(crate::defs::resource::Resource::Ingress(ing)) =
+                app.app_def
+                    .resources
+                    .get(&crate::defs::resource::ResourceId {
+                        kind: crate::defs::resource::ResourceKind::Ingress,
+                        name: std::sync::Arc::new(ing_name.clone()),
+                    })
+            {
+                let ing_def = ing.def.lock();
+                if ing_def.tls {
+                    all_warm.insert(ing_def.hostname.clone());
+                }
+            }
+        }
     }
 
     let mut config = build_proxy_config(&all_pairs);
     config.l4_routes = all_l4_routes;
+    crate::system::translate::proxy::augment_with_warm_certs(&mut config, all_warm);
     let caddy_json = super::super::caddy::build_caddy_config(&config);
 
     ProxyBuildResult {

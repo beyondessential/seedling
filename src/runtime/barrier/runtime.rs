@@ -419,6 +419,73 @@ impl RuntimeInstance {
         })
     }
 
+    // l[impl rt.warm-certs]
+    // r[impl actuate.ingress.warm-certs]
+    fn do_warm_certs(
+        &mut self,
+        resources_with_defs: Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)>,
+    ) -> Result<Started, Box<EvalAltResult>> {
+        // Filter to TLS-terminating ingresses; ignore everything else
+        // (per the language spec rule l[rt.warm-certs]).
+        let resources: Vec<ResourceInstance> = resources_with_defs
+            .into_iter()
+            .filter(|(inst, def)| {
+                if inst.kind != crate::defs::resource::ResourceKind::Ingress {
+                    return false;
+                }
+                // Filter to TLS-terminating ingresses by inspecting the def.
+                if let Some(crate::defs::resource::Resource::Ingress(ing)) = def {
+                    let i = ing.def.lock();
+                    i.tls
+                } else {
+                    // No definition handy: assume yes — the caller passed an
+                    // Ingress resource explicitly. The Caddy reconciler will
+                    // re-check before pushing config.
+                    true
+                }
+            })
+            .map(|(inst, _)| inst)
+            .collect();
+
+        if is_barrier_hit_pending()
+            && let Some(ctx) = &self.ctx
+            && let Some(cond) = ctx.lock().pending_barrier.clone()
+        {
+            return Err(make_barrier_error(cond));
+        }
+
+        let ctx = match &self.ctx {
+            None => {
+                return Ok(Started {
+                    ctx: None,
+                    resources,
+                });
+            }
+            Some(c) => Arc::clone(c),
+        };
+
+        {
+            let mut g = ctx.lock();
+            if g.is_replaying() {
+                g.call_index += 1;
+            } else {
+                let idx = g.call_index;
+                g.pending.push(ActionLogEntry {
+                    call_index: idx,
+                    call_kind: CallKind::WarmCerts,
+                    resources: resources.clone(),
+                    barrier: None,
+                });
+                g.call_index += 1;
+            }
+        }
+
+        Ok(Started {
+            ctx: Some(ctx),
+            resources,
+        })
+    }
+
     // r[impl barrier.replay.rt-stop]
     fn do_stop(
         &mut self,
@@ -575,6 +642,19 @@ impl CustomType for RuntimeInstance {
                         ))
                     })?;
                     this.do_start(resources_with_defs)
+                },
+            )
+            // l[impl rt.warm-certs]
+            .with_fn(
+                "warm_certs",
+                |this: &mut Self, resources: Dynamic| -> Result<Started, Box<EvalAltResult>> {
+                    let resources_with_defs = this.extract_instances(resources).map_err(|e| {
+                        Box::new(EvalAltResult::ErrorRuntime(
+                            e.to_string().into(),
+                            rhai::Position::NONE,
+                        ))
+                    })?;
+                    this.do_warm_certs(resources_with_defs)
                 },
             );
     }

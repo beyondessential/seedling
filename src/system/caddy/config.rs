@@ -74,23 +74,47 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
     }
 
     // --- TLS automation ---
-    let tls_subjects: Vec<&str> = config
+    // Subjects covered by the automation policy: routed TLS vhosts plus any
+    // warm-cert hostnames that aren't already in routed vhosts.
+    let routed_subjects: std::collections::BTreeSet<&str> = config
         .virtual_hosts
         .iter()
         .filter(|vh| vh.tls_acme)
         .map(|vh| vh.hostname.as_str())
         .collect();
+    let warm_subjects: std::collections::BTreeSet<&str> = config
+        .warm_cert_hostnames
+        .iter()
+        .map(|h| h.as_str())
+        .filter(|h| !routed_subjects.contains(h))
+        .collect();
+    let mut all_subjects: Vec<&str> = routed_subjects
+        .iter()
+        .chain(warm_subjects.iter())
+        .copied()
+        .collect();
+    all_subjects.sort();
+    all_subjects.dedup();
 
     let mut apps = json!({ "http": { "servers": servers } });
 
-    if !tls_subjects.is_empty() {
-        apps["tls"] = json!({
+    if !all_subjects.is_empty() {
+        // r[impl actuate.ingress.warm-certs]
+        // For routed subjects, Caddy acquires the cert lazily on first
+        // request to the matching server; for warm-only subjects, no server
+        // matches and Caddy must be told explicitly via certificates.automate.
+        let mut tls = json!({
             "automation": {
                 "policies": [{
-                    "subjects": tls_subjects,
+                    "subjects": all_subjects,
                 }]
             }
         });
+        if !warm_subjects.is_empty() {
+            let warm_list: Vec<&str> = warm_subjects.iter().copied().collect();
+            tls["certificates"] = json!({ "automate": warm_list });
+        }
+        apps["tls"] = tls;
     }
 
     if !config.l4_routes.is_empty() {

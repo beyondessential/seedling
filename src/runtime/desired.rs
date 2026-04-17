@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use crate::defs::app::AppDef;
@@ -37,8 +37,8 @@ impl DesiredState {
 }
 
 /// Records the resources an in-progress lifecycle operation has placed into
-/// the desired state so far, as directed by `rt.start()`, `rt.stop()`, and
-/// `rt.reconcile()` calls in the action closure.
+/// the desired state so far, as directed by `rt.start()` and `rt.stop()`
+/// calls in the action closure.
 #[derive(Debug, Default, Clone)]
 pub struct OperationProgress {
     resources: HashMap<ResourceInstance, LifecycleState>,
@@ -46,6 +46,12 @@ pub struct OperationProgress {
     /// These are resources created anonymously inside an action closure that are
     /// not present in the static AppDef. Repopulated on each pass of run_operation.
     pub dynamic_defs: HashMap<ResourceInstance, Resource>,
+    /// Hostnames whose certs should be pre-warmed (via `rt.warm_certs`) without
+    /// routing traffic to them. Read by the proxy reconciler to emit
+    /// `tls.certificates.automate` entries; not part of the standard desired
+    /// state. Stored by ingress resource name.
+    // r[impl actuate.ingress.warm-certs]
+    pub warm_cert_hostnames: BTreeSet<String>,
 }
 
 impl OperationProgress {
@@ -53,6 +59,7 @@ impl OperationProgress {
         Self {
             resources: HashMap::new(),
             dynamic_defs: HashMap::new(),
+            warm_cert_hostnames: BTreeSet::new(),
         }
     }
 
@@ -88,6 +95,7 @@ impl OperationProgress {
         let mut this = Self {
             resources: HashMap::new(),
             dynamic_defs: HashMap::new(),
+            warm_cert_hostnames: BTreeSet::new(),
         };
         for entry in entries {
             match entry.call_kind {
@@ -102,6 +110,19 @@ impl OperationProgress {
                     }
                 }
                 CallKind::Query => {}
+                // r[impl actuate.ingress.warm-certs]
+                // WarmCerts records intent in a separate map; it does not put
+                // resources into the standard desired state, so the reconciler
+                // will not actuate them as fully Ready (which would route
+                // traffic). The Caddy reconciler reads warm_cert_hostnames
+                // separately to push cert-only proxy entries.
+                CallKind::WarmCerts => {
+                    for r in &entry.resources {
+                        if let Some(name) = r.name.as_deref() {
+                            this.warm_cert_hostnames.insert(name.to_owned());
+                        }
+                    }
+                }
             }
         }
         this

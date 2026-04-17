@@ -300,6 +300,12 @@ pub struct ProxyConfig {
     pub virtual_hosts: Vec<VirtualHost>,
     /// Layer-4 (TCP/UDP) routes for non-HTTP ingresses proxied via Caddy L4.
     pub l4_routes: Vec<L4Route>,
+    /// Hostnames whose TLS certificates should be pre-provisioned without
+    /// adding routes (`rt.warm_certs`). Translated to
+    /// `tls.certificates.automate` plus matching policy subjects so that Caddy
+    /// acquires the certs eagerly, not lazily on first request.
+    // r[impl actuate.ingress.warm-certs]
+    pub warm_cert_hostnames: std::collections::BTreeSet<String>,
 }
 
 /// A layer-4 (TCP/UDP) proxy route for non-HTTP ingresses.

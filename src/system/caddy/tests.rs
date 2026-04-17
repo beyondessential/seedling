@@ -47,6 +47,7 @@ fn http_only_vhost_goes_in_http_server() {
         }],
         virtual_hosts: vec![http_vhost("example.com", "[fd5e::1]:3000")],
         l4_routes: vec![],
+        warm_cert_hostnames: Default::default(),
     };
     let json = build_caddy_config(&config);
     let servers = &json["apps"]["http"]["servers"];
@@ -69,6 +70,7 @@ fn https_vhost_goes_in_https_server_redirect_in_http() {
         ],
         virtual_hosts: vec![https_vhost("example.com", "[fd5e::1]:3000")],
         l4_routes: vec![],
+        warm_cert_hostnames: Default::default(),
     };
     let json = build_caddy_config(&config);
     let servers = &json["apps"]["http"]["servers"];
@@ -106,10 +108,78 @@ fn tls_acme_subjects_appear_in_automation() {
             }],
         }],
         l4_routes: vec![],
+        warm_cert_hostnames: Default::default(),
     };
     let json = build_caddy_config(&config);
     let subjects = &json["apps"]["tls"]["automation"]["policies"][0]["subjects"];
     assert_eq!(subjects[0], "secure.example.com");
+}
+
+// r[verify actuate.ingress.warm-certs]
+#[test]
+fn warm_cert_only_emits_certificates_automate_and_policy() {
+    let mut config = ProxyConfig::default();
+    config
+        .warm_cert_hostnames
+        .insert("warm.example.com".to_string());
+    let json = build_caddy_config(&config);
+
+    // No HTTP server is created — there are no routes.
+    assert!(
+        json["apps"]["http"]["servers"]
+            .as_object()
+            .is_none_or(|m| m.is_empty())
+    );
+
+    // The hostname appears in both the automation policy and certificates.automate.
+    let subjects = &json["apps"]["tls"]["automation"]["policies"][0]["subjects"];
+    assert_eq!(subjects[0], "warm.example.com");
+    let automate = &json["apps"]["tls"]["certificates"]["automate"];
+    assert_eq!(automate[0], "warm.example.com");
+}
+
+// r[verify actuate.ingress.warm-certs]
+#[test]
+fn warm_cert_skipped_when_already_routed() {
+    let mut config = ProxyConfig {
+        listeners: vec![ProxyListener {
+            port: 443,
+            proto: ProxyListenerProto::Https,
+        }],
+        virtual_hosts: vec![VirtualHost {
+            hostname: "shared.example.com".to_string(),
+            tls_acme: true,
+            redirect: None,
+            routes: vec![ProxyRoute {
+                prefix: "/".to_string(),
+                upstreams: vec!["http://[fd5e::1]:3000".to_string()],
+            }],
+        }],
+        l4_routes: vec![],
+        warm_cert_hostnames: Default::default(),
+    };
+    // Asking to warm a hostname that's already routed should be a no-op
+    // (the hostname is already covered by lazy acquisition via the server block).
+    config
+        .warm_cert_hostnames
+        .insert("shared.example.com".to_string());
+    let json = build_caddy_config(&config);
+
+    // Subjects appear once in the policy.
+    let subjects = json["apps"]["tls"]["automation"]["policies"][0]["subjects"]
+        .as_array()
+        .expect("subjects array")
+        .iter()
+        .filter(|s| s.as_str() == Some("shared.example.com"))
+        .count();
+    assert_eq!(subjects, 1, "subject should not be duplicated");
+
+    // certificates.automate is absent (or doesn't include the routed hostname).
+    let automate = &json["apps"]["tls"]["certificates"];
+    assert!(
+        automate.is_null(),
+        "certificates.automate should not be set when all warm hostnames are already routed"
+    );
 }
 
 #[test]
@@ -129,6 +199,7 @@ fn dial_strips_http_scheme() {
             }],
         }],
         l4_routes: vec![],
+        warm_cert_hostnames: Default::default(),
     };
     let json = build_caddy_config(&config);
     let dial = &json["apps"]["http"]["servers"]["seedling_https"]["routes"][0]["handle"][0]["upstreams"]
@@ -159,6 +230,7 @@ fn https_server_includes_quic_listener() {
             }],
         }],
         l4_routes: vec![],
+        warm_cert_hostnames: Default::default(),
     };
     let json = build_caddy_config(&config);
     let listen = &json["apps"]["http"]["servers"]["seedling_https"]["listen"];

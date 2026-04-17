@@ -38,6 +38,10 @@ pub enum CallKind {
     Start,
     Stop,
     Query,
+    /// `rt.warm_certs(...)` — pre-provision TLS certificates without routing
+    /// traffic. Records intent without affecting the standard desired state.
+    // r[impl actuate.ingress.warm-certs]
+    WarmCerts,
 }
 
 // r[impl history.action-log.entries]

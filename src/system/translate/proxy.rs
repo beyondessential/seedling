@@ -148,6 +148,27 @@ pub fn build_proxy_config(ingresses: &[(IngressDef, ServiceUpstream)]) -> ProxyC
         listeners: listener_set.into_iter().collect(),
         virtual_hosts: vhosts.into_values().collect(),
         l4_routes: vec![],
+        warm_cert_hostnames: BTreeSet::new(),
+    }
+}
+
+/// Augment a ProxyConfig with warm-cert hostnames collected from the per-app
+/// `OperationProgress.warm_cert_hostnames` sets. Hostnames already present as a
+/// vhost (i.e. routed) are skipped — Caddy's vhost-driven acquisition handles
+/// those, and adding them to `automate` is redundant.
+// r[impl actuate.ingress.warm-certs]
+pub fn augment_with_warm_certs(config: &mut ProxyConfig, warm_hostnames: BTreeSet<String>) {
+    let already_routed: BTreeSet<&str> = config
+        .virtual_hosts
+        .iter()
+        .filter(|vh| vh.tls_acme)
+        .map(|vh| vh.hostname.as_str())
+        .collect();
+
+    for host in warm_hostnames {
+        if !already_routed.contains(host.as_str()) {
+            config.warm_cert_hostnames.insert(host);
+        }
     }
 }
 
