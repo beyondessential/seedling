@@ -75,15 +75,72 @@ Absent specification bugs, anything that is not defined here is either defined i
 > The desired state is derived from two inputs:
 >
 > 1. The AppDef: the resource graph produced by evaluating the BSL script.
-> 2. The progress of the current [lifecycle operation](#r--operation.lifecycle), if any: which resources have been started, stopped, or reconciled by the action closure so far.
+> 2. The progress of the current [lifecycle operation](#r--operation.lifecycle), if any: which resources have been started or stopped by the action closure so far.
 
 > r[desired-state.steady]
 > When no lifecycle operation is active, the desired state is the full AppDef.
 > The reconciler maintains it autonomously: restarting terminated containers according to their restart policy, maintaining scale, and keeping networking and ingress configuration consistent.
 
 > r[desired-state.during-operation]
-> When a lifecycle operation is in progress, the desired state is built incrementally by the action closure's `rt.start()`, `rt.stop()`, and `rt.reconcile()` calls.
+> When a lifecycle operation is in progress, the desired state is built incrementally by the action closure's `rt.start()` and `rt.stop()` calls.
 > The reconciler must only act on resources that the operation has placed into the desired state so far.
+> Resources that are not in the desired state during an operation are left untouched: any running instances continue to run with whatever spec they were last started with, and no rotation is performed against them until the operation either schedules them explicitly or completes (returning the app to steady state).
+
+# Generation
+
+> r[generation.definition]
+> A *generation* is a monotonically increasing per-app counter that uniquely identifies the application's defined state at a point in time.
+> Each generation corresponds to a specific `(script, parameter values)` pair.
+> The current generation of an app determines the AppDef that the reconciler maintains in steady state.
+
+> r[generation.bumps]
+> The generation of an app must be incremented (by exactly one) on each of:
+>
+> - The initial registration of the app.
+> - A successful script update.
+> - A successful parameter set or unset.
+>
+> The bump must be committed to durable storage atomically with the change that caused it.
+> If the change triggers a lifecycle operation (such as an `on_change` handler), the operation is dispatched after the generation has been committed.
+
+> r[generation.monotonic]
+> Generations must be strictly monotonic for the lifetime of an app.
+> A failed lifecycle operation (for example, a failing `on_change` handler) must not roll back the generation: the change to the defined state has already been committed, and the failure is recorded as the operation's [outcome](#r--generation.history).
+> An operator may file a corrective change as a new generation; the failed generation remains visible in history.
+
+> r[generation.history]
+> The runtime must maintain a durable per-app history of generations.
+> Each generation history entry must contain:
+>
+> - The generation number.
+> - A timestamp of when the generation was created.
+> - The kind of change: `Register`, `ScriptUpdate`, `ParamSet`, or `ParamUnset`.
+> - For `ParamSet` and `ParamUnset`: the parameter name, the previous value (`Option<Value>`), and the new value (`Option<Value>`). A `ParamSet` from an unset state has a previous value of `None`; a `ParamUnset` has a new value of `None`.
+> - For `Register` and `ScriptUpdate`: the content hash of the script registered at this generation.
+> - The identity of the lifecycle operation triggered by this change, if any.
+> - The outcome of that operation: `Pending` (still running or queued), `Succeeded`, or `Failed` (with details).
+
+> r[generation.script-storage]
+> Script bodies must be stored content-addressed by hash.
+> Multiple generations whose script content is identical share a single stored script body.
+> A generation history entry references its script by hash; the script body is retrieved by looking up the hash.
+
+> r[generation.reconstruction]
+> Given a generation number N for an app, the runtime must be able to reconstruct the AppDef as it was at generation N by:
+>
+> 1. Looking up generation N's script hash and loading the corresponding script body.
+> 2. Building the parameter map at generation N: for each parameter that has any history entry at or before N, the value is taken from the most recent `ParamSet` or `ParamUnset` entry at or before N. A `ParamUnset` (or absence of any entry) yields `None`.
+> 3. Evaluating the script with that parameter map.
+
+> r[generation.previous]
+> The *previous generation* of generation N is generation N − 1.
+> Reconstruction of the previous generation is required to materialise the `old` argument of [`on_change`](#l--param.on-change.old) handlers.
+
+> r[generation.deregister]
+> When an app is deregistered, its generation history and all stored generation data (parameter values, script bodies referenced only by this app) must be deleted as part of teardown.
+> A subsequent registration of an app with the same name begins a new generation lineage from generation 1; the two registrations are independent for all runtime purposes.
+>
+> Forensic reconstruction of a prior app's history (across a deregister/re-register cycle) is the responsibility of the [audit log](#r--audit.log), not the per-app generation history.
 
 # Lifecycle
 
@@ -205,7 +262,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > - A timestamp.
 > - The lifecycle operation identity.
-> - The `rt.*` call that was made (start, stop, reconcile), and on which resources.
+> - The `rt.*` call that was made (e.g. start, stop, warm_certs), and on which resources.
 > - The barrier condition, if a barrier was reached (which resources, which state, what deadline).
 > - Whether the barrier has been satisfied.
 
@@ -231,8 +288,10 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - Faults filed and cleared.
 > - Resource state transitions.
 
-> r[audit.log.version-ids]
-> App registration and update audit entries must include the version identifier of the new app version. Update entries must also include the previous version identifier.
+> r[audit.log.generations]
+> Audit entries that record changes to an app's defined state — including registration, script update, parameter set, and parameter unset — must include the [generation](#r--generation.definition) of the change.
+> For changes that supersede a prior generation (any change other than initial registration), the entry must also include the previous generation.
+> Lifecycle operation audit entries triggered by a generation change must include the source and target generations from the operation record.
 
 > r[audit.log.rotation]
 > The audit log file must be compatible with external log rotation tools. The runtime must detect when the log file has been rotated (renamed or removed) and reopen the configured path.
@@ -284,7 +343,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > - **Normal boot** (prior state exists, no interrupted operation): the `start` action.
 > - **Boot, interrupted operation exists**: replay of the interrupted operation.
-> - **Param change**: the `on_change` handler registered on the parameter that changed.
+> - **Param change**: the `on_change` handler registered on the parameter that changed, when the change matches one of the [transitions](#l--param.on-change.transitions) in the language spec, the app is installed, and a handler is registered.
 > - **Operator request**: a named action, including `install`.
 
 > r[operation.lifecycle.param-change]
@@ -292,8 +351,18 @@ Absent specification bugs, anything that is not defined here is either defined i
 > It is subject to the same [concurrency restrictions](#r--operation.lifecycle.single) as all other lifecycle operations.
 > Only one parameter may be changed at a time.
 
+> r[operation.lifecycle.generations]
+> Every lifecycle operation record must carry a *source generation* and a *target generation*.
+>
+> - For an operation triggered by a [generation bump](#r--generation.bumps) (param change, script update), the source generation is the generation that was current immediately before the bump, and the target generation is the new generation produced by the bump.
+> - For an operation not triggered by a generation bump (operator-invoked actions, `start`, replay), the source and target generations are equal — the current generation at the time of dispatch.
+>
+> Replay of an interrupted operation must reconstruct the AppDef using the operation's stored target generation, and `old` (when applicable) using the source generation.
+> This must hold even if further generations have been committed in the meantime; the operation always sees the world it was scheduled for.
+
 > r[operation.lifecycle.completion]
-> When a lifecycle operation completes (the action closure returns), the full [desired state](#r--desired-state.steady) takes effect and the reconciler maintains it autonomously.
+> When a lifecycle operation completes (the action closure returns), the full [desired state](#r--desired-state.steady) — derived from the AppDef at the app's current generation — takes effect and the reconciler maintains it autonomously.
+> The operation's outcome is recorded in the [generation history](#r--generation.history) entry that triggered it (when applicable).
 
 ## Action Composition
 
@@ -342,7 +411,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > 1. The BSL script is re-evaluated to reconstruct the AppDef.
 > 2. The [action execution log](#r--history.action-log) is read from persistent storage.
 > 3. The action closure is re-executed from the beginning.
-> 4. `rt.start()`, `rt.stop()`, and `rt.reconcile()` calls that are already recorded in the log are idempotent: they produce the same desired state mutations but do not duplicate real-world operations.
+> 4. `rt.*` calls that are already recorded in the log are idempotent: they produce the same desired state mutations but do not duplicate real-world operations.
 > 5. Barrier calls whose conditions are already satisfied (according to the current world observation history) return immediately.
 > 6. Execution fast-forwards to the first unsatisfied barrier, where it suspends normally.
 
@@ -397,6 +466,17 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[observe.ingress]
 > For Ingress resource instances, the runtime must observe whether the proxy is reachable.
 
+> r[observe.ingress.certs]
+> For each TLS-terminating ingress, the runtime must observe the certificate status for each declared hostname.
+> Statuses are:
+>
+> - `none`: no certificate has been acquired and no acquisition is in progress.
+> - `pending`: certificate acquisition is in progress.
+> - `valid`: a non-expired certificate is cached and usable. The expiry timestamp must also be observable.
+> - `failed`: certificate acquisition has failed; the most recent error must be observable.
+>
+> Cert observation drives both the [`Ready` lifecycle state](#r--lifecycle.ingress) of an ingress and the satisfaction of [`rt.warm_certs`](#l--rt.warm-certs) barriers.
+
 > r[observe.persist]
 > After each observation pass, the runtime must persist the resulting facts to the
 > `world_observations` table as `obs_kind` string entries so that the barrier oracle
@@ -436,6 +516,12 @@ Absent specification bugs, anything that is not defined here is either defined i
 > to the system journal. Each infrastructure container must be tagged with a structured
 > journal field that identifies the infrastructure component so that log queries can
 > target infrastructure logs independently of workload logs.
+
+> r[actuate.ingress.warm-certs]
+> When an action closure invokes [`rt.warm_certs`](#l--rt.warm-certs) with a selection that contains TLS-terminating ingresses, the runtime must initiate certificate acquisition for those ingresses' hostnames without exposing the ingresses to live traffic.
+> A typical implementation pushes a partial proxy configuration that requests certificate acquisition while not routing requests to any backend; once the certificate is `valid`, it is served from the proxy's cache when the same ingress is later started for real.
+>
+> The warm_certs call must be recorded in the [action execution log](#r--history.action-log) and must be idempotent on replay: a subsequent invocation with the same selection observes the existing cert state and returns immediately when `valid`, without re-initiating acquisition.
 
 > r[actuate.volume.start]
 > Starting a Volume instance must create the named volume if it does not already exist, then apply any declared file writes to the volume.
@@ -538,6 +624,10 @@ Absent specification bugs, anything that is not defined here is either defined i
 > When the reconciler observes that a resource instance's backing unit is in a failed state while the desired state is active, it must file a fault of kind `container_start_failed` associated with that instance.
 > The fault is cleared automatically when the unit is subsequently observed in an active or activating state.
 
+> r[fault.cert-acquisition]
+> When TLS certificate acquisition for an ingress hostname fails persistently (after the proxy's own retry policy has been exhausted), the runtime must file a fault of kind `cert_acquisition_failed` associated with that ingress, identifying the hostname and the most recent acquisition error.
+> The fault is cleared automatically when a subsequent acquisition for the same hostname is observed as `valid`.
+
 > r[fault.surfacing]
 > Faults must be surfaced to operators through the operator interface (defined in a separate spec).
 > The runtime must not silently discard faults.
@@ -581,19 +671,6 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > r[identity.job.shell]
 > A Job used as the target of a shell `attach()` call receives a fresh randomly-generated instance ID chosen at the moment `attach()` is called, independent of any lifecycle operation ID. This allows multiple concurrent shell sessions to run against the same Job definition without collision.
-
-# Reconciliation of Resources
-
-> r[reconcile.operation]
-> The `rt.reconcile(old, new)` runtime method must convert one resource into another while minimising disruption.
-
-> r[reconcile.supported-pairs]
-> The runtime must define which resource type pairs support reconciliation.
-> Unsupported pairs must fall back to stop-then-start, as specified in the language spec.
-
-> r[reconcile.ingress]
-> Reconciling one Ingress into another must not drop in-flight traffic.
-> The runtime must update the ingress configuration atomically, transitioning backends from old to new as new backends become available.
 
 # Startup
 

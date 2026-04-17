@@ -164,11 +164,12 @@ Absent specification bugs, anything that is not defined here is either defined i
 > `/apps/update { app, script }` re-evaluates the provided BSL script source text.
 > If a lifecycle operation is in progress, the new AppDef takes effect at the next evaluation boundary after the operation completes.
 > If the script fails to parse or evaluate, a `script_error` app-level fault is filed, the existing AppDef continues running, and the request still succeeds.
-> On success, any previously active `script_error` fault for this app is cleared.
+> On success, any previously active `script_error` fault for this app is cleared, and the app's [generation](#r--generation.definition) is bumped with a `ScriptUpdate` history entry.
 
-> i[app.version]
-> Every registered app has a current version identifier. The version identifier is an opaque string assigned when the app is first registered and updated each time `/apps/update` is called.
-> Previous versions and their scripts are retained durably so that operators and automation can retrieve any historical version.
+> i[app.generation]
+> Every registered app has a current [generation](#r--generation.definition) — a per-app monotonic integer identifying the app's defined state at a point in time.
+> The generation is bumped on initial registration, on each successful `/apps/update`, and on each successful parameter set or unset.
+> Previous generations are retained durably so that operators and automation can retrieve any historical state of the app.
 
 > i[app.list]
 > `/apps/list` returns an array of objects with fields `name` and `status`.
@@ -207,9 +208,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - `install_requirements`: an object map of requirement key to `{ kind, required, description, default_value }`, as defined in the language spec for install requirements.
 >   Empty if the app has no explicit install action.
 > - `current_operation`: present only when status is `Operating`.
->   Has fields `action_name` and `barrier`.
+>   Has fields `action_name`, `barrier`, `source_generation`, and `target_generation`.
 >   `barrier` is either `null` (operation is running but not yet at a barrier) or an object with fields `resources`, `required_state`, `deadline_secs`, and `elapsed_secs`.
-> - `version_id`: the current version identifier of the app.
+> - `generation`: the current generation of the app.
 
 # Scaling
 
@@ -230,9 +231,47 @@ Absent specification bugs, anything that is not defined here is either defined i
 # App Script Retrieval
 
 > i[app.script]
-> `/apps/script { app, version? }` returns the BSL script source text for the specified app.
-> If `version` is provided, the script for that specific version is returned; otherwise the current version's script is returned.
-> The response contains the fields `script` (the source text) and `version_id` (the version identifier of the returned script).
+> `/apps/script { app, generation? }` returns the BSL script source text for the specified app.
+> If `generation` is provided, the script that was active at that generation is returned; otherwise the current generation's script is returned.
+> The response contains the fields `script` (the source text) and `generation` (the generation of the returned script).
+> Multiple consecutive generations may share the same script content (for example, when intermediate generations are parameter changes); this is not surfaced specially in the response.
+
+# Generation History
+
+> i[generation.history]
+> `/apps/generations { app, limit?, before? }` returns the most recent entries of the app's [generation history](#r--generation.history), in descending order of generation number.
+> `limit` defaults to 50 and is capped at 200. `before`, when provided, restricts the response to entries with generation strictly less than the given value.
+>
+> Each entry in the response is an object with fields:
+>
+> - `generation`: the generation number.
+> - `timestamp`: RFC 3339 timestamp.
+> - `kind`: `"register" | "script_update" | "param_set" | "param_unset"`.
+> - `param_name`: present for `param_set` and `param_unset`.
+> - `previous_value`: present for `param_set` and `param_unset`; `null` if the parameter was unset before this entry, otherwise a string.
+> - `new_value`: present for `param_set` and `param_unset`; `null` for `param_unset`, otherwise a string.
+> - `script_changed`: boolean; `true` for `register` and `script_update`, otherwise `true` only if the script content for this generation differs from the immediately preceding generation. (For `param_set` / `param_unset`, this is always `false`.)
+> - `operation_id`: identifier of the lifecycle operation triggered by this change, if any.
+> - `outcome`: `"pending" | "succeeded" | "failed"`; `null` if no lifecycle operation was triggered. When `failed`, an `error` field carries a short description.
+
+# Change Planning
+
+> i[plan.dry-run]
+> `/apps/plan { app, proposed_script?, proposed_params? }` evaluates a hypothetical change against the app's current generation and returns a structured diff.
+> Neither the script nor the parameter values stored on the server are modified by this call.
+>
+> Parameters:
+>
+> - `proposed_script`: optional BSL script source text to evaluate in place of the current script. If omitted, the current script is used.
+> - `proposed_params`: optional array of `{ name, value }` objects. `value` is `null` to model an unset; a string to model a set. Parameters not listed are taken from the current parameter map. If both `proposed_script` and `proposed_params` are omitted, the response is an empty diff.
+>
+> The response contains:
+>
+> - `diff`: an array of resource diff entries, each with fields `resource_type`, `resource_name`, and `change` (`"added" | "removed" | "modified"`). For `modified` entries, a `fields` array lists the resource attributes that differ between current and proposed.
+> - `on_change_would_fire`: an array of parameter names whose `on_change` handlers would be scheduled if the proposed change were committed.
+> - `errors`: an array of evaluation errors, if the proposed script fails to evaluate. When present, `diff` and `on_change_would_fire` are absent.
+>
+> The dry-run does not simulate the execution of `on_change` handlers or any action closures; it reports only the static diff and which handlers would be triggered.
 
 # Param Management
 
@@ -242,9 +281,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 > A param with no stored value is treated as absent.
 
 > i[param.set]
-> `/apps/params/set { app, name, value }` persists the value and, if an `on_change` handler is registered for that param, schedules it as a lifecycle operation subject to the same concurrency rules as all lifecycle operations.
+> `/apps/params/set { app, name, value }` persists the value and bumps the app's [generation](#r--generation.definition) with a `ParamSet` history entry. If the change matches one of the [transitions](#l--param.on-change.transitions) defined in the language spec, an `on_change` handler is registered for that param, and the app is installed, the handler is scheduled as a lifecycle operation subject to the same concurrency rules as all lifecycle operations.
 > The script is re-evaluated after the value is persisted; if evaluation fails, a `script_error` app-level fault is filed and the request still succeeds.
-> Returns `{ "schedule": "accepted" }` or `{ "schedule": "queued" }` on success, or an error.
+> Returns `{ "schedule": "accepted" | "queued" | "not_scheduled", "generation": <int> }` on success, or an error. `not_scheduled` means the generation was bumped but no `on_change` handler ran (for example, the value did not change, or no handler is registered).
 
 > i[param.unknown]
 > Setting a param whose name does not appear in the app's current script evaluation is permitted.
@@ -252,10 +291,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > i[param.unset]
 > `/apps/params/unset { app, name }` removes the stored value for the named parameter and reloads the script.
-> If the parameter has an `on_change` handler and the app is installed, it is scheduled as a lifecycle operation.
+> If the parameter previously had a stored value, the app's [generation](#r--generation.definition) is bumped with a `ParamUnset` history entry. If the change matches one of the [transitions](#l--param.on-change.transitions), an `on_change` handler is registered, and the app is installed, the handler is scheduled as a lifecycle operation.
 > The script is re-evaluated after the value is removed; if evaluation fails, a `script_error` app-level fault is filed and the request still succeeds.
-> Returns `{ "schedule": "accepted" }` or `{ "schedule": "queued" }` on success, or an error.
-> If the parameter has no stored value, the request still succeeds.
+> Returns `{ "schedule": "accepted" | "queued" | "not_scheduled", "generation": <int> }` on success, or an error. If the parameter had no stored value, the generation is not bumped, the response carries `"schedule": "not_scheduled"`, and the response's `generation` reflects the unchanged current generation.
 
 # Action Invocation
 
@@ -474,12 +512,14 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > | `type` | Additional fields |
 > |---|---|
-> | `AppRegistered` | `app`, `version_id` |
+> | `AppRegistered` | `app`, `generation` |
 > | `AppDeregistered` | `app` |
-> | `AppUpdated` | `app`, `version_id`, `previous_version_id` |
-> | `OperationStarted` | `app`, `action_name`, `operation_id` |
-> | `OperationCompleted` | `app`, `action_name`, `operation_id` |
-> | `OperationFailed` | `app`, `action_name`, `operation_id`, `error` |
+> | `AppUpdated` | `app`, `generation`, `previous_generation` |
+> | `ParamSet` | `app`, `name`, `previous_value`, `new_value`, `generation`, `previous_generation` |
+> | `ParamUnset` | `app`, `name`, `previous_value`, `generation`, `previous_generation` |
+> | `OperationStarted` | `app`, `action_name`, `operation_id`, `source_generation`, `target_generation` |
+> | `OperationCompleted` | `app`, `action_name`, `operation_id`, `source_generation`, `target_generation` |
+> | `OperationFailed` | `app`, `action_name`, `operation_id`, `source_generation`, `target_generation`, `error` |
 > | `FaultFiled` | all fault record fields |
 > | `FaultCleared` | `id`, `app` |
 > | `ResourceStateChanged` | `app`, `resource_type`, `resource_name`, `instance_id`, `state` |

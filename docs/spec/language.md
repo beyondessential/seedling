@@ -231,8 +231,30 @@ This is currently the only value.
 > `param.on_change(fn: closure)` registers a handler that is called when the parameter's value changes.
 >
 > The `fn` closure may take up to two arguments: the [Runtime Instance](#l--rt.var) (typically named `rt`) and the previous `App` instance (typically named `old`).
-> `old.param(name)` returns the previous value of any parameter.
+
+> l[param.on-change.old]
+> The `old` argument is an `App` value that reflects the state at the previous [generation](#r--generation.definition): the script evaluated with the parameter values as they were before the change.
 >
+> `old.param(name).is_set()` and `old.param(name).value()` return results consistent with the prior parameter state.
+> Static resources defined in the script, and actions, are accessible via `old` and reflect their prior definitions. This is useful for resources whose shape depends on parameter values.
+>
+> Calling resource-definition methods on `old` (that would create or mutate resources) has no effect on the current app; `old` is a read-only view of the previous generation.
+
+> l[param.on-change.transitions]
+> The handler is invoked as a [lifecycle operation](#r--operation.lifecycle) when the effective value of the parameter transitions between states. For this purpose the value of a parameter is always `Option<Value>`: either unset (`None`) or set to some string (`Some(s)`).
+>
+> The handler is invoked on any of the following transitions:
+>
+> - `None` → `Some(s)`: the parameter was unset and has now been set.
+> - `Some(s₁)` → `Some(s₂)` where `s₁ ≠ s₂`: the value has changed.
+> - `Some(s)` → `None`: the parameter has been unset.
+>
+> Within the closure, `old.param(name).is_set()` reflects the prior half of the transition, and `app.param(name).is_set()` reflects the new half.
+
+> l[param.on-change.not-on-install]
+> The handler is not invoked during the initial install of an application, because there is no prior generation to compare against.
+
+> l[param.on-change.constraints]
 > `on_change` may only be called at the top level of the script (statically). Calling it from within an action closure must throw.
 > Calling `on_change` more than once on the same parameter must throw.
 
@@ -710,19 +732,16 @@ This spec defines the semantics of the Runtime Instance as far as BSL is concern
 > l[rt.query]
 > The `rt.query(resources: Collection)` method returns a [Started](#l--rt.started) _without_ scheduling the resources.
 
-> l[rt.reconcile]
-> The `rt.reconcile(old: Resource, new: Resource)` method converts one Resource into another, and returns a [Started](#l--rt.started).
+> l[rt.warm-certs]
+> The `rt.warm_certs(resources: Collection)` method selects all TLS-terminating [Ingresses](#l--ingress.type) from the given Collection and ensures their TLS certificates are provisioned and cached, without yet routing traffic to those ingresses.
+> Non-ingress resources and ingresses without TLS termination in the collection are ignored.
 >
-> How exactly that happens, and which resource pairs are supported, is defined by the runtime (not in this spec).
-> Non-normatively, an example is reconciling an [Ingress](#l--ingress.type) into another, which will happen without dropping traffic.
+> It returns a [Started](#l--rt.started). Calling `.ready()` on the returned `Started` blocks until certificates are valid for every selected ingress.
+> If certificate provisioning cannot complete for one or more selected ingresses (for example, ACME issuance fails persistently), a fault is filed and the barrier throws when its deadline expires.
 >
-> If a reconciliation is not implemented for the pair of resources, this is equivalent to:
-> ```rhai
-> rt.stop(old);
-> rt.start(new);
-> ```
+> If the selection contains no TLS-terminating ingresses, the returned `Started` is immediately satisfied.
 >
-> Note that this does not support Collections, it's specifically one Resource to one Resource.
+> Calling `rt.warm_certs(app)` from within an [`on_change`](#l--param.on-change) handler warms exactly the ingresses that exist in the new generation. Ingresses present in the previous generation but not the new one are not warmed.
 
 ## Waiting on resource state
 
