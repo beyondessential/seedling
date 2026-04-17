@@ -68,6 +68,8 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8]) -> HandlerResult {
         "/apps/script" => apps::get_app_script(state, parse_params(req.params)?),
         // i[generation.history]
         "/apps/generations" => apps::list_generations(state, parse_params(req.params)?),
+        // i[plan.dry-run]
+        "/apps/plan" => apps::dry_run_plan(state, parse_params(req.params)?),
         // i[param.set]
         "/apps/params/set" => params::set_param(state, parse_params(req.params)?),
         // i[param.unset]

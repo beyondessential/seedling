@@ -52,6 +52,22 @@ pub(crate) struct ListGenerationsParams {
 }
 
 #[derive(Deserialize)]
+pub(crate) struct ProposedParam {
+    pub name: String,
+    /// `Some(s)` to model setting; `None` to model unsetting.
+    pub value: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct PlanParams {
+    pub app: String,
+    #[serde(default)]
+    pub proposed_script: Option<String>,
+    #[serde(default)]
+    pub proposed_params: Option<Vec<ProposedParam>>,
+}
+
+#[derive(Deserialize)]
 pub(crate) struct ScaleParams {
     pub app: String,
     pub deployment: String,
@@ -519,6 +535,122 @@ pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -
         .collect();
 
     Ok(json!(result))
+}
+
+// i[plan.dry-run]
+pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams) -> HandlerResult {
+    let name = params.app.as_str();
+    {
+        let reg = state.registry.read();
+        if !reg.is_registered(name) {
+            return Err(OiError::not_found(format!("app not found: {name}")));
+        }
+    }
+
+    // Empty input → empty diff.
+    if params.proposed_script.is_none() && params.proposed_params.is_none() {
+        return Ok(json!({
+            "diff": Vec::<Value>::new(),
+            "on_change_would_fire": Vec::<String>::new(),
+        }));
+    }
+
+    let (current_script, current_params) = {
+        let reg = state.registry.read();
+        let entry = reg.get(name).expect("confirmed registered");
+        let db = state.db.lock();
+        let stored = crate::runtime::apps::load_params_for_app(&db, name).unwrap_or_default();
+        (entry.script.clone(), stored)
+    };
+
+    // Build the proposed param map from current with the proposals overlaid.
+    let mut proposed_param_map = current_params.clone();
+    if let Some(props) = &params.proposed_params {
+        for p in props {
+            match &p.value {
+                Some(v) => {
+                    proposed_param_map.insert(p.name.clone(), v.clone());
+                }
+                None => {
+                    proposed_param_map.remove(&p.name);
+                }
+            }
+        }
+    }
+
+    let proposed_script = params.proposed_script.as_deref().unwrap_or(&current_script);
+
+    let proposed_app = match crate::runtime::apps::evaluate_script(
+        name,
+        proposed_script,
+        &proposed_param_map,
+        &state.script_limits,
+    ) {
+        Ok(a) => a,
+        Err(e) => {
+            return Ok(json!({ "errors": [e.to_string()] }));
+        }
+    };
+    let current_app = {
+        let reg = state.registry.read();
+        let entry = reg.get(name).expect("confirmed registered");
+        // Clone the existing AppDef shape rather than re-evaluating; the
+        // current AppDef is already the result of evaluating current_script
+        // with current_params.
+        entry.app.clone()
+    };
+
+    let cur_def = current_app.def.lock();
+    let prop_def = proposed_app.def.lock();
+
+    let mut diff: Vec<Value> = Vec::new();
+    for (id, _resource) in &prop_def.resources {
+        if !cur_def.resources.contains_key(id) {
+            diff.push(json!({
+                "resource_type": format!("{:?}", id.kind),
+                "resource_name": id.name.as_str(),
+                "change": "added",
+            }));
+        }
+    }
+    for (id, _resource) in &cur_def.resources {
+        if !prop_def.resources.contains_key(id) {
+            diff.push(json!({
+                "resource_type": format!("{:?}", id.kind),
+                "resource_name": id.name.as_str(),
+                "change": "removed",
+            }));
+        } else {
+            // Both present — emit "modified" without field-level detail for V1.
+            // The set membership of resources is the most operator-actionable
+            // signal; field-level diffing requires a serialisable Resource
+            // representation that's outside this scope.
+            diff.push(json!({
+                "resource_type": format!("{:?}", id.kind),
+                "resource_name": id.name.as_str(),
+                "change": "modified",
+                "fields": Vec::<String>::new(),
+            }));
+        }
+    }
+
+    // Compute on_change_would_fire: for each param with a registered handler
+    // in the proposed AppDef, did its effective value change between current
+    // and proposed maps?
+    let mut on_change_would_fire: Vec<String> = Vec::new();
+    for handler_param in prop_def.param_changes.iter() {
+        let cur = current_params.get(handler_param);
+        let prop = proposed_param_map.get(handler_param);
+        if cur != prop {
+            on_change_would_fire.push(handler_param.clone());
+        }
+    }
+    on_change_would_fire.sort();
+
+    Ok(json!({
+        "diff": diff,
+        "on_change_would_fire": on_change_would_fire,
+    }))
 }
 
 // i[app.register]
