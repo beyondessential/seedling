@@ -299,7 +299,6 @@ This is currently the only value.
 > An External Service is a Service provided by the Seedling control plane to a BSL script, at a particular name.
 >
 > External Services are defined using the `app.external_service(name: string)` method, which returns a `ExternalService`.
-> When the service is not yet available, `app.external_service()` returns a [placeholder](#l--bsl.placeholder).
 >
 > External Services can't be modified, only [mounted](#l--pod.mount-service).
 
@@ -585,7 +584,6 @@ This is currently the only value.
 > An External Volume is a Volume provided by the Seedling control plane to a BSL script, at a particular name.
 >
 > External Volumes are defined using the `app.external_volume(name: string)` method, which returns an `ExternalVolume`.
-> When the volume is not yet available, `app.external_volume()` returns a [placeholder](#l--bsl.placeholder).
 >
 > External Volumes can't be modified or configured further, only [mounted](#l--container.mount-volume).
 

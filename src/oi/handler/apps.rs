@@ -195,7 +195,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
 
     // Load stored param values from DB. Names come from AppDef; values come
     // from the params table. Params declared by the script but never set by
-    // the operator are shown as null, not as the internal <placeholder> string.
+    // the operator are shown as null.
     let stored_params = {
         let db = state.db.lock();
         crate::runtime::apps::load_params_for_app(&db, name).unwrap_or_default()
