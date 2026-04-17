@@ -154,6 +154,8 @@ fn schedule_on_change(
 // i[param.store]
 // i[param.set]
 // i[param.unknown]
+// l[impl param.on-change.transitions]
+// l[impl param.on-change.not-on-install]
 pub(crate) fn set_param(state: &OiState, params: SetParamParams) -> HandlerResult {
     let app = params.app.as_str();
     let param_name = params.name.as_str();
@@ -218,6 +220,8 @@ pub(crate) fn set_param(state: &OiState, params: SetParamParams) -> HandlerResul
 }
 
 // i[param.unset]
+// l[impl param.on-change.transitions]
+// l[impl param.on-change.not-on-install]
 pub(crate) fn unset_param(state: &OiState, params: UnsetParamParams) -> HandlerResult {
     let app = params.app.as_str();
     let param_name = params.name.as_str();

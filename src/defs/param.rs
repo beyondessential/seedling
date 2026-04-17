@@ -30,6 +30,7 @@ impl CustomType for Param {
         );
 
         // l[impl param.on-change]
+        // l[impl param.on-change.constraints]
         builder.with_fn(
             "on_change",
             |this: &mut Self, closure: FnPtr| -> Result<(), Box<EvalAltResult>> {

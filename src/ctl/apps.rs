@@ -76,6 +76,34 @@ pub(super) enum AppsCommand {
         #[arg(long)]
         local_port: Option<u16>,
     },
+    /// Get the script for an app (current generation by default)
+    Script {
+        app: String,
+        /// Specific generation to fetch
+        #[arg(long)]
+        generation: Option<u64>,
+    },
+    /// List the generation history for an app
+    Generations {
+        app: String,
+        /// Maximum number of entries to return (1-200, default 50)
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Only show entries with generation strictly less than this value
+        #[arg(long)]
+        before: Option<u64>,
+    },
+    /// Dry-run a hypothetical change against the current generation
+    Plan {
+        app: String,
+        /// Path to a proposed script file
+        #[arg(long = "script")]
+        proposed_script_file: Option<PathBuf>,
+        /// Proposed param change as `name=value` (repeatable). Use `name=` to
+        /// model unsetting.
+        #[arg(long = "param")]
+        proposed_params: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -394,6 +422,50 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
             local_port,
         } => {
             super::forward::forward_port(client, app, service, port, proto, local_port).await;
+        }
+        AppsCommand::Script { app, generation } => {
+            let mut params = serde_json::json!({ "app": app });
+            if let Some(g) = generation {
+                params["generation"] = serde_json::json!(g);
+            }
+            print_result(client.request("/apps/script", params).await);
+        }
+        AppsCommand::Generations { app, limit, before } => {
+            let mut params = serde_json::json!({ "app": app });
+            if let Some(l) = limit {
+                params["limit"] = serde_json::json!(l);
+            }
+            if let Some(b) = before {
+                params["before"] = serde_json::json!(b);
+            }
+            print_result(client.request("/apps/generations", params).await);
+        }
+        AppsCommand::Plan {
+            app,
+            proposed_script_file,
+            proposed_params,
+        } => {
+            let mut params = serde_json::json!({ "app": app });
+            if let Some(path) = proposed_script_file {
+                let script = read_script_file(&path);
+                params["proposed_script"] = serde_json::json!(script);
+            }
+            if !proposed_params.is_empty() {
+                let parsed: Vec<serde_json::Value> = proposed_params
+                    .iter()
+                    .map(|spec| match spec.split_once('=') {
+                        Some((name, "")) => {
+                            serde_json::json!({ "name": name, "value": serde_json::Value::Null })
+                        }
+                        Some((name, value)) => serde_json::json!({ "name": name, "value": value }),
+                        None => {
+                            serde_json::json!({ "name": spec, "value": serde_json::Value::Null })
+                        }
+                    })
+                    .collect();
+                params["proposed_params"] = serde_json::Value::Array(parsed);
+            }
+            print_result(client.request("/apps/plan", params).await);
         }
     }
 }

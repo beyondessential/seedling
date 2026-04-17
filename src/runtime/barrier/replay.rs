@@ -310,7 +310,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         // captured, fresh_scope, and fresh_app are all dropped here.
     };
 
-    // r[impl param.on-change.old]
+    // l[impl param.on-change.old]
     // For param-change handlers, materialise `old` from the previous
     // generation (= source_generation). For other operations, leave it
     // empty: the spec only defines `old` for on_change handlers, but the

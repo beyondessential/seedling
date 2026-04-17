@@ -81,6 +81,7 @@ pub struct AppEntry {
     /// Cleared on the next successful evaluation.
     pub script_error: Option<(String, Timestamp)>,
     /// Current app generation (0 if not yet bumped).
+    // i[impl app.generation]
     pub current_generation: generations::Generation,
 }
 

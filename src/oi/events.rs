@@ -259,10 +259,6 @@ pub fn operation_completed(
     );
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "mirrors all fields of OiEvent::OperationFailed"
-)]
 pub fn operation_failed(
     tx: &EventSender,
     app: &str,

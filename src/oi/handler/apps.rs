@@ -447,7 +447,7 @@ pub(crate) fn get_app_script(state: &OiState, params: GetScriptParams) -> Handle
     Ok(json!({ "script": script, "generation": generation }))
 }
 
-// i[generation.history]
+// i[impl generation.history]
 pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -> HandlerResult {
     let name = params.app.as_str();
     {
@@ -537,7 +537,7 @@ pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -
     Ok(json!(result))
 }
 
-// i[plan.dry-run]
+// i[impl plan.dry-run]
 pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams) -> HandlerResult {
     let name = params.app.as_str();
     {
@@ -604,7 +604,7 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams) -> HandlerResult
     let prop_def = proposed_app.def.lock();
 
     let mut diff: Vec<Value> = Vec::new();
-    for (id, _resource) in &prop_def.resources {
+    for id in prop_def.resources.keys() {
         if !cur_def.resources.contains_key(id) {
             diff.push(json!({
                 "resource_type": format!("{:?}", id.kind),
@@ -613,7 +613,7 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams) -> HandlerResult
             }));
         }
     }
-    for (id, _resource) in &cur_def.resources {
+    for id in cur_def.resources.keys() {
         if !prop_def.resources.contains_key(id) {
             diff.push(json!({
                 "resource_type": format!("{:?}", id.kind),
