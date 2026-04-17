@@ -12,6 +12,16 @@ use crate::runtime::{LifecycleState, ResourceInstance};
 // r[impl history.world.state-derivation]
 pub trait WorldStateOracle: Send + Sync {
     fn lifecycle_state(&self, resource: &ResourceInstance) -> LifecycleState;
+
+    /// Returns true if a TLS certificate has been observed valid for the given
+    /// ingress resource. Used by `rt.warm_certs(...).ready()` to wait on cert
+    /// validity without coupling to the standard ingress `Ready` lifecycle
+    /// (which also requires routing).
+    // r[impl observe.ingress.certs]
+    fn cert_valid_for(&self, resource: &ResourceInstance) -> bool {
+        let _ = resource;
+        false
+    }
 }
 
 /// A simple in-memory oracle for tests.
@@ -21,12 +31,14 @@ pub trait WorldStateOracle: Send + Sync {
 /// of the same resource (with a different UUID) still match correctly.
 pub struct TestWorldOracle {
     states: Mutex<HashMap<(ResourceKind, Option<String>), LifecycleState>>,
+    valid_certs: Mutex<std::collections::HashSet<(ResourceKind, Option<String>)>>,
 }
 
 impl TestWorldOracle {
     pub fn new() -> Self {
         Self {
             states: Mutex::new(HashMap::new()),
+            valid_certs: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -34,6 +46,13 @@ impl TestWorldOracle {
         self.states
             .lock()
             .insert((resource.kind, resource.name), state);
+    }
+
+    /// Mark the given ingress as having a valid cert for `cert_valid_for`.
+    pub fn set_cert_valid(&self, resource: ResourceInstance) {
+        self.valid_certs
+            .lock()
+            .insert((resource.kind, resource.name));
     }
 }
 
@@ -50,6 +69,12 @@ impl WorldStateOracle for TestWorldOracle {
             .get(&(resource.kind, resource.name.clone()))
             .copied()
             .unwrap_or(LifecycleState::Pending)
+    }
+
+    fn cert_valid_for(&self, resource: &ResourceInstance) -> bool {
+        self.valid_certs
+            .lock()
+            .contains(&(resource.kind, resource.name.clone()))
     }
 }
 
@@ -75,6 +100,29 @@ impl WorldStateOracle for DbWorldOracle {
             Err(_) => return LifecycleState::Pending,
         };
         derive_lifecycle_state(resource, &observations)
+    }
+
+    fn cert_valid_for(&self, resource: &ResourceInstance) -> bool {
+        if resource.kind != ResourceKind::Ingress {
+            return false;
+        }
+        let db = self.db.lock();
+        let observations = match crate::runtime::history::query_observations(&db, resource) {
+            Ok(obs) => obs,
+            Err(_) => return false,
+        };
+        // Most recent cert observation determines current validity.
+        // `cert_valid` overrides any earlier `cert_acquisition_failed` and
+        // vice-versa.
+        let mut valid = false;
+        for obs in &observations {
+            match obs.obs_kind.as_str() {
+                "cert_valid" => valid = true,
+                "cert_acquisition_failed" => valid = false,
+                _ => {}
+            }
+        }
+        valid
     }
 }
 

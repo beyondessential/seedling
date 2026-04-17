@@ -145,6 +145,52 @@ pub(super) struct ProxyBuildResult {
     )>,
 }
 
+/// Resolve all warm-cert ingresses across snapshots into `(instance, hostname)`
+/// pairs. Filters out non-TLS ingresses and ingresses already covered by a
+/// routed vhost (since Caddy will acquire those via the standard server-block
+/// driven path).
+// r[impl actuate.ingress.warm-certs]
+pub(super) fn warm_cert_targets(
+    apps: &[AppSnapshot],
+    registry: &dyn InstanceRegistry,
+) -> Vec<(crate::runtime::identity::ResourceInstance, String)> {
+    let mut out = Vec::new();
+    for app in apps {
+        if app.phase == AppPhase::Uninstalling {
+            continue;
+        }
+        for ing_name in &app.warm_cert_hostnames {
+            let resource_id = crate::defs::resource::ResourceId {
+                kind: crate::defs::resource::ResourceKind::Ingress,
+                name: std::sync::Arc::new(ing_name.clone()),
+            };
+            let Some(crate::defs::resource::Resource::Ingress(ing)) =
+                app.app_def.resources.get(&resource_id)
+            else {
+                continue;
+            };
+            let hostname = {
+                let ing_def = ing.def.lock();
+                if !ing_def.tls {
+                    continue;
+                }
+                ing_def.hostname.clone()
+            };
+            match registry.get_or_create_singleton(
+                &app.name,
+                crate::defs::resource::ResourceKind::Ingress,
+                Some(ing_name.as_str()),
+            ) {
+                Ok(instance) => out.push((instance, hostname)),
+                Err(e) => {
+                    tracing::warn!(app = %app.name, ingress = %ing_name, error = %e, "warm_certs: registry lookup failed");
+                }
+            }
+        }
+    }
+    out
+}
+
 pub(super) fn compute_proxy_config(
     apps: &[AppSnapshot],
     node_prefix: &Ipv6Net,

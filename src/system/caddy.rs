@@ -1,7 +1,9 @@
+mod cert_observation;
 mod config;
 mod proxy;
 mod startup;
 
+pub(crate) use cert_observation::observe as observe_certs;
 pub(crate) use config::build_caddy_config;
 #[expect(unused_imports, reason = "public API surface")]
 pub(crate) use proxy::{CaddyAddrs, CaddyError};

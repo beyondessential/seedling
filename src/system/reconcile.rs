@@ -156,6 +156,14 @@ pub struct Reconciler {
     nat64_active: bool,
     /// The resolver container's IPv6 address (set after resolver startup).
     resolver_addr: Option<Ipv6Addr>,
+    /// Host-filesystem path of the Caddy data volume. Resolved lazily on the
+    /// first tick that needs to inspect Caddy's certificate cache.
+    // r[impl observe.ingress.certs]
+    caddy_data_path: tokio::sync::OnceCell<PathBuf>,
+    /// First time each warm-cert hostname was seen during the current process
+    /// lifetime, used to gate `cert_acquisition_failed` faults.
+    // r[impl fault.cert-acquisition]
+    warm_cert_first_seen: HashMap<String, std::time::Instant>,
 }
 
 impl Reconciler {
@@ -204,6 +212,8 @@ impl Reconciler {
             nat64_active,
             resolver_addr: None,
             shells,
+            caddy_data_path: tokio::sync::OnceCell::new(),
+            warm_cert_first_seen: HashMap::new(),
         }
     }
 
@@ -491,6 +501,9 @@ impl Reconciler {
                     }
                     Ok(()) => {}
                 }
+
+                // r[impl observe.ingress.certs]
+                self.observe_warm_certs(&apps).await;
             }
             None => {
                 // Caddy unavailable — still apply routes (they don't need caddy).

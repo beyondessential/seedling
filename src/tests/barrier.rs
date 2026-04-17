@@ -27,6 +27,10 @@ fn dep(name: &str) -> ResourceInstance {
     ResourceInstance::new_singleton("test-app", ResourceKind::Deployment, name)
 }
 
+fn ing(name: &str) -> ResourceInstance {
+    ResourceInstance::new_singleton("test-app", ResourceKind::Ingress, name)
+}
+
 fn registry() -> Arc<dyn crate::runtime::InstanceRegistry> {
     Arc::new(EphemeralInstanceRegistry::new())
 }
@@ -464,6 +468,100 @@ fn rt_stop_acts_as_barrier() {
         &mut scope,
     );
     assert!(matches!(r, OperationResult::Completed));
+}
+
+// r[verify rt.warm-certs]
+// r[verify observe.ingress.certs]
+#[test]
+fn warm_certs_barrier_uses_cert_oracle() {
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let svc = app.service("public");
+        let ingress = svc.ingress("warm.example.com", 443).tls();
+        app.on_start(|rt| {
+            let warm = rt.warm_certs(ingress);
+            warm.ready();
+        });
+    "#,
+    );
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    // Mark cert as valid for the ingress; the standard ingress lifecycle is
+    // intentionally NOT set to Ready, so this proves .ready() consults
+    // cert_valid_for rather than lifecycle_state.
+    oracle.set_cert_valid(ing("public"));
+
+    let log = InMemoryActionLog::new();
+    let result = run_operation(
+        OperationContext {
+            engine: &engine,
+            script_ast: &ast,
+            operation_id: OperationId::new(),
+            app: &app,
+            action_name: "start",
+            log: &log,
+            world: oracle,
+            registry: registry(),
+            active_progress: None,
+            tick_notify: None,
+            install_requirements: None,
+            is_shell: false,
+            db: None,
+            source_generation: 0,
+            target_generation: 0,
+            script_limits: None,
+        },
+        &mut scope,
+    );
+    assert!(
+        matches!(result, OperationResult::Completed),
+        "warm_certs.ready() should resolve when cert_valid_for returns true; got {result:?}"
+    );
+}
+
+// r[verify rt.warm-certs]
+#[test]
+fn warm_certs_barrier_suspends_when_cert_not_valid() {
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let svc = app.service("public");
+        let ingress = svc.ingress("warm.example.com", 443).tls();
+        app.on_start(|rt| {
+            let warm = rt.warm_certs(ingress);
+            warm.ready();
+        });
+    "#,
+    );
+
+    // Oracle reports no cert valid AND ingress lifecycle defaults to Pending.
+    let oracle = Arc::new(TestWorldOracle::new());
+
+    let log = InMemoryActionLog::new();
+    let result = run_operation(
+        OperationContext {
+            engine: &engine,
+            script_ast: &ast,
+            operation_id: OperationId::new(),
+            app: &app,
+            action_name: "start",
+            log: &log,
+            world: oracle,
+            registry: registry(),
+            active_progress: None,
+            tick_notify: None,
+            install_requirements: None,
+            is_shell: false,
+            db: None,
+            source_generation: 0,
+            target_generation: 0,
+            script_limits: None,
+        },
+        &mut scope,
+    );
+    assert!(
+        matches!(result, OperationResult::Suspended(_)),
+        "warm_certs.ready() should suspend when cert is not valid; got {result:?}"
+    );
 }
 
 // r[verify barrier.suspension]

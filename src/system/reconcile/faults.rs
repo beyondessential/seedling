@@ -3,6 +3,54 @@ use crate::runtime::{faults, identity::ResourceInstance};
 use super::{Reconciler, pods, volumes};
 
 impl Reconciler {
+    /// File a fault scoped to a specific resource instance, if no active fault
+    /// of the same kind already exists for that instance. Used by callers that
+    /// don't have a typed update struct (e.g. cert observation).
+    pub(super) fn file_resource_fault(
+        &self,
+        instance: &ResourceInstance,
+        fault_kind: &str,
+        description: &str,
+    ) {
+        let db = self.db.lock();
+        let inst_hex = instance.id.to_hex();
+        let kind_str = format!("{:?}", instance.kind).to_lowercase();
+        let already_filed = faults::list_active_faults(&db, Some(&instance.app))
+            .unwrap_or_default()
+            .iter()
+            .any(|f| f.kind == fault_kind && f.instance_id.as_deref() == Some(&inst_hex));
+        if !already_filed
+            && let Err(e) = faults::file_fault(
+                &db,
+                &instance.app,
+                Some(&kind_str),
+                instance.name.as_deref(),
+                Some(&inst_hex),
+                fault_kind,
+                description,
+            )
+        {
+            tracing::warn!(app = %instance.app, instance = %inst_hex, kind = %fault_kind, "failed to file resource fault: {e}");
+        }
+    }
+
+    /// Clear all active faults of the given kind for a specific resource
+    /// instance.
+    pub(super) fn clear_resource_fault(&self, instance: &ResourceInstance, fault_kind: &str) {
+        let db = self.db.lock();
+        let inst_hex = instance.id.to_hex();
+        let cleared: Vec<_> = faults::list_active_faults(&db, Some(&instance.app))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|f| f.kind == fault_kind && f.instance_id.as_deref() == Some(&inst_hex))
+            .collect();
+        for f in cleared {
+            if let Err(e) = faults::clear_fault(&db, &f.id, &instance.app) {
+                tracing::warn!(app = %instance.app, fault_id = %f.id, "failed to clear resource fault: {e}");
+            }
+        }
+    }
+
     // r[fault.image-pull]
     pub(super) fn file_image_pull_faults(&self, app: &str, update: &pods::PodActuationUpdate) {
         let db = self.db.lock();

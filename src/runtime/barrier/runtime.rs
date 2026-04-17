@@ -213,6 +213,7 @@ impl RuntimeInstance {
     ) -> Result<Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)>, RegistryError>
     {
         use crate::defs::deployment::Deployment;
+        use crate::defs::ingress::Ingress;
         use crate::defs::job::Job;
         use crate::defs::resource::{Resource, ResourceKind};
         use crate::defs::service::Service;
@@ -342,6 +343,15 @@ impl RuntimeInstance {
             )]);
         }
 
+        if let Some(ing) = resources.clone().try_cast::<Ingress>() {
+            let instance = self.registry.get_or_create_singleton(
+                &self.app_name,
+                ResourceKind::Ingress,
+                Some(ing.name.as_str()),
+            )?;
+            return Ok(vec![(instance, Some(Resource::Ingress(ing)))]);
+        }
+
         // Unknown / Collection stub — no resources to track.
         Ok(vec![])
     }
@@ -392,6 +402,7 @@ impl RuntimeInstance {
                 return Ok(Started {
                     ctx: None,
                     resources,
+                    is_warm: false,
                 });
             }
             Some(c) => Arc::clone(c),
@@ -416,6 +427,7 @@ impl RuntimeInstance {
         Ok(Started {
             ctx: Some(ctx),
             resources,
+            is_warm: false,
         })
     }
 
@@ -459,6 +471,7 @@ impl RuntimeInstance {
                 return Ok(Started {
                     ctx: None,
                     resources,
+                    is_warm: true,
                 });
             }
             Some(c) => Arc::clone(c),
@@ -483,6 +496,7 @@ impl RuntimeInstance {
         Ok(Started {
             ctx: Some(ctx),
             resources,
+            is_warm: true,
         })
     }
 
@@ -669,6 +683,12 @@ impl CustomType for RuntimeInstance {
 pub struct Started {
     pub ctx: Option<SharedContext>,
     pub resources: Vec<ResourceInstance>,
+    /// Set when this `Started` was returned by `rt.warm_certs`. Changes the
+    /// `.ready()` barrier semantics to check cert validity (via the world
+    /// oracle's `cert_valid_for`) instead of the standard ingress lifecycle
+    /// `Ready` (which requires both cert and routing).
+    // l[impl rt.warm-certs]
+    pub is_warm: bool,
 }
 
 impl Started {
@@ -733,11 +753,20 @@ impl Started {
         }
 
         // Check if condition is currently satisfied.
-        let all_reached = !self.resources.is_empty()
-            && self
-                .resources
-                .iter()
-                .all(|r| g.world.lifecycle_state(r).has_reached(required));
+        // For warm-cert Starteds, `.ready()` checks cert validity directly via
+        // the oracle, since the standard ingress `Ready` lifecycle requires
+        // both routing and cert validity, but warm_certs intentionally does
+        // not route traffic.
+        // r[impl rt.warm-certs]
+        let all_reached = if self.is_warm && required == LifecycleState::Ready {
+            !self.resources.is_empty() && self.resources.iter().all(|r| g.world.cert_valid_for(r))
+        } else {
+            !self.resources.is_empty()
+                && self
+                    .resources
+                    .iter()
+                    .all(|r| g.world.lifecycle_state(r).has_reached(required))
+        };
 
         // r[impl barrier.resume]
         if all_reached {
