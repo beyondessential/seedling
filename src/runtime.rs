@@ -10,6 +10,7 @@ pub mod desired;
 pub mod external_volume_mappings;
 pub mod faults;
 pub mod gc;
+pub mod generations;
 pub mod history;
 pub mod identity;
 pub mod lifecycle;

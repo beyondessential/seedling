@@ -42,8 +42,7 @@ fn make_entry(name: &str, script_error: Option<&str>) -> AppEntry {
         active_progress: Arc::new(parking_lot::RwLock::new(None)),
         tick_notify: Arc::new(Notify::new()),
         script_error: script_error.map(|msg| (msg.to_owned(), Timestamp::now())),
-        version_id: String::new(),
-        previous_version_id: None,
+        current_generation: 0,
     }
 }
 
@@ -212,26 +211,26 @@ fn evaluate_script_absent_param_has_no_stored_value() {
 fn registry_load_from_db_restores_params() {
     let db = Db::open_in_memory().expect("open");
 
-    let version_id = "test-version-1";
     db.conn
         .execute(
-            "INSERT INTO app_versions (id, app, script, created_at) VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![
-                version_id,
-                "myapp",
-                r#"let h = app.param("hostname");"#,
-                "2024-01-01T00:00:00Z",
-            ],
-        )
-        .expect("insert app version");
-    db.conn
-        .execute(
-            "INSERT INTO registered_apps (name, installed, current_version_id) VALUES (?1, 0, ?2)",
-            rusqlite::params!["myapp", version_id],
+            "INSERT INTO registered_apps (name, installed, uninstalling, current_generation) \
+             VALUES ('myapp', 0, 0, 0)",
+            [],
         )
         .expect("insert app");
 
+    crate::runtime::generations::bump_register(&db, "myapp", r#"let h = app.param("hostname");"#)
+        .expect("bump register");
+
     upsert_param(&db, "myapp", "hostname", "restored.example.com").expect("upsert");
+    // The handler would also bump generation for the param — for this test
+    // (purely about load_from_db), we set the current_generation directly.
+    db.conn
+        .execute(
+            "UPDATE registered_apps SET current_generation = 1 WHERE name = 'myapp'",
+            [],
+        )
+        .expect("set current_generation");
 
     let registry = AppRegistry::load_from_db(
         &db,

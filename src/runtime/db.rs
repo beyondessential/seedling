@@ -411,6 +411,125 @@ impl Db {
             self.conn
                 .execute_batch("INSERT INTO schema_version VALUES (19);")?;
         }
+        if version < 20 {
+            // r[impl generation.history]
+            // r[impl generation.script-storage]
+            // Replace UUID-keyed app_versions with content-addressed script_bodies
+            // and a per-app generations history.
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS script_bodies (
+                    hash TEXT PRIMARY KEY,
+                    body TEXT NOT NULL
+                );
+                 CREATE TABLE IF NOT EXISTS generations (
+                    app             TEXT    NOT NULL,
+                    generation      INTEGER NOT NULL,
+                    created_at      TEXT    NOT NULL,
+                    kind            TEXT    NOT NULL,
+                    param_name      TEXT,
+                    previous_value  TEXT,
+                    new_value       TEXT,
+                    script_hash     TEXT    NOT NULL,
+                    operation_id    TEXT,
+                    outcome         TEXT,
+                    outcome_error   TEXT,
+                    PRIMARY KEY (app, generation)
+                 );
+                 CREATE INDEX IF NOT EXISTS idx_generations_app
+                     ON generations (app, generation DESC);
+                 ALTER TABLE registered_apps ADD COLUMN current_generation INTEGER NOT NULL DEFAULT 0;",
+            )?;
+
+            // Backfill: convert each app's current state into a Register entry
+            // at generation 1, plus one ParamSet entry per existing param.
+            use sha2::{Digest, Sha256};
+            let now = jiff::Timestamp::now().to_string();
+            fn hex_of(digest: &[u8]) -> String {
+                use std::fmt::Write as FmtWrite;
+                let mut s = String::with_capacity(digest.len() * 2);
+                for b in digest {
+                    write!(s, "{b:02x}").expect("write to String is infallible");
+                }
+                s
+            }
+
+            let app_rows: Vec<(String, Option<String>)> = {
+                let mut stmt = self
+                    .conn
+                    .prepare("SELECT name, current_version_id FROM registered_apps")?;
+                stmt.query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                })?
+                .collect::<rusqlite::Result<_>>()?
+            };
+
+            for (app, version_id) in app_rows {
+                let Some(vid) = version_id else {
+                    // Apps that never had a script row — leave at generation 0;
+                    // they would have failed to load anyway. Logged at load time.
+                    continue;
+                };
+                let script: String = match self.conn.query_row(
+                    "SELECT script FROM app_versions WHERE id = ?1",
+                    [&vid],
+                    |row| row.get(0),
+                ) {
+                    Ok(s) => s,
+                    Err(rusqlite::Error::QueryReturnedNoRows) => continue,
+                    Err(e) => return Err(e),
+                };
+
+                let digest = Sha256::digest(script.as_bytes());
+                let hash = hex_of(&digest);
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO script_bodies (hash, body) VALUES (?1, ?2)",
+                    rusqlite::params![hash, script],
+                )?;
+
+                self.conn.execute(
+                    "INSERT INTO generations
+                        (app, generation, created_at, kind, script_hash)
+                     VALUES (?1, 1, ?2, 'register', ?3)",
+                    rusqlite::params![app, now, hash],
+                )?;
+
+                let params: Vec<(String, String)> = {
+                    let mut pstmt = self.conn.prepare(
+                        "SELECT param_name, value FROM params WHERE app_name = ?1 ORDER BY param_name",
+                    )?;
+                    pstmt
+                        .query_map([&app], |row| {
+                            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                        })?
+                        .collect::<rusqlite::Result<_>>()?
+                };
+
+                let mut current = 1u64;
+                for (param_name, value) in params {
+                    current += 1;
+                    self.conn.execute(
+                        "INSERT INTO generations
+                            (app, generation, created_at, kind, param_name,
+                             previous_value, new_value, script_hash)
+                         VALUES (?1, ?2, ?3, 'param_set', ?4, NULL, ?5, ?6)",
+                        rusqlite::params![app, current as i64, now, param_name, value, hash],
+                    )?;
+                }
+
+                self.conn.execute(
+                    "UPDATE registered_apps SET current_generation = ?1 WHERE name = ?2",
+                    rusqlite::params![current as i64, app],
+                )?;
+            }
+
+            // Drop the legacy version-tracking columns / table.
+            self.conn
+                .execute_batch("ALTER TABLE registered_apps DROP COLUMN current_version_id;")?;
+            self.conn.execute_batch("DROP TABLE app_versions;")?;
+
+            self.conn
+                .execute_batch("INSERT INTO schema_version VALUES (20);")?;
+        }
         tx.commit()?;
         Ok(())
     }

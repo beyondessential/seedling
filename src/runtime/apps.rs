@@ -10,7 +10,7 @@ use tokio::sync::Notify;
 
 use crate::{
     defs::app::App,
-    runtime::{db::Db, desired::OperationProgress},
+    runtime::{db::Db, desired::OperationProgress, generations},
     setup_language,
 };
 
@@ -30,6 +30,8 @@ impl std::fmt::Display for ScriptError {
         f.write_str(&self.0)
     }
 }
+
+impl std::error::Error for ScriptError {}
 
 /// The installation phase of an app. Stored in `registered_apps` and shared
 /// with the reconciler via Arc so the reconciler can transition it on cleanup.
@@ -78,10 +80,8 @@ pub struct AppEntry {
     /// Active script-evaluation fault, if the last reload failed.
     /// Cleared on the next successful evaluation.
     pub script_error: Option<(String, Timestamp)>,
-    /// Current app version identifier.
-    pub version_id: String,
-    /// Previous app version identifier, if the app has been updated.
-    pub previous_version_id: Option<String>,
+    /// Current app generation (0 if not yet bumped).
+    pub current_generation: generations::Generation,
 }
 
 pub struct AppRegistry {
@@ -132,8 +132,7 @@ impl AppRegistry {
                 active_progress: Arc::new(RwLock::new(None)),
                 tick_notify,
                 script_error,
-                version_id: String::new(),
-                previous_version_id: None,
+                current_generation: 0,
             },
         );
         Ok(())
@@ -206,44 +205,54 @@ impl AppRegistry {
     ) -> rusqlite::Result<Self> {
         let mut registry = Self::new();
         let mut stmt = db.conn.prepare(
-            "SELECT name, installed, uninstalling, current_version_id FROM registered_apps ORDER BY name",
+            "SELECT name, installed, uninstalling, current_generation FROM registered_apps ORDER BY name",
         )?;
-        let rows: Vec<(String, bool, bool, Option<String>)> = stmt
+        let rows: Vec<(String, bool, bool, i64)> = stmt
             .query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, bool>(1)?,
                     row.get::<_, bool>(2)?,
-                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, i64>(3)?,
                 ))
             })?
             .collect::<rusqlite::Result<_>>()?;
 
-        for (name, installed, uninstalling, version_id) in rows {
+        for (name, installed, uninstalling, current_gen) in rows {
             let phase = match (installed, uninstalling) {
                 (_, true) => AppPhase::Uninstalling,
                 (true, _) => AppPhase::Installed,
                 (false, _) => AppPhase::NotInstalled,
+            };
+            if current_gen <= 0 {
+                tracing::warn!(app = %name, "skipping app with no current generation");
+                continue;
+            }
+            let current_generation = current_gen as generations::Generation;
+
+            let hash = match generations::script_hash_at(db, &name, current_generation) {
+                Ok(h) => h,
+                Err(e) => {
+                    tracing::warn!(app = %name, generation = current_generation, "failed to resolve script hash: {e}");
+                    continue;
+                }
+            };
+            let script: String = match generations::script_body(db, &hash) {
+                Ok(Some(s)) => s,
+                Ok(None) => {
+                    tracing::warn!(app = %name, hash = %hash, "missing script body");
+                    continue;
+                }
+                Err(e) => {
+                    tracing::warn!(app = %name, "failed to load script body: {e}");
+                    continue;
+                }
             };
             let stored = match load_params_for_app(db, &name) {
                 Ok(p) => p,
                 Err(e) => {
                     tracing::warn!("failed to load params for app '{name}': {e}");
                     BTreeMap::new()
-                }
-            };
-            let Some(version_id) = version_id else {
-                tracing::warn!(app = %name, "skipping app with no current version");
-                continue;
-            };
-            let mut vstmt = db
-                .conn
-                .prepare("SELECT script FROM app_versions WHERE id = ?1")?;
-            let script: String = match vstmt.query_row([&version_id], |row| row.get(0)) {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::warn!(app = %name, version = %version_id, "failed to load app version script: {e}");
-                    continue;
                 }
             };
             let (app, script_error) = match evaluate_script(&name, &script, &stored, limits) {
@@ -263,8 +272,7 @@ impl AppRegistry {
                     active_progress: Arc::new(RwLock::new(None)),
                     tick_notify: Arc::clone(&tick_notify),
                     script_error,
-                    version_id,
-                    previous_version_id: None,
+                    current_generation,
                 },
             );
         }
@@ -278,13 +286,13 @@ impl AppRegistry {
         let installed = matches!(*phase, AppPhase::Installed | AppPhase::Uninstalling);
         let uninstalling = matches!(*phase, AppPhase::Uninstalling);
         db.conn.execute(
-            "INSERT OR REPLACE INTO registered_apps (name, installed, uninstalling, current_version_id) \
+            "INSERT OR REPLACE INTO registered_apps (name, installed, uninstalling, current_generation) \
              VALUES (?1, ?2, ?3, ?4)",
             rusqlite::params![
                 entry.name,
                 installed as i64,
                 uninstalling as i64,
-                if entry.version_id.is_empty() { None } else { Some(&entry.version_id) },
+                entry.current_generation as i64,
             ],
         )?;
         Ok(())
@@ -297,47 +305,36 @@ impl AppRegistry {
     }
 }
 
-/// Insert a new app version row and return its ID.
-// i[app.version]
-pub fn insert_app_version(db: &Db, app: &str, script: &str) -> rusqlite::Result<String> {
-    let id = uuid::Uuid::new_v4().to_string();
-    let now = jiff::Timestamp::now().to_string();
-    db.conn.execute(
-        "INSERT INTO app_versions (id, app, script, created_at) VALUES (?1, ?2, ?3, ?4)",
-        rusqlite::params![id, app, script, now],
-    )?;
-    Ok(id)
+/// Retrieve the script text active at a specific generation, along with the app
+/// name (for cross-checking selection in the OI handler).
+pub fn get_script_at_generation(
+    db: &Db,
+    app: &str,
+    generation: generations::Generation,
+) -> rusqlite::Result<Option<String>> {
+    let hash = match generations::script_hash_at(db, app, generation) {
+        Ok(h) => h,
+        Err(generations::Error::NotFound { .. }) => return Ok(None),
+        Err(generations::Error::Db(e)) => return Err(e),
+        Err(e) => {
+            tracing::warn!(app, generation, "script_hash_at failed: {e}");
+            return Ok(None);
+        }
+    };
+    generations::script_body(db, &hash)
 }
 
-/// Retrieve the script text for a specific version.
-pub fn get_version_script(db: &Db, version_id: &str) -> rusqlite::Result<Option<(String, String)>> {
-    let mut stmt = db
-        .conn
-        .prepare("SELECT app, script FROM app_versions WHERE id = ?1")?;
-    let result = stmt.query_row([version_id], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    });
-    match result {
-        Ok(pair) => Ok(Some(pair)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e),
-    }
-}
-
-/// Retrieve the script text for the current version of an app.
-pub fn get_current_script(db: &Db, app: &str) -> rusqlite::Result<Option<(String, String)>> {
-    let mut stmt = db.conn.prepare(
-        "SELECT v.id, v.script FROM app_versions v
-         INNER JOIN registered_apps a ON a.current_version_id = v.id
-         WHERE a.name = ?1",
-    )?;
-    let result = stmt.query_row([app], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    });
-    match result {
-        Ok(pair) => Ok(Some(pair)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e),
+/// Retrieve the script for the current generation of an app.
+pub fn get_current_script(
+    db: &Db,
+    app: &str,
+) -> rusqlite::Result<Option<(generations::Generation, String)>> {
+    let Some(current_gen) = generations::current(db, app)? else {
+        return Ok(None);
+    };
+    match get_script_at_generation(db, app, current_gen)? {
+        Some(s) => Ok(Some((current_gen, s))),
+        None => Ok(None),
     }
 }
 
@@ -377,7 +374,7 @@ pub fn transition_phase(
     }
 }
 
-fn evaluate_script(
+pub fn evaluate_script(
     name: &str,
     script: &str,
     params: &BTreeMap<String, String>,

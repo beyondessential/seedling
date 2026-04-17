@@ -6,22 +6,41 @@ use tokio::sync::broadcast;
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
 pub enum OiEvent {
-    // r[audit.log.version-ids]
+    // r[impl audit.log.generations]
     AppRegistered {
         timestamp: Timestamp,
         app: String,
-        version_id: String,
+        generation: u64,
     },
     AppDeregistered {
         timestamp: Timestamp,
         app: String,
     },
-    // r[audit.log.version-ids]
+    // r[impl audit.log.generations]
     AppUpdated {
         timestamp: Timestamp,
         app: String,
-        version_id: String,
-        previous_version_id: Option<String>,
+        generation: u64,
+        previous_generation: Option<u64>,
+    },
+    // r[impl audit.log.generations]
+    ParamSet {
+        timestamp: Timestamp,
+        app: String,
+        name: String,
+        previous_value: Option<String>,
+        new_value: String,
+        generation: u64,
+        previous_generation: u64,
+    },
+    // r[impl audit.log.generations]
+    ParamUnset {
+        timestamp: Timestamp,
+        app: String,
+        name: String,
+        previous_value: String,
+        generation: u64,
+        previous_generation: u64,
     },
     OperationStarted {
         timestamp: Timestamp,
@@ -112,13 +131,13 @@ pub fn emit(tx: &EventSender, event: OiEvent) {
     let _ = tx.send(event);
 }
 
-pub fn app_registered(tx: &EventSender, app: &str, version_id: &str) {
+pub fn app_registered(tx: &EventSender, app: &str, generation: u64) {
     emit(
         tx,
         OiEvent::AppRegistered {
             timestamp: now(),
             app: app.to_owned(),
-            version_id: version_id.to_owned(),
+            generation,
         },
     );
 }
@@ -133,19 +152,58 @@ pub fn app_deregistered(tx: &EventSender, app: &str) {
     );
 }
 
-pub fn app_updated(
-    tx: &EventSender,
-    app: &str,
-    version_id: &str,
-    previous_version_id: Option<&str>,
-) {
+pub fn app_updated(tx: &EventSender, app: &str, generation: u64, previous_generation: Option<u64>) {
     emit(
         tx,
         OiEvent::AppUpdated {
             timestamp: now(),
             app: app.to_owned(),
-            version_id: version_id.to_owned(),
-            previous_version_id: previous_version_id.map(str::to_owned),
+            generation,
+            previous_generation,
+        },
+    );
+}
+
+pub fn param_set(
+    tx: &EventSender,
+    app: &str,
+    name: &str,
+    previous_value: Option<&str>,
+    new_value: &str,
+    generation: u64,
+    previous_generation: u64,
+) {
+    emit(
+        tx,
+        OiEvent::ParamSet {
+            timestamp: now(),
+            app: app.to_owned(),
+            name: name.to_owned(),
+            previous_value: previous_value.map(str::to_owned),
+            new_value: new_value.to_owned(),
+            generation,
+            previous_generation,
+        },
+    );
+}
+
+pub fn param_unset(
+    tx: &EventSender,
+    app: &str,
+    name: &str,
+    previous_value: &str,
+    generation: u64,
+    previous_generation: u64,
+) {
+    emit(
+        tx,
+        OiEvent::ParamUnset {
+            timestamp: now(),
+            app: app.to_owned(),
+            name: name.to_owned(),
+            previous_value: previous_value.to_owned(),
+            generation,
+            previous_generation,
         },
     );
 }

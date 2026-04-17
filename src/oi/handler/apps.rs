@@ -39,7 +39,7 @@ pub(crate) struct AppScriptParams {
 #[derive(Deserialize)]
 pub(crate) struct GetScriptParams {
     pub app: String,
-    pub version: Option<String>,
+    pub generation: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -163,7 +163,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     let entry = reg
         .get(name)
         .ok_or_else(|| OiError::not_found(format!("app not found: {name}")))?;
-    let version_id = entry.version_id.clone();
+    let generation = entry.current_generation;
 
     let base_status = reg.status_of(name).unwrap();
     let status = effective_app_status(base_status, entry, &state.db.lock());
@@ -364,7 +364,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
 
     let mut desc = json!({
         "status": status.name(),
-        "version_id": version_id,
+        "generation": generation,
         "faults": app_faults_json,
         "resources": resources_json,
         "params": params_json,
@@ -402,27 +402,24 @@ pub(crate) fn get_app_script(state: &OiState, params: GetScriptParams) -> Handle
     }
 
     let db = state.db.lock();
-    let (version_id, script) = match &params.version {
-        Some(vid) => {
-            let (app, script) = crate::runtime::apps::get_version_script(&db, vid)
+    let (generation, script) = match params.generation {
+        Some(gen_n) => {
+            let script = crate::runtime::apps::get_script_at_generation(&db, name, gen_n)
                 .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?
-                .ok_or_else(|| OiError::not_found(format!("version not found: {vid}")))?;
-            if app != name {
-                return Err(OiError::not_found(format!(
-                    "version {vid} does not belong to app {name}"
-                )));
-            }
-            (vid.clone(), script)
+                .ok_or_else(|| {
+                    OiError::not_found(format!("generation {gen_n} not found for app {name}"))
+                })?;
+            (gen_n, script)
         }
         None => {
-            let (vid, script) = crate::runtime::apps::get_current_script(&db, name)
+            let (gen_n, script) = crate::runtime::apps::get_current_script(&db, name)
                 .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?
                 .ok_or_else(|| OiError::not_found(format!("no script found for app: {name}")))?;
-            (vid, script)
+            (gen_n, script)
         }
     };
 
-    Ok(json!({ "script": script, "version_id": version_id }))
+    Ok(json!({ "script": script, "generation": generation }))
 }
 
 // i[app.register]
@@ -455,7 +452,7 @@ pub(crate) fn register_app(state: &OiState, params: AppScriptParams) -> HandlerR
         .map_err(|e| OiError::script_error(e.to_string()))?;
     }
 
-    // Persist to DB.
+    // Persist app row first so generations can FK against it.
     {
         let reg = state.registry.read();
         let entry = reg.get(name).expect("just registered");
@@ -464,17 +461,25 @@ pub(crate) fn register_app(state: &OiState, params: AppScriptParams) -> HandlerR
             .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db persist: {e}")))?;
     }
 
-    // Create initial version.
-    let version_id = {
+    // r[impl generation.bumps] — initial registration creates generation 1.
+    let generation = {
         let db = state.db.lock();
-        crate::runtime::apps::insert_app_version(&db, name, script)
-            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db version: {e}")))?
+        crate::runtime::generations::bump_register(&db, name, script)
+            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db generation: {e}")))?
     };
     {
         let mut reg = state.registry.write();
         if let Some(entry) = reg.get_mut(name) {
-            entry.version_id = version_id.clone();
+            entry.current_generation = generation;
         }
+    }
+    // Persist again now that current_generation is set.
+    {
+        let reg = state.registry.read();
+        let entry = reg.get(name).expect("just registered");
+        let db = state.db.lock();
+        AppRegistry::persist_app(&db, entry)
+            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db persist: {e}")))?;
     }
 
     {
@@ -486,9 +491,9 @@ pub(crate) fn register_app(state: &OiState, params: AppScriptParams) -> HandlerR
         }
     }
 
-    tracing::info!(app = %name, "registered app");
-    crate::oi::events::app_registered(&state.event_tx, name, &version_id);
-    Ok(json!({}))
+    tracing::info!(app = %name, generation, "registered app");
+    crate::oi::events::app_registered(&state.event_tx, name, generation);
+    Ok(json!({ "generation": generation }))
 }
 
 // i[app.deregister]
@@ -539,6 +544,13 @@ pub(crate) fn deregister_app(state: &OiState, params: AppParams) -> HandlerResul
         let db = state.db.lock();
         crate::runtime::apps::delete_app_params(&db, name)
             .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db param cleanup: {e}")))?;
+    }
+    // r[impl generation.deregister]
+    {
+        let db = state.db.lock();
+        if let Err(e) = crate::runtime::generations::delete_for_app(&db, name) {
+            tracing::warn!(app = %name, "failed to delete generation history during deregister: {e}");
+        }
     }
     {
         let db = state.db.lock();
@@ -608,111 +620,95 @@ pub(crate) fn update_app(state: &OiState, params: AppScriptParams) -> HandlerRes
         }
     }
 
-    let previous_version_id = {
+    // Reject if an operation is active or queued for this app.
+    if state.scheduler.lock().has_operation_for(name) {
+        return Err(OiError::new(
+            ErrorCode::OperationInProgress,
+            format!("operation in progress for app: {name}"),
+        ));
+    }
+
+    let previous_generation = {
         let reg = state.registry.read();
-        reg.get(name).map(|e| e.version_id.clone())
+        reg.get(name).map(|e| e.current_generation).unwrap_or(0)
     };
 
-    let op_in_progress = state
-        .registry
-        .read()
-        .get(name)
-        .is_some_and(|e| e.active_progress.read().is_some());
-
-    if op_in_progress {
-        // Operation running: just update stored script so next evaluation uses it.
-        // The in-memory AppDef is left unchanged until the operation completes.
-        if let Some(entry) = state.registry.write().get_mut(name) {
-            entry.script = script.to_owned();
-        }
-    } else {
-        // No operation: reload script and apply to in-memory AppDef immediately.
-        let loaded_params = {
-            let db = state.db.lock();
-            crate::runtime::apps::load_params_for_app(&db, name)
-                .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db params: {e}")))?
-        };
-        state.registry.write().reload(
-            name,
-            script.to_owned(),
-            &loaded_params,
-            &state.script_limits,
-        );
-        {
-            let reg = state.registry.read();
-            if let Some(entry) = reg.get(name) {
-                let db = state.db.lock();
-                crate::runtime::apps::sync_script_error_fault(&db, entry);
-                crate::runtime::apps::sync_registry_faults(&db, entry);
-            }
-        }
-        // r[impl scaling.clamp]
-        {
-            let reg = state.registry.read();
-            if let Some(entry) = reg.get(name) {
-                let def = entry.app.def.lock();
-                let deployment_bounds: std::collections::BTreeMap<String, (u16, u16)> = def
-                    .resources
-                    .iter()
-                    .filter_map(|(id, resource)| {
-                        if let Resource::Deployment(deployment) = resource {
-                            let dep_def = deployment.def.lock();
-                            Some((
-                                id.name.as_str().to_owned(),
-                                (dep_def.scale.start, dep_def.scale.end),
-                            ))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                drop(def);
-                let db = state.db.lock();
-                if let Err(e) = scaling::clamp_scaling_decisions(&db, name, &deployment_bounds) {
-                    tracing::error!(app = %name, error = %e, "failed to clamp scaling decisions");
-                }
-            }
-        }
-        // Wake reconciler to pick up new desired state.
-        if let Some(entry) = state.registry.read().get(name) {
-            entry.tick_notify.notify_one();
-        }
-    }
-
-    // Persist updated script to DB in either case.
+    // Reload script and apply to in-memory AppDef immediately.
+    let loaded_params = {
+        let db = state.db.lock();
+        crate::runtime::apps::load_params_for_app(&db, name)
+            .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db params: {e}")))?
+    };
+    state.registry.write().reload(
+        name,
+        script.to_owned(),
+        &loaded_params,
+        &state.script_limits,
+    );
     {
         let reg = state.registry.read();
-        let entry = reg.get(name).expect("confirmed registered");
-        let db = state.db.lock();
-        AppRegistry::persist_app(&db, entry)
-            .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db update: {e}")))?;
+        if let Some(entry) = reg.get(name) {
+            let db = state.db.lock();
+            crate::runtime::apps::sync_script_error_fault(&db, entry);
+            crate::runtime::apps::sync_registry_faults(&db, entry);
+        }
+    }
+    // r[impl scaling.clamp]
+    {
+        let reg = state.registry.read();
+        if let Some(entry) = reg.get(name) {
+            let def = entry.app.def.lock();
+            let deployment_bounds: std::collections::BTreeMap<String, (u16, u16)> = def
+                .resources
+                .iter()
+                .filter_map(|(id, resource)| {
+                    if let Resource::Deployment(deployment) = resource {
+                        let dep_def = deployment.def.lock();
+                        Some((
+                            id.name.as_str().to_owned(),
+                            (dep_def.scale.start, dep_def.scale.end),
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            drop(def);
+            let db = state.db.lock();
+            if let Err(e) = scaling::clamp_scaling_decisions(&db, name, &deployment_bounds) {
+                tracing::error!(app = %name, error = %e, "failed to clamp scaling decisions");
+            }
+        }
+    }
+    // Wake reconciler to pick up new desired state.
+    if let Some(entry) = state.registry.read().get(name) {
+        entry.tick_notify.notify_one();
     }
 
-    // Create new version.
-    let version_id = {
+    // r[impl generation.bumps] — script update bumps the generation.
+    let generation = {
         let db = state.db.lock();
-        crate::runtime::apps::insert_app_version(&db, name, script)
-            .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db version: {e}")))?
+        crate::runtime::generations::bump_script_update(&db, name, script)
+            .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db generation: {e}")))?
     };
     {
         let mut reg = state.registry.write();
         if let Some(entry) = reg.get_mut(name) {
-            entry.previous_version_id = previous_version_id.clone();
-            entry.version_id = version_id.clone();
+            entry.current_generation = generation;
         }
     }
-    // Persist again with updated version_id.
+    // Persist with updated current_generation.
     {
         let reg = state.registry.read();
         let entry = reg.get(name).expect("confirmed registered");
         let db = state.db.lock();
         AppRegistry::persist_app(&db, entry)
-            .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db update version: {e}")))?;
+            .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db update generation: {e}")))?;
     }
 
+    let op_in_progress = false;
     // i[forward.script-update] — tear down any forward whose target service is
-    // no longer present in the new AppDef (only when the AppDef was reloaded
-    // immediately; deferred reload at evaluation boundary is handled separately).
+    // no longer present in the new AppDef.
     if !op_in_progress {
         let valid_services: std::collections::HashSet<String> = {
             let reg = state.registry.read();
@@ -736,14 +732,18 @@ pub(crate) fn update_app(state: &OiState, params: AppScriptParams) -> HandlerRes
         }
     }
 
-    tracing::info!(app = %name, "updated app");
+    tracing::info!(app = %name, generation, "updated app");
     crate::oi::events::app_updated(
         &state.event_tx,
         name,
-        &version_id,
-        previous_version_id.as_deref(),
+        generation,
+        if previous_generation == 0 {
+            None
+        } else {
+            Some(previous_generation)
+        },
     );
-    Ok(json!({}))
+    Ok(json!({ "generation": generation }))
 }
 
 // i[impl scale.set]
