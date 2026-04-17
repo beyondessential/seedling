@@ -107,19 +107,6 @@ fn exercise_query() {
     );
 }
 
-// l[verify rt.reconcile]
-#[test]
-fn exercise_reconcile() {
-    exercise(
-        r#"
-        app.on_action("test-reconcile", |rt| {
-            let svc = app.service("public");
-            rt.reconcile(app, svc);
-        });
-    "#,
-    );
-}
-
 // l[verify rt.started.type]
 #[test]
 fn started_is_a_collection() {

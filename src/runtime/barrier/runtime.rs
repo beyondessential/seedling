@@ -576,16 +576,6 @@ impl CustomType for RuntimeInstance {
                     })?;
                     this.do_start(resources_with_defs)
                 },
-            )
-            // l[impl rt.reconcile]
-            // r[impl reconcile.operation]
-            // r[impl reconcile.supported-pairs]
-            .with_fn(
-                "reconcile",
-                |this: &mut Self,
-                 _old: Dynamic,
-                 _new: Dynamic|
-                 -> Result<Started, Box<EvalAltResult>> { this.do_start(vec![]) },
             );
     }
 }

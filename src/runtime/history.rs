@@ -397,7 +397,6 @@ pub fn load_action_log(
         let call_kind = match call_kind_str.as_str() {
             "Start" => CallKind::Start,
             "Stop" => CallKind::Stop,
-            "Reconcile" => CallKind::Reconcile,
             "Query" => CallKind::Query,
             other => {
                 return Err(rusqlite::Error::FromSqlConversionFailure(

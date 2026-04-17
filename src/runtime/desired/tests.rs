@@ -269,21 +269,6 @@ fn from_log_stop_entry_maps_to_unscheduled() {
 
 // r[verify desired-state.during-operation]
 #[test]
-fn from_log_reconcile_entry_maps_to_ready() {
-    let app_def = make_app_def(&["web"]);
-    let entries = [log_entry(CallKind::Reconcile, vec![dep("myapp", "web")])];
-    let progress = OperationProgress::from_log(&entries);
-
-    let registry = EphemeralInstanceRegistry::new();
-    let scales = default_effective_scales(&app_def);
-    let state = compute("myapp", &app_def, Some(&progress), &registry, &scales).unwrap();
-
-    let map = to_map(state);
-    assert_eq!(map["web"], LifecycleState::Ready);
-}
-
-// r[verify desired-state.during-operation]
-#[test]
 fn from_log_query_entry_is_ignored() {
     let entries = [log_entry(CallKind::Query, vec![dep("myapp", "web")])];
     let progress = OperationProgress::from_log(&entries);

@@ -79,7 +79,7 @@ impl OperationProgress {
 
     /// Build from a slice of action log entries.
     ///
-    /// `Start` and `Reconcile` entries map to desired state `Ready`.
+    /// `Start` entries map to desired state `Ready`.
     /// `Stop` entries map to desired state `Unscheduled`.
     /// `Query` entries are ignored; they do not affect the desired state.
     ///
@@ -91,7 +91,7 @@ impl OperationProgress {
         };
         for entry in entries {
             match entry.call_kind {
-                CallKind::Start | CallKind::Reconcile => {
+                CallKind::Start => {
                     for r in &entry.resources {
                         this.started(r.clone());
                     }

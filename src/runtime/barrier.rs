@@ -37,7 +37,6 @@ pub struct BarrierCondition {
 pub enum CallKind {
     Start,
     Stop,
-    Reconcile,
     Query,
 }
 
