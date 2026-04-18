@@ -25,6 +25,23 @@ use lifecycle::spawn_accepted_operation;
 pub(crate) struct InvokeActionParams {
     pub app: String,
     pub name: String,
+    #[serde(default)]
+    pub params: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+// i[action.params]
+fn validate_action_params(
+    params: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), OiError> {
+    for key in params.keys() {
+        if key.ends_with("_volume") {
+            return Err(OiError::new(
+                ErrorCode::RequirementsInvalid,
+                format!("param key {key:?} is reserved (keys ending in _volume are reserved)"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 // i[action.not-installed-gate]
@@ -32,6 +49,8 @@ pub(crate) struct InvokeActionParams {
 pub(crate) fn invoke_action(state: &Arc<OiState>, params: InvokeActionParams) -> HandlerResult {
     let app_name = &params.app;
     let action_name = &params.name;
+    let action_params = params.params.unwrap_or_default();
+    validate_action_params(&action_params)?;
 
     {
         let reg = state.registry.read();
@@ -66,42 +85,44 @@ pub(crate) fn invoke_action(state: &Arc<OiState>, params: InvokeActionParams) ->
         let reg = state.registry.read();
         reg.get(app_name).map(|e| e.current_generation).unwrap_or(0)
     };
-    let (result, op_id_opt) = {
+    let (result, op_id_str) = {
         let mut sched = state.scheduler.lock();
         let result = sched.request(
             app_name,
             action_name,
-            serde_json::Map::new(),
+            action_params.clone(),
             current_generation,
             current_generation,
         );
-        let op_id = if matches!(result, ScheduleResult::Accepted) {
-            sched.active().map(|a| a.operation_id.clone())
-        } else {
-            None
+        let op_id = match &result {
+            ScheduleResult::Accepted => sched.active().map(|a| a.operation_id.clone()),
+            ScheduleResult::Queued => sched
+                .queue_iter()
+                .find(|q| q.app == *app_name)
+                .map(|q| q.operation_id.clone()),
+            ScheduleResult::Rejected(_) => None,
         };
-        (result, op_id)
+        (result, op_id.map(|id| id.0.clone()).unwrap_or_default())
     };
 
     match result {
         ScheduleResult::Accepted => {
-            if let Some(op_id) = op_id_opt {
-                spawn_accepted_operation(
-                    Arc::clone(state),
-                    app_name.to_owned(),
-                    action_name.to_owned(),
-                    op_id,
-                    serde_json::Map::new(),
-                    current_generation,
-                    current_generation,
-                );
-            }
+            let op_id = crate::runtime::barrier::OperationId(op_id_str.clone());
+            spawn_accepted_operation(
+                Arc::clone(state),
+                app_name.to_owned(),
+                action_name.to_owned(),
+                op_id,
+                action_params,
+                current_generation,
+                current_generation,
+            );
             tracing::info!(app = %app_name, action = %action_name, schedule = "accepted", "invoke_action");
-            Ok(json!({ "schedule": "accepted" }))
+            Ok(json!({ "schedule": "accepted", "operation_id": op_id_str }))
         }
         ScheduleResult::Queued => {
             tracing::info!(app = %app_name, action = %action_name, schedule = "queued", "invoke_action");
-            Ok(json!({ "schedule": "queued" }))
+            Ok(json!({ "schedule": "queued", "operation_id": op_id_str }))
         }
         ScheduleResult::Rejected(RejectReason::SameAppOperationInProgress) => Err(OiError::new(
             ErrorCode::OperationInProgress,

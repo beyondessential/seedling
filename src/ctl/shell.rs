@@ -33,7 +33,12 @@ pub async fn read_shell_line(recv: &mut quinn::RecvStream) -> Result<Vec<u8>, St
     }
 }
 
-pub async fn open_shell(client: &OiClient, app: String, name: String) -> i32 {
+pub async fn open_shell(
+    client: &OiClient,
+    app: String,
+    name: String,
+    params: serde_json::Map<String, serde_json::Value>,
+) -> i32 {
     // 1. Current terminal dimensions.
     let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
 
@@ -45,9 +50,15 @@ pub async fn open_shell(client: &OiClient, app: String, name: String) -> i32 {
 
     // 3. Send the /shells/start request (newline-terminated JSON).
     {
+        let mut shell_params = serde_json::json!({
+            "app": app, "name": name, "rows": rows, "cols": cols,
+        });
+        if !params.is_empty() {
+            shell_params["params"] = serde_json::Value::Object(params.clone());
+        }
         let mut req = serde_json::to_vec(&serde_json::json!({
             "method": "/shells/start",
-            "params": { "app": app, "name": name, "rows": rows, "cols": cols },
+            "params": shell_params,
         }))
         .expect("serialisation never fails");
         req.push(b'\n');

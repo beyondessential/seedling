@@ -112,6 +112,11 @@ impl Scheduler {
         self.active.as_ref()
     }
 
+    /// Iterator over queued operations.
+    pub fn queue_iter(&self) -> impl Iterator<Item = &QueuedOperation> {
+        self.queue.iter()
+    }
+
     /// Returns true if there is an active or queued operation for the given app.
     pub fn has_operation_for(&self, app: &str) -> bool {
         self.active.as_ref().is_some_and(|a| a.app == app)

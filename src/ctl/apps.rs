@@ -5,6 +5,20 @@ use seedling::oi::client::OiClient;
 
 use super::print_result;
 
+// i[ctl.action.params]
+// i[ctl.shell.params]
+fn parse_positional_params(args: &[String]) -> serde_json::Map<String, serde_json::Value> {
+    let mut map = serde_json::Map::new();
+    for arg in args {
+        if let Some((key, value)) = arg.split_once('=') {
+            map.insert(key.to_owned(), serde_json::Value::String(value.to_owned()));
+        } else {
+            map.insert(arg.clone(), serde_json::Value::Bool(true));
+        }
+    }
+    map
+}
+
 #[derive(Subcommand)]
 pub(super) enum AppsCommand {
     /// Manage volumes for an app
@@ -30,7 +44,13 @@ pub(super) enum AppsCommand {
         command: ParamCommand,
     },
     /// Invoke a lifecycle action
-    Action { app: String, name: String },
+    Action {
+        app: String,
+        name: String,
+        /// Params as key[=value] (bare key maps to true)
+        #[arg(trailing_var_arg = true)]
+        params: Vec<String>,
+    },
     /// Invoke the install action
     Install {
         app: String,
@@ -39,7 +59,13 @@ pub(super) enum AppsCommand {
         requirements: Vec<String>,
     },
     /// Open an interactive shell session
-    Shell { app: String, name: String },
+    Shell {
+        app: String,
+        name: String,
+        /// Params as key[=value] (bare key maps to true)
+        #[arg(trailing_var_arg = true)]
+        params: Vec<String>,
+    },
     /// Stream container logs
     Logs {
         /// App name
@@ -311,15 +337,13 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                 );
             }
         },
-        AppsCommand::Action { app, name } => {
-            print_result(
-                client
-                    .request(
-                        "/apps/action/invoke",
-                        serde_json::json!({ "app": app, "name": name }),
-                    )
-                    .await,
-            );
+        AppsCommand::Action { app, name, params } => {
+            let action_params = parse_positional_params(&params);
+            let mut req = serde_json::json!({ "app": app, "name": name });
+            if !action_params.is_empty() {
+                req["params"] = serde_json::Value::Object(action_params);
+            }
+            print_result(client.request("/apps/action/invoke", req).await);
         }
         AppsCommand::Install { app, requirements } => {
             let reqs: HashMap<String, String> = requirements
@@ -338,8 +362,9 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                     .await,
             );
         }
-        AppsCommand::Shell { app, name } => {
-            let code = super::shell::open_shell(client, app, name).await;
+        AppsCommand::Shell { app, name, params } => {
+            let shell_params = parse_positional_params(&params);
+            let code = super::shell::open_shell(client, app, name, shell_params).await;
             std::process::exit(code);
         }
         AppsCommand::Logs {

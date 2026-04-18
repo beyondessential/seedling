@@ -172,7 +172,7 @@ pub(crate) fn invoke_install(state: &Arc<OiState>, params: InvokeInstallParams) 
         let reg = state.registry.read();
         reg.get(app_name).map(|e| e.current_generation).unwrap_or(0)
     };
-    let (result, op_id_opt) = {
+    let (result, op_id_str) = {
         let mut sched = state.scheduler.lock();
         let result = sched.request(
             app_name,
@@ -181,33 +181,35 @@ pub(crate) fn invoke_install(state: &Arc<OiState>, params: InvokeInstallParams) 
             current_generation,
             current_generation,
         );
-        let op_id = if matches!(result, ScheduleResult::Accepted) {
-            sched.active().map(|a| a.operation_id.clone())
-        } else {
-            None
+        let op_id = match &result {
+            ScheduleResult::Accepted => sched.active().map(|a| a.operation_id.clone()),
+            ScheduleResult::Queued => sched
+                .queue_iter()
+                .find(|q| q.app == *app_name)
+                .map(|q| q.operation_id.clone()),
+            ScheduleResult::Rejected(_) => None,
         };
-        (result, op_id)
+        (result, op_id.map(|id| id.0.clone()).unwrap_or_default())
     };
 
     match result {
         ScheduleResult::Accepted => {
-            if let Some(op_id) = op_id_opt {
-                spawn_accepted_operation(
-                    Arc::clone(state),
-                    app_name.to_owned(),
-                    "install".to_owned(),
-                    op_id,
-                    params,
-                    current_generation,
-                    current_generation,
-                );
-            }
+            let op_id = crate::runtime::barrier::OperationId(op_id_str.clone());
+            spawn_accepted_operation(
+                Arc::clone(state),
+                app_name.to_owned(),
+                "install".to_owned(),
+                op_id,
+                params,
+                current_generation,
+                current_generation,
+            );
             tracing::info!(app = %app_name, schedule = "accepted", "invoke_install");
-            Ok(json!({ "schedule": "accepted" }))
+            Ok(json!({ "schedule": "accepted", "operation_id": op_id_str }))
         }
         ScheduleResult::Queued => {
             tracing::info!(app = %app_name, schedule = "queued", "invoke_install");
-            Ok(json!({ "schedule": "queued" }))
+            Ok(json!({ "schedule": "queued", "operation_id": op_id_str }))
         }
         ScheduleResult::Rejected(RejectReason::SameAppOperationInProgress) => Err(OiError::new(
             ErrorCode::OperationInProgress,
