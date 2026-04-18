@@ -314,14 +314,15 @@ Absent specification bugs, anything that is not defined here is either defined i
 > While an app is `NotInstalled`, all action and shell invocations except `/apps/install/invoke` are rejected with `not_installed`.
 
 > i[action.invoke]
-> `/apps/action/invoke { app, name }` schedules the named action as a lifecycle operation.
+> `/apps/action/invoke { app, name, params? }` schedules the named action as a lifecycle operation.
+> `params` is an optional JSON object. Keys ending in `_volume` are reserved and must be rejected.
 > Shell actions must not be invoked via this method; `not_found` is returned if a shell name is provided.
-> Returns `{ "schedule": "accepted" }` or `{ "schedule": "queued" }` on success, or an error.
+> Returns `{ "schedule": "accepted", "operation_id": "<string>" }` or `{ "schedule": "queued", "operation_id": "<string>" }` on success, or an error. The `operation_id` is always present and uniquely identifies this operation.
 
 > i[action.invoke.install]
-> `/apps/install/invoke { app, requirements }` schedules the install action.
+> `/apps/install/invoke { app, requirements? }` schedules the install action.
 > It is only valid when the app is `NotInstalled`; otherwise `already_installed` is returned.
-> `requirements` is an object map of requirement key to string value.
+> `requirements` is an optional JSON object of requirement key to string value. The values are delivered to the install closure as `param`.
 > If the app has no explicit install action, `requirements` must be absent or empty.
 > Requirements are validated before the operation is enqueued; validation failure returns `requirements_invalid`.
 > Returns `{ "schedule": "accepted" }` or `{ "schedule": "queued" }` on success, or an error.
@@ -338,7 +339,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 # Shell Sessions
 
 > i[shell.open]
-> `/shells/start { app, name, rows, cols }` opens an interactive shell session.
+> `/shells/start { app, name, rows, cols, params? }` opens an interactive shell session.
+> `params` is an optional JSON object. Keys ending in `_volume` are reserved and must be rejected.
 > Returns `{ session_id, stdout_stream_id, stderr_stream_id }` as the handshake response on the session stream.
 > After the handshake response is written, the server treats subsequent bytes on the session stream's client-to-server direction as raw stdin for the shell's job.
 
@@ -530,7 +532,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > | `AppUpdated` | `app`, `generation`, `previous_generation` |
 > | `ParamSet` | `app`, `name`, `previous_value`, `new_value`, `generation`, `previous_generation` |
 > | `ParamUnset` | `app`, `name`, `previous_value`, `generation`, `previous_generation` |
-> | `OperationStarted` | `app`, `action_name`, `operation_id`, `source_generation`, `target_generation` |
+> | `OperationStarted` | `app`, `action_name`, `operation_id`, `source_generation`, `target_generation`, `trigger` |
 > | `OperationCompleted` | `app`, `action_name`, `operation_id`, `source_generation`, `target_generation` |
 > | `OperationFailed` | `app`, `action_name`, `operation_id`, `source_generation`, `target_generation`, `error` |
 > | `FaultFiled` | all fault record fields |
@@ -541,6 +543,13 @@ Absent specification bugs, anything that is not defined here is either defined i
 > | `ForwardStopped` | `forward_id` |
 > | `ScaleChanged` | `app`, `deployment`, `scale`, `previous_scale`, `bounds_low`, `bounds_high` |
 > | `ServerBusy` | `reason` |
+>
+> The `trigger` field on `OperationStarted` is a string indicating what caused the operation:
+>
+> - `"operator"`: manual action or install invocation.
+> - `"boot"`: automatic start on runtime startup.
+> - `"param_change"`: an `on_change` handler firing.
+> - `"schedule"`: a BSL `on_schedule` cron fire.
 
 > i[event.ordering]
 > Events on a single connection's event stream are emitted in the order they occur.
@@ -613,3 +622,10 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - For UDP forwards: the number of datagrams relayed in each direction.
 >
 > On exit, the client prints a summary of these counters to stderr.
+
+> i[ctl.action.params]
+> The CLI accepts action params as positional arguments after the action name: `ctl apps action <app> <name> [key[=value]]...`.
+> A bare key (no `=`) maps to `key: true`. A `key=value` pair maps to `key: "value"`.
+
+> i[ctl.shell.params]
+> The CLI accepts shell params with the same syntax: `ctl apps shell <app> <name> [key[=value]]...`.

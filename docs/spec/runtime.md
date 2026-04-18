@@ -345,6 +345,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - **Boot, interrupted operation exists**: replay of the interrupted operation.
 > - **Param change**: the `on_change` handler registered on the parameter that changed, when the change matches one of the [transitions](#l--param.on-change.transitions) in the language spec, the app is installed, and a handler is registered.
 > - **Operator request**: a named action, including `install`.
+> - **Schedule**: a BSL `on_schedule` cron expression fires.
 
 > r[operation.lifecycle.param-change]
 > A param change is a lifecycle operation.
@@ -363,6 +364,11 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[operation.lifecycle.completion]
 > When a lifecycle operation completes (the action closure returns), the full [desired state](#r--desired-state.steady) — derived from the AppDef at the app's current generation — takes effect and the reconciler maintains it autonomously.
 > The operation's outcome is recorded in the [generation history](#r--generation.history) entry that triggered it (when applicable).
+
+> r[operation.params]
+> When a lifecycle operation is dispatched with params, the params must be persisted alongside the operation record in the action execution log. On replay, the persisted params must be restored and passed to the action closure.
+>
+> Shell sessions do not persist params; shells are not replayable.
 
 ## Action Composition
 
@@ -384,6 +390,29 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[operation.shell.resources]
 > Resources created within a shell session are dynamic.
 > They are cleaned up when the session ends.
+
+# Scheduled Actions
+
+> r[schedule.tick]
+> The reconciliation loop must check for due scheduled actions at least once per minute. This check is performed as part of the normal reconciliation tick.
+
+> r[schedule.fire]
+> For each `(app, action, cronexpr)` tuple, the runtime computes the next fire time from the stored `last_fired_at` and the cron expression. If the next fire time falls within the last 59 seconds, the action is fired as a lifecycle operation with an empty param map and the `"schedule"` trigger.
+
+> r[schedule.state]
+> The runtime stores `(app_name, action_name, cronexpr, last_fired_at)` tuples durably. `last_fired_at` is updated on each successful fire.
+
+> r[schedule.startup-grace]
+> On startup, for schedule entries whose cron expression interval is 10 minutes or greater, the fire window is extended from 59 seconds to 5 minutes. This covers short runtime restarts without causing a storm of catch-up fires for frequent schedules.
+
+> r[schedule.prune]
+> When a BSL script is evaluated, the runtime must prune schedule state rows that no longer match any `(action, cronexpr)` pair declared in the script.
+
+> r[schedule.audit]
+> Scheduled action fires must be recorded in the audit log as lifecycle operations with the `"schedule"` trigger.
+
+> r[schedule.start-reject]
+> Calling `on_schedule` on the Start Action (action name `"start"`) must throw at script evaluation time.
 
 # Action Closure Suspension
 

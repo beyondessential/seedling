@@ -582,12 +582,19 @@ This is currently the only value.
 >
 > Action implements [Collection](#l--collection.interface), the Action is treated as an opaque Resource.
 >
-> The `fn` closure may take one argument, the [Runtime Instance](#l--rt.var), typically named `rt`. Specialised Actions may have access to more arguments.
+> The `fn` closure must take exactly two arguments: the [Runtime Instance](#l--rt.var) (typically named `rt`) and the [param map](#l--action.params) (typically named `param`).
 >
 > The `options` [object map](https://rhai.rs/book/language/object-maps.html)'s available properties are described below:
 
 > l[action.option-description]
 > An Action's `description` option is free-form text provided to operators. It may describe what the action does or is for.
+
+> l[action.params]
+> All action closures receive exactly two arguments: the [Runtime Instance](#l--rt.var) (`rt`) and a `Param` object map (`param`).
+>
+> The `param` is an arbitrary key-value map provided by the invoker. When no params are provided, `param` is an empty map (`#{}`).
+>
+> Param keys ending in `_volume` are reserved for internal use by the Seedling runtime. The runtime must reject operator-provided params whose keys end in `_volume`.
 
 ## Start Action
 
@@ -595,6 +602,8 @@ This is currently the only value.
 > The specialised Start Action is used to define how the application is started. It is used autonomously by the Seedling control plane.
 >
 > It may be defined using the `app.on_action()` method with a `name` of `"start"`, or with the shorthand `app.on_start(fn: closure, options?: object)`, which returns an `Action`.
+>
+> The `fn` closure must take exactly two arguments: `rt` and `param`. When fired autonomously (boot, schedule), `param` is an empty map.
 >
 > If it is not defined, it defaults to the equivalent of:
 > ```rhai
@@ -610,17 +619,34 @@ This is currently the only value.
 >
 > Shells exist in a separate namespace as other actions: their names do not conflict.
 >
-> The `fn` closure must either:
-> - take up to one argument (the [Runtime Instance](#l--rt.var), `rt`), and return a [Job](#l--job.type); or
-> - take exactly two arguments, the [Runtime Instance](#l--rt.var) (typically named `rt`) and the [Shell Attacher](#l--action.shell.attach) (typically named `attach`), and return nothing.
+> The `fn` closure must take exactly three arguments: the [Runtime Instance](#l--rt.var) (typically named `rt`), the [Shell Control](#l--action.shell.control) (typically named `shell`), and the param map (typically named `param`).
 >
-> The first form is equivalent to using the second form and calling `attach` on the first form's return value. A Shell Action which does not call `attach` (implicitly via return or explicitly) is invalid, and may be unavailable for use.
+> A shell closure that returns without calling `shell.attach` or `shell.error` is invalid. The runtime must return an error to the client.
+
+> l[action.shell.control]
+> The Shell Control is the second argument of the Shell Action. It is a custom type with two methods:
+>
+> - `shell.attach(job: Job)`: bridges the operator's input/output to the Job. Blocks until the operator closes the session or the connection is interrupted. Must be called exactly once per shell invocation. Calling `attach` a second time must throw.
+> - `shell.error(msg: string)`: sends an error message to the client and terminates the shell session. This call is terminal: it throws an exception to end the closure.
 
 > l[action.shell.attach]
 > The Shell Attacher is the second argument of the Shell Action. It is a host function which bridges the operator to the [Job](#l--job.type) provided as argument, attaching the operator's input/output to that of the Job.
 >
 > The Shell Attacher returns once the operator closes the shell, or if the connection is interrupted in some other way.
 > <!-- TODO: consider a return value to indicate how it exited -->
+
+## Scheduled Actions
+
+> l[action.schedule]
+> An Action returned by `on_action()` may be given one or more cron schedules via the `.on_schedule(expr: string)` builder method.
+>
+> `on_schedule` returns the Action for chaining. It may be called multiple times to attach multiple schedules to the same action.
+>
+> The `expr` is a 5-field cron expression (minute, hour, day-of-month, month, day-of-week) with 1-minute minimum resolution. The Jenkins `H` extension is supported: `H` is replaced with a stable hash-derived value within the field's range, computed from `(app_name, action_name)`. For example, `H 2 * * *` fires once daily at a stable minute during the 02:xx hour.
+>
+> `on_schedule` must not be called on the Start Action (name `"start"`); doing so must throw. `on_schedule` is not available on Shell Actions.
+>
+> When a scheduled action fires, it is invoked as a normal lifecycle operation with an empty `param` map. Operators may also invoke a scheduled action manually via the action invocation RPC, in which case operator-provided params are passed through.
 
 ## Install Action
 
@@ -629,7 +655,7 @@ This is currently the only value.
 >
 > It must be defined using the `app.on_install(fn: closure, requirements?: object)` method, and cannot be defined using `on_action()`. It also does not take the `options` argument.
 >
-> Its `fn` closure may take up to two arguments: the [Runtime Instance](#l--rt.var) (typically named `rt`) and the [Install Requirements](#l--action.install.requirements) (typically named `reqs`).
+> The `fn` closure must take exactly two arguments: `rt` and `param`. Install requirement values are delivered through `param`. The requirements definition (second argument to `on_install()`) defines the validation schema; it does not change the closure signature.
 >
 > If it is not defined, it defaults to the equivalent of:
 > ```rhai
