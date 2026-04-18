@@ -29,7 +29,7 @@ pub(crate) struct InvokeActionParams {
     pub params: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
-// i[action.params]
+// l[impl action.params]
 fn validate_action_params(
     params: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), OiError> {
