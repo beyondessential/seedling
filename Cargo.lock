@@ -3207,15 +3207,29 @@ name = "seedling"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "futures-util",
+ "lloggs",
+ "parking_lot",
+ "quinn",
+ "rustls",
+ "seedling-core",
+ "seedling-protocol",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "seedling-core"
+version = "0.1.0"
+dependencies = [
+ "clap",
  "cronexpr",
- "crossterm",
- "dirs",
  "ed25519-dalek",
  "futures-util",
  "ipnet",
  "jiff",
  "libc",
- "lloggs",
  "nftables",
  "nix 0.29.0",
  "parking_lot",
@@ -3229,6 +3243,7 @@ dependencies = [
  "rustix",
  "rustls",
  "rustls-pki-types",
+ "seedling-protocol",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -3242,6 +3257,43 @@ dependencies = [
  "wildmatch",
  "zbus",
  "zxcvbn",
+]
+
+[[package]]
+name = "seedling-ctl"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "crossterm",
+ "dirs",
+ "futures-util",
+ "lloggs",
+ "quinn",
+ "rustls",
+ "seedling-protocol",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "seedling-protocol"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "ed25519-dalek",
+ "futures-util",
+ "jiff",
+ "quinn",
+ "rand_core 0.6.4",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "subtle",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

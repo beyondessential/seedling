@@ -1,34 +1,25 @@
-[package]
-name = "seedling"
+[workspace]
+resolver = "3"
+members = ["crates/protocol", "crates/core", "crates/daemon", "crates/ctl"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
+publish = false
 
-[[bin]]
-name = "seedling-ctl"
-path = "src/ctl.rs"
-
-[dependencies]
+[workspace.dependencies]
 clap = { version = "4.6.0", features = ["derive"] }
-cronexpr = "1.4.0"
 crossterm = "0.29.0"
 dirs = "5.0.1"
 ed25519-dalek = { version = "2.2.0", features = ["pkcs8", "rand_core"] }
 futures-util = { version = "0.3.32", default-features = false, features = ["io", "channel"] }
 ipnet = "2.12.0"
 jiff = { version = "0.2.23", features = ["serde"] }
-libc = "0.2.172"
 lloggs = "1.4.0"
-nftables = { version = "0.6.3", features = ["tokio"] }
-nix = { version = "0.29.0", features = ["term"] }
 parking_lot = "0.12.5"
-podman-rest-client = { version = "0.13.0", features = ["uds"] }
 quinn = "0.11.9"
 rand_core = "0.6"
 reqwest = { version = "0.13.2", features = ["json"] }
-rhai = { version = "1.24.0", features = ["metadata"] }
-rtnetlink = "0.20.0"
-rusqlite = { version = "0.39.0", features = ["bundled"] }
-rustix = { version = "1.0.7", features = ["fs", "process"] }
 rustls = "0.23.37"
 rustls-pki-types = "1.14.0"
 serde = { version = "1.0.228", features = ["derive"] }
@@ -36,16 +27,10 @@ serde_json = "1.0.149"
 sha2 = "0.11.0"
 snafu = "0.9.0"
 subtle = "2.6.1"
-systemd = "0.10.1"
 tokio = { version = "1.51.0", features = ["full"] }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 uuid = { version = "1.23.0", features = ["v4", "serde", "v5"] }
 wildmatch = "2.6.1"
-zbus = { version = "5.14.0", features = ["tokio"] }
-zxcvbn = "2.2.2"
-tempfile = "3.20.0"
 
 [patch.crates-io]
 smartstring = { git = "https://github.com/bodil/smartstring", rev = "refs/pull/34/head" }
-
-[dev-dependencies]

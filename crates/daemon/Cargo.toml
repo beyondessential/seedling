@@ -1,0 +1,23 @@
+[package]
+name = "seedling"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "seedling"
+path = "src/main.rs"
+
+[dependencies]
+seedling-core = { path = "../core" }
+seedling-protocol = { path = "../protocol" }
+
+clap.workspace = true
+futures-util.workspace = true
+lloggs.workspace = true
+parking_lot.workspace = true
+quinn.workspace = true
+serde_json.workspace = true
+rustls.workspace = true
+tokio.workspace = true
+tracing.workspace = true

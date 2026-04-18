@@ -1,0 +1,44 @@
+[package]
+name = "seedling-core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+seedling-protocol = { path = "../protocol" }
+
+clap.workspace = true
+cronexpr = "1.4.0"
+ed25519-dalek.workspace = true
+futures-util.workspace = true
+ipnet.workspace = true
+jiff.workspace = true
+libc = "0.2.172"
+nftables = { version = "0.6.3", features = ["tokio"] }
+nix = { version = "0.29.0", features = ["term"] }
+parking_lot.workspace = true
+podman-rest-client = { version = "0.13.0", features = ["uds"] }
+quinn.workspace = true
+rand_core.workspace = true
+reqwest.workspace = true
+rhai = { version = "1.24.0", features = ["metadata"] }
+rtnetlink = "0.20.0"
+rusqlite = { version = "0.39.0", features = ["bundled"] }
+rustix = { version = "1.0.7", features = ["fs", "process"] }
+rustls.workspace = true
+rustls-pki-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+snafu.workspace = true
+subtle.workspace = true
+systemd = "0.10.1"
+tempfile = "3.20.0"
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+wildmatch.workspace = true
+zbus = { version = "5.14.0", features = ["tokio"] }
+zxcvbn = "2.2.2"
+
+[dev-dependencies]
