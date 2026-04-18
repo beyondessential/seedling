@@ -543,9 +543,128 @@ impl Db {
             self.conn
                 .execute_batch("INSERT INTO schema_version VALUES (21);")?;
         }
+        if version < 22 {
+            // r[impl schedule.state]
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS action_schedules (
+                    app          TEXT NOT NULL,
+                    action       TEXT NOT NULL,
+                    cronexpr     TEXT NOT NULL,
+                    last_fired_at TEXT,
+                    PRIMARY KEY (app, action, cronexpr)
+                );",
+            )?;
+            self.conn
+                .execute_batch("INSERT INTO schema_version VALUES (22);")?;
+        }
         tx.commit()?;
         Ok(())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Schedule helpers
+// ---------------------------------------------------------------------------
+
+pub struct ScheduleRow {
+    pub app: String,
+    pub action: String,
+    pub cronexpr: String,
+    pub last_fired_at: Option<String>,
+}
+
+// r[impl schedule.state]
+pub fn upsert_schedule_fired(
+    db: &Db,
+    app: &str,
+    action: &str,
+    cronexpr: &str,
+    fired_at: &str,
+) -> rusqlite::Result<()> {
+    db.conn.execute(
+        "INSERT INTO action_schedules (app, action, cronexpr, last_fired_at)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT (app, action, cronexpr)
+         DO UPDATE SET last_fired_at = excluded.last_fired_at",
+        rusqlite::params![app, action, cronexpr, fired_at],
+    )?;
+    Ok(())
+}
+
+pub fn list_schedules(db: &Db, app: &str) -> rusqlite::Result<Vec<ScheduleRow>> {
+    let mut stmt = db.conn.prepare(
+        "SELECT app, action, cronexpr, last_fired_at
+         FROM action_schedules WHERE app = ?1",
+    )?;
+    let rows = stmt.query_map([app], |row| {
+        Ok(ScheduleRow {
+            app: row.get(0)?,
+            action: row.get(1)?,
+            cronexpr: row.get(2)?,
+            last_fired_at: row.get(3)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn list_all_schedules(db: &Db) -> rusqlite::Result<Vec<ScheduleRow>> {
+    let mut stmt = db.conn.prepare(
+        "SELECT app, action, cronexpr, last_fired_at FROM action_schedules",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(ScheduleRow {
+            app: row.get(0)?,
+            action: row.get(1)?,
+            cronexpr: row.get(2)?,
+            last_fired_at: row.get(3)?,
+        })
+    })?;
+    rows.collect()
+}
+
+// r[impl schedule.prune]
+pub fn prune_schedules(
+    db: &Db,
+    app: &str,
+    valid_pairs: &[(String, String)],
+) -> rusqlite::Result<()> {
+    let current = list_schedules(db, app)?;
+    for row in current {
+        let key = (row.action.clone(), row.cronexpr.clone());
+        if !valid_pairs.contains(&key) {
+            db.conn.execute(
+                "DELETE FROM action_schedules
+                 WHERE app = ?1 AND action = ?2 AND cronexpr = ?3",
+                rusqlite::params![app, row.action, row.cronexpr],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Ensure all declared schedules have rows (inserts missing ones without
+/// overwriting existing `last_fired_at`).
+pub fn ensure_schedules(
+    db: &Db,
+    app: &str,
+    pairs: &[(String, String)],
+) -> rusqlite::Result<()> {
+    for (action, cronexpr) in pairs {
+        db.conn.execute(
+            "INSERT OR IGNORE INTO action_schedules (app, action, cronexpr)
+             VALUES (?1, ?2, ?3)",
+            rusqlite::params![app, action, cronexpr],
+        )?;
+    }
+    Ok(())
+}
+
+pub fn delete_schedules_for_app(db: &Db, app: &str) -> rusqlite::Result<()> {
+    db.conn.execute(
+        "DELETE FROM action_schedules WHERE app = ?1",
+        rusqlite::params![app],
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
