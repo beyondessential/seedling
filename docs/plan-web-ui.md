@@ -125,7 +125,7 @@ Crate layout:
 ```
 crates/web/
   Cargo.toml
-  build.rs                  # runs `pnpm --filter ./frontend build`; checks dist exists
+  build.rs                  # runs `npm build`; checks dist exists
   src/
     main.rs                 # CLI args, wiring, bind/listen
     config.rs               # TOML: [auth] password_hash, session_secret
@@ -326,7 +326,7 @@ Create:
 
 ## Verification
 
-**Build & lint:** `cargo clippy --workspace --all-targets` clean; `cargo fmt`. Frontend: `pnpm --filter ./frontend check` (svelte-check + tsc) clean.
+**Build & lint:** `cargo clippy --workspace --all-targets` clean; `cargo fmt`. Frontend: `npm check` (tsc) clean.
 
 **Unit:**
 - Argon2 login success/failure.
