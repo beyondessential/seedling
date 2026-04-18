@@ -87,6 +87,30 @@ fn capture_install(fnptr: FnPtr) {
     });
 }
 
+thread_local! {
+    static APPDEF_HOLDER: RefCell<Option<Holder<AppDef>>> = const { RefCell::new(None) };
+}
+
+pub(crate) fn set_appdef_holder(holder: &Holder<AppDef>) {
+    APPDEF_HOLDER.with(|h| *h.borrow_mut() = Some(holder.clone()));
+}
+
+pub(crate) fn clear_appdef_holder() {
+    APPDEF_HOLDER.with(|h| *h.borrow_mut() = None);
+}
+
+// l[impl action.schedule]
+pub(crate) fn append_action_schedule(action_name: &str, expr: &str) {
+    APPDEF_HOLDER.with(|h| {
+        if let Some(ref holder) = *h.borrow() {
+            let mut def = holder.lock();
+            if let Some(action_def) = def.actions.get_mut(action_name) {
+                action_def.schedules.push(expr.to_owned());
+            }
+        }
+    });
+}
+
 // ---------------------------------------------------------------------------
 // AppDef — Send, shared with the Reconciler
 // ---------------------------------------------------------------------------

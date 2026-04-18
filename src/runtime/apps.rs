@@ -386,10 +386,13 @@ pub fn evaluate_script(
     // during script evaluation. AppDef.params (the BSL-declared set) is
     // populated by the script itself via app.param() calls.
     *app.stored.lock() = params.clone();
-    engine
-        .run_with_scope(&mut scope, script)
-        .map_err(|e| ScriptError(e.to_string()))?;
     app.def.lock().name = name.to_owned();
+    crate::defs::app::set_appdef_holder(&app.def);
+    let result = engine
+        .run_with_scope(&mut scope, script)
+        .map_err(|e| ScriptError(e.to_string()));
+    crate::defs::app::clear_appdef_holder();
+    result?;
     Ok(app)
 }
 
