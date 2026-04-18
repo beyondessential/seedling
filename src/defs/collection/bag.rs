@@ -27,9 +27,9 @@ impl ResourceBag for AppBag {
     fn fetch(&self, id: &ResourceId) -> Option<Dynamic> {
         let def = self.0.def.lock();
         if id.kind == ResourceKind::Action {
-            def.actions.get(id.name.as_str()).map(|_| {
-                Dynamic::from(Action::new((*id.name).clone(), def.name.clone()))
-            })
+            def.actions
+                .get(id.name.as_str())
+                .map(|_| Dynamic::from(Action::new((*id.name).clone(), def.name.clone())))
         } else {
             def.resources.get(id).map(|r| r.to_dynamic())
         }

@@ -219,10 +219,6 @@ pub fn param_unset(
     );
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "mirrors all fields of OiEvent::OperationStarted"
-)]
 pub fn operation_started(
     tx: &EventSender,
     app: &str,

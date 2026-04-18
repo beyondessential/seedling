@@ -133,10 +133,6 @@ impl Scheduler {
     // r[impl operation.lifecycle.single]
     // r[impl operation.lifecycle.single.intra-app]
     // r[impl operation.lifecycle.single.inter-app]
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "mirrors all fields of a lifecycle operation request"
-    )]
     pub fn request(
         &mut self,
         app: &str,

@@ -25,11 +25,7 @@ pub fn schedule_hash(app_name: &str, action_name: &str) -> u64 {
 /// Validate and parse a 5-field cron expression. The `H` extension is supported
 /// using the hash derived from the given app and action names. The timezone
 /// defaults to UTC when omitted.
-pub fn validate_cron_expr(
-    expr: &str,
-    app_name: &str,
-    action_name: &str,
-) -> Result<(), String> {
+pub fn validate_cron_expr(expr: &str, app_name: &str, action_name: &str) -> Result<(), String> {
     let opts = cron_parse_options(app_name, action_name);
     cronexpr::parse_crontab_with(expr, opts)
         .map(|_| ())

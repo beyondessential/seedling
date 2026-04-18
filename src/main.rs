@@ -523,13 +523,8 @@ async fn main() {
 
     // Spawn the reconciler + schedule ticker now that OiState is available.
     {
-        let (
-            mut reconciler,
-            tick_notify,
-            schedule_db,
-            schedule_scheduler,
-            schedule_registry,
-        ) = reconciler_handle;
+        let (mut reconciler, tick_notify, schedule_db, schedule_scheduler, schedule_registry) =
+            reconciler_handle;
         let oi_state_for_sched = Arc::clone(&oi_state);
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(5));
@@ -554,11 +549,9 @@ async fn main() {
                     let db_guard = schedule_db.lock();
                     let mut sched = schedule_scheduler.lock();
                     let reg = schedule_registry.read();
-                    let fired = schedule_ticker.maybe_tick(
-                        &db_guard,
-                        &mut sched,
-                        &|app_name| reg.get(app_name).map(|e| e.current_generation),
-                    );
+                    let fired = schedule_ticker.maybe_tick(&db_guard, &mut sched, &|app_name| {
+                        reg.get(app_name).map(|e| e.current_generation)
+                    });
                     fired
                         .into_iter()
                         .filter(|f| f.accepted && f.operation_id.is_some())

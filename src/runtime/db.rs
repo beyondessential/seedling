@@ -608,9 +608,9 @@ pub fn list_schedules(db: &Db, app: &str) -> rusqlite::Result<Vec<ScheduleRow>> 
 }
 
 pub fn list_all_schedules(db: &Db) -> rusqlite::Result<Vec<ScheduleRow>> {
-    let mut stmt = db.conn.prepare(
-        "SELECT app, action, cronexpr, last_fired_at FROM action_schedules",
-    )?;
+    let mut stmt = db
+        .conn
+        .prepare("SELECT app, action, cronexpr, last_fired_at FROM action_schedules")?;
     let rows = stmt.query_map([], |row| {
         Ok(ScheduleRow {
             app: row.get(0)?,
@@ -644,11 +644,7 @@ pub fn prune_schedules(
 
 /// Ensure all declared schedules have rows (inserts missing ones without
 /// overwriting existing `last_fired_at`).
-pub fn ensure_schedules(
-    db: &Db,
-    app: &str,
-    pairs: &[(String, String)],
-) -> rusqlite::Result<()> {
+pub fn ensure_schedules(db: &Db, app: &str, pairs: &[(String, String)]) -> rusqlite::Result<()> {
     for (action, cronexpr) in pairs {
         db.conn.execute(
             "INSERT OR IGNORE INTO action_schedules (app, action, cronexpr)

@@ -49,13 +49,17 @@ pub fn check_due_schedules(
         let base_time = match &row.last_fired_at {
             Some(ts_str) => match ts_str.parse::<Timestamp>() {
                 Ok(ts) => ts,
-                Err(_) => now.checked_sub(SignedDuration::from_secs(300)).unwrap_or(now),
+                Err(_) => now
+                    .checked_sub(SignedDuration::from_secs(300))
+                    .unwrap_or(now),
             },
-            None => now.checked_sub(SignedDuration::from_secs(300)).unwrap_or(now),
+            None => now
+                .checked_sub(SignedDuration::from_secs(300))
+                .unwrap_or(now),
         };
 
         let next_fire = match crontab.find_next(base_time) {
-            Ok(zoned) => Timestamp::try_from(zoned).unwrap_or(now),
+            Ok(zoned) => Timestamp::from(zoned),
             Err(e) => {
                 tracing::warn!(
                     app = %row.app,
@@ -94,9 +98,13 @@ pub fn check_due_schedules(
             match result {
                 ScheduleResult::Accepted | ScheduleResult::Queued => {
                     let fired_at = now.to_string();
-                    if let Err(e) =
-                        db::upsert_schedule_fired(db, &row.app, &row.action, &row.cronexpr, &fired_at)
-                    {
+                    if let Err(e) = db::upsert_schedule_fired(
+                        db,
+                        &row.app,
+                        &row.action,
+                        &row.cronexpr,
+                        &fired_at,
+                    ) {
                         tracing::error!(
                             app = %row.app,
                             action = %row.action,
@@ -148,18 +156,12 @@ fn is_infrequent_schedule(crontab: &cronexpr::Crontab, now: Timestamp) -> bool {
         Ok(z) => z,
         Err(_) => return false,
     };
-    let first_ts = match Timestamp::try_from(first.clone()) {
-        Ok(ts) => ts,
-        Err(_) => return false,
-    };
+    let first_ts = Timestamp::from(first);
     let second = match crontab.find_next(first_ts) {
         Ok(z) => z,
         Err(_) => return false,
     };
-    let second_ts = match Timestamp::try_from(second) {
-        Ok(ts) => ts,
-        Err(_) => return false,
-    };
+    let second_ts = Timestamp::from(second);
     let ten_minutes_later = first_ts
         .checked_add(SignedDuration::from_mins(10))
         .unwrap_or(first_ts);
@@ -171,6 +173,12 @@ fn is_infrequent_schedule(crontab: &cronexpr::Crontab, now: Timestamp) -> bool {
 pub struct ScheduleTicker {
     last_check: Option<Timestamp>,
     is_startup: bool,
+}
+
+impl Default for ScheduleTicker {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ScheduleTicker {
@@ -261,14 +269,8 @@ mod tests {
         db::ensure_schedules(&db, "myapp", &pairs).unwrap();
 
         let now: Timestamp = "2026-04-18T12:01:00Z".parse().unwrap();
-        db::upsert_schedule_fired(
-            &db,
-            "myapp",
-            "backup",
-            "* * * * *",
-            "2026-04-18T12:00:00Z",
-        )
-        .unwrap();
+        db::upsert_schedule_fired(&db, "myapp", "backup", "* * * * *", "2026-04-18T12:00:00Z")
+            .unwrap();
 
         let mut scheduler = Scheduler::new();
         let fired = check_due_schedules(&db, &mut scheduler, now, false, &|_| Some(1));
@@ -291,10 +293,8 @@ mod tests {
         let mut scope = rhai::Scope::new();
         scope.push("action", action);
 
-        let result = engine.eval_with_scope::<rhai::Dynamic>(
-            &mut scope,
-            r#"action.on_schedule("* * * * *")"#,
-        );
+        let result = engine
+            .eval_with_scope::<rhai::Dynamic>(&mut scope, r#"action.on_schedule("* * * * *")"#);
         assert!(result.is_err());
         let err_str = result.unwrap_err().to_string();
         assert!(
