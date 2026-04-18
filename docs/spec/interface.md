@@ -609,6 +609,35 @@ Absent specification bugs, anything that is not defined here is either defined i
 > On `/apps/update` for an app that is a registered backup app, the runtime must evaluate the new script and reject the update if the required actions (`save-snapshot`, `list-snapshots`, `restore-snapshot`) are no longer present.
 > The same validation must be performed during `/apps/plan` (dry-run) and reported in the diff.
 
+## Backup Strategies
+
+> i[backup.strategy.create]
+> `/backups/strategies/create { name, via, schedule, volumes }` creates a named backup strategy.
+>
+> - `name`: strategy name (follows standard naming rules).
+> - `via`: name of a registered backup app.
+> - `schedule`: one of `"every hour"`, `"twice a day"`, `"every day"`.
+> - `volumes`: array of source volume identifiers (`"<app>/<volume>"` or `"_site/<volume>"`).
+>
+> Returns `{ "created": true }` on success.
+
+> i[backup.strategy.list]
+> `/backups/strategies/list {}` returns an array of strategy objects with fields `name`, `via`, `schedule`, and `volumes`.
+
+> i[backup.strategy.show]
+> `/backups/strategies/show { name }` returns the strategy object.
+
+> i[backup.strategy.update]
+> `/backups/strategies/update { name, via?, schedule?, volumes? }` updates a strategy. All fields except `name` are optional; only provided fields are changed.
+
+> i[backup.strategy.delete]
+> `/backups/strategies/delete { name }` deletes a strategy.
+
+> i[backup.run]
+> `/backups/run { strategy, volume? }` triggers an immediate backup for the named strategy. If `volume` is provided, only that volume is backed up; otherwise all volumes in the strategy are backed up.
+>
+> Returns `{ "schedule": "accepted", "operation_id": "<string>" }` on success. Each volume produces a separate operation; if multiple volumes are triggered, an array of `{ volume, operation_id }` objects is returned.
+
 # Client Behaviour
 
 > i[ctl.graceful-shutdown]
@@ -650,3 +679,6 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > i[ctl.backup.app.hint]
 > When `ctl apps create` evaluates a script that declares actions `save-snapshot`, `list-snapshots`, and `restore-snapshot`, the CLI should print an informational message suggesting backup app registration.
+
+> i[ctl.backup.strategy.allow-missing]
+> When creating or updating a backup strategy, the CLI checks whether each referenced volume exists. If any volume does not resolve and `--allow-missing` is not passed, the CLI must abort with an error before sending the request.

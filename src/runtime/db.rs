@@ -568,6 +568,19 @@ impl Db {
             self.conn
                 .execute_batch("INSERT INTO schema_version VALUES (23);")?;
         }
+        if version < 24 {
+            // i[impl backup.strategy.create]
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS backup_strategies (
+                    name     TEXT PRIMARY KEY,
+                    via      TEXT NOT NULL,
+                    schedule TEXT NOT NULL,
+                    volumes  TEXT NOT NULL
+                );",
+            )?;
+            self.conn
+                .execute_batch("INSERT INTO schema_version VALUES (24);")?;
+        }
         tx.commit()?;
         Ok(())
     }

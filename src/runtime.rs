@@ -5,6 +5,7 @@
 pub mod apps;
 pub mod audit;
 pub mod backup_apps;
+pub mod backup_strategies;
 pub mod barrier;
 pub mod db;
 pub mod desired;

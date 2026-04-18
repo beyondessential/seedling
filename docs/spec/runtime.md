@@ -414,6 +414,15 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[schedule.start-reject]
 > Calling `on_schedule` on the Start Action (action name `"start"`) must throw at script evaluation time.
 
+# Backup Scheduling
+
+> r[backup.schedule]
+> Backup strategies use named schedule buckets: `"every hour"`, `"twice a day"`, `"every day"`. Snapshots are taken on the round boundary:
+>
+> - `"every hour"`: top of each hour (xx:00 UTC).
+> - `"every day"`: midnight UTC (00:00).
+> - `"twice a day"`: midnight UTC and noon UTC (00:00, 12:00).
+
 # Action Closure Suspension
 
 > r[barrier.suspension]

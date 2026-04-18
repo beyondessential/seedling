@@ -134,6 +134,18 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8]) -> HandlerResult {
         }
         // i[backup.app.list]
         "/backups/apps/list" => backups::list_backup_apps(state),
+        // i[backup.strategy.create]
+        "/backups/strategies/create" => backups::create_strategy(state, parse_params(req.params)?),
+        // i[backup.strategy.list]
+        "/backups/strategies/list" => backups::list_strategies(state),
+        // i[backup.strategy.show]
+        "/backups/strategies/show" => backups::show_strategy(state, parse_params(req.params)?),
+        // i[backup.strategy.update]
+        "/backups/strategies/update" => backups::update_strategy(state, parse_params(req.params)?),
+        // i[backup.strategy.delete]
+        "/backups/strategies/delete" => backups::delete_strategy(state, parse_params(req.params)?),
+        // i[backup.run]
+        "/backups/run" => backups::run_backup(state, parse_params(req.params)?),
         other => Err(OiError::not_found(format!("unknown method: {other}"))),
     };
 
