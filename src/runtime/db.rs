@@ -581,6 +581,13 @@ impl Db {
             self.conn
                 .execute_batch("INSERT INTO schema_version VALUES (24);")?;
         }
+        if version < 25 {
+            // r[impl backup.execution]
+            self.conn
+                .execute_batch("ALTER TABLE backup_strategies ADD COLUMN last_fired_at TEXT;")?;
+            self.conn
+                .execute_batch("INSERT INTO schema_version VALUES (25);")?;
+        }
         tx.commit()?;
         Ok(())
     }

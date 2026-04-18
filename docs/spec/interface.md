@@ -634,9 +634,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 > `/backups/strategies/delete { name }` deletes a strategy.
 
 > i[backup.run]
-> `/backups/run { strategy }` triggers an immediate backup for the named strategy, backing up all volumes in the strategy.
+> `/backups/run { strategy }` triggers an immediate backup for the named strategy, backing up all volumes in the strategy without a random delay.
 >
-> Returns `{ "schedule": "accepted", "operation_id": "<string>" }` on success. Each volume produces a separate operation; if multiple volumes are triggered, an array of `{ volume, operation_id }` objects is returned.
+> Returns `{ "accepted": true }` immediately; the backup runs asynchronously in the background.
 
 # Client Behaviour
 

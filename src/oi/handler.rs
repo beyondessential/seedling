@@ -10,7 +10,7 @@ use super::{
 
 pub mod actions;
 mod apps;
-mod backups;
+pub mod backups;
 mod faults;
 mod key_mgmt;
 mod params;

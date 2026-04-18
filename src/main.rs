@@ -532,6 +532,8 @@ async fn main() {
             let mut idle = false;
             // r[impl schedule.tick]
             let mut schedule_ticker = seedling::runtime::schedules::ScheduleTicker::new();
+            // r[impl backup.execution]
+            let mut backup_ticker = seedling::runtime::backup_execution::BackupTicker::new();
             loop {
                 if idle {
                     tick_notify.notified().await;
@@ -570,6 +572,25 @@ async fn main() {
                             "schedule".to_owned(),
                         );
                     }
+                }
+
+                // r[impl backup.execution]
+                let due_strategies = {
+                    let db_guard = schedule_db.lock();
+                    backup_ticker.maybe_tick(&db_guard)
+                };
+                for due in due_strategies {
+                    seedling::oi::handler::backups::spawn_backup_run(
+                        Arc::clone(&oi_state_for_sched),
+                        seedling::runtime::backup_strategies::BackupStrategy {
+                            name: due.name,
+                            via: due.via,
+                            schedule: due.schedule,
+                            volumes: due.volumes,
+                            last_fired_at: None,
+                        },
+                        false,
+                    );
                 }
 
                 match AssertUnwindSafe(reconciler.tick()).catch_unwind().await {

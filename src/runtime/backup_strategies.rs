@@ -10,6 +10,7 @@ pub struct BackupStrategy {
     pub via: String,
     pub schedule: String,
     pub volumes: Vec<String>,
+    pub last_fired_at: Option<String>,
 }
 
 // i[impl backup.strategy.create]
@@ -24,9 +25,9 @@ pub fn create(db: &Db, strategy: &BackupStrategy) -> rusqlite::Result<()> {
 }
 
 pub fn get(db: &Db, name: &str) -> rusqlite::Result<Option<BackupStrategy>> {
-    let mut stmt = db
-        .conn
-        .prepare("SELECT name, via, schedule, volumes FROM backup_strategies WHERE name = ?1")?;
+    let mut stmt = db.conn.prepare(
+        "SELECT name, via, schedule, volumes, last_fired_at FROM backup_strategies WHERE name = ?1",
+    )?;
     let mut rows = stmt.query_map(params![name], row_to_strategy)?;
     match rows.next() {
         Some(row) => Ok(Some(row?)),
@@ -36,9 +37,9 @@ pub fn get(db: &Db, name: &str) -> rusqlite::Result<Option<BackupStrategy>> {
 
 // i[impl backup.strategy.list]
 pub fn list_all(db: &Db) -> rusqlite::Result<Vec<BackupStrategy>> {
-    let mut stmt = db
-        .conn
-        .prepare("SELECT name, via, schedule, volumes FROM backup_strategies ORDER BY name")?;
+    let mut stmt = db.conn.prepare(
+        "SELECT name, via, schedule, volumes, last_fired_at FROM backup_strategies ORDER BY name",
+    )?;
     let rows = stmt.query_map([], row_to_strategy)?;
     rows.collect()
 }
@@ -84,16 +85,27 @@ pub fn references_backup_app(db: &Db, backup_app_name: &str) -> rusqlite::Result
     Ok(count > 0)
 }
 
+// r[impl backup.execution]
+pub fn update_last_fired_at(db: &Db, name: &str, fired_at: &str) -> rusqlite::Result<()> {
+    db.conn.execute(
+        "UPDATE backup_strategies SET last_fired_at = ?2 WHERE name = ?1",
+        params![name, fired_at],
+    )?;
+    Ok(())
+}
+
 fn row_to_strategy(row: &rusqlite::Row<'_>) -> rusqlite::Result<BackupStrategy> {
     let name: String = row.get(0)?;
     let via: String = row.get(1)?;
     let schedule: String = row.get(2)?;
     let volumes_json: String = row.get(3)?;
     let volumes: Vec<String> = serde_json::from_str(&volumes_json).unwrap_or_default();
+    let last_fired_at: Option<String> = row.get(4)?;
     Ok(BackupStrategy {
         name,
         via,
         schedule,
         volumes,
+        last_fired_at,
     })
 }

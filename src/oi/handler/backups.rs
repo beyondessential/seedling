@@ -1,12 +1,19 @@
+use std::sync::Arc;
+
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::{
+    defs::volume::OperationVolumeBinding,
     oi::{
         error::{ErrorCode, HandlerResult, OiError},
+        handler::actions::lifecycle::run_operation_for_backup,
         state::OiState,
     },
-    runtime::{backup_apps, backup_strategies},
+    runtime::{
+        backup_apps, backup_execution, backup_strategies, barrier::OperationId, faults,
+        scheduler::ScheduleResult,
+    },
 };
 
 #[derive(Deserialize)]
@@ -141,6 +148,7 @@ pub(crate) fn create_strategy(state: &OiState, params: CreateStrategyParams) -> 
         via: params.via,
         schedule: params.schedule,
         volumes: params.volumes,
+        last_fired_at: None,
     };
     backup_strategies::create(&db, &strategy).map_err(|e| {
         OiError::new(
@@ -249,14 +257,319 @@ pub(crate) fn delete_strategy(state: &OiState, params: StrategyNameParams) -> Ha
 }
 
 #[derive(Deserialize)]
-#[expect(dead_code, reason = "fields read in Phase 6 execution stub")]
 pub(crate) struct RunBackupParams {
     pub strategy: String,
 }
 
 // i[impl backup.run]
-pub(crate) fn run_backup(_state: &OiState, _params: RunBackupParams) -> HandlerResult {
-    todo!("backup execution not yet implemented (Phase 6)")
+pub(crate) fn run_backup(state: &Arc<OiState>, params: RunBackupParams) -> HandlerResult {
+    let db = state.db.lock();
+    let strategy = backup_strategies::get(&db, &params.strategy)
+        .map_err(|e| OiError::new(ErrorCode::Internal, format!("db strategies: {e}")))?
+        .ok_or_else(|| OiError::not_found(format!("no strategy named {:?}", params.strategy)))?;
+    drop(db);
+
+    spawn_backup_run(Arc::clone(state), strategy, true);
+    Ok(json!({ "queued": true }))
+}
+
+// r[impl backup.execution]
+pub fn spawn_backup_run(
+    state: Arc<OiState>,
+    strategy: backup_strategies::BackupStrategy,
+    is_manual: bool,
+) {
+    tokio::spawn(async move {
+        run_strategy_backup(&state, &strategy, is_manual).await;
+    });
+}
+
+// r[impl backup.validation.fire-time]
+// r[impl backup.execution]
+// r[impl backup.execution.per-volume-failure]
+async fn run_strategy_backup(
+    state: &Arc<OiState>,
+    strategy: &backup_strategies::BackupStrategy,
+    is_manual: bool,
+) {
+    let (backup_app_name, backing_app_name) = {
+        let db = state.db.lock();
+        match backup_apps::get_by_name(&db, &strategy.via) {
+            Ok(Some(ba)) => (ba.name, ba.app),
+            Ok(None) => {
+                tracing::error!(
+                    strategy = %strategy.name,
+                    via = %strategy.via,
+                    "backup app no longer registered"
+                );
+                return;
+            }
+            Err(e) => {
+                tracing::error!(
+                    strategy = %strategy.name,
+                    "failed to look up backup app: {e}"
+                );
+                return;
+            }
+        }
+    };
+
+    // r[impl backup.validation.fire-time]
+    {
+        let reg = state.registry.read();
+        let valid = reg.get(&backing_app_name).is_some_and(|entry| {
+            let def = entry.app.def.lock();
+            backup_apps::REQUIRED_ACTIONS
+                .iter()
+                .all(|a| def.actions.contains_key(*a))
+        });
+        if !valid {
+            tracing::error!(
+                strategy = %strategy.name,
+                app = %backing_app_name,
+                "backup app missing required actions at fire time"
+            );
+            let db = state.db.lock();
+            let _ = faults::file_fault(
+                &db,
+                &backing_app_name,
+                None,
+                None,
+                None,
+                "backup_app_unavailable",
+                &format!("backup app {backing_app_name:?} is missing required backup actions"),
+            );
+            return;
+        }
+    }
+
+    if !is_manual {
+        let delay = backup_execution::random_delay_secs(&strategy.schedule);
+        if delay > 0 {
+            tracing::debug!(strategy = %strategy.name, delay_secs = delay, "applying backup delay");
+            tokio::time::sleep(tokio::time::Duration::from_secs(delay)).await;
+        }
+    }
+
+    for vol_id in &strategy.volumes {
+        // r[impl backup.execution.per-volume-failure]
+        run_volume_backup(
+            state,
+            &backup_app_name,
+            &backing_app_name,
+            strategy,
+            vol_id,
+            is_manual,
+        )
+        .await;
+    }
+}
+
+// r[impl backup.execution]
+// r[impl backup.execution.retry]
+async fn run_volume_backup(
+    state: &Arc<OiState>,
+    backup_app_name: &str,
+    backing_app_name: &str,
+    strategy: &backup_strategies::BackupStrategy,
+    vol_id: &str,
+    is_manual: bool,
+) {
+    let vol_store = &state.driver.volume_store;
+
+    let source_path = match parse_vol_id_to_path(vol_id, vol_store) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(strategy = %strategy.name, vol = %vol_id, "invalid volume id: {e}");
+            let db = state.db.lock();
+            let _ = faults::file_fault(
+                &db,
+                backing_app_name,
+                None,
+                None,
+                None,
+                "backup_source_unavailable",
+                &format!("strategy {:?}: {e}", strategy.name),
+            );
+            return;
+        }
+    };
+
+    // r[impl backup.execution]
+    if !source_path.exists() {
+        tracing::error!(strategy = %strategy.name, vol = %vol_id, "source volume path does not exist");
+        let db = state.db.lock();
+        let _ = faults::file_fault(
+            &db,
+            backing_app_name,
+            None,
+            None,
+            None,
+            "backup_source_unavailable",
+            &format!(
+                "strategy {:?}: volume {vol_id:?} path does not exist",
+                strategy.name
+            ),
+        );
+        return;
+    }
+
+    let snapshot_name = format!("backup-snap-{}-{}", strategy.name, uuid::Uuid::new_v4());
+
+    let mut attempt = 0u8;
+    loop {
+        attempt += 1;
+
+        // r[impl backup.execution]
+        if let Err(e) = vol_store.snapshot_site(&snapshot_name, &source_path).await {
+            tracing::error!(
+                strategy = %strategy.name,
+                vol = %vol_id,
+                attempt,
+                "failed to create snapshot: {e}"
+            );
+            if attempt >= 2 {
+                let db = state.db.lock();
+                let _ = faults::file_fault(
+                    &db,
+                    backing_app_name,
+                    None,
+                    None,
+                    None,
+                    "backup_failed",
+                    &format!(
+                        "strategy {:?}: failed to snapshot volume {vol_id:?}: {e}",
+                        strategy.name
+                    ),
+                );
+            }
+            if attempt < 2 {
+                let delay = backup_execution::random_delay_secs(&strategy.schedule);
+                tokio::time::sleep(tokio::time::Duration::from_secs(delay.max(1))).await;
+                continue;
+            }
+            return;
+        }
+
+        let snapshot_path = vol_store.site_path(&snapshot_name);
+
+        // r[impl backup.execution]
+        let operation_id = acquire_scheduler_slot(state, backup_app_name).await;
+
+        let mut bindings = std::collections::HashMap::new();
+        bindings.insert(
+            "source".to_owned(),
+            OperationVolumeBinding {
+                host_path: snapshot_path,
+                read_only: true,
+            },
+        );
+
+        let success = run_operation_for_backup(
+            state,
+            backup_app_name,
+            "save-snapshot",
+            operation_id,
+            serde_json::Map::new(),
+            0,
+            0,
+            bindings,
+        )
+        .await;
+
+        // r[impl backup.execution]
+        let _ = vol_store.remove_site(&snapshot_name).await;
+
+        if success {
+            let db = state.db.lock();
+            faults::clear_faults_by_kind(&db, backing_app_name, "backup_failed").ok();
+            faults::clear_faults_by_kind(&db, backing_app_name, "backup_source_unavailable").ok();
+            return;
+        }
+
+        // r[impl backup.execution.retry]
+        if attempt < 2 {
+            tracing::warn!(
+                strategy = %strategy.name,
+                vol = %vol_id,
+                "backup save-snapshot failed, will retry after delay"
+            );
+            if !is_manual {
+                let delay = backup_execution::random_delay_secs(&strategy.schedule);
+                tokio::time::sleep(tokio::time::Duration::from_secs(delay.max(1))).await;
+            }
+            continue;
+        }
+
+        tracing::error!(
+            strategy = %strategy.name,
+            vol = %vol_id,
+            "backup save-snapshot failed after retry"
+        );
+        let db = state.db.lock();
+        let _ = faults::file_fault(
+            &db,
+            backing_app_name,
+            None,
+            None,
+            None,
+            "backup_failed",
+            &format!(
+                "strategy {:?}: save-snapshot failed for volume {vol_id:?}",
+                strategy.name
+            ),
+        );
+        return;
+    }
+}
+
+// r[impl backup.execution]
+async fn acquire_scheduler_slot(state: &Arc<OiState>, app_name: &str) -> OperationId {
+    loop {
+        let result = {
+            let mut sched = state.scheduler.lock();
+            if sched.active().is_none() {
+                let r = sched.request(
+                    app_name,
+                    "save-snapshot",
+                    serde_json::Map::new(),
+                    0,
+                    0,
+                    "backup",
+                );
+                if matches!(r, ScheduleResult::Accepted) {
+                    sched.active().map(|a| a.operation_id.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+        if let Some(op_id) = result {
+            return op_id;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    }
+}
+
+fn parse_vol_id_to_path(
+    vol_id: &str,
+    vol_store: &crate::system::volume_store::VolumeStore,
+) -> Result<std::path::PathBuf, String> {
+    let (prefix, vol) = vol_id.split_once('/').ok_or_else(|| {
+        format!("invalid volume id {vol_id:?}: expected _site/<name> or <app>/<volume>")
+    })?;
+    if prefix.is_empty() || vol.is_empty() {
+        return Err(format!(
+            "invalid volume id {vol_id:?}: neither part may be empty"
+        ));
+    }
+    if prefix == "_site" {
+        Ok(vol_store.site_path(vol))
+    } else {
+        Ok(vol_store.path(&format!("{prefix}-{vol}")))
+    }
 }
 
 fn validate_schedule(schedule: &str) -> Result<(), OiError> {

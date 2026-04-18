@@ -423,6 +423,45 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - `"every day"`: midnight UTC (00:00).
 > - `"twice a day"`: midnight UTC and noon UTC (00:00, 12:00).
 
+> r[backup.schedule.delay]
+> Before executing a backup strategy, the runtime must apply a random delay of 0–10% of the schedule interval:
+>
+> - `"every hour"` (3600 s interval): 0–360 s delay.
+> - `"twice a day"` (43200 s interval): 0–4320 s delay.
+> - `"every day"` (86400 s interval): 0–8640 s delay.
+>
+> For manually triggered backups (`/backups/run`), no delay is applied.
+
+> r[backup.validation.fire-time]
+> Before executing a backup strategy, the runtime must verify:
+>
+> 1. The registered backup app still exists in the backup app registry.
+> 2. The backing app is registered in the app registry and exposes all required backup actions.
+>
+> If either check fails, a `backup_app_unavailable` fault is filed against the backing app name and execution is aborted.
+
+> r[backup.execution]
+> For each volume in the strategy (in declaration order), the runtime must:
+>
+> 1. Resolve the volume identifier to a filesystem path. If the path does not exist, file a
+>    `backup_source_unavailable` fault against the backup app and skip the volume.
+> 2. Create a read-only snapshot of the source volume at a temporary path.
+> 3. Acquire the scheduler slot (waiting until no other operation is active).
+> 4. Run the backup app's `save-snapshot` action with the snapshot bound to the volume key `"source"`.
+> 5. After the action completes (success or failure), remove the snapshot.
+>
+> On success, any existing `backup_failed` and `backup_source_unavailable` faults for the backup app are cleared.
+
+> r[backup.execution.per-volume-failure]
+> Volume backups within a strategy are independent: a failure for one volume must not prevent
+> the remaining volumes from being backed up.
+
+> r[backup.execution.retry]
+> If the `save-snapshot` action fails, the runtime must retry exactly once after a fresh random
+> delay (following the same rules as `r[backup.schedule.delay]`). If the retry also fails, a
+> `backup_failed` fault is filed against the backup app with the failing volume noted in the
+> description.
+
 # Action Closure Suspension
 
 > r[barrier.suspension]

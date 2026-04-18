@@ -1,10 +1,10 @@
-use std::{path::Path, sync::Arc, time::Duration};
+use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
 
 use parking_lot::{Mutex, RwLock};
 use tokio::sync::Notify;
 
 use crate::{
-    defs::app::App,
+    defs::{app::App, volume::OperationVolumeBinding},
     oi::{events, state::OiState},
     runtime::{
         AppPhase, AppRegistry, InstanceRegistry,
@@ -58,6 +58,7 @@ fn run_operation_loop(
     script_limits: &crate::ScriptLimits,
     source_generation: u64,
     target_generation: u64,
+    operation_volume_bindings: HashMap<String, OperationVolumeBinding>,
 ) -> bool {
     let (engine, mut scope, _) = crate::setup_language(script_limits);
     let ast = match engine.compile(script) {
@@ -107,7 +108,7 @@ fn run_operation_loop(
                 source_generation,
                 target_generation,
                 script_limits: Some(script_limits.clone()),
-                operation_volume_bindings: std::collections::HashMap::new(),
+                operation_volume_bindings: operation_volume_bindings.clone(),
             },
             &mut scope,
         );
@@ -372,6 +373,7 @@ pub fn spawn_accepted_operation(
                     &script_limits,
                     source_generation,
                     target_generation,
+                    HashMap::new(),
                 )
             })
             .await
@@ -405,4 +407,107 @@ pub fn spawn_accepted_operation(
             );
         }
     });
+}
+
+/// Run a single backup action (e.g. `save-snapshot`) to completion, with
+/// operation-scoped volume bindings, then drain the scheduler queue.
+///
+/// Returns `true` on success, `false` on failure.
+/// The caller must have already acquired the scheduler slot for `backup_app_name`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "internal helper grouping all operation state"
+)]
+pub(crate) async fn run_operation_for_backup(
+    state: &Arc<OiState>,
+    backup_app_name: &str,
+    action_name: &str,
+    operation_id: OperationId,
+    params: serde_json::Map<String, serde_json::Value>,
+    source_generation: u64,
+    target_generation: u64,
+    operation_volume_bindings: HashMap<String, OperationVolumeBinding>,
+) -> bool {
+    let (app, active_progress, tick_notify, script) = {
+        let reg = state.registry.read();
+        match reg.get(backup_app_name) {
+            Some(e) => (
+                e.app.clone(),
+                Arc::clone(&e.active_progress),
+                Arc::clone(&e.tick_notify),
+                e.script.clone(),
+            ),
+            None => {
+                tracing::error!(app = %backup_app_name, "run_operation_for_backup: app not found");
+                return false;
+            }
+        }
+    };
+
+    let db_path = state.db_path.clone();
+    let event_tx = state.event_tx.clone();
+    let script_limits = state.script_limits.clone();
+    let operation_id_str = operation_id.0.clone();
+    let backup_app_name_owned = backup_app_name.to_owned();
+    let action_name_owned = action_name.to_owned();
+
+    events::operation_started(
+        &event_tx,
+        backup_app_name,
+        action_name,
+        &operation_id.0,
+        source_generation,
+        target_generation,
+        "backup",
+    );
+
+    let success = {
+        let active_progress_clone = Arc::clone(&active_progress);
+        let tick_notify_clone = Arc::clone(&tick_notify);
+        let event_tx_clone = event_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let dbs = match open_operation_dbs(&db_path, &backup_app_name_owned) {
+                Some(d) => d,
+                None => return false,
+            };
+            run_operation_loop(
+                &app,
+                &backup_app_name_owned,
+                &action_name_owned,
+                &operation_id,
+                &script,
+                dbs,
+                params,
+                active_progress_clone,
+                tick_notify_clone,
+                &event_tx_clone,
+                &script_limits,
+                source_generation,
+                target_generation,
+                operation_volume_bindings,
+            )
+        })
+        .await
+        .unwrap_or(false)
+    };
+
+    cleanup_dynamic_resources(state, &operation_id_str, &active_progress, &tick_notify).await;
+    *active_progress.write() = None;
+    tick_notify.notify_one();
+
+    let next = state.scheduler.lock().complete_current();
+    if let Some(queued) = next {
+        spawn_accepted_operation(
+            Arc::clone(state),
+            queued.app,
+            queued.action,
+            queued.operation_id,
+            queued.params,
+            queued.source_generation,
+            queued.target_generation,
+            queued.trigger,
+        );
+    }
+
+    success
 }
