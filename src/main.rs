@@ -580,6 +580,11 @@ async fn main() {
                     backup_ticker.maybe_tick(&db_guard)
                 };
                 for due in due_strategies {
+                    let ids: Vec<_> = due
+                        .volumes
+                        .iter()
+                        .map(|_| seedling::runtime::barrier::OperationId::new())
+                        .collect();
                     seedling::oi::handler::backups::spawn_backup_run(
                         Arc::clone(&oi_state_for_sched),
                         seedling::runtime::backup_strategies::BackupStrategy {
@@ -589,6 +594,7 @@ async fn main() {
                             volumes: due.volumes,
                             last_fired_at: None,
                         },
+                        ids,
                         false,
                     );
                 }

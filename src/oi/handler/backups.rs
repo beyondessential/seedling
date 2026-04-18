@@ -10,10 +10,7 @@ use crate::{
         handler::actions::lifecycle::run_operation_for_backup,
         state::OiState,
     },
-    runtime::{
-        backup_apps, backup_execution, backup_strategies, barrier::OperationId, faults,
-        scheduler::ScheduleResult,
-    },
+    runtime::{backup_apps, backup_execution, backup_strategies, barrier::OperationId, faults},
 };
 
 #[derive(Deserialize)]
@@ -269,18 +266,32 @@ pub(crate) fn run_backup(state: &Arc<OiState>, params: RunBackupParams) -> Handl
         .ok_or_else(|| OiError::not_found(format!("no strategy named {:?}", params.strategy)))?;
     drop(db);
 
-    spawn_backup_run(Arc::clone(state), strategy, true);
-    Ok(json!({ "queued": true }))
+    let ids: Vec<OperationId> = strategy
+        .volumes
+        .iter()
+        .map(|_| OperationId::new())
+        .collect();
+
+    let operations: Vec<_> = strategy
+        .volumes
+        .iter()
+        .zip(ids.iter())
+        .map(|(vol, id)| json!({ "volume": vol, "operation_id": id.0 }))
+        .collect();
+
+    spawn_backup_run(Arc::clone(state), strategy, ids, true);
+    Ok(json!(operations))
 }
 
 // r[impl backup.execution]
 pub fn spawn_backup_run(
     state: Arc<OiState>,
     strategy: backup_strategies::BackupStrategy,
+    operation_ids: Vec<OperationId>,
     is_manual: bool,
 ) {
     tokio::spawn(async move {
-        run_strategy_backup(&state, &strategy, is_manual).await;
+        run_strategy_backup(&state, &strategy, &operation_ids, is_manual).await;
     });
 }
 
@@ -290,6 +301,7 @@ pub fn spawn_backup_run(
 async fn run_strategy_backup(
     state: &Arc<OiState>,
     strategy: &backup_strategies::BackupStrategy,
+    operation_ids: &[OperationId],
     is_manual: bool,
 ) {
     let (backup_app_name, backing_app_name) = {
@@ -351,7 +363,7 @@ async fn run_strategy_backup(
         }
     }
 
-    for vol_id in &strategy.volumes {
+    for (vol_id, op_id) in strategy.volumes.iter().zip(operation_ids.iter()) {
         // r[impl backup.execution.per-volume-failure]
         run_volume_backup(
             state,
@@ -359,6 +371,7 @@ async fn run_strategy_backup(
             &backing_app_name,
             strategy,
             vol_id,
+            op_id,
             is_manual,
         )
         .await;
@@ -373,6 +386,7 @@ async fn run_volume_backup(
     backing_app_name: &str,
     strategy: &backup_strategies::BackupStrategy,
     vol_id: &str,
+    operation_id: &OperationId,
     is_manual: bool,
 ) {
     let vol_store = &state.driver.volume_store;
@@ -454,7 +468,7 @@ async fn run_volume_backup(
         let snapshot_path = vol_store.site_path(&snapshot_name);
 
         // r[impl backup.execution]
-        let operation_id = acquire_scheduler_slot(state, backup_app_name).await;
+        acquire_scheduler_slot(state, backup_app_name, operation_id).await;
 
         let mut bindings = std::collections::HashMap::new();
         bindings.insert(
@@ -469,7 +483,7 @@ async fn run_volume_backup(
             state,
             backup_app_name,
             "save-snapshot",
-            operation_id,
+            operation_id.clone(),
             serde_json::Map::new(),
             0,
             0,
@@ -524,30 +538,22 @@ async fn run_volume_backup(
 }
 
 // r[impl backup.execution]
-async fn acquire_scheduler_slot(state: &Arc<OiState>, app_name: &str) -> OperationId {
+async fn acquire_scheduler_slot(state: &Arc<OiState>, app_name: &str, operation_id: &OperationId) {
     loop {
-        let result = {
+        {
             let mut sched = state.scheduler.lock();
             if sched.active().is_none() {
-                let r = sched.request(
+                sched.request_with_id(
                     app_name,
                     "save-snapshot",
                     serde_json::Map::new(),
                     0,
                     0,
                     "backup",
+                    operation_id.clone(),
                 );
-                if matches!(r, ScheduleResult::Accepted) {
-                    sched.active().map(|a| a.operation_id.clone())
-                } else {
-                    None
-                }
-            } else {
-                None
+                return;
             }
-        };
-        if let Some(op_id) = result {
-            return op_id;
         }
         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
     }

@@ -636,7 +636,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[backup.run]
 > `/backups/run { strategy }` triggers an immediate backup for the named strategy, backing up all volumes in the strategy without a random delay.
 >
-> Returns `{ "accepted": true }` immediately; the backup runs asynchronously in the background.
+> Returns `[{ "volume": "<vol>", "operation_id": "<id>" }, ...]` — one entry per volume in the strategy, in declaration order. The backup runs asynchronously; the operation IDs can be used to track progress via events.
 
 # Client Behaviour
 

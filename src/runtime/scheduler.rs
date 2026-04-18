@@ -142,6 +142,34 @@ impl Scheduler {
         target_generation: u64,
         trigger: &str,
     ) -> ScheduleResult {
+        self.request_with_id(
+            app,
+            action,
+            params,
+            source_generation,
+            target_generation,
+            trigger,
+            OperationId::new(),
+        )
+    }
+
+    /// Like [`request`], but uses a caller-provided `operation_id` instead of
+    /// generating a new one. Use this when the ID must be known before the
+    /// scheduler slot is acquired (e.g. to return it to an API caller).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors request() signature plus operation_id"
+    )]
+    pub fn request_with_id(
+        &mut self,
+        app: &str,
+        action: &str,
+        params: serde_json::Map<String, serde_json::Value>,
+        source_generation: u64,
+        target_generation: u64,
+        trigger: &str,
+        operation_id: OperationId,
+    ) -> ScheduleResult {
         match &self.active {
             None => {
                 // No active operation — start immediately.
@@ -149,7 +177,7 @@ impl Scheduler {
                 self.active = Some(ActiveOperation {
                     app: app.to_owned(),
                     action: action.to_owned(),
-                    operation_id: OperationId::new(),
+                    operation_id,
                     source_generation,
                     target_generation,
                 });
@@ -167,7 +195,7 @@ impl Scheduler {
                 self.queue.push_back(QueuedOperation {
                     app: app.to_owned(),
                     action: action.to_owned(),
-                    operation_id: OperationId::new(),
+                    operation_id,
                     params,
                     source_generation,
                     target_generation,
