@@ -279,7 +279,13 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     let mut actions_json: Vec<Value> = def
         .actions
         .values()
-        .map(|a| json!({ "name": a.name, "description": a.description, "kind": "action" }))
+        .map(|a| {
+            let mut obj = json!({ "name": a.name, "description": a.description, "kind": "action" });
+            if !a.schedules.is_empty() {
+                obj["schedules"] = json!(a.schedules);
+            }
+            obj
+        })
         .collect();
 
     // shells (kind: "shell")
