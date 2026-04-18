@@ -43,4 +43,18 @@ specs (
             }
         )
     }
+    {
+        name web
+        source_url https://github.com/beyondessential/seedling
+        include (docs/spec/web.md)
+        impls (
+            {
+                name main
+                include (
+                    crates/web/src/*.rs
+                    crates/web/src/**/*.rs
+                )
+            }
+        )
+    }
 )

@@ -16,6 +16,11 @@ Absent specification bugs, anything that is not defined here is either defined i
 > The server's key pair is generated at first startup and persisted to the data directory so that clients can pin the SPKI fingerprint across restarts.
 > Clients verify the server by its SPKI fingerprint; certificate chain validation is not used.
 
+> i[transport.listen]
+> The server may be configured to listen on one or more addresses at startup.
+> All configured addresses share the same server identity (key pair and SPKI fingerprint) and the same authorized key set.
+> When no addresses are explicitly configured, the server listens on a single loopback address on the default port.
+
 > i[transport.remote]
 > Remote operation mode — binding to a non-loopback address, with client authentication and PKI — is reserved for a future extension of this spec.
 > Authentication and certificate verification requirements for remote mode are not defined here yet.
@@ -99,6 +104,21 @@ Absent specification bugs, anything that is not defined here is either defined i
 > ```json
 > { "method": "<string>", "params": { } }
 > ```
+
+> i[wire.actor]
+> A control request may include an optional top-level `actor` object identifying the human or system principal that initiated the request:
+> ```json
+> { "method": "<string>", "actor": { "kind": "<string>", "id": "<string>", "display": "<string>", "session": "<string>" }, "params": { } }
+> ```
+> All fields within `actor` are optional strings.
+> `kind` identifies the authentication mechanism (e.g. `"ctl"`, `"password"`, `"tailscale"`, `"dev"`).
+> `id` is a stable identifier for the principal (e.g. an email address or key fingerprint).
+> `display` is a human-readable label.
+> `session` is an opaque per-session correlator.
+>
+> When the `actor` field is absent from a request, the server synthesises one from the client's mTLS identity: `kind` is `"ctl"`, `id` is the client's SPKI fingerprint, and `display` is the label stored in the authorized keys table for that fingerprint (or the fingerprint itself if no label is stored).
+>
+> The resolved actor is included in all events emitted as a result of the request and recorded in the audit log.
 
 > i[wire.response.ok]
 > A successful response has the form:
@@ -524,6 +544,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[event.types]
 > The following event types are defined.
 > Every event object includes a `type` field (string) and a `timestamp` field (RFC 3339).
+> When an event is caused by an OI request, the event object also includes an `actor` field containing the actor resolved from that request (see [wire.actor](#i--wire.actor)).
+> For events triggered autonomously by the runtime — such as `OperationStarted` with `trigger: "boot"` or `trigger: "schedule"` — the `actor` field is absent.
 >
 > | `type` | Additional fields |
 > |---|---|
