@@ -146,6 +146,10 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8]) -> HandlerResult {
         "/backups/strategies/delete" => backups::delete_strategy(state, parse_params(req.params)?),
         // i[backup.run]
         "/backups/run" => backups::run_backup(state, parse_params(req.params)?),
+        // i[backup.snapshots.list]
+        "/backups/snapshots/list" => backups::list_snapshots(state, parse_params(req.params)?),
+        // i[backup.restore]
+        "/backups/restore" => backups::restore_backup(state, parse_params(req.params)?),
         other => Err(OiError::not_found(format!("unknown method: {other}"))),
     };
 

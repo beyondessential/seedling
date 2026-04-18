@@ -462,6 +462,27 @@ Absent specification bugs, anything that is not defined here is either defined i
 > `backup_failed` fault is filed against the backup app with the failing volume noted in the
 > description.
 
+> r[backup.list]
+> To list available snapshots for a volume, the runtime must synchronously invoke the backup app's
+> `list-snapshots` action. The action receives:
+>
+> - A param `"volume"` containing the volume identifier string.
+> - A writable volume bound to key `"output"`.
+>
+> The action must write a file named `snapshots.json` to the output volume.
+> The runtime reads and returns the contents of that file as the result.
+
+> r[backup.restore]
+> To restore a snapshot, the runtime must:
+>
+> 1. Create a new site volume with a generated name.
+> 2. Synchronously invoke the backup app's `restore-snapshot` action. The action receives:
+>    - A param `"snapshot"` containing the snapshot identifier.
+>    - A param `"volume"` containing the source volume identifier string.
+>    - A writable volume bound to key `"destination"` pointing at the new site volume.
+> 3. If the action fails, remove the site volume and propagate the error.
+> 4. Return the site volume name.
+
 # Action Closure Suspension
 
 > r[barrier.suspension]

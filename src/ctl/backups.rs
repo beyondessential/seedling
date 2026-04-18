@@ -21,6 +21,23 @@ pub(super) enum BackupsCommand {
         #[arg(long)]
         strategy: String,
     },
+    /// Snapshot management
+    Snapshots {
+        #[command(subcommand)]
+        command: BackupSnapshotsCommand,
+    },
+    /// Restore a snapshot to a new site volume
+    Restore {
+        /// Strategy name
+        #[arg(long)]
+        strategy: String,
+        /// Volume identifier (e.g. myapp/data or _site/vol)
+        #[arg(long)]
+        volume: String,
+        /// Snapshot identifier
+        #[arg(long)]
+        snapshot: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -95,6 +112,19 @@ pub(super) enum BackupStrategiesCommand {
         /// Strategy name
         #[arg(long)]
         name: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub(super) enum BackupSnapshotsCommand {
+    /// List available snapshots for a volume
+    List {
+        /// Strategy name
+        #[arg(long)]
+        strategy: String,
+        /// Volume identifier (e.g. myapp/data or _site/vol)
+        #[arg(long)]
+        volume: String,
     },
 }
 
@@ -230,6 +260,38 @@ pub(super) async fn dispatch(client: &OiClient, cmd: BackupsCommand) {
             print_result(
                 client
                     .request("/backups/run", serde_json::json!({ "strategy": strategy }))
+                    .await,
+            );
+        }
+        // i[impl backup.snapshots.list]
+        BackupsCommand::Snapshots { command } => match command {
+            BackupSnapshotsCommand::List { strategy, volume } => {
+                print_result(
+                    client
+                        .request(
+                            "/backups/snapshots/list",
+                            serde_json::json!({ "strategy": strategy, "volume": volume }),
+                        )
+                        .await,
+                );
+            }
+        },
+        // i[impl backup.restore]
+        BackupsCommand::Restore {
+            strategy,
+            volume,
+            snapshot,
+        } => {
+            print_result(
+                client
+                    .request(
+                        "/backups/restore",
+                        serde_json::json!({
+                            "strategy": strategy,
+                            "volume": volume,
+                            "snapshot": snapshot,
+                        }),
+                    )
                     .await,
             );
         }

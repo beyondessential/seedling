@@ -559,6 +559,194 @@ async fn acquire_scheduler_slot(state: &Arc<OiState>, app_name: &str, operation_
     }
 }
 
+#[derive(Deserialize)]
+pub(crate) struct ListSnapshotsParams {
+    pub strategy: String,
+    pub volume: String,
+}
+
+// i[impl backup.snapshots.list]
+// r[impl backup.list]
+pub(crate) fn list_snapshots(state: &Arc<OiState>, params: ListSnapshotsParams) -> HandlerResult {
+    tokio::runtime::Handle::current().block_on(list_snapshots_async(state, params))
+}
+
+async fn list_snapshots_async(state: &Arc<OiState>, params: ListSnapshotsParams) -> HandlerResult {
+    let (backup_app_name, backing_app_name) =
+        resolve_backup_app(state, &params.strategy, &params.volume)?;
+    validate_backup_app_actions(state, &backing_app_name)?;
+
+    let tempdir = tempfile::tempdir().map_err(|e| {
+        OiError::new(
+            ErrorCode::Internal,
+            format!("failed to create temp dir: {e}"),
+        )
+    })?;
+
+    let operation_id = OperationId::new();
+    acquire_scheduler_slot(state, &backup_app_name, &operation_id).await;
+
+    let mut bindings = std::collections::HashMap::new();
+    bindings.insert(
+        "output".to_owned(),
+        OperationVolumeBinding {
+            host_path: tempdir.path().to_owned(),
+            read_only: false,
+        },
+    );
+
+    let mut action_params = serde_json::Map::new();
+    action_params.insert("volume".to_owned(), json!(params.volume));
+
+    let success = run_operation_for_backup(
+        state,
+        &backup_app_name,
+        "list-snapshots",
+        operation_id,
+        action_params,
+        0,
+        0,
+        bindings,
+    )
+    .await;
+
+    if !success {
+        return Err(OiError::new(
+            ErrorCode::Internal,
+            "list-snapshots action failed".to_owned(),
+        ));
+    }
+
+    let snapshots_path = tempdir.path().join("snapshots.json");
+    let raw: Vec<u8> = tokio::fs::read(&snapshots_path).await.map_err(|e| {
+        OiError::new(
+            ErrorCode::Internal,
+            format!("list-snapshots did not write snapshots.json: {e}"),
+        )
+    })?;
+
+    let value: serde_json::Value = serde_json::from_slice(&raw).map_err(|e| {
+        OiError::new(
+            ErrorCode::Internal,
+            format!("snapshots.json is not valid JSON: {e}"),
+        )
+    })?;
+
+    Ok(value)
+}
+
+#[derive(Deserialize)]
+pub(crate) struct RestoreBackupParams {
+    pub strategy: String,
+    pub volume: String,
+    pub snapshot: String,
+}
+
+// i[impl backup.restore]
+// r[impl backup.restore]
+pub(crate) fn restore_backup(state: &Arc<OiState>, params: RestoreBackupParams) -> HandlerResult {
+    tokio::runtime::Handle::current().block_on(restore_backup_async(state, params))
+}
+
+async fn restore_backup_async(state: &Arc<OiState>, params: RestoreBackupParams) -> HandlerResult {
+    let (backup_app_name, backing_app_name) =
+        resolve_backup_app(state, &params.strategy, &params.volume)?;
+    validate_backup_app_actions(state, &backing_app_name)?;
+
+    let vol_store = &state.driver.volume_store;
+    let site_vol_name = format!(
+        "restore-{}-{}",
+        params.strategy,
+        uuid::Uuid::new_v4().simple()
+    );
+
+    vol_store.create_site(&site_vol_name).await.map_err(|e| {
+        OiError::new(
+            ErrorCode::Internal,
+            format!("failed to create restore site volume: {e}"),
+        )
+    })?;
+
+    let operation_id = OperationId::new();
+    acquire_scheduler_slot(state, &backup_app_name, &operation_id).await;
+
+    let dest_path = vol_store.site_path(&site_vol_name);
+    let mut bindings = std::collections::HashMap::new();
+    bindings.insert(
+        "destination".to_owned(),
+        OperationVolumeBinding {
+            host_path: dest_path,
+            read_only: false,
+        },
+    );
+
+    let mut action_params = serde_json::Map::new();
+    action_params.insert("snapshot".to_owned(), json!(params.snapshot));
+    action_params.insert("volume".to_owned(), json!(params.volume));
+
+    let success = run_operation_for_backup(
+        state,
+        &backup_app_name,
+        "restore-snapshot",
+        operation_id,
+        action_params,
+        0,
+        0,
+        bindings,
+    )
+    .await;
+
+    if !success {
+        let _ = vol_store.remove_site(&site_vol_name).await;
+        return Err(OiError::new(
+            ErrorCode::Internal,
+            "restore-snapshot action failed".to_owned(),
+        ));
+    }
+
+    Ok(json!({ "site_volume": site_vol_name }))
+}
+
+fn resolve_backup_app(
+    state: &Arc<OiState>,
+    strategy_name: &str,
+    _volume: &str,
+) -> Result<(String, String), OiError> {
+    let db = state.db.lock();
+    let strategy = backup_strategies::get(&db, strategy_name)
+        .map_err(|e| OiError::new(ErrorCode::Internal, format!("db strategies: {e}")))?
+        .ok_or_else(|| OiError::not_found(format!("no strategy named {strategy_name:?}")))?;
+    let ba = backup_apps::get_by_name(&db, &strategy.via)
+        .map_err(|e| OiError::new(ErrorCode::Internal, format!("db backup apps: {e}")))?
+        .ok_or_else(|| {
+            OiError::not_found(format!(
+                "backup app {:?} no longer registered",
+                strategy.via
+            ))
+        })?;
+    Ok((ba.name, ba.app))
+}
+
+fn validate_backup_app_actions(
+    state: &Arc<OiState>,
+    backing_app_name: &str,
+) -> Result<(), OiError> {
+    let reg = state.registry.read();
+    let valid = reg.get(backing_app_name).is_some_and(|entry| {
+        let def = entry.app.def.lock();
+        backup_apps::REQUIRED_ACTIONS
+            .iter()
+            .all(|a| def.actions.contains_key(*a))
+    });
+    if !valid {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!("backup app {backing_app_name:?} is missing required backup actions"),
+        ));
+    }
+    Ok(())
+}
+
 fn parse_vol_id_to_path(
     vol_id: &str,
     vol_store: &crate::system::volume_store::VolumeStore,

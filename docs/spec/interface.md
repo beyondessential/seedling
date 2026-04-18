@@ -638,6 +638,20 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > Returns `[{ "volume": "<vol>", "operation_id": "<id>" }, ...]` — one entry per volume in the strategy, in declaration order. The backup runs asynchronously; the operation IDs can be used to track progress via events.
 
+> i[backup.snapshots.list]
+> `/backups/snapshots/list { strategy, volume }` synchronously invokes the backup app's `list-snapshots` action and returns the output.
+>
+> `strategy` is the strategy name; `volume` is the volume identifier within the strategy (e.g. `"myapp/data"` or `"_site/vol"`).
+>
+> Returns the parsed JSON written by the action to its `"output"` volume as `snapshots.json`.
+
+> i[backup.restore]
+> `/backups/restore { strategy, volume, snapshot }` restores a snapshot to a new site volume.
+>
+> `strategy` is the strategy name; `volume` is the source volume identifier; `snapshot` is the snapshot identifier as returned by `list-snapshots`.
+>
+> Returns `{ "site_volume": "<name>" }` — the name of the newly created site volume containing the restored data.
+
 # Client Behaviour
 
 > i[ctl.graceful-shutdown]
