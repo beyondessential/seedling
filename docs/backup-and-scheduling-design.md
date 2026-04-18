@@ -360,39 +360,41 @@ Update i[event.types], add `trigger` field to `OperationStarted`:
 
 **Goal**: `app.external_volume(name)` in action scope resolves operation-scoped bindings.
 
-1. **Operation-scoped binding store** (src/runtime/barrier/runtime.rs or new module).
+1. **Update specs** (language.md: l[volume.external.dynamic], runtime.md if needed).
+
+2. **Operation-scoped binding store** (src/runtime/barrier/runtime.rs or new module).
    - Thread-local or context-carried map: `name → host_path + read_only`.
    - Populated before an action closure runs, cleared after.
 
-2. **Update ExternalVolume resolution** (src/defs/app/volume.rs, src/system/translate/).
+3. **Update ExternalVolume resolution** (src/defs/app/volume.rs, src/system/translate/).
    - When in action scope, check the binding store first.
    - Fall back to the static external_volume_mappings table.
 
-3. **Tests**.
+4. **Tests**.
 
 ### Phase 4: Backup App Registration
 
 **Goal**: Operators can register apps as backup apps with validation.
 
-1. **Backup app registry table** (src/runtime/db).
+1. **Update specs** (interface.md: i[backup.app.*], i[backup.app.validation]).
+
+2. **Backup app registry table** (src/runtime/db).
    - Table: `backup_apps(name TEXT PRIMARY KEY, app TEXT UNIQUE)`.
 
-2. **Registration RPC** (src/oi/handler, new backups.rs or similar).
+3. **Registration RPC** (src/oi/handler, new backups.rs or similar).
    - `/backups/apps/register { name, app }`: validate app has `save-snapshot`, `list-snapshots`, `restore-snapshot` actions.
    - `/backups/apps/deregister { name }`: reject if strategies reference it.
    - `/backups/apps/list {}`.
 
-3. **Continuous validation on script update** (src/oi/handler/apps.rs).
+4. **Continuous validation on script update** (src/oi/handler/apps.rs).
    - On `/apps/update`, if app is a registered backup app, validate new script.
    - Wire into `/apps/plan` (dry-run) response.
 
-4. **CLI hint** (src/ctl/apps.rs).
+5. **CLI hint** (src/ctl/apps.rs).
    - On `apps create`, evaluate script; if backup-shaped, print suggestion.
 
-5. **CLI subcommands** (src/ctl, new backups.rs or similar).
+6. **CLI subcommands** (src/ctl, new backups.rs or similar).
    - `ctl backups apps register|deregister|list`.
-
-6. **Update specs** (interface.md).
 
 7. **Tests**.
 
@@ -400,24 +402,24 @@ Update i[event.types], add `trigger` field to `OperationStarted`:
 
 **Goal**: Operators can create, manage, and manually trigger backup strategies.
 
-1. **Strategy table** (src/runtime/db).
+1. **Update specs** (interface.md: i[backup.strategy.*], i[ctl.backup.*]).
+
+2. **Strategy table** (src/runtime/db).
    - Table: `backup_strategies(name TEXT PRIMARY KEY, via TEXT, schedule TEXT, volumes TEXT)`.
    - `volumes` stored as JSON array.
 
-2. **Strategy CRUD RPCs** (src/oi/handler/backups.rs).
+3. **Strategy CRUD RPCs** (src/oi/handler/backups.rs).
    - `/backups/strategies/create|list|show|update|delete`.
    - Validate `via` references a registered backup app.
    - Validate `schedule` is one of the named buckets.
 
-3. **Manual trigger RPC** (src/oi/handler/backups.rs).
+4. **Manual trigger RPC** (src/oi/handler/backups.rs).
    - `/backups/run { strategy, volume? }`.
 
-4. **CLI subcommands** (src/ctl/backups.rs).
+5. **CLI subcommands** (src/ctl/backups.rs).
    - `ctl backups strategies create|list|show|update|delete`.
    - `ctl backups run`.
    - `--allow-missing` flag for volume existence check.
-
-5. **Update specs** (interface.md).
 
 6. **Tests**.
 
@@ -425,11 +427,13 @@ Update i[event.types], add `trigger` field to `OperationStarted`:
 
 **Goal**: Scheduled and manual backups execute end-to-end.
 
-1. **Backup scheduler tick** (src/runtime, alongside the schedule tick from Phase 2).
+1. **Update specs** (runtime.md: r[backup.schedule], r[backup.schedule.delay], r[backup.execution], r[backup.execution.retry], r[backup.execution.per-volume-failure], r[backup.validation.fire-time]).
+
+2. **Backup scheduler tick** (src/runtime, alongside the schedule tick from Phase 2).
    - Check due strategies against named bucket rules (round boundaries).
    - For each due strategy × volume, enqueue backup operations.
 
-2. **Backup operation orchestration** (new module, src/runtime/backups.rs or similar).
+3. **Backup operation orchestration** (new module, src/runtime/backups.rs or similar).
    - BTRFS snapshot of source volume.
    - Random delay (10% of interval, skip for manual).
    - Create operation-scoped bindings (source snapshot read-only, output tmpfs).
@@ -437,33 +441,35 @@ Update i[event.types], add `trigger` field to `OperationStarted`:
    - On completion: read output file, audit log, cleanup.
    - On failure: retry once with fresh delay, then fault + cleanup.
 
-3. **Fault types** (src/runtime/faults).
+4. **Fault types** (src/runtime/faults).
    - `backup_app_unavailable`.
    - `backup_source_unavailable`.
    - `backup_failed`.
 
-4. **Audit log entries for backup events** (src/runtime/audit.rs).
+5. **Audit log entries for backup events** (src/runtime/audit.rs).
    - Include output file contents (if present and under 1 KB).
 
-5. **Tests**.
+6. **Tests**.
 
 ### Phase 7: Backup List and Restore
 
 **Goal**: Operators can list snapshots and restore from backups.
 
-1. **List-snapshots sync RPC** (src/oi/handler/backups.rs).
+1. **Update specs** (runtime.md: r[backup.list], r[backup.restore]; interface.md: i[backup.snapshots.list], i[backup.restore]).
+
+2. **List-snapshots sync RPC** (src/oi/handler/backups.rs).
    - `/backups/snapshots/list { strategy, source? }`.
    - Invoke `list-snapshots` action, await completion, read output file, return.
 
-2. **Restore RPC** (src/oi/handler/backups.rs).
+3. **Restore RPC** (src/oi/handler/backups.rs).
    - `/backups/restore { strategy, snapshot_id, source }`.
    - Create fresh managed site volume.
    - Bind as `target_volume` (read-write).
    - Invoke `restore-snapshot`, await completion.
    - Return site volume name on success; cleanup on failure.
 
-3. **CLI subcommands** (src/ctl/backups.rs).
+4. **CLI subcommands** (src/ctl/backups.rs).
    - `ctl backups snapshots list`.
    - `ctl backups restore`.
 
-4. **Tests**.
+5. **Tests**.
