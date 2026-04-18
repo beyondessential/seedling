@@ -7,7 +7,7 @@ use super::*;
 fn rt_available_in_actions() {
     exercise(
         r#"
-        app.on_start(|rt| {
+        app.on_start(|rt, _param| {
             let t = rt.type_of();
             if t != "RuntimeInstance" { throw "rt must be RuntimeInstance, got: " + t; }
         });
@@ -20,7 +20,7 @@ fn rt_available_in_actions() {
 fn rt_methods_are_defined() {
     exercise(
         r#"
-        app.on_start(|rt| {
+        app.on_start(|rt, _param| {
             let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             let started = rt.start(dep);
             started.ready();
@@ -36,7 +36,7 @@ fn rt_methods_are_defined() {
 fn rt_lifecycle_states_accessible() {
     exercise(
         r#"
-        app.on_start(|rt| {
+        app.on_start(|rt, _param| {
             let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             let started = rt.start(dep);
             started.scheduled();
@@ -54,7 +54,7 @@ fn rt_lifecycle_states_accessible() {
 fn exercise_start_action() {
     exercise(
         r#"
-        app.on_start(|rt| {
+        app.on_start(|rt, _param| {
             let svc = app.service("web");
             let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             rt.start(svc);
@@ -69,7 +69,7 @@ fn exercise_start_action() {
 fn exercise_stop() {
     exercise(
         r#"
-        app.on_start(|rt| {
+        app.on_start(|rt, _param| {
             let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             let started = rt.start(dep);
             started.ready();
@@ -84,7 +84,7 @@ fn exercise_stop() {
 fn exercise_stop_with_deadline() {
     exercise(
         r#"
-        app.on_start(|rt| {
+        app.on_start(|rt, _param| {
             let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             rt.start(dep).ready();
             rt.stop(dep, 10);
@@ -98,7 +98,7 @@ fn exercise_stop_with_deadline() {
 fn exercise_query() {
     exercise(
         r#"
-        app.on_start(|rt| {
+        app.on_start(|rt, _param| {
             let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             let queried = rt.query(dep);
             queried.ready();
@@ -112,7 +112,7 @@ fn exercise_query() {
 fn exercise_warm_certs() {
     exercise(
         r#"
-        app.on_start(|rt| {
+        app.on_start(|rt, _param| {
             let svc = app.service("public");
             let ing = svc.ingress("test.example.com", 443).tls();
             let warm = rt.warm_certs(ing);
@@ -127,7 +127,7 @@ fn exercise_warm_certs() {
 fn warm_certs_ignores_non_ingress_resources() {
     exercise(
         r#"
-        app.on_start(|rt| {
+        app.on_start(|rt, _param| {
             let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             // Passing a non-ingress should not throw — just be ignored.
             let warm = rt.warm_certs(dep);
@@ -142,7 +142,7 @@ fn warm_certs_ignores_non_ingress_resources() {
 fn started_is_a_collection() {
     exercise(
         r#"
-        app.on_start(|rt| {
+        app.on_start(|rt, _param| {
             let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             let svc = app.service("web");
             let started = rt.start(dep);
@@ -160,7 +160,7 @@ fn started_is_a_collection() {
 fn started_state_methods_with_deadline() {
     exercise(
         r#"
-        app.on_start(|rt| {
+        app.on_start(|rt, _param| {
             let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             let started = rt.start(dep);
             started.scheduled(30);
@@ -179,7 +179,7 @@ fn started_state_methods_with_deadline() {
 fn exercise_terminated_ensure_success() {
     exercise(
         r#"
-        app.on_start(|rt| {
+        app.on_start(|rt, _param| {
             let job = app.job("init").image("docker.io/library/tools:latest").command("setup");
             rt.start(job).terminated().ensure_success();
         });
@@ -192,7 +192,7 @@ fn exercise_terminated_ensure_success() {
 fn termination_type_is_opaque() {
     exercise(
         r#"
-        app.on_start(|rt| {
+        app.on_start(|rt, _param| {
             let job = app.job("init").image("docker.io/library/tools:latest").command("setup");
             let term = rt.start(job).terminated();
             let t = term.type_of();

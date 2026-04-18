@@ -25,8 +25,8 @@ fn app_methods_are_defined() {
         app.volume("vol");
         app.external_volume("evol");
         app.param("par");
-        app.on_action("act", |rt| {});
-        app.on_start(|rt| {});
+        app.on_action("act", |rt, _param| {});
+        app.on_start(|rt, _param| {});
         app.on_shell("shl", |rt| { app.job("shl").command("sh") });
         app.on_install(|rt, reqs| {});
     "#,
@@ -76,7 +76,7 @@ fn closures_create_dynamic_resources() {
             .image("docker.io/library/tools:1")
             .command("run");
 
-        app.on_start(|rt| {
+        app.on_start(|rt, _param| {
             let j = make_job.call();
             rt.start(j).terminated();
         });

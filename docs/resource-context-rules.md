@@ -39,7 +39,7 @@ To use a resource with modified configuration inside an action, create an anonym
 resource instead:
 
 ```rhai
-app.on_action("migrate", |rt| {
+app.on_action("migrate", |rt, _param| {
     // ✗ Error: cannot modify a static resource reference
     // app.deployment("web").image("new-image");
 

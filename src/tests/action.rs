@@ -6,7 +6,7 @@ use super::*;
 fn on_action_registers_and_returns_action() {
     let app = run_test_script_app(
         r#"
-        let a = app.on_action("migrate", |rt| {}, #{
+        let a = app.on_action("migrate", |rt, _param| {}, #{
             description: "Run migrations",
         });
     "#,
@@ -21,7 +21,7 @@ fn on_action_registers_and_returns_action() {
 fn on_action_without_options() {
     let app = run_test_script_app(
         r#"
-        app.on_action("cleanup", |rt| {});
+        app.on_action("cleanup", |rt, _param| {});
     "#,
     );
     let def = app.def.lock();
@@ -34,7 +34,7 @@ fn on_action_without_options() {
 fn on_start_registers_start_action() {
     let app = run_test_script_app(
         r#"
-        app.on_start(|rt| {});
+        app.on_start(|rt, _param| {});
     "#,
     );
     let def = app.def.lock();
@@ -46,7 +46,7 @@ fn on_start_registers_start_action() {
 fn on_start_with_options() {
     let app = run_test_script_app(
         r#"
-        app.on_start(|rt| {}, #{
+        app.on_start(|rt, _param| {}, #{
             description: "Start the application",
         });
     "#,
@@ -93,7 +93,7 @@ fn on_shell_without_options() {
 fn shells_in_separate_namespace_from_actions() {
     let app = run_test_script_app(
         r#"
-        app.on_action("debug", |rt| {});
+        app.on_action("debug", |rt, _param| {});
         app.on_shell("debug", |rt| {
             app.job("shell-debug").image("docker.io/library/tools:latest").command("sh")
         });

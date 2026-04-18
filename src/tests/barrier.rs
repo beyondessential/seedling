@@ -42,7 +42,7 @@ fn barrier_satisfied_on_first_pass() {
     let (engine, mut scope, app, ast) = setup_with_script(
         r#"
         let web = app.deployment("web").image("docker.io/library/nginx:latest");
-        app.on_start(|rt| {
+        app.on_start(|rt, _param| {
             rt.start(app.deployment("web")).ready();
         });
     "#,
@@ -84,7 +84,7 @@ fn barrier_suspends_then_resumes() {
     let (engine, mut scope, app, ast) = setup_with_script(
         r#"
         let web = app.deployment("web").image("docker.io/library/nginx:latest");
-        app.on_start(|rt| {
+        app.on_start(|rt, _param| {
             rt.start(app.deployment("web")).ready();
         });
     "#,
@@ -157,7 +157,7 @@ fn sequential_barriers() {
         r#"
         let frontend = app.deployment("frontend").image("docker.io/library/nginx:latest");
         let backend = app.deployment("backend").image("docker.io/library/api:latest");
-        app.on_start(|rt| {
+        app.on_start(|rt, _param| {
             rt.start(app.deployment("frontend")).scheduled();
             rt.start(app.deployment("backend")).ready();
         });
@@ -252,7 +252,7 @@ fn barrier_deadline_zero_expires_on_second_pass() {
     let (engine, mut scope, app, ast) = setup_with_script(
         r#"
         let web = app.deployment("web").image("docker.io/library/nginx:latest");
-        app.on_start(|rt| {
+        app.on_start(|rt, _param| {
             rt.start(app.deployment("web")).ready(0);
         });
     "#,
@@ -321,7 +321,7 @@ fn replay_idempotency() {
         r#"
         let a = app.deployment("aaa").image("docker.io/library/img:latest");
         let b = app.deployment("bbb").image("docker.io/library/img:latest");
-        app.on_start(|rt| {
+        app.on_start(|rt, _param| {
             rt.start(app.deployment("aaa"));
             rt.start(app.deployment("bbb")).ready();
         });
@@ -406,7 +406,7 @@ fn rt_stop_acts_as_barrier() {
     let (engine, mut scope, app, ast) = setup_with_script(
         r#"
         let old = app.deployment("old").image("docker.io/library/nginx:latest");
-        app.on_start(|rt| {
+        app.on_start(|rt, _param| {
             let dep = app.deployment("old");
             rt.start(dep);
             rt.stop(dep);
@@ -478,7 +478,7 @@ fn warm_certs_barrier_uses_cert_oracle() {
         r#"
         let svc = app.service("public");
         let ingress = svc.ingress("warm.example.com", 443).tls();
-        app.on_start(|rt| {
+        app.on_start(|rt, _param| {
             let warm = rt.warm_certs(ingress);
             warm.ready();
         });
@@ -526,7 +526,7 @@ fn warm_certs_barrier_suspends_when_cert_not_valid() {
         r#"
         let svc = app.service("public");
         let ingress = svc.ingress("warm.example.com", 443).tls();
-        app.on_start(|rt| {
+        app.on_start(|rt, _param| {
             let warm = rt.warm_certs(ingress);
             warm.ready();
         });
@@ -573,7 +573,7 @@ fn stub_runtime_still_passes_language_tests() {
     exercise(
         r#"
         let web = app.deployment("web").image("docker.io/library/nginx:latest");
-        app.on_start(|rt| {
+        app.on_start(|rt, _param| {
             rt.start(app.deployment("web")).ready();
         });
     "#,

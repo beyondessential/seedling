@@ -83,7 +83,7 @@ let migrate = || app.job("migrate")
     .mount("/var/run/postgres", pg_socket);
 
 // actions are available to operators to run
-let migrate_action = app.on_action("migrate", |rt| {
+let migrate_action = app.on_action("migrate", |rt, _param| {
     // `rt` is the "runtime", and is how you control resources
     // (vs defining them or selecting them)
 
@@ -103,8 +103,8 @@ let migrate_action = app.on_action("migrate", |rt| {
 
 // some actions are special, so they have first-class syntax,
 // but are also equivalent to something like:
-// on_action("start", |rt| { ... }, #{ description: "Start the app" })
-app.on_start(|rt| {
+// on_action("start", |rt, _param| { ... }, #{ description: "Start the app" })
+app.on_start(|rt, _param| {
     // start the networking
     rt.start([traffic, control]);
 

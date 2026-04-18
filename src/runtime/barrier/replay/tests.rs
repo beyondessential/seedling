@@ -25,7 +25,7 @@ fn db_action_log_barrier_suspends_then_resumes() {
             &mut scope,
             r#"
             let dep = app.deployment("web").image("docker.io/library/nginx:latest");
-            app.on_start(|rt| {
+            app.on_start(|rt, _param| {
                 rt.start(app.deployment("web")).ready();
             });
             "#,
@@ -122,7 +122,7 @@ fn db_action_log_sequential_barriers() {
             r#"
             let fe = app.deployment("frontend").image("docker.io/library/nginx:latest");
             let be = app.deployment("backend").image("docker.io/library/api:latest");
-            app.on_start(|rt| {
+            app.on_start(|rt, _param| {
                 rt.start(app.deployment("frontend")).scheduled();
                 rt.start(app.deployment("backend")).ready();
             });

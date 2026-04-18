@@ -202,7 +202,7 @@ fn param_used_in_closure_captures_injected_value() {
         r#"
         let ver = app.param("version");
         let dep = app.deployment("web").image("docker.io/library/placeholder:latest");
-        app.on_start(|rt| {
+        app.on_start(|rt, _param| {
             rt.start(app.deployment().image(`docker.io/library/myapp:${ver.value()}`));
         });
         "#,
@@ -255,7 +255,7 @@ fn on_change_inside_action_closure_throws() {
     let (engine, mut scope, app, ast) = run_test_script(
         r#"
         let p = app.param("version");
-        app.on_start(|rt| {
+        app.on_start(|rt, _param| {
             p.on_change(|rt| {});
         });
         "#,

@@ -271,7 +271,7 @@ fn run_action_with_volumes(
 fn anon_volume_in_action_gets_seedling_prefix() {
     let progress = run_action_with_volumes(
         r#"
-        app.on_action("goo", |rt| {
+        app.on_action("goo", |rt, _param| {
             let vol = app.volume();
             let j = app.job().image("docker.io/library/busybox:latest").mount("/data", vol);
             rt.start(j);
@@ -315,7 +315,7 @@ fn anon_volume_in_action_gets_seedling_prefix() {
 fn shared_anon_volume_same_id_across_containers() {
     let progress = run_action_with_volumes(
         r#"
-        app.on_action("goo", |rt| {
+        app.on_action("goo", |rt, _param| {
             let vol = app.volume();
             vol.write("/config.txt", "hello");
             let j1 = app.job().image("docker.io/library/busybox:latest").mount("/a", vol);
@@ -360,7 +360,7 @@ fn shared_anon_volume_same_id_across_containers() {
 fn distinct_anon_volumes_get_distinct_ids() {
     let progress = run_action_with_volumes(
         r#"
-        app.on_action("goo", |rt| {
+        app.on_action("goo", |rt, _param| {
             let vol1 = app.volume();
             let vol2 = app.volume();
             let j = app.job().image("docker.io/library/busybox:latest").mount("/a", vol1).mount("/b", vol2);
@@ -402,7 +402,7 @@ fn distinct_anon_volumes_get_distinct_ids() {
 fn anon_volume_writes_preserved_through_action() {
     let progress = run_action_with_volumes(
         r#"
-        app.on_action("goo", |rt| {
+        app.on_action("goo", |rt, _param| {
             let vol = app.volume();
             vol.write("/init.sql", "CREATE TABLE t;");
             vol.write("/seed.sql", "INSERT INTO t VALUES (1);");
@@ -447,7 +447,7 @@ fn frozen_static_volume_cannot_be_modified_in_action() {
     let (engine, mut scope, app, ast) = run_test_script(
         r#"
         let v = app.volume("data");
-        app.on_action("goo", |rt| {
+        app.on_action("goo", |rt, _param| {
             app.volume("data").write("/x", "y");
         });
     "#,
