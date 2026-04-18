@@ -17,7 +17,7 @@ use crate::{
 use super::HandlerResult;
 
 pub(crate) mod install;
-pub(crate) mod lifecycle;
+pub mod lifecycle;
 
 use lifecycle::spawn_accepted_operation;
 

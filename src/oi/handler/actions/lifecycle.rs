@@ -301,7 +301,7 @@ fn finalize_install(state: &OiState, app_name: &str) {
     clippy::too_many_arguments,
     reason = "internal helper grouping all operation state"
 )]
-pub(crate) fn spawn_accepted_operation(
+pub fn spawn_accepted_operation(
     state: Arc<OiState>,
     app_name: String,
     action_name: String,

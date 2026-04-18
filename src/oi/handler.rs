@@ -8,7 +8,7 @@ use super::{
     state::OiState,
 };
 
-mod actions;
+pub mod actions;
 mod apps;
 mod faults;
 mod key_mgmt;

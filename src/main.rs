@@ -466,7 +466,7 @@ async fn main() {
 
     let shells = seedling::oi::shells::ShellRegistry::new();
 
-    let mut reconciler = Reconciler::new(
+    let reconciler = Reconciler::new(
         Arc::clone(&driver),
         node_prefix,
         instance_registry,
@@ -480,50 +480,21 @@ async fn main() {
         Arc::clone(&shells),
     );
 
-    {
+    // The reconciler and schedule ticker are spawned below, after OiState is
+    // constructed, so that scheduled-action fires can spawn lifecycle operations.
+    let reconciler_handle = {
         let tick_notify = Arc::clone(&tick_notify);
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(5));
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            let mut idle = false;
-            loop {
-                if idle {
-                    // No apps installed — suspend the interval and wait for an
-                    // explicit wake (app install/update).
-                    tick_notify.notified().await;
-                    idle = false;
-                    // Reset the interval so the first active tick fires immediately.
-                    interval.reset();
-                } else {
-                    tokio::select! {
-                        _ = interval.tick() => {},
-                        _ = tick_notify.notified() => {},
-                    }
-                }
-                match AssertUnwindSafe(reconciler.tick()).catch_unwind().await {
-                    Ok(active) => {
-                        if !active {
-                            idle = true;
-                        }
-                    }
-                    Err(payload) => {
-                        let msg = match payload.downcast_ref::<&str>() {
-                            Some(s) => (*s).to_owned(),
-                            None => match payload.downcast_ref::<String>() {
-                                Some(s) => s.clone(),
-                                None => "unknown panic".to_owned(),
-                            },
-                        };
-                        tracing::error!(panic = %msg, "reconciler tick panicked; recovering");
-                        reconciler.file_system_fault(
-                            "reconciler_panic",
-                            &format!("reconciler tick panicked: {msg}"),
-                        );
-                    }
-                }
-            }
-        });
-    }
+        let schedule_db = Arc::clone(&db);
+        let schedule_scheduler = Arc::clone(&scheduler);
+        let schedule_registry = Arc::clone(&registry);
+        (
+            reconciler,
+            tick_notify,
+            schedule_db,
+            schedule_scheduler,
+            schedule_registry,
+        )
+    };
 
     tracing::info!("started global reconciler");
 
@@ -549,6 +520,89 @@ async fn main() {
         script_limits,
         dns_servers,
     });
+
+    // Spawn the reconciler + schedule ticker now that OiState is available.
+    {
+        let (
+            mut reconciler,
+            tick_notify,
+            schedule_db,
+            schedule_scheduler,
+            schedule_registry,
+        ) = reconciler_handle;
+        let oi_state_for_sched = Arc::clone(&oi_state);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(5));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut idle = false;
+            // r[impl schedule.tick]
+            let mut schedule_ticker = seedling::runtime::schedules::ScheduleTicker::new();
+            loop {
+                if idle {
+                    tick_notify.notified().await;
+                    idle = false;
+                    interval.reset();
+                } else {
+                    tokio::select! {
+                        _ = interval.tick() => {},
+                        _ = tick_notify.notified() => {},
+                    }
+                }
+
+                // r[impl schedule.tick]
+                let accepted_fires = {
+                    let db_guard = schedule_db.lock();
+                    let mut sched = schedule_scheduler.lock();
+                    let reg = schedule_registry.read();
+                    let fired = schedule_ticker.maybe_tick(
+                        &db_guard,
+                        &mut sched,
+                        &|app_name| reg.get(app_name).map(|e| e.current_generation),
+                    );
+                    fired
+                        .into_iter()
+                        .filter(|f| f.accepted && f.operation_id.is_some())
+                        .collect::<Vec<_>>()
+                };
+                for fire in accepted_fires {
+                    if let Some(op_id) = fire.operation_id {
+                        seedling::oi::handler::actions::lifecycle::spawn_accepted_operation(
+                            Arc::clone(&oi_state_for_sched),
+                            fire.app,
+                            fire.action,
+                            op_id,
+                            serde_json::Map::new(),
+                            fire.generation,
+                            fire.generation,
+                            "schedule".to_owned(),
+                        );
+                    }
+                }
+
+                match AssertUnwindSafe(reconciler.tick()).catch_unwind().await {
+                    Ok(active) => {
+                        if !active {
+                            idle = true;
+                        }
+                    }
+                    Err(payload) => {
+                        let msg = match payload.downcast_ref::<&str>() {
+                            Some(s) => (*s).to_owned(),
+                            None => match payload.downcast_ref::<String>() {
+                                Some(s) => s.clone(),
+                                None => "unknown panic".to_owned(),
+                            },
+                        };
+                        tracing::error!(panic = %msg, "reconciler tick panicked; recovering");
+                        reconciler.file_system_fault(
+                            "reconciler_panic",
+                            &format!("reconciler tick panicked: {msg}"),
+                        );
+                    }
+                }
+            }
+        });
+    }
 
     let (_fingerprint, oi_endpoint) = oi::run(
         Arc::clone(&oi_state),
