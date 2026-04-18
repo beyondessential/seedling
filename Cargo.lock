@@ -640,6 +640,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cronexpr"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b0faedd892014c395490082439eb38b1abbfa4732655c9a6196782061731852"
+dependencies = [
+ "jiff",
+ "winnow 0.7.15",
+]
+
+[[package]]
 name = "crossbeam-channel"
 version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3197,6 +3207,7 @@ name = "seedling"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "cronexpr",
  "crossterm",
  "dirs",
  "ed25519-dalek",
