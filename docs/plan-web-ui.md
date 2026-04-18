@@ -4,32 +4,21 @@
 
 Seedling currently has one operator surface: the `seedling-ctl` CLI, which opens a QUIC + mTLS-RPK connection to the daemon's OI (Operator Interface) on `[::1]:7891` and sends newline-delimited JSON requests over bidirectional streams.
 
-We want a second operator surface — a browser-based UI — served by a new binary (`seedling-web`) that sits beside the daemon and proxies the OI. Because Seedling's OI is already a QUIC-streams-of-JSON protocol, the natural browser wire protocol is **WebTransport**: the same streaming abstractions, natively available in the browser, identical wire format. The web binary therefore becomes a thin shim:
-
-```
-browser ──WebTransport (H3)──▶ seedling-web ──OI QUIC (RPK)──▶ seedlingd
-           │                        │                              │
- Svelte SPA over HTTPS              │                              │
-                                    ├── own ClientIdentity         └── authorised_keys
-                                    ├── session-cookie auth
-                                    ├── tailscale header extractor
-                                    └── injects actor into each OI request
-```
+We want a second operator surface — a browser-based UI — served by a new binary (`seedling-web`) that sits beside the daemon and proxies the OI. Because Seedling's OI is already a QUIC-streams-of-JSON protocol, the natural browser wire protocol is **WebTransport**: the same streaming abstractions, natively available in the browser, identical wire format.
 
 Three cross-cutting concerns:
 
 1. **Subclient context / actor identity.** The daemon currently only knows callers by their SPKI fingerprint (logged, not threaded into handlers/events/audit). A web binary fronting many humans behind one QUIC identity must tell the daemon *who* initiated each call.
 2. **Listening on non-loopback interfaces.** Today the daemon is hardcoded to `[::1]:7891`. We want both binaries to bind configurable interfaces (`lo`, `tailscale0`) or explicit addresses, loopback-only by default.
-3. **Authentication.** Tailscale identity headers when present (gated on an explicit `--trust-tailscale-headers` flag); shared Argon2 password + signed session cookie otherwise. Cookies flow on the WebTransport handshake because it's an HTTP/3 request.
+3. **Authentication.** Tailscale identity headers when present (gated on an explicit `--trust-tailscale-headers` flag); shared Argon2 password + tokens otherwise.
 
-Phase 1 scope: list apps, register new, view/update script, show status, install/actions. Event/log/shell/forward streaming deferred.
+Scope: list apps, register new, view/update script, show status, install/actions. Event/log/shell/forward streaming deferred.
 
 ## Decisions locked in
 
 - Frontend: **React + TypeScript + Vite**, with **MUI (Material UI)** for components and **React Router v7** for routing. Served as a static SPA.
 - Theme: green/grass palette — MUI custom theme with a green primary and earthy secondary.
 - Wire protocol: **WebTransport**, carrying the existing OI JSON wire format 1:1 (web binary injects the `actor` field and proxies streams).
-- Fallback auth: Argon2id shared password + signed session cookie. Session cookies authenticate the WebTransport handshake request.
 - TLS cert strategy: see "TLS & cert-hash pinning" below.
 - Listen: `--interface NAME[,NAME…]` and `--listen ADDR:PORT` for both daemon and web binary; loopback-only defaults.
 - No streaming endpoints in phase 1 (but the WT plumbing naturally supports them when we add them).
@@ -40,7 +29,7 @@ Phase 1 scope: list apps, register new, view/update script, show status, install
 
 `seedling-web` runs **two distinct listeners**:
 
-1. **Plain HTTP (TCP)** via axum+hyper: serves the Svelte SPA bundle and `POST /connect`. Designed to sit behind a TLS terminator (Caddy, nginx, Tailscale Serve) in production. On loopback it's served directly and still qualifies as a secure context in browsers so WebTransport works.
+1. **Plain HTTP (TCP)** via axum+hyper: serves the SPA bundle and `POST /connect`. Designed to sit behind a TLS terminator (Caddy, nginx, Tailscale Serve) in production. On loopback it's served directly and still qualifies as a secure context in browsers so WebTransport works.
 2. **HTTP/3 + WebTransport (UDP)** via `wtransport`: always served directly — reverse-proxying WebTransport is not standardised. Uses an ephemeral self-signed ECDSA-P256 cert; the SPA pins it via `serverCertificateHashes` returned by `POST /connect`. No real cert or CA trust needed on this listener.
 
 Production deployment shape:
@@ -56,8 +45,6 @@ Dev / loopback deployment shape:
 browser ──HTTP (localhost)──▶ seedling-web:8080
         ──H3/WT──────────────▶ seedling-web:7893
 ```
-
-The cross-port WebTransport connection is fine: cookies set for the hostname are sent port-independently on the WT handshake; WebTransport has no same-origin restriction.
 
 Inside the web binary, a single long-lived `OiClient` (from `seedling-protocol`) connects to the daemon. Each incoming WebTransport bidi stream triggers a new `conn.open_bi()` on the daemon connection; the web binary reads the request JSON from the browser, parses enough to inject `actor`, re-serialises, and splices the remaining bytes bidirectionally. Server-initiated unidirectional streams from the daemon (events, logs) are mirrored back as WT uni streams when we add them in a later phase.
 
@@ -93,9 +80,9 @@ The SPA's HTTPS origin is the reverse proxy's problem: in prod the operator poin
 The WebTransport listener owns its own cert lifecycle, independent of anything external:
 
 - `wtransport` serves H3 with a **self-signed ECDSA-P256 cert** generated at startup.
-- The cert is constrained to the WebTransport `serverCertificateHashes` rules: ECDSA secp256r1, SHA-256, validity ≤ 14 days.
+- The cert is constrained to the WebTransport `serverCertificateHashes` rules: ECDSA secp256r1, SHA-256. Spec says <= 14 days, we do validity 7 days, working period 6 days.
 - Browsers accept the cert because the SPA pins it by SHA-256 in the WT constructor, not by CA trust.
-- Rotation: the web binary keeps two overlapping certs (`current` and `next`). At T-24h before `current` expires, generate `next`; both hashes are included in subsequent `POST /connect` responses. Swap the WT listener to `next` when `current` expires. A browser with an in-flight session re-calls `POST /connect` on reconnect and picks up the new hash automatically.
+- Rotation: the web binary keeps two overlapping certs (`current` and `next`). At T-24h before `current` expires, generate `next`; both hashes are included in subsequent `POST /connect` responses. Swap the WT listener to `next` when `current` expires. A browser whose WT stops calls `POST /connect` again before reconnect and picks up the new hash automatically.
 
 ### Listen on interfaces (shared daemon + web)
 
@@ -281,6 +268,7 @@ Spec items describe **what** the system requires, not **how**. Keep implementati
 - Parse `Tailscale-User-Login`/`Tailscale-User-Name` when the trust flag is set.
 - WebTransport server accepting sessions, authenticating handshake via single-use token in URL.
 - Opening a WT stream returns `not_implemented` until phase 4.
+- Support SSLKEYLOGFILE like for seedling daemon so WebTransport can be inspected.
 
 **Phase 3 — SPA skeleton.**
 - `frontend/` React + TypeScript + Vite project with MUI.
@@ -292,7 +280,7 @@ Spec items describe **what** the system requires, not **how**. Keep implementati
 
 **Phase 4 — WebTransport stream proxy.** `proxy.rs`: actor injection on first JSON line; bidirectional splice for remaining bytes. Plumb through to the daemon OiClient. End-to-end: browser → web binary → daemon → JSON response.
 
-**Phase 5 — Phase-1 UI features.** Svelte routes + API wrappers for:
+**Phase 5 — Initial UI features.** React routes + API wrappers for:
 - App list (`/apps/list`).
 - App detail — status, resources, faults, params, install requirements, actions, script (`/apps/show` + `/apps/script`).
 - Register new app (`/apps/create`).
@@ -303,8 +291,9 @@ Spec items describe **what** the system requires, not **how**. Keep implementati
 Future (out of scope for this plan):
 - Event feed + log tail over WT uni streams.
 - Shells via WT + xterm.js.
+- Richer editor for scripts. 
 - Tailscale service app grants.
-- OIDC as an alternative fallback.
+- Passkeys instead of a single shared password.
 
 ## Critical files
 
