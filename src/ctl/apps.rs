@@ -294,8 +294,8 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                     .await,
             );
             if looks_like_backup_app {
-                eprintln!(
-                    "info: this app looks like a backup app; \
+                tracing::info!(
+                    "this app looks like a backup app; \
                      register it with: ctl backups apps register --name <name> --app {app}"
                 );
             }
