@@ -278,6 +278,7 @@ Spec items describe **what** the system requires, not **how**. Keep implementati
 - Ephemeral WT cert generator + rotation task + hash publishing.
 - Axum plain HTTP: `/healthz`, `POST /connect`, static SPA.
 - `/connect` handler: credential checking in order, token issuance, single-use WT token generation.
+- Parse `Tailscale-User-Login`/`Tailscale-User-Name` when the trust flag is set.
 - WebTransport server accepting sessions, authenticating handshake via single-use token in URL.
 - Opening a WT stream returns `not_implemented` until phase 4.
 
@@ -298,10 +299,6 @@ Spec items describe **what** the system requires, not **how**. Keep implementati
 - Update script (`/apps/update`).
 - Invoke install (`/apps/install/invoke`) with dynamic form from `install_requirements`.
 - Invoke action (`/apps/action/invoke`) with typed-param form.
-
-**Phase 6 — Tailscale integration.** Parse `Tailscale-User-Login`/`Tailscale-User-Name` when the trust flag is set; document deployment via `tailscale serve` (which terminates TLS for the plain-HTTP SPA surface) with the WT listener still served directly on a separate port.
-
-**Phase 7 — Caddy deployment.** Example Caddyfile that terminates TLS in front of the plain-HTTP SPA surface and leaves the WT UDP listener exposed directly.
 
 Future (out of scope for this plan):
 - Event feed + log tail over WT uni streams.
