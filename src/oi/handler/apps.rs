@@ -685,9 +685,34 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams) -> HandlerResult
     }
     on_change_would_fire.sort();
 
+    // i[impl backup.app.validation]
+    // If this app is a registered backup app, report any missing required
+    // actions as errors in the plan output.
+    let mut errors: Vec<String> = Vec::new();
+    {
+        let db = state.db.lock();
+        if crate::runtime::backup_apps::get_by_app(&db, name)
+            .map_err(|e| OiError::new(ErrorCode::Internal, format!("db backup apps: {e}")))?
+            .is_some()
+        {
+            let missing: Vec<&str> = crate::runtime::backup_apps::REQUIRED_ACTIONS
+                .iter()
+                .copied()
+                .filter(|a| !prop_def.actions.contains_key(*a))
+                .collect();
+            if !missing.is_empty() {
+                errors.push(format!(
+                    "backup app must declare actions: {}",
+                    missing.join(", ")
+                ));
+            }
+        }
+    }
+
     Ok(json!({
         "diff": diff,
         "on_change_would_fire": on_change_would_fire,
+        "errors": errors,
     }))
 }
 
@@ -910,6 +935,36 @@ pub(crate) fn update_app(state: &OiState, params: AppScriptParams) -> HandlerRes
         let reg = state.registry.read();
         reg.get(name).map(|e| e.current_generation).unwrap_or(0)
     };
+
+    // i[impl backup.app.validation]
+    // If this app is a registered backup app, validate the new script still
+    // declares all required backup actions before applying the update.
+    {
+        let db = state.db.lock();
+        if let Some(_reg) = crate::runtime::backup_apps::get_by_app(&db, name)
+            .map_err(|e| OiError::new(ErrorCode::Internal, format!("db backup apps: {e}")))?
+        {
+            let proposed = crate::runtime::apps::evaluate_script(
+                name,
+                script,
+                &std::collections::BTreeMap::new(),
+                &state.script_limits,
+            )
+            .map_err(|e| OiError::new(ErrorCode::ScriptError, e.to_string()))?;
+            let def = proposed.def.lock();
+            let missing: Vec<&str> = crate::runtime::backup_apps::REQUIRED_ACTIONS
+                .iter()
+                .copied()
+                .filter(|a| !def.actions.contains_key(*a))
+                .collect();
+            if !missing.is_empty() {
+                return Err(OiError::new(
+                    ErrorCode::RequirementsInvalid,
+                    format!("backup app must declare actions: {}", missing.join(", ")),
+                ));
+            }
+        }
+    }
 
     // Reload script and apply to in-memory AppDef immediately.
     let loaded_params = {

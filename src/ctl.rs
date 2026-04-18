@@ -9,6 +9,8 @@ use seedling::oi::{
 
 #[path = "ctl/apps.rs"]
 mod apps;
+#[path = "ctl/backups.rs"]
+mod backups;
 #[path = "ctl/client.rs"]
 mod client;
 #[path = "ctl/forward.rs"]
@@ -86,6 +88,11 @@ enum Command {
     Registries {
         #[command(subcommand)]
         command: op::RegistriesCommand,
+    },
+    /// Backup app management
+    Backups {
+        #[command(subcommand)]
+        command: backups::BackupsCommand,
     },
     /// User/key management
     User {
@@ -281,6 +288,7 @@ async fn main() {
         Command::Shells { command } => op::dispatch_shells(&client, command).await,
         Command::Forwards { command } => op::dispatch_forwards(&client, command).await,
         Command::Registries { command } => op::dispatch_registries(&client, command).await,
+        Command::Backups { command } => backups::dispatch(&client, command).await,
         Command::User { command } => op::dispatch_user(&client, command).await,
         Command::Status => {
             print_result(

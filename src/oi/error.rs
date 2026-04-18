@@ -14,6 +14,8 @@ pub enum ErrorCode {
     Deregistering,
     ServerBusy,
     Internal,
+    // i[impl backup.app.deregister]
+    BackupAppInUse,
 }
 
 #[derive(Debug)]

@@ -591,6 +591,24 @@ Absent specification bugs, anything that is not defined here is either defined i
 > `/registries/remove { registry }` removes a registry hostname from the allowlist.
 > All registered apps are re-evaluated after a registry is removed; any app whose images reference the removed registry will receive a `disallowed_registry` fault.
 
+## Backup Apps
+
+> i[backup.app.register]
+> `/backups/apps/register { name, app }` registers the named app as a backup app under the given backup-app name. The app must declare actions `save-snapshot`, `list-snapshots`, and `restore-snapshot`. If validation fails, the request is rejected.
+>
+> Returns `{ "registered": true }` on success.
+
+> i[backup.app.deregister]
+> `/backups/apps/deregister { name }` removes a backup app registration.
+> If any backup strategies reference this backup app, the request is rejected with `backup_app_in_use`.
+
+> i[backup.app.list]
+> `/backups/apps/list {}` returns an array of registered backup apps with fields `name` and `app`.
+
+> i[backup.app.validation]
+> On `/apps/update` for an app that is a registered backup app, the runtime must evaluate the new script and reject the update if the required actions (`save-snapshot`, `list-snapshots`, `restore-snapshot`) are no longer present.
+> The same validation must be performed during `/apps/plan` (dry-run) and reported in the diff.
+
 # Client Behaviour
 
 > i[ctl.graceful-shutdown]
@@ -629,3 +647,6 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > i[ctl.shell.params]
 > The CLI accepts shell params with the same syntax: `ctl apps shell <app> <name> [key[=value]]...`.
+
+> i[ctl.backup.app.hint]
+> When `ctl apps create` evaluates a script that declares actions `save-snapshot`, `list-snapshots`, and `restore-snapshot`, the CLI should print an informational message suggesting backup app registration.

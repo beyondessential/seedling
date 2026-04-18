@@ -281,6 +281,10 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
         }
         AppsCommand::Create { app, script_file } => {
             let script = read_script_file(&script_file);
+            // i[impl ctl.backup.app.hint]
+            let looks_like_backup_app = seedling::runtime::backup_apps::REQUIRED_ACTIONS
+                .iter()
+                .all(|a| script.contains(a));
             print_result(
                 client
                     .request(
@@ -289,6 +293,12 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                     )
                     .await,
             );
+            if looks_like_backup_app {
+                eprintln!(
+                    "info: this app looks like a backup app; \
+                     register it with: ctl backups apps register --name <name> --app {app}"
+                );
+            }
         }
         AppsCommand::Remove { app } => {
             print_result(

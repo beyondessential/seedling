@@ -557,6 +557,17 @@ impl Db {
             self.conn
                 .execute_batch("INSERT INTO schema_version VALUES (22);")?;
         }
+        if version < 23 {
+            // i[impl backup.app.register]
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS backup_apps (
+                    name  TEXT PRIMARY KEY,
+                    app   TEXT UNIQUE NOT NULL
+                );",
+            )?;
+            self.conn
+                .execute_batch("INSERT INTO schema_version VALUES (23);")?;
+        }
         tx.commit()?;
         Ok(())
     }

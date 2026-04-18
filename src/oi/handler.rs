@@ -10,6 +10,7 @@ use super::{
 
 pub mod actions;
 mod apps;
+mod backups;
 mod faults;
 mod key_mgmt;
 mod params;
@@ -125,6 +126,14 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8]) -> HandlerResult {
         "/volumes/external/list" => {
             volumes::list_external_mappings(state, parse_params(req.params)?)
         }
+        // i[backup.app.register]
+        "/backups/apps/register" => backups::register_backup_app(state, parse_params(req.params)?),
+        // i[backup.app.deregister]
+        "/backups/apps/deregister" => {
+            backups::deregister_backup_app(state, parse_params(req.params)?)
+        }
+        // i[backup.app.list]
+        "/backups/apps/list" => backups::list_backup_apps(state),
         other => Err(OiError::not_found(format!("unknown method: {other}"))),
     };
 
