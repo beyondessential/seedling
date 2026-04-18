@@ -1,6 +1,8 @@
 use rhai::{Dynamic, EvalAltResult, TypeBuilder};
 
-use crate::runtime::barrier::runtime::{action_def, is_in_action_closure, next_anon_vol_id};
+use crate::runtime::barrier::runtime::{
+    action_def, get_operation_volume_binding, is_in_action_closure, next_anon_vol_id,
+};
 
 use super::super::{
     resource::{Resource, ResourceId, ResourceKind, ResourceName},
@@ -67,20 +69,24 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
     );
 
     // l[impl volume.external]
+    // l[impl volume.external.dynamic]
     builder.with_fn(
         "external_volume",
         |this: &mut App, name: &str| -> Result<Dynamic, Box<EvalAltResult>> {
             super::super::validate_name(name)?;
             let rname = ResourceName::new(name.into());
+            let op_binding = get_operation_volume_binding(name);
             let mut def = this.def.lock();
             let id = ResourceId {
                 kind: ResourceKind::ExternalVolume,
                 name: rname.clone(),
             };
-            let resource = def
-                .resources
-                .entry(id)
-                .or_insert_with(|| Resource::ExternalVolume(ExternalVolume { name: rname }));
+            let resource = def.resources.entry(id).or_insert_with(|| {
+                Resource::ExternalVolume(ExternalVolume {
+                    name: rname,
+                    operation_binding: op_binding,
+                })
+            });
             match resource {
                 Resource::ExternalVolume(v) => Ok(Dynamic::from(v.clone())),
                 _ => unreachable!(),

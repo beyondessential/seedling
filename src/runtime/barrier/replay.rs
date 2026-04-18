@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use parking_lot::{Mutex, RwLock};
 use rhai::{AST, Dynamic, Engine, EvalAltResult, Scope};
@@ -10,6 +10,7 @@ use crate::runtime::generations;
 use crate::runtime::history;
 
 use crate::defs::app::{App, AppDef, begin_closure_capture, end_closure_capture};
+use crate::defs::volume::OperationVolumeBinding;
 use crate::runtime::barrier::oracle::WorldStateOracle;
 use crate::runtime::barrier::runtime::{
     ActionClosureGuard, RuntimeInstance, clear_barrier_hit, extract_barrier_hit,
@@ -238,6 +239,11 @@ pub struct OperationContext<'a, W: WorldStateOracle + 'static> {
     /// `on_change` handlers. Required only when source_generation > 0 and
     /// the action is a parameter-change handler.
     pub script_limits: Option<crate::ScriptLimits>,
+    /// Operation-scoped external volume bindings injected by the runtime.
+    /// Empty for normal operations; populated for internal operations such as
+    /// backup actions that need to expose snapshot paths to the closure.
+    // l[impl volume.external.dynamic]
+    pub operation_volume_bindings: HashMap<String, OperationVolumeBinding>,
 }
 
 /// The `log` carries committed entries across calls; pass the same `log`
@@ -265,6 +271,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         source_generation,
         target_generation: _,
         script_limits,
+        operation_volume_bindings,
     } = op;
 
     // Save the operation ID string before it is moved into the replay context.
@@ -408,7 +415,8 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         .expect("static call script must compile");
     let action_def = Arc::new(Mutex::new(app.def.lock().clone()));
     let result = {
-        let _guard = ActionClosureGuard::new(action_def, op_id_str.clone());
+        let _guard =
+            ActionClosureGuard::new(action_def, op_id_str.clone(), operation_volume_bindings);
         engine.eval_ast_with_scope::<Dynamic>(scope, &call_ast)
     };
 

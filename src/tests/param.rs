@@ -240,6 +240,7 @@ fn param_used_in_closure_captures_injected_value() {
             source_generation: 0,
             target_generation: 0,
             script_limits: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
         },
         &mut scope,
     );
@@ -288,6 +289,7 @@ fn on_change_inside_action_closure_throws() {
             source_generation: 0,
             target_generation: 0,
             script_limits: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
         },
         &mut scope,
     );

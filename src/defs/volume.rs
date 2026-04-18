@@ -157,10 +157,21 @@ impl CustomType for Volume {
     }
 }
 
+/// An operation-scoped volume binding injected by the runtime before an action closure runs.
+#[derive(Debug, Clone)]
+pub struct OperationVolumeBinding {
+    pub host_path: std::path::PathBuf,
+    pub read_only: bool,
+}
+
 // l[impl volume.external]
 #[derive(Debug, Clone)]
 pub struct ExternalVolume {
     pub name: ResourceName,
+    /// Set when this external volume resolves to an operation-scoped binding rather
+    /// than a static external volume mapping.
+    // l[impl volume.external.dynamic]
+    pub operation_binding: Option<OperationVolumeBinding>,
 }
 
 impl CustomType for ExternalVolume {

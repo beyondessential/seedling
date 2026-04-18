@@ -1,9 +1,10 @@
-use std::{cell::RefCell, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
 use parking_lot::Mutex;
 use rhai::{CustomType, Dynamic, EvalAltResult, Map, TypeBuilder};
 
 use crate::defs::app::AppDef;
+use crate::defs::volume::OperationVolumeBinding;
 use crate::runtime::barrier::{
     ActionLogEntry, BarrierCondition, BarrierRecord, CallKind, SharedContext,
 };
@@ -67,6 +68,31 @@ fn clear_action_def() {
 }
 
 // ---------------------------------------------------------------------------
+// Thread-local: operation-scoped volume bindings, set for the duration of
+// an action closure. Populated by the runtime before invoking an action
+// that requires bindings (e.g. backup operations); empty for normal actions.
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    static OPERATION_VOLUME_BINDINGS: RefCell<HashMap<String, OperationVolumeBinding>>
+        = RefCell::new(HashMap::new());
+}
+
+/// Returns the operation-scoped binding for `name`, if one is set.
+pub fn get_operation_volume_binding(name: &str) -> Option<OperationVolumeBinding> {
+    OPERATION_VOLUME_BINDINGS.with(|m| m.borrow().get(name).cloned())
+}
+
+/// Replaces the current operation-scoped binding map.
+pub fn set_operation_volume_bindings(bindings: HashMap<String, OperationVolumeBinding>) {
+    OPERATION_VOLUME_BINDINGS.with(|m| *m.borrow_mut() = bindings);
+}
+
+fn clear_operation_volume_bindings() {
+    OPERATION_VOLUME_BINDINGS.with(|m| m.borrow_mut().clear());
+}
+
+// ---------------------------------------------------------------------------
 // Thread-locals: stable anonymous volume naming within an action closure.
 // ---------------------------------------------------------------------------
 
@@ -97,18 +123,27 @@ pub fn next_anon_vol_id() -> Option<String> {
 pub struct ActionClosureGuard;
 
 impl ActionClosureGuard {
-    pub fn new(action_def: Arc<Mutex<AppDef>>, op_id: String) -> Self {
+    pub fn new(
+        action_def: Arc<Mutex<AppDef>>,
+        op_id: String,
+        bindings: HashMap<String, OperationVolumeBinding>,
+    ) -> Self {
         IN_ACTION_CLOSURE.with(|b| b.set(true));
         set_action_def(action_def);
         ANON_VOL_OP_ID.with(|cell| *cell.borrow_mut() = Some(op_id));
         ANON_VOL_COUNTER.with(|c| c.set(0));
+        set_operation_volume_bindings(bindings);
         Self
     }
 }
 
 impl Default for ActionClosureGuard {
     fn default() -> Self {
-        Self::new(Arc::new(Mutex::new(AppDef::default())), String::new())
+        Self::new(
+            Arc::new(Mutex::new(AppDef::default())),
+            String::new(),
+            HashMap::new(),
+        )
     }
 }
 
@@ -118,6 +153,7 @@ impl Drop for ActionClosureGuard {
         clear_action_def();
         ANON_VOL_OP_ID.with(|cell| *cell.borrow_mut() = None);
         ANON_VOL_COUNTER.with(|c| c.set(0));
+        clear_operation_volume_bindings();
     }
 }
 

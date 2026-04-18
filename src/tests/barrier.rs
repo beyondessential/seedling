@@ -71,6 +71,7 @@ fn barrier_satisfied_on_first_pass() {
             source_generation: 0,
             target_generation: 0,
             script_limits: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
         },
         &mut scope,
     );
@@ -115,6 +116,7 @@ fn barrier_suspends_then_resumes() {
             source_generation: 0,
             target_generation: 0,
             script_limits: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
         },
         &mut scope,
     );
@@ -142,6 +144,7 @@ fn barrier_suspends_then_resumes() {
             source_generation: 0,
             target_generation: 0,
             script_limits: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
         },
         &mut scope,
     );
@@ -188,6 +191,7 @@ fn sequential_barriers() {
             source_generation: 0,
             target_generation: 0,
             script_limits: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
         },
         &mut scope,
     );
@@ -214,6 +218,7 @@ fn sequential_barriers() {
             source_generation: 0,
             target_generation: 0,
             script_limits: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
         },
         &mut scope,
     );
@@ -240,6 +245,7 @@ fn sequential_barriers() {
             source_generation: 0,
             target_generation: 0,
             script_limits: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
         },
         &mut scope,
     );
@@ -282,6 +288,7 @@ fn barrier_deadline_zero_expires_on_second_pass() {
             source_generation: 0,
             target_generation: 0,
             script_limits: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
         },
         &mut scope,
     );
@@ -306,6 +313,7 @@ fn barrier_deadline_zero_expires_on_second_pass() {
             source_generation: 0,
             target_generation: 0,
             script_limits: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
         },
         &mut scope,
     );
@@ -352,6 +360,7 @@ fn replay_idempotency() {
             source_generation: 0,
             target_generation: 0,
             script_limits: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
         },
         &mut scope,
     );
@@ -378,6 +387,7 @@ fn replay_idempotency() {
             source_generation: 0,
             target_generation: 0,
             script_limits: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
         },
         &mut scope,
     );
@@ -438,6 +448,7 @@ fn rt_stop_acts_as_barrier() {
             source_generation: 0,
             target_generation: 0,
             script_limits: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
         },
         &mut scope,
     );
@@ -464,6 +475,7 @@ fn rt_stop_acts_as_barrier() {
             source_generation: 0,
             target_generation: 0,
             script_limits: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
         },
         &mut scope,
     );
@@ -510,6 +522,7 @@ fn warm_certs_barrier_uses_cert_oracle() {
             source_generation: 0,
             target_generation: 0,
             script_limits: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
         },
         &mut scope,
     );
@@ -555,6 +568,7 @@ fn warm_certs_barrier_suspends_when_cert_not_valid() {
             source_generation: 0,
             target_generation: 0,
             script_limits: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
         },
         &mut scope,
     );

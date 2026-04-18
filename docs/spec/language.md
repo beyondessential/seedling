@@ -573,6 +573,13 @@ This is currently the only value.
 >
 > External Volumes can't be modified or configured further, only [mounted](#l--container.mount-volume).
 
+> l[volume.external.dynamic]
+> When `app.external_volume(name)` is called within an action closure, the runtime checks operation-scoped volume bindings first, then falls back to the static external volume mapping table. Operation-scoped bindings are injected by the runtime for specific internal operations and are not operator-configurable.
+>
+> If the name resolves to an operation-scoped binding, the returned `ExternalVolume` references the bound path for the duration of the operation. The binding is removed when the operation ends.
+>
+> If the name does not match any operation-scoped binding, the lookup falls back to the static external volume mapping table as for any other external volume reference.
+
 # Action
 
 > l[action.type]

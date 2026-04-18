@@ -253,6 +253,7 @@ fn run_action_with_volumes(
             source_generation: 0,
             target_generation: 0,
             script_limits: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
         },
         &mut scope,
     );
@@ -435,6 +436,189 @@ fn anon_volume_writes_preserved_through_action() {
     assert!(found_writes, "should have found volume with writes");
 }
 
+// ---------------------------------------------------------------------------
+// Operation-scoped external volume bindings
+// ---------------------------------------------------------------------------
+
+// l[verify volume.external.dynamic]
+#[test]
+fn external_volume_in_action_picks_up_operation_binding() {
+    use crate::defs::container::VolumeMount;
+    use crate::defs::volume::OperationVolumeBinding;
+    use crate::runtime::barrier::runtime::{ActionClosureGuard, set_operation_volume_bindings};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    let (engine, mut scope, app, ast) = run_test_script(
+        r#"
+        app.on_action("backup", |rt, _param| {
+            let vol = app.external_volume("op-src-vol");
+            let j = app.job().image("docker.io/library/busybox:latest").mount("/src", vol);
+            rt.start(j);
+        });
+    "#,
+    );
+
+    let oracle = Arc::new(crate::runtime::TestWorldOracle::new());
+    let log = crate::runtime::barrier::replay::InMemoryActionLog::new();
+    let op = crate::runtime::barrier::OperationId::new();
+    let registry: Arc<dyn crate::runtime::InstanceRegistry> =
+        Arc::new(crate::runtime::EphemeralInstanceRegistry::new());
+    let progress = Arc::new(parking_lot::RwLock::new(None));
+
+    // Populate the operation-scoped binding before running the action.
+    let mut bindings = HashMap::new();
+    bindings.insert(
+        "op-src-vol".to_string(),
+        OperationVolumeBinding {
+            host_path: PathBuf::from("/btrfs/snapshots/abc123"),
+            read_only: true,
+        },
+    );
+    set_operation_volume_bindings(bindings.clone());
+
+    let _guard = ActionClosureGuard::new(
+        std::sync::Arc::new(parking_lot::Mutex::new(crate::defs::app::AppDef::default())),
+        String::new(),
+        std::collections::HashMap::new(),
+    );
+
+    let result = crate::runtime::barrier::replay::run_operation(
+        crate::runtime::barrier::replay::OperationContext {
+            engine: &engine,
+            script_ast: &ast,
+            operation_id: op,
+            app: &app,
+            action_name: "backup",
+            log: &log,
+            world: oracle,
+            registry,
+            active_progress: Some(Arc::clone(&progress)),
+            tick_notify: None,
+            params: serde_json::Map::new(),
+            is_shell: false,
+            db: None,
+            source_generation: 0,
+            target_generation: 0,
+            script_limits: None,
+            operation_volume_bindings: bindings,
+        },
+        &mut scope,
+    );
+
+    assert!(
+        matches!(
+            result,
+            crate::runtime::barrier::replay::OperationResult::Completed
+                | crate::runtime::barrier::replay::OperationResult::Suspended(_)
+        ),
+        "expected Completed or Suspended, got {result:?}"
+    );
+
+    let prog = progress.read().clone().expect("progress should be set");
+    for resource in prog.dynamic_defs.values() {
+        if let defs::resource::Resource::Job(job) = resource {
+            let def = job.def.lock();
+            let pod = def.pod.lock();
+            let container = pod.container.lock();
+            for vm in container.volume_mounts.values() {
+                if let VolumeMount::ExternalVolume(ev) = vm {
+                    let binding = ev
+                        .operation_binding
+                        .as_ref()
+                        .expect("operation_binding should be set for op-src-vol");
+                    assert_eq!(
+                        binding.host_path,
+                        PathBuf::from("/btrfs/snapshots/abc123"),
+                        "host_path should match injected binding"
+                    );
+                    assert!(binding.read_only, "read_only should be true");
+                    return;
+                }
+            }
+        }
+    }
+    panic!("expected Job with ExternalVolume mount in dynamic defs");
+}
+
+// l[verify volume.external.dynamic]
+#[test]
+fn external_volume_without_binding_has_no_operation_binding() {
+    use crate::defs::container::VolumeMount;
+
+    let progress = run_action_with_volumes(
+        r#"
+        app.on_action("no-binding", |rt, _param| {
+            let vol = app.external_volume("static-vol");
+            let j = app.job().image("docker.io/library/busybox:latest").mount("/mnt", vol);
+            rt.start(j);
+        });
+    "#,
+        "no-binding",
+    );
+
+    for resource in progress.dynamic_defs.values() {
+        if let defs::resource::Resource::Job(job) = resource {
+            let def = job.def.lock();
+            let pod = def.pod.lock();
+            let container = pod.container.lock();
+            for vm in container.volume_mounts.values() {
+                if let VolumeMount::ExternalVolume(ev) = vm {
+                    assert!(
+                        ev.operation_binding.is_none(),
+                        "ExternalVolume without injected binding should have no operation_binding"
+                    );
+                    return;
+                }
+            }
+        }
+    }
+    panic!("expected Job with ExternalVolume mount in dynamic defs");
+}
+
+// l[verify volume.external.dynamic]
+#[test]
+fn operation_bindings_cleared_after_guard_drops() {
+    use crate::defs::volume::OperationVolumeBinding;
+    use crate::runtime::barrier::runtime::{
+        get_operation_volume_binding, set_operation_volume_bindings,
+    };
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    let mut bindings = HashMap::new();
+    bindings.insert(
+        "temp-vol".to_string(),
+        OperationVolumeBinding {
+            host_path: PathBuf::from("/tmp/snapshot"),
+            read_only: false,
+        },
+    );
+    set_operation_volume_bindings(bindings);
+    assert!(
+        get_operation_volume_binding("temp-vol").is_some(),
+        "binding should be present after set"
+    );
+
+    {
+        let _guard = crate::runtime::barrier::runtime::ActionClosureGuard::new(
+            std::sync::Arc::new(parking_lot::Mutex::new(crate::defs::app::AppDef::default())),
+            String::new(),
+            std::collections::HashMap::new(),
+        );
+        // Guard replaces bindings with empty map on construction.
+        assert!(
+            get_operation_volume_binding("temp-vol").is_none(),
+            "guard should replace bindings with its own map on construction"
+        );
+    }
+    // After drop, bindings are cleared.
+    assert!(
+        get_operation_volume_binding("temp-vol").is_none(),
+        "bindings should be cleared after guard drops"
+    );
+}
+
 // l[verify app.resources.context.named]
 #[test]
 fn frozen_static_volume_cannot_be_modified_in_action() {
@@ -477,6 +661,7 @@ fn frozen_static_volume_cannot_be_modified_in_action() {
             source_generation: 0,
             target_generation: 0,
             script_limits: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
         },
         &mut scope,
     );

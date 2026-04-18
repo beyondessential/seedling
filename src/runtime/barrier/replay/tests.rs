@@ -68,6 +68,7 @@ fn db_action_log_barrier_suspends_then_resumes() {
             source_generation: 0,
             target_generation: 0,
             script_limits: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
         },
         &mut scope,
     );
@@ -102,6 +103,7 @@ fn db_action_log_barrier_suspends_then_resumes() {
             source_generation: 0,
             target_generation: 0,
             script_limits: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
         },
         &mut scope,
     );
@@ -162,6 +164,7 @@ fn db_action_log_sequential_barriers() {
             source_generation: 0,
             target_generation: 0,
             script_limits: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
         },
         &mut scope,
     );
@@ -188,6 +191,7 @@ fn db_action_log_sequential_barriers() {
             source_generation: 0,
             target_generation: 0,
             script_limits: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
         },
         &mut scope,
     );
@@ -214,6 +218,7 @@ fn db_action_log_sequential_barriers() {
             source_generation: 0,
             target_generation: 0,
             script_limits: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
         },
         &mut scope,
     );

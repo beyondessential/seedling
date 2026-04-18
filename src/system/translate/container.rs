@@ -249,15 +249,24 @@ fn spec_from_pod(
         .volume_mounts
         .iter()
         .map(|(path, vm)| {
-            // Handle resolved external volumes specially (they carry their own read_only).
-            if let VolumeMount::ExternalVolume(ev) = vm
-                && let Some(resolved) = external_volumes.get(ev.name.as_ref())
-            {
-                return Mount {
-                    source: resolved.source.clone(),
-                    target: path.to_string_lossy().into_owned(),
-                    read_only: resolved.read_only,
-                };
+            if let VolumeMount::ExternalVolume(ev) = vm {
+                // l[impl volume.external.dynamic]
+                // Operation-scoped binding takes precedence over the static mapping table.
+                if let Some(binding) = &ev.operation_binding {
+                    return Mount {
+                        source: MountSource::Bind(binding.host_path.clone()),
+                        target: path.to_string_lossy().into_owned(),
+                        read_only: binding.read_only,
+                    };
+                }
+                // Fall back to static external volume mappings.
+                if let Some(resolved) = external_volumes.get(ev.name.as_ref()) {
+                    return Mount {
+                        source: resolved.source.clone(),
+                        target: path.to_string_lossy().into_owned(),
+                        read_only: resolved.read_only,
+                    };
+                }
             }
 
             let source = match vm {

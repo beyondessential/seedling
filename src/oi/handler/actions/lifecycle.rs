@@ -107,6 +107,7 @@ fn run_operation_loop(
                 source_generation,
                 target_generation,
                 script_limits: Some(script_limits.clone()),
+                operation_volume_bindings: std::collections::HashMap::new(),
             },
             &mut scope,
         );

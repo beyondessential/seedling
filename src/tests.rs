@@ -81,6 +81,7 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
             let _guard = ActionClosureGuard::new(
                 std::sync::Arc::new(parking_lot::Mutex::new(crate::defs::app::AppDef::default())),
                 String::new(),
+                std::collections::HashMap::new(),
             );
             eval_merged(
                 engine,
@@ -110,6 +111,7 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
             let _guard = ActionClosureGuard::new(
                 std::sync::Arc::new(parking_lot::Mutex::new(crate::defs::app::AppDef::default())),
                 String::new(),
+                std::collections::HashMap::new(),
             );
             eval_merged(
                 engine,
@@ -139,6 +141,7 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
             let _guard = ActionClosureGuard::new(
                 std::sync::Arc::new(parking_lot::Mutex::new(crate::defs::app::AppDef::default())),
                 String::new(),
+                std::collections::HashMap::new(),
             );
             eval_merged(
                 engine,
@@ -172,6 +175,7 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
                         crate::defs::app::AppDef::default(),
                     )),
                     String::new(),
+                    std::collections::HashMap::new(),
                 );
                 eval_merged(engine, scope, script_ast, call_script)
             };
