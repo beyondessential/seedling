@@ -20,9 +20,6 @@ pub(super) enum BackupsCommand {
         /// Strategy name
         #[arg(long)]
         strategy: String,
-        /// Limit to a single volume (e.g. myapp/data or _site/vol)
-        #[arg(long)]
-        volume: Option<String>,
     },
 }
 
@@ -229,12 +226,12 @@ pub(super) async fn dispatch(client: &OiClient, cmd: BackupsCommand) {
             }
         },
         // i[impl backup.run]
-        BackupsCommand::Run { strategy, volume } => {
-            let mut body = serde_json::json!({ "strategy": strategy });
-            if let Some(v) = volume {
-                body["volume"] = serde_json::json!(v);
-            }
-            print_result(client.request("/backups/run", body).await);
+        BackupsCommand::Run { strategy } => {
+            print_result(
+                client
+                    .request("/backups/run", serde_json::json!({ "strategy": strategy }))
+                    .await,
+            );
         }
     }
 }

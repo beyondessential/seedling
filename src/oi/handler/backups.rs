@@ -252,7 +252,6 @@ pub(crate) fn delete_strategy(state: &OiState, params: StrategyNameParams) -> Ha
 #[expect(dead_code, reason = "fields read in Phase 6 execution stub")]
 pub(crate) struct RunBackupParams {
     pub strategy: String,
-    pub volume: Option<String>,
 }
 
 // i[impl backup.run]

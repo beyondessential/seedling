@@ -414,7 +414,7 @@ Update i[event.types], add `trigger` field to `OperationStarted`:
    - Validate `schedule` is one of the named buckets.
 
 4. **Manual trigger RPC** (src/oi/handler/backups.rs).
-   - `/backups/run { strategy, volume? }`.
+   - `/backups/run { strategy, volume? }` (as todo!()).
 
 5. **CLI subcommands** (src/ctl/backups.rs).
    - `ctl backups strategies create|list|show|update|delete`.
@@ -432,6 +432,7 @@ Update i[event.types], add `trigger` field to `OperationStarted`:
 2. **Backup scheduler tick** (src/runtime, alongside the schedule tick from Phase 2).
    - Check due strategies against named bucket rules (round boundaries).
    - For each due strategy × volume, enqueue backup operations.
+   - Also fill in the implementation for /backups/run.
 
 3. **Backup operation orchestration** (new module, src/runtime/backups.rs or similar).
    - BTRFS snapshot of source volume.
