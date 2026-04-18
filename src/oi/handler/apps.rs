@@ -74,6 +74,33 @@ pub(crate) struct ScaleParams {
     pub scale: u16,
 }
 
+// r[impl schedule.prune]
+fn sync_action_schedules(state: &OiState, app_name: &str) {
+    let valid_pairs: Vec<(String, String)> = {
+        let reg = state.registry.read();
+        let Some(entry) = reg.get(app_name) else {
+            return;
+        };
+        let def = entry.app.def.lock();
+        def.actions
+            .values()
+            .flat_map(|a| {
+                a.schedules
+                    .iter()
+                    .map(|expr| (a.name.clone(), expr.clone()))
+            })
+            .collect()
+    };
+
+    let db = state.db.lock();
+    if let Err(e) = crate::runtime::db::prune_schedules(&db, app_name, &valid_pairs) {
+        tracing::warn!(app = %app_name, "failed to prune schedules: {e}");
+    }
+    if let Err(e) = crate::runtime::db::ensure_schedules(&db, app_name, &valid_pairs) {
+        tracing::warn!(app = %app_name, "failed to ensure schedules: {e}");
+    }
+}
+
 fn validate_name(name: &str) -> Result<(), OiError> {
     if name.starts_with('_') {
         return Err(OiError::new(
@@ -727,6 +754,9 @@ pub(crate) fn register_app(state: &OiState, params: AppScriptParams) -> HandlerR
         }
     }
 
+    // r[impl schedule.prune]
+    sync_action_schedules(state, name);
+
     tracing::info!(app = %name, generation, "registered app");
     crate::oi::events::app_registered(&state.event_tx, name, generation);
     Ok(json!({ "generation": generation }))
@@ -798,6 +828,12 @@ pub(crate) fn deregister_app(state: &OiState, params: AppParams) -> HandlerResul
         let db = state.db.lock();
         if let Err(e) = scaling::delete_scaling_decisions_for_app(&db, name) {
             tracing::warn!(app = %name, "failed to clean up scaling decisions during deregister: {e}");
+        }
+    }
+    {
+        let db = state.db.lock();
+        if let Err(e) = crate::runtime::db::delete_schedules_for_app(&db, name) {
+            tracing::warn!(app = %name, "failed to clean up schedules during deregister: {e}");
         }
     }
 
@@ -967,6 +1003,9 @@ pub(crate) fn update_app(state: &OiState, params: AppScriptParams) -> HandlerRes
             let _ = entry.stop_tx.send(true);
         }
     }
+
+    // r[impl schedule.prune]
+    sync_action_schedules(state, name);
 
     tracing::info!(app = %name, generation, "updated app");
     crate::oi::events::app_updated(
