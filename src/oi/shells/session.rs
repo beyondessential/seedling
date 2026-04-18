@@ -201,7 +201,7 @@ pub(crate) async fn open_shell_session(
                     registry: Arc::clone(&registry),
                     active_progress: None,
                     tick_notify: None,
-                    install_requirements: None,
+                    params: serde_json::Map::new(),
                     is_shell: true,
                     db: None,
                     source_generation: 0,

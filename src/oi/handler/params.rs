@@ -111,7 +111,13 @@ fn schedule_on_change(
     }
     let source_generation = generation.saturating_sub(1);
     let mut sched = state.scheduler.lock();
-    let result = sched.request(app, param_name, None, source_generation, generation);
+    let result = sched.request(
+        app,
+        param_name,
+        serde_json::Map::new(),
+        source_generation,
+        generation,
+    );
     match result {
         ScheduleResult::Accepted => {
             // Attach the operation to the generation history entry so the

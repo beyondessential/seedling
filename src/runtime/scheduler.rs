@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::fmt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -33,7 +33,10 @@ pub struct QueuedOperation {
     pub app: String,
     pub action: String,
     pub operation_id: OperationId,
-    pub install_requirements: Option<BTreeMap<String, String>>,
+    /// Action params passed by the invoker. For install actions, contains the
+    /// validated requirements. Empty map for actions with no params.
+    // r[impl operation.params]
+    pub params: serde_json::Map<String, serde_json::Value>,
     // r[impl operation.lifecycle.generations]
     pub source_generation: u64,
     // r[impl operation.lifecycle.generations]
@@ -127,7 +130,7 @@ impl Scheduler {
         &mut self,
         app: &str,
         action: &str,
-        install_requirements: Option<BTreeMap<String, String>>,
+        params: serde_json::Map<String, serde_json::Value>,
         source_generation: u64,
         target_generation: u64,
     ) -> ScheduleResult {
@@ -157,7 +160,7 @@ impl Scheduler {
                     app: app.to_owned(),
                     action: action.to_owned(),
                     operation_id: OperationId::new(),
-                    install_requirements,
+                    params,
                     source_generation,
                     target_generation,
                 });

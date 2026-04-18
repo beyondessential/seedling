@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
+use std::{path::Path, sync::Arc, time::Duration};
 
 use parking_lot::{Mutex, RwLock};
 use tokio::sync::Notify;
@@ -51,7 +51,7 @@ fn run_operation_loop(
     operation_id: &OperationId,
     script: &str,
     dbs: OperationDbs,
-    install_requirements: Option<BTreeMap<String, String>>,
+    params: serde_json::Map<String, serde_json::Value>,
     active_progress: Arc<RwLock<Option<OperationProgress>>>,
     tick_notify: Arc<Notify>,
     event_tx: &events::EventSender,
@@ -101,7 +101,7 @@ fn run_operation_loop(
                 registry: Arc::clone(&registry),
                 active_progress: Some(Arc::clone(&active_progress)),
                 tick_notify: Some(Arc::clone(&tick_notify)),
-                install_requirements: install_requirements.clone(),
+                params: params.clone(),
                 is_shell: false,
                 db: Some(Arc::clone(&dbs.db)),
                 source_generation,
@@ -302,7 +302,7 @@ pub(crate) fn spawn_accepted_operation(
     app_name: String,
     action_name: String,
     operation_id: OperationId,
-    install_requirements: Option<BTreeMap<String, String>>,
+    params: serde_json::Map<String, serde_json::Value>,
     source_generation: u64,
     target_generation: u64,
 ) {
@@ -344,7 +344,7 @@ pub(crate) fn spawn_accepted_operation(
             let action_name = action_name.clone();
             let active_progress = Arc::clone(&active_progress);
             let tick_notify = Arc::clone(&tick_notify);
-            let install_requirements = install_requirements.clone();
+            let params = params.clone();
 
             tokio::task::spawn_blocking(move || {
                 let dbs = match open_operation_dbs(&db_path, &app_name) {
@@ -358,7 +358,7 @@ pub(crate) fn spawn_accepted_operation(
                     &operation_id,
                     &script,
                     dbs,
-                    install_requirements,
+                    params,
                     active_progress,
                     tick_notify,
                     &event_tx,
@@ -391,7 +391,7 @@ pub(crate) fn spawn_accepted_operation(
                 queued.app,
                 queued.action,
                 queued.operation_id,
-                queued.install_requirements,
+                queued.params,
                 queued.source_generation,
                 queued.target_generation,
             );

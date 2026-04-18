@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
@@ -169,6 +168,34 @@ pub enum OperationResult {
 // run_operation
 // ---------------------------------------------------------------------------
 
+fn json_value_to_rhai_dynamic(v: &serde_json::Value) -> rhai::Dynamic {
+    match v {
+        serde_json::Value::String(s) => Dynamic::from(s.clone()),
+        serde_json::Value::Bool(b) => Dynamic::from(*b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Dynamic::from(i)
+            } else if let Some(f) = n.as_f64() {
+                Dynamic::from(f)
+            } else {
+                Dynamic::UNIT
+            }
+        }
+        serde_json::Value::Null => Dynamic::UNIT,
+        serde_json::Value::Object(map) => {
+            let rhai_map: rhai::Map = map
+                .iter()
+                .map(|(k, v)| (k.as_str().into(), json_value_to_rhai_dynamic(v)))
+                .collect();
+            Dynamic::from(rhai_map)
+        }
+        serde_json::Value::Array(arr) => {
+            let rhai_arr: rhai::Array = arr.iter().map(json_value_to_rhai_dynamic).collect();
+            Dynamic::from(rhai_arr)
+        }
+    }
+}
+
 /// Execute one pass of a lifecycle operation's action closure.
 ///
 /// Returns:
@@ -189,8 +216,10 @@ pub struct OperationContext<'a, W: WorldStateOracle + 'static> {
     pub registry: Arc<dyn InstanceRegistry>,
     pub active_progress: Option<Arc<RwLock<Option<OperationProgress>>>>,
     pub tick_notify: Option<Arc<Notify>>,
-    /// Requirements for the install action; `None` for all other actions.
-    pub install_requirements: Option<BTreeMap<String, String>>,
+    /// Action params passed by the invoker. For install actions, contains the
+    /// validated requirements. Empty map for actions with no params.
+    // r[impl operation.params]
+    pub params: serde_json::Map<String, serde_json::Value>,
     /// `true` when this operation executes a shell action closure.
     /// Affects the call script used to invoke the closure.
     pub is_shell: bool,
@@ -230,7 +259,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         registry,
         active_progress,
         tick_notify,
-        install_requirements,
+        params,
         is_shell: _,
         db,
         source_generation,
@@ -352,31 +381,23 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     scope.push("__bsl_rt", rt);
     scope.push("__bsl_closure", closure);
     scope.push("__bsl_old_app", old_app);
-    let reqs_map: rhai::Map = if action_name == "install" {
-        install_requirements
-            .as_ref()
-            .map(|reqs| {
-                reqs.iter()
-                    .map(|(k, v)| (k.as_str().into(), rhai::Dynamic::from(v.clone())))
-                    .collect()
-            })
-            .unwrap_or_default()
-    } else {
-        rhai::Map::new()
-    };
-    scope.push("__bsl_reqs", reqs_map);
+    let param_map: rhai::Map = params
+        .iter()
+        .map(|(k, v)| (k.as_str().into(), json_value_to_rhai_dynamic(v)))
+        .collect();
+    scope.push("__bsl_param", param_map);
     if is_shell {
         scope.push("__bsl_attach", super::shell::shell_attach_fn_ptr());
     }
 
     let call_script = if is_install {
-        "__bsl_closure.call(__bsl_rt, __bsl_reqs)"
+        "__bsl_closure.call(__bsl_rt, __bsl_param)"
     } else if is_param_change {
         "__bsl_closure.call(__bsl_rt, __bsl_old_app)"
     } else if is_shell {
         "try { __bsl_closure.call(__bsl_rt, __bsl_attach) } catch { let _r = __bsl_closure.call(__bsl_rt); __bsl_shell_attach_impl(_r) }"
     } else {
-        "__bsl_closure.call(__bsl_rt)"
+        "__bsl_closure.call(__bsl_rt, __bsl_param)"
     };
 
     // Evaluate only the closure call — do NOT re-execute the script body.
@@ -396,7 +417,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     let _ = scope.remove::<Dynamic>("__bsl_rt");
     let _ = scope.remove::<Dynamic>("__bsl_closure");
     let _ = scope.remove::<Dynamic>("__bsl_old_app");
-    let _ = scope.remove::<rhai::Map>("__bsl_reqs");
+    let _ = scope.remove::<rhai::Map>("__bsl_param");
     if is_shell {
         let _ = scope.remove::<rhai::FnPtr>("__bsl_attach");
     }

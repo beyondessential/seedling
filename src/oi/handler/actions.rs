@@ -71,7 +71,7 @@ pub(crate) fn invoke_action(state: &Arc<OiState>, params: InvokeActionParams) ->
         let result = sched.request(
             app_name,
             action_name,
-            None,
+            serde_json::Map::new(),
             current_generation,
             current_generation,
         );
@@ -91,7 +91,7 @@ pub(crate) fn invoke_action(state: &Arc<OiState>, params: InvokeActionParams) ->
                     app_name.to_owned(),
                     action_name.to_owned(),
                     op_id,
-                    None,
+                    serde_json::Map::new(),
                     current_generation,
                     current_generation,
                 );

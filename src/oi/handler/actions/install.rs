@@ -161,11 +161,10 @@ pub(crate) fn invoke_install(state: &Arc<OiState>, params: InvokeInstallParams) 
         return Ok(json!({ "schedule": "accepted" }));
     }
 
-    let install_reqs = if filled.is_empty() {
-        None
-    } else {
-        Some(filled)
-    };
+    let params: serde_json::Map<String, serde_json::Value> = filled
+        .into_iter()
+        .map(|(k, v)| (k, serde_json::Value::String(v)))
+        .collect();
 
     // Operator-invoked install: source and target generation are both the
     // current generation (install does not produce a new generation).
@@ -178,7 +177,7 @@ pub(crate) fn invoke_install(state: &Arc<OiState>, params: InvokeInstallParams) 
         let result = sched.request(
             app_name,
             "install",
-            install_reqs.clone(),
+            params.clone(),
             current_generation,
             current_generation,
         );
@@ -198,7 +197,7 @@ pub(crate) fn invoke_install(state: &Arc<OiState>, params: InvokeInstallParams) 
                     app_name.to_owned(),
                     "install".to_owned(),
                     op_id,
-                    install_reqs,
+                    params,
                     current_generation,
                     current_generation,
                 );
