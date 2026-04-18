@@ -122,7 +122,7 @@ pub fn register(engine: &mut Engine) {
     engine.build_type::<runtime::Started>();
     engine.build_type::<runtime::Termination>();
     engine.build_type::<collection::Collection>();
-    shell::register_shell_attach(engine);
+    engine.build_type::<shell::ShellControl>();
 
     // l[impl collection.col]
     engine.register_fn("col", collection::col);

@@ -298,7 +298,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     // the thread-local capture buffer collects them during the re-run and is
     // discarded immediately after. The fresh AppDef is compared against the
     // stored one as an idempotency check, then also discarded.
-    let (closure, is_install, is_param_change, is_shell) = {
+    let (closure, is_param_change, is_shell) = {
         let (mut fresh_scope, fresh_app) = crate::defs::scope();
         fresh_app.def.lock().name = app_name;
         // i[param.store] — restore persisted param values so is_set()/value()
@@ -335,7 +335,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         };
         let is_param_change =
             !is_install && fresh_app.def.lock().param_changes.contains(action_name);
-        (closure, is_install, is_param_change, is_shell)
+        (closure, is_param_change, is_shell)
         // captured, fresh_scope, and fresh_app are all dropped here.
     };
 
@@ -387,15 +387,13 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         .collect();
     scope.push("__bsl_param", param_map);
     if is_shell {
-        scope.push("__bsl_attach", super::shell::shell_attach_fn_ptr());
+        scope.push("__bsl_shell", super::shell::ShellControl::new());
     }
 
-    let call_script = if is_install {
-        "__bsl_closure.call(__bsl_rt, __bsl_param)"
-    } else if is_param_change {
+    let call_script = if is_param_change {
         "__bsl_closure.call(__bsl_rt, __bsl_old_app)"
     } else if is_shell {
-        "try { __bsl_closure.call(__bsl_rt, __bsl_attach) } catch { let _r = __bsl_closure.call(__bsl_rt); __bsl_shell_attach_impl(_r) }"
+        "__bsl_closure.call(__bsl_rt, __bsl_shell, __bsl_param)"
     } else {
         "__bsl_closure.call(__bsl_rt, __bsl_param)"
     };
@@ -419,7 +417,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     let _ = scope.remove::<Dynamic>("__bsl_old_app");
     let _ = scope.remove::<rhai::Map>("__bsl_param");
     if is_shell {
-        let _ = scope.remove::<rhai::FnPtr>("__bsl_attach");
+        let _ = scope.remove::<super::shell::ShellControl>("__bsl_shell");
     }
 
     // Flush pending entries from the context to the log.

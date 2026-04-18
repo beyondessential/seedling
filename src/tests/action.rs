@@ -61,8 +61,8 @@ fn on_start_with_options() {
 fn on_shell_registers_shell() {
     let app = run_test_script_app(
         r#"
-        app.on_shell("node", |rt| {
-            app.job("shell-node").image("docker.io/library/node:20").command("node")
+        app.on_shell("node", |rt, shell, _param| {
+            shell.attach(app.job("shell-node").image("docker.io/library/node:20").command("node"));
         }, #{
             description: "Node REPL",
         });
@@ -78,8 +78,8 @@ fn on_shell_registers_shell() {
 fn on_shell_without_options() {
     let app = run_test_script_app(
         r#"
-        app.on_shell("dbs", |rt| {
-            app.job("shell-dbs").image("docker.io/library/psql:latest").command("psql")
+        app.on_shell("dbs", |rt, shell, _param| {
+            shell.attach(app.job("shell-dbs").image("docker.io/library/psql:latest").command("psql"));
         });
     "#,
     );
@@ -94,8 +94,8 @@ fn shells_in_separate_namespace_from_actions() {
     let app = run_test_script_app(
         r#"
         app.on_action("debug", |rt, _param| {});
-        app.on_shell("debug", |rt| {
-            app.job("shell-debug").image("docker.io/library/tools:latest").command("sh")
+        app.on_shell("debug", |rt, shell, _param| {
+            shell.attach(app.job("shell-debug").image("docker.io/library/tools:latest").command("sh"));
         });
     "#,
     );

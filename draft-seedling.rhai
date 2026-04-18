@@ -122,23 +122,21 @@ app.on_start(|rt, _param| {
 
 // shells are available to operators to debug
 // they're essentially actions that provide an interactive terminal/shell
-app.on_shell("node", |_rt| {
-    app.job("shell-node")
+app.on_shell("node", |_rt, shell, _param| {
+    shell.attach(app.job("shell-node")
         .image(image.call("central"))
-        .command("shell")
-    // a Resource is returned, so seedling rt.start()s it and then attaches when ready()
+        .command("shell"));
 }, #{
     description: "A Node.js shell in the Tamanu app context",
 });
 
 // for more control including cleanup
-app.on_shell("db", |rt, attach| {
-    // this job is only defined here, so it can't be used outside this block
-    let shell = app.job("shell-db")
+app.on_shell("db", |rt, shell, _param| {
+    let job = app.job("shell-db")
         .image(image.call("toolbox"))
         .command(["bestool", "t", "p"]);
-    rt.start(shell).running();
-    attach.call(shell); // this "blocks" until the shell exits
+    rt.start(job).running();
+    shell.attach(job); // this "blocks" until the shell exits
 
     rt.start(app.job("shell-db-cleanup")
         .image(image.call("toolbox"))

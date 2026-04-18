@@ -13,9 +13,7 @@ use crate::{
             OperationId,
             oracle::DbWorldOracle,
             replay::{DbActionLog, OperationContext, OperationResult, run_operation},
-            shell::{
-                ShellAttachCtx, ShellExecTarget, clear_shell_attach_ctx, set_shell_attach_ctx,
-            },
+            shell::{ShellAttachCtx, ShellOutcome, clear_shell_attach_ctx, set_shell_attach_ctx},
         },
         identity::{InstanceVariant, ResourceInstance},
         registry::{DbInstanceRegistry, InstanceRegistry, RegistryError},
@@ -151,7 +149,7 @@ pub(crate) async fn open_shell_session(
         }
     }
 
-    let result_slot: Arc<Mutex<Option<ShellExecTarget>>> = Arc::new(Mutex::new(None));
+    let result_slot: Arc<Mutex<Option<ShellOutcome>>> = Arc::new(Mutex::new(None));
     let result_slot_for_task = Arc::clone(&result_slot);
     let db_for_task = Arc::clone(&state.db);
     let script_limits = state.script_limits.clone();
@@ -238,16 +236,28 @@ pub(crate) async fn open_shell_session(
         return;
     }
 
-    let exec_target_opt = result_slot.lock().take();
-    let exec_target = match exec_target_opt {
-        Some(t) => t,
+    let shell_outcome = result_slot.lock().take();
+    let exec_target = match shell_outcome {
+        Some(ShellOutcome::Attach(target)) => target,
+        Some(ShellOutcome::Error(msg)) => {
+            tracing::warn!(app = %app_name, shell = %shell_name, "shell error: {msg}");
+            let resp = serde_json::to_vec(&serde_json::json!({
+                "error": { "code": "shell_error", "message": msg }
+            }))
+            .unwrap_or_default();
+            let _ = send.write_all(&resp).await;
+            let _ = send.finish();
+            return;
+        }
         None => {
             tracing::warn!(
                 app = %app_name, shell = %shell_name,
                 "shell closure completed but attach was not called"
             );
-            let resp =
-                serde_json::to_vec(&serde_json::json!({ "exit_code": -1 })).unwrap_or_default();
+            let resp = serde_json::to_vec(&serde_json::json!({
+                "error": { "code": "shell_error", "message": "shell did not attach" }
+            }))
+            .unwrap_or_default();
             let _ = send.write_all(&resp).await;
             let _ = send.finish();
             return;

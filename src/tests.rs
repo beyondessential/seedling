@@ -3,7 +3,7 @@ use rhai::{AST, Engine, Scope};
 
 use crate::defs::install::InstallDef;
 use crate::runtime::barrier::runtime::{ActionClosureGuard, RuntimeInstance};
-use crate::runtime::barrier::shell::shell_attach_fn_ptr;
+use crate::runtime::barrier::shell::ShellControl;
 use crate::{defs, setup_language as setup};
 
 mod action;
@@ -45,7 +45,6 @@ pub fn exercise(source: &str) {
 
 fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, script_ast: &AST) {
     let rt = RuntimeInstance::stub();
-    let attach = shell_attach_fn_ptr();
 
     // Re-run the script with the TLS capture active to recover FnPtrs,
     // exactly as run_operation does. FnPtrs are never stored persistently.
@@ -70,11 +69,12 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
         (actions, shells, install, param_changes)
     };
 
+    let empty_param = rhai::Map::new();
+
     for (name, closure) in &actions {
         scope.push("__bsl_rt", rt.clone());
         scope.push("__bsl_closure", closure.clone());
-
-        let call_script = "__bsl_closure.call(__bsl_rt)";
+        scope.push("__bsl_param", empty_param.clone());
 
         println!("exercising action: {name}");
         let result = {
@@ -82,7 +82,12 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
                 std::sync::Arc::new(parking_lot::Mutex::new(crate::defs::app::AppDef::default())),
                 String::new(),
             );
-            eval_merged(engine, scope, script_ast, call_script)
+            eval_merged(
+                engine,
+                scope,
+                script_ast,
+                "__bsl_closure.call(__bsl_rt, __bsl_param)",
+            )
         };
         match result {
             Ok(_) => println!("  ok"),
@@ -91,63 +96,27 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
 
         let _ = scope.remove::<Dynamic>("__bsl_rt");
         let _ = scope.remove::<Dynamic>("__bsl_closure");
+        let _ = scope.remove::<rhai::Map>("__bsl_param");
     }
 
     for (name, closure) in &shells {
         scope.push("__bsl_rt", rt.clone());
         scope.push("__bsl_closure", closure.clone());
-        scope.push("__bsl_attach", attach.clone());
+        scope.push("__bsl_shell", ShellControl::new());
+        scope.push("__bsl_param", empty_param.clone());
 
         println!("exercising shell: {name}");
-        let two_arg = "__bsl_closure.call(__bsl_rt, __bsl_attach)";
-        let one_arg = "__bsl_closure.call(__bsl_rt)";
-        let result_two = {
-            let _guard = ActionClosureGuard::new(
-                std::sync::Arc::new(parking_lot::Mutex::new(crate::defs::app::AppDef::default())),
-                String::new(),
-            );
-            eval_merged(engine, scope, script_ast, two_arg)
-        };
-        match result_two {
-            Ok(_) => println!("  ok (two-arg)"),
-            Err(err_two) => {
-                let result_one = {
-                    let _guard = ActionClosureGuard::new(
-                        std::sync::Arc::new(parking_lot::Mutex::new(
-                            crate::defs::app::AppDef::default(),
-                        )),
-                        String::new(),
-                    );
-                    eval_merged(engine, scope, script_ast, one_arg)
-                };
-                match result_one {
-                    Ok(_) => println!("  ok (one-arg)"),
-                    Err(err_one) => {
-                        println!("  error (two-arg): {err_two}");
-                        println!("  error (one-arg): {err_one}");
-                    }
-                }
-            }
-        }
-
-        let _ = scope.remove::<Dynamic>("__bsl_rt");
-        let _ = scope.remove::<Dynamic>("__bsl_closure");
-        let _ = scope.remove::<Dynamic>("__bsl_attach");
-    }
-
-    if let Some((closure, reqs_map)) = &install {
-        scope.push("__bsl_rt", rt.clone());
-        scope.push("__bsl_closure", closure.clone());
-        scope.push("__bsl_reqs", reqs_map.clone());
-
-        println!("exercising install");
-        let call_script = "__bsl_closure.call(__bsl_rt, __bsl_reqs)";
         let result = {
             let _guard = ActionClosureGuard::new(
                 std::sync::Arc::new(parking_lot::Mutex::new(crate::defs::app::AppDef::default())),
                 String::new(),
             );
-            eval_merged(engine, scope, script_ast, call_script)
+            eval_merged(
+                engine,
+                scope,
+                script_ast,
+                "__bsl_closure.call(__bsl_rt, __bsl_shell, __bsl_param)",
+            )
         };
         match result {
             Ok(_) => println!("  ok"),
@@ -156,7 +125,36 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
 
         let _ = scope.remove::<Dynamic>("__bsl_rt");
         let _ = scope.remove::<Dynamic>("__bsl_closure");
-        let _ = scope.remove::<Dynamic>("__bsl_reqs");
+        let _ = scope.remove::<ShellControl>("__bsl_shell");
+        let _ = scope.remove::<rhai::Map>("__bsl_param");
+    }
+
+    if let Some((closure, reqs_map)) = &install {
+        scope.push("__bsl_rt", rt.clone());
+        scope.push("__bsl_closure", closure.clone());
+        scope.push("__bsl_param", reqs_map.clone());
+
+        println!("exercising install");
+        let result = {
+            let _guard = ActionClosureGuard::new(
+                std::sync::Arc::new(parking_lot::Mutex::new(crate::defs::app::AppDef::default())),
+                String::new(),
+            );
+            eval_merged(
+                engine,
+                scope,
+                script_ast,
+                "__bsl_closure.call(__bsl_rt, __bsl_param)",
+            )
+        };
+        match result {
+            Ok(_) => println!("  ok"),
+            Err(err) => println!("  error: {err}"),
+        }
+
+        let _ = scope.remove::<Dynamic>("__bsl_rt");
+        let _ = scope.remove::<Dynamic>("__bsl_closure");
+        let _ = scope.remove::<rhai::Map>("__bsl_param");
     }
 
     if !param_changes.is_empty() {

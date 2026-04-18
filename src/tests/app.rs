@@ -27,7 +27,7 @@ fn app_methods_are_defined() {
         app.param("par");
         app.on_action("act", |rt, _param| {});
         app.on_start(|rt, _param| {});
-        app.on_shell("shl", |rt| { app.job("shl").command("sh") });
+        app.on_shell("shl", |rt, shell, _param| { shell.attach(app.job("shl").command("sh")); });
         app.on_install(|rt, reqs| {});
     "#,
     );

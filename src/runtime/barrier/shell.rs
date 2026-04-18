@@ -1,8 +1,9 @@
 use std::{cell::RefCell, sync::Arc};
 
 use parking_lot::Mutex;
+use rhai::{CustomType, Dynamic, EvalAltResult, TypeBuilder};
 
-/// The exec target resolved by `__bsl_shell_attach_impl` from a Job.
+/// The exec target resolved by `ShellControl::attach` from a Job.
 /// Passed back to the OI layer which translates it to a `ContainerSpec`
 /// via the standard `job_spec` pipeline and runs `podman run --rm -it`.
 pub struct ShellExecTarget {
@@ -18,12 +19,17 @@ pub struct ShellExecTarget {
     pub instance_id: crate::runtime::identity::InstanceId,
 }
 
+/// Outcome of a shell closure: either an exec target or an error message.
+pub enum ShellOutcome {
+    Attach(ShellExecTarget),
+    Error(String),
+}
+
 /// Context installed in the thread-local before running a shell closure.
-/// Provides a slot for `__bsl_shell_attach_impl` to write the resolved
-/// exec target into.
+/// Provides a slot for `ShellControl` methods to write results into.
 pub struct ShellAttachCtx {
     pub app_name: String,
-    pub result: Arc<Mutex<Option<ShellExecTarget>>>,
+    pub result: Arc<Mutex<Option<ShellOutcome>>>,
 }
 
 thread_local! {
@@ -38,32 +44,90 @@ pub fn clear_shell_attach_ctx() {
     SHELL_ATTACH_CTX.with(|c| *c.borrow_mut() = None);
 }
 
+// l[impl action.shell.control]
 // l[impl action.shell.attach]
-pub fn register_shell_attach(engine: &mut rhai::Engine) {
-    engine.register_fn("__bsl_shell_attach_impl", |job: rhai::Dynamic| {
+#[derive(Debug, Clone)]
+pub struct ShellControl {
+    attached: bool,
+}
+
+impl Default for ShellControl {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ShellControl {
+    pub fn new() -> Self {
+        Self { attached: false }
+    }
+
+    fn do_attach(&mut self, job: Dynamic) -> Result<(), Box<EvalAltResult>> {
         use crate::defs::job::Job;
+
+        if self.attached {
+            return Err(Box::new(EvalAltResult::ErrorRuntime(
+                "shell.attach() already called".into(),
+                rhai::Position::NONE,
+            )));
+        }
+
+        let j = job.try_cast::<Job>().ok_or_else(|| {
+            Box::new(EvalAltResult::ErrorRuntime(
+                "shell.attach() requires a Job argument".into(),
+                rhai::Position::NONE,
+            ))
+        })?;
 
         SHELL_ATTACH_CTX.with(|ctx| {
             let ctx = ctx.borrow();
             let Some(ref c) = *ctx else { return };
 
-            let Some(j) = job.try_cast::<Job>() else {
-                return;
-            };
-
             let job_def = j.def.lock().clone();
             let job_name = j.name.to_string();
 
-            *c.result.lock() = Some(ShellExecTarget {
+            *c.result.lock() = Some(ShellOutcome::Attach(ShellExecTarget {
                 job_def,
                 job_name,
                 app_name: c.app_name.clone(),
                 instance_id: crate::runtime::identity::InstanceId::generate(),
-            });
+            }));
         });
-    });
+
+        self.attached = true;
+        Ok(())
+    }
+
+    fn do_error(&mut self, msg: &str) -> Result<(), Box<EvalAltResult>> {
+        SHELL_ATTACH_CTX.with(|ctx| {
+            let ctx = ctx.borrow();
+            if let Some(ref c) = *ctx {
+                *c.result.lock() = Some(ShellOutcome::Error(msg.to_owned()));
+            }
+        });
+
+        Err(Box::new(EvalAltResult::ErrorRuntime(
+            format!("shell error: {msg}").into(),
+            rhai::Position::NONE,
+        )))
+    }
 }
 
-pub fn shell_attach_fn_ptr() -> rhai::FnPtr {
-    rhai::FnPtr::new("__bsl_shell_attach_impl").expect("valid function name")
+impl CustomType for ShellControl {
+    fn build(mut builder: TypeBuilder<Self>) {
+        builder
+            .with_name("ShellControl")
+            .with_fn(
+                "attach",
+                |this: &mut Self, job: Dynamic| -> Result<(), Box<EvalAltResult>> {
+                    this.do_attach(job)
+                },
+            )
+            .with_fn(
+                "error",
+                |this: &mut Self, msg: &str| -> Result<(), Box<EvalAltResult>> {
+                    this.do_error(msg)
+                },
+            );
+    }
 }
