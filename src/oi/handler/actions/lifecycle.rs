@@ -297,6 +297,10 @@ fn finalize_install(state: &OiState, app_name: &str) {
 
 /// Spawn an async task that runs a lifecycle operation to completion, then
 /// handles queued follow-on operations and install completion bookkeeping.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "internal helper grouping all operation state"
+)]
 pub(crate) fn spawn_accepted_operation(
     state: Arc<OiState>,
     app_name: String,
@@ -305,6 +309,7 @@ pub(crate) fn spawn_accepted_operation(
     params: serde_json::Map<String, serde_json::Value>,
     source_generation: u64,
     target_generation: u64,
+    trigger: String,
 ) {
     let (app, active_progress, tick_notify, script) = {
         let reg = state.registry.read();
@@ -334,6 +339,7 @@ pub(crate) fn spawn_accepted_operation(
             &operation_id.0,
             source_generation,
             target_generation,
+            &trigger,
         );
         let operation_id_str = operation_id.0.clone();
 
@@ -394,6 +400,7 @@ pub(crate) fn spawn_accepted_operation(
                 queued.params,
                 queued.source_generation,
                 queued.target_generation,
+                queued.trigger,
             );
         }
     });

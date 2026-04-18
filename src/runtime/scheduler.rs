@@ -41,6 +41,8 @@ pub struct QueuedOperation {
     pub source_generation: u64,
     // r[impl operation.lifecycle.generations]
     pub target_generation: u64,
+    // i[impl event.types]
+    pub trigger: String,
 }
 
 // r[impl operation.lifecycle.single]
@@ -131,6 +133,10 @@ impl Scheduler {
     // r[impl operation.lifecycle.single]
     // r[impl operation.lifecycle.single.intra-app]
     // r[impl operation.lifecycle.single.inter-app]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors all fields of a lifecycle operation request"
+    )]
     pub fn request(
         &mut self,
         app: &str,
@@ -138,6 +144,7 @@ impl Scheduler {
         params: serde_json::Map<String, serde_json::Value>,
         source_generation: u64,
         target_generation: u64,
+        trigger: &str,
     ) -> ScheduleResult {
         match &self.active {
             None => {
@@ -168,6 +175,7 @@ impl Scheduler {
                     params,
                     source_generation,
                     target_generation,
+                    trigger: trigger.to_owned(),
                 });
                 ScheduleResult::Queued
             }

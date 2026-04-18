@@ -93,6 +93,7 @@ pub(crate) fn invoke_action(state: &Arc<OiState>, params: InvokeActionParams) ->
             action_params.clone(),
             current_generation,
             current_generation,
+            "operator",
         );
         let op_id = match &result {
             ScheduleResult::Accepted => sched.active().map(|a| a.operation_id.clone()),
@@ -116,6 +117,7 @@ pub(crate) fn invoke_action(state: &Arc<OiState>, params: InvokeActionParams) ->
                 action_params,
                 current_generation,
                 current_generation,
+                "operator".to_owned(),
             );
             tracing::info!(app = %app_name, action = %action_name, schedule = "accepted", "invoke_action");
             Ok(json!({ "schedule": "accepted", "operation_id": op_id_str }))

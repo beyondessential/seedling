@@ -43,6 +43,7 @@ pub enum OiEvent {
         previous_generation: u64,
     },
     // r[impl operation.lifecycle.generations]
+    // i[impl event.types]
     OperationStarted {
         timestamp: Timestamp,
         app: String,
@@ -50,6 +51,7 @@ pub enum OiEvent {
         operation_id: String,
         source_generation: u64,
         target_generation: u64,
+        trigger: String,
     },
     // r[impl operation.lifecycle.generations]
     OperationCompleted {
@@ -217,6 +219,10 @@ pub fn param_unset(
     );
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors all fields of OiEvent::OperationStarted"
+)]
 pub fn operation_started(
     tx: &EventSender,
     app: &str,
@@ -224,6 +230,7 @@ pub fn operation_started(
     operation_id: &str,
     source_generation: u64,
     target_generation: u64,
+    trigger: &str,
 ) {
     emit(
         tx,
@@ -234,6 +241,7 @@ pub fn operation_started(
             operation_id: operation_id.to_owned(),
             source_generation,
             target_generation,
+            trigger: trigger.to_owned(),
         },
     );
 }

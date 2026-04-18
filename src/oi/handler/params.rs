@@ -117,6 +117,7 @@ fn schedule_on_change(
         serde_json::Map::new(),
         source_generation,
         generation,
+        "param_change",
     );
     match result {
         ScheduleResult::Accepted => {
