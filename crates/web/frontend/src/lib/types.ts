@@ -25,7 +25,8 @@ export interface FaultRecord {
 export interface ResourceInstance {
   id: string;
   display_name: string;
-  lifecycle_state: string;
+  lifecycle: string;
+  transition_time?: string;
 }
 
 export interface ScaleBounds {

@@ -95,8 +95,8 @@ function ResourcesSection({ resources }: { resources: AppResource[] }) {
                       </TableCell>
                       <TableCell>
                         <Chip
-                          label={inst.lifecycle_state.replace(/_/g, " ")}
-                          color={lifecycleColor(inst.lifecycle_state)}
+                          label={inst.lifecycle.replace(/_/g, " ")}
+                          color={lifecycleColor(inst.lifecycle)}
                           size="small"
                         />
                       </TableCell>
