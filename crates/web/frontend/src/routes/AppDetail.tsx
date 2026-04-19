@@ -253,9 +253,7 @@ function ParamsSection({
                     )}
                   </TableCell>
                   <TableCell>
-                    {p.kind !== "text" && (
-                      <Chip label={p.kind} size="small" variant="outlined" />
-                    )}
+                    <Chip label={p.kind} size="small" variant="outlined" />
                   </TableCell>
                   <TableCell
                     sx={{
