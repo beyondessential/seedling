@@ -160,214 +160,99 @@ pub enum OiEvent {
     },
 }
 
-pub type EventSender = broadcast::Sender<OiEvent>;
+/// Newtype over `broadcast::Sender<OiEvent>` that carries event-emission methods.
+#[derive(Clone, Debug)]
+pub struct EventSender(broadcast::Sender<OiEvent>);
+
+impl std::ops::Deref for EventSender {
+    type Target = broadcast::Sender<OiEvent>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 pub fn new_event_channel() -> EventSender {
     let (tx, _) = broadcast::channel(256);
-    tx
+    EventSender(tx)
 }
 
 fn now() -> Timestamp {
     Timestamp::now()
 }
 
-/// Emit an event, ignoring the result (no subscribers is fine).
-pub fn emit(tx: &EventSender, event: OiEvent) {
-    let _ = tx.send(event);
-}
+impl EventSender {
+    fn emit(&self, event: OiEvent) {
+        let _ = self.0.send(event);
+    }
 
-pub fn app_registered(tx: &EventSender, app: &str, generation: u64, actor: Option<Actor>) {
-    emit(
-        tx,
-        OiEvent::AppRegistered {
+    pub fn app_registered(&self, app: &str, generation: u64, actor: Option<Actor>) {
+        self.emit(OiEvent::AppRegistered {
             timestamp: now(),
             app: app.to_owned(),
             generation,
             actor,
-        },
-    );
-}
+        });
+    }
 
-pub fn app_deregistered(tx: &EventSender, app: &str, actor: Option<Actor>) {
-    emit(
-        tx,
-        OiEvent::AppDeregistered {
+    pub fn app_deregistered(&self, app: &str, actor: Option<Actor>) {
+        self.emit(OiEvent::AppDeregistered {
             timestamp: now(),
             app: app.to_owned(),
             actor,
-        },
-    );
-}
+        });
+    }
 
-pub fn app_updated(
-    tx: &EventSender,
-    app: &str,
-    generation: u64,
-    previous_generation: Option<u64>,
-    actor: Option<Actor>,
-) {
-    emit(
-        tx,
-        OiEvent::AppUpdated {
+    pub fn app_updated(
+        &self,
+        app: &str,
+        generation: u64,
+        previous_generation: Option<u64>,
+        actor: Option<Actor>,
+    ) {
+        self.emit(OiEvent::AppUpdated {
             timestamp: now(),
             app: app.to_owned(),
             generation,
             previous_generation,
             actor,
-        },
-    );
-}
+        });
+    }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "actor added as part of audit trail"
-)]
-pub fn param_set(
-    tx: &EventSender,
-    app: &str,
-    name: &str,
-    previous_value: Option<&str>,
-    new_value: &str,
-    generation: u64,
-    previous_generation: u64,
-    actor: Option<Actor>,
-) {
-    emit(
-        tx,
-        OiEvent::ParamSet {
-            timestamp: now(),
-            app: app.to_owned(),
-            name: name.to_owned(),
-            previous_value: previous_value.map(str::to_owned),
-            new_value: new_value.to_owned(),
-            generation,
-            previous_generation,
+    /// Build a context for scale-change events.
+    /// Captures the deployment identity and bounds; call `.changed(new, prev)` to emit.
+    pub fn scale(
+        &self,
+        app: impl Into<String>,
+        deployment: impl Into<String>,
+        bounds_low: u16,
+        bounds_high: u16,
+        actor: Option<Actor>,
+    ) -> ScaleEventCtx {
+        ScaleEventCtx {
+            tx: self.clone(),
+            app: app.into(),
+            deployment: deployment.into(),
+            bounds_low,
+            bounds_high,
             actor,
-        },
-    );
-}
+        }
+    }
 
-pub fn param_unset(
-    tx: &EventSender,
-    app: &str,
-    name: &str,
-    previous_value: &str,
-    generation: u64,
-    previous_generation: u64,
-    actor: Option<Actor>,
-) {
-    emit(
-        tx,
-        OiEvent::ParamUnset {
-            timestamp: now(),
-            app: app.to_owned(),
-            name: name.to_owned(),
-            previous_value: previous_value.to_owned(),
-            generation,
-            previous_generation,
-            actor,
-        },
-    );
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "actor added as part of audit trail"
-)]
-pub fn operation_started(
-    tx: &EventSender,
-    app: &str,
-    action_name: &str,
-    operation_id: &str,
-    source_generation: u64,
-    target_generation: u64,
-    trigger: &str,
-    actor: Option<Actor>,
-) {
-    emit(
-        tx,
-        OiEvent::OperationStarted {
-            timestamp: now(),
-            app: app.to_owned(),
-            action_name: action_name.to_owned(),
-            operation_id: operation_id.to_owned(),
-            source_generation,
-            target_generation,
-            trigger: trigger.to_owned(),
-            actor,
-        },
-    );
-}
-
-pub fn operation_completed(
-    tx: &EventSender,
-    app: &str,
-    action_name: &str,
-    operation_id: &str,
-    source_generation: u64,
-    target_generation: u64,
-    actor: Option<Actor>,
-) {
-    emit(
-        tx,
-        OiEvent::OperationCompleted {
-            timestamp: now(),
-            app: app.to_owned(),
-            action_name: action_name.to_owned(),
-            operation_id: operation_id.to_owned(),
-            source_generation,
-            target_generation,
-            actor,
-        },
-    );
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "actor added as part of audit trail"
-)]
-pub fn operation_failed(
-    tx: &EventSender,
-    app: &str,
-    action_name: &str,
-    operation_id: &str,
-    source_generation: u64,
-    target_generation: u64,
-    error: &str,
-    actor: Option<Actor>,
-) {
-    emit(
-        tx,
-        OiEvent::OperationFailed {
-            timestamp: now(),
-            app: app.to_owned(),
-            action_name: action_name.to_owned(),
-            operation_id: operation_id.to_owned(),
-            source_generation,
-            target_generation,
-            error: error.to_owned(),
-            actor,
-        },
-    );
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "mirrors all fields of OiEvent::FaultFiled"
-)]
-pub fn fault_filed(
-    tx: &EventSender,
-    id: &str,
-    app: &str,
-    resource_type: Option<&str>,
-    resource_name: Option<&str>,
-    instance_id: Option<&str>,
-    kind: &str,
-    description: &str,
-) {
-    emit(
-        tx,
-        OiEvent::FaultFiled {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "three optional resource qualifier fields mirror OiEvent::FaultFiled and cannot be meaningfully collapsed"
+    )]
+    pub fn fault_filed(
+        &self,
+        id: &str,
+        app: &str,
+        resource_type: Option<&str>,
+        resource_name: Option<&str>,
+        instance_id: Option<&str>,
+        kind: &str,
+        description: &str,
+    ) {
+        self.emit(OiEvent::FaultFiled {
             timestamp: now(),
             id: id.to_owned(),
             app: app.to_owned(),
@@ -377,33 +262,27 @@ pub fn fault_filed(
             kind: kind.to_owned(),
             description: description.to_owned(),
             actor: None,
-        },
-    );
-}
+        });
+    }
 
-pub fn fault_cleared(tx: &EventSender, id: &str, app: &str) {
-    emit(
-        tx,
-        OiEvent::FaultCleared {
+    pub fn fault_cleared(&self, id: &str, app: &str) {
+        self.emit(OiEvent::FaultCleared {
             timestamp: now(),
             id: id.to_owned(),
             app: app.to_owned(),
             actor: None,
-        },
-    );
-}
+        });
+    }
 
-pub fn resource_state_changed(
-    tx: &EventSender,
-    app: &str,
-    resource_type: &str,
-    resource_name: &str,
-    instance_id: &str,
-    state: &str,
-) {
-    emit(
-        tx,
-        OiEvent::ResourceStateChanged {
+    pub fn resource_state_changed(
+        &self,
+        app: &str,
+        resource_type: &str,
+        resource_name: &str,
+        instance_id: &str,
+        state: &str,
+    ) {
+        self.emit(OiEvent::ResourceStateChanged {
             timestamp: now(),
             app: app.to_owned(),
             resource_type: resource_type.to_owned(),
@@ -411,83 +290,199 @@ pub fn resource_state_changed(
             instance_id: instance_id.to_owned(),
             state: state.to_owned(),
             actor: None,
-        },
-    );
-}
+        });
+    }
 
-pub fn shell_exited(tx: &EventSender, session_id: &str, exit_code: i32) {
-    emit(
-        tx,
-        OiEvent::ShellExited {
+    pub fn shell_exited(&self, session_id: &str, exit_code: i32) {
+        self.emit(OiEvent::ShellExited {
             timestamp: now(),
             session_id: session_id.to_owned(),
             exit_code,
             actor: None,
-        },
-    );
-}
+        });
+    }
 
-pub fn forward_started(tx: &EventSender, forward_id: &str, app: &str, service: &str, port: u16) {
-    emit(
-        tx,
-        OiEvent::ForwardStarted {
+    pub fn forward_started(&self, forward_id: &str, app: &str, service: &str, port: u16) {
+        self.emit(OiEvent::ForwardStarted {
             timestamp: now(),
             forward_id: forward_id.to_owned(),
             app: app.to_owned(),
             service: service.to_owned(),
             port,
             actor: None,
-        },
-    );
-}
+        });
+    }
 
-pub fn forward_stopped(tx: &EventSender, forward_id: &str) {
-    emit(
-        tx,
-        OiEvent::ForwardStopped {
+    pub fn forward_stopped(&self, forward_id: &str) {
+        self.emit(OiEvent::ForwardStopped {
             timestamp: now(),
             forward_id: forward_id.to_owned(),
             actor: None,
-        },
-    );
-}
+        });
+    }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "actor added as part of audit trail"
-)]
-pub fn scale_changed(
-    tx: &EventSender,
-    app: &str,
-    deployment: &str,
-    scale: u16,
-    previous_scale: u16,
-    bounds_low: u16,
-    bounds_high: u16,
-    actor: Option<Actor>,
-) {
-    emit(
-        tx,
-        OiEvent::ScaleChanged {
-            timestamp: now(),
-            app: app.to_owned(),
-            deployment: deployment.to_owned(),
-            scale,
-            previous_scale,
-            bounds_low,
-            bounds_high,
-            actor,
-        },
-    );
-}
-
-pub fn server_busy(tx: &EventSender, reason: &str) {
-    emit(
-        tx,
-        OiEvent::ServerBusy {
+    pub fn server_busy(&self, reason: &str) {
+        self.emit(OiEvent::ServerBusy {
             timestamp: now(),
             reason: reason.to_owned(),
             actor: None,
-        },
-    );
+        });
+    }
+
+    /// Build a context for the three operation lifecycle events.
+    /// The context is `Clone + Send + 'static` and can cross the blocking thread boundary.
+    // i[wire.actor]
+    pub fn operation(
+        &self,
+        app: impl Into<String>,
+        action_name: impl Into<String>,
+        operation_id: impl Into<String>,
+        source_generation: u64,
+        target_generation: u64,
+        actor: Option<Actor>,
+    ) -> OperationEventCtx {
+        OperationEventCtx {
+            tx: self.clone(),
+            app: app.into(),
+            action_name: action_name.into(),
+            operation_id: operation_id.into(),
+            source_generation,
+            target_generation,
+            actor,
+        }
+    }
+
+    /// Build a context for param-change events (set/unset).
+    pub fn param_change(
+        &self,
+        app: impl Into<String>,
+        generation: u64,
+        previous_generation: u64,
+        actor: Option<Actor>,
+    ) -> ParamEventCtx {
+        ParamEventCtx {
+            tx: self.clone(),
+            app: app.into(),
+            generation,
+            previous_generation,
+            actor,
+        }
+    }
+}
+
+/// Context for operation lifecycle events (started / completed / failed).
+/// Carries common fields so each call site only supplies what differs.
+#[derive(Clone)]
+pub struct OperationEventCtx {
+    tx: EventSender,
+    pub app: String,
+    pub action_name: String,
+    pub operation_id: String,
+    pub source_generation: u64,
+    pub target_generation: u64,
+    actor: Option<Actor>,
+}
+
+impl OperationEventCtx {
+    pub fn started(&self, trigger: &str) {
+        self.tx.emit(OiEvent::OperationStarted {
+            timestamp: now(),
+            app: self.app.clone(),
+            action_name: self.action_name.clone(),
+            operation_id: self.operation_id.clone(),
+            source_generation: self.source_generation,
+            target_generation: self.target_generation,
+            trigger: trigger.to_owned(),
+            actor: self.actor.clone(),
+        });
+    }
+
+    pub fn completed(&self) {
+        self.tx.emit(OiEvent::OperationCompleted {
+            timestamp: now(),
+            app: self.app.clone(),
+            action_name: self.action_name.clone(),
+            operation_id: self.operation_id.clone(),
+            source_generation: self.source_generation,
+            target_generation: self.target_generation,
+            actor: self.actor.clone(),
+        });
+    }
+
+    pub fn failed(&self, error: &str) {
+        self.tx.emit(OiEvent::OperationFailed {
+            timestamp: now(),
+            app: self.app.clone(),
+            action_name: self.action_name.clone(),
+            operation_id: self.operation_id.clone(),
+            source_generation: self.source_generation,
+            target_generation: self.target_generation,
+            error: error.to_owned(),
+            actor: self.actor.clone(),
+        });
+    }
+}
+
+/// Context for parameter-change events (set / unset).
+#[derive(Clone)]
+pub struct ParamEventCtx {
+    tx: EventSender,
+    app: String,
+    generation: u64,
+    previous_generation: u64,
+    actor: Option<Actor>,
+}
+
+impl ParamEventCtx {
+    pub fn set(&self, name: &str, previous_value: Option<&str>, new_value: &str) {
+        self.tx.emit(OiEvent::ParamSet {
+            timestamp: now(),
+            app: self.app.clone(),
+            name: name.to_owned(),
+            previous_value: previous_value.map(str::to_owned),
+            new_value: new_value.to_owned(),
+            generation: self.generation,
+            previous_generation: self.previous_generation,
+            actor: self.actor.clone(),
+        });
+    }
+
+    pub fn unset(&self, name: &str, previous_value: &str) {
+        self.tx.emit(OiEvent::ParamUnset {
+            timestamp: now(),
+            app: self.app.clone(),
+            name: name.to_owned(),
+            previous_value: previous_value.to_owned(),
+            generation: self.generation,
+            previous_generation: self.previous_generation,
+            actor: self.actor.clone(),
+        });
+    }
+}
+
+/// Context for scale-change events.
+/// Captures deployment identity and bounds; call `.changed(new, prev)` to emit.
+#[derive(Clone)]
+pub struct ScaleEventCtx {
+    tx: EventSender,
+    app: String,
+    deployment: String,
+    bounds_low: u16,
+    bounds_high: u16,
+    actor: Option<Actor>,
+}
+
+impl ScaleEventCtx {
+    pub fn changed(&self, scale: u16, previous_scale: u16) {
+        self.tx.emit(OiEvent::ScaleChanged {
+            timestamp: now(),
+            app: self.app.clone(),
+            deployment: self.deployment.clone(),
+            scale,
+            previous_scale,
+            bounds_low: self.bounds_low,
+            bounds_high: self.bounds_high,
+            actor: self.actor.clone(),
+        });
+    }
 }

@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
 
 use parking_lot::{Mutex, RwLock};
-use seedling_protocol::{actor::Actor, events};
+use seedling_protocol::events::OperationEventCtx;
 use tokio::sync::Notify;
 
 use crate::{
@@ -21,7 +21,6 @@ use crate::{
     },
 };
 
-/// Collected DB handle used by a single lifecycle operation pass.
 struct OperationDbs {
     db: Arc<Mutex<Db>>,
 }
@@ -38,30 +37,25 @@ fn open_operation_dbs(db_path: &Path, app_name: &str) -> Option<OperationDbs> {
 }
 
 /// Run the operation loop synchronously until completion or failure.
-///
-/// Returns `true` on success, `false` on compile error, DB failure, or
-/// operation failure.
 #[expect(
     clippy::too_many_arguments,
-    reason = "internal helper grouping all operation state"
+    reason = "operation state is inherently multi-dimensional"
 )]
 fn run_operation_loop(
     app: &App,
-    app_name: &str,
-    action_name: &str,
-    operation_id: &OperationId,
     script: &str,
     dbs: OperationDbs,
     params: serde_json::Map<String, serde_json::Value>,
     active_progress: Arc<RwLock<Option<OperationProgress>>>,
     tick_notify: Arc<Notify>,
-    event_tx: &events::EventSender,
+    op_ctx: &OperationEventCtx,
     script_limits: &crate::ScriptLimits,
-    source_generation: u64,
-    target_generation: u64,
     operation_volume_bindings: HashMap<String, OperationVolumeBinding>,
-    actor: Option<Actor>,
 ) -> bool {
+    let app_name = op_ctx.app.as_str();
+    let action_name = op_ctx.action_name.as_str();
+    let operation_id = OperationId(op_ctx.operation_id.clone());
+
     let (engine, mut scope, _) = crate::setup_language(script_limits);
     let ast = match engine.compile(script) {
         Ok(a) => a,
@@ -107,8 +101,8 @@ fn run_operation_loop(
                 params: params.clone(),
                 is_shell: false,
                 db: Some(Arc::clone(&dbs.db)),
-                source_generation,
-                target_generation,
+                source_generation: op_ctx.source_generation,
+                target_generation: op_ctx.target_generation,
                 script_limits: Some(script_limits.clone()),
                 operation_volume_bindings: operation_volume_bindings.clone(),
             },
@@ -118,15 +112,7 @@ fn run_operation_loop(
             OperationResult::Completed => {
                 let db = dbs.db.lock();
                 faults::clear_faults_by_kind(&db, app_name, "operation_failed").ok();
-                events::operation_completed(
-                    event_tx,
-                    app_name,
-                    action_name,
-                    &operation_id.0,
-                    source_generation,
-                    target_generation,
-                    actor.clone(),
-                );
+                op_ctx.completed();
                 return true;
             }
             OperationResult::Failed(e) => {
@@ -141,16 +127,7 @@ fn run_operation_loop(
                     "operation_failed",
                     &format!("{action_name} failed: {e}"),
                 );
-                events::operation_failed(
-                    event_tx,
-                    app_name,
-                    action_name,
-                    &operation_id.0,
-                    source_generation,
-                    target_generation,
-                    &e.to_string(),
-                    actor.clone(),
-                );
+                op_ctx.failed(&e.to_string());
                 return false;
             }
             OperationResult::Suspended(_) => {
@@ -161,10 +138,6 @@ fn run_operation_loop(
     }
 }
 
-/// Tear down dynamic resources created during the operation.
-///
-/// Builds a cleanup `OperationProgress` with all dynamic instances marked as
-/// stopped, then polls until they reach `Terminated` or a timeout is hit.
 async fn cleanup_dynamic_resources(
     state: &OiState,
     operation_id_str: &str,
@@ -284,7 +257,6 @@ async fn cleanup_dynamic_resources(
     }
 }
 
-/// Mark install as complete and persist the phase transition.
 fn finalize_install(state: &OiState, app_name: &str) {
     // i[action.invoke.install.completion]
     {
@@ -301,8 +273,6 @@ fn finalize_install(state: &OiState, app_name: &str) {
     tracing::info!(app = %app_name, "install completed; app is now installed");
 }
 
-/// Spawn an async task that runs a lifecycle operation to completion, then
-/// handles queued follow-on operations and install completion bookkeeping.
 #[expect(
     clippy::too_many_arguments,
     reason = "internal helper grouping all operation state"
@@ -316,7 +286,7 @@ pub fn spawn_accepted_operation(
     source_generation: u64,
     target_generation: u64,
     trigger: String,
-    actor: Option<Actor>,
+    actor: Option<seedling_protocol::actor::Actor>,
 ) {
     let (app, active_progress, tick_notify, script) = {
         let reg = state.registry.read();
@@ -340,27 +310,24 @@ pub fn spawn_accepted_operation(
 
     tokio::spawn(async move {
         // i[wire.actor]
-        events::operation_started(
-            &event_tx,
+        let op_ctx = event_tx.operation(
             &app_name,
             &action_name,
             &operation_id.0,
             source_generation,
             target_generation,
-            &trigger,
-            actor.clone(),
+            actor,
         );
+        op_ctx.started(&trigger);
+
         let operation_id_str = operation_id.0.clone();
 
-        // --- Run the operation on a blocking thread ---
         let success = {
-            let event_tx = event_tx.clone();
             let app_name = app_name.clone();
-            let action_name = action_name.clone();
             let active_progress = Arc::clone(&active_progress);
             let tick_notify = Arc::clone(&tick_notify);
             let params = params.clone();
-            let actor = actor.clone();
+            let op_ctx = op_ctx.clone();
 
             tokio::task::spawn_blocking(move || {
                 let dbs = match open_operation_dbs(&db_path, &app_name) {
@@ -369,39 +336,29 @@ pub fn spawn_accepted_operation(
                 };
                 run_operation_loop(
                     &app,
-                    &app_name,
-                    &action_name,
-                    &operation_id,
                     &script,
                     dbs,
                     params,
                     active_progress,
                     tick_notify,
-                    &event_tx,
+                    &op_ctx,
                     &script_limits,
-                    source_generation,
-                    target_generation,
                     HashMap::new(),
-                    actor,
                 )
             })
             .await
             .unwrap_or(false)
         };
 
-        // --- Clean up dynamic resources ---
         cleanup_dynamic_resources(&state, &operation_id_str, &active_progress, &tick_notify).await;
 
-        // --- Clear active progress and wake reconciler ---
         *active_progress.write() = None;
         tick_notify.notify_one();
 
-        // --- Install completion ---
         if is_install && success {
             finalize_install(&state, &app_name);
         }
 
-        // --- Drain the queue ---
         let next = state.scheduler.lock().complete_current();
         if let Some(queued) = next {
             spawn_accepted_operation(
@@ -419,11 +376,6 @@ pub fn spawn_accepted_operation(
     });
 }
 
-/// Run a single backup action (e.g. `save-snapshot`) to completion, with
-/// operation-scoped volume bindings, then drain the scheduler queue.
-///
-/// Returns `true` on success, `false` on failure.
-/// The caller must have already acquired the scheduler slot for `backup_app_name`.
 #[expect(
     clippy::too_many_arguments,
     reason = "internal helper grouping all operation state"
@@ -455,48 +407,38 @@ pub(crate) async fn run_operation_for_backup(
     };
 
     let db_path = state.db_path.clone();
-    let event_tx = state.event_tx.clone();
     let script_limits = state.script_limits.clone();
     let operation_id_str = operation_id.0.clone();
-    let backup_app_name_owned = backup_app_name.to_owned();
-    let action_name_owned = action_name.to_owned();
 
-    events::operation_started(
-        &event_tx,
+    let op_ctx = state.event_tx.operation(
         backup_app_name,
         action_name,
         &operation_id.0,
         source_generation,
         target_generation,
-        "backup",
         None,
     );
+    op_ctx.started("backup");
 
     let success = {
         let active_progress_clone = Arc::clone(&active_progress);
         let tick_notify_clone = Arc::clone(&tick_notify);
-        let event_tx_clone = event_tx.clone();
+        let op_ctx = op_ctx.clone();
         tokio::task::spawn_blocking(move || {
-            let dbs = match open_operation_dbs(&db_path, &backup_app_name_owned) {
+            let dbs = match open_operation_dbs(&db_path, &op_ctx.app) {
                 Some(d) => d,
                 None => return false,
             };
             run_operation_loop(
                 &app,
-                &backup_app_name_owned,
-                &action_name_owned,
-                &operation_id,
                 &script,
                 dbs,
                 params,
                 active_progress_clone,
                 tick_notify_clone,
-                &event_tx_clone,
+                &op_ctx,
                 &script_limits,
-                source_generation,
-                target_generation,
                 operation_volume_bindings,
-                None,
             )
         })
         .await

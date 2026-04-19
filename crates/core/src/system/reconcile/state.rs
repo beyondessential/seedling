@@ -45,8 +45,7 @@ impl Reconciler {
                     if let Some(&prev) = self.prev_states.get(&key)
                         && prev != state
                     {
-                        seedling_protocol::events::resource_state_changed(
-                            &self.event_tx,
+                        self.event_tx.resource_state_changed(
                             &app.name,
                             &kind_str,
                             res_name,

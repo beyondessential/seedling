@@ -18,8 +18,7 @@ pub fn init(tx: EventSender) {
 
 fn emit_filed(record: &FaultRecord) {
     if let Some(tx) = EVENT_TX.get() {
-        seedling_protocol::events::fault_filed(
-            tx,
+        tx.fault_filed(
             &record.id,
             &record.app,
             record.resource_type.as_deref(),
@@ -33,7 +32,7 @@ fn emit_filed(record: &FaultRecord) {
 
 fn emit_cleared(id: &str, app: &str) {
     if let Some(tx) = EVENT_TX.get() {
-        seedling_protocol::events::fault_cleared(tx, id, app);
+        tx.fault_cleared(id, app);
     }
 }
 

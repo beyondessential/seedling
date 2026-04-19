@@ -264,10 +264,9 @@ async fn handle_bidi_stream(
                 "stream concurrency limit reached; rejecting stream \
                  (adjust with --max-streams)"
             );
-            seedling_protocol::events::server_busy(
-                &state.event_tx,
-                "stream concurrency limit reached",
-            );
+            state
+                .event_tx
+                .server_busy("stream concurrency limit reached");
             let resp = json!({
                 "error": {
                     "code": "server_busy",

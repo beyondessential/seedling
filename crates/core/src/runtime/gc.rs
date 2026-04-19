@@ -219,7 +219,7 @@ mod tests {
         static INIT: Once = Once::new();
         INIT.call_once(|| {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                crate::runtime::faults::init(tokio::sync::broadcast::channel(16).0);
+                crate::runtime::faults::init(seedling_protocol::events::new_event_channel());
             }));
         });
     }

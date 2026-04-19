@@ -215,16 +215,15 @@ pub(crate) fn set_param(
 
     let schedule = schedule_on_change(state, app, param_name, generation)?;
 
-    seedling_protocol::events::param_set(
-        &state.event_tx,
-        app,
-        param_name,
-        previous_value.as_deref(),
-        value,
-        generation,
-        previous_generation,
-        Some(ctx.actor.clone()),
-    );
+    state
+        .event_tx
+        .param_change(
+            app,
+            generation,
+            previous_generation,
+            Some(ctx.actor.clone()),
+        )
+        .set(param_name, previous_value.as_deref(), value);
 
     tracing::info!(app, param = param_name, generation, schedule, "set_param");
     Ok(json!({ "schedule": schedule, "generation": generation }))
@@ -283,15 +282,15 @@ pub(crate) fn unset_param(
 
     let schedule = schedule_on_change(state, app, param_name, generation)?;
 
-    seedling_protocol::events::param_unset(
-        &state.event_tx,
-        app,
-        param_name,
-        &previous_value,
-        generation,
-        previous_generation,
-        Some(ctx.actor.clone()),
-    );
+    state
+        .event_tx
+        .param_change(
+            app,
+            generation,
+            previous_generation,
+            Some(ctx.actor.clone()),
+        )
+        .unset(param_name, &previous_value);
 
     tracing::info!(app, param = param_name, generation, schedule, "unset_param");
     Ok(json!({ "schedule": schedule, "generation": generation }))
