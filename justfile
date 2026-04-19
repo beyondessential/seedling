@@ -36,9 +36,10 @@ ctl *args:
 events:
     target/debug/seedling-ctl op events
 
-# Run seedling-web in dev mode (open http://localhost:5173 via `just frontend` for HMR)
-web:
-    SKIP_FRONTEND_BUILD=1 cargo run -p seedling-web -- --dev-no-auth
+# Watch the built seedling-web binary and restart it on changes
+watch-web:
+    watchexec -IrW target/debug/seedling-web --ignore-nothing \
+        'target/debug/seedling-web --dev-no-auth'
 
 # Run the Vite dev server
 frontend:

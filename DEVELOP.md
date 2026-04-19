@@ -24,18 +24,18 @@ just watch-run
 
 ## Web UI
 
-The web UI is a React/Vite SPA served by `seedling-web`. In production it is embedded directly into the binary via `rust-embed`. For development, run the Rust server and the Vite dev server side by side in two terminals:
+The web UI is a React/Vite SPA served by `seedling-web`. In production it is embedded directly into the binary via `rust-embed`. For development, run three terminals alongside `just watch-build`:
 
 ```
-just web
+just watch-web
 ```
 ```
 just frontend
 ```
 
-Open **`http://localhost:5173`** (Vite's port, not the Rust server's). Vite's dev server is configured to proxy `/connect` and `/healthz` to the Rust server at `:8080`, so API calls work and HMR is fully functional.
+Open **`http://localhost:5173`** (Vite's port, not the Rust server's). Vite's dev server is configured to proxy `/connect` and `/healthz` to the Rust server at `:8080`, so API calls work and HMR is fully functional. `watch-web` restarts the Rust server automatically whenever `watch-build` produces a new binary.
 
-`SKIP_FRONTEND_BUILD=1` is set automatically by `just web` and `just build` so that cargo does not run `npm run build` on every compile. You need a `frontend/dist/` to exist for the Rust binary to compile in this mode — run `just frontend-build` once if it doesn't, or run `just build-release` for a full embedded production build.
+`SKIP_FRONTEND_BUILD=1` is set automatically by `just build` so that cargo does not run `npm run build` on every compile. You need a `frontend/dist/` to exist for the Rust binary to compile in this mode — run `just frontend-build` once if it doesn't, or run `just build-release` for a full embedded production build.
 
 If you add npm dependencies, run `just frontend-install` first.
 
