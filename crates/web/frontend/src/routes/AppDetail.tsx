@@ -3,6 +3,8 @@ import ClearIcon from "@mui/icons-material/Clear";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import EditIcon from "@mui/icons-material/Edit";
 import RefreshIcon from "@mui/icons-material/Refresh";
+import VisibilityIcon from "@mui/icons-material/Visibility";
+import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import {
   Alert,
   Box,
@@ -143,14 +145,19 @@ function ParamsSection({
   const { execute, loading, error, clearError } = useOiAction();
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
 
   const startEdit = (p: AppParam) => {
     setEditing(p.name);
     setDraft(p.value ?? "");
+    setShowPassword(false);
     clearError();
   };
 
-  const cancel = () => setEditing(null);
+  const cancel = () => {
+    setEditing(null);
+    setShowPassword(false);
+  };
 
   const save = async () => {
     if (!editing) return;
@@ -211,12 +218,45 @@ function ParamsSection({
                         if (e.key === "Escape") cancel();
                       }}
                       autoFocus
-                      type={paramFieldType(p.kind)}
-                      helperText={p.description ?? undefined}
+                      type={showPassword ? "text" : paramFieldType(p.kind)}
+                      error={
+                        p.kind === "password" &&
+                        draft.length > 0 &&
+                        draft.length < 12
+                      }
+                      helperText={
+                        p.kind === "password" &&
+                        draft.length > 0 &&
+                        draft.length < 12
+                          ? "Password is too weak"
+                          : (p.description ?? undefined)
+                      }
                       inputProps={{ style: { fontFamily: "monospace" } }}
                       InputProps={{
                         endAdornment: (
                           <InputAdornment position="end">
+                            {(p.kind === "password" ||
+                              p.kind === "weak-password") && (
+                              <Tooltip
+                                title={
+                                  showPassword ? "Hide" : "Show"
+                                }
+                              >
+                                <IconButton
+                                  size="small"
+                                  onClick={() =>
+                                    setShowPassword((v) => !v)
+                                  }
+                                  edge="end"
+                                >
+                                  {showPassword ? (
+                                    <VisibilityOffIcon fontSize="small" />
+                                  ) : (
+                                    <VisibilityIcon fontSize="small" />
+                                  )}
+                                </IconButton>
+                              </Tooltip>
+                            )}
                             <Tooltip title="Save">
                               <span>
                                 <IconButton
