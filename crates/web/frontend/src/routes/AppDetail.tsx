@@ -1167,7 +1167,7 @@ export default function AppDetail() {
             />
           </Section>
 
-          {data.resources.some((r) => r.type === "external_volume") && (
+          {data.resources.some((r) => r.def?.kind === "external_volume") && (
             <>
               <Divider />
               <Section title="External Volumes">
@@ -1182,7 +1182,7 @@ export default function AppDetail() {
                     </TableHead>
                     <TableBody>
                       {data.resources
-                        .filter((r) => r.type === "external_volume")
+                        .filter((r) => r.def?.kind === "external_volume")
                         .map((r) => {
                           const mapping = (mappings ?? []).find(
                             (m) => m.external_name === r.name,
