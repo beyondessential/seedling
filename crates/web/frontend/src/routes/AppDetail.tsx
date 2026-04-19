@@ -1,5 +1,6 @@
 import CheckIcon from "@mui/icons-material/Check";
 import ClearIcon from "@mui/icons-material/Clear";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import EditIcon from "@mui/icons-material/Edit";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import {
@@ -254,7 +255,7 @@ function ParamsSection({
                           onClick={() => void unset(p.name)}
                           disabled={loading}
                         >
-                          <ClearIcon fontSize="small" />
+                          <DeleteOutlineIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
                     )}
