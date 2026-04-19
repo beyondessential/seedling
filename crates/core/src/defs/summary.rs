@@ -95,6 +95,7 @@ pub struct ContainerSummary {
     pub extra_caps: Vec<String>,
     pub writable_rootfs: bool,
     pub pids_limit: Option<u32>,
+    pub workdir: Option<String>,
 }
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -323,6 +324,7 @@ impl ContainerDef {
             extra_caps: self.extra_caps.clone(),
             writable_rootfs: self.writable_rootfs,
             pids_limit: self.pids_limit,
+            workdir: self.workdir.clone(),
         }
     }
 }

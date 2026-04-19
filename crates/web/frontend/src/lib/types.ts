@@ -49,6 +49,7 @@ export interface ContainerSummary {
   extra_caps: string[];
   writable_rootfs: boolean;
   pids_limit: number | null;
+  workdir: string | null;
 }
 
 export interface PodSummary {

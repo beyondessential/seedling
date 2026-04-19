@@ -105,6 +105,9 @@ pub fn podman_args(spec: &ContainerSpec) -> Vec<String> {
     if let Some(cpus) = spec.cpus {
         args.push(format!("--cpus={cpus}"));
     }
+    if let Some(workdir) = &spec.workdir {
+        args.push(format!("--workdir={workdir}"));
+    }
 
     args.push("--name".to_string());
     args.push(spec.name.clone());
@@ -338,6 +341,7 @@ fn spec_from_pod(
         extra_caps: container.extra_caps.clone(),
         writable_rootfs: container.writable_rootfs,
         pids_limit: container.pids_limit.unwrap_or(256),
+        workdir: container.workdir.clone(),
     };
     let hash = spec_hash(&spec);
     spec.labels.insert("seedling.spec-hash".to_string(), hash);

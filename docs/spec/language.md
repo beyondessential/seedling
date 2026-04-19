@@ -517,6 +517,11 @@ This is currently the only value.
 > The `limit` must be a positive integer.
 > The default PID limit is 256.
 
+> l[container.workdir]
+> The `container.workdir(path: string)` builder method sets the working directory of the container process.
+> The `path` must be an absolute path.
+> If not set, the working directory is determined by the container image.
+
 # Pod
 
 > l[pod.interface]

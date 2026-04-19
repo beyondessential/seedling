@@ -561,6 +561,40 @@ fn env_map_form_rejects_forbidden() {
     );
 }
 
+// l[verify container.workdir]
+#[test]
+fn container_workdir_sets_path() {
+    let app = run_test_script_app(
+        r#"
+        app.deployment("web")
+            .image("docker.io/library/nginx:latest")
+            .workdir("/app");
+    "#,
+    );
+    let def = app.def.lock();
+    let id = def
+        .resources
+        .keys()
+        .find(|id| id.kind == ResourceKind::Deployment && &*id.name == "web")
+        .unwrap();
+    if let defs::resource::Resource::Deployment(dep) = &def.resources[id] {
+        let dep_def = dep.def.lock();
+        let pod = dep_def.pod.lock();
+        let container = pod.container.lock();
+        assert_eq!(container.workdir.as_deref(), Some("/app"));
+    } else {
+        panic!("expected Deployment");
+    }
+}
+
+// l[verify container.workdir]
+#[test]
+fn container_workdir_rejects_relative_path() {
+    let _ = run_test_script_err(
+        r#"app.deployment("web").workdir("app/relative");"#,
+    );
+}
+
 // l[verify container.on-exit]
 #[test]
 fn container_on_exit_strategy() {

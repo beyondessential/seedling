@@ -16,6 +16,7 @@ fn deployment_summary_with_image(image: Option<&str>, scale: (u16, u16)) -> Depl
             extra_caps: Vec::new(),
             writable_rootfs: false,
             pids_limit: None,
+            workdir: None,
         },
         pod: PodSummary {
             service_mounts: Vec::new(),

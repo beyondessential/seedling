@@ -25,6 +25,7 @@ fn podman_args_basic_shape() {
         extra_caps: vec![],
         writable_rootfs: false,
         pids_limit: 256,
+        workdir: None,
     };
 
     let args = podman_args(&spec);
@@ -69,6 +70,7 @@ fn podman_args_volume_mount() {
         extra_caps: vec![],
         writable_rootfs: false,
         pids_limit: 256,
+        workdir: None,
     };
 
     let args = podman_args(&spec);
@@ -97,6 +99,7 @@ fn podman_args_add_host_ipv6() {
         extra_caps: vec![],
         writable_rootfs: false,
         pids_limit: 256,
+        workdir: None,
     };
 
     let args = podman_args(&spec);
@@ -123,6 +126,7 @@ fn podman_args_hardening_defaults() {
         extra_caps: vec![],
         writable_rootfs: false,
         pids_limit: 256,
+        workdir: None,
     };
 
     let args = podman_args(&spec);
@@ -162,6 +166,7 @@ fn podman_args_hardening_overrides() {
         extra_caps: vec!["NET_RAW".to_string(), "NET_BIND_SERVICE".to_string()],
         writable_rootfs: true,
         pids_limit: 1024,
+        workdir: None,
     };
 
     let args = podman_args(&spec);
@@ -175,6 +180,33 @@ fn podman_args_hardening_overrides() {
     assert_eq!(args[pids_pos + 1], "1024");
     assert!(args.contains(&"--memory=512m".to_string()));
     assert!(args.contains(&"--cpus=1.5".to_string()));
+    assert!(!args.iter().any(|a| a.starts_with("--workdir")));
+}
+
+// i[verify container.workdir]
+#[test]
+fn podman_args_workdir() {
+    let spec = ContainerSpec {
+        name: "n".to_string(),
+        image: "img".to_string(),
+        command: vec![],
+        entrypoint: vec![],
+        env: vec![],
+        mounts: vec![],
+        network: "net".to_string(),
+        labels: BTreeMap::new(),
+        health: None,
+        hosts: vec![],
+        dns_servers: vec![],
+        memory: None,
+        cpus: None,
+        extra_caps: vec![],
+        writable_rootfs: false,
+        pids_limit: 256,
+        workdir: Some("/app".to_string()),
+    };
+    let args = podman_args(&spec);
+    assert!(args.contains(&"--workdir=/app".to_string()));
 }
 
 #[test]

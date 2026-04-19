@@ -98,6 +98,7 @@ pub struct ContainerSpec {
     pub extra_caps: Vec<String>,
     pub writable_rootfs: bool,
     pub pids_limit: u32,
+    pub workdir: Option<String>,
 }
 
 #[derive(Debug, Clone)]

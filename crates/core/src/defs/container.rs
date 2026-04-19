@@ -271,6 +271,7 @@ pub struct ContainerDef {
     pub extra_caps: Vec<String>,
     pub writable_rootfs: bool,
     pub pids_limit: Option<u32>,
+    pub workdir: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -495,6 +496,21 @@ impl ContainerDef {
                     );
                 }
                 ext(this).lock().pids_limit = Some(limit as u32);
+                Ok(this.clone())
+            },
+        );
+
+        // l[impl container.workdir]
+        builder.with_fn(
+            "workdir",
+            move |this: &mut T, path: String| -> Result<T, Box<EvalAltResult>> {
+                this.ensure_unfrozen()?;
+                if !path.starts_with('/') {
+                    return Err(
+                        format!("workdir must be an absolute path, got '{path}'").into(),
+                    );
+                }
+                ext(this).lock().workdir = Some(path);
                 Ok(this.clone())
             },
         );
