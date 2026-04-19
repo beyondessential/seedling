@@ -321,16 +321,6 @@ impl Actuator {
                         .stop_unit(&unit)
                         .await
                         .context(ProcessSnafu)?;
-                    // Remove the container now rather than deferring to the
-                    // next tick. If we return without removing it, the
-                    // container name stays occupied and a subsequent start
-                    // will fail with "name already in use".
-                    self.driver
-                        .container
-                        .remove_container(&instance.display_name, true)
-                        .await
-                        .context(ContainerSnafu)?;
-                    return Ok(());
                 }
                 ActiveState::Inactive | ActiveState::Failed => {
                     self.driver
@@ -342,8 +332,8 @@ impl Actuator {
             }
         }
 
-        // Container may already be gone (e.g. podman --rm removed it on exit).
-        // Ignore not-found errors so network and volume cleanup still proceeds.
+        // Container may already be gone (podman --rm removes it on exit).
+        // Ignore not-found errors so network and volume cleanup always proceeds.
         let _ = self
             .driver
             .container
