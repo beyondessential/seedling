@@ -668,17 +668,23 @@ function ActionsSection({
   appName,
   actions,
   status,
+  operatingAction,
   onRefresh,
 }: {
   appName: string;
   actions: AppAction[];
   status: AppStatus;
+  operatingAction?: string;
   onRefresh: () => void;
 }) {
   const [invoking, setInvoking] = useState<AppAction | null>(null);
 
   const canInstall = status === "not_installed";
-  const canInvoke = status !== "not_installed" && status !== "uninstalling" && status !== "deregistering";
+  const canInvoke =
+    status !== "not_installed" &&
+    status !== "uninstalling" &&
+    status !== "deregistering" &&
+    status !== "operating";
 
   if (actions.length === 0)
     return <Typography color="text.secondary">No actions.</Typography>;
@@ -698,6 +704,7 @@ function ActionsSection({
           <TableBody>
             {actions.map((a) => {
               const isInvokable = a.kind !== "shell" && a.kind !== "lifecycle";
+              const isRunning = a.name === operatingAction;
               const canRun =
                 a.kind === "install"
                   ? canInstall
@@ -713,14 +720,25 @@ function ActionsSection({
                   </TableCell>
                   <TableCell align="right">
                     {isInvokable && (
-                      <Button
-                        size="small"
-                        variant={a.kind === "install" ? "contained" : "outlined"}
-                        onClick={() => setInvoking(a)}
-                        disabled={!canRun}
-                      >
-                        {a.kind === "install" ? "Install" : "Run"}
-                      </Button>
+                      isRunning ? (
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          disabled
+                          startIcon={<CircularProgress size={12} />}
+                        >
+                          Running…
+                        </Button>
+                      ) : (
+                        <Button
+                          size="small"
+                          variant={a.kind === "install" ? "contained" : "outlined"}
+                          onClick={() => setInvoking(a)}
+                          disabled={!canRun}
+                        >
+                          {a.kind === "install" ? "Install" : "Run"}
+                        </Button>
+                      )
                     )}
                   </TableCell>
                 </TableRow>
@@ -975,6 +993,7 @@ export default function AppDetail() {
                   appName={name!}
                   actions={data.actions}
                   status={data.status}
+                  operatingAction={data.current_operation?.action_name}
                   onRefresh={refetch}
                 />
               </Section>
