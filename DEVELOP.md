@@ -30,6 +30,23 @@ It also puts the logs in seedling.log so tools can query that.
 The TLS keys are logged to /tmp/seedling.keylog: you can configure Wireshark to read from that to get useful information out of it when debugging the RPC "OI" protocol.
 The state/data-dir is set to /opt/seedling to simulate an install without putting root-owned files in your home/source directory.
 
+## Web UI
+
+The web UI is a React/Vite SPA served by `seedling-web`. In production it is embedded directly into the binary via `rust-embed`. For development, run the Rust server and the Vite dev server side by side in two terminals:
+
+```
+just web
+```
+```
+just frontend
+```
+
+`just web` starts `seedling-web` with `--dev-no-auth` (no password needed) and `--vite-port 5173`, which proxies all SPA requests to Vite. Open the URL printed by the Rust server (e.g. `http://localhost:8080`); the page will be served through the proxy so Vite's HMR websocket won't reach the browser directly. If you need HMR, open Vite's own URL (`http://localhost:5173`) instead and configure its proxy to forward `/connect` and `/healthz` to the Rust port.
+
+`SKIP_FRONTEND_BUILD=1` is set automatically by `just web` and `just build` so that cargo does not run `npm run build` on every compile. Run `just frontend-build` or `just build-release` when you need a fresh embedded bundle.
+
+If you add npm dependencies, run `just frontend-install` first.
+
 ## Controlling
 
 You can then use `target/debug/seedling-ctl` to interact with Seedling.
