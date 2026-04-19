@@ -204,14 +204,17 @@ pub(crate) fn effective_app_status(
             let state = derive_lifecycle_state(inst, &obs);
             if state == LifecycleState::Ready {
                 has_ready = true;
-            } else if state != LifecycleState::Unscheduled {
-                // Any instance in a non-terminal, non-ready state means
-                // this resource group is not fully healthy.
+            } else if matches!(
+                state,
+                LifecycleState::Unscheduled
+                    | LifecycleState::Terminating
+                    | LifecycleState::Terminated
+            ) {
+                // Instances being torn down are transitioning to Unscheduled
+                // and must not drag the app to Degraded.
+            } else {
                 return false;
             }
-            // Unscheduled instances (e.g. old singletons after a
-            // singleton-to-scaled transition) are inert — they have been
-            // intentionally torn down and must not drag the app to Degraded.
         }
         has_ready
     });

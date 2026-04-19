@@ -64,7 +64,6 @@ struct ObservedInstance<'a> {
     spec_stale: bool,
     unit_failed: bool,
     unit_active: bool,
-    unit_loaded: bool,
     container_exists: bool,
     result: PodInstanceResult,
 }
@@ -105,7 +104,6 @@ async fn observe_one_pod<'a>(
                 spec_stale: false,
                 unit_failed: false,
                 unit_active: false,
-                unit_loaded: false,
                 container_exists: false,
                 result,
             });
@@ -154,14 +152,6 @@ async fn observe_one_pod<'a>(
     let unit_active = facts
         .iter()
         .any(|(f, _)| matches!(f, ObservationFact::UnitActive));
-    let unit_loaded = facts.iter().any(|(f, _)| {
-        matches!(
-            f,
-            ObservationFact::UnitActive
-                | ObservationFact::UnitInactive
-                | ObservationFact::UnitFailed
-        )
-    });
     let container_exists = facts.iter().any(|(f, _)| {
         matches!(
             f,
@@ -206,7 +196,6 @@ async fn observe_one_pod<'a>(
         spec_stale,
         unit_failed,
         unit_active,
-        unit_loaded,
         container_exists,
         result,
     })
@@ -307,9 +296,7 @@ async fn actuate_one_pod(
                 }
             }
         }
-        LifecycleState::Unscheduled
-            if obs.is_running || obs.unit_loaded || obs.container_exists =>
-        {
+        LifecycleState::Unscheduled if obs.is_running || obs.container_exists => {
             result.running = None;
             result
                 .observations

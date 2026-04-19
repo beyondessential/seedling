@@ -204,7 +204,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - `Deregistering`: deregistration was requested and resource teardown is in progress.
 > - `Operating`: a lifecycle operation is in progress. Includes the field `action_name`.
 > - `Running`: steady state; no active faults; all resources are at their desired lifecycle states.
-> - `Degraded`: steady state, but one or more resources are not at their desired lifecycle state or have an active fault.
+> - `Degraded`: steady state, but one or more resources are not at their desired lifecycle state or have an active fault. Resources that are actively being torn down (`Terminating` or `Terminated` lifecycle state) are not counted as degraded — they are transitioning to `Unscheduled` and do not represent a fault condition.
 > - `Faulted`: one or more active faults exist and at least one resource has been excluded from active reconciliation.
 
 > i[app.status.priority]
