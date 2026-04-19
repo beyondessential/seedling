@@ -1,5 +1,6 @@
 import EventNoteIcon from "@mui/icons-material/EventNote";
 import PeopleAltIcon from "@mui/icons-material/PeopleAlt";
+import StorageIcon from "@mui/icons-material/Storage";
 import { AppBar, Badge, Box, Chip, IconButton, Toolbar, Tooltip, Typography } from "@mui/material";
 import { useCallback } from "react";
 import { Link } from "react-router-dom";
@@ -87,6 +88,16 @@ export function Navbar() {
             {data.hostname}
           </Typography>
         )}
+        <Tooltip title="Volumes">
+          <IconButton
+            size="small"
+            component={Link}
+            to="/volumes"
+            sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
+          >
+            <StorageIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
         <Tooltip title={`${sessionCount} connected client${sessionCount === 1 ? "" : "s"}`}>
           <IconButton
             size="small"

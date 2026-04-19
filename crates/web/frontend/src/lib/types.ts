@@ -226,6 +226,38 @@ export interface ConnectedClients {
   forwards: ForwardSession[];
 }
 
+export interface SiteVolume {
+  name: string;
+  kind: "managed" | "bind" | "snapshot";
+  created_at: string;
+  host_path?: string;
+  source?: string;
+}
+
+export interface ExportedVolume {
+  app: string;
+  volume_name: string;
+  description?: string;
+}
+
+export interface ExternalMapping {
+  app: string;
+  external_name: string;
+  read_only: boolean;
+  target_kind: "exported" | "site";
+  target_app?: string;
+  target_volume: string;
+}
+
+export interface HeldVolume {
+  id: string;
+  app: string;
+  volume_name: string;
+  display_name: string;
+  reason: string;
+  held_at: string;
+}
+
 export interface ConnectRequest {
   token?: string;
   password?: string;

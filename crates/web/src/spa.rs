@@ -12,6 +12,7 @@ struct Assets;
 
 // w[spa.delivery]
 // w[routes.apps]
+// w[impl routes.volumes]
 pub async fn handler(State(state): State<AppState>, req: Request<Body>) -> impl IntoResponse {
     if let Some(port) = state.vite_port {
         return vite_proxy(port, req.uri()).await;
