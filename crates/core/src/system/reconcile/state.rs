@@ -208,6 +208,11 @@ impl Reconciler {
     ) {
         for (instance, kind, payload) in batch {
             if !self.written_obs.insert((instance.id, kind)) {
+                tracing::trace!(
+                    instance = %instance.display_name,
+                    obs = kind,
+                    "persist_obs: skipping already-written observation"
+                );
                 continue;
             }
             let db = self.db.lock();
