@@ -45,6 +45,10 @@ pub(super) struct PodActuationUpdate {
     /// Instances successfully started this tick; their written_obs entries must
     /// be cleared so the new lifecycle observations can be recorded.
     pub started_instances: Vec<ResourceInstance>,
+    // r[impl autonomous.job-terminal.defense]
+    /// Job instances detected as complete this tick, for the reconciler's
+    /// completed-jobs set.
+    pub completed_job_instances: Vec<InstanceId>,
 }
 
 struct PodInstanceResult {
@@ -59,6 +63,8 @@ struct PodInstanceResult {
     stop_failure: Option<(ResourceInstance, String)>,
     observe_failure: Option<(ResourceInstance, String)>,
     started_instance: Option<ResourceInstance>,
+    // r[impl autonomous.job-terminal.defense]
+    completed_job: Option<InstanceId>,
 }
 
 /// Per-instance observation collected before any actuation decisions are made.
@@ -94,6 +100,7 @@ async fn observe_one_pod<'a>(
         stop_failure: None,
         observe_failure: None,
         started_instance: None,
+        completed_job: None,
     };
 
     let facts = match observer.observe(&dr.instance, &dr.definition).await {
@@ -223,22 +230,26 @@ async fn actuate_one_pod(
     mut obs: ObservedInstance<'_>,
     inhibit_stop: bool,
     written_obs: &HashSet<(InstanceId, &'static str)>,
+    completed_jobs: &HashSet<InstanceId>,
 ) -> Option<PodInstanceResult> {
     let dr = obs.dr;
     let result = &mut obs.result;
 
     // r[impl autonomous.job-terminal]
-    // Jobs that have completed naturally are not restarted. Detect completion
-    // by checking whether the container was previously seen running (written_obs)
-    // but is now gone — this works even when Podman's --rm removes the container
-    // instantly on exit with no visible Exited state. Clean up any lingering
-    // container/unit state but do not start a replacement.
+    // r[impl autonomous.job-terminal.defense]
+    // Jobs that have completed naturally are not restarted. Two detection paths:
+    // 1. Primary: container was previously seen running (written_obs) but is now
+    //    gone — works even when Podman's --rm removes it instantly on exit.
+    // 2. Defense in depth: if this instance ID was recorded as completed in a
+    //    prior tick (completed_jobs), kill any container that somehow restarted.
     if matches!(dr.definition, Resource::Job(_)) && dr.desired == LifecycleState::Ready {
         let previously_ran = written_obs.contains(&(dr.instance.id, "container_running"));
-        let is_done =
-            obs.has_exited || (!obs.container_exists && !obs.is_running && previously_ran);
+        let already_completed = completed_jobs.contains(&dr.instance.id);
+        let is_done = obs.has_exited
+            || (!obs.container_exists && !obs.is_running && previously_ran)
+            || already_completed;
         if is_done {
-            if obs.container_exists || obs.unit_active || obs.unit_failed {
+            if obs.container_exists || obs.unit_active || obs.unit_failed || obs.is_running {
                 match actuator.stop(&dr.instance, &dr.definition).await {
                     Ok(()) => {}
                     Err(e) => {
@@ -251,6 +262,7 @@ async fn actuate_one_pod(
                     }
                 }
             }
+            result.completed_job = Some(dr.instance.id);
             return Some(obs.result);
         }
     }
@@ -465,6 +477,7 @@ pub(super) async fn observe_and_actuate(
     desired: &DesiredState,
     node_prefix: &Ipv6Net,
     written_obs: &HashSet<(InstanceId, &'static str)>,
+    completed_jobs: &HashSet<InstanceId>,
 ) -> PodActuationUpdate {
     // Phase 1: observe all instances concurrently.
     let pod_resources: Vec<&DesiredResource> = desired
@@ -530,7 +543,13 @@ pub(super) async fn observe_and_actuate(
     let mut actuate_futures = Vec::with_capacity(observed.len());
     for obs in observed {
         let inhibit = inhibited_instances.contains(&obs.dr.instance.display_name);
-        actuate_futures.push(actuate_one_pod(actuator, obs, inhibit, written_obs));
+        actuate_futures.push(actuate_one_pod(
+            actuator,
+            obs,
+            inhibit,
+            written_obs,
+            completed_jobs,
+        ));
     }
 
     let results = join_all(actuate_futures).await;
@@ -548,6 +567,7 @@ pub(super) async fn observe_and_actuate(
         observe_failures: Vec::new(),
         rolling_deployments,
         started_instances: Vec::new(),
+        completed_job_instances: Vec::new(),
     };
 
     for result in results.into_iter().flatten() {
@@ -581,6 +601,10 @@ pub(super) async fn observe_and_actuate(
         }
         if let Some(s) = result.started_instance {
             update.started_instances.push(s);
+        }
+        // r[impl autonomous.job-terminal.defense]
+        if let Some(id) = result.completed_job {
+            update.completed_job_instances.push(id);
         }
     }
 

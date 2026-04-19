@@ -144,6 +144,10 @@ pub struct Reconciler {
     registry: Arc<dyn InstanceRegistry>,
     app_registry: Arc<RwLock<AppRegistry>>,
     written_obs: HashSet<(InstanceId, &'static str)>,
+    // r[impl autonomous.job-terminal.defense]
+    /// Job instance IDs known to have completed during this process lifetime.
+    /// If these appear running on a subsequent tick they are stopped immediately.
+    completed_jobs: HashSet<InstanceId>,
     event_tx: EventSender,
     shells: Arc<ShellRegistry>,
     /// Previous tick's lifecycle states, keyed by (app, instance_id_hex).
@@ -207,6 +211,7 @@ impl Reconciler {
             registry,
             app_registry,
             written_obs,
+            completed_jobs: HashSet::new(),
             event_tx,
             prev_states: BTreeMap::new(),
             rolling_updates: HashSet::new(),
@@ -337,7 +342,8 @@ impl Reconciler {
                 &self.driver,
                 &apps,
                 &self.node_prefix,
-                &self.written_obs
+                &self.written_obs,
+                &self.completed_jobs,
             ),
             phases::run_volumes_phase(&self.observer, &self.actuator, &apps),
             tokio::time::timeout(
@@ -620,7 +626,12 @@ impl Reconciler {
             self.persist_obs(pod_update.observations);
             for instance in &pod_update.started_instances {
                 self.written_obs.retain(|(id, _)| *id != instance.id);
+                // r[impl autonomous.job-terminal.defense]
+                self.completed_jobs.remove(&instance.id);
             }
+            // r[impl autonomous.job-terminal.defense]
+            self.completed_jobs
+                .extend(pod_update.completed_job_instances.iter().copied());
             running_pods_by_app.insert(app_name, pod_update.running);
         }
         let _ = apps;
@@ -684,6 +695,8 @@ impl Reconciler {
                         .collect();
                     self.written_obs
                         .retain(|(id, _)| !app_instance_ids.contains(id));
+                    self.completed_jobs
+                        .retain(|id| !app_instance_ids.contains(id));
                     tracing::info!(app = %app.name, "uninstall complete");
                 }
                 Ok(units) => {
