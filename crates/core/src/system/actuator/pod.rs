@@ -12,7 +12,7 @@ use crate::{
     system::{
         System,
         translate::{
-            container::anon_vol_name,
+
             proxy::{instance_ipv6, pod_network_prefix},
         },
         types::{ActiveState, TransientRestart, TransientUnitSpec},
@@ -69,14 +69,14 @@ pub(super) fn collect_container_volumes(
         .lock()
         .volume_mounts
         .iter()
-        .filter_map(|(path, vm)| match vm {
+        .filter_map(|(_path, vm)| match vm {
             VolumeMount::Volume(v) => {
                 let (name, remove_on_stop, host_path) = match &v.name {
                     None => {
-                        let vol_name = match &v.anon_id {
-                            Some(id) => id.clone(),
-                            None => anon_vol_name(instance, &path.to_string_lossy()),
-                        };
+                        let vol_name = v
+                            .anon_id
+                            .clone()
+                            .expect("anonymous volume must have an anon_id");
                         (vol_name, true, None)
                     }
                     Some(n) => {

@@ -204,20 +204,6 @@ pub fn spec_hash(spec: &ContainerSpec) -> String {
     hex
 }
 
-/// Derive a deterministic podman volume name for an anonymous BSL volume
-/// mounted at `mount_path` on `instance`.
-///
-/// The name is stable across restarts (same instance + same path → same
-/// name) but unique per (instance, path) pair.
-pub fn anon_vol_name(instance: &ResourceInstance, mount_path: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let hash = Sha256::digest(mount_path.as_bytes());
-    format!(
-        "{}-anon-{:02x}{:02x}{:02x}{:02x}",
-        instance.display_name, hash[0], hash[1], hash[2], hash[3]
-    )
-}
-
 // ---------------------------------------------------------------------------
 // Shared pod → spec logic
 // ---------------------------------------------------------------------------
@@ -273,10 +259,10 @@ fn spec_from_pod(
                 VolumeMount::Volume(v) => {
                     let name = match &v.name {
                         Some(n) => format!("{}-{}", instance.app, n.as_str()),
-                        None => match &v.anon_id {
-                            Some(id) => id.clone(),
-                            None => anon_vol_name(instance, &path.to_string_lossy()),
-                        },
+                        None => v
+                            .anon_id
+                            .clone()
+                            .expect("anonymous volume must have an anon_id"),
                     };
                     // r[impl actuate.volume.storage]
                     let is_named = v.name.is_some();
