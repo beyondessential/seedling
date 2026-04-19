@@ -1,6 +1,8 @@
-import { AppBar, Box, Chip, Toolbar, Typography } from "@mui/material";
+import { AppBar, Box, Chip, Toolbar, Tooltip, Typography } from "@mui/material";
+import { Link } from "react-router-dom";
 import { useOiQuery } from "../hooks/useOi";
 import { useSessionContext } from "./SessionProvider";
+import type { FaultRecord } from "../lib/types";
 
 interface StatusSummary {
   hostname: string;
@@ -9,7 +11,9 @@ interface StatusSummary {
 
 export function Navbar() {
   const { data } = useOiQuery<StatusSummary>("/server/status", {});
+  const { data: faults } = useOiQuery<FaultRecord[]>("/faults/list", {});
   const { reconnecting } = useSessionContext();
+  const faultCount = faults?.length ?? 0;
 
   return (
     <AppBar position="fixed">
@@ -21,6 +25,19 @@ export function Navbar() {
           Seedling
         </Typography>
         <Box sx={{ flexGrow: 1 }} />
+        {faultCount > 0 && (
+          <Tooltip title={`${faultCount} active fault${faultCount === 1 ? "" : "s"}`}>
+            <Chip
+              label={`${faultCount} fault${faultCount === 1 ? "" : "s"}`}
+              size="small"
+              color="error"
+              component={Link}
+              to="/faults"
+              clickable
+              sx={{ mr: 1, fontFamily: "monospace" }}
+            />
+          </Tooltip>
+        )}
         {reconnecting && (
           <Chip
             label="Reconnecting…"

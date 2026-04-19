@@ -59,17 +59,25 @@ function lifecycleColor(
   return "default";
 }
 
-function FaultList({ faults }: { faults: FaultRecord[] }) {
+function FaultList({ faults, showApp }: { faults: FaultRecord[]; showApp?: boolean }) {
   if (faults.length === 0) return null;
   return (
     <Stack spacing={1}>
       {faults.map((f) => (
         <Alert key={f.id} severity="error" sx={{ fontFamily: "monospace" }}>
-          <strong>{f.kind}</strong>
-          {f.resource_name && ` · ${f.resource_type}/${f.resource_name}`}
-          {f.instance_id && ` (${f.instance_id})`}
-          {" — "}
-          {f.description}
+          <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2, flexWrap: "wrap" }}>
+            <Box>
+              {showApp && f.app && <><Link to={`/apps/${f.app}`} style={{ color: "inherit" }}>{f.app}</Link>{" · "}</>}
+              <strong>{f.kind}</strong>
+              {f.resource_name && ` · ${f.resource_type}/${f.resource_name}`}
+              {f.instance_id && ` (${f.instance_id.slice(0, 12)})`}
+              {" — "}
+              {f.description}
+            </Box>
+            <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "nowrap", alignSelf: "center" }}>
+              {new Date(f.timestamp).toLocaleString()}
+            </Typography>
+          </Box>
         </Alert>
       ))}
     </Stack>

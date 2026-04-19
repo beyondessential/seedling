@@ -15,6 +15,7 @@ export interface AppSummary {
 
 export interface FaultRecord {
   id: string;
+  app?: string;
   kind: string;
   resource_type?: string;
   resource_name?: string;
