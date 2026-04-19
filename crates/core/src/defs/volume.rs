@@ -119,9 +119,9 @@ impl CustomType for Volume {
                     Ok(this.clone())
                 },
             )
-            // l[impl volume.export]
+            // l[impl volume.exported]
             .with_fn(
-                "export",
+                "exported",
                 |this: &mut Self| -> Result<Volume, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
                     if this.name.is_none() {
@@ -131,9 +131,9 @@ impl CustomType for Volume {
                     Ok(this.clone())
                 },
             )
-            // l[impl volume.export]
+            // l[impl volume.exported]
             .with_fn(
-                "export",
+                "exported",
                 |this: &mut Self, options: Map| -> Result<Volume, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
                     if this.name.is_none() {
