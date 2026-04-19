@@ -506,9 +506,7 @@ impl ContainerDef {
             move |this: &mut T, path: String| -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
                 if !path.starts_with('/') {
-                    return Err(
-                        format!("workdir must be an absolute path, got '{path}'").into(),
-                    );
+                    return Err(format!("workdir must be an absolute path, got '{path}'").into());
                 }
                 ext(this).lock().workdir = Some(path);
                 Ok(this.clone())

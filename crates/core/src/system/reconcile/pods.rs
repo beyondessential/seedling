@@ -33,6 +33,8 @@ pub(super) struct PodActuationUpdate {
     pub unit_healthy: Vec<ResourceInstance>,
     /// Instances whose registry lookup failed during start.
     pub registry_failures: Vec<ResourceInstance>,
+    /// Instances blocked from starting because a required external volume has no mapping.
+    pub external_volume_failures: Vec<(ResourceInstance, String)>,
     /// Instances whose start failed for reasons other than image pull or registry.
     pub start_failures: Vec<(ResourceInstance, String)>,
     /// Instances whose stop failed.
@@ -59,6 +61,7 @@ struct PodInstanceResult {
     unit_failure: Option<ResourceInstance>,
     unit_healthy: Option<ResourceInstance>,
     registry_failure: Option<ResourceInstance>,
+    external_volume_failure: Option<(ResourceInstance, String)>,
     start_failure: Option<(ResourceInstance, String)>,
     stop_failure: Option<(ResourceInstance, String)>,
     observe_failure: Option<(ResourceInstance, String)>,
@@ -96,6 +99,7 @@ async fn observe_one_pod<'a>(
         unit_failure: None,
         unit_healthy: None,
         registry_failure: None,
+        external_volume_failure: None,
         start_failure: None,
         stop_failure: None,
         observe_failure: None,
@@ -343,6 +347,18 @@ async fn actuate_one_pod(
                     );
                     result.registry_failure = Some(dr.instance.clone());
                 }
+                // r[impl fault.external-volume-unmapped]
+                Err(crate::system::actuator::ActuateError::ExternalVolumeNotMapped {
+                    ref name,
+                    ..
+                }) => {
+                    error!(
+                        instance = %dr.instance.display_name,
+                        volume = %name,
+                        "pods: external volume not mapped"
+                    );
+                    result.external_volume_failure = Some((dr.instance.clone(), name.clone()));
+                }
                 Err(e) => {
                     error!(
                         instance = %dr.instance.display_name,
@@ -564,6 +580,7 @@ pub(super) async fn observe_and_actuate(
         unit_failures: Vec::new(),
         unit_healthy: Vec::new(),
         registry_failures: Vec::new(),
+        external_volume_failures: Vec::new(),
         start_failures: Vec::new(),
         stop_failures: Vec::new(),
         observe_failures: Vec::new(),
@@ -591,6 +608,9 @@ pub(super) async fn observe_and_actuate(
         }
         if let Some(f) = result.registry_failure {
             update.registry_failures.push(f);
+        }
+        if let Some(f) = result.external_volume_failure {
+            update.external_volume_failures.push(f);
         }
         if let Some(f) = result.start_failure {
             update.start_failures.push(f);

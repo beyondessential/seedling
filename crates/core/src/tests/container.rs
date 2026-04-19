@@ -590,9 +590,7 @@ fn container_workdir_sets_path() {
 // l[verify container.workdir]
 #[test]
 fn container_workdir_rejects_relative_path() {
-    let _ = run_test_script_err(
-        r#"app.deployment("web").workdir("app/relative");"#,
-    );
+    let _ = run_test_script_err(r#"app.deployment("web").workdir("app/relative");"#);
 }
 
 // l[verify container.on-exit]

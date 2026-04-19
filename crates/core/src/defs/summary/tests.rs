@@ -120,9 +120,11 @@ fn end_to_end_real_app_diff() {
         app.deployment("web").image(`ghcr.io/example/web:${v}`).scale(2);
     "#;
 
-    let (cur, cur_err) = crate::runtime::apps::evaluate_script("test", script, &current_params, &limits);
+    let (cur, cur_err) =
+        crate::runtime::apps::evaluate_script("test", script, &current_params, &limits);
     assert!(cur_err.is_none(), "current eval: {cur_err:?}");
-    let (prop, prop_err) = crate::runtime::apps::evaluate_script("test", script, &proposed_params, &limits);
+    let (prop, prop_err) =
+        crate::runtime::apps::evaluate_script("test", script, &proposed_params, &limits);
     assert!(prop_err.is_none(), "proposed eval: {prop_err:?}");
 
     let id = ResourceId {

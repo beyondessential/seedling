@@ -731,6 +731,10 @@ Absent specification bugs, anything that is not defined here is either defined i
 > When the reconciler observes that a resource instance's backing unit is in a failed state while the desired state is active, it must file a fault of kind `container_start_failed` associated with that instance.
 > The fault is cleared automatically when the unit is subsequently observed in an active or activating state.
 
+> r[fault.external-volume-unmapped]
+> When a deployment or job instance requires an external volume that has no mapping in the external volume mapping table, the reconciler must not start the instance and must file a fault of kind `external_volume_not_mapped` against that instance, identifying the missing volume name.
+> The fault is cleared automatically when a subsequent reconciliation tick is able to start the instance (i.e. the mapping has been added and the start succeeds).
+
 > r[fault.cert-acquisition]
 > When TLS certificate acquisition for an ingress hostname fails persistently (after the proxy's own retry policy has been exhausted), the runtime must file a fault of kind `cert_acquisition_failed` associated with that ingress, identifying the hostname and the most recent acquisition error.
 > The fault is cleared automatically when a subsequent acquisition for the same hostname is observed as `valid`.

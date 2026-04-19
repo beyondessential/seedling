@@ -146,6 +146,52 @@ impl Reconciler {
         }
     }
 
+    // r[impl fault.external-volume-unmapped]
+    pub(super) fn file_external_volume_faults(&self, app: &str, update: &pods::PodActuationUpdate) {
+        let db = self.db.lock();
+        for (instance, vol_name) in &update.external_volume_failures {
+            let inst_hex = instance.id.to_hex();
+            let kind_str = format!("{:?}", instance.kind).to_lowercase();
+            let already_filed = faults::list_active_faults(&db, Some(app))
+                .unwrap_or_default()
+                .iter()
+                .any(|f| {
+                    f.kind == "external_volume_not_mapped"
+                        && f.instance_id.as_deref() == Some(&inst_hex)
+                });
+            if !already_filed {
+                let desc = format!("external volume '{vol_name}' is not mapped for app '{app}'");
+                if let Err(e) = faults::file_fault(
+                    &db,
+                    app,
+                    Some(&kind_str),
+                    instance.name.as_deref(),
+                    Some(&inst_hex),
+                    "external_volume_not_mapped",
+                    &desc,
+                ) {
+                    tracing::warn!(app = %app, instance = %inst_hex, "failed to file external-volume-not-mapped fault: {e}");
+                }
+            }
+        }
+        for instance in &update.unit_healthy {
+            let inst_hex = instance.id.to_hex();
+            let cleared: Vec<_> = faults::list_active_faults(&db, Some(app))
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|f| {
+                    f.kind == "external_volume_not_mapped"
+                        && f.instance_id.as_deref() == Some(&inst_hex)
+                })
+                .collect();
+            for f in cleared {
+                if let Err(e) = faults::clear_fault(&db, &f.id, app) {
+                    tracing::warn!(app = %app, fault_id = %f.id, "failed to clear external-volume-not-mapped fault: {e}");
+                }
+            }
+        }
+    }
+
     pub(super) fn file_pod_actuation_faults(&self, app: &str, update: &pods::PodActuationUpdate) {
         let db = self.db.lock();
         Self::file_instance_faults(&db, app, &update.start_failures, "start_failed");

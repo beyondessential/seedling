@@ -539,8 +539,14 @@ pub(crate) fn list_declared_external_volumes(state: &OiState) -> HandlerResult {
         })
         .collect();
     items.sort_by(|a, b| {
-        let ak = (a["app"].as_str().unwrap_or(""), a["name"].as_str().unwrap_or(""));
-        let bk = (b["app"].as_str().unwrap_or(""), b["name"].as_str().unwrap_or(""));
+        let ak = (
+            a["app"].as_str().unwrap_or(""),
+            a["name"].as_str().unwrap_or(""),
+        );
+        let bk = (
+            b["app"].as_str().unwrap_or(""),
+            b["name"].as_str().unwrap_or(""),
+        );
         ak.cmp(&bk)
     });
     Ok(json!(items))

@@ -64,10 +64,6 @@ export function MapVolumeDialog({ open, onClose, onSuccess, existing, prefill }:
   const resolvedApp = isFixed ? initialApp : selectedRequest.split("\0")[0] ?? "";
   const resolvedName = isFixed ? initialName : selectedRequest.split("\0")[1] ?? "";
 
-  const filteredExported = targetApp
-    ? (exportedVolumes ?? []).filter((v) => v.app === targetApp)
-    : (exportedVolumes ?? []);
-
   const canSubmit =
     !!resolvedApp &&
     !!resolvedName &&
@@ -192,39 +188,49 @@ export function MapVolumeDialog({ open, onClose, onSuccess, existing, prefill }:
           )}
 
           {targetKind === "exported" && (
-            <>
-              <TextField
-                label="Source app"
-                size="small"
-                value={targetApp}
-                onChange={(e) => {
-                  setTargetApp(e.target.value);
-                  setTargetVolume("");
-                }}
-                inputProps={{ style: { fontFamily: "monospace" } }}
-              />
-              {filteredExported.length > 0 ? (
-                <FormControl size="small">
-                  <InputLabel>Exported volume</InputLabel>
-                  <Select
-                    label="Exported volume"
-                    value={targetVolume}
-                    onChange={(e) => setTargetVolume(e.target.value)}
-                    sx={{ fontFamily: "monospace" }}
-                  >
-                    {filteredExported.map((v) => (
-                      <MenuItem key={v.volume_name} value={v.volume_name} sx={{ fontFamily: "monospace" }}>
-                        {v.volume_name}
-                        {v.description && (
-                          <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
-                            {v.description}
-                          </Typography>
-                        )}
-                      </MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-              ) : (
+            (exportedVolumes ?? []).length > 0 ? (
+              <FormControl size="small" fullWidth>
+                <InputLabel>Exported volume</InputLabel>
+                <Select
+                  label="Exported volume"
+                  value={targetApp && targetVolume ? `${targetApp}\0${targetVolume}` : ""}
+                  onChange={(e) => {
+                    const parts = e.target.value.split("\0");
+                    setTargetApp(parts[0] ?? "");
+                    setTargetVolume(parts[1] ?? "");
+                  }}
+                  sx={{ fontFamily: "monospace" }}
+                >
+                  {(exportedVolumes ?? []).map((v) => (
+                    <MenuItem
+                      key={`${v.app}\0${v.volume_name}`}
+                      value={`${v.app}\0${v.volume_name}`}
+                      sx={{ fontFamily: "monospace" }}
+                    >
+                      {v.app}
+                      <Typography component="span" color="text.secondary" sx={{ mx: 0.5 }}>/</Typography>
+                      {v.volume_name}
+                      {v.description && (
+                        <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                          {v.description}
+                        </Typography>
+                      )}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            ) : (
+              <>
+                <TextField
+                  label="Source app"
+                  size="small"
+                  value={targetApp}
+                  onChange={(e) => {
+                    setTargetApp(e.target.value);
+                    setTargetVolume("");
+                  }}
+                  inputProps={{ style: { fontFamily: "monospace" } }}
+                />
                 <TextField
                   label="Exported volume name"
                   size="small"
@@ -232,8 +238,8 @@ export function MapVolumeDialog({ open, onClose, onSuccess, existing, prefill }:
                   onChange={(e) => setTargetVolume(e.target.value)}
                   inputProps={{ style: { fontFamily: "monospace" } }}
                 />
-              )}
-            </>
+              </>
+            )
           )}
 
           <FormControlLabel

@@ -11,6 +11,7 @@ use snafu::{IntoError, ResultExt, Snafu};
 
 use crate::{
     defs::{
+        container::VolumeMount,
         enums::OnExit,
         resource::{Resource, ResourceKind},
     },
@@ -85,6 +86,12 @@ pub enum ActuateError {
     #[snafu(display("instance registry error: {source}"))]
     Registry {
         source: crate::runtime::registry::RegistryError,
+        backtrace: snafu::Backtrace,
+    },
+    // r[fault.external-volume-unmapped]
+    #[snafu(display("external volume '{name}' is not mapped"))]
+    ExternalVolumeNotMapped {
+        name: String,
         backtrace: snafu::Backtrace,
     },
 }
@@ -225,7 +232,7 @@ impl Actuator {
     ) -> Result<Option<String>, ActuateError> {
         match resource {
             Resource::Deployment(dep) => {
-                let (image, raw_mounts, restart, vols) = {
+                let (image, raw_mounts, restart, vols, required_ext_vols) = {
                     let def = dep.def.lock();
                     let pod = def.pod.lock();
                     let container = pod.container.lock();
@@ -233,15 +240,38 @@ impl Actuator {
                     let raw_mounts = pod.service_mounts.clone();
                     // r[impl container.on-exit]
                     let restart = map_on_exit(container.on_exit.unwrap_or(OnExit::Restart));
+                    // r[impl fault.external-volume-unmapped]
+                    let required_ext_vols: Vec<String> = container
+                        .volume_mounts
+                        .values()
+                        .filter_map(|m| match m {
+                            VolumeMount::ExternalVolume(ev) if ev.operation_binding.is_none() => {
+                                Some(ev.name.as_ref().to_string())
+                            }
+                            _ => None,
+                        })
+                        .collect();
                     drop(container);
                     let vols = collect_container_volumes(
                         &pod,
                         instance,
                         Some(self.driver.volume_store.volumes_dir()),
                     );
-                    (image, raw_mounts, restart, vols)
+                    (image, raw_mounts, restart, vols, required_ext_vols)
                 };
                 let external_vols = self.resolve_external_volumes(&instance.app);
+                // r[impl fault.external-volume-unmapped]
+                for name in &required_ext_vols {
+                    if !external_vols.contains_key(name.as_str()) {
+                        tracing::warn!(
+                            app = %instance.app,
+                            instance = %instance.display_name,
+                            volume = %name,
+                            "external volume not mapped, blocking start"
+                        );
+                        return Err(ExternalVolumeNotMappedSnafu { name: name.clone() }.build());
+                    }
+                }
                 self.start_pod_instance(
                     instance,
                     &image,
@@ -266,7 +296,7 @@ impl Actuator {
                 .await
             }
             Resource::Job(job) => {
-                let (image, raw_mounts, restart, vols) = {
+                let (image, raw_mounts, restart, vols, required_ext_vols) = {
                     let def = job.def.lock();
                     let pod = def.pod.lock();
                     let container = pod.container.lock();
@@ -275,15 +305,38 @@ impl Actuator {
                     // r[impl container.on-exit]
                     // Jobs default to Terminate so systemd does not restart them on completion.
                     let restart = map_on_exit(container.on_exit.unwrap_or(OnExit::Terminate));
+                    // r[impl fault.external-volume-unmapped]
+                    let required_ext_vols: Vec<String> = container
+                        .volume_mounts
+                        .values()
+                        .filter_map(|m| match m {
+                            VolumeMount::ExternalVolume(ev) if ev.operation_binding.is_none() => {
+                                Some(ev.name.as_ref().to_string())
+                            }
+                            _ => None,
+                        })
+                        .collect();
                     drop(container);
                     let vols = collect_container_volumes(
                         &pod,
                         instance,
                         Some(self.driver.volume_store.volumes_dir()),
                     );
-                    (image, raw_mounts, restart, vols)
+                    (image, raw_mounts, restart, vols, required_ext_vols)
                 };
                 let external_vols = self.resolve_external_volumes(&instance.app);
+                // r[impl fault.external-volume-unmapped]
+                for name in &required_ext_vols {
+                    if !external_vols.contains_key(name.as_str()) {
+                        tracing::warn!(
+                            app = %instance.app,
+                            instance = %instance.display_name,
+                            volume = %name,
+                            "external volume not mapped, blocking start"
+                        );
+                        return Err(ExternalVolumeNotMappedSnafu { name: name.clone() }.build());
+                    }
+                }
                 self.start_pod_instance(
                     instance,
                     &image,
