@@ -11,6 +11,7 @@ use crate::state::AppState;
 struct Assets;
 
 // w[spa.delivery]
+// w[routes.apps]
 pub async fn handler(State(state): State<AppState>, req: Request<Body>) -> impl IntoResponse {
     if let Some(port) = state.vite_port {
         return vite_proxy(port, req.uri()).await;
