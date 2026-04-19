@@ -218,7 +218,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - `status`: the app's current status as defined in [app.status](#i--app.status).
 > - `faults`: array of app-level [fault records](#i--fault.record) not associated with a specific resource instance (e.g. script evaluation errors). Empty when there are no active app-level faults.
 > - `resources`: array of objects with fields `name`, `type`, `instances`, `faults`, and for Deployment resources, `scale`.
->   Each instance has fields `id`, `display_name`, and `lifecycle_state`.
+>   Each instance has fields `id`, `display_name`, `lifecycle`, and `transition_time` (RFC 3339, optional).
 >   Each fault entry is a [fault record](#i--fault.record).
 > - `params`: array of objects with fields `name` and `value`.
 >   `value` is `null` if the param has not been set.
