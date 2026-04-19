@@ -4,6 +4,7 @@ import { ProtectedRoute } from "./components/ProtectedRoute";
 import { SessionProvider } from "./components/SessionProvider";
 import AppDetail from "./routes/AppDetail";
 import Apps from "./routes/Apps";
+import EditScript from "./routes/EditScript";
 import Login from "./routes/Login";
 
 const router = createBrowserRouter([
@@ -14,6 +15,7 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <Apps /> },
       { path: "apps/:name", element: <AppDetail /> },
+      { path: "apps/:name/script", element: <EditScript /> },
     ],
   },
 ]);

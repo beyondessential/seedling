@@ -1,11 +1,16 @@
+import CheckIcon from "@mui/icons-material/Check";
+import ClearIcon from "@mui/icons-material/Clear";
+import EditIcon from "@mui/icons-material/Edit";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import {
   Alert,
   Box,
+  Button,
   Chip,
   CircularProgress,
   Divider,
   IconButton,
+  InputAdornment,
   Paper,
   Stack,
   Table,
@@ -14,10 +19,13 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TextField,
   Tooltip,
   Typography,
 } from "@mui/material";
-import { Link, useParams } from "react-router-dom";
+import { useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
 import { statusColor, statusLabel } from "../lib/status";
 import type {
@@ -55,7 +63,8 @@ function FaultList({ faults }: { faults: FaultRecord[] }) {
 }
 
 function ResourcesSection({ resources }: { resources: AppResource[] }) {
-  if (resources.length === 0) return <Typography color="text.secondary">No resources.</Typography>;
+  if (resources.length === 0)
+    return <Typography color="text.secondary">No resources.</Typography>;
   return (
     <Stack spacing={2}>
       {resources.map((r) => (
@@ -90,7 +99,9 @@ function ResourcesSection({ resources }: { resources: AppResource[] }) {
                 ) : (
                   r.instances.map((inst) => (
                     <TableRow key={inst.id}>
-                      <TableCell sx={{ fontFamily: "monospace", fontSize: "0.8rem" }}>
+                      <TableCell
+                        sx={{ fontFamily: "monospace", fontSize: "0.8rem" }}
+                      >
                         {inst.display_name}
                       </TableCell>
                       <TableCell>
@@ -112,34 +123,154 @@ function ResourcesSection({ resources }: { resources: AppResource[] }) {
   );
 }
 
-function ParamsSection({ params }: { params: AppParam[] }) {
-  if (params.length === 0) return <Typography color="text.secondary">No params.</Typography>;
+function ParamsSection({
+  appName,
+  params,
+  onRefresh,
+}: {
+  appName: string;
+  params: AppParam[];
+  onRefresh: () => void;
+}) {
+  const { execute, loading, error, clearError } = useOiAction();
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+
+  const startEdit = (p: AppParam) => {
+    setEditing(p.name);
+    setDraft(p.value ?? "");
+    clearError();
+  };
+
+  const cancel = () => setEditing(null);
+
+  const save = async () => {
+    if (!editing) return;
+    try {
+      await execute("/apps/params/set", {
+        app: appName,
+        name: editing,
+        value: draft,
+      });
+      setEditing(null);
+      onRefresh();
+    } catch {
+      // displayed via error
+    }
+  };
+
+  const unset = async (paramName: string) => {
+    try {
+      await execute("/apps/params/unset", { app: appName, name: paramName });
+      onRefresh();
+    } catch {
+      // displayed via error
+    }
+  };
+
+  if (params.length === 0)
+    return <Typography color="text.secondary">No params.</Typography>;
+
   return (
-    <TableContainer component={Paper} variant="outlined">
-      <Table size="small">
-        <TableHead>
-          <TableRow>
-            <TableCell>Name</TableCell>
-            <TableCell>Value</TableCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {params.map((p) => (
-            <TableRow key={p.name}>
-              <TableCell sx={{ fontFamily: "monospace" }}>{p.name}</TableCell>
-              <TableCell sx={{ fontFamily: "monospace", color: p.value == null ? "text.disabled" : undefined }}>
-                {p.value ?? "—"}
-              </TableCell>
+    <Stack spacing={1}>
+      {error && <Alert severity="error">{error}</Alert>}
+      <TableContainer component={Paper} variant="outlined">
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>Name</TableCell>
+              <TableCell>Value</TableCell>
+              <TableCell width={96} />
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </TableContainer>
+          </TableHead>
+          <TableBody>
+            {params.map((p) =>
+              editing === p.name ? (
+                <TableRow key={p.name}>
+                  <TableCell sx={{ fontFamily: "monospace" }}>{p.name}</TableCell>
+                  <TableCell colSpan={2}>
+                    <TextField
+                      size="small"
+                      fullWidth
+                      value={draft}
+                      onChange={(e) => setDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void save();
+                        if (e.key === "Escape") cancel();
+                      }}
+                      autoFocus
+                      inputProps={{ style: { fontFamily: "monospace" } }}
+                      InputProps={{
+                        endAdornment: (
+                          <InputAdornment position="end">
+                            <Tooltip title="Save">
+                              <span>
+                                <IconButton
+                                  size="small"
+                                  onClick={() => void save()}
+                                  disabled={loading}
+                                >
+                                  <CheckIcon fontSize="small" />
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                            <Tooltip title="Cancel">
+                              <IconButton size="small" onClick={cancel}>
+                                <ClearIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          </InputAdornment>
+                        ),
+                      }}
+                    />
+                  </TableCell>
+                </TableRow>
+              ) : (
+                <TableRow key={p.name}>
+                  <TableCell sx={{ fontFamily: "monospace" }}>{p.name}</TableCell>
+                  <TableCell
+                    sx={{
+                      fontFamily: "monospace",
+                      color: p.value == null ? "text.disabled" : undefined,
+                    }}
+                  >
+                    {p.value ?? "—"}
+                  </TableCell>
+                  <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
+                    <Tooltip title={p.value == null ? "Set" : "Edit"}>
+                      <IconButton
+                        size="small"
+                        onClick={() => startEdit(p)}
+                        disabled={loading}
+                      >
+                        <EditIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                    {p.value != null && (
+                      <Tooltip title="Unset">
+                        <IconButton
+                          size="small"
+                          onClick={() => void unset(p.name)}
+                          disabled={loading}
+                        >
+                          <ClearIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ),
+            )}
+          </TableBody>
+        </Table>
+      </TableContainer>
+    </Stack>
   );
 }
 
 function ActionsSection({ actions }: { actions: AppAction[] }) {
-  if (actions.length === 0) return <Typography color="text.secondary">No actions.</Typography>;
+  if (actions.length === 0)
+    return <Typography color="text.secondary">No actions.</Typography>;
   return (
     <TableContainer component={Paper} variant="outlined">
       <Table size="small">
@@ -157,7 +288,9 @@ function ActionsSection({ actions }: { actions: AppAction[] }) {
               <TableCell>
                 <Chip label={a.kind} size="small" variant="outlined" />
               </TableCell>
-              <TableCell sx={{ color: "text.secondary" }}>{a.description}</TableCell>
+              <TableCell sx={{ color: "text.secondary" }}>
+                {a.description}
+              </TableCell>
             </TableRow>
           ))}
         </TableBody>
@@ -166,7 +299,13 @@ function ActionsSection({ actions }: { actions: AppAction[] }) {
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
   return (
     <Box>
       <Typography variant="h6" sx={{ mb: 1 }}>
@@ -179,6 +318,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 export default function AppDetail() {
   const { name } = useParams<{ name: string }>();
+  const navigate = useNavigate();
   const { data, loading, error, refetch } = useOiQuery<AppDetail>(
     "/apps/show",
     { app: name },
@@ -191,13 +331,26 @@ export default function AppDetail() {
           component={Link}
           to="/"
           variant="body2"
-          sx={{ color: "text.secondary", textDecoration: "none", "&:hover": { textDecoration: "underline" } }}
+          sx={{
+            color: "text.secondary",
+            textDecoration: "none",
+            "&:hover": { textDecoration: "underline" },
+          }}
         >
           Apps
         </Typography>
-        <Typography variant="body2" color="text.disabled">/</Typography>
+        <Typography variant="body2" color="text.disabled">
+          /
+        </Typography>
         <Typography variant="body2">{name}</Typography>
         <Box sx={{ flexGrow: 1 }} />
+        <Button
+          size="small"
+          startIcon={<EditIcon />}
+          onClick={() => navigate(`/apps/${name}/script`)}
+        >
+          Edit script
+        </Button>
         <Tooltip title="Refresh">
           <span>
             <IconButton onClick={refetch} disabled={loading} size="small">
@@ -224,7 +377,10 @@ export default function AppDetail() {
           <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
             <Typography variant="h5">{name}</Typography>
             <Chip
-              label={statusLabel(data.status, data.current_operation?.action_name)}
+              label={statusLabel(
+                data.status,
+                data.current_operation?.action_name,
+              )}
               color={statusColor(data.status)}
               size="small"
             />
@@ -235,12 +391,16 @@ export default function AppDetail() {
 
           {data.current_operation && (
             <Alert severity="info">
-              Operation in progress: <strong>{data.current_operation.action_name}</strong>
-              {" "}(gen {data.current_operation.source_generation} → {data.current_operation.target_generation})
+              Operation in progress:{" "}
+              <strong>{data.current_operation.action_name}</strong>{" "}
+              (gen {data.current_operation.source_generation} →{" "}
+              {data.current_operation.target_generation})
               {data.current_operation.barrier && (
-                <> · barrier: {data.current_operation.barrier.required_state}
-                  {" "}({Math.round(data.current_operation.barrier.elapsed_secs)}s
-                  {" "}/ {data.current_operation.barrier.deadline_secs}s)</>
+                <>
+                  {" "}· barrier: {data.current_operation.barrier.required_state}{" "}
+                  ({Math.round(data.current_operation.barrier.elapsed_secs)}s /{" "}
+                  {data.current_operation.barrier.deadline_secs}s)
+                </>
               )}
             </Alert>
           )}
@@ -260,7 +420,11 @@ export default function AppDetail() {
           <Divider />
 
           <Section title="Params">
-            <ParamsSection params={data.params} />
+            <ParamsSection
+              appName={name!}
+              params={data.params}
+              onRefresh={refetch}
+            />
           </Section>
 
           <Divider />
