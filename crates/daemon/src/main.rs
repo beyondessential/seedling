@@ -178,6 +178,27 @@ async fn main() {
             });
     }
 
+    #[cfg(debug_assertions)]
+    std::thread::spawn(|| {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            let deadlocks = parking_lot::deadlock::check_deadlock();
+            if !deadlocks.is_empty() {
+                tracing::error!(count = deadlocks.len(), "deadlocks detected");
+                for (i, threads) in deadlocks.iter().enumerate() {
+                    for t in threads {
+                        tracing::error!(
+                            deadlock = i,
+                            thread_id = ?t.thread_id(),
+                            backtrace = ?t.backtrace(),
+                            "deadlocked thread"
+                        );
+                    }
+                }
+            }
+        }
+    });
+
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("ring crypto provider already installed");
