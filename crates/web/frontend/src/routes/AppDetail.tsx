@@ -118,15 +118,17 @@ function ResourcesSection({
             <Typography variant="caption" color="text.secondary">
               {r.type}
             </Typography>
-            <Tooltip title="View resource logs">
-              <IconButton
-                size="small"
-                component={Link}
-                to={`/apps/${appName}/logs?resource=${r.name}`}
-              >
-                <ArticleIcon sx={{ fontSize: 14 }} />
-              </IconButton>
-            </Tooltip>
+            {r.type === "deployment" && (
+              <Tooltip title="View resource logs">
+                <IconButton
+                  size="small"
+                  component={Link}
+                  to={`/apps/${appName}/logs?resource=${r.name}`}
+                >
+                  <ArticleIcon sx={{ fontSize: 14 }} />
+                </IconButton>
+              </Tooltip>
+            )}
             {r.scale && (
               <>
                 <Typography variant="caption" color="text.secondary">
@@ -198,15 +200,17 @@ function ResourcesSection({
                         />
                       </TableCell>
                       <TableCell width={40} align="right" sx={{ px: 0.5 }}>
-                        <Tooltip title="View instance logs">
-                          <IconButton
-                            size="small"
-                            component={Link}
-                            to={`/apps/${appName}/logs?resource=${r.name}&instance=${inst.display_name}`}
-                          >
-                            <ArticleIcon sx={{ fontSize: 14 }} />
-                          </IconButton>
-                        </Tooltip>
+                        {r.type === "deployment" && (
+                          <Tooltip title="View instance logs">
+                            <IconButton
+                              size="small"
+                              component={Link}
+                              to={`/apps/${appName}/logs?resource=${r.name}&instance=${inst.display_name}`}
+                            >
+                              <ArticleIcon sx={{ fontSize: 14 }} />
+                            </IconButton>
+                          </Tooltip>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))
