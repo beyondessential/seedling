@@ -42,6 +42,7 @@ impl std::error::Error for ClientError {}
 // Authentication
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 pub enum ClientAuth {
     /// Pin the server by the hex-encoded SHA-256 of its SPKI.
     Fingerprint(String),

@@ -7,8 +7,11 @@ use seedling_protocol::client::{ClientAuth, ClientError, OiClient};
 use seedling_protocol::keys::ClientIdentity;
 
 pub struct DaemonConn {
-    client: OiClient,
+    inner: tokio::sync::Mutex<OiClient>,
     pub fingerprint: String,
+    addr: SocketAddr,
+    auth: ClientAuth,
+    key_path: PathBuf,
 }
 
 impl DaemonConn {
@@ -34,14 +37,24 @@ impl DaemonConn {
         }
 
         let fingerprint = identity.fingerprint.clone();
-        let actor = Actor {
+        let actor = Self::make_actor(&fingerprint);
+        let client = OiClient::connect(addr, auth.clone(), &identity, actor).await?;
+        Ok(Self {
+            inner: tokio::sync::Mutex::new(client),
+            fingerprint,
+            addr,
+            auth,
+            key_path: key_file.to_path_buf(),
+        })
+    }
+
+    fn make_actor(fingerprint: &str) -> Actor {
+        Actor {
             kind: Some("web".to_owned()),
-            id: Some(identity.fingerprint[..8].to_owned()),
+            id: Some(fingerprint[..8].to_owned()),
             display: Some("seedling-web".to_owned()),
             session: None,
-        };
-        let client = OiClient::connect(addr, auth, &identity, actor).await?;
-        Ok(Self { client, fingerprint })
+        }
     }
 
     /// Verify that the connection is actually usable.
@@ -52,14 +65,38 @@ impl DaemonConn {
     /// stream use. A full round-trip request forces the daemon to process
     /// our certificate before we declare the connection healthy.
     pub async fn probe(&self) -> Result<(), ClientError> {
-        match self.client.request("ping", json!({})).await {
+        match self.inner.lock().await.request("ping", json!({})).await {
             Ok(_) | Err(ClientError::Api { .. }) => Ok(()),
             Err(e) => Err(e),
         }
     }
 
     pub async fn open_bi(&self) -> Result<(quinn::SendStream, quinn::RecvStream), ClientError> {
-        self.client.open_bi().await
+        match self.inner.lock().await.open_bi().await {
+            Ok(streams) => Ok(streams),
+            Err(ClientError::Transport(_)) => {
+                tracing::warn!("daemon transport error — attempting reconnect");
+                self.try_reconnect().await?;
+                self.inner.lock().await.open_bi().await
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn try_reconnect(&self) -> Result<(), ClientError> {
+        let identity = ClientIdentity::load_or_generate(&self.key_path)
+            .map_err(|e| ClientError::Connect(Box::new(e)))?
+            .0;
+        let actor = Self::make_actor(&self.fingerprint);
+        let new_client =
+            OiClient::connect(self.addr, self.auth.clone(), &identity, actor).await?;
+        match new_client.request("ping", json!({})).await {
+            Ok(_) | Err(ClientError::Api { .. }) => {}
+            Err(e) => return Err(e),
+        }
+        *self.inner.lock().await = new_client;
+        tracing::info!("daemon reconnected");
+        Ok(())
     }
 
     /// Default path for the web binary's persistent client key.

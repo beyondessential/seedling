@@ -1,5 +1,4 @@
 import {
-  Alert,
   Box,
   Button,
   CircularProgress,
@@ -8,6 +7,7 @@ import {
 } from "@mui/material";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
 
@@ -83,8 +83,8 @@ export default function EditScript() {
       </Box>
 
       <Stack spacing={1}>
-        {fetchError && <Alert severity="error">{fetchError}</Alert>}
-        {saveError && <Alert severity="error">{saveError}</Alert>}
+        {fetchError && <OiErrorAlert error={fetchError} />}
+        {saveError && <OiErrorAlert error={saveError} />}
       </Stack>
 
       {fetching && (

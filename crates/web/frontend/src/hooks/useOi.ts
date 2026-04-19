@@ -1,10 +1,16 @@
 import { useCallback, useContext, useEffect, useState } from "react";
 import { SessionContext } from "../components/SessionProvider";
 
+export interface OiQueryError {
+  method: string;
+  message: string;
+  stack?: string;
+}
+
 export interface OiQueryState<T> {
   data: T | null;
   loading: boolean;
-  error: string | null;
+  error: OiQueryError | null;
   refetch: () => void;
 }
 
@@ -15,7 +21,7 @@ export function useOiQuery<T>(
   const { session } = useContext(SessionContext);
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<OiQueryError | null>(null);
   const [tick, setTick] = useState(0);
 
   const refetch = useCallback(() => setTick((t) => t + 1), []);
@@ -32,13 +38,20 @@ export function useOiQuery<T>(
         if (result.ok) {
           setData(result.value as T);
         } else {
-          setError(`[${result.error.code}] ${result.error.message}`);
+          setError({
+            method,
+            message: `[${result.error.code}] ${result.error.message}`,
+          });
         }
       })
       .catch((e: unknown) => {
         if (!cancelled) {
           console.error(`[OI] ${method} failed:`, e);
-          setError(e instanceof Error ? e.message : String(e));
+          setError({
+            method,
+            message: e instanceof Error ? e.message : String(e),
+            stack: e instanceof Error ? e.stack : undefined,
+          });
         }
       })
       .finally(() => {

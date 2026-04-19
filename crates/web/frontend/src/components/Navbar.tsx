@@ -1,5 +1,6 @@
-import { AppBar, Box, Toolbar, Typography } from "@mui/material";
+import { AppBar, Box, Chip, Toolbar, Typography } from "@mui/material";
 import { useOiQuery } from "../hooks/useOi";
+import { useSessionContext } from "./SessionProvider";
 
 interface StatusSummary {
   hostname: string;
@@ -8,6 +9,7 @@ interface StatusSummary {
 
 export function Navbar() {
   const { data } = useOiQuery<StatusSummary>("/server/status", {});
+  const { reconnecting } = useSessionContext();
 
   return (
     <AppBar position="fixed">
@@ -19,6 +21,14 @@ export function Navbar() {
           Seedling
         </Typography>
         <Box sx={{ flexGrow: 1 }} />
+        {reconnecting && (
+          <Chip
+            label="Reconnecting…"
+            size="small"
+            color="warning"
+            sx={{ mr: 1, fontFamily: "monospace" }}
+          />
+        )}
         {data?.hostname && (
           <Typography variant="body2" sx={{ opacity: 0.85, fontFamily: "monospace" }}>
             {data.hostname}

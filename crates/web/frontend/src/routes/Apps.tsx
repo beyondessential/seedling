@@ -1,6 +1,5 @@
 import RefreshIcon from "@mui/icons-material/Refresh";
 import {
-  Alert,
   Box,
   Chip,
   CircularProgress,
@@ -16,6 +15,7 @@ import {
   Typography,
 } from "@mui/material";
 import { Link } from "react-router-dom";
+import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useOiQuery } from "../hooks/useOi";
 import { statusColor, statusLabel } from "../lib/status";
 import type { AppSummary } from "../lib/types";
@@ -39,11 +39,7 @@ export default function Apps() {
         </Tooltip>
       </Box>
 
-      {error && (
-        <Alert severity="error" sx={{ mb: 2 }}>
-          {error}
-        </Alert>
-      )}
+      {error && <OiErrorAlert error={error} />}
 
       {loading && !data && (
         <Box sx={{ display: "flex", justifyContent: "center", mt: 4 }}>

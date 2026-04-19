@@ -25,6 +25,7 @@ import {
 } from "@mui/material";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
 import { statusColor, statusLabel } from "../lib/status";
@@ -173,7 +174,7 @@ function ParamsSection({
 
   return (
     <Stack spacing={1}>
-      {error && <Alert severity="error">{error}</Alert>}
+      {error && <OiErrorAlert error={error} />}
       <TableContainer component={Paper} variant="outlined">
         <Table size="small">
           <TableHead>
@@ -360,11 +361,7 @@ export default function AppDetail() {
         </Tooltip>
       </Box>
 
-      {error && (
-        <Alert severity="error" sx={{ mb: 2 }}>
-          {error}
-        </Alert>
-      )}
+      {error && <OiErrorAlert error={error} />}
 
       {loading && !data && (
         <Box sx={{ display: "flex", justifyContent: "center", mt: 4 }}>
