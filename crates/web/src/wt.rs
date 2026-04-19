@@ -98,13 +98,26 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
         "WT session established"
     );
 
-    // w[impl routes.sessions]
+    // w[impl sessions.events]
     let session_id = Uuid::new_v4();
+    let connected_at = jiff::Timestamp::now();
     state.web_sessions.insert(WebSessionEntry {
         id: session_id,
-        connected_at: jiff::Timestamp::now(),
+        connected_at,
         actor: Arc::clone(&actor),
     });
+    state
+        .event_broker
+        .publish(Arc::from(
+            json!({
+                "type": "WebSessionStarted",
+                "timestamp": connected_at.to_string(),
+                "session_id": session_id.to_string(),
+            })
+            .to_string()
+            .as_str(),
+        ))
+        .await;
 
     // w[transport.webtransport]
     // w[routes.events]
@@ -201,6 +214,19 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
     }
 
     state.web_sessions.remove(&session_id);
+    // w[impl sessions.events]
+    state
+        .event_broker
+        .publish(Arc::from(
+            json!({
+                "type": "WebSessionStopped",
+                "timestamp": jiff::Timestamp::now().to_string(),
+                "session_id": session_id.to_string(),
+            })
+            .to_string()
+            .as_str(),
+        ))
+        .await;
 }
 
 fn extract_query_param(path_with_query: &str, key: &str) -> Option<String> {

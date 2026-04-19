@@ -401,6 +401,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > On session end, the server closes its write-ends of the stdout and stderr streams.
 
+> i[shell.start]
+> When a session is registered, a `ShellStarted` event is emitted on the event feed.
+
 > i[shell.exit]
 > When a session ends, the server writes a final JSON frame `{ "exit_code": <int> }` to the server-to-client direction of the session stream, then closes its write-end.
 > Signal-terminated processes report a negative exit code.
@@ -464,6 +467,10 @@ Absent specification bugs, anything that is not defined here is either defined i
 > When a new AppDef takes effect for an app (either immediately on `/apps/update` or at the next evaluation boundary if an operation was in progress), the server must check all active forwards for that app.
 > Any forward whose target service name or port is no longer declared in the new AppDef must be torn down: all tunneled connections are closed, the control stream is closed, and a `ForwardStopped` event is emitted.
 > Forwards whose target service and port still exist in the new AppDef are unaffected.
+
+> i[forward.start]
+> When a forward is established, a `ForwardStarted` event is emitted on the event feed.
+> When a forward ends for any reason, a `ForwardStopped` event is emitted on the event feed.
 
 > i[forward.record]
 > A forward record contains the following fields: `forward_id`, `app`, `service`, `port`, `proto`, and `opened_at` (RFC 3339).
@@ -566,6 +573,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > | `FaultFiled` | all fault record fields |
 > | `FaultCleared` | `id`, `app` |
 > | `ResourceStateChanged` | `app`, `resource_type`, `resource_name`, `instance_id`, `state` |
+> | `ShellStarted` | `session_id`, `app`, `name` |
 > | `ShellExited` | `session_id`, `exit_code` |
 > | `ForwardStarted` | `forward_id`, `app`, `service`, `port` |
 > | `ForwardStopped` | `forward_id` |

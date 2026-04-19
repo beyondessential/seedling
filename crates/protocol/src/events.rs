@@ -121,6 +121,14 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
+    ShellStarted {
+        timestamp: Timestamp,
+        session_id: String,
+        app: String,
+        name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
     ShellExited {
         timestamp: Timestamp,
         session_id: String,
@@ -295,6 +303,18 @@ impl EventSender {
         });
     }
 
+    // i[impl shell.start]
+    pub fn shell_started(&self, session_id: &str, app: &str, name: &str) {
+        self.emit(OiEvent::ShellStarted {
+            timestamp: now(),
+            session_id: session_id.to_owned(),
+            app: app.to_owned(),
+            name: name.to_owned(),
+            actor: None,
+        });
+    }
+
+    // i[impl shell.exit]
     pub fn shell_exited(&self, session_id: &str, exit_code: i32) {
         self.emit(OiEvent::ShellExited {
             timestamp: now(),
@@ -304,6 +324,7 @@ impl EventSender {
         });
     }
 
+    // i[impl forward.start]
     pub fn forward_started(&self, forward_id: &str, app: &str, service: &str, port: u16) {
         self.emit(OiEvent::ForwardStarted {
             timestamp: now(),
@@ -315,6 +336,7 @@ impl EventSender {
         });
     }
 
+    // i[impl forward.start]
     pub fn forward_stopped(&self, forward_id: &str) {
         self.emit(OiEvent::ForwardStopped {
             timestamp: now(),

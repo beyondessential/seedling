@@ -212,6 +212,13 @@ pub(crate) async fn forward_port_session(
         app = %params.app, service = %params.service, port = params.port,
         fwd = %forward_id, "forward started"
     );
+    // i[impl forward.start]
+    state.event_tx.forward_started(
+        &forward_id.to_string(),
+        &params.app,
+        &params.service,
+        params.port,
+    );
 
     let mut ctrl_buf = [0u8; 1];
     loop {
@@ -252,6 +259,8 @@ pub(crate) async fn forward_port_session(
     if let Some(entry) = state.forwards.lock().remove(&forward_id) {
         let _ = entry.stop_tx.send(true);
     }
+    // i[impl forward.start]
+    state.event_tx.forward_stopped(&forward_id.to_string());
 
     let _ = send.finish();
     tracing::info!(

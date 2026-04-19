@@ -24,7 +24,7 @@ impl EventBroker {
         })
     }
 
-    async fn publish(&self, line: Arc<str>) {
+    pub async fn publish(&self, line: Arc<str>) {
         let mut recent = self.recent.lock().await;
         if recent.len() >= CACHE_SIZE {
             recent.pop_front();

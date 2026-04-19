@@ -1,25 +1,46 @@
 import EventNoteIcon from "@mui/icons-material/EventNote";
 import PeopleAltIcon from "@mui/icons-material/PeopleAlt";
-import { AppBar, Box, Chip, IconButton, Toolbar, Tooltip, Typography } from "@mui/material";
+import { AppBar, Badge, Box, Chip, IconButton, Toolbar, Tooltip, Typography } from "@mui/material";
+import { useCallback } from "react";
 import { Link } from "react-router-dom";
 import { useEventRefresh } from "../hooks/useEventRefresh";
 import { useOiQuery } from "../hooks/useOi";
 import { useSessionContext } from "./SessionProvider";
-import type { FaultRecord, SeedlingEvent } from "../lib/types";
+import type { ConnectedClients, FaultRecord, SeedlingEvent } from "../lib/types";
 
 interface StatusSummary {
   hostname: string;
   version: string;
 }
 
-const isFaultEvent = (ev: SeedlingEvent) => ev.type === "FaultFiled" || ev.type === "FaultCleared";
+const isFaultEvent = (ev: SeedlingEvent) =>
+  ev.type === "FaultFiled" || ev.type === "FaultCleared";
+
+const isSessionEvent = (ev: SeedlingEvent) =>
+  ev.type === "WebSessionStarted" ||
+  ev.type === "WebSessionStopped" ||
+  ev.type === "ShellStarted" ||
+  ev.type === "ShellExited" ||
+  ev.type === "ForwardStarted" ||
+  ev.type === "ForwardStopped";
 
 export function Navbar() {
   const { data } = useOiQuery<StatusSummary>("/server/status", {});
   const { data: faults, refetch: refetchFaults } = useOiQuery<FaultRecord[]>("/faults/list", {});
+  const { data: clients, refetch: refetchClients } =
+    useOiQuery<ConnectedClients>("/connected-clients/list", {});
   const { reconnecting, sidebarOpen, setSidebarOpen } = useSessionContext();
-  useEventRefresh(refetchFaults, isFaultEvent);
+
+  const matchFaults = useCallback(isFaultEvent, []);
+  const matchSessions = useCallback(isSessionEvent, []);
+  useEventRefresh(refetchFaults, matchFaults);
+  useEventRefresh(refetchClients, matchSessions);
+
   const faultCount = faults?.length ?? 0;
+  const sessionCount =
+    (clients?.web.length ?? 0) +
+    (clients?.shells.length ?? 0) +
+    (clients?.forwards.length ?? 0);
 
   return (
     <AppBar position="fixed">
@@ -57,14 +78,27 @@ export function Navbar() {
             {data.hostname}
           </Typography>
         )}
-        <Tooltip title="Connected clients">
+        <Tooltip title={`${sessionCount} connected client${sessionCount === 1 ? "" : "s"}`}>
           <IconButton
             size="small"
             component={Link}
             to="/sessions"
             sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
           >
-            <PeopleAltIcon fontSize="small" />
+            <Badge
+              badgeContent={sessionCount}
+              color="primary"
+              sx={{
+                "& .MuiBadge-badge": {
+                  fontSize: "0.6rem",
+                  minWidth: 14,
+                  height: 14,
+                  padding: "0 3px",
+                },
+              }}
+            >
+              <PeopleAltIcon fontSize="small" />
+            </Badge>
           </IconButton>
         </Tooltip>
         <Tooltip title={sidebarOpen ? "Hide events" : "Show events"}>

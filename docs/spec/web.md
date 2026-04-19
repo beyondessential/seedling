@@ -106,6 +106,9 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > w[routes.sessions]
 > The web interface must provide a connected-clients view showing all active web UI sessions, open CLI shell sessions, and active port forwards. Each entry must show at minimum the client identity, the connected or opened timestamp, and — for shells and forwards — the associated app.
 
+> w[sessions.events]
+> The web interface must emit `WebSessionStarted` and `WebSessionStopped` events on the event feed when a WebTransport session is established or closed. Clients must use these events, together with the OI events `ShellStarted`, `ShellExited`, `ForwardStarted`, and `ForwardStopped`, to keep the connected-clients count up to date without polling.
+
 # Bind Configuration
 
 > w[bind]

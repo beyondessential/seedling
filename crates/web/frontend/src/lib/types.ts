@@ -146,13 +146,15 @@ export interface SeedlingEvent {
   previous_scale?: number;
   bounds_low?: number;
   bounds_high?: number;
+  // ShellStarted / ShellExited
+  session_id?: string;
+  name?: string;
+  exit_code?: number;
   // ForwardStarted / ForwardStopped
   forward_id?: string;
   service?: string;
   port?: number;
-  // ShellExited
-  session_id?: string;
-  exit_code?: number;
+  // WebSessionStarted / WebSessionStopped (web-layer events)
   // ServerBusy
   reason?: string;
 }
