@@ -8,20 +8,39 @@ mod migrations {
     pub mod v20;
 }
 
+struct Migration {
+    version: i64,
+    sql: &'static str,
+    /// Override for migrations that need Rust logic alongside the SQL.
+    /// If None, `execute_batch(sql)` is used.
+    custom_run: Option<fn(&Connection) -> SqlResult<()>>,
+}
+
 // Canonical SQL for each migration version, used for tamper detection.
 //
 // NEVER modify these constants or the SQL files they point to after they have
-// been deployed. Each constant is hashed when the migration first runs and the
-// hash is stored in schema_version. On every subsequent startup the stored hash
-// is compared against the current file content; a mismatch means someone edited
-// an existing migration — which is forbidden. Add a new version block instead.
+// been deployed. Each is hashed when the migration first runs and the hash is
+// stored in schema_version. A mismatch on startup means someone edited an
+// existing migration — which is forbidden. Add a new version block instead.
+
+// r[impl identity.stable]
+// r[impl identity.components]
+// r[impl history.world.entries]
+// r[impl history.operations.entries]
+// r[impl history.action-log.entries]
+// r[impl operation.lifecycle.events]
+// r[impl barrier.replay]
 const SQL_V2: &str = include_str!("db/migrations/v02.sql");
 const SQL_V3: &str = include_str!("db/migrations/v03.sql");
+// i[app.persist]
 const SQL_V4: &str = include_str!("db/migrations/v04.sql");
+// i[key.authorize]
 const SQL_V5: &str = include_str!("db/migrations/v05.sql");
+// i[param.store]
 const SQL_V6: &str = include_str!("db/migrations/v06.sql");
 const SQL_V7: &str = include_str!("db/migrations/v07.sql");
 const SQL_V8: &str = include_str!("db/migrations/v08.sql");
+// i[fault.record]
 const SQL_V9: &str = include_str!("db/migrations/v09.sql");
 const SQL_V10: &str = include_str!("db/migrations/v10.sql");
 const SQL_V11: &str = include_str!("db/migrations/v11.sql");
@@ -33,40 +52,147 @@ const SQL_V16: &str = include_str!("db/migrations/v16.sql");
 const SQL_V17: &str = include_str!("db/migrations/v17.sql");
 const SQL_V18: &str = include_str!("db/migrations/v18.sql");
 const SQL_V19: &str = include_str!("db/migrations/v19.sql");
+// r[impl generation.history]
+// r[impl generation.script-storage]
 const SQL_V20: &str = migrations::v20::SQL;
+// r[impl operation.lifecycle.generations]
 const SQL_V21: &str = include_str!("db/migrations/v21.sql");
+// r[impl schedule.state]
 const SQL_V22: &str = include_str!("db/migrations/v22.sql");
+// i[impl backup.app.register]
 const SQL_V23: &str = include_str!("db/migrations/v23.sql");
+// i[impl backup.strategy.create]
 const SQL_V24: &str = include_str!("db/migrations/v24.sql");
+// r[impl backup.execution]
 const SQL_V25: &str = include_str!("db/migrations/v25.sql");
 const SQL_V26: &str = include_str!("db/migrations/v26.sql");
 
-const MIGRATIONS: &[(i64, &str)] = &[
-    (2, SQL_V2),
-    (3, SQL_V3),
-    (4, SQL_V4),
-    (5, SQL_V5),
-    (6, SQL_V6),
-    (7, SQL_V7),
-    (8, SQL_V8),
-    (9, SQL_V9),
-    (10, SQL_V10),
-    (11, SQL_V11),
-    (12, SQL_V12),
-    (13, SQL_V13),
-    (14, SQL_V14),
-    (15, SQL_V15),
-    (16, SQL_V16),
-    (17, SQL_V17),
-    (18, SQL_V18),
-    (19, SQL_V19),
-    (20, SQL_V20),
-    (21, SQL_V21),
-    (22, SQL_V22),
-    (23, SQL_V23),
-    (24, SQL_V24),
-    (25, SQL_V25),
-    (26, SQL_V26),
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 2,
+        sql: SQL_V2,
+        custom_run: None,
+    },
+    Migration {
+        version: 3,
+        sql: SQL_V3,
+        custom_run: None,
+    },
+    Migration {
+        version: 4,
+        sql: SQL_V4,
+        custom_run: None,
+    },
+    Migration {
+        version: 5,
+        sql: SQL_V5,
+        custom_run: None,
+    },
+    Migration {
+        version: 6,
+        sql: SQL_V6,
+        custom_run: None,
+    },
+    Migration {
+        version: 7,
+        sql: SQL_V7,
+        custom_run: None,
+    },
+    Migration {
+        version: 8,
+        sql: SQL_V8,
+        custom_run: None,
+    },
+    Migration {
+        version: 9,
+        sql: SQL_V9,
+        custom_run: None,
+    },
+    Migration {
+        version: 10,
+        sql: SQL_V10,
+        custom_run: None,
+    },
+    Migration {
+        version: 11,
+        sql: SQL_V11,
+        custom_run: None,
+    },
+    Migration {
+        version: 12,
+        sql: SQL_V12,
+        custom_run: None,
+    },
+    Migration {
+        version: 13,
+        sql: SQL_V13,
+        custom_run: None,
+    },
+    Migration {
+        version: 14,
+        sql: SQL_V14,
+        custom_run: Some(migrations::v14::run),
+    },
+    Migration {
+        version: 15,
+        sql: SQL_V15,
+        custom_run: None,
+    },
+    Migration {
+        version: 16,
+        sql: SQL_V16,
+        custom_run: None,
+    },
+    Migration {
+        version: 17,
+        sql: SQL_V17,
+        custom_run: None,
+    },
+    Migration {
+        version: 18,
+        sql: SQL_V18,
+        custom_run: None,
+    },
+    Migration {
+        version: 19,
+        sql: SQL_V19,
+        custom_run: None,
+    },
+    Migration {
+        version: 20,
+        sql: SQL_V20,
+        custom_run: Some(migrations::v20::run),
+    },
+    Migration {
+        version: 21,
+        sql: SQL_V21,
+        custom_run: None,
+    },
+    Migration {
+        version: 22,
+        sql: SQL_V22,
+        custom_run: None,
+    },
+    Migration {
+        version: 23,
+        sql: SQL_V23,
+        custom_run: None,
+    },
+    Migration {
+        version: 24,
+        sql: SQL_V24,
+        custom_run: None,
+    },
+    Migration {
+        version: 25,
+        sql: SQL_V25,
+        custom_run: None,
+    },
+    Migration {
+        version: 26,
+        sql: SQL_V26,
+        custom_run: None,
+    },
 ];
 
 fn migration_hash(sql: &str) -> String {
@@ -129,7 +255,7 @@ impl Db {
     // existing SQL file under db/migrations/. Once a migration has shipped the
     // schema_version row for it exists in production databases, and the stored
     // hash will no longer match the edited content — causing a panic on startup.
-    // Always add a new version block and a new SQL/RS file instead.
+    // Always add a new Migration entry and a new SQL/RS file instead.
     fn migrate(&self) -> SqlResult<()> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS schema_version (
@@ -159,147 +285,14 @@ impl Db {
 
         let tx = self.conn.unchecked_transaction()?;
 
-        if version < 2 {
-            // r[impl identity.stable]
-            // r[impl identity.components]
-            // r[impl history.world.entries]
-            // r[impl history.operations.entries]
-            // r[impl history.action-log.entries]
-            // r[impl operation.lifecycle.events]
-            // r[impl barrier.replay]
-            self.conn.execute_batch(SQL_V2)?;
-            self.record_migration(2, SQL_V2)?;
-        }
-
-        if version < 3 {
-            self.conn.execute_batch(SQL_V3)?;
-            self.record_migration(3, SQL_V3)?;
-        }
-
-        if version < 4 {
-            // i[app.persist]
-            self.conn.execute_batch(SQL_V4)?;
-            self.record_migration(4, SQL_V4)?;
-        }
-
-        if version < 5 {
-            // i[key.authorize]
-            self.conn.execute_batch(SQL_V5)?;
-            self.record_migration(5, SQL_V5)?;
-        }
-
-        if version < 6 {
-            // i[param.store]
-            self.conn.execute_batch(SQL_V6)?;
-            self.record_migration(6, SQL_V6)?;
-        }
-
-        if version < 7 {
-            self.conn.execute_batch(SQL_V7)?;
-            self.record_migration(7, SQL_V7)?;
-        }
-
-        if version < 8 {
-            self.conn.execute_batch(SQL_V8)?;
-            self.record_migration(8, SQL_V8)?;
-        }
-
-        if version < 9 {
-            // i[fault.record]
-            self.conn.execute_batch(SQL_V9)?;
-            self.record_migration(9, SQL_V9)?;
-        }
-
-        if version < 10 {
-            self.conn.execute_batch(SQL_V10)?;
-            self.record_migration(10, SQL_V10)?;
-        }
-
-        if version < 11 {
-            self.conn.execute_batch(SQL_V11)?;
-            self.record_migration(11, SQL_V11)?;
-        }
-
-        if version < 12 {
-            self.conn.execute_batch(SQL_V12)?;
-            self.record_migration(12, SQL_V12)?;
-        }
-
-        if version < 13 {
-            self.conn.execute_batch(SQL_V13)?;
-            self.record_migration(13, SQL_V13)?;
-        }
-
-        if version < 14 {
-            migrations::v14::run(&self.conn)?;
-            self.record_migration(14, SQL_V14)?;
-        }
-
-        if version < 15 {
-            self.conn.execute_batch(SQL_V15)?;
-            self.record_migration(15, SQL_V15)?;
-        }
-
-        if version < 16 {
-            self.conn.execute_batch(SQL_V16)?;
-            self.record_migration(16, SQL_V16)?;
-        }
-
-        if version < 17 {
-            self.conn.execute_batch(SQL_V17)?;
-            self.record_migration(17, SQL_V17)?;
-        }
-
-        if version < 18 {
-            self.conn.execute_batch(SQL_V18)?;
-            self.record_migration(18, SQL_V18)?;
-        }
-
-        if version < 19 {
-            self.conn.execute_batch(SQL_V19)?;
-            self.record_migration(19, SQL_V19)?;
-        }
-
-        if version < 20 {
-            // r[impl generation.history]
-            // r[impl generation.script-storage]
-            migrations::v20::run(&self.conn)?;
-            self.record_migration(20, SQL_V20)?;
-        }
-
-        if version < 21 {
-            // r[impl operation.lifecycle.generations]
-            self.conn.execute_batch(SQL_V21)?;
-            self.record_migration(21, SQL_V21)?;
-        }
-
-        if version < 22 {
-            // r[impl schedule.state]
-            self.conn.execute_batch(SQL_V22)?;
-            self.record_migration(22, SQL_V22)?;
-        }
-
-        if version < 23 {
-            // i[impl backup.app.register]
-            self.conn.execute_batch(SQL_V23)?;
-            self.record_migration(23, SQL_V23)?;
-        }
-
-        if version < 24 {
-            // i[impl backup.strategy.create]
-            self.conn.execute_batch(SQL_V24)?;
-            self.record_migration(24, SQL_V24)?;
-        }
-
-        if version < 25 {
-            // r[impl backup.execution]
-            self.conn.execute_batch(SQL_V25)?;
-            self.record_migration(25, SQL_V25)?;
-        }
-
-        if version < 26 {
-            self.conn.execute_batch(SQL_V26)?;
-            self.record_migration(26, SQL_V26)?;
+        for m in MIGRATIONS {
+            if version < m.version {
+                match m.custom_run {
+                    Some(f) => f(&self.conn)?,
+                    None => self.conn.execute_batch(m.sql)?,
+                }
+                self.record_migration(m.version, m.sql)?;
+            }
         }
 
         tx.commit()?;
@@ -320,21 +313,22 @@ impl Db {
     }
 
     fn verify_migrations(&self) -> SqlResult<()> {
-        for &(ver, sql) in MIGRATIONS {
-            let expected = migration_hash(sql);
+        for m in MIGRATIONS {
+            let expected = migration_hash(m.sql);
             match self.conn.query_row(
                 "SELECT hash FROM schema_version WHERE version = ?1",
-                [ver],
+                [m.version],
                 |r| r.get::<_, Option<String>>(0),
             ) {
                 Ok(Some(stored)) => {
                     if stored != expected {
                         panic!(
-                            "Migration {ver} has been tampered with!\n\
+                            "Migration {} has been tampered with!\n\
                              Stored hash:   {stored}\n\
                              Expected hash: {expected}\n\
                              Never edit existing migration files — \
-                             add a new version block instead."
+                             add a new version block instead.",
+                            m.version
                         );
                     }
                 }
@@ -344,7 +338,7 @@ impl Db {
                         "UPDATE schema_version \
                          SET hash = ?1, migrated_at = COALESCE(migrated_at, '(pre-hash-tracking)') \
                          WHERE version = ?2",
-                        rusqlite::params![expected, ver],
+                        rusqlite::params![expected, m.version],
                     )?;
                 }
                 Err(rusqlite::Error::QueryReturnedNoRows) => {
