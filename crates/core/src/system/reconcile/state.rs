@@ -172,8 +172,22 @@ impl Reconciler {
                         continue;
                     }
                 };
-                if derive_lifecycle_state(&dr.instance, &obs) != LifecycleState::Unscheduled {
-                    continue;
+                match derive_lifecycle_state(&dr.instance, &obs) {
+                    LifecycleState::Unscheduled => {}
+                    LifecycleState::Terminating | LifecycleState::Terminated => {
+                        // written_obs is blocking the terminal observation (e.g.
+                        // container_removed) from being written, keeping the
+                        // lifecycle stuck.  Clear it so the next tick can record
+                        // the removal and advance to Unscheduled.
+                        self.written_obs.retain(|(id, _)| *id != dr.instance.id);
+                        tracing::debug!(
+                            app = %app.name,
+                            instance = %dr.instance.display_name,
+                            "clearing written_obs for stuck-terminating excess instance"
+                        );
+                        continue;
+                    }
+                    _ => continue,
                 }
                 match delete_instance(&db, dr.instance.id) {
                     Ok(()) => {
