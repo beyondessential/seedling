@@ -159,5 +159,23 @@ pub(super) async fn observe_and_actuate(
         }
     }
 
+    // r[impl lifecycle.external-volume]
+    // External volume resources are declarations only — nothing to create or
+    // destroy. Drive them directly to the appropriate lifecycle state.
+    for dr in desired
+        .resources
+        .iter()
+        .filter(|dr| matches!(&dr.definition, Resource::ExternalVolume(_)))
+    {
+        let obs_kind = match dr.desired {
+            LifecycleState::Ready => "volume_ready",
+            LifecycleState::Unscheduled => "volume_cleaned_up",
+            _ => continue,
+        };
+        update
+            .observations
+            .push((dr.instance.clone(), obs_kind, json!({})));
+    }
+
     update
 }

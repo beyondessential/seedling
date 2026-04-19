@@ -207,7 +207,10 @@ fn derive_lifecycle_with_ms(
         ResourceKind::Deployment | ResourceKind::Job => derive_container_lifecycle(observations),
         ResourceKind::Service | ResourceKind::HttpService => derive_service_lifecycle(observations),
         ResourceKind::Ingress => derive_ingress_lifecycle(observations),
+        // r[impl lifecycle.volume]
         ResourceKind::Volume => derive_volume_lifecycle(observations),
+        // r[impl lifecycle.external-volume]
+        ResourceKind::ExternalVolume => derive_volume_lifecycle(observations),
         _ => (LifecycleState::Pending, None),
     }
 }

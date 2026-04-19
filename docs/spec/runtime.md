@@ -197,6 +197,12 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - **Ready**: the volume is available for mounting.
 > - **Terminated**: the volume has been removed.
 
+> r[lifecycle.external-volume]
+> For External Volume resources, the lifecycle is managed entirely by the runtime:
+>
+> - **Ready**: immediately upon reconciliation, since the resource is a declaration only. The presence or absence of a mapping is tracked via faults, not lifecycle state.
+> - **Unscheduled**: immediately upon uninstall.
+
 # Persistent History
 
 > r[history.persistence]
