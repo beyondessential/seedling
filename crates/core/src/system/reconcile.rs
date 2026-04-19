@@ -518,6 +518,7 @@ impl Reconciler {
         }
 
         self.emit_state_changes(&apps);
+        self.retire_unscheduled_excess(&apps);
 
         true
     }

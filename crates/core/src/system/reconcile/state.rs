@@ -3,8 +3,9 @@ use std::{collections::BTreeMap, time::Duration};
 use tracing::{error, warn};
 
 use crate::runtime::{
+    AppPhase,
     barrier::oracle::derive_lifecycle_state,
-    history::{find_instances_for_group, insert_observation, query_observations},
+    history::{delete_instance, find_instances_for_group, insert_observation, query_observations},
     lifecycle::LifecycleState,
 };
 
@@ -142,6 +143,58 @@ impl Reconciler {
         }
 
         self.persist_obs(observations);
+    }
+
+    // r[impl gc.instances]
+    /// Delete excess instances that have reached `Unscheduled` this tick so
+    /// that scale-up immediately allocates fresh instances rather than reusing
+    /// stale IDs.  Only runs for `Installed` apps (uninstall cleanup is handled
+    /// separately by `run_uninstall_phase`).
+    pub(super) fn retire_unscheduled_excess(&mut self, apps: &[AppSnapshot]) {
+        let db = self.db.lock();
+        for app in apps {
+            if app.phase != AppPhase::Installed {
+                continue;
+            }
+            for dr in &app.desired.resources {
+                if dr.desired != LifecycleState::Unscheduled {
+                    continue;
+                }
+                let obs = match query_observations(&db, &dr.instance) {
+                    Ok(obs) => obs,
+                    Err(e) => {
+                        tracing::warn!(
+                            app = %app.name,
+                            instance = %dr.instance.display_name,
+                            error = %e,
+                            "retire excess: failed to query observations"
+                        );
+                        continue;
+                    }
+                };
+                if derive_lifecycle_state(&dr.instance, &obs) != LifecycleState::Unscheduled {
+                    continue;
+                }
+                match delete_instance(&db, dr.instance.id) {
+                    Ok(()) => {
+                        self.written_obs.retain(|(id, _)| *id != dr.instance.id);
+                        tracing::debug!(
+                            app = %app.name,
+                            instance = %dr.instance.display_name,
+                            "retired unscheduled excess instance"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            app = %app.name,
+                            instance = %dr.instance.display_name,
+                            error = %e,
+                            "failed to retire unscheduled excess instance"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     // r[impl observe.persist]

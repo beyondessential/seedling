@@ -119,6 +119,24 @@ pub fn find_instances_for_group(
     Ok(instances)
 }
 
+// r[impl gc.instances]
+pub fn delete_instance(db: &Db, id: InstanceId) -> rusqlite::Result<()> {
+    let hex = id.to_hex();
+    db.conn.execute(
+        "DELETE FROM world_observations WHERE instance_id = ?1",
+        params![hex],
+    )?;
+    db.conn.execute(
+        "DELETE FROM faults WHERE instance_id = ?1",
+        params![hex],
+    )?;
+    db.conn.execute(
+        "DELETE FROM resource_instances WHERE id = ?1",
+        params![hex],
+    )?;
+    Ok(())
+}
+
 // r[impl identity.stable]
 // r[impl identity.components]
 pub fn get_or_create_singleton(
