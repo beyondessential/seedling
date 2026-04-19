@@ -127,6 +127,7 @@ mod tests {
             timestamp: jiff::Timestamp::now(),
             app: app.to_owned(),
             generation: 1,
+            actor: None,
         }
     }
 

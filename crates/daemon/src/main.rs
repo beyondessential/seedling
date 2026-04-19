@@ -54,6 +54,21 @@ struct Args {
     /// Run without BTRFS support; use plain directories for named volumes
     #[arg(long)]
     without_btrfs: bool,
+
+    // i[transport.listen]
+    /// Network interface(s) to bind the OI on (comma-separated names).
+    /// All IPv4 and IPv6 addresses of each interface are used.
+    /// Failure to resolve a named interface is fatal.
+    #[arg(long, value_delimiter = ',')]
+    interface: Vec<String>,
+
+    /// Explicit OI listen address(es). May be repeated.
+    #[arg(long)]
+    listen: Vec<std::net::SocketAddr>,
+
+    /// OI listen port, used when --interface is given without an explicit port.
+    #[arg(long, default_value_t = oi::DEFAULT_PORT)]
+    port: u16,
 }
 
 #[derive(clap::Args)]
@@ -570,6 +585,7 @@ async fn main() {
                             fire.generation,
                             fire.generation,
                             "schedule".to_owned(),
+                            None,
                         );
                     }
                 }
@@ -624,9 +640,11 @@ async fn main() {
         });
     }
 
-    let (_fingerprint, oi_endpoint) = oi::run(
+    // i[transport.listen]
+    let oi_addrs = resolve_oi_addrs(&args.interface, &args.listen, args.port);
+    let (_fingerprint, oi_endpoints) = oi::run(
         Arc::clone(&oi_state),
-        oi::DEFAULT_PORT,
+        &oi_addrs,
         &data_dir,
         args.max_streams,
     )
@@ -646,6 +664,42 @@ async fn main() {
     }
 
     tracing::info!("shutting down");
-    oi_endpoint.close(quinn::VarInt::from_u32(0), b"shutdown");
-    oi_endpoint.wait_idle().await;
+    for ep in &oi_endpoints {
+        ep.close(quinn::VarInt::from_u32(0), b"shutdown");
+    }
+    for ep in oi_endpoints {
+        ep.wait_idle().await;
+    }
+}
+
+// i[transport.listen]
+fn resolve_oi_addrs(
+    interfaces: &[String],
+    explicit: &[std::net::SocketAddr],
+    port: u16,
+) -> Vec<std::net::SocketAddr> {
+    if interfaces.is_empty() && explicit.is_empty() {
+        return vec![format!("[::1]:{port}").parse().unwrap()];
+    }
+
+    let mut addrs: Vec<std::net::SocketAddr> = explicit.to_vec();
+
+    for iface_name in interfaces {
+        let all = if_addrs::get_if_addrs().unwrap_or_else(|e| {
+            tracing::error!("failed to list network interfaces: {e}");
+            std::process::exit(1);
+        });
+        let iface_addrs: Vec<_> = all
+            .into_iter()
+            .filter(|i| &i.name == iface_name)
+            .map(|i| std::net::SocketAddr::new(i.ip(), port))
+            .collect();
+        if iface_addrs.is_empty() {
+            tracing::error!("interface {iface_name:?} not found or has no addresses");
+            std::process::exit(1);
+        }
+        addrs.extend(iface_addrs);
+    }
+
+    addrs
 }

@@ -6,12 +6,12 @@ use serde_json::json;
 use tokio::sync::{Semaphore, mpsc};
 use tracing::Instrument;
 
-use seedling_protocol::keys;
+use seedling_protocol::{actor::Actor, keys};
 
 use super::{
     auth::{SeedlingClientVerifier, TrustedKeys},
     forwards::session::{forward_port_session, handle_forward_stream},
-    handler::dispatch,
+    handler::{RequestCtx, dispatch},
     shells::open_shell_session,
     state::OiState,
 };
@@ -64,15 +64,33 @@ fn extract_client_fp(conn: &quinn::Connection) -> Option<String> {
     certs.first().map(|c| keys::fingerprint(c.as_ref()))
 }
 
+// i[wire.actor]
+fn synthesise_actor(state: &OiState, fp: Option<&str>) -> Actor {
+    let id = fp.map(str::to_owned);
+    let display = fp
+        .and_then(|f| {
+            let db = state.db.lock();
+            super::auth::get_label(&db, f).ok().flatten()
+        })
+        .or_else(|| id.clone());
+    Actor {
+        kind: Some("ctl".to_owned()),
+        id,
+        display,
+        session: None,
+    }
+}
+
 // i[transport.quic]
 // i[transport.local]
 // i[transport.client-auth]
+// i[transport.listen]
 pub async fn run(
     state: Arc<OiState>,
-    port: u16,
+    addrs: &[SocketAddr],
     data_dir: &Path,
     max_streams: usize,
-) -> Result<(String, Endpoint), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(String, Vec<Endpoint>), Box<dyn std::error::Error + Send + Sync>> {
     let key_path = data_dir.join("oi.key");
     let key = keys::load_or_generate(&key_path)?;
     let spki = keys::spki_der(&key);
@@ -111,26 +129,33 @@ pub async fn run(
     ));
     // Enable QUIC datagrams for UDP port-forward relay.
     transport.datagram_receive_buffer_size(Some(65536));
-    let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(quic_config));
-    server_config.transport_config(Arc::new(transport));
-
-    let addr: SocketAddr = format!("[::1]:{port}").parse().unwrap();
-    let endpoint = Endpoint::server(server_config, addr)?;
+    let transport = Arc::new(transport);
+    // Build one server config and clone it per endpoint (cheap: all heavy
+    // state is behind Arcs inside quinn::ServerConfig).
+    let mut base_server_config = quinn::ServerConfig::with_crypto(Arc::new(quic_config));
+    base_server_config.transport_config(Arc::clone(&transport));
 
     if std::env::var_os("SSLKEYLOGFILE").is_some() {
         tracing::warn!("SSLKEYLOGFILE is set — TLS session keys are being logged to disk");
     }
 
-    tracing::info!("OI listening on {}", endpoint.local_addr()?);
-
     let stream_semaphore = Arc::new(Semaphore::new(max_streams));
-
     tracing::info!(max_streams, "OI concurrency limit configured");
 
-    let ep = endpoint.clone();
-    tokio::spawn(accept_loop(endpoint, state, stream_semaphore));
+    let mut endpoints = Vec::with_capacity(addrs.len());
+    for addr in addrs {
+        let endpoint = Endpoint::server(base_server_config.clone(), *addr)?;
+        tracing::info!("OI listening on {}", endpoint.local_addr()?);
+        let ep_clone = endpoint.clone();
+        tokio::spawn(accept_loop(
+            endpoint,
+            Arc::clone(&state),
+            Arc::clone(&stream_semaphore),
+        ));
+        endpoints.push(ep_clone);
+    }
 
-    Ok((fingerprint, ep))
+    Ok((fingerprint, endpoints))
 }
 
 async fn accept_loop(endpoint: Endpoint, state: Arc<OiState>, stream_semaphore: Arc<Semaphore>) {
@@ -401,10 +426,18 @@ async fn handle_bidi_stream(
         return;
     }
 
+    // i[wire.actor] — extract actor from request or synthesise from client identity.
+    let client_fp = extract_client_fp(&conn);
+    let actor = first_obj
+        .get("actor")
+        .and_then(|v| serde_json::from_value::<Actor>(v.clone()).ok())
+        .unwrap_or_else(|| synthesise_actor(&state, client_fp.as_deref()));
+    let ctx = RequestCtx { actor };
+
     let rest = recv.read_to_end(MAX_REQUEST_SIZE).await.unwrap_or_default();
     let buf = [line, rest].concat();
 
-    let response = tokio::task::block_in_place(|| dispatch(&state, &buf));
+    let response = tokio::task::block_in_place(|| dispatch(&state, &buf, &ctx));
     if let Err(e) = send.write_all(&response).await {
         tracing::warn!("stream write error: {e}");
     }

@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
 
 use parking_lot::{Mutex, RwLock};
-use seedling_protocol::events;
+use seedling_protocol::{actor::Actor, events};
 use tokio::sync::Notify;
 
 use crate::{
@@ -60,6 +60,7 @@ fn run_operation_loop(
     source_generation: u64,
     target_generation: u64,
     operation_volume_bindings: HashMap<String, OperationVolumeBinding>,
+    actor: Option<Actor>,
 ) -> bool {
     let (engine, mut scope, _) = crate::setup_language(script_limits);
     let ast = match engine.compile(script) {
@@ -124,6 +125,7 @@ fn run_operation_loop(
                     &operation_id.0,
                     source_generation,
                     target_generation,
+                    actor.clone(),
                 );
                 return true;
             }
@@ -147,6 +149,7 @@ fn run_operation_loop(
                     source_generation,
                     target_generation,
                     &e.to_string(),
+                    actor.clone(),
                 );
                 return false;
             }
@@ -313,6 +316,7 @@ pub fn spawn_accepted_operation(
     source_generation: u64,
     target_generation: u64,
     trigger: String,
+    actor: Option<Actor>,
 ) {
     let (app, active_progress, tick_notify, script) = {
         let reg = state.registry.read();
@@ -335,6 +339,7 @@ pub fn spawn_accepted_operation(
     let is_install = action_name == "install";
 
     tokio::spawn(async move {
+        // i[wire.actor]
         events::operation_started(
             &event_tx,
             &app_name,
@@ -343,6 +348,7 @@ pub fn spawn_accepted_operation(
             source_generation,
             target_generation,
             &trigger,
+            actor.clone(),
         );
         let operation_id_str = operation_id.0.clone();
 
@@ -354,6 +360,7 @@ pub fn spawn_accepted_operation(
             let active_progress = Arc::clone(&active_progress);
             let tick_notify = Arc::clone(&tick_notify);
             let params = params.clone();
+            let actor = actor.clone();
 
             tokio::task::spawn_blocking(move || {
                 let dbs = match open_operation_dbs(&db_path, &app_name) {
@@ -375,6 +382,7 @@ pub fn spawn_accepted_operation(
                     source_generation,
                     target_generation,
                     HashMap::new(),
+                    actor,
                 )
             })
             .await
@@ -405,6 +413,7 @@ pub fn spawn_accepted_operation(
                 queued.source_generation,
                 queued.target_generation,
                 queued.trigger,
+                None,
             );
         }
     });
@@ -460,6 +469,7 @@ pub(crate) async fn run_operation_for_backup(
         source_generation,
         target_generation,
         "backup",
+        None,
     );
 
     let success = {
@@ -486,6 +496,7 @@ pub(crate) async fn run_operation_for_backup(
                 source_generation,
                 target_generation,
                 operation_volume_bindings,
+                None,
             )
         })
         .await
@@ -507,6 +518,7 @@ pub(crate) async fn run_operation_for_backup(
             queued.source_generation,
             queued.target_generation,
             queued.trigger,
+            None,
         );
     }
 

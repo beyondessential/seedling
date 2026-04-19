@@ -7,7 +7,10 @@ use seedling_protocol::error::{ErrorCode, OiError};
 
 use crate::{
     defs::install::InstallRequirementKind,
-    oi::{handler::HandlerResult, state::OiState},
+    oi::{
+        handler::{HandlerResult, RequestCtx},
+        state::OiState,
+    },
     runtime::{
         AppPhase,
         apps::AppRegistry,
@@ -120,7 +123,11 @@ fn validate_install_requirements(
 // i[action.not-installed-gate]
 // i[action.invoke.install]
 // i[action.invoke.install.validation]
-pub(crate) fn invoke_install(state: &Arc<OiState>, params: InvokeInstallParams) -> HandlerResult {
+pub(crate) fn invoke_install(
+    state: &Arc<OiState>,
+    params: InvokeInstallParams,
+    ctx: &RequestCtx,
+) -> HandlerResult {
     let app_name = &params.app;
 
     let submitted = params.requirements.unwrap_or_default();
@@ -203,6 +210,7 @@ pub(crate) fn invoke_install(state: &Arc<OiState>, params: InvokeInstallParams) 
                 current_generation,
                 current_generation,
                 "operator".to_owned(),
+                Some(ctx.actor.clone()),
             );
             tracing::info!(app = %app_name, schedule = "accepted", "invoke_install");
             Ok(json!({ "schedule": "accepted", "operation_id": op_id_str }))

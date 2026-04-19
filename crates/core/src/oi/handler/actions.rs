@@ -6,7 +6,7 @@ use serde_json::json;
 use seedling_protocol::error::{ErrorCode, OiError};
 
 use crate::{
-    oi::state::OiState,
+    oi::{handler::RequestCtx, state::OiState},
     runtime::{
         AppPhase,
         scheduler::{RejectReason, ScheduleResult},
@@ -45,7 +45,11 @@ fn validate_action_params(
 
 // i[action.not-installed-gate]
 // i[action.invoke]
-pub(crate) fn invoke_action(state: &Arc<OiState>, params: InvokeActionParams) -> HandlerResult {
+pub(crate) fn invoke_action(
+    state: &Arc<OiState>,
+    params: InvokeActionParams,
+    ctx: &RequestCtx,
+) -> HandlerResult {
     let app_name = &params.app;
     let action_name = &params.name;
     let action_params = params.params.unwrap_or_default();
@@ -117,6 +121,7 @@ pub(crate) fn invoke_action(state: &Arc<OiState>, params: InvokeActionParams) ->
                 current_generation,
                 current_generation,
                 "operator".to_owned(),
+                Some(ctx.actor.clone()),
             );
             tracing::info!(app = %app_name, action = %action_name, schedule = "accepted", "invoke_action");
             Ok(json!({ "schedule": "accepted", "operation_id": op_id_str }))

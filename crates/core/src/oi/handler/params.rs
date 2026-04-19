@@ -6,7 +6,7 @@ use serde_json::json;
 use seedling_protocol::error::{ErrorCode, OiError};
 
 use crate::{
-    oi::state::OiState,
+    oi::{handler::RequestCtx, state::OiState},
     runtime::{
         AppPhase, generations,
         scheduler::{RejectReason, ScheduleResult},
@@ -162,7 +162,11 @@ fn schedule_on_change(
 // i[param.unknown]
 // l[impl param.on-change.transitions]
 // l[impl param.on-change.not-on-install]
-pub(crate) fn set_param(state: &OiState, params: SetParamParams) -> HandlerResult {
+pub(crate) fn set_param(
+    state: &OiState,
+    params: SetParamParams,
+    ctx: &RequestCtx,
+) -> HandlerResult {
     let app = params.app.as_str();
     let param_name = params.name.as_str();
     let value = params.value.as_str();
@@ -219,6 +223,7 @@ pub(crate) fn set_param(state: &OiState, params: SetParamParams) -> HandlerResul
         value,
         generation,
         previous_generation,
+        Some(ctx.actor.clone()),
     );
 
     tracing::info!(app, param = param_name, generation, schedule, "set_param");
@@ -228,7 +233,11 @@ pub(crate) fn set_param(state: &OiState, params: SetParamParams) -> HandlerResul
 // i[param.unset]
 // l[impl param.on-change.transitions]
 // l[impl param.on-change.not-on-install]
-pub(crate) fn unset_param(state: &OiState, params: UnsetParamParams) -> HandlerResult {
+pub(crate) fn unset_param(
+    state: &OiState,
+    params: UnsetParamParams,
+    ctx: &RequestCtx,
+) -> HandlerResult {
     let app = params.app.as_str();
     let param_name = params.name.as_str();
 
@@ -281,6 +290,7 @@ pub(crate) fn unset_param(state: &OiState, params: UnsetParamParams) -> HandlerR
         &previous_value,
         generation,
         previous_generation,
+        Some(ctx.actor.clone()),
     );
 
     tracing::info!(app, param = param_name, generation, schedule, "unset_param");

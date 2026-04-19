@@ -2,6 +2,8 @@ use jiff::Timestamp;
 use serde::Serialize;
 use tokio::sync::broadcast;
 
+use crate::actor::Actor;
+
 // i[event.types]
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
@@ -11,10 +13,14 @@ pub enum OiEvent {
         timestamp: Timestamp,
         app: String,
         generation: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Actor>,
     },
     AppDeregistered {
         timestamp: Timestamp,
         app: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Actor>,
     },
     // r[impl audit.log.generations]
     AppUpdated {
@@ -22,6 +28,8 @@ pub enum OiEvent {
         app: String,
         generation: u64,
         previous_generation: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Actor>,
     },
     // r[impl audit.log.generations]
     ParamSet {
@@ -32,6 +40,8 @@ pub enum OiEvent {
         new_value: String,
         generation: u64,
         previous_generation: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Actor>,
     },
     // r[impl audit.log.generations]
     ParamUnset {
@@ -41,6 +51,8 @@ pub enum OiEvent {
         previous_value: String,
         generation: u64,
         previous_generation: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Actor>,
     },
     // r[impl operation.lifecycle.generations]
     // i[impl event.types]
@@ -52,6 +64,8 @@ pub enum OiEvent {
         source_generation: u64,
         target_generation: u64,
         trigger: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Actor>,
     },
     // r[impl operation.lifecycle.generations]
     OperationCompleted {
@@ -61,6 +75,8 @@ pub enum OiEvent {
         operation_id: String,
         source_generation: u64,
         target_generation: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Actor>,
     },
     // r[impl operation.lifecycle.generations]
     OperationFailed {
@@ -71,6 +87,8 @@ pub enum OiEvent {
         source_generation: u64,
         target_generation: u64,
         error: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Actor>,
     },
     FaultFiled {
         timestamp: Timestamp,
@@ -81,11 +99,15 @@ pub enum OiEvent {
         instance_id: Option<String>,
         kind: String,
         description: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Actor>,
     },
     FaultCleared {
         timestamp: Timestamp,
         id: String,
         app: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Actor>,
     },
     ResourceStateChanged {
         timestamp: Timestamp,
@@ -94,11 +116,15 @@ pub enum OiEvent {
         resource_name: String,
         instance_id: String,
         state: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Actor>,
     },
     ShellExited {
         timestamp: Timestamp,
         session_id: String,
         exit_code: i32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Actor>,
     },
     ForwardStarted {
         timestamp: Timestamp,
@@ -106,10 +132,14 @@ pub enum OiEvent {
         app: String,
         service: String,
         port: u16,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Actor>,
     },
     ForwardStopped {
         timestamp: Timestamp,
         forward_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Actor>,
     },
     ScaleChanged {
         timestamp: Timestamp,
@@ -119,10 +149,14 @@ pub enum OiEvent {
         previous_scale: u16,
         bounds_low: u16,
         bounds_high: u16,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Actor>,
     },
     ServerBusy {
         timestamp: Timestamp,
         reason: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Actor>,
     },
 }
 
@@ -142,28 +176,36 @@ pub fn emit(tx: &EventSender, event: OiEvent) {
     let _ = tx.send(event);
 }
 
-pub fn app_registered(tx: &EventSender, app: &str, generation: u64) {
+pub fn app_registered(tx: &EventSender, app: &str, generation: u64, actor: Option<Actor>) {
     emit(
         tx,
         OiEvent::AppRegistered {
             timestamp: now(),
             app: app.to_owned(),
             generation,
+            actor,
         },
     );
 }
 
-pub fn app_deregistered(tx: &EventSender, app: &str) {
+pub fn app_deregistered(tx: &EventSender, app: &str, actor: Option<Actor>) {
     emit(
         tx,
         OiEvent::AppDeregistered {
             timestamp: now(),
             app: app.to_owned(),
+            actor,
         },
     );
 }
 
-pub fn app_updated(tx: &EventSender, app: &str, generation: u64, previous_generation: Option<u64>) {
+pub fn app_updated(
+    tx: &EventSender,
+    app: &str,
+    generation: u64,
+    previous_generation: Option<u64>,
+    actor: Option<Actor>,
+) {
     emit(
         tx,
         OiEvent::AppUpdated {
@@ -171,10 +213,15 @@ pub fn app_updated(tx: &EventSender, app: &str, generation: u64, previous_genera
             app: app.to_owned(),
             generation,
             previous_generation,
+            actor,
         },
     );
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "actor added as part of audit trail"
+)]
 pub fn param_set(
     tx: &EventSender,
     app: &str,
@@ -183,6 +230,7 @@ pub fn param_set(
     new_value: &str,
     generation: u64,
     previous_generation: u64,
+    actor: Option<Actor>,
 ) {
     emit(
         tx,
@@ -194,6 +242,7 @@ pub fn param_set(
             new_value: new_value.to_owned(),
             generation,
             previous_generation,
+            actor,
         },
     );
 }
@@ -205,6 +254,7 @@ pub fn param_unset(
     previous_value: &str,
     generation: u64,
     previous_generation: u64,
+    actor: Option<Actor>,
 ) {
     emit(
         tx,
@@ -215,10 +265,15 @@ pub fn param_unset(
             previous_value: previous_value.to_owned(),
             generation,
             previous_generation,
+            actor,
         },
     );
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "actor added as part of audit trail"
+)]
 pub fn operation_started(
     tx: &EventSender,
     app: &str,
@@ -227,6 +282,7 @@ pub fn operation_started(
     source_generation: u64,
     target_generation: u64,
     trigger: &str,
+    actor: Option<Actor>,
 ) {
     emit(
         tx,
@@ -238,6 +294,7 @@ pub fn operation_started(
             source_generation,
             target_generation,
             trigger: trigger.to_owned(),
+            actor,
         },
     );
 }
@@ -249,6 +306,7 @@ pub fn operation_completed(
     operation_id: &str,
     source_generation: u64,
     target_generation: u64,
+    actor: Option<Actor>,
 ) {
     emit(
         tx,
@@ -259,10 +317,15 @@ pub fn operation_completed(
             operation_id: operation_id.to_owned(),
             source_generation,
             target_generation,
+            actor,
         },
     );
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "actor added as part of audit trail"
+)]
 pub fn operation_failed(
     tx: &EventSender,
     app: &str,
@@ -271,6 +334,7 @@ pub fn operation_failed(
     source_generation: u64,
     target_generation: u64,
     error: &str,
+    actor: Option<Actor>,
 ) {
     emit(
         tx,
@@ -282,6 +346,7 @@ pub fn operation_failed(
             source_generation,
             target_generation,
             error: error.to_owned(),
+            actor,
         },
     );
 }
@@ -311,6 +376,7 @@ pub fn fault_filed(
             instance_id: instance_id.map(str::to_owned),
             kind: kind.to_owned(),
             description: description.to_owned(),
+            actor: None,
         },
     );
 }
@@ -322,6 +388,7 @@ pub fn fault_cleared(tx: &EventSender, id: &str, app: &str) {
             timestamp: now(),
             id: id.to_owned(),
             app: app.to_owned(),
+            actor: None,
         },
     );
 }
@@ -343,6 +410,7 @@ pub fn resource_state_changed(
             resource_name: resource_name.to_owned(),
             instance_id: instance_id.to_owned(),
             state: state.to_owned(),
+            actor: None,
         },
     );
 }
@@ -354,6 +422,7 @@ pub fn shell_exited(tx: &EventSender, session_id: &str, exit_code: i32) {
             timestamp: now(),
             session_id: session_id.to_owned(),
             exit_code,
+            actor: None,
         },
     );
 }
@@ -367,6 +436,7 @@ pub fn forward_started(tx: &EventSender, forward_id: &str, app: &str, service: &
             app: app.to_owned(),
             service: service.to_owned(),
             port,
+            actor: None,
         },
     );
 }
@@ -377,10 +447,15 @@ pub fn forward_stopped(tx: &EventSender, forward_id: &str) {
         OiEvent::ForwardStopped {
             timestamp: now(),
             forward_id: forward_id.to_owned(),
+            actor: None,
         },
     );
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "actor added as part of audit trail"
+)]
 pub fn scale_changed(
     tx: &EventSender,
     app: &str,
@@ -389,6 +464,7 @@ pub fn scale_changed(
     previous_scale: u16,
     bounds_low: u16,
     bounds_high: u16,
+    actor: Option<Actor>,
 ) {
     emit(
         tx,
@@ -400,6 +476,7 @@ pub fn scale_changed(
             previous_scale,
             bounds_low,
             bounds_high,
+            actor,
         },
     );
 }
@@ -410,6 +487,7 @@ pub fn server_busy(tx: &EventSender, reason: &str) {
         OiEvent::ServerBusy {
             timestamp: now(),
             reason: reason.to_owned(),
+            actor: None,
         },
     );
 }

@@ -10,7 +10,7 @@ use crate::{
         install::InstallRequirementKind,
         resource::{Resource, ResourceKind},
     },
-    oi::state::OiState,
+    oi::{handler::RequestCtx, state::OiState},
     runtime::{
         AppPhase,
         apps::{AppEntry, AppRegistry, AppStatus},
@@ -717,7 +717,11 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams) -> HandlerResult
 
 // i[app.register]
 // i[app.persist]
-pub(crate) fn register_app(state: &OiState, params: AppScriptParams) -> HandlerResult {
+pub(crate) fn register_app(
+    state: &OiState,
+    params: AppScriptParams,
+    ctx: &RequestCtx,
+) -> HandlerResult {
     let name = params.app.as_str();
     let script = params.script.as_str();
 
@@ -788,12 +792,21 @@ pub(crate) fn register_app(state: &OiState, params: AppScriptParams) -> HandlerR
     sync_action_schedules(state, name);
 
     tracing::info!(app = %name, generation, "registered app");
-    seedling_protocol::events::app_registered(&state.event_tx, name, generation);
+    seedling_protocol::events::app_registered(
+        &state.event_tx,
+        name,
+        generation,
+        Some(ctx.actor.clone()),
+    );
     Ok(json!({ "generation": generation }))
 }
 
 // i[app.deregister]
-pub(crate) fn deregister_app(state: &OiState, params: AppParams) -> HandlerResult {
+pub(crate) fn deregister_app(
+    state: &OiState,
+    params: AppParams,
+    ctx: &RequestCtx,
+) -> HandlerResult {
     let name = params.app.as_str();
 
     {
@@ -871,7 +884,7 @@ pub(crate) fn deregister_app(state: &OiState, params: AppParams) -> HandlerResul
     state.registry.write().deregister(name);
 
     tracing::info!(app = %name, "deregistered app");
-    seedling_protocol::events::app_deregistered(&state.event_tx, name);
+    seedling_protocol::events::app_deregistered(&state.event_tx, name, Some(ctx.actor.clone()));
     Ok(json!({}))
 }
 
@@ -911,7 +924,11 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
 }
 
 // i[app.update]
-pub(crate) fn update_app(state: &OiState, params: AppScriptParams) -> HandlerResult {
+pub(crate) fn update_app(
+    state: &OiState,
+    params: AppScriptParams,
+    ctx: &RequestCtx,
+) -> HandlerResult {
     let name = params.app.as_str();
     let script = params.script.as_str();
 
@@ -1077,12 +1094,13 @@ pub(crate) fn update_app(state: &OiState, params: AppScriptParams) -> HandlerRes
         } else {
             Some(previous_generation)
         },
+        Some(ctx.actor.clone()),
     );
     Ok(json!({ "generation": generation }))
 }
 
 // i[impl scale.set]
-pub(crate) fn scale_app(state: &OiState, params: ScaleParams) -> HandlerResult {
+pub(crate) fn scale_app(state: &OiState, params: ScaleParams, ctx: &RequestCtx) -> HandlerResult {
     let name = params.app.as_str();
     let deployment_name = params.deployment.as_str();
 
@@ -1132,6 +1150,7 @@ pub(crate) fn scale_app(state: &OiState, params: ScaleParams) -> HandlerResult {
         previous_scale,
         low,
         high,
+        Some(ctx.actor.clone()),
     );
 
     Ok(json!({
