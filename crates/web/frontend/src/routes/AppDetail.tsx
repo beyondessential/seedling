@@ -59,7 +59,7 @@ function ResourcesSection({ resources }: { resources: AppResource[] }) {
   return (
     <Stack spacing={2}>
       {resources.map((r) => (
-        <Box key={r.name}>
+        <Box key={`${r.type}/${r.name}`}>
           <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 0.5 }}>
             <Typography variant="subtitle2">{r.name}</Typography>
             <Typography variant="caption" color="text.secondary">
