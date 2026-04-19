@@ -118,7 +118,7 @@ function ResourcesSection({
             <Typography variant="caption" color="text.secondary">
               {r.type}
             </Typography>
-            {r.type === "deployment" && (
+            {(r.type === "deployment" || r.type === "job") && (
               <Tooltip title="View resource logs">
                 <IconButton
                   size="small"
@@ -200,7 +200,7 @@ function ResourcesSection({
                         />
                       </TableCell>
                       <TableCell width={40} align="right" sx={{ px: 0.5 }}>
-                        {r.type === "deployment" && (
+                        {(r.type === "deployment" || r.type === "job") && (
                           <Tooltip title="View instance logs">
                             <IconButton
                               size="small"
