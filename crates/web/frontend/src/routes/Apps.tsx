@@ -17,32 +17,8 @@ import {
 } from "@mui/material";
 import { Link } from "react-router-dom";
 import { useOiQuery } from "../hooks/useOi";
-import type { AppStatus, AppSummary } from "../lib/types";
-
-type ChipColor = "success" | "warning" | "error" | "default" | "info";
-
-function statusColor(status: AppStatus): ChipColor {
-  switch (status) {
-    case "running":
-      return "success";
-    case "degraded":
-      return "warning";
-    case "faulted":
-      return "error";
-    case "operating":
-      return "info";
-    case "not_installed":
-    case "uninstalling":
-      return "default";
-  }
-}
-
-function statusLabel(app: AppSummary): string {
-  if (app.status === "operating" && app.action_name) {
-    return `operating: ${app.action_name}`;
-  }
-  return app.status.replace("_", " ");
-}
+import { statusColor, statusLabel } from "../lib/status";
+import type { AppSummary } from "../lib/types";
 
 export default function Apps() {
   const { data, loading, error, refetch } =
@@ -104,7 +80,7 @@ export default function Apps() {
                   </TableCell>
                   <TableCell>
                     <Chip
-                      label={statusLabel(app)}
+                      label={statusLabel(app.status, app.action_name)}
                       color={statusColor(app.status)}
                       size="small"
                     />
