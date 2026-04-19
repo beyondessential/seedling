@@ -39,6 +39,7 @@ events:
 # Watch the built seedling-web binary and restart it on changes
 watch-web:
     watchexec -IrW target/debug --ignore-nothing -f seedling-web \
+        -E SSLKEYLOGFILE=/tmp/seedling-web.keylog \
         'target/debug/seedling-web --dev-no-auth'
 
 # Run the Vite dev server

@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
+use serde_json::json;
 use seedling_protocol::actor::Actor;
 use seedling_protocol::client::{ClientAuth, ClientError, OiClient};
 use seedling_protocol::keys::ClientIdentity;
@@ -48,12 +49,13 @@ impl DaemonConn {
     /// In TLS 1.3, client certificate verification happens after the server
     /// sends its Finished message, so `connect` can return Ok even if the
     /// daemon will reject our key. The rejection only surfaces on the first
-    /// stream open. Call this immediately after connect to catch it early.
+    /// stream use. A full round-trip request forces the daemon to process
+    /// our certificate before we declare the connection healthy.
     pub async fn probe(&self) -> Result<(), ClientError> {
-        tokio::task::yield_now().await;
-        let (mut send, _recv) = self.client.open_bi().await?;
-        let _ = send.finish();
-        Ok(())
+        match self.client.request("ping", json!({})).await {
+            Ok(_) | Err(ClientError::Api { .. }) => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 
     pub async fn open_bi(&self) -> Result<(quinn::SendStream, quinn::RecvStream), ClientError> {

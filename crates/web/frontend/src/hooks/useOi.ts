@@ -36,8 +36,10 @@ export function useOiQuery<T>(
         }
       })
       .catch((e: unknown) => {
-        if (!cancelled)
+        if (!cancelled) {
+          console.error(`[OI] ${method} failed:`, e);
           setError(e instanceof Error ? e.message : String(e));
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

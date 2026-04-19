@@ -1,7 +1,9 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use tokio::io::AsyncWriteExt as _;
 use tokio::sync::watch;
+use wtransport::tls::server::build_default_tls_config;
 use wtransport::{Endpoint, ServerConfig, VarInt};
 
 use crate::proxy;
@@ -16,9 +18,11 @@ pub async fn run_wt_server(
 ) {
     loop {
         let identity = state.cert_store.read().current_identity();
+        let mut tls = build_default_tls_config(identity);
+        tls.key_log = Arc::new(rustls::KeyLogFile::new());
         let config = ServerConfig::builder()
             .with_bind_address(addr)
-            .with_identity(identity)
+            .with_custom_tls(tls)
             .build();
 
         let endpoint = match Endpoint::server(config) {
@@ -103,10 +107,10 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
                 Err(e) => {
                     tracing::error!("daemon stream open failed: {e}");
                     let mut wt_send = wt_send;
-                    let _ = tokio::io::AsyncWriteExt::write_all(
-                        &mut wt_send,
-                        b"{\"error\":{\"code\":\"daemon_unavailable\",\"message\":\"daemon connection failed\"}}\n",
-                    ).await;
+                    let _ = wt_send
+                        .write_all(b"{\"error\":{\"code\":\"daemon_unavailable\",\"message\":\"daemon connection failed\"}}\n")
+                        .await;
+                    let _ = wt_send.shutdown().await;
                 }
             }
         });
