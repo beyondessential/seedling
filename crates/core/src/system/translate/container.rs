@@ -77,6 +77,12 @@ pub fn job_spec(
 pub fn podman_args(spec: &ContainerSpec) -> Vec<String> {
     let mut args = vec!["podman".to_string(), "run".to_string(), "--rm".to_string()];
 
+    // r[impl actuate.container.journal-metadata]
+    // Disable podman's built-in journald log driver; container stdout/stderr flows
+    // through podman's own process stdout, which systemd captures once. Without this,
+    // both podman's journald driver and systemd's unit capture write the same lines.
+    args.push("--log-driver=none".to_string());
+
     // r[impl actuate.container.hardening]
     args.push("--cap-drop=ALL".to_string());
     for cap in &spec.extra_caps {
