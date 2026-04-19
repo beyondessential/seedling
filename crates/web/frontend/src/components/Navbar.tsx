@@ -45,10 +45,19 @@ export function Navbar() {
   return (
     <AppBar position="fixed">
       <Toolbar variant="dense">
-        <Typography sx={{ mr: 1, fontSize: "1.2rem", lineHeight: 1 }}>
+        <Typography
+          component={Link}
+          to="/"
+          sx={{ mr: 1, fontSize: "1.2rem", lineHeight: 1, textDecoration: "none" }}
+        >
           🌱
         </Typography>
-        <Typography variant="h6" sx={{ fontWeight: 700, letterSpacing: "-0.5px" }}>
+        <Typography
+          variant="h6"
+          component={Link}
+          to="/"
+          sx={{ fontWeight: 700, letterSpacing: "-0.5px", color: "inherit", textDecoration: "none" }}
+        >
           Seedling
         </Typography>
         <Box sx={{ flexGrow: 1 }} />
