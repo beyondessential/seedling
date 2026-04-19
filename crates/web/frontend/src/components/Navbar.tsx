@@ -1,19 +1,23 @@
 import EventNoteIcon from "@mui/icons-material/EventNote";
 import { AppBar, Box, Chip, IconButton, Toolbar, Tooltip, Typography } from "@mui/material";
 import { Link } from "react-router-dom";
+import { useEventRefresh } from "../hooks/useEventRefresh";
 import { useOiQuery } from "../hooks/useOi";
 import { useSessionContext } from "./SessionProvider";
-import type { FaultRecord } from "../lib/types";
+import type { FaultRecord, SeedlingEvent } from "../lib/types";
 
 interface StatusSummary {
   hostname: string;
   version: string;
 }
 
+const isFaultEvent = (ev: SeedlingEvent) => ev.type === "FaultFiled" || ev.type === "FaultCleared";
+
 export function Navbar() {
   const { data } = useOiQuery<StatusSummary>("/server/status", {});
-  const { data: faults } = useOiQuery<FaultRecord[]>("/faults/list", {});
+  const { data: faults, refetch: refetchFaults } = useOiQuery<FaultRecord[]>("/faults/list", {});
   const { reconnecting, sidebarOpen, setSidebarOpen } = useSessionContext();
+  useEventRefresh(refetchFaults, isFaultEvent);
   const faultCount = faults?.length ?? 0;
 
   return (
