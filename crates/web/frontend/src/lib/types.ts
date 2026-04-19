@@ -92,6 +92,50 @@ export interface AppDetail {
   current_operation?: CurrentOperation;
 }
 
+export interface SeedlingEvent {
+  type: string;
+  timestamp: string;
+  actor?: Actor;
+  // App-scoped events
+  app?: string;
+  // AppRegistered / AppUpdated
+  generation?: number;
+  previous_generation?: number;
+  // ParamSet / ParamUnset
+  name?: string;
+  // OperationStarted / OperationCompleted / OperationFailed
+  action_name?: string;
+  operation_id?: string;
+  source_generation?: number;
+  target_generation?: number;
+  trigger?: string;
+  error?: string;
+  // FaultFiled / FaultCleared
+  id?: string;
+  kind?: string;
+  resource_type?: string;
+  resource_name?: string;
+  instance_id?: string;
+  description?: string;
+  // ResourceStateChanged
+  state?: string;
+  // ScaleChanged
+  deployment?: string;
+  scale?: number;
+  previous_scale?: number;
+  bounds_low?: number;
+  bounds_high?: number;
+  // ForwardStarted / ForwardStopped
+  forward_id?: string;
+  service?: string;
+  port?: number;
+  // ShellExited
+  session_id?: string;
+  exit_code?: number;
+  // ServerBusy
+  reason?: string;
+}
+
 export interface Actor {
   kind?: string;
   id?: string;

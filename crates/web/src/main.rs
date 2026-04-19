@@ -9,6 +9,7 @@ use parking_lot::{Mutex, RwLock};
 mod auth;
 mod config;
 mod daemon;
+mod event_broker;
 mod http;
 mod interfaces;
 mod proxy;
@@ -19,6 +20,7 @@ mod wt_cert;
 
 use config::Config;
 use daemon::DaemonConn;
+use event_broker::{EventBroker, run_event_broker};
 use interfaces::resolve_bind_addrs;
 use seedling_protocol::client::ClientAuth;
 use state::AppState;
@@ -195,6 +197,8 @@ async fn main() {
 
     let (rotation_tx, rotation_rx) = tokio::sync::watch::channel(());
 
+    let event_broker = EventBroker::new();
+
     let state = AppState {
         trust_tailscale: args.trust_tailscale_headers,
         dev_no_auth: args.dev_no_auth,
@@ -205,11 +209,16 @@ async fn main() {
         password_hash,
         wt_port,
         vite_port: args.vite_port,
-        daemon,
+        daemon: Arc::clone(&daemon),
+        event_broker: Arc::clone(&event_broker),
     };
 
     // Spawn cert rotation background task.
     tokio::spawn(wt::run_cert_rotation(Arc::clone(&cert_store), rotation_tx));
+
+    // Spawn the event broker — maintains a single daemon subscription and fans
+    // out to all connected web clients.
+    tokio::spawn(run_event_broker(event_broker, daemon));
 
     // Spawn HTTP servers.
     let router = http::router(state.clone());

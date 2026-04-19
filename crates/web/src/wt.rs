@@ -6,8 +6,8 @@ use tokio::sync::watch;
 use wtransport::tls::server::build_default_tls_config;
 use wtransport::{Endpoint, ServerConfig, VarInt};
 
-use crate::proxy;
-use crate::state::{self, AppState};
+use crate::state::AppState;
+use crate::{proxy, state};
 
 /// Run a WebTransport server on `addr`, restarting when `rotation_rx` fires (cert rotated).
 // w[transport.webtransport]
@@ -96,17 +96,42 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
     );
 
     // w[transport.webtransport]
-    while let Ok((wt_send, wt_recv)) = conn.accept_bi().await {
+    // w[routes.events]
+    while let Ok((mut wt_send, wt_recv)) = conn.accept_bi().await {
         let state3 = state.clone();
         let actor2 = Arc::clone(&actor);
         tokio::spawn(async move {
+            let peeked = match proxy::peek_request(wt_recv, &actor2).await {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::debug!("peek request failed: {e}");
+                    return;
+                }
+            };
+
+            if peeked.method == "/events/subscribe" {
+                let _ = wt_send.write_all(b"{\"result\":{}}\n").await;
+                state3.event_broker.serve_client(wt_send).await;
+                return;
+            }
+
             match state3.daemon.open_bi().await {
                 Ok((daemon_send, daemon_recv)) => {
-                    proxy::proxy_stream(wt_send, wt_recv, daemon_send, daemon_recv, actor2).await;
+                    let mut daemon_send = daemon_send;
+                    let mut daemon_recv = daemon_recv;
+                    if let Err(e) = proxy::proxy_from_peeked(
+                        &mut wt_send,
+                        peeked,
+                        &mut daemon_send,
+                        &mut daemon_recv,
+                    )
+                    .await
+                    {
+                        tracing::debug!("proxy stream: {e}");
+                    }
                 }
                 Err(e) => {
                     tracing::error!("daemon stream open failed: {e}");
-                    let mut wt_send = wt_send;
                     let _ = wt_send
                         .write_all(b"{\"error\":{\"code\":\"daemon_unavailable\",\"message\":\"daemon connection failed\"}}\n")
                         .await;

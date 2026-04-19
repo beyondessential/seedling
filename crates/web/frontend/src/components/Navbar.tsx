@@ -1,4 +1,5 @@
-import { AppBar, Box, Chip, Toolbar, Tooltip, Typography } from "@mui/material";
+import EventNoteIcon from "@mui/icons-material/EventNote";
+import { AppBar, Box, Chip, IconButton, Toolbar, Tooltip, Typography } from "@mui/material";
 import { Link } from "react-router-dom";
 import { useOiQuery } from "../hooks/useOi";
 import { useSessionContext } from "./SessionProvider";
@@ -12,7 +13,7 @@ interface StatusSummary {
 export function Navbar() {
   const { data } = useOiQuery<StatusSummary>("/server/status", {});
   const { data: faults } = useOiQuery<FaultRecord[]>("/faults/list", {});
-  const { reconnecting } = useSessionContext();
+  const { reconnecting, sidebarOpen, setSidebarOpen } = useSessionContext();
   const faultCount = faults?.length ?? 0;
 
   return (
@@ -47,10 +48,20 @@ export function Navbar() {
           />
         )}
         {data?.hostname && (
-          <Typography variant="body2" sx={{ opacity: 0.85, fontFamily: "monospace" }}>
+          <Typography variant="body2" sx={{ opacity: 0.85, mr: 1, fontFamily: "monospace" }}>
             {data.hostname}
           </Typography>
         )}
+        <Tooltip title={sidebarOpen ? "Hide events" : "Show events"}>
+          <IconButton
+            color={sidebarOpen ? "inherit" : "default"}
+            size="small"
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            sx={{ color: sidebarOpen ? "white" : "rgba(255,255,255,0.6)" }}
+          >
+            <EventNoteIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
       </Toolbar>
     </AppBar>
   );

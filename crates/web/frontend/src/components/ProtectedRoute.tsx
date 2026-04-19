@@ -1,19 +1,23 @@
 import { Box, CircularProgress, Toolbar } from "@mui/material";
 import { useContext } from "react";
 import { Navigate, Outlet } from "react-router-dom";
+import { EventsSidebar } from "./EventsSidebar";
 import { Navbar } from "./Navbar";
 import { SessionContext } from "./SessionProvider";
 
 export function ProtectedRoute() {
-  const { session, probing } = useContext(SessionContext);
+  const { session, probing, sidebarOpen } = useContext(SessionContext);
   if (probing) return <CircularProgress sx={{ m: 4 }} />;
   if (!session) return <Navigate to="/login" replace />;
   return (
     <>
       <Navbar />
-      <Box component="main">
-        <Toolbar variant="dense" />
-        <Outlet />
+      <Toolbar variant="dense" />
+      <Box sx={{ display: "flex", height: "calc(100vh - 48px)" }}>
+        <Box component="main" sx={{ flexGrow: 1, overflow: "auto" }}>
+          <Outlet />
+        </Box>
+        {sidebarOpen && <EventsSidebar />}
       </Box>
     </>
   );

@@ -1,44 +1,27 @@
-use std::sync::Arc;
-
 use seedling_protocol::actor::Actor;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 
 const MAX_FIRST_LINE: usize = 1024 * 1024;
 
-// w[transport.webtransport]
-// w[wt.actor]
-pub async fn proxy_stream(
-    mut wt_send: wtransport::SendStream,
-    wt_recv: wtransport::RecvStream,
-    mut daemon_send: quinn::SendStream,
-    mut daemon_recv: quinn::RecvStream,
-    actor: Arc<Actor>,
-) {
-    if let Err(e) = do_proxy(
-        &mut wt_send,
-        wt_recv,
-        &mut daemon_send,
-        &mut daemon_recv,
-        &actor,
-    )
-    .await
-    {
-        tracing::debug!("proxy stream: {e}");
-    }
+pub struct PeekedRequest {
+    pub method: String,
+    /// The first JSON line with the actor field injected, ready to write.
+    pub modified_line: Vec<u8>,
+    /// Buffered remainder of the WT recv stream.
+    pub remaining: BufReader<wtransport::RecvStream>,
 }
 
-async fn do_proxy(
-    wt_send: &mut wtransport::SendStream,
+/// Read and parse the first JSON line from a WT recv stream, inject the actor
+/// field, and return the method and remaining buffered stream.
+pub async fn peek_request(
     wt_recv: wtransport::RecvStream,
-    daemon_send: &mut quinn::SendStream,
-    daemon_recv: &mut quinn::RecvStream,
     actor: &Actor,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut wt_buf = BufReader::new(wt_recv);
+) -> Result<PeekedRequest, Box<dyn std::error::Error + Send + Sync>> {
+    let mut buf = BufReader::new(wt_recv);
     let mut first_line = String::new();
-    let n = wt_buf.read_line(&mut first_line).await?;
+    let n = buf.read_line(&mut first_line).await?;
     if n == 0 {
-        return Ok(());
+        return Err("empty stream".into());
     }
     if first_line.len() > MAX_FIRST_LINE {
         return Err(format!("first line too large ({} bytes)", first_line.len()).into());
@@ -46,18 +29,38 @@ async fn do_proxy(
 
     let raw = first_line.trim_end_matches(['\n', '\r']);
     let mut json: serde_json::Value = serde_json::from_str(raw)?;
+    let method = json
+        .get("method")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_owned();
     if let Some(obj) = json.as_object_mut() {
         obj.insert("actor".into(), serde_json::to_value(actor)?);
     }
+    let modified_line = serde_json::to_vec(&json)?;
 
-    let modified = serde_json::to_vec(&json)?;
-    daemon_send.write_all(&modified).await?;
+    Ok(PeekedRequest {
+        method,
+        modified_line,
+        remaining: buf,
+    })
+}
+
+// w[transport.webtransport]
+// w[wt.actor]
+/// Splice a pre-peeked request through to a daemon stream.
+pub async fn proxy_from_peeked(
+    wt_send: &mut wtransport::SendStream,
+    peeked: PeekedRequest,
+    daemon_send: &mut quinn::SendStream,
+    daemon_recv: &mut quinn::RecvStream,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    daemon_send.write_all(&peeked.modified_line).await?;
     daemon_send.write_all(b"\n").await?;
 
-    // Splice remaining bytes in both directions concurrently.
-    // Keep wt_buf (not into_inner) so buffered bytes aren't lost.
+    let mut remaining = peeked.remaining;
     let fwd = async {
-        let _ = tokio::io::copy(&mut wt_buf, daemon_send).await;
+        let _ = tokio::io::copy(&mut remaining, daemon_send).await;
         let _ = daemon_send.finish();
     };
     let bwd = async {
@@ -65,6 +68,5 @@ async fn do_proxy(
         let _ = wt_send.shutdown().await;
     };
     tokio::join!(fwd, bwd);
-
     Ok(())
 }

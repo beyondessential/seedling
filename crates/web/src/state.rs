@@ -5,6 +5,7 @@ use parking_lot::Mutex;
 use seedling_protocol::actor::Actor;
 
 use crate::daemon::DaemonConn;
+use crate::event_broker::EventBroker;
 use crate::wt_cert::CertStore;
 
 pub struct WtTokenEntry {
@@ -61,4 +62,5 @@ pub struct AppState {
     /// When set, the SPA fallback proxies to a Vite dev server instead of serving embedded assets.
     pub vite_port: Option<u16>,
     pub daemon: Arc<DaemonConn>,
+    pub event_broker: Arc<EventBroker>,
 }

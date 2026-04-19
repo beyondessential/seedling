@@ -104,6 +104,19 @@ impl DaemonConn {
         Ok(())
     }
 
+    /// Create a fresh, independent `OiClient` for long-running event subscriptions.
+    ///
+    /// Event streaming holds a stream open indefinitely, so it must not share
+    /// the connection managed by `open_bi`.  Each call opens a new QUIC
+    /// connection to the daemon.
+    pub async fn new_events_client(&self) -> Result<OiClient, ClientError> {
+        let identity = ClientIdentity::load_or_generate(&self.key_path)
+            .map_err(|e| ClientError::Connect(Box::new(e)))?
+            .0;
+        let actor = Self::make_actor(&self.fingerprint);
+        OiClient::connect(self.addr, self.auth.clone(), &identity, actor).await
+    }
+
     /// Default path for the web binary's persistent client key.
     pub fn default_key_path() -> PathBuf {
         dirs::state_dir()

@@ -3,7 +3,7 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 use super::keys::ClientIdentity;
 use crate::actor::Actor;
 
-use quinn::{ClientConfig, Connection, Endpoint, TransportConfig};
+use quinn::{ClientConfig, Connection, Endpoint, RecvStream, TransportConfig};
 use rustls::{
     ClientConfig as TlsClientConfig, DigitallySignedStruct, SignatureScheme,
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
@@ -12,6 +12,7 @@ use rustls_pki_types::{CertificateDer, ServerName, SubjectPublicKeyInfoDer, Unix
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
+use tokio::io::{AsyncBufReadExt as _, BufReader};
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -324,6 +325,41 @@ impl OiClient {
             .accept_uni()
             .await
             .map_err(|e| ClientError::Transport(Box::new(e)))
+    }
+
+    /// Subscribe to the server's event stream.
+    ///
+    /// Sends `/events/subscribe`, discards the initial `{"result":{}}` line,
+    /// then accepts the server-initiated unidirectional stream the daemon opens
+    /// to push newline-delimited JSON events.  Returns that stream.
+    pub async fn subscribe_events(&self) -> Result<RecvStream, ClientError> {
+        let (mut send, recv) = self
+            .conn
+            .open_bi()
+            .await
+            .map_err(|e| ClientError::Transport(Box::new(e)))?;
+
+        let req = serde_json::to_vec(&serde_json::json!({
+            "method": "/events/subscribe",
+            "actor": &self.actor,
+            "params": {}
+        }))
+        .expect("serialise never fails");
+        send.write_all(&req)
+            .await
+            .map_err(|e| ClientError::Transport(Box::new(e)))?;
+        send.finish()
+            .map_err(|e| ClientError::Transport(Box::new(e)))?;
+
+        // Consume the initial {"result":{}} line.
+        let mut buf = BufReader::new(recv);
+        let mut line = String::new();
+        buf.read_line(&mut line)
+            .await
+            .map_err(|e| ClientError::Transport(Box::new(e)))?;
+
+        // The daemon now opens a server-initiated uni stream carrying events.
+        self.accept_uni().await
     }
 
     /// Send a QUIC datagram to the server.

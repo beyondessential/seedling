@@ -8,14 +8,18 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
+import { useCallback } from "react";
 import { Link } from "react-router-dom";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useOiQuery } from "../hooks/useOi";
-import type { FaultRecord } from "../lib/types";
+import { useEventRefresh } from "../hooks/useEventRefresh";
+import type { FaultRecord, SeedlingEvent } from "../lib/types";
 
 export default function Faults() {
   const { data, loading, error, refetch } =
     useOiQuery<FaultRecord[]>("/faults/list", {});
+  const matchesFaults = useCallback((ev: SeedlingEvent) => ev.type === "FaultFiled" || ev.type === "FaultCleared", []);
+  useEventRefresh(refetch, matchesFaults);
 
   return (
     <Box sx={{ p: 3, maxWidth: 900, mx: "auto" }}>

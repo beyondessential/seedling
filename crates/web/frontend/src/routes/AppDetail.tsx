@@ -33,11 +33,12 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
+import { useEventRefresh } from "../hooks/useEventRefresh";
 import { isStrongPassword, passwordScore } from "../lib/passwordStrength";
 import { statusColor, statusLabel } from "../lib/status";
 import type {
@@ -48,6 +49,7 @@ import type {
   AppStatus,
   FaultRecord,
   InstallRequirement,
+  SeedlingEvent,
 } from "../lib/types";
 
 function lifecycleColor(
@@ -789,6 +791,12 @@ function AppRemovalDialog({
   );
 }
 
+const APP_DETAIL_EVENTS: Set<string> = new Set([
+  "AppUpdated", "OperationStarted", "OperationCompleted", "OperationFailed",
+  "ParamSet", "ParamUnset", "ResourceStateChanged", "FaultFiled", "FaultCleared",
+  "ScaleChanged",
+]);
+
 export default function AppDetail() {
   const { name } = useParams<{ name: string }>();
   const navigate = useNavigate();
@@ -797,6 +805,11 @@ export default function AppDetail() {
     "/apps/show",
     { app: name },
   );
+  const matchesApp = useCallback(
+    (ev: SeedlingEvent) => APP_DETAIL_EVENTS.has(ev.type) && (!ev.app || ev.app === name),
+    [name],
+  );
+  useEventRefresh(refetch, matchesApp);
 
   return (
     <Box sx={{ p: 3, maxWidth: 900, mx: "auto" }}>

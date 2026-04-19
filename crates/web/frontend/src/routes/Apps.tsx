@@ -16,15 +16,25 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
+import { useCallback } from "react";
 import { Link } from "react-router-dom";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useOiQuery } from "../hooks/useOi";
+import { useEventRefresh } from "../hooks/useEventRefresh";
 import { statusColor, statusLabel } from "../lib/status";
-import type { AppSummary } from "../lib/types";
+import type { AppSummary, SeedlingEvent } from "../lib/types";
+
+const APP_LIST_EVENTS: Set<string> = new Set([
+  "AppRegistered", "AppDeregistered", "AppUpdated",
+  "OperationStarted", "OperationCompleted", "OperationFailed",
+  "FaultFiled", "FaultCleared",
+]);
 
 export default function Apps() {
   const { data, loading, error, refetch } =
     useOiQuery<AppSummary[]>("/apps/list", {});
+  const matchesApps = useCallback((ev: SeedlingEvent) => APP_LIST_EVENTS.has(ev.type), []);
+  useEventRefresh(refetch, matchesApps);
 
   return (
     <Box sx={{ p: 3, maxWidth: 900, mx: "auto" }}>
