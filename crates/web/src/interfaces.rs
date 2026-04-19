@@ -25,7 +25,8 @@ pub fn resolve_bind_addrs(
             .collect();
 
         if matched.is_empty() {
-            return Err(InterfaceError(format!("interface not found: {name}")));
+            warn!("interface not found: {name}");
+            continue;
         }
 
         for ip in matched {
