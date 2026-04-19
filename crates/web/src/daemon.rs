@@ -1,10 +1,10 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
-use serde_json::json;
 use seedling_protocol::actor::Actor;
 use seedling_protocol::client::{ClientAuth, ClientError, OiClient};
 use seedling_protocol::keys::ClientIdentity;
+use serde_json::json;
 
 pub struct DaemonConn {
     inner: tokio::sync::Mutex<OiClient>,
@@ -88,8 +88,7 @@ impl DaemonConn {
             .map_err(|e| ClientError::Connect(Box::new(e)))?
             .0;
         let actor = Self::make_actor(&self.fingerprint);
-        let new_client =
-            OiClient::connect(self.addr, self.auth.clone(), &identity, actor).await?;
+        let new_client = OiClient::connect(self.addr, self.auth.clone(), &identity, actor).await?;
         match new_client.request("ping", json!({})).await {
             Ok(_) | Err(ClientError::Api { .. }) => {}
             Err(e) => return Err(e),
