@@ -569,6 +569,65 @@ function ActionInvokeDialog({
   );
 }
 
+function InstallSection({
+  appName,
+  installAction,
+  onRefresh,
+}: {
+  appName: string;
+  installAction: AppAction | undefined;
+  onRefresh: () => void;
+}) {
+  const { execute, loading } = useOiAction();
+  const [dialogOpen, setDialogOpen] = useState(false);
+
+  const hasParams = installAction && Object.keys(installAction.params).length > 0;
+
+  const handleInstall = async () => {
+    if (hasParams) {
+      setDialogOpen(true);
+    } else {
+      await execute("/apps/install/invoke", { app: appName, params: {} });
+      onRefresh();
+    }
+  };
+
+  return (
+    <>
+      <Box
+        sx={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 2,
+          py: 6,
+        }}
+      >
+        <Typography color="text.secondary">
+          This app has not been installed yet.
+        </Typography>
+        <Button
+          variant="contained"
+          size="large"
+          onClick={() => void handleInstall()}
+          disabled={loading}
+        >
+          {loading ? "Installing…" : "Install"}
+        </Button>
+      </Box>
+      {installAction && (
+        <ActionInvokeDialog
+          appName={appName}
+          action={installAction}
+          open={dialogOpen}
+          onClose={() => setDialogOpen(false)}
+          onSuccess={onRefresh}
+        />
+      )}
+    </>
+  );
+}
+
 function ActionsSection({
   appName,
   actions,
@@ -585,13 +644,7 @@ function ActionsSection({
   const canInstall = status === "not_installed";
   const canInvoke = status !== "not_installed" && status !== "uninstalling" && status !== "deregistering";
 
-  const hasExplicitInstall = actions.some((a) => a.kind === "install");
-  const visibleActions: AppAction[] =
-    canInstall && !hasExplicitInstall
-      ? [{ name: "install", kind: "install", description: null, params: {} }, ...actions]
-      : actions;
-
-  if (visibleActions.length === 0)
+  if (actions.length === 0)
     return <Typography color="text.secondary">No actions.</Typography>;
 
   return (
@@ -607,7 +660,7 @@ function ActionsSection({
             </TableRow>
           </TableHead>
           <TableBody>
-            {visibleActions.map((a) => {
+            {actions.map((a) => {
               const isInvokable = a.kind !== "shell" && a.kind !== "lifecycle";
               const canRun =
                 a.kind === "install"
@@ -854,24 +907,34 @@ export default function AppDetail() {
 
           <Divider />
 
-          <Section title="Actions">
-            <ActionsSection
+          {data.status === "not_installed" ? (
+            <InstallSection
               appName={name!}
-              actions={data.actions}
-              status={data.status}
+              installAction={data.actions.find((a) => a.kind === "install")}
               onRefresh={refetch}
             />
-          </Section>
+          ) : (
+            <>
+              <Section title="Actions">
+                <ActionsSection
+                  appName={name!}
+                  actions={data.actions}
+                  status={data.status}
+                  onRefresh={refetch}
+                />
+              </Section>
 
-          <Divider />
+              <Divider />
 
-          <Section title="Resources">
-            <ResourcesSection
-              appName={name!}
-              resources={data.resources}
-              onRefresh={refetch}
-            />
-          </Section>
+              <Section title="Resources">
+                <ResourcesSection
+                  appName={name!}
+                  resources={data.resources}
+                  onRefresh={refetch}
+                />
+              </Section>
+            </>
+          )}
         </Stack>
       )}
       <AppRemovalDialog
