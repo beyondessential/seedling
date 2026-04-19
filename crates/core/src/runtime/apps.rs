@@ -168,6 +168,10 @@ impl AppRegistry {
         self.entries.get(name)
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = &AppEntry> {
+        self.entries.values()
+    }
+
     pub fn get_mut(&mut self, name: &str) -> Option<&mut AppEntry> {
         self.entries.get_mut(name)
     }

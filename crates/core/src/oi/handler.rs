@@ -133,6 +133,7 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/volumes/external/list" => {
             volumes::list_external_mappings(state, parse_params(req.params)?)
         }
+        "/volumes/external/declared" => volumes::list_declared_external_volumes(state),
         // i[backup.app.register]
         "/backups/apps/register" => backups::register_backup_app(state, parse_params(req.params)?),
         // i[backup.app.deregister]

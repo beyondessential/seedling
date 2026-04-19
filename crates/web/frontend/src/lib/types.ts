@@ -241,6 +241,11 @@ export interface ExportedVolume {
   description?: string;
 }
 
+export interface DeclaredExternalVolume {
+  app: string;
+  name: string;
+}
+
 export interface ExternalMapping {
   app: string;
   external_name: string;

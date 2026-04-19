@@ -523,6 +523,29 @@ pub(crate) fn list_external_mappings(
     Ok(json!(items))
 }
 
+pub(crate) fn list_declared_external_volumes(state: &OiState) -> HandlerResult {
+    use crate::defs::resource::ResourceKind;
+
+    let reg = state.registry.read();
+    let mut items: Vec<serde_json::Value> = reg
+        .iter()
+        .flat_map(|entry| {
+            let def = entry.app.def.lock();
+            def.resources
+                .keys()
+                .filter(|id| id.kind == ResourceKind::ExternalVolume)
+                .map(|id| json!({ "app": entry.name, "name": id.name.as_str() }))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    items.sort_by(|a, b| {
+        let ak = (a["app"].as_str().unwrap_or(""), a["name"].as_str().unwrap_or(""));
+        let bk = (b["app"].as_str().unwrap_or(""), b["name"].as_str().unwrap_or(""));
+        ak.cmp(&bk)
+    });
+    Ok(json!(items))
+}
+
 fn parse_mapping_target(
     kind: &str,
     target_app: Option<&str>,

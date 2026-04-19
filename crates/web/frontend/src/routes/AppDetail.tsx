@@ -36,6 +36,7 @@ import {
 } from "@mui/material";
 import { useCallback, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { MapVolumeDialog } from "../components/MapVolumeDialog";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
@@ -48,6 +49,7 @@ import type {
   AppParam,
   AppResource,
   AppStatus,
+  ExternalMapping,
   FaultRecord,
   InstallRequirement,
   ResourceDef,
@@ -1027,6 +1029,15 @@ export default function AppDetail() {
     "/apps/show",
     { app: name },
   );
+  const { data: mappings, refetch: refetchMappings } = useOiQuery<ExternalMapping[]>(
+    "/volumes/external/list",
+    { app: name },
+  );
+  const [mapDialogState, setMapDialogState] = useState<
+    | { mode: "prefill"; volName: string }
+    | { mode: "remap"; existing: ExternalMapping }
+    | null
+  >(null);
   const matchesApp = useCallback(
     (ev: SeedlingEvent) => APP_DETAIL_EVENTS.has(ev.type) && (!ev.app || ev.app === name),
     [name],
@@ -1156,6 +1167,74 @@ export default function AppDetail() {
             />
           </Section>
 
+          {data.resources.some((r) => r.type === "external_volume") && (
+            <>
+              <Divider />
+              <Section title="External Volumes">
+                <TableContainer component={Paper} variant="outlined">
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Name</TableCell>
+                        <TableCell>Mapped to</TableCell>
+                        <TableCell width={80} align="right" />
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {data.resources
+                        .filter((r) => r.type === "external_volume")
+                        .map((r) => {
+                          const mapping = (mappings ?? []).find(
+                            (m) => m.external_name === r.name,
+                          );
+                          return (
+                            <TableRow key={r.name}>
+                              <TableCell sx={{ fontFamily: "monospace" }}>
+                                {r.name}
+                              </TableCell>
+                              <TableCell>
+                                {mapping ? (
+                                  <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                                    <Typography variant="caption" sx={{ fontFamily: "monospace" }}>
+                                      {mapping.target_kind === "exported" && mapping.target_app
+                                        ? `${mapping.target_app}/${mapping.target_volume}`
+                                        : mapping.target_volume}
+                                    </Typography>
+                                    <Chip label={mapping.target_kind} size="small" variant="outlined" />
+                                    {mapping.read_only && (
+                                      <Chip label="ro" size="small" variant="outlined" />
+                                    )}
+                                  </Box>
+                                ) : (
+                                  <Typography variant="caption" color="text.secondary">
+                                    Not mapped
+                                  </Typography>
+                                )}
+                              </TableCell>
+                              <TableCell align="right">
+                                <Button
+                                  size="small"
+                                  onClick={() =>
+                                    setMapDialogState(
+                                      mapping
+                                        ? { mode: "remap", existing: mapping }
+                                        : { mode: "prefill", volName: r.name },
+                                    )
+                                  }
+                                >
+                                  {mapping ? "Remap" : "Map"}
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </Section>
+            </>
+          )}
+
           <Divider />
 
           {data.status === "not_installed" ? (
@@ -1190,6 +1269,20 @@ export default function AppDetail() {
             </>
           )}
         </Stack>
+      )}
+      {mapDialogState && (
+        <MapVolumeDialog
+          open={true}
+          onClose={() => setMapDialogState(null)}
+          onSuccess={() => {
+            setMapDialogState(null);
+            void refetchMappings();
+          }}
+          {...(mapDialogState.mode === "remap"
+            ? { existing: mapDialogState.existing }
+            : { prefill: { app: name!, name: mapDialogState.volName } }
+          )}
+        />
       )}
       <AppRemovalDialog
         appName={name!}

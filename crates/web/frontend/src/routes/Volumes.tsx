@@ -7,7 +7,6 @@ import {
   Alert,
   Box,
   Button,
-  Checkbox,
   Chip,
   CircularProgress,
   Dialog,
@@ -38,10 +37,12 @@ import {
 } from "@mui/material";
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import { MapVolumeDialog } from "../components/MapVolumeDialog";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
 import type {
+  DeclaredExternalVolume,
   ExportedVolume,
   ExternalMapping,
   HeldVolume,
@@ -210,247 +211,6 @@ function CreateSiteVolumeDialog({
   );
 }
 
-// w[impl routes.volumes]
-function MapVolumeDialog({
-  open,
-  onClose,
-  onSuccess,
-  existing,
-  siteVolumes,
-  exportedVolumes,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onSuccess: () => void;
-  existing?: ExternalMapping;
-  siteVolumes: SiteVolume[];
-  exportedVolumes: ExportedVolume[];
-}) {
-  const { execute, loading, error, clearError } = useOiAction();
-  const [app, setApp] = useState(existing?.app ?? "");
-  const [externalName, setExternalName] = useState(
-    existing?.external_name ?? "",
-  );
-  const [targetKind, setTargetKind] = useState<"site" | "exported">(
-    existing?.target_kind ?? "site",
-  );
-  const [targetApp, setTargetApp] = useState(existing?.target_app ?? "");
-  const [targetVolume, setTargetVolume] = useState(
-    existing?.target_volume ?? "",
-  );
-  const [readOnly, setReadOnly] = useState(existing?.read_only ?? false);
-
-  const isRemap = !!existing;
-
-  const handleClose = () => {
-    clearError();
-    onClose();
-  };
-
-  const handleSubmit = async () => {
-    try {
-      await execute(
-        isRemap ? "/volumes/external/remap" : "/volumes/external/map",
-        {
-          app,
-          external_name: externalName,
-          target_kind: targetKind,
-          ...(targetKind === "exported" ? { target_app: targetApp } : {}),
-          target_volume: targetVolume,
-          read_only: readOnly,
-        },
-      );
-      onSuccess();
-    } catch {
-      // displayed via error
-    }
-  };
-
-  const filteredExported =
-    targetApp
-      ? exportedVolumes.filter((v) => v.app === targetApp)
-      : exportedVolumes;
-
-  const canSubmit =
-    !!app &&
-    !!externalName &&
-    !!targetVolume &&
-    (targetKind === "site" || !!targetApp);
-
-  return (
-    <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
-      <DialogTitle>
-        {isRemap ? "Remap External Volume" : "Map External Volume"}
-      </DialogTitle>
-      <DialogContent>
-        <Stack spacing={2} sx={{ mt: 0.5 }}>
-          {error && <OiErrorAlert error={error} />}
-          <TextField
-            label="App"
-            size="small"
-            value={app}
-            onChange={(e) => setApp(e.target.value)}
-            inputProps={{ style: { fontFamily: "monospace" } }}
-            disabled={isRemap}
-            autoFocus={!isRemap}
-          />
-          <TextField
-            label="External volume name"
-            size="small"
-            value={externalName}
-            onChange={(e) => setExternalName(e.target.value)}
-            inputProps={{ style: { fontFamily: "monospace" } }}
-            disabled={isRemap}
-            autoFocus={isRemap}
-          />
-          <FormControl>
-            <FormLabel>Target</FormLabel>
-            <RadioGroup
-              row
-              value={targetKind}
-              onChange={(e) => {
-                setTargetKind(e.target.value as typeof targetKind);
-                setTargetVolume("");
-              }}
-            >
-              <FormControlLabel
-                value="site"
-                control={<Radio size="small" />}
-                label="Site volume"
-              />
-              <FormControlLabel
-                value="exported"
-                control={<Radio size="small" />}
-                label="Exported app volume"
-              />
-            </RadioGroup>
-          </FormControl>
-          {targetKind === "site" && (
-            siteVolumes.length > 0 ? (
-              <FormControl size="small">
-                <InputLabel>Site volume</InputLabel>
-                <Select
-                  label="Site volume"
-                  value={targetVolume}
-                  onChange={(e) => setTargetVolume(e.target.value)}
-                  sx={{ fontFamily: "monospace" }}
-                >
-                  {siteVolumes.map((v) => (
-                    <MenuItem
-                      key={v.name}
-                      value={v.name}
-                      sx={{ fontFamily: "monospace" }}
-                    >
-                      {v.name}
-                      <Typography
-                        component="span"
-                        variant="caption"
-                        color="text.secondary"
-                        sx={{ ml: 1 }}
-                      >
-                        {v.kind}
-                      </Typography>
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            ) : (
-              <TextField
-                label="Site volume name"
-                size="small"
-                value={targetVolume}
-                onChange={(e) => setTargetVolume(e.target.value)}
-                inputProps={{ style: { fontFamily: "monospace" } }}
-                helperText="No site volumes found — enter the name manually."
-              />
-            )
-          )}
-          {targetKind === "exported" && (
-            <>
-              <TextField
-                label="Source app"
-                size="small"
-                value={targetApp}
-                onChange={(e) => {
-                  setTargetApp(e.target.value);
-                  setTargetVolume("");
-                }}
-                inputProps={{ style: { fontFamily: "monospace" } }}
-              />
-              {filteredExported.length > 0 ? (
-                <FormControl size="small">
-                  <InputLabel>Exported volume</InputLabel>
-                  <Select
-                    label="Exported volume"
-                    value={targetVolume}
-                    onChange={(e) => setTargetVolume(e.target.value)}
-                    sx={{ fontFamily: "monospace" }}
-                  >
-                    {filteredExported.map((v) => (
-                      <MenuItem
-                        key={v.volume_name}
-                        value={v.volume_name}
-                        sx={{ fontFamily: "monospace" }}
-                      >
-                        {v.volume_name}
-                        {v.description && (
-                          <Typography
-                            component="span"
-                            variant="caption"
-                            color="text.secondary"
-                            sx={{ ml: 1 }}
-                          >
-                            {v.description}
-                          </Typography>
-                        )}
-                      </MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-              ) : (
-                <TextField
-                  label="Exported volume name"
-                  size="small"
-                  value={targetVolume}
-                  onChange={(e) => setTargetVolume(e.target.value)}
-                  inputProps={{ style: { fontFamily: "monospace" } }}
-                />
-              )}
-            </>
-          )}
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={readOnly}
-                onChange={(e) => setReadOnly(e.target.checked)}
-                size="small"
-              />
-            }
-            label="Mount read-only"
-          />
-        </Stack>
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={handleClose} disabled={loading}>
-          Cancel
-        </Button>
-        <Button
-          variant="contained"
-          onClick={() => void handleSubmit()}
-          disabled={loading || !canSubmit}
-        >
-          {loading
-            ? isRemap
-              ? "Remapping…"
-              : "Mapping…"
-            : isRemap
-              ? "Remap"
-              : "Map"}
-        </Button>
-      </DialogActions>
-    </Dialog>
-  );
-}
 
 // w[impl routes.volumes]
 export default function Volumes() {
@@ -473,6 +233,12 @@ export default function Volumes() {
     refetch: refetchMappings,
   } = useOiQuery<ExternalMapping[]>("/volumes/external/list", {});
   const {
+    data: declared,
+    loading: declaredLoading,
+    error: declaredError,
+    refetch: refetchDeclared,
+  } = useOiQuery<DeclaredExternalVolume[]>("/volumes/external/declared", {});
+  const {
     data: heldVols,
     loading: heldLoading,
     error: heldError,
@@ -484,11 +250,13 @@ export default function Volumes() {
   const [createOpen, setCreateOpen] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
   const [remapTarget, setRemapTarget] = useState<ExternalMapping | null>(null);
+  const [prefillTarget, setPrefillTarget] = useState<{ app: string; name: string } | null>(null);
 
   const refreshAll = () => {
     refetchSite();
     refetchExported();
     refetchMappings();
+    refetchDeclared();
     refetchHeld();
   };
 
@@ -508,7 +276,7 @@ export default function Volumes() {
   };
 
   const anyLoading =
-    siteLoading || exportedLoading || mappingsLoading || heldLoading;
+    siteLoading || exportedLoading || mappingsLoading || declaredLoading || heldLoading;
 
   return (
     <Box sx={{ p: 3, maxWidth: 900, mx: "auto" }}>
@@ -646,26 +414,23 @@ export default function Volumes() {
 
         <Divider />
 
-        {/* External Volume Mappings */}
+        {/* External Volume Requests */}
         <Box>
           <Box sx={{ display: "flex", alignItems: "center", mb: 1, gap: 1 }}>
             <Typography variant="subtitle1" sx={{ fontWeight: 600, flexGrow: 1 }}>
-              External Volume Mappings
+              External Volume Requests
             </Typography>
-            <Button
-              size="small"
-              startIcon={<AddIcon />}
-              onClick={() => setMapOpen(true)}
-            >
-              Add
+            <Button size="small" startIcon={<AddIcon />} onClick={() => setMapOpen(true)}>
+              Map
             </Button>
           </Box>
+          {declaredError && <OiErrorAlert error={declaredError} />}
           {mappingsError && <OiErrorAlert error={mappingsError} />}
-          {mappingsLoading && !mappings && <CircularProgress size={20} />}
-          {mappings &&
-            (mappings.length === 0 ? (
+          {(declaredLoading || mappingsLoading) && !declared && <CircularProgress size={20} />}
+          {declared && (
+            declared.length === 0 ? (
               <Typography color="text.secondary" variant="body2">
-                No mappings.
+                No external volume requests across registered apps.
               </Typography>
             ) : (
               <TableContainer component={Paper} variant="outlined">
@@ -679,53 +444,61 @@ export default function Volumes() {
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {mappings.map((m) => (
-                      <TableRow key={`${m.app}/${m.external_name}`}>
-                        <TableCell sx={{ fontFamily: "monospace" }}>
-                          <Link to={`/apps/${m.app}`}>{m.app}</Link>
-                        </TableCell>
-                        <TableCell sx={{ fontFamily: "monospace" }}>
-                          {m.external_name}
-                        </TableCell>
-                        <TableCell sx={{ fontFamily: "monospace" }}>
-                          {m.target_kind === "exported"
-                            ? `${m.target_app}/${m.target_volume}`
-                            : `_site/${m.target_volume}`}
-                          {m.read_only && (
-                            <Chip
-                              label="ro"
-                              size="small"
-                              variant="outlined"
-                              sx={{ ml: 1 }}
-                            />
-                          )}
-                        </TableCell>
-                        <TableCell align="right" sx={{ px: 0.5, whiteSpace: "nowrap" }}>
-                          <Tooltip title="Remap">
-                            <IconButton
-                              size="small"
-                              onClick={() => setRemapTarget(m)}
-                            >
-                              <EditIcon sx={{ fontSize: 16 }} />
-                            </IconButton>
-                          </Tooltip>
-                          <Tooltip title="Unmap">
-                            <IconButton
-                              size="small"
-                              onClick={() =>
-                                void unmapVolume(m.app, m.external_name)
-                              }
-                            >
-                              <LinkOffIcon sx={{ fontSize: 16 }} />
-                            </IconButton>
-                          </Tooltip>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {declared.map((d) => {
+                      const mapping = mappings?.find(
+                        (m) => m.app === d.app && m.external_name === d.name,
+                      );
+                      return (
+                        <TableRow key={`${d.app}/${d.name}`}>
+                          <TableCell sx={{ fontFamily: "monospace" }}>
+                            <Link to={`/apps/${d.app}`}>{d.app}</Link>
+                          </TableCell>
+                          <TableCell sx={{ fontFamily: "monospace" }}>{d.name}</TableCell>
+                          <TableCell sx={{ fontFamily: "monospace" }}>
+                            {mapping ? (
+                              <>
+                                {mapping.target_kind === "exported"
+                                  ? `${mapping.target_app}/${mapping.target_volume}`
+                                  : `_site/${mapping.target_volume}`}
+                                {mapping.read_only && (
+                                  <Chip label="ro" size="small" variant="outlined" sx={{ ml: 1 }} />
+                                )}
+                              </>
+                            ) : (
+                              <Typography variant="caption" color="warning.main">unmapped</Typography>
+                            )}
+                          </TableCell>
+                          <TableCell align="right" sx={{ px: 0.5, whiteSpace: "nowrap" }}>
+                            {mapping ? (
+                              <>
+                                <Tooltip title="Remap">
+                                  <IconButton size="small" onClick={() => setRemapTarget(mapping)}>
+                                    <EditIcon sx={{ fontSize: 16 }} />
+                                  </IconButton>
+                                </Tooltip>
+                                <Tooltip title="Unmap">
+                                  <IconButton size="small" onClick={() => void unmapVolume(d.app, d.name)}>
+                                    <LinkOffIcon sx={{ fontSize: 16 }} />
+                                  </IconButton>
+                                </Tooltip>
+                              </>
+                            ) : (
+                              <Button
+                                size="small"
+                                onClick={() => setPrefillTarget({ app: d.app, name: d.name })}
+                              >
+                                Map
+                              </Button>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               </TableContainer>
-            ))}
+            )
+          )}
         </Box>
 
         {/* Held Volumes — only show if any exist */}
@@ -794,26 +567,30 @@ export default function Volumes() {
         exportedVolumes={exportedVols ?? []}
       />
 
-      {(mapOpen || remapTarget != null) && (
+      {(mapOpen || remapTarget != null || prefillTarget != null) && (
         <MapVolumeDialog
           key={
             remapTarget
               ? `remap:${remapTarget.app}/${remapTarget.external_name}`
-              : "new"
+              : prefillTarget
+                ? `prefill:${prefillTarget.app}/${prefillTarget.name}`
+                : "new"
           }
-          open={mapOpen || remapTarget != null}
+          open={mapOpen || remapTarget != null || prefillTarget != null}
           onClose={() => {
             setMapOpen(false);
             setRemapTarget(null);
+            setPrefillTarget(null);
           }}
           onSuccess={() => {
             refetchMappings();
+            refetchDeclared();
             setMapOpen(false);
             setRemapTarget(null);
+            setPrefillTarget(null);
           }}
           existing={remapTarget ?? undefined}
-          siteVolumes={siteVols ?? []}
-          exportedVolumes={exportedVols ?? []}
+          prefill={prefillTarget ?? undefined}
         />
       )}
     </Box>
