@@ -116,13 +116,11 @@ impl AppRegistry {
         tick_notify: Arc<Notify>,
         limits: &crate::ScriptLimits,
     ) -> Result<(), ScriptError> {
-        let (app, script_error) = match evaluate_script(&name, &script, &BTreeMap::new(), limits) {
-            Ok(a) => (a, None),
-            Err(e) => {
-                tracing::warn!(app = %name, error = %e, "script has errors at registration; params may need to be set");
-                (App::default(), Some((e.to_string(), Timestamp::now())))
-            }
-        };
+        let (app, raw_error) = evaluate_script(&name, &script, &BTreeMap::new(), limits);
+        let script_error = raw_error.map(|e| {
+            tracing::warn!(app = %name, error = %e, "script has errors at registration; params may need to be set");
+            (e.to_string(), Timestamp::now())
+        });
         self.entries.insert(
             name.clone(),
             AppEntry {
@@ -158,20 +156,11 @@ impl AppRegistry {
         params: &BTreeMap<String, String>,
         limits: &crate::ScriptLimits,
     ) {
-        match evaluate_script(name, &script, params, limits) {
-            Ok(app) => {
-                if let Some(entry) = self.entries.get_mut(name) {
-                    entry.script = script;
-                    entry.app = app;
-                    entry.script_error = None;
-                }
-            }
-            Err(e) => {
-                if let Some(entry) = self.entries.get_mut(name) {
-                    entry.script = script;
-                    entry.script_error = Some((e.to_string(), Timestamp::now()));
-                }
-            }
+        let (app, raw_error) = evaluate_script(name, &script, params, limits);
+        if let Some(entry) = self.entries.get_mut(name) {
+            entry.script = script;
+            entry.app = app;
+            entry.script_error = raw_error.map(|e| (e.to_string(), Timestamp::now()));
         }
     }
 
@@ -256,13 +245,11 @@ impl AppRegistry {
                     BTreeMap::new()
                 }
             };
-            let (app, script_error) = match evaluate_script(&name, &script, &stored, limits) {
-                Ok(a) => (a, None),
-                Err(e) => {
-                    tracing::warn!("failed to reload script for app '{name}': {e}");
-                    (App::default(), Some((e.to_string(), Timestamp::now())))
-                }
-            };
+            let (app, raw_error) = evaluate_script(&name, &script, &stored, limits);
+            let script_error = raw_error.map(|e| {
+                tracing::warn!("failed to reload script for app '{name}': {e}");
+                (e.to_string(), Timestamp::now())
+            });
             registry.entries.insert(
                 name.clone(),
                 AppEntry {
@@ -380,7 +367,7 @@ pub fn evaluate_script(
     script: &str,
     params: &BTreeMap<String, String>,
     limits: &crate::ScriptLimits,
-) -> Result<App, ScriptError> {
+) -> (App, Option<ScriptError>) {
     let (engine, mut scope, app) = setup_language(limits);
     // i[param.store] — pre-populate stored values so is_set()/value() work
     // during script evaluation. AppDef.params (the BSL-declared set) is
@@ -388,12 +375,12 @@ pub fn evaluate_script(
     *app.stored.lock() = params.clone();
     app.def.lock().name = name.to_owned();
     crate::defs::app::set_appdef_holder(&app.def);
-    let result = engine
+    let err = engine
         .run_with_scope(&mut scope, script)
-        .map_err(|e| ScriptError(e.to_string()));
+        .err()
+        .map(|e| ScriptError(e.to_string()));
     crate::defs::app::clear_appdef_holder();
-    result?;
-    Ok(app)
+    (app, err)
 }
 
 #[cfg(test)]

@@ -702,17 +702,15 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams) -> HandlerResult
 
     let proposed_script = params.proposed_script.as_deref().unwrap_or(&current_script);
 
-    let proposed_app = match crate::runtime::apps::evaluate_script(
+    let (proposed_app, proposed_err) = crate::runtime::apps::evaluate_script(
         name,
         proposed_script,
         &proposed_param_map,
         &state.script_limits,
-    ) {
-        Ok(a) => a,
-        Err(e) => {
-            return Ok(json!({ "errors": [e.to_string()] }));
-        }
-    };
+    );
+    if let Some(e) = proposed_err {
+        return Ok(json!({ "errors": [e.to_string()] }));
+    }
     let current_app = {
         let reg = state.registry.read();
         let entry = reg.get(name).expect("confirmed registered");
@@ -1047,13 +1045,15 @@ pub(crate) fn update_app(
         if let Some(_reg) = crate::runtime::backup_apps::get_by_app(&db, name)
             .map_err(|e| OiError::new(ErrorCode::Internal, format!("db backup apps: {e}")))?
         {
-            let proposed = crate::runtime::apps::evaluate_script(
+            let (proposed, proposed_err) = crate::runtime::apps::evaluate_script(
                 name,
                 script,
                 &std::collections::BTreeMap::new(),
                 &state.script_limits,
-            )
-            .map_err(|e| OiError::new(ErrorCode::ScriptError, e.to_string()))?;
+            );
+            if let Some(e) = proposed_err {
+                return Err(OiError::new(ErrorCode::ScriptError, e.to_string()));
+            }
             let def = proposed.def.lock();
             let missing: Vec<&str> = seedling_protocol::backup_actions::REQUIRED_ACTIONS
                 .iter()

@@ -349,6 +349,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[action.invoke]
 > `/apps/action/invoke { app, name, params? }` schedules the named action as a lifecycle operation.
 > `params` is an optional JSON object. Keys ending in `_volume` are reserved and must be rejected.
+> If the app has an active `script_error` fault, the request is rejected with `script_error`.
 > If the action has a declared param schema, schema-defined params are validated and defaults applied before the operation is enqueued; validation failure returns `requirements_invalid`.
 > Shell actions must not be invoked via this method; `not_found` is returned if a shell name is provided.
 > The Start Action (`name` = `"start"`) must not be invoked via this method; `not_found` is returned.
@@ -357,6 +358,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[action.invoke.install]
 > `/apps/install/invoke { app, params? }` schedules the install action.
 > It is only valid when the app is `NotInstalled`; otherwise `already_installed` is returned.
+> If the app has an active `script_error` fault, the request is rejected with `script_error`.
 > `params` is an optional JSON object of param key to string value. The values are delivered to the install closure as `param`.
 > If the app has no explicit install action, `params` must be absent or empty.
 > Params are validated before the operation is enqueued; validation failure returns `requirements_invalid`.

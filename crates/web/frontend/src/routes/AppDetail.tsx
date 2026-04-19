@@ -781,10 +781,12 @@ function ActionInvokeDialog({
 function InstallSection({
   appName,
   installAction,
+  hasScriptError,
   onRefresh,
 }: {
   appName: string;
   installAction: AppAction | undefined;
+  hasScriptError: boolean;
   onRefresh: () => void;
 }) {
   const { execute, loading } = useOiAction();
@@ -819,7 +821,7 @@ function InstallSection({
           variant="contained"
           size="large"
           onClick={() => void handleInstall()}
-          disabled={loading}
+          disabled={loading || hasScriptError}
         >
           {loading ? "Installing…" : "Install"}
         </Button>
@@ -841,19 +843,22 @@ function ActionsSection({
   appName,
   actions,
   status,
+  hasScriptError,
   operatingAction,
   onRefresh,
 }: {
   appName: string;
   actions: AppAction[];
   status: AppStatus;
+  hasScriptError: boolean;
   operatingAction?: string;
   onRefresh: () => void;
 }) {
   const [invoking, setInvoking] = useState<AppAction | null>(null);
 
-  const canInstall = status === "not_installed";
+  const canInstall = status === "not_installed" && !hasScriptError;
   const canInvoke =
+    !hasScriptError &&
     status !== "not_installed" &&
     status !== "uninstalling" &&
     status !== "deregistering" &&
@@ -1157,6 +1162,7 @@ export default function AppDetail() {
             <InstallSection
               appName={name!}
               installAction={data.actions.find((a) => a.kind === "install")}
+              hasScriptError={data.faults.some((f) => f.kind === "script_error")}
               onRefresh={refetch}
             />
           ) : (
@@ -1166,6 +1172,7 @@ export default function AppDetail() {
                   appName={name!}
                   actions={data.actions}
                   status={data.status}
+                  hasScriptError={data.faults.some((f) => f.kind === "script_error")}
                   operatingAction={data.current_operation?.action_name}
                   onRefresh={refetch}
                 />

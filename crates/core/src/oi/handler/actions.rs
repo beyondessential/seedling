@@ -98,6 +98,13 @@ pub(crate) fn invoke_action(
             ));
         }
 
+        // i[action.invoke] - reject if script_error fault is active
+        if entry.script_error.is_some() {
+            return Err(OiError::script_error(format!(
+                "app has a script error: {app_name}"
+            )));
+        }
+
         let def = entry.app.def.lock();
         if def.shells.contains_key(action_name) {
             return Err(OiError::not_found(format!(

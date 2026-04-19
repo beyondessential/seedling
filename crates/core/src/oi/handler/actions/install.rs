@@ -144,6 +144,13 @@ pub(crate) fn invoke_install(
             ));
         }
 
+        // i[action.invoke.install] - reject if script_error fault is active
+        if entry.script_error.is_some() {
+            return Err(OiError::script_error(format!(
+                "app has a script error: {app_name}"
+            )));
+        }
+
         entry.app.def.lock().install.is_some()
     };
 

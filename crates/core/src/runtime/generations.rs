@@ -460,7 +460,11 @@ pub fn reconstruct_app_def(
     let hash = script_hash_at(db, app, generation)?;
     let script = script_body(db, &hash)?.ok_or_else(|| Error::MissingScript(hash.clone()))?;
     let params = param_map_at(db, app, generation)?;
-    Ok(apps::evaluate_script(app, &script, &params, limits)?)
+    let (evaled, script_error) = apps::evaluate_script(app, &script, &params, limits);
+    if let Some(e) = script_error {
+        return Err(Error::Script(e));
+    }
+    Ok(evaled)
 }
 
 /// Delete all generation history and orphaned script bodies for an app.
