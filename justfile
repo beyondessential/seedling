@@ -1,4 +1,6 @@
 vite_port := "5173"
+data_dir  := "/opt/seedling"
+verbosity := "-v"
 
 # Build the workspace, skipping the frontend npm build
 build:
@@ -15,6 +17,25 @@ fmt:
 # Run clippy and check formatting
 check:
     cargo clippy && cargo fmt --check
+
+# Watch source files and rebuild on changes
+watch-build:
+    SKIP_FRONTEND_BUILD=1 watchexec cargo build
+
+# Watch the built binary and restart the daemon on changes (requires sudo)
+watch-run:
+    watchexec -IrW target/debug --ignore-nothing \
+        -E SSLKEYLOGFILE=/tmp/seedling.keylog \
+        'sudo --preserve-env=SEEDLING_LOG --preserve-env=SSLKEYLOGFILE \
+        target/debug/seedling --data-dir {{data_dir}} {{verbosity}} 2>&1 | tee -a seedling.log'
+
+# Run seedling-ctl with arbitrary arguments
+ctl *args:
+    target/debug/seedling-ctl {{args}}
+
+# Tail the live event feed from the daemon
+events:
+    target/debug/seedling-ctl op events
 
 # Run seedling-web in dev mode, proxying the SPA to the Vite dev server
 web:
