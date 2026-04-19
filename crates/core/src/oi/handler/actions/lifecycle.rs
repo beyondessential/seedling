@@ -286,7 +286,7 @@ pub fn spawn_accepted_operation(
     source_generation: u64,
     target_generation: u64,
     trigger: String,
-    actor: Option<seedling_protocol::actor::Actor>,
+    actor: Option<std::sync::Arc<seedling_protocol::actor::Actor>>,
 ) {
     let (app, active_progress, tick_notify, script) = {
         let reg = state.registry.read();

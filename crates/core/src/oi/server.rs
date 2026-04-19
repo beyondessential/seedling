@@ -65,7 +65,7 @@ fn extract_client_fp(conn: &quinn::Connection) -> Option<String> {
 }
 
 // i[wire.actor]
-fn synthesise_actor(state: &OiState, fp: Option<&str>) -> Actor {
+fn synthesise_actor(state: &OiState, fp: Option<&str>) -> Arc<Actor> {
     let id = fp.map(str::to_owned);
     let display = fp
         .and_then(|f| {
@@ -73,12 +73,12 @@ fn synthesise_actor(state: &OiState, fp: Option<&str>) -> Actor {
             super::auth::get_label(&db, f).ok().flatten()
         })
         .or_else(|| id.clone());
-    Actor {
+    Arc::new(Actor {
         kind: Some("ctl".to_owned()),
         id,
         display,
         session: None,
-    }
+    })
 }
 
 // i[transport.quic]
@@ -430,6 +430,7 @@ async fn handle_bidi_stream(
     let actor = first_obj
         .get("actor")
         .and_then(|v| serde_json::from_value::<Actor>(v.clone()).ok())
+        .map(Arc::new)
         .unwrap_or_else(|| synthesise_actor(&state, client_fp.as_deref()));
     let ctx = RequestCtx { actor };
 

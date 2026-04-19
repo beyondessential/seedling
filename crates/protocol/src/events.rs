@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use jiff::Timestamp;
 use serde::Serialize;
 use tokio::sync::broadcast;
@@ -14,13 +16,13 @@ pub enum OiEvent {
         app: String,
         generation: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
-        actor: Option<Actor>,
+        actor: Option<Arc<Actor>>,
     },
     AppDeregistered {
         timestamp: Timestamp,
         app: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        actor: Option<Actor>,
+        actor: Option<Arc<Actor>>,
     },
     // r[impl audit.log.generations]
     AppUpdated {
@@ -29,7 +31,7 @@ pub enum OiEvent {
         generation: u64,
         previous_generation: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        actor: Option<Actor>,
+        actor: Option<Arc<Actor>>,
     },
     // r[impl audit.log.generations]
     ParamSet {
@@ -41,7 +43,7 @@ pub enum OiEvent {
         generation: u64,
         previous_generation: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
-        actor: Option<Actor>,
+        actor: Option<Arc<Actor>>,
     },
     // r[impl audit.log.generations]
     ParamUnset {
@@ -52,7 +54,7 @@ pub enum OiEvent {
         generation: u64,
         previous_generation: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
-        actor: Option<Actor>,
+        actor: Option<Arc<Actor>>,
     },
     // r[impl operation.lifecycle.generations]
     // i[impl event.types]
@@ -65,7 +67,7 @@ pub enum OiEvent {
         target_generation: u64,
         trigger: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        actor: Option<Actor>,
+        actor: Option<Arc<Actor>>,
     },
     // r[impl operation.lifecycle.generations]
     OperationCompleted {
@@ -76,7 +78,7 @@ pub enum OiEvent {
         source_generation: u64,
         target_generation: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
-        actor: Option<Actor>,
+        actor: Option<Arc<Actor>>,
     },
     // r[impl operation.lifecycle.generations]
     OperationFailed {
@@ -88,7 +90,7 @@ pub enum OiEvent {
         target_generation: u64,
         error: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        actor: Option<Actor>,
+        actor: Option<Arc<Actor>>,
     },
     FaultFiled {
         timestamp: Timestamp,
@@ -100,14 +102,14 @@ pub enum OiEvent {
         kind: String,
         description: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        actor: Option<Actor>,
+        actor: Option<Arc<Actor>>,
     },
     FaultCleared {
         timestamp: Timestamp,
         id: String,
         app: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        actor: Option<Actor>,
+        actor: Option<Arc<Actor>>,
     },
     ResourceStateChanged {
         timestamp: Timestamp,
@@ -117,14 +119,14 @@ pub enum OiEvent {
         instance_id: String,
         state: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        actor: Option<Actor>,
+        actor: Option<Arc<Actor>>,
     },
     ShellExited {
         timestamp: Timestamp,
         session_id: String,
         exit_code: i32,
         #[serde(skip_serializing_if = "Option::is_none")]
-        actor: Option<Actor>,
+        actor: Option<Arc<Actor>>,
     },
     ForwardStarted {
         timestamp: Timestamp,
@@ -133,13 +135,13 @@ pub enum OiEvent {
         service: String,
         port: u16,
         #[serde(skip_serializing_if = "Option::is_none")]
-        actor: Option<Actor>,
+        actor: Option<Arc<Actor>>,
     },
     ForwardStopped {
         timestamp: Timestamp,
         forward_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        actor: Option<Actor>,
+        actor: Option<Arc<Actor>>,
     },
     ScaleChanged {
         timestamp: Timestamp,
@@ -150,13 +152,13 @@ pub enum OiEvent {
         bounds_low: u16,
         bounds_high: u16,
         #[serde(skip_serializing_if = "Option::is_none")]
-        actor: Option<Actor>,
+        actor: Option<Arc<Actor>>,
     },
     ServerBusy {
         timestamp: Timestamp,
         reason: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        actor: Option<Actor>,
+        actor: Option<Arc<Actor>>,
     },
 }
 
@@ -185,7 +187,7 @@ impl EventSender {
         let _ = self.0.send(event);
     }
 
-    pub fn app_registered(&self, app: &str, generation: u64, actor: Option<Actor>) {
+    pub fn app_registered(&self, app: &str, generation: u64, actor: Option<Arc<Actor>>) {
         self.emit(OiEvent::AppRegistered {
             timestamp: now(),
             app: app.to_owned(),
@@ -194,7 +196,7 @@ impl EventSender {
         });
     }
 
-    pub fn app_deregistered(&self, app: &str, actor: Option<Actor>) {
+    pub fn app_deregistered(&self, app: &str, actor: Option<Arc<Actor>>) {
         self.emit(OiEvent::AppDeregistered {
             timestamp: now(),
             app: app.to_owned(),
@@ -207,7 +209,7 @@ impl EventSender {
         app: &str,
         generation: u64,
         previous_generation: Option<u64>,
-        actor: Option<Actor>,
+        actor: Option<Arc<Actor>>,
     ) {
         self.emit(OiEvent::AppUpdated {
             timestamp: now(),
@@ -226,7 +228,7 @@ impl EventSender {
         deployment: impl Into<String>,
         bounds_low: u16,
         bounds_high: u16,
-        actor: Option<Actor>,
+        actor: Option<Arc<Actor>>,
     ) -> ScaleEventCtx {
         ScaleEventCtx {
             tx: self.clone(),
@@ -339,7 +341,7 @@ impl EventSender {
         operation_id: impl Into<String>,
         source_generation: u64,
         target_generation: u64,
-        actor: Option<Actor>,
+        actor: Option<Arc<Actor>>,
     ) -> OperationEventCtx {
         OperationEventCtx {
             tx: self.clone(),
@@ -358,7 +360,7 @@ impl EventSender {
         app: impl Into<String>,
         generation: u64,
         previous_generation: u64,
-        actor: Option<Actor>,
+        actor: Option<Arc<Actor>>,
     ) -> ParamEventCtx {
         ParamEventCtx {
             tx: self.clone(),
@@ -380,7 +382,7 @@ pub struct OperationEventCtx {
     pub operation_id: String,
     pub source_generation: u64,
     pub target_generation: u64,
-    actor: Option<Actor>,
+    actor: Option<Arc<Actor>>,
 }
 
 impl OperationEventCtx {
@@ -430,7 +432,7 @@ pub struct ParamEventCtx {
     app: String,
     generation: u64,
     previous_generation: u64,
-    actor: Option<Actor>,
+    actor: Option<Arc<Actor>>,
 }
 
 impl ParamEventCtx {
@@ -469,7 +471,7 @@ pub struct ScaleEventCtx {
     deployment: String,
     bounds_low: u16,
     bounds_high: u16,
-    actor: Option<Actor>,
+    actor: Option<Arc<Actor>>,
 }
 
 impl ScaleEventCtx {

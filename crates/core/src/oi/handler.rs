@@ -24,7 +24,7 @@ mod volumes;
 pub struct RequestCtx {
     /// The resolved actor for this request. Always present — synthesised from
     /// the client's mTLS identity when absent from the request JSON.
-    pub actor: Actor,
+    pub actor: Arc<Actor>,
 }
 
 fn parse_params<T: DeserializeOwned>(params: Value) -> Result<T, OiError> {
