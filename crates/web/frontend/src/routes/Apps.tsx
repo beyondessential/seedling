@@ -1,6 +1,8 @@
+import AddIcon from "@mui/icons-material/Add";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import {
   Box,
+  Button,
   Chip,
   CircularProgress,
   IconButton,
@@ -30,6 +32,15 @@ export default function Apps() {
         <Typography variant="h5" sx={{ flexGrow: 1 }}>
           Apps
         </Typography>
+        <Button
+          size="small"
+          variant="contained"
+          startIcon={<AddIcon />}
+          component={Link}
+          to="/apps/new"
+        >
+          New app
+        </Button>
         <Tooltip title="Refresh">
           <span>
             <IconButton onClick={refetch} disabled={loading} size="small">
