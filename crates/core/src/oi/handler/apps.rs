@@ -7,7 +7,7 @@ use seedling_protocol::error::{ErrorCode, OiError};
 
 use crate::{
     defs::{
-        install::InstallRequirementKind,
+        install::ParamKind,
         resource::{Resource, ResourceKind},
     },
     oi::{handler::RequestCtx, state::OiState},
@@ -125,17 +125,17 @@ fn validate_name(name: &str) -> Result<(), OiError> {
     }
 }
 
-fn install_requirement_kind_str(kind: InstallRequirementKind) -> &'static str {
+fn install_requirement_kind_str(kind: ParamKind) -> &'static str {
     match kind {
-        InstallRequirementKind::Text => "text",
-        InstallRequirementKind::Email => "email",
-        InstallRequirementKind::Password => "password",
-        InstallRequirementKind::WeakPassword => "weak-password",
+        ParamKind::Text => "text",
+        ParamKind::Email => "email",
+        ParamKind::Password => "password",
+        ParamKind::WeakPassword => "weak-password",
     }
 }
 
 fn serialize_param_schema(
-    schema: &std::collections::BTreeMap<String, crate::defs::install::InstallRequirementDef>,
+    schema: &std::collections::BTreeMap<String, crate::defs::install::ParamDef>,
 ) -> serde_json::Map<String, Value> {
     schema
         .iter()
@@ -301,15 +301,21 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         .collect();
 
     // i[app.describe]
-    // actions (kind: "action")
+    // actions (kind: "action" or "lifecycle")
     let mut actions_json: Vec<Value> = def
         .actions
         .values()
         .map(|a| {
+            // l[impl action.start.no-manual-invoke]
+            let kind = if a.name == "start" {
+                "lifecycle"
+            } else {
+                "action"
+            };
             let mut obj = json!({
                 "name": a.name,
                 "description": a.description,
-                "kind": "action",
+                "kind": kind,
                 "params": serialize_param_schema(&a.params),
             });
             if !a.schedules.is_empty() {

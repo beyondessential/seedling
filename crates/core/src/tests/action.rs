@@ -143,19 +143,13 @@ fn on_install_with_requirements() {
     let install = def.install.as_ref().expect("install should exist");
     assert_eq!(install.requirements.len(), 2);
     let email_req = &install.requirements["admin_email"];
-    assert!(matches!(
-        email_req.kind,
-        defs::install::InstallRequirementKind::Email
-    ));
+    assert!(matches!(email_req.kind, defs::install::ParamKind::Email));
     assert_eq!(
         email_req.default_value.as_deref(),
         Some("admin@example.com")
     );
     let pw_req = &install.requirements["admin_password"];
-    assert!(matches!(
-        pw_req.kind,
-        defs::install::InstallRequirementKind::Password
-    ));
+    assert!(matches!(pw_req.kind, defs::install::ParamKind::Password));
     assert!(pw_req.default_value.is_none());
 }
 
@@ -190,10 +184,7 @@ fn install_requirement_kind_text() {
     let def = app.def.lock();
     let install = def.install.as_ref().unwrap();
     let req = &install.requirements["site_name"];
-    assert!(matches!(
-        req.kind,
-        defs::install::InstallRequirementKind::Text
-    ));
+    assert!(matches!(req.kind, defs::install::ParamKind::Text));
 }
 
 // l[verify action.install.requirements.kind-text]
@@ -213,10 +204,7 @@ fn install_requirement_kind_defaults_to_text() {
     let def = app.def.lock();
     let install = def.install.as_ref().unwrap();
     let req = &install.requirements["site_name"];
-    assert!(matches!(
-        req.kind,
-        defs::install::InstallRequirementKind::Text
-    ));
+    assert!(matches!(req.kind, defs::install::ParamKind::Text));
 }
 
 // l[verify action.install.requirements.kind-weak-password]
@@ -237,10 +225,7 @@ fn install_requirement_kind_weak_password() {
     let def = app.def.lock();
     let install = def.install.as_ref().unwrap();
     let req = &install.requirements["api_key"];
-    assert!(matches!(
-        req.kind,
-        defs::install::InstallRequirementKind::WeakPassword
-    ));
+    assert!(matches!(req.kind, defs::install::ParamKind::WeakPassword));
 }
 
 // l[verify action.install]
@@ -298,10 +283,7 @@ fn on_action_with_params() {
     let action = &def.actions["maintenance"];
     assert_eq!(action.params.len(), 1);
     let p = &action.params["contact_email"];
-    assert!(matches!(
-        p.kind,
-        defs::install::InstallRequirementKind::Email
-    ));
+    assert!(matches!(p.kind, defs::install::ParamKind::Email));
     assert_eq!(p.default_value.as_deref(), Some("admin@example.com"));
 }
 

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::defs::install::{InstallRequirementDef, InstallRequirementKind};
+use crate::defs::install::{ParamDef, ParamKind};
 
 use super::{is_strong_password, is_valid_email, validate_requirements};
 
@@ -58,19 +58,15 @@ fn weak_password_rejected() {
     assert!(!is_strong_password("abc"));
 }
 
-fn schema(fields: &[(&str, InstallRequirementDef)]) -> BTreeMap<String, InstallRequirementDef> {
+fn schema(fields: &[(&str, ParamDef)]) -> BTreeMap<String, ParamDef> {
     fields
         .iter()
         .map(|(k, v)| (k.to_string(), v.clone()))
         .collect()
 }
 
-fn req(
-    kind: InstallRequirementKind,
-    required: bool,
-    default: Option<&str>,
-) -> InstallRequirementDef {
-    InstallRequirementDef {
+fn req(kind: ParamKind, required: bool, default: Option<&str>) -> ParamDef {
+    ParamDef {
         kind,
         required,
         default_value: default.map(|s| s.to_owned()),
@@ -89,7 +85,7 @@ fn empty_schema_empty_submitted_ok() {
 // i[verify action.invoke.install.validation]
 #[test]
 fn required_field_missing_returns_error() {
-    let s = schema(&[("email", req(InstallRequirementKind::Text, true, None))]);
+    let s = schema(&[("email", req(ParamKind::Text, true, None))]);
     let result = validate_requirements(&s, &BTreeMap::new());
     assert!(result.is_err());
     assert!(result.unwrap_err().message.contains("email"));
@@ -98,10 +94,7 @@ fn required_field_missing_returns_error() {
 // i[verify action.invoke.install.validation]
 #[test]
 fn required_field_with_default_filled_in() {
-    let s = schema(&[(
-        "site",
-        req(InstallRequirementKind::Text, true, Some("default-site")),
-    )]);
+    let s = schema(&[("site", req(ParamKind::Text, true, Some("default-site")))]);
     let result = validate_requirements(&s, &BTreeMap::new());
     assert!(result.is_ok());
     assert_eq!(
@@ -113,7 +106,7 @@ fn required_field_with_default_filled_in() {
 // i[verify action.invoke.install.validation]
 #[test]
 fn optional_field_absent_is_ok() {
-    let s = schema(&[("note", req(InstallRequirementKind::Text, false, None))]);
+    let s = schema(&[("note", req(ParamKind::Text, false, None))]);
     let result = validate_requirements(&s, &BTreeMap::new());
     assert!(result.is_ok());
 }
@@ -121,7 +114,7 @@ fn optional_field_absent_is_ok() {
 // i[verify action.invoke.install.validation]
 #[test]
 fn invalid_email_field_returns_error() {
-    let s = schema(&[("email", req(InstallRequirementKind::Email, true, None))]);
+    let s = schema(&[("email", req(ParamKind::Email, true, None))]);
     let mut submitted = BTreeMap::new();
     submitted.insert("email".to_owned(), "notanemail".to_owned());
     let result = validate_requirements(&s, &submitted);
@@ -132,7 +125,7 @@ fn invalid_email_field_returns_error() {
 // i[verify action.invoke.install.validation]
 #[test]
 fn valid_email_field_passes() {
-    let s = schema(&[("email", req(InstallRequirementKind::Email, true, None))]);
+    let s = schema(&[("email", req(ParamKind::Email, true, None))]);
     let mut submitted = BTreeMap::new();
     submitted.insert("email".to_owned(), "user@example.com".to_owned());
     let result = validate_requirements(&s, &submitted);
@@ -142,7 +135,7 @@ fn valid_email_field_passes() {
 // i[verify action.invoke.install.validation]
 #[test]
 fn weak_password_field_returns_error() {
-    let s = schema(&[("pw", req(InstallRequirementKind::Password, true, None))]);
+    let s = schema(&[("pw", req(ParamKind::Password, true, None))]);
     let mut submitted = BTreeMap::new();
     submitted.insert("pw".to_owned(), "password".to_owned());
     let result = validate_requirements(&s, &submitted);
@@ -153,7 +146,7 @@ fn weak_password_field_returns_error() {
 // i[verify action.invoke.install.validation]
 #[test]
 fn strong_password_field_passes() {
-    let s = schema(&[("pw", req(InstallRequirementKind::Password, true, None))]);
+    let s = schema(&[("pw", req(ParamKind::Password, true, None))]);
     let mut submitted = BTreeMap::new();
     submitted.insert(
         "pw".to_owned(),
@@ -166,7 +159,7 @@ fn strong_password_field_passes() {
 // i[verify action.invoke.install.validation]
 #[test]
 fn weak_password_kind_always_passes() {
-    let s = schema(&[("pw", req(InstallRequirementKind::WeakPassword, true, None))]);
+    let s = schema(&[("pw", req(ParamKind::WeakPassword, true, None))]);
     let mut submitted = BTreeMap::new();
     submitted.insert("pw".to_owned(), "password".to_owned());
     let result = validate_requirements(&s, &submitted);
@@ -177,8 +170,8 @@ fn weak_password_kind_always_passes() {
 #[test]
 fn multiple_errors_collected() {
     let s = schema(&[
-        ("email", req(InstallRequirementKind::Email, true, None)),
-        ("name", req(InstallRequirementKind::Text, true, None)),
+        ("email", req(ParamKind::Email, true, None)),
+        ("name", req(ParamKind::Text, true, None)),
     ]);
     let result = validate_requirements(&s, &BTreeMap::new());
     assert!(result.is_err());

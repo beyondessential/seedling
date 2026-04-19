@@ -417,10 +417,11 @@ function ActionsSection({
           </TableHead>
           <TableBody>
             {actions.map((a) => {
+              const isInvokable = a.kind !== "shell" && a.kind !== "lifecycle";
               const canRun =
                 a.kind === "install"
                   ? canInstall
-                  : a.kind !== "shell" && canInvoke;
+                  : isInvokable && canInvoke;
               return (
                 <TableRow key={a.name}>
                   <TableCell sx={{ fontFamily: "monospace" }}>{a.name}</TableCell>
@@ -431,7 +432,7 @@ function ActionsSection({
                     {a.description}
                   </TableCell>
                   <TableCell align="right">
-                    {a.kind !== "shell" && (
+                    {isInvokable && (
                       <Button
                         size="small"
                         variant={a.kind === "install" ? "contained" : "outlined"}

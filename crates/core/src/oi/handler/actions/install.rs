@@ -6,7 +6,7 @@ use serde_json::json;
 use seedling_protocol::error::{ErrorCode, OiError};
 
 use crate::{
-    defs::install::{InstallRequirementDef, InstallRequirementKind},
+    defs::install::{ParamDef, ParamKind},
     oi::{
         handler::{HandlerResult, RequestCtx},
         state::OiState,
@@ -48,7 +48,7 @@ fn is_strong_password(password: &str) -> bool {
 
 // i[action.invoke.install.validation]
 pub(in crate::oi) fn validate_requirements(
-    schema: &BTreeMap<String, InstallRequirementDef>,
+    schema: &BTreeMap<String, ParamDef>,
     submitted: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, String>, OiError> {
     let mut filled = submitted.clone();
@@ -70,17 +70,17 @@ pub(in crate::oi) fn validate_requirements(
 
         let value = filled.get(field).map(|s| s.as_str()).unwrap_or("");
         match req_def.kind {
-            InstallRequirementKind::Email => {
+            ParamKind::Email => {
                 if !is_valid_email(value) {
                     errors.push(format!("{field}: invalid email address"));
                 }
             }
-            InstallRequirementKind::Password => {
+            ParamKind::Password => {
                 if !is_strong_password(value) {
                     errors.push(format!("{field}: password is too weak"));
                 }
             }
-            InstallRequirementKind::Text | InstallRequirementKind::WeakPassword => {}
+            ParamKind::Text | ParamKind::WeakPassword => {}
         }
     }
 

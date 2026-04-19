@@ -1,6 +1,6 @@
 use rhai::{EvalAltResult, TypeBuilder};
 
-use super::super::install::{InstallRequirementDef, InstallRequirementKind};
+use super::super::install::{ParamDef, ParamKind};
 use super::App;
 
 pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
@@ -15,8 +15,8 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                 .lock()
                 .params
                 .entry(name.into())
-                .or_insert_with(|| InstallRequirementDef {
-                    kind: InstallRequirementKind::Text,
+                .or_insert_with(|| ParamDef {
+                    kind: ParamKind::Text,
                     required: false,
                     default_value: None,
                     description: None,

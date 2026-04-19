@@ -46,10 +46,7 @@ fn validate_action_params(
 
 // i[action.invoke]
 fn apply_action_param_schema(
-    action_params_schema: &std::collections::BTreeMap<
-        String,
-        crate::defs::install::InstallRequirementDef,
-    >,
+    action_params_schema: &std::collections::BTreeMap<String, crate::defs::install::ParamDef>,
     params: &mut serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), OiError> {
     if action_params_schema.is_empty() {
@@ -106,6 +103,12 @@ pub(crate) fn invoke_action(
             return Err(OiError::not_found(format!(
                 "'{action_name}' is a shell action; use /shells/start"
             )));
+        }
+        // l[impl action.start.no-manual-invoke]
+        if action_name == "start" {
+            return Err(OiError::not_found(
+                "'start' is a lifecycle action and cannot be manually invoked".to_string(),
+            ));
         }
         let action_def = def
             .actions

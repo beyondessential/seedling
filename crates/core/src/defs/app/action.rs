@@ -92,7 +92,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
 fn parse_action_params(
     options: &Map,
 ) -> Result<
-    std::collections::BTreeMap<String, super::super::install::InstallRequirementDef>,
+    std::collections::BTreeMap<String, super::super::install::ParamDef>,
     Box<rhai::EvalAltResult>,
 > {
     match options

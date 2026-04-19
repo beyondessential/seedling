@@ -6,7 +6,7 @@ use rhai::{CustomType, FnPtr, Map, TypeBuilder};
 use super::{
     Holder,
     action::{ActionDef, ShellDef},
-    install::{InstallDef, InstallRequirementDef},
+    install::{InstallDef, ParamDef},
     resource::{Resource, ResourceId},
 };
 
@@ -121,7 +121,7 @@ pub(crate) fn append_action_schedule(action_name: &str, expr: &str) {
 pub struct AppDef {
     pub name: String,
     /// Parameters declared by the BSL script via `app.param()`, with optional schema metadata.
-    pub params: BTreeMap<String, InstallRequirementDef>,
+    pub params: BTreeMap<String, ParamDef>,
     pub resources: BTreeMap<ResourceId, Resource>,
     /// Action metadata (name, description). No FnPtrs — closures are
     /// recovered on demand via the thread-local capture buffer.

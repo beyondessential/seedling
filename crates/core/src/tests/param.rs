@@ -326,7 +326,7 @@ fn param_schema_builder_methods_set_fields() {
         .expect("param should be declared");
     assert!(matches!(
         schema.kind,
-        crate::defs::install::InstallRequirementKind::Email
+        crate::defs::install::ParamKind::Email
     ));
     assert!(schema.required);
     assert_eq!(schema.default_value.as_deref(), Some("admin@example.com"));
@@ -339,10 +339,7 @@ fn param_schema_defaults_when_no_builder_methods() {
     let app = run_test_script_app(r#"app.param("host");"#);
     let def = app.def.lock();
     let schema = def.params.get("host").expect("param should be declared");
-    assert!(matches!(
-        schema.kind,
-        crate::defs::install::InstallRequirementKind::Text
-    ));
+    assert!(matches!(schema.kind, crate::defs::install::ParamKind::Text));
     assert!(!schema.required);
     assert!(schema.default_value.is_none());
     assert!(schema.description.is_none());
@@ -356,7 +353,7 @@ fn param_schema_kind_password() {
     let schema = def.params.get("secret").unwrap();
     assert!(matches!(
         schema.kind,
-        crate::defs::install::InstallRequirementKind::Password
+        crate::defs::install::ParamKind::Password
     ));
 }
 

@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 use rhai::{CustomType, Dynamic, EvalAltResult, Map, TypeBuilder};
 
 use super::collection::{Collection, col};
-use super::install::InstallRequirementDef;
+use super::install::ParamDef;
 
 // l[impl action.option-params]
 #[derive(Debug, Clone)]
@@ -13,7 +13,7 @@ pub struct ActionDef {
     pub description: Option<String>,
     // l[impl action.schedule]
     pub schedules: Vec<String>,
-    pub params: BTreeMap<String, InstallRequirementDef>,
+    pub params: BTreeMap<String, ParamDef>,
 }
 
 /// Compute a stable hash from `(app_name, action_name)` for use with cronexpr's

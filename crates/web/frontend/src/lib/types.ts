@@ -55,7 +55,7 @@ export interface AppParam {
 export interface AppAction {
   name: string;
   description: string | null;
-  kind: "action" | "shell" | "install";
+  kind: "action" | "shell" | "install" | "lifecycle";
   params: Record<string, InstallRequirement>;
   schedules?: string[];
 }

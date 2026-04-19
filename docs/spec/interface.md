@@ -221,11 +221,11 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - `resources`: array of objects with fields `name`, `type`, `instances`, `faults`, and for Deployment resources, `scale`.
 >   Each instance has fields `id`, `display_name`, `lifecycle`, and `transition_time` (RFC 3339, optional).
 >   Each fault entry is a [fault record](#i--fault.record).
-> - `params`: array of objects with fields `name` and `value`.
->   `value` is `null` if the param has not been set.
+> - `params`: array of objects with fields `name`, `value`, `kind`, `required`, `description`, and `default_value`.
+>   `value` is `null` if the param has not been set. The schema fields (`kind`, `required`, `description`, `default_value`) reflect any metadata set via the BSL param builder methods.
 > - `unknown_params`: array of objects with fields `name` and `value`, listing parameters that have a stored value in the database but whose name does not appear in the app's current script evaluation. This is informational only; these values have no effect until the script is updated to reference them.
 > - `actions`: array of objects with fields `name`, `description`, `kind`, and `params`.
->   `kind` is one of `action`, `shell`, or `install`.
+>   `kind` is one of `action`, `shell`, `install`, or `lifecycle`. The `lifecycle` kind is used for the Start Action, which is driven autonomously and cannot be manually invoked.
 >   `params` is an object map of param key to `{ kind, required, description, default_value }`, as defined in the language spec. Empty for actions with no declared param schema.
 > - `current_operation`: present only when status is `Operating`.
 >   Has fields `action_name`, `barrier`, `source_generation`, and `target_generation`.
@@ -338,6 +338,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > `params` is an optional JSON object. Keys ending in `_volume` are reserved and must be rejected.
 > If the action has a declared param schema, schema-defined params are validated and defaults applied before the operation is enqueued; validation failure returns `requirements_invalid`.
 > Shell actions must not be invoked via this method; `not_found` is returned if a shell name is provided.
+> The Start Action (`name` = `"start"`) must not be invoked via this method; `not_found` is returned.
 > Returns `{ "schedule": "accepted", "operation_id": "<string>" }` or `{ "schedule": "queued", "operation_id": "<string>" }` on success, or an error. The `operation_id` is always present and uniquely identifies this operation.
 
 > i[action.invoke.install]

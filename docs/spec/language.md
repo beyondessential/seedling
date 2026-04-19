@@ -641,6 +641,9 @@ This is currently the only value.
 > rt.start(app);
 > ```
 
+> l[action.start.no-manual-invoke]
+> The Start Action is a lifecycle-only action. It must not be manually invokable via the action invocation RPC. Attempting to invoke it must return `not_found`.
+
 ## Shell Action
 
 > l[action.shell]

@@ -3,20 +3,20 @@ use std::collections::BTreeMap;
 // l[impl action.install]
 #[derive(Debug, Clone)]
 pub struct InstallDef {
-    pub requirements: BTreeMap<String, InstallRequirementDef>,
+    pub requirements: BTreeMap<String, ParamDef>,
 }
 
 // l[impl action.install.requirements]
 #[derive(Debug, Clone, PartialEq)]
-pub struct InstallRequirementDef {
-    pub kind: InstallRequirementKind,
+pub struct ParamDef {
+    pub kind: ParamKind,
     pub required: bool,
     pub default_value: Option<String>,
     pub description: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
-pub enum InstallRequirementKind {
+pub enum ParamKind {
     // l[impl action.install.requirements.kind-text]
     #[default]
     Text,
@@ -28,7 +28,7 @@ pub enum InstallRequirementKind {
     WeakPassword,
 }
 
-impl std::str::FromStr for InstallRequirementKind {
+impl std::str::FromStr for ParamKind {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {

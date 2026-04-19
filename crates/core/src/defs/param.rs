@@ -1,7 +1,7 @@
 use rhai::{CustomType, EvalAltResult, FnPtr, TypeBuilder};
 
 use super::app::App;
-use super::install::InstallRequirementKind;
+use super::install::ParamKind;
 
 // l[impl param.type]
 #[derive(Debug, Clone)]
@@ -62,15 +62,15 @@ impl CustomType for Param {
         builder.with_fn(
             "kind",
             |this: &mut Self, kind_str: &str| -> Result<Self, Box<EvalAltResult>> {
-                let kind = kind_str.parse::<InstallRequirementKind>().map_err(
-                    |_| -> Box<EvalAltResult> {
+                let kind = kind_str
+                    .parse::<ParamKind>()
+                    .map_err(|_| -> Box<EvalAltResult> {
                         format!(
                             "unknown param kind '{}' for parameter '{}'",
                             kind_str, this.name
                         )
                         .into()
-                    },
-                )?;
+                    })?;
                 this.app
                     .def
                     .lock()
