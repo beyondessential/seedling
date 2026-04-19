@@ -181,6 +181,14 @@ async fn main() {
             eprintln!("error: daemon connection failed: {e}");
             std::process::exit(1);
         });
+    daemon.probe().await.unwrap_or_else(|e| {
+        eprintln!("error: daemon rejected connection: {e}");
+        eprintln!(
+            "hint: authorise this key in seedlingd: seedling-ctl oi add-key {} seedling-web",
+            daemon.fingerprint
+        );
+        std::process::exit(1);
+    });
     let daemon = Arc::new(daemon);
 
     let cert_store = Arc::new(RwLock::new(CertStore::new()));

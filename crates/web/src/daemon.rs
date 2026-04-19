@@ -7,6 +7,7 @@ use seedling_protocol::keys::ClientIdentity;
 
 pub struct DaemonConn {
     client: OiClient,
+    pub fingerprint: String,
 }
 
 impl DaemonConn {
@@ -31,6 +32,7 @@ impl DaemonConn {
             );
         }
 
+        let fingerprint = identity.fingerprint.clone();
         let actor = Actor {
             kind: Some("web".to_owned()),
             id: Some(identity.fingerprint[..8].to_owned()),
@@ -38,7 +40,20 @@ impl DaemonConn {
             session: None,
         };
         let client = OiClient::connect(addr, auth, &identity, actor).await?;
-        Ok(Self { client })
+        Ok(Self { client, fingerprint })
+    }
+
+    /// Verify that the connection is actually usable.
+    ///
+    /// In TLS 1.3, client certificate verification happens after the server
+    /// sends its Finished message, so `connect` can return Ok even if the
+    /// daemon will reject our key. The rejection only surfaces on the first
+    /// stream open. Call this immediately after connect to catch it early.
+    pub async fn probe(&self) -> Result<(), ClientError> {
+        tokio::task::yield_now().await;
+        let (mut send, _recv) = self.client.open_bi().await?;
+        let _ = send.finish();
+        Ok(())
     }
 
     pub async fn open_bi(&self) -> Result<(quinn::SendStream, quinn::RecvStream), ClientError> {
