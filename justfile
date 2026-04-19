@@ -1,5 +1,4 @@
-vite_port := "5173"
-data_dir  := "/opt/seedling"
+data_dir := "/opt/seedling"
 verbosity := "-v"
 
 # Build the workspace, skipping the frontend npm build
@@ -37,9 +36,9 @@ ctl *args:
 events:
     target/debug/seedling-ctl op events
 
-# Run seedling-web in dev mode, proxying the SPA to the Vite dev server
+# Run seedling-web in dev mode (open http://localhost:5173 via `just frontend` for HMR)
 web:
-    SKIP_FRONTEND_BUILD=1 cargo run -p seedling-web -- --dev-no-auth --vite-port {{vite_port}}
+    SKIP_FRONTEND_BUILD=1 cargo run -p seedling-web -- --dev-no-auth
 
 # Run the Vite dev server
 frontend:

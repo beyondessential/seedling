@@ -33,9 +33,9 @@ just web
 just frontend
 ```
 
-`just web` starts `seedling-web` with `--dev-no-auth` (no password needed) and `--vite-port 5173`, which proxies all SPA requests to Vite. Open the URL printed by the Rust server (e.g. `http://localhost:8080`); the page will be served through the proxy so Vite's HMR websocket won't reach the browser directly. If you need HMR, open Vite's own URL (`http://localhost:5173`) instead and configure its proxy to forward `/connect` and `/healthz` to the Rust port.
+Open **`http://localhost:5173`** (Vite's port, not the Rust server's). Vite's dev server is configured to proxy `/connect` and `/healthz` to the Rust server at `:8080`, so API calls work and HMR is fully functional.
 
-`SKIP_FRONTEND_BUILD=1` is set automatically by `just web` and `just build` so that cargo does not run `npm run build` on every compile. Run `just frontend-build` or `just build-release` when you need a fresh embedded bundle.
+`SKIP_FRONTEND_BUILD=1` is set automatically by `just web` and `just build` so that cargo does not run `npm run build` on every compile. You need a `frontend/dist/` to exist for the Rust binary to compile in this mode — run `just frontend-build` once if it doesn't, or run `just build-release` for a full embedded production build.
 
 If you add npm dependencies, run `just frontend-install` first.
 
