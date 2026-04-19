@@ -582,11 +582,17 @@ function ActionsSection({
 }) {
   const [invoking, setInvoking] = useState<AppAction | null>(null);
 
-  if (actions.length === 0)
-    return <Typography color="text.secondary">No actions.</Typography>;
-
   const canInstall = status === "not_installed";
-  const canInvoke = status !== "not_installed" && status !== "uninstalling";
+  const canInvoke = status !== "not_installed" && status !== "uninstalling" && status !== "deregistering";
+
+  const hasExplicitInstall = actions.some((a) => a.kind === "install");
+  const visibleActions: AppAction[] =
+    canInstall && !hasExplicitInstall
+      ? [{ name: "install", kind: "install", description: null, params: {} }, ...actions]
+      : actions;
+
+  if (visibleActions.length === 0)
+    return <Typography color="text.secondary">No actions.</Typography>;
 
   return (
     <>
@@ -601,7 +607,7 @@ function ActionsSection({
             </TableRow>
           </TableHead>
           <TableBody>
-            {actions.map((a) => {
+            {visibleActions.map((a) => {
               const isInvokable = a.kind !== "shell" && a.kind !== "lifecycle";
               const canRun =
                 a.kind === "install"
