@@ -562,12 +562,22 @@ async fn main() {
                 }
 
                 // r[impl schedule.tick]
+                // Snapshot generations before acquiring the DB to maintain
+                // consistent lock order (registry → db) across the codebase.
+                let app_generations: std::collections::HashMap<String, u64> = {
+                    let reg = schedule_registry.read();
+                    reg.list()
+                        .into_iter()
+                        .filter_map(|(name, _)| {
+                            reg.get(&name).map(|e| (name, e.current_generation))
+                        })
+                        .collect()
+                };
                 let accepted_fires = {
                     let db_guard = schedule_db.lock();
                     let mut sched = schedule_scheduler.lock();
-                    let reg = schedule_registry.read();
                     let fired = schedule_ticker.maybe_tick(&db_guard, &mut sched, &|app_name| {
-                        reg.get(app_name).map(|e| e.current_generation)
+                        app_generations.get(app_name).copied()
                     });
                     fired
                         .into_iter()

@@ -161,6 +161,11 @@ pub(crate) fn invoke_install(
             let mut reg = state.registry.write();
             if let Some(entry) = reg.get_mut(app_name) {
                 *entry.phase.lock() = AppPhase::Installed;
+            }
+        }
+        {
+            let reg = state.registry.read();
+            if let Some(entry) = reg.get(app_name) {
                 let db = state.db.lock();
                 AppRegistry::persist_app(&db, entry)
                     .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db persist: {e}")))?;

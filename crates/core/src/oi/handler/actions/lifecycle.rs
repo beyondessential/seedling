@@ -259,10 +259,19 @@ async fn cleanup_dynamic_resources(
 
 fn finalize_install(state: &OiState, app_name: &str) {
     // i[action.invoke.install.completion]
+    // Update the in-memory phase under the write lock, then persist under a
+    // read lock. Never hold the write lock while acquiring db: the schedule
+    // ticker holds db then acquires registry.read(), so registry.write() +
+    // db.lock() in either order creates a deadlock with it.
     {
         let mut reg = state.registry.write();
         if let Some(entry) = reg.get_mut(app_name) {
             *entry.phase.lock() = AppPhase::Installed;
+        }
+    }
+    {
+        let reg = state.registry.read();
+        if let Some(entry) = reg.get(app_name) {
             let db = state.db.lock();
             if let Err(e) = AppRegistry::persist_app(&db, entry) {
                 tracing::error!(app = %app_name, "persist installed flag: {e}");

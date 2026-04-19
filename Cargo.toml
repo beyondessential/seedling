@@ -43,3 +43,10 @@ wildmatch = "2.6.1"
 
 [patch.crates-io]
 smartstring = { git = "https://github.com/bodil/smartstring", rev = "refs/pull/34/head" }
+
+[profile.dev]
+force-frame-pointers = true
+
+[profile.release]
+debug = true
+force-frame-pointers = true
