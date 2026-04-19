@@ -1,5 +1,7 @@
 use std::net::{IpAddr, SocketAddr};
 
+use tracing::warn;
+
 /// Resolve interface names and explicit addresses into a deduplicated list of bind addresses.
 ///
 /// If both `interface_names` and `explicit_addrs` are empty, returns the loopback default.

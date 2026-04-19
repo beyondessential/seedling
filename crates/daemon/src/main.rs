@@ -695,8 +695,8 @@ fn resolve_oi_addrs(
             .map(|i| std::net::SocketAddr::new(i.ip(), port))
             .collect();
         if iface_addrs.is_empty() {
-            tracing::error!("interface {iface_name:?} not found or has no addresses");
-            std::process::exit(1);
+            tracing::warn!("interface {iface_name:?} not found or has no addresses");
+            continue;
         }
         addrs.extend(iface_addrs);
     }
