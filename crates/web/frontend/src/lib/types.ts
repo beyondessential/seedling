@@ -37,12 +37,43 @@ export interface ScaleBounds {
   current: number;
 }
 
+export interface ContainerSummary {
+  image: string | null;
+  command: string[] | null;
+  args: string[] | null;
+  env: Record<string, string>;
+  volume_mounts: Record<string, { kind: "volume"; name: string | null } | { kind: "external_volume"; name: string }>;
+  on_exit: string;
+  memory: string | null;
+  cpus: number | null;
+  extra_caps: string[];
+  writable_rootfs: boolean;
+  pids_limit: number | null;
+}
+
+export interface PodSummary {
+  service_mounts: string[];
+  http_bindings: string[];
+  tcp_bindings: string[];
+  udp_bindings: string[];
+}
+
+export type ResourceDef =
+  | { kind: "service"; http: boolean }
+  | { kind: "http_service"; service: string; port: number }
+  | { kind: "ingress"; service: string; hostname: string; port: number; tls: boolean; dtls: boolean; http_terminate: "http1" | "http2" | null; redirect: { port: number; code: number } | null }
+  | { kind: "deployment"; container: ContainerSummary; pod: PodSummary; scale: { low: number; high: number }; on_update: string; on_terminate: string }
+  | { kind: "job"; container: ContainerSummary; pod: PodSummary; deadline: number | null }
+  | { kind: "volume"; readonly: boolean; tmpfs: boolean; writes: Record<string, string>; exported: boolean; export_description: string | null }
+  | { kind: "external_volume" };
+
 export interface AppResource {
   name: string;
   type: string;
   instances: ResourceInstance[];
   faults: FaultRecord[];
   scale?: ScaleBounds;
+  def?: ResourceDef;
 }
 
 export interface AppParam {
@@ -148,7 +179,6 @@ export interface SeedlingEvent {
   bounds_high?: number;
   // ShellStarted / ShellExited
   session_id?: string;
-  name?: string;
   exit_code?: number;
   // ForwardStarted / ForwardStopped
   forward_id?: string;

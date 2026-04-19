@@ -218,9 +218,18 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > - `status`: the app's current status as defined in [app.status](#i--app.status).
 > - `faults`: array of app-level [fault records](#i--fault.record) not associated with a specific resource instance (e.g. script evaluation errors). Empty when there are no active app-level faults.
-> - `resources`: array of objects with fields `name`, `type`, `instances`, `faults`, and for Deployment resources, `scale`.
+> - `resources`: array of objects with fields `name`, `type`, `instances`, `faults`, `def`, and for Deployment resources, `scale`.
 >   Each instance has fields `id`, `display_name`, `lifecycle`, and `transition_time` (RFC 3339, optional).
 >   Each fault entry is a [fault record](#i--fault.record).
+>   `def` is an object describing the resource's configuration. The shape varies by `type`:
+>   for `ingress`: `{ hostname, port, tls, dtls, http_terminate, redirect }`;
+>   for `service`: `{ http }`;
+>   for `http_service`: `{ service, port }`;
+>   for `deployment`: `{ container, pod, scale, on_update, on_terminate }`;
+>   for `job`: `{ container, pod, deadline }`;
+>   for `volume`: `{ readonly, tmpfs, writes, exported, export_description }`.
+>   `container` has fields `image`, `command`, `args`, `env`, `volume_mounts`, `on_exit`, `memory`, `cpus`, `extra_caps`, `writable_rootfs`, `pids_limit`.
+>   `pod` has fields `service_mounts`, `http_bindings`, `tcp_bindings`, `udp_bindings` (each an array of strings).
 > - `params`: array of objects with fields `name`, `value`, `kind`, `required`, `description`, and `default_value`.
 >   `value` is `null` if the param has not been set. The schema fields (`kind`, `required`, `description`, `default_value`) reflect any metadata set via the BSL param builder methods.
 > - `unknown_params`: array of objects with fields `name` and `value`, listing parameters that have a stored value in the database but whose name does not appear in the app's current script evaluation. This is informational only; these values have no effect until the script is updated to reference them.

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Value, json, to_value};
 
 use seedling_protocol::error::{ErrorCode, OiError};
 
@@ -361,11 +361,12 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
             | AppStatus::Operating { .. }
             | AppStatus::Uninstalling
     );
+    // i[app.describe]
     let mut resources_json: Vec<Value> = {
         let db = state.db.lock();
         def.resources
-            .keys()
-            .map(|id| {
+            .iter()
+            .map(|(id, resource)| {
                 let instances_json: Vec<Value> = if query_instances {
                     find_instances_for_group(&db, name, id.kind, Some(id.name.as_str()))
                         .unwrap_or_default()
@@ -414,12 +415,11 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                     "type": resource_type_str,
                     "instances": instances_json,
                     "faults": resource_faults,
+                    "def": to_value(resource.summary()).unwrap_or(Value::Null),
                 });
 
                 // i[impl scale.describe]
-                if id.kind == ResourceKind::Deployment
-                    && let Some(Resource::Deployment(deployment)) = def.resources.get(id)
-                {
+                if let Resource::Deployment(deployment) = resource {
                     let dep_def = deployment.def.lock();
                     let low = dep_def.scale.start;
                     let high = dep_def.scale.end;
@@ -432,9 +432,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                     });
                 }
 
-                if id.kind == ResourceKind::Volume
-                    && let Some(Resource::Volume(vol)) = def.resources.get(id)
-                {
+                if let Resource::Volume(vol) = resource {
                     let vol_def = vol.def.lock();
                     if let Some(export_opts) = &vol_def.exported {
                         let mut export = json!({ "exported": true });

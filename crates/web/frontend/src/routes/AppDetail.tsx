@@ -50,6 +50,7 @@ import type {
   AppStatus,
   FaultRecord,
   InstallRequirement,
+  ResourceDef,
   SeedlingEvent,
 } from "../lib/types";
 
@@ -85,6 +86,75 @@ function FaultList({ faults, showApp }: { faults: FaultRecord[]; showApp?: boole
       ))}
     </Stack>
   );
+}
+
+function ResourceDefDetail({ def }: { def: ResourceDef }) {
+  if (def.kind === "ingress") {
+    const scheme = def.tls ? "https" : "http";
+    const url = `${scheme}://${def.hostname}:${def.port}`;
+    return (
+      <Box sx={{ mt: 0.5, display: "flex", gap: 0.5, flexWrap: "wrap", alignItems: "center" }}>
+        <Typography variant="caption" sx={{ fontFamily: "monospace", mr: 0.5 }}>{url}</Typography>
+        {def.http_terminate && <Chip label={def.http_terminate} size="small" variant="outlined" />}
+        {def.dtls && <Chip label="dtls" size="small" variant="outlined" />}
+        {def.redirect && (
+          <Chip label={`redirect :${def.redirect.port} (${def.redirect.code})`} size="small" variant="outlined" />
+        )}
+      </Box>
+    );
+  }
+  if (def.kind === "service") {
+    if (!def.http) return null;
+    return <Chip label="http" size="small" variant="outlined" sx={{ mt: 0.5 }} />;
+  }
+  if (def.kind === "http_service") {
+    return (
+      <Typography variant="caption" sx={{ fontFamily: "monospace", display: "block", mt: 0.5 }}>
+        {def.service}:{def.port}
+      </Typography>
+    );
+  }
+  if (def.kind === "deployment" || def.kind === "job") {
+    const bindings = [
+      ...def.pod.http_bindings.map((b) => `http: ${b}`),
+      ...def.pod.tcp_bindings.map((b) => `tcp: ${b}`),
+      ...def.pod.udp_bindings.map((b) => `udp: ${b}`),
+    ];
+    return (
+      <Box sx={{ mt: 0.5, display: "flex", gap: 0.5, flexWrap: "wrap", alignItems: "center" }}>
+        {def.container.image && (
+          <Typography
+            variant="caption"
+            sx={{ fontFamily: "monospace", opacity: 0.8, maxWidth: 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+            title={def.container.image}
+          >
+            {def.container.image}
+          </Typography>
+        )}
+        {bindings.map((b) => <Chip key={b} label={b} size="small" variant="outlined" />)}
+        {def.container.memory && <Chip label={`mem: ${def.container.memory}`} size="small" variant="outlined" />}
+        {def.container.cpus != null && <Chip label={`cpu: ${def.container.cpus}`} size="small" variant="outlined" />}
+        {def.kind === "job" && def.deadline != null && (
+          <Chip label={`deadline: ${def.deadline}s`} size="small" variant="outlined" />
+        )}
+      </Box>
+    );
+  }
+  if (def.kind === "volume") {
+    const chips = [
+      def.tmpfs && "tmpfs",
+      !def.tmpfs && "persistent",
+      def.readonly && "readonly",
+      def.exported && (def.export_description ?? "exported"),
+    ].filter(Boolean) as string[];
+    if (chips.length === 0) return null;
+    return (
+      <Box sx={{ mt: 0.5, display: "flex", gap: 0.5, flexWrap: "wrap" }}>
+        {chips.map((c) => <Chip key={c} label={c} size="small" variant="outlined" />)}
+      </Box>
+    );
+  }
+  return null;
 }
 
 function ResourcesSection({
@@ -168,7 +238,8 @@ function ResourcesSection({
             )}
           </Box>
           <FaultList faults={r.faults} />
-          <TableContainer component={Paper} variant="outlined">
+          {r.def && <ResourceDefDetail def={r.def} />}
+          <TableContainer component={Paper} variant="outlined" sx={{ mt: 0.5 }}>
             <Table size="small">
               <TableHead>
                 <TableRow>
