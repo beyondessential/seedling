@@ -249,17 +249,19 @@ async fn actuate_one_pod(
             || (!obs.container_exists && !obs.is_running && previously_ran)
             || already_completed;
         if is_done {
-            if obs.container_exists || obs.unit_active || obs.unit_failed || obs.is_running {
-                match actuator.stop(&dr.instance, &dr.definition).await {
-                    Ok(()) => {}
-                    Err(e) => {
-                        error!(
-                            instance = %dr.instance.display_name,
-                            error = %e,
-                            "pods: stop completed job failed"
-                        );
-                        result.stop_failure = Some((dr.instance.clone(), e.to_string()));
-                    }
+            // Always call stop: even when the container is already gone (--rm)
+            // and the unit is merely Inactive, the pod network must be removed.
+            // stop_pod_instance tolerates missing containers; the network
+            // removal is the critical side-effect here.
+            match actuator.stop(&dr.instance, &dr.definition).await {
+                Ok(()) => {}
+                Err(e) => {
+                    error!(
+                        instance = %dr.instance.display_name,
+                        error = %e,
+                        "pods: stop completed job failed"
+                    );
+                    result.stop_failure = Some((dr.instance.clone(), e.to_string()));
                 }
             }
             result.completed_job = Some(dr.instance.id);

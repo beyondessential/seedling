@@ -342,11 +342,13 @@ impl Actuator {
             }
         }
 
-        self.driver
+        // Container may already be gone (e.g. podman --rm removed it on exit).
+        // Ignore not-found errors so network and volume cleanup still proceeds.
+        let _ = self
+            .driver
             .container
             .remove_container(&instance.display_name, true)
-            .await
-            .context(ContainerSnafu)?;
+            .await;
 
         let net_name = pod_network_name(instance);
         if self
