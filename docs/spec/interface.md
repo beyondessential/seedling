@@ -224,10 +224,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - `params`: array of objects with fields `name` and `value`.
 >   `value` is `null` if the param has not been set.
 > - `unknown_params`: array of objects with fields `name` and `value`, listing parameters that have a stored value in the database but whose name does not appear in the app's current script evaluation. This is informational only; these values have no effect until the script is updated to reference them.
-> - `actions`: array of objects with fields `name`, `description`, and `kind`.
+> - `actions`: array of objects with fields `name`, `description`, `kind`, and `params`.
 >   `kind` is one of `action`, `shell`, or `install`.
-> - `install_requirements`: an object map of requirement key to `{ kind, required, description, default_value }`, as defined in the language spec for install requirements.
->   Empty if the app has no explicit install action.
+>   `params` is an object map of param key to `{ kind, required, description, default_value }`, as defined in the language spec. Empty for actions with no declared param schema.
 > - `current_operation`: present only when status is `Operating`.
 >   Has fields `action_name`, `barrier`, `source_generation`, and `target_generation`.
 >   `barrier` is either `null` (operation is running but not yet at a barrier) or an object with fields `resources`, `required_state`, `deadline_secs`, and `elapsed_secs`.
@@ -337,21 +336,22 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[action.invoke]
 > `/apps/action/invoke { app, name, params? }` schedules the named action as a lifecycle operation.
 > `params` is an optional JSON object. Keys ending in `_volume` are reserved and must be rejected.
+> If the action has a declared param schema, schema-defined params are validated and defaults applied before the operation is enqueued; validation failure returns `requirements_invalid`.
 > Shell actions must not be invoked via this method; `not_found` is returned if a shell name is provided.
 > Returns `{ "schedule": "accepted", "operation_id": "<string>" }` or `{ "schedule": "queued", "operation_id": "<string>" }` on success, or an error. The `operation_id` is always present and uniquely identifies this operation.
 
 > i[action.invoke.install]
-> `/apps/install/invoke { app, requirements? }` schedules the install action.
+> `/apps/install/invoke { app, params? }` schedules the install action.
 > It is only valid when the app is `NotInstalled`; otherwise `already_installed` is returned.
-> `requirements` is an optional JSON object of requirement key to string value. The values are delivered to the install closure as `param`.
-> If the app has no explicit install action, `requirements` must be absent or empty.
-> Requirements are validated before the operation is enqueued; validation failure returns `requirements_invalid`.
+> `params` is an optional JSON object of param key to string value. The values are delivered to the install closure as `param`.
+> If the app has no explicit install action, `params` must be absent or empty.
+> Params are validated before the operation is enqueued; validation failure returns `requirements_invalid`.
 > Returns `{ "schedule": "accepted" }` or `{ "schedule": "queued" }` on success, or an error.
 
 > i[action.invoke.install.validation]
-> Requirements are validated according to the kinds defined in the language spec before the operation is enqueued.
+> Params are validated according to the kinds defined in the language spec before the operation is enqueued.
 > A required field with no provided value and no `default_value` is a validation error.
-> The requirements object is passed to the install action closure and discarded when the install operation completes; it is never persisted.
+> The params object is passed to the install action closure and discarded when the install operation completes; it is never persisted.
 
 > i[action.invoke.install.completion]
 > When an install operation completes successfully, the app transitions out of `NotInstalled`.

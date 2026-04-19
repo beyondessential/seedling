@@ -16,8 +16,13 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
         })
         .with_fn(
             "on_install",
-            |this: &mut App, closure: FnPtr, requirements: Map| -> Result<(), Box<EvalAltResult>> {
-                let reqs = parse_install_requirements(&requirements)?;
+            |this: &mut App, closure: FnPtr, config: Map| -> Result<(), Box<EvalAltResult>> {
+                // l[impl action.install.requirements]
+                let params_map = config
+                    .get("params")
+                    .and_then(|v| v.read_lock::<Map>().map(|m| m.clone()))
+                    .unwrap_or_default();
+                let reqs = parse_param_defs(&params_map)?;
                 this.def.lock().install = Some(InstallDef { requirements: reqs });
                 super::capture_install(closure);
                 Ok(())
@@ -26,7 +31,8 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
 }
 
 // l[impl action.install.requirements.kind-unknown]
-fn parse_install_requirements(
+// l[impl action.option-params]
+pub(super) fn parse_param_defs(
     map: &Map,
 ) -> Result<BTreeMap<String, InstallRequirementDef>, Box<EvalAltResult>> {
     let mut reqs = BTreeMap::new();
@@ -37,7 +43,7 @@ fn parse_install_requirements(
                 .and_then(|v| v.clone().into_string().ok())
             {
                 Some(s) => InstallRequirementKind::from_str(&s).map_err(|_| {
-                    Box::<EvalAltResult>::from(format!("unknown install requirement kind: \"{s}\""))
+                    Box::<EvalAltResult>::from(format!("unknown param kind: \"{s}\""))
                 })?,
                 None => InstallRequirementKind::default(),
             };

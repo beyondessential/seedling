@@ -125,14 +125,16 @@ fn on_install_with_requirements() {
     let app = run_test_script_app(
         r#"
         app.on_install(|rt, reqs| {}, #{
-            admin_email: #{
-                kind: "email",
-                description: "Admin email",
-                default_value: "admin@example.com",
-            },
-            admin_password: #{
-                kind: "password",
-                description: "Admin password",
+            params: #{
+                admin_email: #{
+                    kind: "email",
+                    description: "Admin email",
+                    default_value: "admin@example.com",
+                },
+                admin_password: #{
+                    kind: "password",
+                    description: "Admin password",
+                },
             },
         });
     "#,
@@ -176,9 +178,11 @@ fn install_requirement_kind_text() {
     let app = run_test_script_app(
         r#"
         app.on_install(|rt, reqs| {}, #{
-            site_name: #{
-                kind: "text",
-                description: "Site name",
+            params: #{
+                site_name: #{
+                    kind: "text",
+                    description: "Site name",
+                },
             },
         });
     "#,
@@ -198,8 +202,10 @@ fn install_requirement_kind_defaults_to_text() {
     let app = run_test_script_app(
         r#"
         app.on_install(|rt, reqs| {}, #{
-            site_name: #{
-                description: "Site name",
+            params: #{
+                site_name: #{
+                    description: "Site name",
+                },
             },
         });
     "#,
@@ -219,9 +225,11 @@ fn install_requirement_kind_weak_password() {
     let app = run_test_script_app(
         r#"
         app.on_install(|rt, reqs| {}, #{
-            api_key: #{
-                kind: "weak-password",
-                description: "API key",
+            params: #{
+                api_key: #{
+                    kind: "weak-password",
+                    description: "API key",
+                },
             },
         });
     "#,
@@ -243,9 +251,11 @@ fn exercise_install_action() {
         app.on_install(|rt, reqs| {
             rt.start(app.deployment("web").image("docker.io/library/nginx:latest")).ready();
         }, #{
-            admin_email: #{
-                kind: "email",
-                description: "Admin email",
+            params: #{
+                admin_email: #{
+                    kind: "email",
+                    description: "Admin email",
+                },
             },
         });
     "#,
@@ -258,8 +268,53 @@ fn install_requirement_unknown_kind_throws() {
     let _ = run_test_script_err(
         r#"
         app.on_install(|rt, reqs| {}, #{
-            field: #{
-                kind: "banana",
+            params: #{
+                field: #{
+                    kind: "banana",
+                },
+            },
+        });
+    "#,
+    );
+}
+
+// l[verify action.option-params]
+#[test]
+fn on_action_with_params() {
+    let app = run_test_script_app(
+        r#"
+        app.on_action("maintenance", |rt, params| {}, #{
+            params: #{
+                contact_email: #{
+                    kind: "email",
+                    description: "Contact email during maintenance",
+                    default_value: "admin@example.com",
+                },
+            },
+        });
+    "#,
+    );
+    let def = app.def.lock();
+    let action = &def.actions["maintenance"];
+    assert_eq!(action.params.len(), 1);
+    let p = &action.params["contact_email"];
+    assert!(matches!(
+        p.kind,
+        defs::install::InstallRequirementKind::Email
+    ));
+    assert_eq!(p.default_value.as_deref(), Some("admin@example.com"));
+}
+
+// l[verify action.option-params]
+#[test]
+fn on_action_unknown_param_kind_throws() {
+    let _ = run_test_script_err(
+        r#"
+        app.on_action("maintenance", |rt, params| {}, #{
+            params: #{
+                field: #{
+                    kind: "banana",
+                },
             },
         });
     "#,

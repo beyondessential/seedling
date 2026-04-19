@@ -54,9 +54,9 @@ pub(super) enum AppsCommand {
     /// Invoke the install action
     Install {
         app: String,
-        /// Requirements as key=value
-        #[arg(long = "req")]
-        requirements: Vec<String>,
+        /// Params as key=value (trailing positional args)
+        #[arg(trailing_var_arg = true)]
+        params: Vec<String>,
     },
     /// Open an interactive shell session
     Shell {
@@ -355,8 +355,8 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
             }
             print_result(client.request("/apps/action/invoke", req).await);
         }
-        AppsCommand::Install { app, requirements } => {
-            let reqs: HashMap<String, String> = requirements
+        AppsCommand::Install { app, params } => {
+            let submitted: HashMap<String, String> = params
                 .iter()
                 .filter_map(|r| {
                     let mut parts = r.splitn(2, '=');
@@ -367,7 +367,7 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                 client
                     .request(
                         "/apps/install/invoke",
-                        serde_json::json!({ "app": app, "requirements": reqs }),
+                        serde_json::json!({ "app": app, "params": submitted }),
                     )
                     .await,
             );

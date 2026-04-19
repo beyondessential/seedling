@@ -50,8 +50,10 @@ export interface AppParam {
 
 export interface AppAction {
   name: string;
-  description: string;
+  description: string | null;
   kind: "action" | "shell" | "install";
+  params: Record<string, InstallRequirement>;
+  schedules?: string[];
 }
 
 export interface CurrentOperation {
@@ -81,7 +83,6 @@ export interface AppDetail {
   params: AppParam[];
   unknown_params: AppParam[];
   actions: AppAction[];
-  install_requirements: Record<string, InstallRequirement>;
   current_operation?: CurrentOperation;
 }
 

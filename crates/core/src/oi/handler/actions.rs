@@ -18,6 +18,7 @@ use super::HandlerResult;
 pub(crate) mod install;
 pub mod lifecycle;
 
+use install::validate_requirements;
 use lifecycle::spawn_accepted_operation;
 
 #[derive(Deserialize)]
@@ -43,6 +44,37 @@ fn validate_action_params(
     Ok(())
 }
 
+// i[action.invoke]
+fn apply_action_param_schema(
+    action_params_schema: &std::collections::BTreeMap<
+        String,
+        crate::defs::install::InstallRequirementDef,
+    >,
+    params: &mut serde_json::Map<String, serde_json::Value>,
+) -> Result<(), OiError> {
+    if action_params_schema.is_empty() {
+        return Ok(());
+    }
+
+    let submitted: std::collections::BTreeMap<String, String> = action_params_schema
+        .keys()
+        .filter_map(|k| {
+            params
+                .get(k)
+                .and_then(|v| v.as_str())
+                .map(|s| (k.clone(), s.to_owned()))
+        })
+        .collect();
+
+    let filled = validate_requirements(action_params_schema, &submitted)?;
+
+    for (k, v) in filled {
+        params.insert(k, serde_json::Value::String(v));
+    }
+
+    Ok(())
+}
+
 // i[action.not-installed-gate]
 // i[action.invoke]
 pub(crate) fn invoke_action(
@@ -52,7 +84,7 @@ pub(crate) fn invoke_action(
 ) -> HandlerResult {
     let app_name = &params.app;
     let action_name = &params.name;
-    let action_params = params.params.unwrap_or_default();
+    let mut action_params = params.params.unwrap_or_default();
     validate_action_params(&action_params)?;
 
     {
@@ -75,11 +107,13 @@ pub(crate) fn invoke_action(
                 "'{action_name}' is a shell action; use /shells/start"
             )));
         }
-        if !def.actions.contains_key(action_name) {
-            return Err(OiError::not_found(format!(
-                "action not found: {action_name}"
-            )));
-        }
+        let action_def = def
+            .actions
+            .get(action_name)
+            .ok_or_else(|| OiError::not_found(format!("action not found: {action_name}")))?;
+
+        // i[action.invoke]
+        apply_action_param_schema(&action_def.params, &mut action_params)?;
     }
 
     // Operator-invoked action: source and target generation are equal to the

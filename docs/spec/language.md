@@ -596,6 +596,13 @@ This is currently the only value.
 > l[action.option-description]
 > An Action's `description` option is free-form text provided to operators. It may describe what the action does or is for.
 
+> l[action.option-params]
+> An Action may declare a `params` schema in its `options` object. The value is an object map of param key to definition object, with the same structure and validation kinds as [Install Action params](#l--action.install.requirements).
+>
+> Params declared in the schema are validated against their kind and required/default rules before the action is scheduled. Additional params not mentioned in the schema are permitted and passed through as-is.
+>
+> If a `kind` value is provided but does not match any of the defined kinds, `on_action()` must throw.
+
 > l[action.params]
 > All action closures receive exactly two arguments: the [Runtime Instance](#l--rt.var) (`rt`) and a `Param` object map (`param`).
 >
@@ -660,9 +667,9 @@ This is currently the only value.
 > l[action.install]
 > The specialised Install Action is used to define how the application is first set up. It is used autonomously by the Seedling control plane.
 >
-> It must be defined using the `app.on_install(fn: closure, requirements?: object)` method, and cannot be defined using `on_action()`. It also does not take the `options` argument.
+> It must be defined using the `app.on_install(fn: closure, config?: object)` method, and cannot be defined using `on_action()`.
 >
-> The `fn` closure must take exactly two arguments: `rt` and `param`. Install requirement values are delivered through `param`. The requirements definition (second argument to `on_install()`) defines the validation schema; it does not change the closure signature.
+> The `fn` closure must take exactly two arguments: `rt` and `param`. Param values are delivered through `param`. The `config` object defines the validation schema; it does not change the closure signature.
 >
 > If it is not defined, it defaults to the equivalent of:
 > ```rhai
@@ -670,40 +677,40 @@ This is currently the only value.
 > ```
 
 > l[action.install.requirements]
-> The Install Action can define special parameters which are only requested from the operator when installation is requested. The values of the Requirements are only known to Seedling for the duration of the Install process, and are discarded afterwards.
+> The Install Action can define special parameters which are only requested from the operator when installation is requested. The values of the params are only known to Seedling for the duration of the Install process, and are discarded afterwards.
 >
-> The Requirements Definition (the second argument to `on_install()`) is an object map of requirement key => definition.
+> The param schema is declared under the `params` key of the `config` object passed to `on_install()`: `#{ params: #{ key: #{ ... }, ... } }`.
 >
-> The Requirements Object (the second argument of the `fn` _closure_) is an object map of requirement key => string value.
+> The `param` argument of the `fn` _closure_ is an object map of param key to string value.
 >
-> The definition has these fields:
+> Each param definition has these fields:
 > - `kind` (optional): how to present/validate the field, defaults to `"text"`;
 > - `required` (optional): boolean, defaults to `true`;
-> - `description` (optional): free-form text, for the operator to understand what the required value is or is for;
+> - `description` (optional): free-form text, for the operator to understand what the value is or is for;
 > - `default_value` (optional): string, the value to use if none is provided.
-> 
-> If `default_value` is set and `required` is `true`, then the default value is pre-populated in the field input (but the field is still mandatory / cannot be submitted empty).
+>
+> If `default_value` is set and `required` is `true`, the default value is pre-populated in the field input (but the field is still mandatory and cannot be submitted empty).
 
 > l[action.install.requirements.kind-text]
-> A requirement kind of `"text"` is a free-form text field.
+> A param kind of `"text"` is a free-form text field.
 > No validation is applied.
 
 > l[action.install.requirements.kind-email]
-> A requirement kind of `"email"` is an email address field.
+> A param kind of `"email"` is an email address field.
 > Basic validation is applied, and hints may be provided for more outlandish values ([for example](https://en.wikipedia.org/wiki/Email_address#Valid_email_addresses), `" "@example.org` is a valid email address, but probably not what an user meant).
 
 > l[action.install.requirements.kind-password]
-> A requirement kind of `"password"` is a strong password field.
+> A param kind of `"password"` is a strong password field.
 > Weak passwords must not be accepted (what makes a weak password is implementation-defined, but should be something like [zxcvbn](https://lowe.github.io/tryzxcvbn/)).
 > The field should have a strong password generator available.
 
 > l[action.install.requirements.kind-weak-password]
-> A requirement kind of `"weak-password"` is a free-form password field.
+> A param kind of `"weak-password"` is a free-form password field.
 > Password strength should be hinted, but must not restrict submission.
 > The field should have a strong password generator available.
 
 > l[action.install.requirements.kind-unknown]
-> If a requirement `kind` is provided but does not match any of the defined kinds, `on_install()` must throw.
+> If a param `kind` is provided but does not match any of the defined kinds, `on_install()` must throw.
 
 # Runtime Instance
 

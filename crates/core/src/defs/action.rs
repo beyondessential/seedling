@@ -1,16 +1,19 @@
-use std::collections::hash_map::DefaultHasher;
+use std::collections::{BTreeMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 
 use rhai::{CustomType, Dynamic, EvalAltResult, Map, TypeBuilder};
 
 use super::collection::{Collection, col};
+use super::install::InstallRequirementDef;
 
+// l[impl action.option-params]
 #[derive(Debug, Clone)]
 pub struct ActionDef {
     pub name: String,
     pub description: Option<String>,
     // l[impl action.schedule]
     pub schedules: Vec<String>,
+    pub params: BTreeMap<String, InstallRequirementDef>,
 }
 
 /// Compute a stable hash from `(app_name, action_name)` for use with cronexpr's

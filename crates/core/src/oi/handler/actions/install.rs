@@ -6,7 +6,7 @@ use serde_json::json;
 use seedling_protocol::error::{ErrorCode, OiError};
 
 use crate::{
-    defs::install::InstallRequirementKind,
+    defs::install::{InstallRequirementDef, InstallRequirementKind},
     oi::{
         handler::{HandlerResult, RequestCtx},
         state::OiState,
@@ -24,7 +24,7 @@ use super::lifecycle::spawn_accepted_operation;
 pub(crate) struct InvokeInstallParams {
     pub app: String,
     #[serde(default)]
-    pub requirements: Option<BTreeMap<String, String>>,
+    pub params: Option<BTreeMap<String, String>>,
 }
 
 // i[action.invoke.install.validation]
@@ -48,27 +48,13 @@ fn is_strong_password(password: &str) -> bool {
 
 // i[action.invoke.install.validation]
 pub(in crate::oi) fn validate_requirements(
-    install_def: Option<&crate::defs::install::InstallDef>,
+    schema: &BTreeMap<String, InstallRequirementDef>,
     submitted: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, String>, OiError> {
-    let install_def = match install_def {
-        Some(d) => d,
-        None => {
-            return if submitted.is_empty() {
-                Ok(BTreeMap::new())
-            } else {
-                Err(OiError::new(
-                    ErrorCode::RequirementsInvalid,
-                    "app has no install requirements",
-                ))
-            };
-        }
-    };
-
     let mut filled = submitted.clone();
     let mut errors: Vec<String> = Vec::new();
 
-    for (field, req_def) in &install_def.requirements {
+    for (field, req_def) in schema {
         let raw = filled.get(field).map(|s| s.as_str()).unwrap_or("");
 
         if raw.is_empty() {
@@ -109,7 +95,7 @@ pub(in crate::oi) fn validate_requirements(
 }
 
 // i[action.invoke.install.validation]
-fn validate_install_requirements(
+fn validate_install_params(
     state: &OiState,
     app_name: &str,
     submitted: &BTreeMap<String, String>,
@@ -117,7 +103,19 @@ fn validate_install_requirements(
     let reg = state.registry.read();
     let entry = reg.get(app_name).expect("caller confirmed exists");
     let def = entry.app.def.lock();
-    validate_requirements(def.install.as_ref(), submitted)
+    match &def.install {
+        None => {
+            if submitted.is_empty() {
+                Ok(BTreeMap::new())
+            } else {
+                Err(OiError::new(
+                    ErrorCode::RequirementsInvalid,
+                    "app has no install params",
+                ))
+            }
+        }
+        Some(inst) => validate_requirements(&inst.requirements, submitted),
+    }
 }
 
 // i[action.not-installed-gate]
@@ -130,7 +128,7 @@ pub(crate) fn invoke_install(
 ) -> HandlerResult {
     let app_name = &params.app;
 
-    let submitted = params.requirements.unwrap_or_default();
+    let submitted = params.params.unwrap_or_default();
 
     let has_install_action = {
         let reg = state.registry.read();
@@ -149,7 +147,7 @@ pub(crate) fn invoke_install(
         entry.app.def.lock().install.is_some()
     };
 
-    let filled = validate_install_requirements(state, app_name, &submitted)?;
+    let filled = validate_install_params(state, app_name, &submitted)?;
 
     if !has_install_action {
         {
@@ -166,7 +164,7 @@ pub(crate) fn invoke_install(
         return Ok(json!({ "schedule": "accepted" }));
     }
 
-    let params: serde_json::Map<String, serde_json::Value> = filled
+    let op_params: serde_json::Map<String, serde_json::Value> = filled
         .into_iter()
         .map(|(k, v)| (k, serde_json::Value::String(v)))
         .collect();
@@ -182,7 +180,7 @@ pub(crate) fn invoke_install(
         let result = sched.request(
             app_name,
             "install",
-            params.clone(),
+            op_params.clone(),
             current_generation,
             current_generation,
             "operator",
@@ -206,7 +204,7 @@ pub(crate) fn invoke_install(
                 app_name.to_owned(),
                 "install".to_owned(),
                 op_id,
-                params,
+                op_params,
                 current_generation,
                 current_generation,
                 "operator".to_owned(),

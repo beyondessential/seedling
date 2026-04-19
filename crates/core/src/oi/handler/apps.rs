@@ -134,6 +134,25 @@ fn install_requirement_kind_str(kind: InstallRequirementKind) -> &'static str {
     }
 }
 
+fn serialize_param_schema(
+    schema: &std::collections::BTreeMap<String, crate::defs::install::InstallRequirementDef>,
+) -> serde_json::Map<String, Value> {
+    schema
+        .iter()
+        .map(|(k, req)| {
+            (
+                k.clone(),
+                json!({
+                    "kind": install_requirement_kind_str(req.kind),
+                    "required": req.required,
+                    "description": req.description,
+                    "default_value": req.default_value,
+                }),
+            )
+        })
+        .collect()
+}
+
 // i[app.list]
 pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
     let reg = state.registry.read();
@@ -274,12 +293,18 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         .map(|(k, v)| json!({ "name": k, "value": v }))
         .collect();
 
+    // i[app.describe]
     // actions (kind: "action")
     let mut actions_json: Vec<Value> = def
         .actions
         .values()
         .map(|a| {
-            let mut obj = json!({ "name": a.name, "description": a.description, "kind": "action" });
+            let mut obj = json!({
+                "name": a.name,
+                "description": a.description,
+                "kind": "action",
+                "params": serialize_param_schema(&a.params),
+            });
             if !a.schedules.is_empty() {
                 obj["schedules"] = json!(a.schedules);
             }
@@ -289,35 +314,23 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
 
     // shells (kind: "shell")
     for s in def.shells.values() {
-        actions_json.push(json!({ "name": s.name, "description": s.description, "kind": "shell" }));
+        actions_json.push(json!({
+            "name": s.name,
+            "description": s.description,
+            "kind": "shell",
+            "params": {},
+        }));
     }
 
     // install action (kind: "install")
-    if def.install.is_some() {
-        actions_json.push(json!({ "name": "install", "description": null, "kind": "install" }));
+    if let Some(inst) = &def.install {
+        actions_json.push(json!({
+            "name": "install",
+            "description": null,
+            "kind": "install",
+            "params": serialize_param_schema(&inst.requirements),
+        }));
     }
-
-    // install_requirements
-    let install_requirements: serde_json::Map<String, Value> = def
-        .install
-        .as_ref()
-        .map(|inst| {
-            inst.requirements
-                .iter()
-                .map(|(k, req)| {
-                    (
-                        k.clone(),
-                        json!({
-                            "kind": install_requirement_kind_str(req.kind),
-                            "required": req.required,
-                            "description": req.description,
-                            "default_value": req.default_value,
-                        }),
-                    )
-                })
-                .collect()
-        })
-        .unwrap_or_default();
 
     // resources — with instance lifecycle state from DB observations.
     // Only query instances for Installed/Uninstalling apps; NotInstalled
@@ -427,7 +440,6 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         "params": params_json,
         "unknown_params": unknown_params_json,
         "actions": actions_json,
-        "install_requirements": install_requirements,
     });
 
     if let AppStatus::Operating { .. } = &status {

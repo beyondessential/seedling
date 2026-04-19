@@ -9,6 +9,10 @@ import {
   Button,
   Chip,
   CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Divider,
   IconButton,
   InputAdornment,
@@ -35,7 +39,9 @@ import type {
   AppDetail,
   AppParam,
   AppResource,
+  AppStatus,
   FaultRecord,
+  InstallRequirement,
 } from "../lib/types";
 
 function lifecycleColor(
@@ -270,34 +276,180 @@ function ParamsSection({
   );
 }
 
-function ActionsSection({ actions }: { actions: AppAction[] }) {
+function paramFieldType(kind: string): string {
+  if (kind === "password" || kind === "weak-password") return "password";
+  if (kind === "email") return "email";
+  return "text";
+}
+
+function ActionInvokeDialog({
+  appName,
+  action,
+  open,
+  onClose,
+  onSuccess,
+}: {
+  appName: string;
+  action: AppAction;
+  open: boolean;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const { execute, loading, error, clearError } = useOiAction();
+  const [values, setValues] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      Object.entries(action.params).map(([k, def]: [string, InstallRequirement]) => [
+        k,
+        def.default_value ?? "",
+      ]),
+    ),
+  );
+
+  const handleClose = () => {
+    clearError();
+    onClose();
+  };
+
+  const handleSubmit = async () => {
+    const method =
+      action.kind === "install" ? "/apps/install/invoke" : "/apps/action/invoke";
+    const params =
+      action.kind === "install"
+        ? { app: appName, params: values }
+        : { app: appName, name: action.name, params: values };
+    try {
+      await execute(method, params);
+      onSuccess();
+      handleClose();
+    } catch {
+      // displayed via error
+    }
+  };
+
+  const paramEntries = Object.entries(action.params) as [string, InstallRequirement][];
+
+  return (
+    <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
+      <DialogTitle sx={{ fontFamily: "monospace", pb: 1 }}>
+        {action.kind === "install" ? "Install" : `Run: ${action.name}`}
+      </DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ mt: 0.5 }}>
+          {error && <OiErrorAlert error={error} />}
+          {paramEntries.length === 0 ? (
+            <Typography variant="body2" color="text.secondary">
+              No params required.
+            </Typography>
+          ) : (
+            paramEntries.map(([key, def]) => (
+              <TextField
+                key={key}
+                label={key}
+                size="small"
+                value={values[key] ?? ""}
+                onChange={(e) =>
+                  setValues((v) => ({ ...v, [key]: e.target.value }))
+                }
+                helperText={def.description ?? undefined}
+                type={paramFieldType(def.kind)}
+                required={def.required}
+                inputProps={{ style: { fontFamily: "monospace" } }}
+              />
+            ))
+          )}
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={handleClose} disabled={loading}>
+          Cancel
+        </Button>
+        <Button variant="contained" onClick={handleSubmit} disabled={loading}>
+          {loading
+            ? "Running…"
+            : action.kind === "install"
+              ? "Install"
+              : "Run"}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+function ActionsSection({
+  appName,
+  actions,
+  status,
+  onRefresh,
+}: {
+  appName: string;
+  actions: AppAction[];
+  status: AppStatus;
+  onRefresh: () => void;
+}) {
+  const [invoking, setInvoking] = useState<AppAction | null>(null);
+
   if (actions.length === 0)
     return <Typography color="text.secondary">No actions.</Typography>;
+
+  const canInstall = status === "not_installed";
+  const canInvoke = status !== "not_installed" && status !== "uninstalling";
+
   return (
-    <TableContainer component={Paper} variant="outlined">
-      <Table size="small">
-        <TableHead>
-          <TableRow>
-            <TableCell>Name</TableCell>
-            <TableCell>Kind</TableCell>
-            <TableCell>Description</TableCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {actions.map((a) => (
-            <TableRow key={a.name}>
-              <TableCell sx={{ fontFamily: "monospace" }}>{a.name}</TableCell>
-              <TableCell>
-                <Chip label={a.kind} size="small" variant="outlined" />
-              </TableCell>
-              <TableCell sx={{ color: "text.secondary" }}>
-                {a.description}
-              </TableCell>
+    <>
+      <TableContainer component={Paper} variant="outlined">
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>Name</TableCell>
+              <TableCell>Kind</TableCell>
+              <TableCell>Description</TableCell>
+              <TableCell />
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </TableContainer>
+          </TableHead>
+          <TableBody>
+            {actions.map((a) => {
+              const canRun =
+                a.kind === "install"
+                  ? canInstall
+                  : a.kind !== "shell" && canInvoke;
+              return (
+                <TableRow key={a.name}>
+                  <TableCell sx={{ fontFamily: "monospace" }}>{a.name}</TableCell>
+                  <TableCell>
+                    <Chip label={a.kind} size="small" variant="outlined" />
+                  </TableCell>
+                  <TableCell sx={{ color: "text.secondary" }}>
+                    {a.description}
+                  </TableCell>
+                  <TableCell align="right">
+                    {a.kind !== "shell" && (
+                      <Button
+                        size="small"
+                        variant={a.kind === "install" ? "contained" : "outlined"}
+                        onClick={() => setInvoking(a)}
+                        disabled={!canRun}
+                      >
+                        {a.kind === "install" ? "Install" : "Run"}
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </TableContainer>
+      {invoking && (
+        <ActionInvokeDialog
+          key={invoking.name}
+          appName={appName}
+          action={invoking}
+          open={true}
+          onClose={() => setInvoking(null)}
+          onSuccess={onRefresh}
+        />
+      )}
+    </>
   );
 }
 
@@ -428,7 +580,12 @@ export default function AppDetail() {
           <Divider />
 
           <Section title="Actions">
-            <ActionsSection actions={data.actions} />
+            <ActionsSection
+              appName={name!}
+              actions={data.actions}
+              status={data.status}
+              onRefresh={refetch}
+            />
           </Section>
         </Stack>
       )}
