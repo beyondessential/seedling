@@ -184,7 +184,7 @@ async fn main() {
     daemon.probe().await.unwrap_or_else(|e| {
         eprintln!("error: daemon rejected connection: {e}");
         eprintln!(
-            "hint: authorise this key in seedlingd: seedling-ctl oi add-key {} seedling-web",
+            "hint: authorise this key in seedlingd: seedling-ctl user add {} seedling-web",
             daemon.fingerprint
         );
         std::process::exit(1);
