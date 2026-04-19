@@ -14,7 +14,10 @@ export function useEventRefresh(
   matches: (ev: SeedlingEvent) => boolean,
 ) {
   const { events } = useContext(SessionContext);
-  const prevLength = useRef(events.length);
+  // Track the previous newest event by identity, not by array length.
+  // Tracking length breaks once the buffer is full (capped at 200): length
+  // stays constant so new events are never detected.
+  const prevFirst = useRef<SeedlingEvent | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dirty = useRef(false);
 
@@ -47,11 +50,14 @@ export function useEventRefresh(
 
   // Check for new matching events.
   useEffect(() => {
-    const prev = prevLength.current;
-    prevLength.current = events.length;
-    if (events.length <= prev) return;
-    // New events are prepended, so check events[0..newCount-1].
-    const newCount = events.length - prev;
+    if (events.length === 0 || events[0] === prevFirst.current) return;
+    const oldFirst = prevFirst.current;
+    prevFirst.current = events[0];
+    // Find where the previously-newest event now sits to count new arrivals.
+    // indexOf returns -1 if it was pushed out of the capped buffer; in that
+    // case treat the whole array as new (worst case: a spurious debounced refetch).
+    const cutoff = oldFirst ? events.indexOf(oldFirst) : events.length;
+    const newCount = cutoff === -1 ? events.length : cutoff;
     for (let i = 0; i < newCount; i++) {
       if (matches(events[i])) {
         scheduleRefetch();
