@@ -57,6 +57,6 @@ export class WtClient {
         error: body.error as { code: string; message: string },
       };
     }
-    return { ok: true, value: body };
+    return { ok: true, value: body.result ?? body };
   }
 }
