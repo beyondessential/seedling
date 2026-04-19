@@ -23,7 +23,10 @@ export function useEventRefresh(
       dirty.current = true;
       return;
     }
-    if (timer.current !== null) clearTimeout(timer.current);
+    // Leading edge: fire immediately on the first event in a quiet window.
+    if (timer.current === null) refetch();
+    // Trailing edge: also fire after the burst of events settles.
+    else clearTimeout(timer.current);
     timer.current = setTimeout(() => {
       timer.current = null;
       refetch();
