@@ -665,13 +665,15 @@ function Section({
   );
 }
 
-function DeregisterDialog({
+function AppRemovalDialog({
   appName,
+  kind,
   open,
   onClose,
   onSuccess,
 }: {
   appName: string;
+  kind: "uninstall" | "deregister";
   open: boolean;
   onClose: () => void;
   onSuccess: () => void;
@@ -680,34 +682,40 @@ function DeregisterDialog({
 
   const handleConfirm = async () => {
     try {
-      await execute("/apps/remove", { app: appName });
+      const method = kind === "uninstall" ? "/apps/uninstall" : "/apps/remove";
+      await execute(method, { app: appName });
       onSuccess();
     } catch {
       // displayed via error
     }
   };
 
+  const handleClose = () => { clearError(); onClose(); };
+
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
-      <DialogTitle>Deregister app</DialogTitle>
+    <Dialog open={open} onClose={handleClose} maxWidth="xs" fullWidth>
+      <DialogTitle>{kind === "uninstall" ? "Uninstall app" : "Deregister app"}</DialogTitle>
       <DialogContent>
         {error && <OiErrorAlert error={error} />}
         <Typography>
-          Remove <strong>{appName}</strong> from Seedling? This will stop and
-          tear down all its resources.
+          {kind === "uninstall" ? (
+            <>Uninstall <strong>{appName}</strong>? This will tear down all its resources. The app will remain registered and can be reinstalled.</>
+          ) : (
+            <>Remove <strong>{appName}</strong> from Seedling entirely? This cannot be undone.</>
+          )}
         </Typography>
       </DialogContent>
       <DialogActions>
-        <Button onClick={() => { clearError(); onClose(); }} disabled={loading}>
-          Cancel
-        </Button>
+        <Button onClick={handleClose} disabled={loading}>Cancel</Button>
         <Button
           variant="contained"
           color="error"
           onClick={handleConfirm}
           disabled={loading}
         >
-          {loading ? "Removing…" : "Deregister"}
+          {loading
+            ? kind === "uninstall" ? "Uninstalling…" : "Removing…"
+            : kind === "uninstall" ? "Uninstall" : "Deregister"}
         </Button>
       </DialogActions>
     </Dialog>
@@ -717,7 +725,7 @@ function DeregisterDialog({
 export default function AppDetail() {
   const { name } = useParams<{ name: string }>();
   const navigate = useNavigate();
-  const [deregisterOpen, setDeregisterOpen] = useState(false);
+  const [removalOpen, setRemovalOpen] = useState(false);
   const { data, loading, error, refetch } = useOiQuery<AppDetail>(
     "/apps/show",
     { app: name },
@@ -743,14 +751,28 @@ export default function AppDetail() {
         </Typography>
         <Typography variant="body2">{name}</Typography>
         <Box sx={{ flexGrow: 1 }} />
-        <Button
-          size="small"
-          color="error"
-          onClick={() => setDeregisterOpen(true)}
-          disabled={loading}
-        >
-          Deregister
-        </Button>
+        {data?.status === "not_installed" && (
+          <Button
+            size="small"
+            color="error"
+            onClick={() => setRemovalOpen(true)}
+            disabled={loading}
+          >
+            Deregister
+          </Button>
+        )}
+        {data?.status !== "not_installed" &&
+          data?.status !== "uninstalling" &&
+          data?.status !== "deregistering" && (
+          <Button
+            size="small"
+            color="error"
+            onClick={() => setRemovalOpen(true)}
+            disabled={loading}
+          >
+            Uninstall
+          </Button>
+        )}
         <Button
           size="small"
           startIcon={<EditIcon />}
@@ -846,11 +868,16 @@ export default function AppDetail() {
           </Section>
         </Stack>
       )}
-      <DeregisterDialog
+      <AppRemovalDialog
         appName={name!}
-        open={deregisterOpen}
-        onClose={() => setDeregisterOpen(false)}
-        onSuccess={() => navigate("/")}
+        kind={data?.status === "not_installed" ? "deregister" : "uninstall"}
+        open={removalOpen}
+        onClose={() => setRemovalOpen(false)}
+        onSuccess={() => {
+          setRemovalOpen(false);
+          if (data?.status === "not_installed") navigate("/");
+          else refetch();
+        }}
       />
     </Box>
   );

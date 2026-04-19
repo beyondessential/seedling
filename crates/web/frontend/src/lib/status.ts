@@ -14,6 +14,7 @@ export function statusColor(status: AppStatus): ChipColor {
       return "info";
     case "not_installed":
     case "uninstalling":
+    case "deregistering":
       return "default";
   }
 }
