@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 use seedling_protocol::actor::Actor;
 
+use crate::daemon::DaemonConn;
 use crate::wt_cert::CertStore;
 
 pub struct WtTokenEntry {
@@ -59,4 +60,5 @@ pub struct AppState {
     pub wt_port: u16,
     /// When set, the SPA fallback proxies to a Vite dev server instead of serving embedded assets.
     pub vite_port: Option<u16>,
+    pub daemon: Arc<DaemonConn>,
 }

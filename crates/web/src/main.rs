@@ -8,15 +8,19 @@ use parking_lot::{Mutex, RwLock};
 
 mod auth;
 mod config;
+mod daemon;
 mod http;
 mod interfaces;
+mod proxy;
 mod spa;
 mod state;
 mod wt;
 mod wt_cert;
 
 use config::Config;
+use daemon::DaemonConn;
 use interfaces::resolve_bind_addrs;
+use seedling_protocol::client::ClientAuth;
 use state::AppState;
 use wt_cert::CertStore;
 
@@ -63,6 +67,24 @@ struct Args {
     /// Proxy the SPA to a Vite dev server on this port instead of serving embedded assets.
     #[arg(long)]
     vite_port: Option<u16>,
+
+    /// Address of the seedlingd OI endpoint to proxy.
+    #[arg(long, default_value = "[::1]:7891")]
+    daemon_addr: std::net::SocketAddr,
+
+    /// SHA-256 SPKI fingerprint (hex) of the daemon to pin.
+    #[arg(long)]
+    #[cfg_attr(debug_assertions, arg(conflicts_with = "daemon_trust_any"))]
+    daemon_fingerprint: Option<String>,
+
+    /// Skip daemon key verification (development only).
+    #[cfg(debug_assertions)]
+    #[arg(long, conflicts_with = "daemon_fingerprint")]
+    daemon_trust_any: bool,
+
+    /// Path to the web binary's persistent client key file.
+    #[arg(long)]
+    key_file: Option<std::path::PathBuf>,
 }
 
 #[tokio::main]
@@ -129,6 +151,34 @@ async fn main() {
     let session_lifetime = Duration::from_secs(cfg.auth.session_lifetime_secs);
     let password_hash = cfg.auth.password_hash;
 
+    #[cfg(debug_assertions)]
+    let trust_any = args.daemon_trust_any;
+    #[cfg(not(debug_assertions))]
+    let trust_any = false;
+
+    let daemon_auth = if trust_any {
+        tracing::warn!("--daemon-trust-any: skipping daemon key verification");
+        ClientAuth::TrustAny
+    } else if let Some(fp) = args.daemon_fingerprint {
+        ClientAuth::Fingerprint(fp)
+    } else if cfg!(debug_assertions) {
+        tracing::warn!("no --daemon-fingerprint; trusting any daemon key (debug build)");
+        ClientAuth::TrustAny
+    } else {
+        eprintln!("error: --daemon-fingerprint is required");
+        std::process::exit(1);
+    };
+
+    let key_file = args.key_file.unwrap_or_else(DaemonConn::default_key_path);
+
+    let daemon = DaemonConn::connect(args.daemon_addr, daemon_auth, &key_file)
+        .await
+        .unwrap_or_else(|e| {
+            eprintln!("error: daemon connection failed: {e}");
+            std::process::exit(1);
+        });
+    let daemon = Arc::new(daemon);
+
     let cert_store = Arc::new(RwLock::new(CertStore::new()));
 
     let (rotation_tx, rotation_rx) = tokio::sync::watch::channel(());
@@ -143,6 +193,7 @@ async fn main() {
         password_hash,
         wt_port,
         vite_port: args.vite_port,
+        daemon,
     };
 
     // Spawn cert rotation background task.

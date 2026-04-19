@@ -4,6 +4,7 @@ use std::sync::Arc;
 use tokio::sync::watch;
 use wtransport::{Endpoint, ServerConfig, VarInt};
 
+use crate::proxy;
 use crate::state::{self, AppState};
 
 /// Run a WebTransport server on `addr`, restarting when `rotation_rx` fires (cert rotated).
@@ -90,13 +91,25 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
         "WT session established"
     );
 
-    // w[transport.webtransport] — proxy streams in phase 4; return not_implemented for now.
-    while let Ok((mut send, _recv)) = conn.accept_bi().await {
-        let _ = tokio::io::AsyncWriteExt::write_all(
-            &mut send,
-            b"{\"error\":{\"code\":\"not_implemented\",\"message\":\"streaming not yet available\"}}\n",
-        )
-        .await;
+    // w[transport.webtransport]
+    while let Ok((wt_send, wt_recv)) = conn.accept_bi().await {
+        let state3 = state.clone();
+        let actor2 = Arc::clone(&actor);
+        tokio::spawn(async move {
+            match state3.daemon.open_bi().await {
+                Ok((daemon_send, daemon_recv)) => {
+                    proxy::proxy_stream(wt_send, wt_recv, daemon_send, daemon_recv, actor2).await;
+                }
+                Err(e) => {
+                    tracing::error!("daemon stream open failed: {e}");
+                    let mut wt_send = wt_send;
+                    let _ = tokio::io::AsyncWriteExt::write_all(
+                        &mut wt_send,
+                        b"{\"error\":{\"code\":\"daemon_unavailable\",\"message\":\"daemon connection failed\"}}\n",
+                    ).await;
+                }
+            }
+        });
     }
 }
 

@@ -13,6 +13,7 @@ seedling-protocol = { path = "../protocol" }
 
 argon2.workspace = true
 axum.workspace = true
+dirs.workspace = true
 mime_guess.workspace = true
 reqwest.workspace = true
 clap.workspace = true
@@ -27,5 +28,6 @@ toml.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+quinn.workspace = true
 rust-embed.workspace = true
 wtransport.workspace = true
