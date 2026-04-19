@@ -105,22 +105,19 @@ impl DaemonConn {
         Ok(())
     }
 
-    /// Send a streaming request to the daemon and return the server-initiated
-    /// unidirectional stream that carries the response payload (log entries, etc.).
+    /// Send a streaming request to the daemon using a fresh, dedicated QUIC
+    /// connection and return both the connection handle (to keep it alive) and
+    /// the server-initiated unidirectional stream carrying the response payload.
     ///
-    /// Captures the current `quinn::Connection` without holding the lock, so
-    /// normal requests are not blocked.  `open_bi` and `accept_uni` both run on
-    /// the same connection instance; if a reconnect happens concurrently the
-    /// returned stream still belongs to the pre-reconnect connection, which is
-    /// fine — the caller will see EOF / write errors if that connection drops.
-    pub async fn start_uni_stream_request(
+    /// Using a dedicated connection ensures that dropping the stream (e.g. when
+    /// the client disconnects mid-stream) cannot affect the shared connection
+    /// used by normal requests.
+    pub async fn start_log_stream(
         &self,
         request_bytes: &[u8],
-    ) -> Result<quinn::RecvStream, ClientError> {
-        let conn = {
-            let client = self.inner.lock().await;
-            client.connection().clone()
-        };
+    ) -> Result<(OiClient, quinn::RecvStream), ClientError> {
+        let client = self.new_events_client().await?;
+        let conn = client.connection().clone();
 
         let (mut send, recv) = conn
             .open_bi()
@@ -142,9 +139,12 @@ impl DaemonConn {
             .await
             .map_err(|e| ClientError::Transport(Box::new(e)))?;
 
-        conn.accept_uni()
+        let log_recv = conn
+            .accept_uni()
             .await
-            .map_err(|e| ClientError::Transport(Box::new(e)))
+            .map_err(|e| ClientError::Transport(Box::new(e)))?;
+
+        Ok((client, log_recv))
     }
 
     /// Create a fresh, independent `OiClient` for long-running event subscriptions.

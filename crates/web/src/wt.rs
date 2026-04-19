@@ -120,15 +120,15 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
             // stream to push entries, which the transparent proxy cannot forward.
             // Accept that uni stream here and relay entries over the WT bidi send.
             if peeked.method == "/logs/stream" {
-                match state3
-                    .daemon
-                    .start_uni_stream_request(&peeked.modified_line)
-                    .await
-                {
-                    Ok(mut log_recv) => {
+                match state3.daemon.start_log_stream(&peeked.modified_line).await {
+                    Ok((_log_client, mut log_recv)) => {
                         let _ = wt_send.write_all(b"{\"result\":{}}\n").await;
-                        let _ = tokio::io::copy(&mut log_recv, &mut wt_send).await;
-                        let _ = wt_send.shutdown().await;
+                        // Only send FIN on clean daemon EOF; on client abort (STOP_SENDING)
+                        // just drop wt_send to send RESET_STREAM instead of an invalid FIN.
+                        if tokio::io::copy(&mut log_recv, &mut wt_send).await.is_ok() {
+                            let _ = wt_send.shutdown().await;
+                        }
+                        // _log_client dropped here — dedicated connection closed cleanly.
                     }
                     Err(e) => {
                         tracing::error!("log stream setup failed: {e}");
