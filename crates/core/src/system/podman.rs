@@ -689,10 +689,22 @@ fn map_api_err(e: podman_rest_client::Error) -> PodmanError {
 }
 
 fn is_not_found(e: &podman_rest_client::Error) -> bool {
-    matches!(
-        e,
-        podman_rest_client::Error::Api { code, .. } if code.as_u16() == 404
-    )
+    match e {
+        podman_rest_client::Error::Api { code, body } => {
+            // Normal not-found.
+            if code.as_u16() == 404 {
+                return true;
+            }
+            // Podman can return 500 when a container disappears between the
+            // name-lookup and the ID-based inspect (TOCTOU race with --rm).
+            // Treat "no such container" 500s as not-found so callers see None.
+            if code.as_u16() == 500 && body.to_string().contains("no such container") {
+                return true;
+            }
+            false
+        }
+        _ => false,
+    }
 }
 
 fn parse_container_status(s: &str) -> ContainerStatus {
