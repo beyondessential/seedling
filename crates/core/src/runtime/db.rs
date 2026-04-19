@@ -48,6 +48,10 @@ impl Db {
         Ok(db)
     }
 
+    // NEVER edit or delete an existing migration block. Once a migration has shipped, the
+    // schema_version row for it exists in production databases and that block will never run
+    // again. Editing it silently diverges the schema from what the version number promises.
+    // Always add a new version < N block at the bottom instead.
     fn migrate(&self) -> SqlResult<()> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS schema_version (
