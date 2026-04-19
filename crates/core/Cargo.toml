@@ -40,5 +40,6 @@ uuid.workspace = true
 wildmatch.workspace = true
 zbus = { version = "5.14.0", features = ["tokio"] }
 zxcvbn = "2.2.2"
+whoami.workspace = true
 
 [dev-dependencies]

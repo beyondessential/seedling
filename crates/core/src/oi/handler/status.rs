@@ -9,6 +9,7 @@ use super::HandlerResult;
 // i[status.get]
 pub(crate) fn get_status(state: &OiState) -> HandlerResult {
     let uptime = state.start_time.elapsed().as_secs();
+    let hostname = whoami::devicename().unwrap_or_else(|_| String::from("unknown"));
     let reg = state.registry.read();
     let apps = reg.list();
     let apps_total = apps.len();
@@ -19,6 +20,7 @@ pub(crate) fn get_status(state: &OiState) -> HandlerResult {
 
     Ok(json!({
         "version": env!("CARGO_PKG_VERSION"),
+        "hostname": hostname,
         "uptime_secs": uptime,
         "spki_fingerprint": state.spki_fingerprint.get().cloned().unwrap_or_default(),
         "apps_total": apps_total,

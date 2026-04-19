@@ -156,6 +156,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > The response contains the following fields:
 >
 > - `version`: the Seedling version string.
+> - `hostname`: the hostname of the machine running the Seedling instance.
 > - `uptime_secs`: the number of seconds since the Seedling process started.
 > - `spki_fingerprint`: the SHA-256 fingerprint (hex-encoded) of the server's raw public key, allowing clients to verify or record the identity of the instance they are connected to.
 > - `apps_total`: total number of registered apps.

@@ -3545,6 +3545,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "whoami",
  "wildmatch",
  "zbus",
  "zxcvbn",
