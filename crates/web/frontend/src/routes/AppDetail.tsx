@@ -1,6 +1,7 @@
 import CheckIcon from "@mui/icons-material/Check";
 import ClearIcon from "@mui/icons-material/Clear";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import RestoreIcon from "@mui/icons-material/Restore";
 import EditIcon from "@mui/icons-material/Edit";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import VisibilityIcon from "@mui/icons-material/Visibility";
@@ -300,15 +301,24 @@ function ParamsSection({
                   <TableCell>
                     <Chip label={p.kind} size="small" variant="outlined" />
                   </TableCell>
-                  <TableCell
-                    sx={{
-                      fontFamily: "monospace",
-                      color: p.value == null ? "text.disabled" : undefined,
-                    }}
-                  >
-                    {p.kind === "password" || p.kind === "weak-password"
-                      ? p.value != null ? "••••••••" : "—"
-                      : p.value ?? "—"}
+                  <TableCell sx={{ fontFamily: "monospace" }}>
+                    {(() => {
+                      const isPassword = p.kind === "password" || p.kind === "weak-password";
+                      if (p.value != null) {
+                        return isPassword ? "••••••••" : p.value;
+                      }
+                      if (p.default_value != null) {
+                        return (
+                          <Box component="span" sx={{ color: "text.disabled" }}>
+                            {isPassword ? "••••••••" : p.default_value}
+                            <Typography component="span" variant="caption" sx={{ ml: 0.5 }}>
+                              (default)
+                            </Typography>
+                          </Box>
+                        );
+                      }
+                      return <Box component="span" sx={{ color: "text.disabled" }}>—</Box>;
+                    })()}
                   </TableCell>
                   <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
                     <Tooltip title={p.value == null ? "Set" : "Edit"}>
@@ -320,7 +330,7 @@ function ParamsSection({
                         <EditIcon fontSize="small" />
                       </IconButton>
                     </Tooltip>
-                    {p.value != null && (
+                    {p.value != null && !p.required && (
                       <Tooltip title="Unset">
                         <IconButton
                           size="small"
@@ -328,6 +338,17 @@ function ParamsSection({
                           disabled={loading}
                         >
                           <DeleteOutlineIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    )}
+                    {p.value != null && p.required && p.default_value != null && (
+                      <Tooltip title="Reset to default">
+                        <IconButton
+                          size="small"
+                          onClick={() => void unset(p.name)}
+                          disabled={loading}
+                        >
+                          <RestoreIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
                     )}
