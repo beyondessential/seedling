@@ -97,6 +97,7 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
 
     // w[transport.webtransport]
     // w[routes.events]
+    // w[routes.logs]
     while let Ok((mut wt_send, wt_recv)) = conn.accept_bi().await {
         let state3 = state.clone();
         let actor2 = Arc::clone(&actor);
@@ -112,6 +113,32 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
             if peeked.method == "/events/subscribe" {
                 let _ = wt_send.write_all(b"{\"result\":{}}\n").await;
                 state3.event_broker.serve_client(wt_send).await;
+                return;
+            }
+
+            // Intercept /logs/stream: the daemon opens a server-initiated uni
+            // stream to push entries, which the transparent proxy cannot forward.
+            // Accept that uni stream here and relay entries over the WT bidi send.
+            if peeked.method == "/logs/stream" {
+                match state3
+                    .daemon
+                    .start_uni_stream_request(&peeked.modified_line)
+                    .await
+                {
+                    Ok(mut log_recv) => {
+                        let _ = wt_send.write_all(b"{\"result\":{}}\n").await;
+                        let _ = tokio::io::copy(&mut log_recv, &mut wt_send).await;
+                        let _ = wt_send.shutdown().await;
+                    }
+                    Err(e) => {
+                        tracing::error!("log stream setup failed: {e}");
+                        let msg = serde_json::json!({
+                            "error": { "code": "daemon_unavailable", "message": e.to_string() }
+                        });
+                        let _ = wt_send.write_all((msg.to_string() + "\n").as_bytes()).await;
+                        let _ = wt_send.shutdown().await;
+                    }
+                }
                 return;
             }
 

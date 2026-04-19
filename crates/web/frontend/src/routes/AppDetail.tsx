@@ -1,4 +1,5 @@
 import AddIcon from "@mui/icons-material/Add";
+import ArticleIcon from "@mui/icons-material/Article";
 import CheckIcon from "@mui/icons-material/Check";
 import ClearIcon from "@mui/icons-material/Clear";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
@@ -117,6 +118,15 @@ function ResourcesSection({
             <Typography variant="caption" color="text.secondary">
               {r.type}
             </Typography>
+            <Tooltip title="View resource logs">
+              <IconButton
+                size="small"
+                component={Link}
+                to={`/apps/${appName}/logs?resource=${r.name}`}
+              >
+                <ArticleIcon sx={{ fontSize: 14 }} />
+              </IconButton>
+            </Tooltip>
             {r.scale && (
               <>
                 <Typography variant="caption" color="text.secondary">
@@ -162,12 +172,13 @@ function ResourcesSection({
                 <TableRow>
                   <TableCell>Instance</TableCell>
                   <TableCell width={120} align="right">State</TableCell>
+                  <TableCell width={40} />
                 </TableRow>
               </TableHead>
               <TableBody>
                 {r.instances.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={2} sx={{ color: "text.secondary" }}>
+                    <TableCell colSpan={3} sx={{ color: "text.secondary" }}>
                       No instances.
                     </TableCell>
                   </TableRow>
@@ -185,6 +196,17 @@ function ResourcesSection({
                           color={lifecycleColor(inst.lifecycle)}
                           size="small"
                         />
+                      </TableCell>
+                      <TableCell width={40} align="right" sx={{ px: 0.5 }}>
+                        <Tooltip title="View instance logs">
+                          <IconButton
+                            size="small"
+                            component={Link}
+                            to={`/apps/${appName}/logs?resource=${r.name}&instance=${inst.display_name}`}
+                          >
+                            <ArticleIcon sx={{ fontSize: 14 }} />
+                          </IconButton>
+                        </Tooltip>
                       </TableCell>
                     </TableRow>
                   ))
@@ -853,6 +875,14 @@ export default function AppDetail() {
             Uninstall
           </Button>
         )}
+        <Button
+          size="small"
+          startIcon={<ArticleIcon />}
+          component={Link}
+          to={`/apps/${name}/logs`}
+        >
+          Logs
+        </Button>
         <Button
           size="small"
           startIcon={<EditIcon />}

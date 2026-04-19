@@ -92,6 +92,27 @@ export interface AppDetail {
   current_operation?: CurrentOperation;
 }
 
+export interface LogEntry {
+  timestamp: string;
+  message: string;
+  unit: string;
+  stream: "stdout" | "stderr";
+  app?: string;
+  resource_kind?: string;
+  resource?: string;
+  instance?: string;
+  infra?: string;
+}
+
+export interface LogStreamParams {
+  app?: string;
+  infra?: string;
+  resource?: string;
+  instance?: string;
+  follow?: boolean;
+  tail?: number;
+}
+
 export interface SeedlingEvent {
   type: string;
   timestamp: string;

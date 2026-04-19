@@ -305,6 +305,10 @@ impl OiClient {
         &self.actor
     }
 
+    pub fn connection(&self) -> &quinn::Connection {
+        &self.conn
+    }
+
     /// Open a raw bidirectional stream.
     ///
     /// Used for shell sessions where the stream protocol differs from the

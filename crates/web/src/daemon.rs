@@ -5,6 +5,7 @@ use seedling_protocol::actor::Actor;
 use seedling_protocol::client::{ClientAuth, ClientError, OiClient};
 use seedling_protocol::keys::ClientIdentity;
 use serde_json::json;
+use tokio::io::{AsyncBufReadExt as _, BufReader};
 
 pub struct DaemonConn {
     inner: tokio::sync::Mutex<OiClient>,
@@ -102,6 +103,48 @@ impl DaemonConn {
         *self.inner.lock().await = new_client;
         tracing::info!("daemon reconnected");
         Ok(())
+    }
+
+    /// Send a streaming request to the daemon and return the server-initiated
+    /// unidirectional stream that carries the response payload (log entries, etc.).
+    ///
+    /// Captures the current `quinn::Connection` without holding the lock, so
+    /// normal requests are not blocked.  `open_bi` and `accept_uni` both run on
+    /// the same connection instance; if a reconnect happens concurrently the
+    /// returned stream still belongs to the pre-reconnect connection, which is
+    /// fine — the caller will see EOF / write errors if that connection drops.
+    pub async fn start_uni_stream_request(
+        &self,
+        request_bytes: &[u8],
+    ) -> Result<quinn::RecvStream, ClientError> {
+        let conn = {
+            let client = self.inner.lock().await;
+            client.connection().clone()
+        };
+
+        let (mut send, recv) = conn
+            .open_bi()
+            .await
+            .map_err(|e| ClientError::Transport(Box::new(e)))?;
+
+        send.write_all(request_bytes)
+            .await
+            .map_err(|e| ClientError::Transport(Box::new(e)))?;
+        send.write_all(b"\n")
+            .await
+            .map_err(|e| ClientError::Transport(Box::new(e)))?;
+        send.finish()
+            .map_err(|e| ClientError::Transport(Box::new(e)))?;
+
+        let mut buf = BufReader::new(recv);
+        let mut line = String::new();
+        buf.read_line(&mut line)
+            .await
+            .map_err(|e| ClientError::Transport(Box::new(e)))?;
+
+        conn.accept_uni()
+            .await
+            .map_err(|e| ClientError::Transport(Box::new(e)))
     }
 
     /// Create a fresh, independent `OiClient` for long-running event subscriptions.

@@ -8,6 +8,7 @@ import CreateApp from "./routes/CreateApp";
 import EditScript from "./routes/EditScript";
 import Faults from "./routes/Faults";
 import Login from "./routes/Login";
+import Logs from "./routes/Logs";
 
 const router = createBrowserRouter([
   { path: "/login", element: <Login />, errorElement: <ErrorPage /> },
@@ -20,6 +21,7 @@ const router = createBrowserRouter([
       { path: "apps/:name", element: <AppDetail /> },
       { path: "apps/:name/script", element: <EditScript /> },
       { path: "faults", element: <Faults /> },
+      { path: "apps/:name/logs", element: <Logs /> },
     ],
   },
 ]);

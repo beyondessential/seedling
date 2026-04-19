@@ -1,4 +1,4 @@
-import type { Actor, OiRequest, OiResult, SeedlingEvent } from "./types";
+import type { Actor, LogEntry, LogStreamParams, OiRequest, OiResult, SeedlingEvent } from "./types";
 
 function hexToBuffer(hex: string): ArrayBuffer {
   const bytes = new Uint8Array(hex.length / 2);
@@ -60,19 +60,40 @@ export class WtClient {
     return { ok: true, value: body.result ?? body };
   }
 
+  // w[routes.logs]
+  async streamLogs(
+    params: LogStreamParams,
+    onEntry: (entry: LogEntry) => void,
+    signal: AbortSignal,
+  ): Promise<void> {
+    await this._streamLines("/logs/stream", params, signal, (line) => {
+      try { onEntry(JSON.parse(line) as LogEntry); } catch { /* skip malformed */ }
+    });
+  }
+
   // w[routes.events]
   async subscribeEvents(
     onEvent: (event: SeedlingEvent) => void,
     signal: AbortSignal,
   ): Promise<void> {
+    await this._streamLines("/events/subscribe", {}, signal, (line) => {
+      try { onEvent(JSON.parse(line) as SeedlingEvent); } catch { /* skip malformed */ }
+    });
+  }
+
+  private async _streamLines(
+    method: string,
+    params: unknown,
+    signal: AbortSignal,
+    onLine: (line: string) => void,
+  ): Promise<void> {
     const stream = await this.wt.createBidirectionalStream();
     const writer = stream.writable.getWriter();
     const reader = stream.readable.getReader();
 
-    const req: OiRequest = { method: "/events/subscribe", actor: this.actor, params: {} };
+    const req: OiRequest = { method, actor: this.actor, params };
     const encoder = new TextEncoder();
     await writer.write(encoder.encode(JSON.stringify(req) + "\n"));
-    // Leave writer open — server keeps recv side alive.
 
     const cleanup = () => {
       writer.close().catch(() => undefined);
@@ -96,14 +117,13 @@ export class WtClient {
           if (firstLine) {
             firstLine = false;
             const parsed = JSON.parse(line) as Record<string, unknown>;
-            if ("error" in parsed) throw new Error(String((parsed.error as Record<string,unknown>).message ?? parsed.error));
+            if ("error" in parsed)
+              throw new Error(
+                String((parsed.error as Record<string, unknown>).message ?? parsed.error),
+              );
             continue;
           }
-          try {
-            onEvent(JSON.parse(line) as SeedlingEvent);
-          } catch {
-            // Skip malformed event lines.
-          }
+          onLine(line);
         }
       }
     } finally {
