@@ -308,6 +308,9 @@ function ParamsSection({
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [addName, setAddName] = useState("");
+  const [addValue, setAddValue] = useState("");
 
   const startEdit = (p: AppParam) => {
     setEditing(p.name);
@@ -319,6 +322,33 @@ function ParamsSection({
   const cancel = () => {
     setEditing(null);
     setShowPassword(false);
+  };
+
+  const startAdd = () => {
+    setAdding(true);
+    setAddName("");
+    setAddValue("");
+    setEditing(null);
+    clearError();
+  };
+
+  const cancelAdd = () => {
+    setAdding(false);
+    setAddName("");
+    setAddValue("");
+  };
+
+  const saveAdd = async () => {
+    if (!addName.trim()) return;
+    try {
+      await execute("/apps/params/set", { app: appName, name: addName.trim(), value: addValue });
+      setAdding(false);
+      setAddName("");
+      setAddValue("");
+      onRefresh();
+    } catch {
+      // displayed via error
+    }
   };
 
   const save = async () => {
@@ -345,12 +375,83 @@ function ParamsSection({
     }
   };
 
-  if (params.length === 0)
-    return <Typography color="text.secondary">No params.</Typography>;
+  const addRow = adding ? (
+    <TableRow>
+      <TableCell colSpan={2}>
+        <TextField
+          size="small"
+          placeholder="param name"
+          value={addName}
+          onChange={(e) => setAddName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void saveAdd();
+            if (e.key === "Escape") cancelAdd();
+          }}
+          autoFocus
+          inputProps={{ style: { fontFamily: "monospace" } }}
+          sx={{ width: 200 }}
+        />
+      </TableCell>
+      <TableCell>
+        <TextField
+          size="small"
+          placeholder="value"
+          value={addValue}
+          onChange={(e) => setAddValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void saveAdd();
+            if (e.key === "Escape") cancelAdd();
+          }}
+          fullWidth
+          inputProps={{ style: { fontFamily: "monospace" } }}
+        />
+      </TableCell>
+      <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
+        <Tooltip title="Save">
+          <span>
+            <IconButton size="small" onClick={() => void saveAdd()} disabled={loading || !addName.trim()}>
+              <CheckIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Tooltip title="Cancel">
+          <IconButton size="small" onClick={cancelAdd}>
+            <ClearIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      </TableCell>
+    </TableRow>
+  ) : null;
+
+  if (params.length === 0 && !adding) {
+    return (
+      <Stack spacing={1}>
+        {error && <OiErrorAlert error={error} />}
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <Typography color="text.secondary">No params.</Typography>
+          <Button size="small" startIcon={<AddIcon fontSize="small" />} onClick={startAdd}>
+            Set param
+          </Button>
+        </Box>
+        {adding && (
+          <TableContainer component={Paper} variant="outlined">
+            <Table size="small"><TableBody>{addRow}</TableBody></Table>
+          </TableContainer>
+        )}
+      </Stack>
+    );
+  }
 
   return (
     <Stack spacing={1}>
       {error && <OiErrorAlert error={error} />}
+      <Box sx={{ display: "flex", justifyContent: "flex-end" }}>
+        {!adding && (
+          <Button size="small" startIcon={<AddIcon fontSize="small" />} onClick={startAdd}>
+            Set param
+          </Button>
+        )}
+      </Box>
       <TableContainer component={Paper} variant="outlined">
         <Table size="small">
           <TableHead>
@@ -516,6 +617,7 @@ function ParamsSection({
                 </TableRow>
               ),
             )}
+            {addRow}
           </TableBody>
         </Table>
       </TableContainer>
