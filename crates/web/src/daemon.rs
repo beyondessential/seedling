@@ -72,7 +72,13 @@ impl DaemonConn {
     }
 
     pub async fn open_bi(&self) -> Result<(quinn::SendStream, quinn::RecvStream), ClientError> {
-        match self.inner.lock().await.open_bi().await {
+        // Drop the guard before the match so that try_reconnect can re-acquire
+        // the lock. Holding it through the scrutinee would deadlock.
+        let result = {
+            let client = self.inner.lock().await;
+            client.open_bi().await
+        };
+        match result {
             Ok(streams) => Ok(streams),
             Err(ClientError::Transport(_)) => {
                 tracing::warn!("daemon transport error — attempting reconnect");
