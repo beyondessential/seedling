@@ -6,6 +6,7 @@ use axum::{Json, Router};
 use serde_json::json;
 
 use crate::auth::{self, ConnectRequest};
+use crate::spa;
 use crate::state::AppState;
 
 // w[transport.http]
@@ -13,7 +14,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/connect", post(connect))
-        .fallback(spa_fallback)
+        .fallback(spa::handler)
         .with_state(state)
 }
 
@@ -32,9 +33,4 @@ async fn connect(
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
     auth::handle_connect(state, headers, host, body).await
-}
-
-async fn spa_fallback() -> impl IntoResponse {
-    // w[spa.delivery] — SPA bundle will be embedded here in phase 3.
-    (StatusCode::NOT_FOUND, "SPA not yet available")
 }

@@ -10,6 +10,7 @@ mod auth;
 mod config;
 mod http;
 mod interfaces;
+mod spa;
 mod state;
 mod wt;
 mod wt_cert;
