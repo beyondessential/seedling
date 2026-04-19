@@ -15,8 +15,10 @@ use crate::{
         AppPhase,
         apps::{AppEntry, AppRegistry, AppStatus},
         barrier::oracle::{derive_lifecycle_state, derive_state_with_transition_time},
+        desired::list_dynamic_resources_for_app,
         faults,
         history::{find_instances_for_group, query_observations},
+        identity::{InstanceId, InstanceVariant, ResourceInstance},
         lifecycle::LifecycleState,
         scaling, transition_phase,
     },
@@ -359,7 +361,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
             | AppStatus::Operating { .. }
             | AppStatus::Uninstalling
     );
-    let resources_json: Vec<Value> = {
+    let mut resources_json: Vec<Value> = {
         let db = state.db.lock();
         def.resources
             .keys()
@@ -447,6 +449,66 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
             })
             .collect()
     };
+
+    // Append dynamic resources (started inside action closures, not in AppDef).
+    if query_instances {
+        let db = state.db.lock();
+        let dyn_records = list_dynamic_resources_for_app(&db, name).unwrap_or_default();
+        for rec in dyn_records {
+            let Some(id) = InstanceId::from_hex(&rec.instance_id) else {
+                continue;
+            };
+            let Some(kind) = resource_kind_from_debug_str(&rec.kind) else {
+                continue;
+            };
+            let inst = ResourceInstance {
+                id,
+                app: rec.app.clone(),
+                kind,
+                name: rec.resource_name.clone(),
+                variant: InstanceVariant::Singleton,
+                display_name: rec.display_name.clone(),
+            };
+            let observations = query_observations(&db, &inst).unwrap_or_default();
+            let (lifecycle, transition_time) =
+                derive_state_with_transition_time(&inst, &observations);
+            let kind_str = format!("{:?}", kind).to_lowercase();
+            let display_name = rec
+                .resource_name
+                .as_deref()
+                .unwrap_or(&rec.display_name)
+                .to_owned();
+            let instance_faults: Vec<Value> = all_faults_for_app
+                .iter()
+                .filter(|f| f.instance_id.as_deref() == Some(&rec.instance_id))
+                .map(|f| {
+                    json!({
+                        "id": f.id,
+                        "app": f.app,
+                        "resource_type": f.resource_type,
+                        "resource_name": f.resource_name,
+                        "instance_id": f.instance_id,
+                        "kind": f.kind,
+                        "timestamp": f.timestamp.to_string(),
+                        "description": f.description,
+                    })
+                })
+                .collect();
+            resources_json.push(json!({
+                "name": display_name,
+                "type": kind_str,
+                "instances": [{
+                    "id": rec.instance_id,
+                    "display_name": rec.display_name,
+                    "lifecycle": format!("{lifecycle:?}"),
+                    "transition_time": transition_time.and_then(|t| {
+                        jiff::Timestamp::try_from(t).ok().map(|ts| ts.to_string())
+                    }),
+                }],
+                "faults": instance_faults,
+            }));
+        }
+    }
 
     let mut desc = json!({
         "status": status.name(),
@@ -1175,4 +1237,16 @@ pub(crate) fn scale_app(state: &OiState, params: ScaleParams, ctx: &RequestCtx) 
         "scale": new_scale,
         "bounds": { "low": low, "high": high },
     }))
+}
+
+fn resource_kind_from_debug_str(s: &str) -> Option<ResourceKind> {
+    match s {
+        "Deployment" => Some(ResourceKind::Deployment),
+        "Job" => Some(ResourceKind::Job),
+        "Service" => Some(ResourceKind::Service),
+        "HttpService" => Some(ResourceKind::HttpService),
+        "Volume" => Some(ResourceKind::Volume),
+        "ExternalVolume" => Some(ResourceKind::ExternalVolume),
+        _ => None,
+    }
 }

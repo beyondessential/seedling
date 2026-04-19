@@ -588,6 +588,13 @@ impl Db {
             self.conn
                 .execute_batch("INSERT INTO schema_version VALUES (25);")?;
         }
+
+        if version < 26 {
+            self.conn
+                .execute_batch("ALTER TABLE dynamic_resources ADD COLUMN resource_name TEXT;")?;
+            self.conn
+                .execute_batch("INSERT INTO schema_version VALUES (26);")?;
+        }
         tx.commit()?;
         Ok(())
     }

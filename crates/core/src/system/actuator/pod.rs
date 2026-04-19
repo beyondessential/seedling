@@ -11,10 +11,7 @@ use crate::{
     runtime::{identity::ResourceInstance, registry::RegistryError},
     system::{
         System,
-        translate::{
-
-            proxy::{instance_ipv6, pod_network_prefix},
-        },
+        translate::proxy::{instance_ipv6, pod_network_prefix},
         types::{ActiveState, TransientRestart, TransientUnitSpec},
     },
 };

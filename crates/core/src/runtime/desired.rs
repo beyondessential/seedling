@@ -259,6 +259,8 @@ pub struct DynamicResourceRecord {
     pub operation_id: String,
     pub kind: String,
     pub display_name: String,
+    /// BSL-level resource name; `None` for anonymous resources.
+    pub resource_name: Option<String>,
 }
 
 /// Persist a dynamic resource so it survives restarts.
@@ -268,14 +270,16 @@ pub fn insert_dynamic_resource(
     operation_id: &str,
 ) -> rusqlite::Result<()> {
     db.conn.execute(
-        "INSERT OR REPLACE INTO dynamic_resources (instance_id, app, operation_id, kind, display_name)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT OR REPLACE INTO dynamic_resources
+             (instance_id, app, operation_id, kind, display_name, resource_name)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         rusqlite::params![
             instance.id.to_hex(),
             instance.app,
             operation_id,
             format!("{:?}", instance.kind),
             instance.display_name,
+            instance.name,
         ],
     )?;
     Ok(())
@@ -302,18 +306,41 @@ pub fn delete_dynamic_resources_for_operation(db: &Db, operation_id: &str) -> ru
 /// Load all dynamic resource records (e.g., for startup orphan cleanup).
 pub fn list_dynamic_resources(db: &Db) -> rusqlite::Result<Vec<DynamicResourceRecord>> {
     let mut stmt = db.conn.prepare(
-        "SELECT instance_id, app, operation_id, kind, display_name
+        "SELECT instance_id, app, operation_id, kind, display_name, resource_name
          FROM dynamic_resources ORDER BY app, instance_id",
     )?;
-    let rows = stmt.query_map([], |row| {
-        Ok(DynamicResourceRecord {
-            instance_id: row.get(0)?,
-            app: row.get(1)?,
-            operation_id: row.get(2)?,
-            kind: row.get(3)?,
-            display_name: row.get(4)?,
-        })
-    })?;
+    collect_dynamic_rows(stmt.query_map([], |row| parse_dynamic_row(row))?)
+}
+
+/// Load dynamic resource records for a single app.
+pub fn list_dynamic_resources_for_app(
+    db: &Db,
+    app: &str,
+) -> rusqlite::Result<Vec<DynamicResourceRecord>> {
+    let mut stmt = db.conn.prepare(
+        "SELECT instance_id, app, operation_id, kind, display_name, resource_name
+         FROM dynamic_resources WHERE app = ?1 ORDER BY instance_id",
+    )?;
+    collect_dynamic_rows(stmt.query_map([app], |row| parse_dynamic_row(row))?)
+}
+
+fn parse_dynamic_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DynamicResourceRecord> {
+    Ok(DynamicResourceRecord {
+        instance_id: row.get(0)?,
+        app: row.get(1)?,
+        operation_id: row.get(2)?,
+        kind: row.get(3)?,
+        display_name: row.get(4)?,
+        resource_name: row.get(5)?,
+    })
+}
+
+fn collect_dynamic_rows(
+    rows: rusqlite::MappedRows<
+        '_,
+        impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<DynamicResourceRecord>,
+    >,
+) -> rusqlite::Result<Vec<DynamicResourceRecord>> {
     let mut records = Vec::new();
     for row in rows {
         records.push(row?);

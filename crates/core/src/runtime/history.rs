@@ -126,14 +126,10 @@ pub fn delete_instance(db: &Db, id: InstanceId) -> rusqlite::Result<()> {
         "DELETE FROM world_observations WHERE instance_id = ?1",
         params![hex],
     )?;
-    db.conn.execute(
-        "DELETE FROM faults WHERE instance_id = ?1",
-        params![hex],
-    )?;
-    db.conn.execute(
-        "DELETE FROM resource_instances WHERE id = ?1",
-        params![hex],
-    )?;
+    db.conn
+        .execute("DELETE FROM faults WHERE instance_id = ?1", params![hex])?;
+    db.conn
+        .execute("DELETE FROM resource_instances WHERE id = ?1", params![hex])?;
     Ok(())
 }
 
