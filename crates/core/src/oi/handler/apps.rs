@@ -929,6 +929,10 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
     {
         let db = state.db.lock();
         transition_phase(&phase_arc, AppPhase::Uninstalling, &db, name, "");
+        // i[impl scale.reset-on-uninstall]
+        if let Err(e) = scaling::delete_scaling_decisions_for_app(&db, name) {
+            tracing::warn!(app = %name, "failed to clear scaling decisions on uninstall: {e}");
+        }
     }
 
     // Wake the reconciler so it starts cleanup immediately.

@@ -244,6 +244,10 @@ Absent specification bugs, anything that is not defined here is either defined i
 > The effective scale chosen by `/apps/scale` is stored durably and survives process restarts.
 > On startup, the stored decision is loaded and used as the effective scale for the deployment.
 
+> i[scale.reset-on-uninstall]
+> When an app is uninstalled, all stored scaling decisions for that app are discarded.
+> After reinstallation, each Deployment's effective scale reverts to its declared lower bound.
+
 > i[scale.describe]
 > `/apps/show` includes, for each Deployment resource, a `scale` object with fields `low` (lower bound), `high` (upper bound), and `current` (the effective scale).
 > `current` is the stored scaling decision clamped to the declared bounds, or the lower bound if no decision has been stored.
