@@ -1,0 +1,4 @@
+CREATE TABLE IF NOT EXISTS backup_apps (
+    name TEXT PRIMARY KEY,
+    app  TEXT UNIQUE NOT NULL
+);
