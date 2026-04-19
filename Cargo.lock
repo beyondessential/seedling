@@ -3604,6 +3604,7 @@ dependencies = [
  "quinn",
  "reqwest",
  "rust-embed",
+ "rustls",
  "seedling-protocol",
  "serde",
  "serde_json",

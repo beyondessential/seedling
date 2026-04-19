@@ -109,6 +109,10 @@ async fn main() {
             .ok();
     }
 
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("ring crypto provider already installed");
+
     let cfg = args
         .config
         .as_deref()

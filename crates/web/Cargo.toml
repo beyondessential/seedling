@@ -29,5 +29,6 @@ tower-http.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 quinn.workspace = true
+rustls.workspace = true
 rust-embed.workspace = true
 wtransport.workspace = true
