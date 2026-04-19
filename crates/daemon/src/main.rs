@@ -66,8 +66,8 @@ struct Args {
     #[arg(long)]
     listen: Vec<std::net::SocketAddr>,
 
-    /// OI listen port, used when --interface is given without an explicit port.
-    #[arg(long, default_value_t = oi::DEFAULT_PORT)]
+    /// OI listen port, used with --interface. Conflicts with --listen.
+    #[arg(long, default_value_t = oi::DEFAULT_PORT, conflicts_with = "listen")]
     port: u16,
 }
 
