@@ -197,7 +197,9 @@ function ParamsSection({
               editing === p.name ? (
                 <TableRow key={p.name}>
                   <TableCell sx={{ fontFamily: "monospace" }}>{p.name}</TableCell>
-                  <TableCell />
+                  <TableCell>
+                    <Chip label={p.kind} size="small" variant="outlined" />
+                  </TableCell>
                   <TableCell colSpan={2}>
                     <TextField
                       size="small"
