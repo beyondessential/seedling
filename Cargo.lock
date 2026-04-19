@@ -3581,6 +3581,7 @@ dependencies = [
  "lloggs",
  "mime_guess",
  "parking_lot",
+ "reqwest",
  "rust-embed",
  "seedling-protocol",
  "serde",

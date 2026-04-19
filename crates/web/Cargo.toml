@@ -14,6 +14,7 @@ seedling-protocol = { path = "../protocol" }
 argon2.workspace = true
 axum.workspace = true
 mime_guess.workspace = true
+reqwest.workspace = true
 clap.workspace = true
 if-addrs.workspace = true
 jiff.workspace = true

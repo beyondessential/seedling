@@ -57,4 +57,6 @@ pub struct AppState {
     pub session_lifetime: Duration,
     pub password_hash: Option<String>,
     pub wt_port: u16,
+    /// When set, the SPA fallback proxies to a Vite dev server instead of serving embedded assets.
+    pub vite_port: Option<u16>,
 }

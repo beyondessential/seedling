@@ -59,6 +59,10 @@ struct Args {
     /// Bypass all authentication. Only allowed on loopback addresses.
     #[arg(long)]
     dev_no_auth: bool,
+
+    /// Proxy the SPA to a Vite dev server on this port instead of serving embedded assets.
+    #[arg(long)]
+    vite_port: Option<u16>,
 }
 
 #[tokio::main]
@@ -138,6 +142,7 @@ async fn main() {
         session_lifetime,
         password_hash,
         wt_port,
+        vite_port: args.vite_port,
     };
 
     // Spawn cert rotation background task.
