@@ -3,6 +3,7 @@ use std::{io::Write, net::SocketAddr};
 use clap::{CommandFactory, Parser, Subcommand};
 use lloggs::LoggingArgs;
 use seedling_protocol::{
+    actor::Actor,
     client::{ClientAuth, ClientError, OiClient},
     keys::ClientIdentity,
 };
@@ -174,6 +175,18 @@ async fn main() {
         return;
     }
 
+    // i[wire.actor]
+    let actor = {
+        let username = whoami::username().unwrap_or_else(|_| String::from("unknown"));
+        let hostname = whoami::devicename().unwrap_or_else(|_| String::from("unknown"));
+        Actor {
+            kind: Some("ctl".to_owned()),
+            id: Some(username.clone()),
+            display: Some(format!("{username} on {hostname}")),
+            session: Some(identity.fingerprint[..8].to_owned()),
+        }
+    };
+
     let client;
 
     #[cfg(debug_assertions)]
@@ -185,19 +198,24 @@ async fn main() {
 
     if trust_any {
         resolved_fingerprint = String::new();
-        client = OiClient::connect(cli.endpoint, ClientAuth::TrustAny, &identity)
+        client = OiClient::connect(cli.endpoint, ClientAuth::TrustAny, &identity, actor.clone())
             .await
             .unwrap_or_else(|e| {
                 tracing::error!("{e}");
                 std::process::exit(1);
             });
     } else if let Some(fp) = cli.fingerprint {
-        client = OiClient::connect(cli.endpoint, ClientAuth::Fingerprint(fp.clone()), &identity)
-            .await
-            .unwrap_or_else(|e| {
-                tracing::error!("{e}");
-                std::process::exit(1);
-            });
+        client = OiClient::connect(
+            cli.endpoint,
+            ClientAuth::Fingerprint(fp.clone()),
+            &identity,
+            actor.clone(),
+        )
+        .await
+        .unwrap_or_else(|e| {
+            tracing::error!("{e}");
+            std::process::exit(1);
+        });
         resolved_fingerprint = fp;
     } else {
         let kh_path = known_hosts::KnownHosts::default_path();
@@ -261,12 +279,17 @@ async fn main() {
             }
         }
 
-        client = OiClient::connect(cli.endpoint, ClientAuth::Fingerprint(fp.clone()), &identity)
-            .await
-            .unwrap_or_else(|e| {
-                tracing::error!("{e}");
-                std::process::exit(1);
-            });
+        client = OiClient::connect(
+            cli.endpoint,
+            ClientAuth::Fingerprint(fp.clone()),
+            &identity,
+            actor,
+        )
+        .await
+        .unwrap_or_else(|e| {
+            tracing::error!("{e}");
+            std::process::exit(1);
+        });
         resolved_fingerprint = fp;
     }
 
@@ -295,7 +318,13 @@ async fn main() {
             );
         }
         Command::Events => {
-            op::dispatch_events(cli.endpoint, resolved_fingerprint, &identity).await;
+            op::dispatch_events(
+                cli.endpoint,
+                resolved_fingerprint,
+                &identity,
+                client.actor().clone(),
+            )
+            .await;
         }
         Command::Client { .. } => unreachable!("handled before connect"),
     }

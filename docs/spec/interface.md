@@ -106,7 +106,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > ```
 
 > i[wire.actor]
-> A control request may include an optional top-level `actor` object identifying the human or system principal that initiated the request:
+> Every control request must include a top-level `actor` object identifying the human or system principal that initiated the request:
 > ```json
 > { "method": "<string>", "actor": { "kind": "<string>", "id": "<string>", "display": "<string>", "session": "<string>" }, "params": { } }
 > ```
@@ -116,7 +116,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > `display` is a human-readable label.
 > `session` is an opaque per-session correlator.
 >
-> When the `actor` field is absent from a request, the server synthesises one from the client's mTLS identity: `kind` is `"ctl"`, `id` is the client's SPKI fingerprint, and `display` is the label stored in the authorized keys table for that fingerprint (or the fingerprint itself if no label is stored).
+> When the `actor` field is absent, the server synthesises one from the client's mTLS identity as a fallback: `kind` is `"ctl"`, `id` is the client's SPKI fingerprint, and `display` is the label stored in the authorized keys table for that fingerprint (or the fingerprint itself if no label is stored).
 >
 > The resolved actor is included in all events emitted as a result of the request and recorded in the audit log.
 

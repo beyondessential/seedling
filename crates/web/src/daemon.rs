@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
+use seedling_protocol::actor::Actor;
 use seedling_protocol::client::{ClientAuth, ClientError, OiClient};
 use seedling_protocol::keys::ClientIdentity;
 
@@ -30,7 +31,13 @@ impl DaemonConn {
             );
         }
 
-        let client = OiClient::connect(addr, auth, &identity).await?;
+        let actor = Actor {
+            kind: Some("web".to_owned()),
+            id: Some(identity.fingerprint[..8].to_owned()),
+            display: Some("seedling-web".to_owned()),
+            session: None,
+        };
+        let client = OiClient::connect(addr, auth, &identity, actor).await?;
         Ok(Self { client })
     }
 

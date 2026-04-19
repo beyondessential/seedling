@@ -207,6 +207,7 @@ pub(super) async fn dispatch_events(
     endpoint: SocketAddr,
     fingerprint: String,
     identity: &ClientIdentity,
+    actor: seedling_protocol::actor::Actor,
 ) {
-    super::subscribe::subscribe(endpoint, fingerprint, identity).await;
+    super::subscribe::subscribe(endpoint, fingerprint, identity, actor).await;
 }

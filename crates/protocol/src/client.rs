@@ -1,6 +1,7 @@
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use super::keys::ClientIdentity;
+use crate::actor::Actor;
 
 use quinn::{ClientConfig, Connection, Endpoint, TransportConfig};
 use rustls::{
@@ -251,13 +252,16 @@ impl ServerCertVerifier for RecordingVerifier {
 
 pub struct OiClient {
     conn: Connection,
+    actor: Actor,
 }
 
 impl OiClient {
+    // i[wire.actor]
     pub async fn connect(
         addr: SocketAddr,
         auth: ClientAuth,
         identity: &ClientIdentity,
+        actor: Actor,
     ) -> Result<Self, ClientError> {
         let verifier: Arc<dyn ServerCertVerifier> = match auth {
             ClientAuth::Fingerprint(fp) => Arc::new(FingerprintVerifier { expected: fp }),
@@ -292,7 +296,11 @@ impl OiClient {
         .map_err(|_| ClientError::Connect("connection timed out".into()))?
         .map_err(|e| ClientError::Connect(Box::new(e)))?;
 
-        Ok(Self { conn })
+        Ok(Self { conn, actor })
+    }
+
+    pub fn actor(&self) -> &Actor {
+        &self.actor
     }
 
     /// Open a raw bidirectional stream.
@@ -340,9 +348,11 @@ impl OiClient {
     }
 
     /// Send a single JSON request and return the parsed result value.
+    // i[wire.actor]
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, ClientError> {
         let req_bytes = serde_json::to_vec(&serde_json::json!({
             "method": method,
+            "actor": &self.actor,
             "params": params,
         }))
         .expect("request serialisation never fails");

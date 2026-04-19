@@ -1,6 +1,7 @@
 use std::{net::SocketAddr, time::Duration};
 
 use seedling_protocol::{
+    actor::Actor,
     client::{ClientAuth, OiClient},
     keys::ClientIdentity,
 };
@@ -9,7 +10,12 @@ const RECONNECT_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
 // i[impl ctl.subscribe.reconnect]
-pub async fn subscribe(endpoint: SocketAddr, fingerprint: String, identity: &ClientIdentity) {
+pub async fn subscribe(
+    endpoint: SocketAddr,
+    fingerprint: String,
+    identity: &ClientIdentity,
+    actor: Actor,
+) {
     let mut deadline = tokio::time::Instant::now() + RECONNECT_TIMEOUT;
     let mut backoff = Duration::from_secs(1);
 
@@ -18,6 +24,7 @@ pub async fn subscribe(endpoint: SocketAddr, fingerprint: String, identity: &Cli
             endpoint,
             ClientAuth::Fingerprint(fingerprint.clone()),
             identity,
+            actor.clone(),
         )
         .await
         {
@@ -63,6 +70,7 @@ enum SessionOutcome {
 async fn run_subscribe_session(client: &OiClient) -> SessionOutcome {
     let req_bytes = serde_json::to_vec(&serde_json::json!({
         "method": "/events/subscribe",
+        "actor": client.actor(),
         "params": {},
     }))
     .expect("serialisation");

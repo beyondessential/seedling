@@ -38,6 +38,7 @@ subtle = "2.6.1"
 tokio = { version = "1.51.0", features = ["full"] }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 uuid = { version = "1.23.0", features = ["v4", "serde", "v5"] }
+whoami = "2.1.1"
 wildmatch = "2.6.1"
 
 [patch.crates-io]
