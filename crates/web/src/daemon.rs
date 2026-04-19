@@ -65,6 +65,14 @@ impl DaemonConn {
     /// daemon will reject our key. The rejection only surfaces on the first
     /// stream use. A full round-trip request forces the daemon to process
     /// our certificate before we declare the connection healthy.
+    pub async fn request(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.inner.lock().await.request(method, params).await
+    }
+
     pub async fn probe(&self) -> Result<(), ClientError> {
         match self.inner.lock().await.request("ping", json!({})).await {
             Ok(_) | Err(ClientError::Api { .. }) => Ok(()),

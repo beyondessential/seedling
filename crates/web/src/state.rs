@@ -6,6 +6,7 @@ use seedling_protocol::actor::Actor;
 
 use crate::daemon::DaemonConn;
 use crate::event_broker::EventBroker;
+use crate::web_sessions::WebSessionRegistry;
 use crate::wt_cert::CertStore;
 
 pub struct WtTokenEntry {
@@ -63,4 +64,5 @@ pub struct AppState {
     pub vite_port: Option<u16>,
     pub daemon: Arc<DaemonConn>,
     pub event_broker: Arc<EventBroker>,
+    pub web_sessions: Arc<WebSessionRegistry>,
 }

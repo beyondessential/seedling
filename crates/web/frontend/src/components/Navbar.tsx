@@ -1,4 +1,5 @@
 import EventNoteIcon from "@mui/icons-material/EventNote";
+import PeopleAltIcon from "@mui/icons-material/PeopleAlt";
 import { AppBar, Box, Chip, IconButton, Toolbar, Tooltip, Typography } from "@mui/material";
 import { Link } from "react-router-dom";
 import { useEventRefresh } from "../hooks/useEventRefresh";
@@ -56,6 +57,16 @@ export function Navbar() {
             {data.hostname}
           </Typography>
         )}
+        <Tooltip title="Connected clients">
+          <IconButton
+            size="small"
+            component={Link}
+            to="/sessions"
+            sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
+          >
+            <PeopleAltIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
         <Tooltip title={sidebarOpen ? "Hide events" : "Show events"}>
           <IconButton
             color={sidebarOpen ? "inherit" : "default"}

@@ -103,6 +103,9 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > w[routes.backups]
 > The web interface exposes backup management: registering and deregistering backup apps; creating, listing, showing, updating, and deleting backup strategies; triggering immediate backups; listing snapshots; and restoring snapshots.
 
+> w[routes.sessions]
+> The web interface must provide a connected-clients view showing all active web UI sessions, open CLI shell sessions, and active port forwards. Each entry must show at minimum the client identity, the connected or opened timestamp, and — for shells and forwards — the associated app.
+
 # Bind Configuration
 
 > w[bind]

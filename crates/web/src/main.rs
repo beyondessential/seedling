@@ -15,6 +15,7 @@ mod interfaces;
 mod proxy;
 mod spa;
 mod state;
+mod web_sessions;
 mod wt;
 mod wt_cert;
 
@@ -24,6 +25,7 @@ use event_broker::{EventBroker, run_event_broker};
 use interfaces::resolve_bind_addrs;
 use seedling_protocol::client::ClientAuth;
 use state::AppState;
+use web_sessions::WebSessionRegistry;
 use wt_cert::CertStore;
 
 const DEFAULT_HTTP_PORT: u16 = 8080;
@@ -211,6 +213,7 @@ async fn main() {
         vite_port: args.vite_port,
         daemon: Arc::clone(&daemon),
         event_broker: Arc::clone(&event_broker),
+        web_sessions: Arc::new(WebSessionRegistry::new()),
     };
 
     // Spawn cert rotation background task.

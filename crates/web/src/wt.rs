@@ -1,12 +1,15 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use serde_json::json;
 use tokio::io::AsyncWriteExt as _;
 use tokio::sync::watch;
+use uuid::Uuid;
 use wtransport::tls::server::build_default_tls_config;
 use wtransport::{Endpoint, ServerConfig, VarInt};
 
 use crate::state::AppState;
+use crate::web_sessions::WebSessionEntry;
 use crate::{proxy, state};
 
 /// Run a WebTransport server on `addr`, restarting when `rotation_rx` fires (cert rotated).
@@ -95,6 +98,14 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
         "WT session established"
     );
 
+    // w[impl routes.sessions]
+    let session_id = Uuid::new_v4();
+    state.web_sessions.insert(WebSessionEntry {
+        id: session_id,
+        connected_at: jiff::Timestamp::now(),
+        actor: Arc::clone(&actor),
+    });
+
     // w[transport.webtransport]
     // w[routes.events]
     // w[routes.logs]
@@ -109,6 +120,27 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
                     return;
                 }
             };
+
+            // w[impl routes.sessions]
+            if peeked.method == "/connected-clients/list" {
+                let web = state3.web_sessions.list();
+                let shells = match state3.daemon.request("/shells/list", json!({})).await {
+                    Ok(v) => v.get("shells").cloned().unwrap_or(json!([])),
+                    Err(_) => json!([]),
+                };
+                let forwards = match state3.daemon.request("/forwards/list", json!({})).await {
+                    Ok(v) => v.get("forwards").cloned().unwrap_or(json!([])),
+                    Err(_) => json!([]),
+                };
+                let response = json!({
+                    "result": { "web": web, "shells": shells, "forwards": forwards }
+                });
+                let _ = wt_send
+                    .write_all((response.to_string() + "\n").as_bytes())
+                    .await;
+                let _ = wt_send.shutdown().await;
+                return;
+            }
 
             if peeked.method == "/events/subscribe" {
                 let _ = wt_send.write_all(b"{\"result\":{}}\n").await;
@@ -167,6 +199,8 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
             }
         });
     }
+
+    state.web_sessions.remove(&session_id);
 }
 
 fn extract_query_param(path_with_query: &str, key: &str) -> Option<String> {

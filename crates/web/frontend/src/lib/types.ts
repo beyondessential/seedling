@@ -164,6 +164,36 @@ export interface Actor {
   session?: string;
 }
 
+export interface WebSession {
+  id: string;
+  connected_at: string;
+  actor_kind: string | null;
+  actor_id: string | null;
+  actor_display: string | null;
+}
+
+export interface ShellSession {
+  session_id: string;
+  app: string;
+  name: string;
+  opened_at: string;
+}
+
+export interface ForwardSession {
+  forward_id: string;
+  app: string;
+  service: string;
+  port: number;
+  proto: string;
+  opened_at: string;
+}
+
+export interface ConnectedClients {
+  web: WebSession[];
+  shells: ShellSession[];
+  forwards: ForwardSession[];
+}
+
 export interface ConnectRequest {
   token?: string;
   password?: string;
