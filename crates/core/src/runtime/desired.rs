@@ -309,7 +309,7 @@ pub fn list_dynamic_resources(db: &Db) -> rusqlite::Result<Vec<DynamicResourceRe
         "SELECT instance_id, app, operation_id, kind, display_name, resource_name
          FROM dynamic_resources ORDER BY app, instance_id",
     )?;
-    collect_dynamic_rows(stmt.query_map([], |row| parse_dynamic_row(row))?)
+    collect_dynamic_rows(stmt.query_map([], parse_dynamic_row)?)
 }
 
 /// Load dynamic resource records for a single app.
@@ -321,7 +321,7 @@ pub fn list_dynamic_resources_for_app(
         "SELECT instance_id, app, operation_id, kind, display_name, resource_name
          FROM dynamic_resources WHERE app = ?1 ORDER BY instance_id",
     )?;
-    collect_dynamic_rows(stmt.query_map([app], |row| parse_dynamic_row(row))?)
+    collect_dynamic_rows(stmt.query_map([app], parse_dynamic_row)?)
 }
 
 fn parse_dynamic_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DynamicResourceRecord> {

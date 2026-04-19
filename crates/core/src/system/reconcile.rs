@@ -327,12 +327,17 @@ impl Reconciler {
         // r[impl reconciliation.liveness]
         // --- Concurrent phase: pods ∥ volumes ∥ caddy ∥ resolver ---
         let (pod_updates, vol_observations, caddy_result, resolver_result) = tokio::join!(
+            // r[impl autonomous.job-terminal]
+            // Pass written_obs so the pod phase can detect completed Jobs: if
+            // container_running was previously written for a Job instance but
+            // the container is now gone, the job finished — don't restart.
             phases::run_pods_phase(
                 &self.observer,
                 &self.actuator,
                 &self.driver,
                 &apps,
-                &self.node_prefix
+                &self.node_prefix,
+                &self.written_obs
             ),
             phases::run_volumes_phase(&self.observer, &self.actuator, &apps),
             tokio::time::timeout(

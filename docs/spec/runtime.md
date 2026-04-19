@@ -526,6 +526,11 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[autonomous.restart]
 > When a container resource in the desired state reaches the Terminated lifecycle state and its `on_exit` or `on_terminate` policy requires recreation, the reconciler must start a replacement.
 
+> r[autonomous.job-terminal]
+> A Job instance that has naturally reached the Terminated lifecycle state must not be restarted by the reconciler.
+> The reconciler must clean up any lingering container or unit state for such an instance but must not start a replacement.
+> This applies both while a lifecycle operation is in progress (the job completed during the operation) and in steady state.
+
 > r[autonomous.scale]
 > When a Deployment resource's observed running instance count differs from its declared scale, the reconciler must start or stop instances to converge on the declared count.
 

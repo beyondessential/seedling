@@ -1,9 +1,12 @@
-use std::{collections::HashMap, net::Ipv4Addr};
+use std::{
+    collections::{HashMap, HashSet},
+    net::Ipv4Addr,
+};
 
 use ipnet::Ipv6Net;
 
 use crate::{
-    runtime::{AppPhase, InstanceRegistry},
+    runtime::{AppPhase, InstanceRegistry, identity::InstanceId},
     system::{
         System, actuator::Actuator, observer::Observer, translate::proxy::build_proxy_config,
         types::DataPlaneRules,
@@ -18,13 +21,20 @@ pub(super) async fn run_pods_phase(
     driver: &std::sync::Arc<System>,
     apps: &[AppSnapshot],
     node_prefix: &Ipv6Net,
+    written_obs: &HashSet<(InstanceId, &'static str)>,
 ) -> Vec<(String, pods::PodActuationUpdate)> {
     let futures: Vec<_> = apps
         .iter()
         .map(|app| async move {
-            let update =
-                pods::observe_and_actuate(observer, actuator, driver, &app.desired, node_prefix)
-                    .await;
+            let update = pods::observe_and_actuate(
+                observer,
+                actuator,
+                driver,
+                &app.desired,
+                node_prefix,
+                written_obs,
+            )
+            .await;
             (app.name.clone(), update)
         })
         .collect();

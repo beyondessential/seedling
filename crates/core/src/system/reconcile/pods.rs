@@ -9,7 +9,7 @@ use crate::{
     defs::{enums::OnUpdate, resource::Resource},
     runtime::{
         desired::{DesiredResource, DesiredState},
-        identity::ResourceInstance,
+        identity::{InstanceId, ResourceInstance},
         lifecycle::LifecycleState,
     },
     system::{
@@ -69,6 +69,8 @@ struct ObservedInstance<'a> {
     unit_failed: bool,
     unit_active: bool,
     container_exists: bool,
+    /// Container has exited but not yet been removed (ContainerExited fact present).
+    has_exited: bool,
     result: PodInstanceResult,
 }
 
@@ -110,6 +112,7 @@ async fn observe_one_pod<'a>(
                 unit_failed: false,
                 unit_active: false,
                 container_exists: false,
+                has_exited: false,
                 result,
             });
         }
@@ -165,6 +168,9 @@ async fn observe_one_pod<'a>(
                 | ObservationFact::ContainerExited { .. }
         )
     });
+    let has_exited = facts
+        .iter()
+        .any(|(f, _)| matches!(f, ObservationFact::ContainerExited { .. }));
 
     // Collect running pods from the pre-actuation observation.
     //
@@ -202,6 +208,7 @@ async fn observe_one_pod<'a>(
         unit_failed,
         unit_active,
         container_exists,
+        has_exited,
         result,
     })
 }
@@ -210,13 +217,43 @@ async fn observe_one_pod<'a>(
 // r[actuate.deployment.stop]
 // r[fault.non-blocking]
 // r[fault.container-start]
+// r[impl autonomous.job-terminal]
 async fn actuate_one_pod(
     actuator: &Actuator,
     mut obs: ObservedInstance<'_>,
     inhibit_stop: bool,
+    written_obs: &HashSet<(InstanceId, &'static str)>,
 ) -> Option<PodInstanceResult> {
     let dr = obs.dr;
     let result = &mut obs.result;
+
+    // r[impl autonomous.job-terminal]
+    // Jobs that have completed naturally are not restarted. Detect completion
+    // by checking whether the container was previously seen running (written_obs)
+    // but is now gone — this works even when Podman's --rm removes the container
+    // instantly on exit with no visible Exited state. Clean up any lingering
+    // container/unit state but do not start a replacement.
+    if matches!(dr.definition, Resource::Job(_)) && dr.desired == LifecycleState::Ready {
+        let previously_ran = written_obs.contains(&(dr.instance.id, "container_running"));
+        let is_done =
+            obs.has_exited || (!obs.container_exists && !obs.is_running && previously_ran);
+        if is_done {
+            if obs.container_exists || obs.unit_active || obs.unit_failed {
+                match actuator.stop(&dr.instance, &dr.definition).await {
+                    Ok(()) => {}
+                    Err(e) => {
+                        error!(
+                            instance = %dr.instance.display_name,
+                            error = %e,
+                            "pods: stop completed job failed"
+                        );
+                        result.stop_failure = Some((dr.instance.clone(), e.to_string()));
+                    }
+                }
+            }
+            return Some(obs.result);
+        }
+    }
 
     // Track unit health for fault filing/clearing.
     // A unit that is "active" in systemd but whose container is not
@@ -427,6 +464,7 @@ pub(super) async fn observe_and_actuate(
     driver: &Arc<System>,
     desired: &DesiredState,
     node_prefix: &Ipv6Net,
+    written_obs: &HashSet<(InstanceId, &'static str)>,
 ) -> PodActuationUpdate {
     // Phase 1: observe all instances concurrently.
     let pod_resources: Vec<&DesiredResource> = desired
@@ -492,7 +530,7 @@ pub(super) async fn observe_and_actuate(
     let mut actuate_futures = Vec::with_capacity(observed.len());
     for obs in observed {
         let inhibit = inhibited_instances.contains(&obs.dr.instance.display_name);
-        actuate_futures.push(actuate_one_pod(actuator, obs, inhibit));
+        actuate_futures.push(actuate_one_pod(actuator, obs, inhibit, written_obs));
     }
 
     let results = join_all(actuate_futures).await;
