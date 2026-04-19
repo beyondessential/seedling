@@ -35,6 +35,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
+import { isStrongPassword, passwordScore } from "../lib/passwordStrength";
 import { statusColor, statusLabel } from "../lib/status";
 import type {
   AppAction,
@@ -222,14 +223,16 @@ function ParamsSection({
                       error={
                         p.kind === "password" &&
                         draft.length > 0 &&
-                        draft.length < 12
+                        !isStrongPassword(draft)
                       }
                       helperText={
-                        p.kind === "password" &&
-                        draft.length > 0 &&
-                        draft.length < 12
-                          ? "Password is too weak"
-                          : (p.description ?? undefined)
+                        p.kind === "password" && draft.length > 0
+                          ? isStrongPassword(draft)
+                            ? (p.description ?? undefined)
+                            : "Password is too weak"
+                          : p.kind === "weak-password" && draft.length > 0
+                            ? `Strength: ${passwordScore(draft)}/4${p.description ? ` — ${p.description}` : ""}`
+                            : (p.description ?? undefined)
                       }
                       inputProps={{ style: { fontFamily: "monospace" } }}
                       InputProps={{
@@ -367,6 +370,10 @@ function ActionInvokeDialog({
       ]),
     ),
   );
+  const [showPasswords, setShowPasswords] = useState<Record<string, boolean>>({});
+
+  const toggleShow = (key: string) =>
+    setShowPasswords((s) => ({ ...s, [key]: !s[key] }));
 
   const handleClose = () => {
     clearError();
@@ -391,6 +398,13 @@ function ActionInvokeDialog({
 
   const paramEntries = Object.entries(action.params) as [string, InstallRequirement][];
 
+  const hasWeakPassword = paramEntries.some(
+    ([key, def]) =>
+      def.kind === "password" &&
+      values[key] != null &&
+      !isStrongPassword(values[key]),
+  );
+
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
       <DialogTitle sx={{ fontFamily: "monospace", pb: 1 }}>
@@ -404,21 +418,60 @@ function ActionInvokeDialog({
               No params required.
             </Typography>
           ) : (
-            paramEntries.map(([key, def]) => (
-              <TextField
-                key={key}
-                label={key}
-                size="small"
-                value={values[key] ?? ""}
-                onChange={(e) =>
-                  setValues((v) => ({ ...v, [key]: e.target.value }))
-                }
-                helperText={def.description ?? undefined}
-                type={paramFieldType(def.kind)}
-                required={def.required}
-                inputProps={{ style: { fontFamily: "monospace" } }}
-              />
-            ))
+            paramEntries.map(([key, def]) => {
+              const isPassword =
+                def.kind === "password" || def.kind === "weak-password";
+              const val = values[key] ?? "";
+              const weak =
+                def.kind === "password" && val.length > 0 && !isStrongPassword(val);
+              const helperText =
+                def.kind === "password" && val.length > 0
+                  ? weak
+                    ? "Password is too weak"
+                    : (def.description ?? undefined)
+                  : def.kind === "weak-password" && val.length > 0
+                    ? `Strength: ${passwordScore(val)}/4${def.description ? ` — ${def.description}` : ""}`
+                    : (def.description ?? undefined);
+              return (
+                <TextField
+                  key={key}
+                  label={key}
+                  size="small"
+                  value={val}
+                  onChange={(e) =>
+                    setValues((v) => ({ ...v, [key]: e.target.value }))
+                  }
+                  helperText={helperText}
+                  error={weak}
+                  type={showPasswords[key] ? "text" : paramFieldType(def.kind)}
+                  required={def.required}
+                  inputProps={{ style: { fontFamily: "monospace" } }}
+                  InputProps={
+                    isPassword
+                      ? {
+                          endAdornment: (
+                            <InputAdornment position="end">
+                              <Tooltip title={showPasswords[key] ? "Hide" : "Show"}>
+                                <IconButton
+                                  size="small"
+                                  onClick={() => toggleShow(key)}
+                                  edge="end"
+                                >
+                                  {showPasswords[key] ? (
+                                    <VisibilityOffIcon fontSize="small" />
+                                  ) : (
+                                    <VisibilityIcon fontSize="small" />
+                                  )}
+                                </IconButton>
+                              </Tooltip>
+                            </InputAdornment>
+                          ),
+                        }
+                      : undefined
+                  }
+                />
+              );
+            })
           )}
         </Stack>
       </DialogContent>
@@ -426,7 +479,11 @@ function ActionInvokeDialog({
         <Button onClick={handleClose} disabled={loading}>
           Cancel
         </Button>
-        <Button variant="contained" onClick={handleSubmit} disabled={loading}>
+        <Button
+          variant="contained"
+          onClick={handleSubmit}
+          disabled={loading || hasWeakPassword}
+        >
           {loading
             ? "Running…"
             : action.kind === "install"
