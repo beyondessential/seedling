@@ -46,6 +46,10 @@ export interface AppResource {
 export interface AppParam {
   name: string;
   value: string | null;
+  kind: string;
+  required: boolean;
+  description: string | null;
+  default_value: string | null;
 }
 
 export interface AppAction {

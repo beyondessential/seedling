@@ -276,12 +276,19 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     let params_json: Vec<Value> = def
         .params
         .iter()
-        .map(|k| {
+        .map(|(k, schema)| {
             let value = stored_params
                 .get(k)
                 .map(|v| Value::String(v.clone()))
                 .unwrap_or(Value::Null);
-            json!({ "name": k, "value": value })
+            json!({
+                "name": k,
+                "value": value,
+                "kind": install_requirement_kind_str(schema.kind),
+                "required": schema.required,
+                "description": schema.description,
+                "default_value": schema.default_value,
+            })
         })
         .collect();
 
@@ -289,7 +296,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     // not reference; shown for operator awareness only.
     let unknown_params_json: Vec<Value> = stored_params
         .iter()
-        .filter(|(k, _)| !def.params.contains(*k))
+        .filter(|(k, _)| !def.params.contains_key(*k))
         .map(|(k, v)| json!({ "name": k, "value": v }))
         .collect();
 

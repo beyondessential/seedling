@@ -207,6 +207,8 @@ function ParamsSection({
                         if (e.key === "Escape") cancel();
                       }}
                       autoFocus
+                      type={paramFieldType(p.kind)}
+                      helperText={p.description ?? undefined}
                       inputProps={{ style: { fontFamily: "monospace" } }}
                       InputProps={{
                         endAdornment: (
@@ -235,14 +237,21 @@ function ParamsSection({
                 </TableRow>
               ) : (
                 <TableRow key={p.name}>
-                  <TableCell sx={{ fontFamily: "monospace" }}>{p.name}</TableCell>
+                  <TableCell sx={{ fontFamily: "monospace" }}>
+                    {p.name}
+                    {p.required && (
+                      <Typography component="span" color="error" sx={{ ml: 0.5 }}>*</Typography>
+                    )}
+                  </TableCell>
                   <TableCell
                     sx={{
                       fontFamily: "monospace",
                       color: p.value == null ? "text.disabled" : undefined,
                     }}
                   >
-                    {p.value ?? "—"}
+                    {p.kind === "password" || p.kind === "weak-password"
+                      ? p.value != null ? "••••••••" : "—"
+                      : p.value ?? "—"}
                   </TableCell>
                   <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
                     <Tooltip title={p.value == null ? "Set" : "Edit"}>

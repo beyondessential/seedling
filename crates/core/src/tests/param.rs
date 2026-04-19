@@ -37,7 +37,7 @@ fn unset_param_is_not_set() {
     let app = run_test_script_app(r#"let _host = app.param("host");"#);
     let def = app.def.lock();
     assert!(
-        def.params.contains("host"),
+        def.params.contains_key("host"),
         "host should be in declared params"
     );
     assert!(
@@ -142,7 +142,7 @@ fn stored_param_is_set_returns_true() {
 
     let def = app.def.lock();
     assert!(
-        def.params.contains("hostname"),
+        def.params.contains_key("hostname"),
         "hostname should be recorded as declared"
     );
 }
@@ -164,7 +164,7 @@ fn unset_param_is_set_returns_false() {
 
     let def = app.def.lock();
     assert!(
-        def.params.contains("hostname"),
+        def.params.contains_key("hostname"),
         "hostname should be recorded as declared even when unset"
     );
 }
@@ -210,7 +210,7 @@ fn param_used_in_closure_captures_injected_value() {
     .expect("script should evaluate");
 
     assert!(
-        app.def.lock().params.contains("version"),
+        app.def.lock().params.contains_key("version"),
         "version should be recorded as declared"
     );
     assert_eq!(
@@ -297,4 +297,88 @@ fn on_change_inside_action_closure_throws() {
         matches!(result, OperationResult::Failed(_)),
         "on_change inside action closure should cause the operation to fail",
     );
+}
+
+// -----------------------------------------------------------------------
+// param.schema — builder methods
+// -----------------------------------------------------------------------
+
+// l[verify param.schema]
+// l[verify param.schema.kind]
+// l[verify param.schema.required]
+// l[verify param.schema.default-value]
+// l[verify param.schema.description]
+#[test]
+fn param_schema_builder_methods_set_fields() {
+    let app = run_test_script_app(
+        r#"
+        app.param("admin-email")
+            .kind("email")
+            .required(true)
+            .default_value("admin@example.com")
+            .description("Admin email address");
+        "#,
+    );
+    let def = app.def.lock();
+    let schema = def
+        .params
+        .get("admin-email")
+        .expect("param should be declared");
+    assert!(matches!(
+        schema.kind,
+        crate::defs::install::InstallRequirementKind::Email
+    ));
+    assert!(schema.required);
+    assert_eq!(schema.default_value.as_deref(), Some("admin@example.com"));
+    assert_eq!(schema.description.as_deref(), Some("Admin email address"));
+}
+
+// l[verify param.schema]
+#[test]
+fn param_schema_defaults_when_no_builder_methods() {
+    let app = run_test_script_app(r#"app.param("host");"#);
+    let def = app.def.lock();
+    let schema = def.params.get("host").expect("param should be declared");
+    assert!(matches!(
+        schema.kind,
+        crate::defs::install::InstallRequirementKind::Text
+    ));
+    assert!(!schema.required);
+    assert!(schema.default_value.is_none());
+    assert!(schema.description.is_none());
+}
+
+// l[verify param.schema.kind]
+#[test]
+fn param_schema_kind_password() {
+    let app = run_test_script_app(r#"app.param("secret").kind("password");"#);
+    let def = app.def.lock();
+    let schema = def.params.get("secret").unwrap();
+    assert!(matches!(
+        schema.kind,
+        crate::defs::install::InstallRequirementKind::Password
+    ));
+}
+
+// l[verify param.schema.kind]
+#[test]
+fn param_schema_kind_unknown_throws() {
+    let _ = run_test_script_err(r#"app.param("field").kind("banana");"#);
+}
+
+// l[verify param.schema]
+#[test]
+fn param_schema_builder_methods_return_same_param_for_chaining() {
+    let app = run_test_script_app(
+        r#"
+        let p = app.param("site-name").description("Site name").required(true);
+        "#,
+    );
+    let def = app.def.lock();
+    let schema = def
+        .params
+        .get("site-name")
+        .expect("param should be declared");
+    assert_eq!(schema.description.as_deref(), Some("Site name"));
+    assert!(schema.required);
 }

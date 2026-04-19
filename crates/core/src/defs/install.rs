@@ -7,7 +7,7 @@ pub struct InstallDef {
 }
 
 // l[impl action.install.requirements]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct InstallRequirementDef {
     pub kind: InstallRequirementKind,
     pub required: bool,
@@ -15,7 +15,7 @@ pub struct InstallRequirementDef {
     pub description: Option<String>,
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub enum InstallRequirementKind {
     // l[impl action.install.requirements.kind-text]
     #[default]

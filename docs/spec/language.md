@@ -257,6 +257,23 @@ This is currently the only value.
 > `on_change` may only be called at the top level of the script (statically). Calling it from within an action closure must throw.
 > Calling `on_change` more than once on the same parameter must throw.
 
+> l[param.schema]
+> A `Param` returned by `app.param()` may have schema metadata attached to it using builder methods. These methods return the same `Param` so calls can be chained.
+>
+> Schema metadata describes how the parameter should be presented and validated in management interfaces. Defaults: `kind` is `"text"`, `required` is `false`, `default_value` is absent, `description` is absent.
+
+> l[param.schema.kind]
+> `param.kind(kind: string)` sets the kind of the parameter. Valid values are the same as for [Install Action params](#l--action.install.requirements): `"text"`, `"email"`, `"password"`, `"weak-password"`. Providing an unknown kind must throw.
+
+> l[param.schema.required]
+> `param.required(required: bool)` sets whether the parameter is required.
+
+> l[param.schema.default-value]
+> `param.default_value(value: string)` sets the default value for the parameter.
+
+> l[param.schema.description]
+> `param.description(description: string)` sets the human-readable description for the parameter.
+
 # Service
 
 > l[service.type]

@@ -1,6 +1,7 @@
 use rhai::{CustomType, EvalAltResult, FnPtr, TypeBuilder};
 
 use super::app::App;
+use super::install::InstallRequirementKind;
 
 // l[impl param.type]
 #[derive(Debug, Clone)]
@@ -56,5 +57,61 @@ impl CustomType for Param {
                 Ok(())
             },
         );
+
+        // l[impl param.schema.kind]
+        builder.with_fn(
+            "kind",
+            |this: &mut Self, kind_str: &str| -> Result<Self, Box<EvalAltResult>> {
+                let kind = kind_str.parse::<InstallRequirementKind>().map_err(
+                    |_| -> Box<EvalAltResult> {
+                        format!(
+                            "unknown param kind '{}' for parameter '{}'",
+                            kind_str, this.name
+                        )
+                        .into()
+                    },
+                )?;
+                this.app
+                    .def
+                    .lock()
+                    .params
+                    .entry(this.name.clone())
+                    .and_modify(|def| def.kind = kind);
+                Ok(this.clone())
+            },
+        );
+
+        // l[impl param.schema.required]
+        builder.with_fn("required", |this: &mut Self, required: bool| -> Self {
+            this.app
+                .def
+                .lock()
+                .params
+                .entry(this.name.clone())
+                .and_modify(|def| def.required = required);
+            this.clone()
+        });
+
+        // l[impl param.schema.default-value]
+        builder.with_fn("default_value", |this: &mut Self, value: &str| -> Self {
+            this.app
+                .def
+                .lock()
+                .params
+                .entry(this.name.clone())
+                .and_modify(|def| def.default_value = Some(value.to_owned()));
+            this.clone()
+        });
+
+        // l[impl param.schema.description]
+        builder.with_fn("description", |this: &mut Self, desc: &str| -> Self {
+            this.app
+                .def
+                .lock()
+                .params
+                .entry(this.name.clone())
+                .and_modify(|def| def.description = Some(desc.to_owned()));
+            this.clone()
+        });
     }
 }
