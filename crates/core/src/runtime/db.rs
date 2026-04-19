@@ -1,6 +1,304 @@
 use std::{os::unix::fs::PermissionsExt, path::Path, time::Duration};
 
 use rusqlite::{Connection, Result as SqlResult};
+use sha2::{Digest, Sha256};
+
+// SQL content used as the canonical hash input for each migration version.
+//
+// NEVER modify these constants after they have been deployed. Each constant is
+// hashed when the migration runs and the hash is stored in schema_version. On
+// every subsequent startup the stored hash is compared against the current
+// constant; a mismatch means someone edited an existing migration, which is
+// forbidden — it causes silent schema drift. Add a new version block instead.
+const SQL_V2: &str = "\
+    DROP TABLE IF EXISTS world_observations;\
+    DROP TABLE IF EXISTS autonomous_operations;\
+    DELETE FROM schema_version;\
+    CREATE TABLE IF NOT EXISTS resource_instances (\
+        id           TEXT    PRIMARY KEY,\
+        app          TEXT    NOT NULL,\
+        kind         TEXT    NOT NULL,\
+        name         TEXT,\
+        is_scaled    INTEGER NOT NULL DEFAULT 0,\
+        display_name TEXT    NOT NULL,\
+        created_at   INTEGER NOT NULL\
+    );\
+    CREATE TABLE IF NOT EXISTS world_observations (\
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,\
+        recorded_at INTEGER NOT NULL,\
+        instance_id TEXT    NOT NULL,\
+        obs_kind    TEXT    NOT NULL,\
+        payload     TEXT    NOT NULL\
+    );\
+    CREATE TABLE IF NOT EXISTS autonomous_operations (\
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,\
+        recorded_at  INTEGER NOT NULL,\
+        instance_id  TEXT    NOT NULL,\
+        operation    TEXT    NOT NULL,\
+        provenance   TEXT    NOT NULL,\
+        outcome      TEXT,\
+        completed_at INTEGER\
+    );\
+    CREATE TABLE IF NOT EXISTS action_log (\
+        id                 INTEGER PRIMARY KEY AUTOINCREMENT,\
+        recorded_at        INTEGER NOT NULL,\
+        operation_id       TEXT    NOT NULL,\
+        app                TEXT    NOT NULL,\
+        action_name        TEXT    NOT NULL,\
+        call_index         INTEGER NOT NULL,\
+        call_kind          TEXT    NOT NULL,\
+        resources          TEXT    NOT NULL,\
+        barrier_state      TEXT,\
+        barrier_deadline   INTEGER,\
+        barrier_satisfied  INTEGER,\
+        barrier_started_at INTEGER,\
+        UNIQUE (operation_id, call_index)\
+    );\
+    CREATE TABLE IF NOT EXISTS current_operation (\
+        singleton    INTEGER PRIMARY KEY DEFAULT 1 CHECK (singleton = 1),\
+        operation_id TEXT    NOT NULL,\
+        app          TEXT    NOT NULL,\
+        action_name  TEXT    NOT NULL\
+    );";
+
+const SQL_V3: &str = "\
+    CREATE TABLE IF NOT EXISTS caddy_state (\
+        singleton        INTEGER PRIMARY KEY DEFAULT 1 CHECK (singleton = 1),\
+        active_container TEXT    NOT NULL\
+    );\
+    CREATE TABLE IF NOT EXISTS caddy_proxy_config (\
+        singleton    INTEGER PRIMARY KEY DEFAULT 1 CHECK (singleton = 1),\
+        config_json  TEXT    NOT NULL\
+    );";
+
+const SQL_V4: &str = "\
+    CREATE TABLE IF NOT EXISTS registered_apps (\
+        name      TEXT    PRIMARY KEY,\
+        script    TEXT    NOT NULL,\
+        installed INTEGER NOT NULL DEFAULT 0\
+    );";
+
+const SQL_V5: &str = "\
+    CREATE TABLE IF NOT EXISTS authorized_keys (\
+        fingerprint TEXT    PRIMARY KEY,\
+        label       TEXT    NOT NULL,\
+        added_at    INTEGER NOT NULL\
+    );";
+
+const SQL_V6: &str = "\
+    CREATE TABLE IF NOT EXISTS params (\
+        app_name   TEXT NOT NULL,\
+        param_name TEXT NOT NULL,\
+        value      TEXT NOT NULL,\
+        PRIMARY KEY (app_name, param_name)\
+    );";
+
+const SQL_V7: &str =
+    "ALTER TABLE registered_apps ADD COLUMN uninstalling INTEGER NOT NULL DEFAULT 0;";
+
+const SQL_V8: &str = "\
+    CREATE TABLE IF NOT EXISTS resource_instances_new (\
+        id           TEXT    PRIMARY KEY,\
+        app          TEXT    NOT NULL,\
+        kind         TEXT    NOT NULL,\
+        name         TEXT,\
+        is_scaled    INTEGER NOT NULL DEFAULT 0,\
+        display_name TEXT    NOT NULL,\
+        created_at   INTEGER NOT NULL\
+    );\
+    INSERT OR IGNORE INTO resource_instances_new \
+        SELECT id, app, kind, name, is_scaled, display_name, created_at \
+        FROM resource_instances;\
+    DROP TABLE resource_instances;\
+    ALTER TABLE resource_instances_new RENAME TO resource_instances;";
+
+const SQL_V9: &str = "\
+    CREATE TABLE IF NOT EXISTS faults (\
+        id            TEXT PRIMARY KEY,\
+        app           TEXT NOT NULL,\
+        resource_type TEXT,\
+        resource_name TEXT,\
+        instance_id   TEXT,\
+        kind          TEXT NOT NULL,\
+        timestamp     TEXT NOT NULL,\
+        description   TEXT NOT NULL,\
+        cleared_at    TEXT\
+    );";
+
+const SQL_V10: &str = "\
+    CREATE TABLE IF NOT EXISTS dynamic_resources (\
+        instance_id   TEXT PRIMARY KEY,\
+        app           TEXT NOT NULL,\
+        operation_id  TEXT NOT NULL,\
+        kind          TEXT NOT NULL,\
+        display_name  TEXT NOT NULL\
+    );";
+
+const SQL_V11: &str = "\
+    CREATE TABLE IF NOT EXISTS allowed_registries (\
+        registry TEXT PRIMARY KEY\
+    );\
+    INSERT OR IGNORE INTO allowed_registries (registry) VALUES ('docker.io');\
+    INSERT OR IGNORE INTO allowed_registries (registry) VALUES ('ghcr.io');";
+
+const SQL_V12: &str = "\
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_singleton_unique \
+        ON resource_instances (app, kind, name) \
+        WHERE is_scaled = 0;";
+
+const SQL_V13: &str = "\
+    CREATE INDEX IF NOT EXISTS idx_world_observations_instance \
+        ON world_observations (instance_id, recorded_at);\
+    CREATE INDEX IF NOT EXISTS idx_autonomous_operations_instance \
+        ON autonomous_operations (instance_id, recorded_at);\
+    CREATE INDEX IF NOT EXISTS idx_action_log_operation \
+        ON action_log (operation_id, call_index);\
+    CREATE INDEX IF NOT EXISTS idx_faults_active_app \
+        ON faults (app, cleared_at) \
+        WHERE cleared_at IS NULL;";
+
+// Hash covers only the schema-changing SQL. The Rust backfill code that
+// copies existing rows is not included.
+const SQL_V14: &str = "\
+    CREATE TABLE IF NOT EXISTS app_versions (\
+        id         TEXT PRIMARY KEY,\
+        app        TEXT NOT NULL,\
+        script     TEXT NOT NULL,\
+        created_at TEXT NOT NULL\
+    );\
+    ALTER TABLE registered_apps ADD COLUMN current_version_id TEXT;";
+
+const SQL_V15: &str = "\
+    CREATE TABLE IF NOT EXISTS scaling_decisions (\
+        app        TEXT NOT NULL,\
+        deployment TEXT NOT NULL,\
+        scale      INTEGER NOT NULL,\
+        updated_at TEXT NOT NULL,\
+        PRIMARY KEY (app, deployment)\
+    );";
+
+const SQL_V16: &str = "\
+    CREATE TABLE IF NOT EXISTS site_volumes (\
+        name       TEXT    PRIMARY KEY,\
+        kind       TEXT    NOT NULL,\
+        host_path  TEXT,\
+        created_at TEXT    NOT NULL\
+    );";
+
+const SQL_V17: &str = "\
+    CREATE TABLE IF NOT EXISTS external_volume_mappings (\
+        app             TEXT    NOT NULL,\
+        external_name   TEXT    NOT NULL,\
+        target_kind     TEXT    NOT NULL,\
+        target_app      TEXT,\
+        target_volume   TEXT    NOT NULL,\
+        read_only       INTEGER NOT NULL DEFAULT 0,\
+        PRIMARY KEY (app, external_name)\
+    );";
+
+const SQL_V18: &str = "ALTER TABLE registered_apps DROP COLUMN script;";
+
+const SQL_V19: &str = "\
+    ALTER TABLE site_volumes ADD COLUMN source_app TEXT;\
+    ALTER TABLE site_volumes ADD COLUMN source_volume TEXT;";
+
+// Hash covers only the schema-changing SQL. The Rust backfill code that
+// converts app_versions rows to the new generations format is not included.
+const SQL_V20: &str = "\
+    CREATE TABLE IF NOT EXISTS script_bodies (\
+        hash TEXT PRIMARY KEY,\
+        body TEXT NOT NULL\
+    );\
+    CREATE TABLE IF NOT EXISTS generations (\
+        app             TEXT    NOT NULL,\
+        generation      INTEGER NOT NULL,\
+        created_at      TEXT    NOT NULL,\
+        kind            TEXT    NOT NULL,\
+        param_name      TEXT,\
+        previous_value  TEXT,\
+        new_value       TEXT,\
+        script_hash     TEXT    NOT NULL,\
+        operation_id    TEXT,\
+        outcome         TEXT,\
+        outcome_error   TEXT,\
+        PRIMARY KEY (app, generation)\
+    );\
+    CREATE INDEX IF NOT EXISTS idx_generations_app \
+        ON generations (app, generation DESC);\
+    ALTER TABLE registered_apps ADD COLUMN current_generation INTEGER NOT NULL DEFAULT 0;\
+    ALTER TABLE registered_apps DROP COLUMN current_version_id;\
+    DROP TABLE app_versions;";
+
+const SQL_V21: &str = "\
+    ALTER TABLE current_operation \
+        ADD COLUMN source_generation INTEGER NOT NULL DEFAULT 0;\
+    ALTER TABLE current_operation \
+        ADD COLUMN target_generation INTEGER NOT NULL DEFAULT 0;";
+
+const SQL_V22: &str = "\
+    CREATE TABLE IF NOT EXISTS action_schedules (\
+        app           TEXT NOT NULL,\
+        action        TEXT NOT NULL,\
+        cronexpr      TEXT NOT NULL,\
+        last_fired_at TEXT,\
+        PRIMARY KEY (app, action, cronexpr)\
+    );";
+
+const SQL_V23: &str = "\
+    CREATE TABLE IF NOT EXISTS backup_apps (\
+        name  TEXT PRIMARY KEY,\
+        app   TEXT UNIQUE NOT NULL\
+    );";
+
+const SQL_V24: &str = "\
+    CREATE TABLE IF NOT EXISTS backup_strategies (\
+        name     TEXT PRIMARY KEY,\
+        via      TEXT NOT NULL,\
+        schedule TEXT NOT NULL,\
+        volumes  TEXT NOT NULL\
+    );";
+
+const SQL_V25: &str = "ALTER TABLE backup_strategies ADD COLUMN last_fired_at TEXT;";
+
+const SQL_V26: &str = "ALTER TABLE dynamic_resources ADD COLUMN resource_name TEXT;";
+
+const MIGRATIONS: &[(i64, &str)] = &[
+    (2, SQL_V2),
+    (3, SQL_V3),
+    (4, SQL_V4),
+    (5, SQL_V5),
+    (6, SQL_V6),
+    (7, SQL_V7),
+    (8, SQL_V8),
+    (9, SQL_V9),
+    (10, SQL_V10),
+    (11, SQL_V11),
+    (12, SQL_V12),
+    (13, SQL_V13),
+    (14, SQL_V14),
+    (15, SQL_V15),
+    (16, SQL_V16),
+    (17, SQL_V17),
+    (18, SQL_V18),
+    (19, SQL_V19),
+    (20, SQL_V20),
+    (21, SQL_V21),
+    (22, SQL_V22),
+    (23, SQL_V23),
+    (24, SQL_V24),
+    (25, SQL_V25),
+    (26, SQL_V26),
+];
+
+fn migration_hash(sql: &str) -> String {
+    let digest = Sha256::digest(sql.as_bytes());
+    let mut s = String::with_capacity(digest.len() * 2);
+    use std::fmt::Write as _;
+    for b in digest.as_slice() {
+        write!(s, "{b:02x}").expect("write to String is infallible");
+    }
+    s
+}
 
 // r[impl history.persistence]
 // r[impl history.storage]
@@ -48,16 +346,30 @@ impl Db {
         Ok(db)
     }
 
-    // NEVER edit or delete an existing migration block. Once a migration has shipped, the
-    // schema_version row for it exists in production databases and that block will never run
-    // again. Editing it silently diverges the schema from what the version number promises.
-    // Always add a new version < N block at the bottom instead.
+    // NEVER edit or delete an existing migration block. Once a migration has
+    // shipped, the schema_version row for it exists in production databases and
+    // that block will never run again. Editing it silently diverges the schema
+    // from what the version number promises. Always add a new version < N block
+    // at the bottom. Editing the corresponding SQL_VN constant is equally
+    // forbidden — it will cause the integrity check to panic on every database
+    // that already has the migration applied.
     fn migrate(&self) -> SqlResult<()> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS schema_version (
-                version INTEGER NOT NULL
+                version     INTEGER NOT NULL,
+                migrated_at TEXT,
+                hash        TEXT
             );",
         )?;
+
+        // Upgrade existing schema_version tables that predate hash tracking.
+        // SQLite errors if a column already exists, so we ignore those errors.
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE schema_version ADD COLUMN migrated_at TEXT;");
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE schema_version ADD COLUMN hash TEXT;");
 
         let version: i64 = self
             .conn
@@ -78,83 +390,80 @@ impl Db {
                  DROP TABLE IF EXISTS autonomous_operations;
                  DELETE FROM schema_version;",
             )?;
-        }
 
-        // r[impl identity.stable]
-        // r[impl identity.components]
-        // The instance registry is the authoritative list of all resource instances.
-        // Each row is created once; the id (32-char hex InstanceId) never changes.
-        self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS resource_instances (
-                id           TEXT    PRIMARY KEY,
-                app          TEXT    NOT NULL,
-                kind         TEXT    NOT NULL,
-                name         TEXT,
-                is_scaled    INTEGER NOT NULL DEFAULT 0,
-                display_name TEXT    NOT NULL,
-                created_at   INTEGER NOT NULL
-            );",
-        )?;
+            // r[impl identity.stable]
+            // r[impl identity.components]
+            // The instance registry is the authoritative list of all resource instances.
+            // Each row is created once; the id (32-char hex InstanceId) never changes.
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS resource_instances (
+                    id           TEXT    PRIMARY KEY,
+                    app          TEXT    NOT NULL,
+                    kind         TEXT    NOT NULL,
+                    name         TEXT,
+                    is_scaled    INTEGER NOT NULL DEFAULT 0,
+                    display_name TEXT    NOT NULL,
+                    created_at   INTEGER NOT NULL
+                );",
+            )?;
 
-        // r[impl history.world.entries]
-        self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS world_observations (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                recorded_at INTEGER NOT NULL,
-                instance_id TEXT    NOT NULL,
-                obs_kind    TEXT    NOT NULL,
-                payload     TEXT    NOT NULL
-            );",
-        )?;
+            // r[impl history.world.entries]
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS world_observations (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    recorded_at INTEGER NOT NULL,
+                    instance_id TEXT    NOT NULL,
+                    obs_kind    TEXT    NOT NULL,
+                    payload     TEXT    NOT NULL
+                );",
+            )?;
 
-        // r[impl history.operations.entries]
-        self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS autonomous_operations (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                recorded_at  INTEGER NOT NULL,
-                instance_id  TEXT    NOT NULL,
-                operation    TEXT    NOT NULL,
-                provenance   TEXT    NOT NULL,
-                outcome      TEXT,
-                completed_at INTEGER
-            );",
-        )?;
+            // r[impl history.operations.entries]
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS autonomous_operations (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    recorded_at  INTEGER NOT NULL,
+                    instance_id  TEXT    NOT NULL,
+                    operation    TEXT    NOT NULL,
+                    provenance   TEXT    NOT NULL,
+                    outcome      TEXT,
+                    completed_at INTEGER
+                );",
+            )?;
 
-        // r[impl history.action-log.entries]
-        self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS action_log (
-                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
-                recorded_at        INTEGER NOT NULL,
-                operation_id       TEXT    NOT NULL,
-                app                TEXT    NOT NULL,
-                action_name        TEXT    NOT NULL,
-                call_index         INTEGER NOT NULL,
-                call_kind          TEXT    NOT NULL,
-                resources          TEXT    NOT NULL,
-                barrier_state      TEXT,
-                barrier_deadline   INTEGER,
-                barrier_satisfied  INTEGER,
-                barrier_started_at INTEGER,
-                UNIQUE (operation_id, call_index)
-            );",
-        )?;
+            // r[impl history.action-log.entries]
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS action_log (
+                    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                    recorded_at        INTEGER NOT NULL,
+                    operation_id       TEXT    NOT NULL,
+                    app                TEXT    NOT NULL,
+                    action_name        TEXT    NOT NULL,
+                    call_index         INTEGER NOT NULL,
+                    call_kind          TEXT    NOT NULL,
+                    resources          TEXT    NOT NULL,
+                    barrier_state      TEXT,
+                    barrier_deadline   INTEGER,
+                    barrier_satisfied  INTEGER,
+                    barrier_started_at INTEGER,
+                    UNIQUE (operation_id, call_index)
+                );",
+            )?;
 
-        // r[impl operation.lifecycle.events]
-        // r[impl barrier.replay]
-        // Singleton row (id=1) records the one in-progress lifecycle operation so
-        // that a restart can detect it and replay rather than starting fresh.
-        self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS current_operation (
-                singleton    INTEGER PRIMARY KEY DEFAULT 1 CHECK (singleton = 1),
-                operation_id TEXT    NOT NULL,
-                app          TEXT    NOT NULL,
-                action_name  TEXT    NOT NULL
-            );",
-        )?;
+            // r[impl operation.lifecycle.events]
+            // r[impl barrier.replay]
+            // Singleton row (id=1) records the one in-progress lifecycle operation so
+            // that a restart can detect it and replay rather than starting fresh.
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS current_operation (
+                    singleton    INTEGER PRIMARY KEY DEFAULT 1 CHECK (singleton = 1),
+                    operation_id TEXT    NOT NULL,
+                    app          TEXT    NOT NULL,
+                    action_name  TEXT    NOT NULL
+                );",
+            )?;
 
-        if version < 2 {
-            self.conn
-                .execute_batch("INSERT INTO schema_version VALUES (2);")?;
+            self.record_migration(2, SQL_V2)?;
         }
 
         if version < 3 {
@@ -168,8 +477,7 @@ impl Db {
                     config_json  TEXT    NOT NULL
                 );",
             )?;
-            self.conn
-                .execute_batch("INSERT INTO schema_version VALUES (3);")?;
+            self.record_migration(3, SQL_V3)?;
         }
 
         if version < 4 {
@@ -181,8 +489,7 @@ impl Db {
                     installed INTEGER NOT NULL DEFAULT 0
                 );",
             )?;
-            self.conn
-                .execute_batch("INSERT INTO schema_version VALUES (4);")?;
+            self.record_migration(4, SQL_V4)?;
         }
 
         if version < 5 {
@@ -194,8 +501,7 @@ impl Db {
                     added_at    INTEGER NOT NULL
                 );",
             )?;
-            self.conn
-                .execute_batch("INSERT INTO schema_version VALUES (5);")?;
+            self.record_migration(5, SQL_V5)?;
         }
 
         if version < 6 {
@@ -208,8 +514,7 @@ impl Db {
                     PRIMARY KEY (app_name, param_name)
                 );",
             )?;
-            self.conn
-                .execute_batch("INSERT INTO schema_version VALUES (6);")?;
+            self.record_migration(6, SQL_V6)?;
         }
 
         if version < 7 {
@@ -218,8 +523,7 @@ impl Db {
             self.conn.execute_batch(
                 "ALTER TABLE registered_apps ADD COLUMN uninstalling INTEGER NOT NULL DEFAULT 0;",
             )?;
-            self.conn
-                .execute_batch("INSERT INTO schema_version VALUES (7);")?;
+            self.record_migration(7, SQL_V7)?;
         }
 
         if version < 8 {
@@ -246,8 +550,7 @@ impl Db {
                 DROP TABLE resource_instances;
                 ALTER TABLE resource_instances_new RENAME TO resource_instances;",
             )?;
-            self.conn
-                .execute_batch("INSERT INTO schema_version VALUES (8);")?;
+            self.record_migration(8, SQL_V8)?;
         }
 
         if version < 9 {
@@ -265,8 +568,7 @@ impl Db {
                     cleared_at    TEXT
                 );",
             )?;
-            self.conn
-                .execute_batch("INSERT INTO schema_version VALUES (9);")?;
+            self.record_migration(9, SQL_V9)?;
         }
 
         if version < 10 {
@@ -279,8 +581,7 @@ impl Db {
                     display_name  TEXT NOT NULL
                 );",
             )?;
-            self.conn
-                .execute_batch("INSERT INTO schema_version VALUES (10);")?;
+            self.record_migration(10, SQL_V10)?;
         }
 
         if version < 11 {
@@ -291,8 +592,7 @@ impl Db {
                 INSERT OR IGNORE INTO allowed_registries (registry) VALUES ('docker.io');
                 INSERT OR IGNORE INTO allowed_registries (registry) VALUES ('ghcr.io');",
             )?;
-            self.conn
-                .execute_batch("INSERT INTO schema_version VALUES (11);")?;
+            self.record_migration(11, SQL_V11)?;
         }
 
         if version < 12 {
@@ -301,8 +601,7 @@ impl Db {
                      ON resource_instances (app, kind, name)
                      WHERE is_scaled = 0;",
             )?;
-            self.conn
-                .execute_batch("INSERT INTO schema_version VALUES (12);")?;
+            self.record_migration(12, SQL_V12)?;
         }
 
         if version < 13 {
@@ -317,8 +616,7 @@ impl Db {
                      ON faults (app, cleared_at)
                      WHERE cleared_at IS NULL;",
             )?;
-            self.conn
-                .execute_batch("INSERT INTO schema_version VALUES (13);")?;
+            self.record_migration(13, SQL_V13)?;
         }
 
         if version < 14 {
@@ -356,8 +654,7 @@ impl Db {
                     )?;
                 }
             }
-            self.conn
-                .execute_batch("INSERT INTO schema_version VALUES (14);")?;
+            self.record_migration(14, SQL_V14)?;
         }
 
         if version < 15 {
@@ -370,8 +667,7 @@ impl Db {
                     PRIMARY KEY (app, deployment)
                 );",
             )?;
-            self.conn
-                .execute_batch("INSERT INTO schema_version VALUES (15);")?;
+            self.record_migration(15, SQL_V15)?;
         }
 
         if version < 16 {
@@ -383,9 +679,9 @@ impl Db {
                     created_at TEXT    NOT NULL
                 );",
             )?;
-            self.conn
-                .execute_batch("INSERT INTO schema_version VALUES (16);")?;
+            self.record_migration(16, SQL_V16)?;
         }
+
         if version < 17 {
             self.conn.execute_batch(
                 "CREATE TABLE IF NOT EXISTS external_volume_mappings (
@@ -398,23 +694,23 @@ impl Db {
                     PRIMARY KEY (app, external_name)
                 );",
             )?;
-            self.conn
-                .execute_batch("INSERT INTO schema_version VALUES (17);")?;
+            self.record_migration(17, SQL_V17)?;
         }
+
         if version < 18 {
             self.conn
                 .execute_batch("ALTER TABLE registered_apps DROP COLUMN script;")?;
-            self.conn
-                .execute_batch("INSERT INTO schema_version VALUES (18);")?;
+            self.record_migration(18, SQL_V18)?;
         }
+
         if version < 19 {
             self.conn.execute_batch(
                 "ALTER TABLE site_volumes ADD COLUMN source_app TEXT;
                  ALTER TABLE site_volumes ADD COLUMN source_volume TEXT;",
             )?;
-            self.conn
-                .execute_batch("INSERT INTO schema_version VALUES (19);")?;
+            self.record_migration(19, SQL_V19)?;
         }
+
         if version < 20 {
             // r[impl generation.history]
             // r[impl generation.script-storage]
@@ -446,8 +742,6 @@ impl Db {
 
             // Backfill: convert each app's current state into a Register entry
             // at generation 1, plus one ParamSet entry per existing param.
-            use sha2::{Digest, Sha256};
-            let now = jiff::Timestamp::now().to_string();
             fn hex_of(digest: &[u8]) -> String {
                 use std::fmt::Write as FmtWrite;
                 let mut s = String::with_capacity(digest.len() * 2);
@@ -467,6 +761,7 @@ impl Db {
                 .collect::<rusqlite::Result<_>>()?
             };
 
+            let now = jiff::Timestamp::now().to_string();
             for (app, version_id) in app_rows {
                 let Some(vid) = version_id else {
                     // Apps that never had a script row — leave at generation 0;
@@ -531,9 +826,9 @@ impl Db {
                 .execute_batch("ALTER TABLE registered_apps DROP COLUMN current_version_id;")?;
             self.conn.execute_batch("DROP TABLE app_versions;")?;
 
-            self.conn
-                .execute_batch("INSERT INTO schema_version VALUES (20);")?;
+            self.record_migration(20, SQL_V20)?;
         }
+
         if version < 21 {
             // r[impl operation.lifecycle.generations]
             // Plumb source/target generation through the operation record so
@@ -544,9 +839,9 @@ impl Db {
                  ALTER TABLE current_operation
                     ADD COLUMN target_generation INTEGER NOT NULL DEFAULT 0;",
             )?;
-            self.conn
-                .execute_batch("INSERT INTO schema_version VALUES (21);")?;
+            self.record_migration(21, SQL_V21)?;
         }
+
         if version < 22 {
             // r[impl schedule.state]
             self.conn.execute_batch(
@@ -558,9 +853,9 @@ impl Db {
                     PRIMARY KEY (app, action, cronexpr)
                 );",
             )?;
-            self.conn
-                .execute_batch("INSERT INTO schema_version VALUES (22);")?;
+            self.record_migration(22, SQL_V22)?;
         }
+
         if version < 23 {
             // i[impl backup.app.register]
             self.conn.execute_batch(
@@ -569,9 +864,9 @@ impl Db {
                     app   TEXT UNIQUE NOT NULL
                 );",
             )?;
-            self.conn
-                .execute_batch("INSERT INTO schema_version VALUES (23);")?;
+            self.record_migration(23, SQL_V23)?;
         }
+
         if version < 24 {
             // i[impl backup.strategy.create]
             self.conn.execute_batch(
@@ -582,24 +877,71 @@ impl Db {
                     volumes  TEXT NOT NULL
                 );",
             )?;
-            self.conn
-                .execute_batch("INSERT INTO schema_version VALUES (24);")?;
+            self.record_migration(24, SQL_V24)?;
         }
+
         if version < 25 {
             // r[impl backup.execution]
             self.conn
                 .execute_batch("ALTER TABLE backup_strategies ADD COLUMN last_fired_at TEXT;")?;
-            self.conn
-                .execute_batch("INSERT INTO schema_version VALUES (25);")?;
+            self.record_migration(25, SQL_V25)?;
         }
 
         if version < 26 {
             self.conn
                 .execute_batch("ALTER TABLE dynamic_resources ADD COLUMN resource_name TEXT;")?;
-            self.conn
-                .execute_batch("INSERT INTO schema_version VALUES (26);")?;
+            self.record_migration(26, SQL_V26)?;
         }
+
         tx.commit()?;
+
+        self.verify_migrations()?;
+
+        Ok(())
+    }
+
+    fn record_migration(&self, version: i64, sql: &str) -> SqlResult<()> {
+        let hash = migration_hash(sql);
+        let now = jiff::Timestamp::now().to_string();
+        self.conn.execute(
+            "INSERT INTO schema_version (version, migrated_at, hash) VALUES (?1, ?2, ?3)",
+            rusqlite::params![version, now, hash],
+        )?;
+        Ok(())
+    }
+
+    fn verify_migrations(&self) -> SqlResult<()> {
+        for &(ver, sql) in MIGRATIONS {
+            let expected = migration_hash(sql);
+            match self.conn.query_row(
+                "SELECT hash FROM schema_version WHERE version = ?1",
+                [ver],
+                |r| r.get::<_, Option<String>>(0),
+            ) {
+                Ok(Some(stored)) => {
+                    if stored != expected {
+                        panic!(
+                            "Migration {ver} has been tampered with!\n\
+                             Stored hash:   {stored}\n\
+                             Expected hash: {expected}\n\
+                             Never edit existing migration blocks or their SQL_V* constants — \
+                             add a new version block instead."
+                        );
+                    }
+                }
+                Ok(None) => {
+                    // Applied before hash tracking was added; seal it now.
+                    self.conn.execute(
+                        "UPDATE schema_version SET hash = ?1, migrated_at = COALESCE(migrated_at, '(pre-hash-tracking)') WHERE version = ?2",
+                        rusqlite::params![expected, ver],
+                    )?;
+                }
+                Err(rusqlite::Error::QueryReturnedNoRows) => {
+                    // Not yet applied — nothing to verify.
+                }
+                Err(e) => return Err(e),
+            }
+        }
         Ok(())
     }
 }
