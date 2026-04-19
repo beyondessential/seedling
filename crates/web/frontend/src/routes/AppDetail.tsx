@@ -47,7 +47,7 @@ import type {
 function lifecycleColor(
   state: string,
 ): "success" | "warning" | "error" | "default" {
-  if (state === "active") return "success";
+  if (state === "ready" || state === "active") return "success";
   if (state === "failed") return "error";
   if (state === "excluded") return "warning";
   return "default";
@@ -94,7 +94,7 @@ function ResourcesSection({ resources }: { resources: AppResource[] }) {
               <TableHead>
                 <TableRow>
                   <TableCell>Instance</TableCell>
-                  <TableCell>State</TableCell>
+                  <TableCell width={120} align="right">State</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -112,7 +112,7 @@ function ResourcesSection({ resources }: { resources: AppResource[] }) {
                       >
                         {inst.display_name}
                       </TableCell>
-                      <TableCell>
+                      <TableCell width={120} align="right">
                         <Chip
                           label={inst.lifecycle.replace(/_/g, " ")}
                           color={lifecycleColor(inst.lifecycle)}
@@ -187,6 +187,7 @@ function ParamsSection({
           <TableHead>
             <TableRow>
               <TableCell>Name</TableCell>
+              <TableCell>Kind</TableCell>
               <TableCell>Value</TableCell>
               <TableCell width={96} />
             </TableRow>
@@ -196,6 +197,7 @@ function ParamsSection({
               editing === p.name ? (
                 <TableRow key={p.name}>
                   <TableCell sx={{ fontFamily: "monospace" }}>{p.name}</TableCell>
+                  <TableCell />
                   <TableCell colSpan={2}>
                     <TextField
                       size="small"
@@ -237,10 +239,22 @@ function ParamsSection({
                 </TableRow>
               ) : (
                 <TableRow key={p.name}>
-                  <TableCell sx={{ fontFamily: "monospace" }}>
-                    {p.name}
-                    {p.required && (
-                      <Typography component="span" color="error" sx={{ ml: 0.5 }}>*</Typography>
+                  <TableCell>
+                    <Box sx={{ fontFamily: "monospace" }}>
+                      {p.name}
+                      {p.required && (
+                        <Typography component="span" color="error" sx={{ ml: 0.5 }}>*</Typography>
+                      )}
+                    </Box>
+                    {p.description && (
+                      <Typography variant="caption" color="text.secondary">
+                        {p.description}
+                      </Typography>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {p.kind !== "text" && (
+                      <Chip label={p.kind} size="small" variant="outlined" />
                     )}
                   </TableCell>
                   <TableCell
@@ -573,12 +587,6 @@ export default function AppDetail() {
 
           <Divider />
 
-          <Section title="Resources">
-            <ResourcesSection resources={data.resources} />
-          </Section>
-
-          <Divider />
-
           <Section title="Params">
             <ParamsSection
               appName={name!}
@@ -596,6 +604,12 @@ export default function AppDetail() {
               status={data.status}
               onRefresh={refetch}
             />
+          </Section>
+
+          <Divider />
+
+          <Section title="Resources">
+            <ResourcesSection resources={data.resources} />
           </Section>
         </Stack>
       )}
