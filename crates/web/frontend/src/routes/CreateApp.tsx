@@ -8,6 +8,7 @@ import {
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { OiErrorAlert } from "../components/OiErrorAlert";
+import { ScriptEditor } from "../components/ScriptEditor";
 import { useOiAction } from "../hooks/useOiAction";
 
 const NAME_RE = /^[a-zA-Z][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]$/;
@@ -102,31 +103,7 @@ export default function CreateApp() {
           }}
         />
 
-        <Box>
-          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.5 }}>
-            Script
-          </Typography>
-          <textarea
-            value={script}
-            onChange={(e) => setScript(e.target.value)}
-            spellCheck={false}
-            style={{
-              width: "100%",
-              minHeight: "60vh",
-              fontFamily: "monospace",
-              fontSize: "0.875rem",
-              lineHeight: 1.5,
-              padding: "12px",
-              boxSizing: "border-box",
-              resize: "vertical",
-              border: "1px solid rgba(255,255,255,0.23)",
-              borderRadius: "4px",
-              background: "transparent",
-              color: "inherit",
-              outline: "none",
-            }}
-          />
-        </Box>
+        <ScriptEditor value={script} onChange={setScript} />
       </Stack>
     </Box>
   );
