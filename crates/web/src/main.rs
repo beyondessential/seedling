@@ -124,8 +124,7 @@ async fn main() {
     let session_lifetime = Duration::from_secs(cfg.auth.session_lifetime_secs);
     let password_hash = cfg.auth.password_hash;
 
-    // SANs are irrelevant — browsers validate the WT cert by hash, not hostname.
-    let cert_store = Arc::new(RwLock::new(CertStore::new(vec!["seedling-web".to_owned()])));
+    let cert_store = Arc::new(RwLock::new(CertStore::new()));
 
     let (rotation_tx, rotation_rx) = tokio::sync::watch::channel(());
 
