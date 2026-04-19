@@ -372,6 +372,88 @@ impl EventSender {
     }
 }
 
+/// An `EventSender` bound to a specific actor for the duration of an OI request.
+/// All audit-trail event methods are available without passing actor at each call site.
+#[derive(Clone, Debug)]
+pub struct EventSenderWithActor {
+    inner: EventSender,
+    pub actor: Arc<Actor>,
+}
+
+impl EventSenderWithActor {
+    pub fn new(inner: EventSender, actor: Arc<Actor>) -> Self {
+        Self { inner, actor }
+    }
+
+    pub fn app_registered(&self, app: &str, generation: u64) {
+        self.inner
+            .app_registered(app, generation, Some(Arc::clone(&self.actor)));
+    }
+
+    pub fn app_deregistered(&self, app: &str) {
+        self.inner
+            .app_deregistered(app, Some(Arc::clone(&self.actor)));
+    }
+
+    pub fn app_updated(&self, app: &str, generation: u64, previous_generation: Option<u64>) {
+        self.inner.app_updated(
+            app,
+            generation,
+            previous_generation,
+            Some(Arc::clone(&self.actor)),
+        );
+    }
+
+    pub fn scale(
+        &self,
+        app: impl Into<String>,
+        deployment: impl Into<String>,
+        bounds_low: u16,
+        bounds_high: u16,
+    ) -> ScaleEventCtx {
+        self.inner.scale(
+            app,
+            deployment,
+            bounds_low,
+            bounds_high,
+            Some(Arc::clone(&self.actor)),
+        )
+    }
+
+    // i[wire.actor]
+    pub fn operation(
+        &self,
+        app: impl Into<String>,
+        action_name: impl Into<String>,
+        operation_id: impl Into<String>,
+        source_generation: u64,
+        target_generation: u64,
+    ) -> OperationEventCtx {
+        self.inner.operation(
+            app,
+            action_name,
+            operation_id,
+            source_generation,
+            target_generation,
+            Some(Arc::clone(&self.actor)),
+        )
+    }
+
+    pub fn param_change(
+        &self,
+        app: impl Into<String>,
+        generation: u64,
+        previous_generation: u64,
+    ) -> ParamEventCtx {
+        self.inner.param_change(
+            app,
+            generation,
+            previous_generation,
+            Some(Arc::clone(&self.actor)),
+        )
+    }
+}
+
 /// Context for operation lifecycle events (started / completed / failed).
 /// Carries common fields so each call site only supplies what differs.
 #[derive(Clone)]

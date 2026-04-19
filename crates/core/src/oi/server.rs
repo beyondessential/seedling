@@ -6,7 +6,7 @@ use serde_json::json;
 use tokio::sync::{Semaphore, mpsc};
 use tracing::Instrument;
 
-use seedling_protocol::{actor::Actor, keys};
+use seedling_protocol::{actor::Actor, events::EventSenderWithActor, keys};
 
 use super::{
     auth::{SeedlingClientVerifier, TrustedKeys},
@@ -432,7 +432,9 @@ async fn handle_bidi_stream(
         .and_then(|v| serde_json::from_value::<Actor>(v.clone()).ok())
         .map(Arc::new)
         .unwrap_or_else(|| synthesise_actor(&state, client_fp.as_deref()));
-    let ctx = RequestCtx { actor };
+    let ctx = RequestCtx {
+        events: EventSenderWithActor::new(state.event_tx.clone(), actor),
+    };
 
     let rest = recv.read_to_end(MAX_REQUEST_SIZE).await.unwrap_or_default();
     let buf = [line, rest].concat();

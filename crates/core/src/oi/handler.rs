@@ -4,8 +4,8 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use seedling_protocol::{
-    actor::Actor,
     error::{ErrorCode, HandlerResult, OiError},
+    events::EventSenderWithActor,
 };
 
 use super::state::OiState;
@@ -22,9 +22,7 @@ mod volumes;
 
 /// Context derived from an incoming OI request, passed through dispatch.
 pub struct RequestCtx {
-    /// The resolved actor for this request. Always present — synthesised from
-    /// the client's mTLS identity when absent from the request JSON.
-    pub actor: Arc<Actor>,
+    pub events: EventSenderWithActor,
 }
 
 fn parse_params<T: DeserializeOwned>(params: Value) -> Result<T, OiError> {

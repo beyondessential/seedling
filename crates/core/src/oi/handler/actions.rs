@@ -121,7 +121,7 @@ pub(crate) fn invoke_action(
                 current_generation,
                 current_generation,
                 "operator".to_owned(),
-                Some(ctx.actor.clone()),
+                Some(Arc::clone(&ctx.events.actor)),
             );
             tracing::info!(app = %app_name, action = %action_name, schedule = "accepted", "invoke_action");
             Ok(json!({ "schedule": "accepted", "operation_id": op_id_str }))

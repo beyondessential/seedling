@@ -210,7 +210,7 @@ pub(crate) fn invoke_install(
                 current_generation,
                 current_generation,
                 "operator".to_owned(),
-                Some(ctx.actor.clone()),
+                Some(Arc::clone(&ctx.events.actor)),
             );
             tracing::info!(app = %app_name, schedule = "accepted", "invoke_install");
             Ok(json!({ "schedule": "accepted", "operation_id": op_id_str }))

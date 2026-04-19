@@ -792,9 +792,7 @@ pub(crate) fn register_app(
     sync_action_schedules(state, name);
 
     tracing::info!(app = %name, generation, "registered app");
-    state
-        .event_tx
-        .app_registered(name, generation, Some(ctx.actor.clone()));
+    ctx.events.app_registered(name, generation);
     Ok(json!({ "generation": generation }))
 }
 
@@ -881,9 +879,7 @@ pub(crate) fn deregister_app(
     state.registry.write().deregister(name);
 
     tracing::info!(app = %name, "deregistered app");
-    state
-        .event_tx
-        .app_deregistered(name, Some(ctx.actor.clone()));
+    ctx.events.app_deregistered(name);
     Ok(json!({}))
 }
 
@@ -1084,7 +1080,7 @@ pub(crate) fn update_app(
     sync_action_schedules(state, name);
 
     tracing::info!(app = %name, generation, "updated app");
-    state.event_tx.app_updated(
+    ctx.events.app_updated(
         name,
         generation,
         if previous_generation == 0 {
@@ -1092,7 +1088,6 @@ pub(crate) fn update_app(
         } else {
             Some(previous_generation)
         },
-        Some(ctx.actor.clone()),
     );
     Ok(json!({ "generation": generation }))
 }
@@ -1140,9 +1135,8 @@ pub(crate) fn scale_app(state: &OiState, params: ScaleParams, ctx: &RequestCtx) 
 
     entry.tick_notify.notify_one();
 
-    state
-        .event_tx
-        .scale(name, deployment_name, low, high, Some(ctx.actor.clone()))
+    ctx.events
+        .scale(name, deployment_name, low, high)
         .changed(new_scale, previous_scale);
 
     Ok(json!({
