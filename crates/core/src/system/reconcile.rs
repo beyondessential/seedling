@@ -611,6 +611,9 @@ impl Reconciler {
                 self.rolling_updates
                     .insert((app_name.clone(), dep_name.clone()));
             }
+            for instance in &pod_update.started_instances {
+                self.written_obs.retain(|(id, _)| *id != instance.id);
+            }
             self.persist_obs(pod_update.observations);
             running_pods_by_app.insert(app_name, pod_update.running);
         }

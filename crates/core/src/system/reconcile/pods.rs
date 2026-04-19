@@ -42,6 +42,9 @@ pub(super) struct PodActuationUpdate {
     /// Deployment names with an active rolling update (stale instances still
     /// being drained). The reconciler uses this to bump effective scale +1.
     pub rolling_deployments: HashSet<String>,
+    /// Instances successfully started this tick; their written_obs entries must
+    /// be cleared so the new lifecycle observations can be recorded.
+    pub started_instances: Vec<ResourceInstance>,
 }
 
 struct PodInstanceResult {
@@ -55,6 +58,7 @@ struct PodInstanceResult {
     start_failure: Option<(ResourceInstance, String)>,
     stop_failure: Option<(ResourceInstance, String)>,
     observe_failure: Option<(ResourceInstance, String)>,
+    started_instance: Option<ResourceInstance>,
 }
 
 /// Per-instance observation collected before any actuation decisions are made.
@@ -87,6 +91,7 @@ async fn observe_one_pod<'a>(
         start_failure: None,
         stop_failure: None,
         observe_failure: None,
+        started_instance: None,
     };
 
     let facts = match observer.observe(&dr.instance, &dr.definition).await {
@@ -266,6 +271,7 @@ async fn actuate_one_pod(
                     if let Some(img) = image_ref {
                         result.image_pull_success = Some((dr.instance.clone(), img));
                     }
+                    result.started_instance = Some(dr.instance.clone());
                 }
                 Err(crate::system::actuator::ActuateError::ImageUnavailable {
                     ref reference,
@@ -503,6 +509,7 @@ pub(super) async fn observe_and_actuate(
         stop_failures: Vec::new(),
         observe_failures: Vec::new(),
         rolling_deployments,
+        started_instances: Vec::new(),
     };
 
     for result in results.into_iter().flatten() {
@@ -533,6 +540,9 @@ pub(super) async fn observe_and_actuate(
         }
         if let Some(f) = result.observe_failure {
             update.observe_failures.push(f);
+        }
+        if let Some(s) = result.started_instance {
+            update.started_instances.push(s);
         }
     }
 
