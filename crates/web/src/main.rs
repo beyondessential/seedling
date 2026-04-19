@@ -180,14 +180,14 @@ async fn main() {
     let daemon = DaemonConn::connect(args.daemon_addr, daemon_auth, &key_file)
         .await
         .unwrap_or_else(|e| {
-            eprintln!("error: daemon connection failed: {e}");
+            tracing::error!("daemon connection failed: {e}");
             std::process::exit(1);
         });
     daemon.probe().await.unwrap_or_else(|e| {
-        eprintln!("error: daemon rejected connection: {e}");
-        eprintln!(
-            "hint: authorise this key in seedlingd: seedling-ctl user add {} seedling-web",
-            daemon.fingerprint
+        tracing::error!(
+            fingerprint = %daemon.fingerprint,
+            "daemon rejected connection: {e} — authorise this key with: seedling-ctl user add {} seedling-web",
+            daemon.fingerprint,
         );
         std::process::exit(1);
     });
