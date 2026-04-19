@@ -1,9 +1,11 @@
+import AddIcon from "@mui/icons-material/Add";
 import CheckIcon from "@mui/icons-material/Check";
 import ClearIcon from "@mui/icons-material/Clear";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
-import RestoreIcon from "@mui/icons-material/Restore";
 import EditIcon from "@mui/icons-material/Edit";
 import RefreshIcon from "@mui/icons-material/Refresh";
+import RemoveIcon from "@mui/icons-material/Remove";
+import RestoreIcon from "@mui/icons-material/Restore";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import {
@@ -74,7 +76,26 @@ function FaultList({ faults }: { faults: FaultRecord[] }) {
   );
 }
 
-function ResourcesSection({ resources }: { resources: AppResource[] }) {
+function ResourcesSection({
+  appName,
+  resources,
+  onRefresh,
+}: {
+  appName: string;
+  resources: AppResource[];
+  onRefresh: () => void;
+}) {
+  const { execute, loading: scaling } = useOiAction();
+
+  const scale = async (deploymentName: string, value: number) => {
+    try {
+      await execute("/apps/scale", { app: appName, deployment: deploymentName, scale: value });
+      onRefresh();
+    } catch {
+      // errors surfaced by useOiAction globally
+    }
+  };
+
   if (resources.length === 0)
     return <Typography color="text.secondary">No resources.</Typography>;
   return (
@@ -87,9 +108,41 @@ function ResourcesSection({ resources }: { resources: AppResource[] }) {
               {r.type}
             </Typography>
             {r.scale && (
-              <Typography variant="caption" color="text.secondary">
-                · scale {r.scale.current} [{r.scale.low}–{r.scale.high}]
-              </Typography>
+              <>
+                <Typography variant="caption" color="text.secondary">
+                  · scale
+                </Typography>
+                <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                  <Tooltip title="Scale down">
+                    <span>
+                      <IconButton
+                        size="small"
+                        onClick={() => void scale(r.name, r.scale!.current - 1)}
+                        disabled={scaling || r.scale.current <= r.scale.low}
+                      >
+                        <RemoveIcon sx={{ fontSize: 14 }} />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                  <Typography variant="caption">
+                    {r.scale.current}
+                  </Typography>
+                  <Tooltip title="Scale up">
+                    <span>
+                      <IconButton
+                        size="small"
+                        onClick={() => void scale(r.name, r.scale!.current + 1)}
+                        disabled={scaling || r.scale.current >= r.scale.high}
+                      >
+                        <AddIcon sx={{ fontSize: 14 }} />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                  <Typography variant="caption" color="text.secondary">
+                    [{r.scale.low}–{r.scale.high}]
+                  </Typography>
+                </Box>
+              </>
             )}
           </Box>
           <FaultList faults={r.faults} />
@@ -612,9 +665,59 @@ function Section({
   );
 }
 
+function DeregisterDialog({
+  appName,
+  open,
+  onClose,
+  onSuccess,
+}: {
+  appName: string;
+  open: boolean;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const { execute, loading, error, clearError } = useOiAction();
+
+  const handleConfirm = async () => {
+    try {
+      await execute("/apps/remove", { app: appName });
+      onSuccess();
+    } catch {
+      // displayed via error
+    }
+  };
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
+      <DialogTitle>Deregister app</DialogTitle>
+      <DialogContent>
+        {error && <OiErrorAlert error={error} />}
+        <Typography>
+          Remove <strong>{appName}</strong> from Seedling? This will stop and
+          tear down all its resources.
+        </Typography>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => { clearError(); onClose(); }} disabled={loading}>
+          Cancel
+        </Button>
+        <Button
+          variant="contained"
+          color="error"
+          onClick={handleConfirm}
+          disabled={loading}
+        >
+          {loading ? "Removing…" : "Deregister"}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
 export default function AppDetail() {
   const { name } = useParams<{ name: string }>();
   const navigate = useNavigate();
+  const [deregisterOpen, setDeregisterOpen] = useState(false);
   const { data, loading, error, refetch } = useOiQuery<AppDetail>(
     "/apps/show",
     { app: name },
@@ -640,6 +743,14 @@ export default function AppDetail() {
         </Typography>
         <Typography variant="body2">{name}</Typography>
         <Box sx={{ flexGrow: 1 }} />
+        <Button
+          size="small"
+          color="error"
+          onClick={() => setDeregisterOpen(true)}
+          disabled={loading}
+        >
+          Deregister
+        </Button>
         <Button
           size="small"
           startIcon={<EditIcon />}
@@ -727,10 +838,20 @@ export default function AppDetail() {
           <Divider />
 
           <Section title="Resources">
-            <ResourcesSection resources={data.resources} />
+            <ResourcesSection
+              appName={name!}
+              resources={data.resources}
+              onRefresh={refetch}
+            />
           </Section>
         </Stack>
       )}
+      <DeregisterDialog
+        appName={name!}
+        open={deregisterOpen}
+        onClose={() => setDeregisterOpen(false)}
+        onSuccess={() => navigate("/")}
+      />
     </Box>
   );
 }
