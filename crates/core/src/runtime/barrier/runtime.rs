@@ -316,12 +316,12 @@ impl RuntimeInstance {
             // from the operation ID via UUID v5, giving a stable identity
             // within one operation (replay-safe) while ensuring distinct
             // invocations of the same action produce different container names.
-            let instance = if let Some(ctx) = &self.ctx {
+            if let Some(ctx) = &self.ctx {
                 let op_id_str = ctx.lock().operation_id.0.clone();
                 let ns = uuid::Uuid::parse_str(&op_id_str).unwrap_or(uuid::Uuid::nil());
                 let key = format!("job:{}", job.name.as_str());
                 let id = InstanceId(uuid::Uuid::new_v5(&ns, key.as_bytes()));
-                ResourceInstance {
+                let instance = ResourceInstance {
                     id,
                     app: self.app_name.clone(),
                     kind: ResourceKind::Job,
@@ -333,17 +333,21 @@ impl RuntimeInstance {
                         job.name.as_str(),
                         id.display_suffix()
                     ),
-                }
-            } else {
-                // Stub / steady-state context: fall back to registry which
-                // returns the nil-UUID singleton for Jobs.
+                };
+                // Persist named jobs to dynamic_resources so they are
+                // visible in `apps show` while the operation is in progress.
+                return Ok(vec![(instance, Some(Resource::Job(job)))]);
+            }
+            // Stub / steady-state context: fall back to registry which
+            // returns the nil-UUID singleton for Jobs.
+            return Ok(vec![(
                 self.registry.get_or_create_singleton(
                     &self.app_name,
                     ResourceKind::Job,
                     Some(job.name.as_str()),
-                )?
-            };
-            return Ok(vec![(instance, None)]);
+                )?,
+                None,
+            )]);
         }
 
         if let Some(svc) = resources.clone().try_cast::<Service>() {

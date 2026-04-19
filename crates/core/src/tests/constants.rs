@@ -124,7 +124,10 @@ fn on_exit_restart() {
         let dep_def = dep.def.lock();
         let pod = dep_def.pod.lock();
         let container = pod.container.lock();
-        assert!(matches!(container.on_exit, defs::enums::OnExit::Restart));
+        assert!(matches!(
+            container.on_exit,
+            Some(defs::enums::OnExit::Restart)
+        ));
     } else {
         panic!("expected Deployment");
     }
@@ -150,7 +153,10 @@ fn on_exit_terminate() {
         let dep_def = dep.def.lock();
         let pod = dep_def.pod.lock();
         let container = pod.container.lock();
-        assert!(matches!(container.on_exit, defs::enums::OnExit::Terminate));
+        assert!(matches!(
+            container.on_exit,
+            Some(defs::enums::OnExit::Terminate)
+        ));
     } else {
         panic!("expected Deployment");
     }
@@ -178,7 +184,7 @@ fn on_exit_restart_on_failure() {
         let container = pod.container.lock();
         assert!(matches!(
             container.on_exit,
-            defs::enums::OnExit::RestartOnFailure
+            Some(defs::enums::OnExit::RestartOnFailure)
         ));
     } else {
         panic!("expected Deployment");

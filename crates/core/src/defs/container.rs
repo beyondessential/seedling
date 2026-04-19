@@ -265,7 +265,7 @@ pub struct ContainerDef {
     pub args: Option<Vec<String>>,
     pub env: Vec<(String, String)>,
     pub volume_mounts: BTreeMap<PathBuf, VolumeMount>,
-    pub on_exit: OnExit,
+    pub on_exit: Option<OnExit>,
     pub memory: Option<String>,
     pub cpus: Option<f64>,
     pub extra_caps: Vec<String>,
@@ -430,7 +430,7 @@ impl ContainerDef {
             "on_exit",
             move |this: &mut T, strategy: OnExit| -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
-                ext(this).lock().on_exit = strategy;
+                ext(this).lock().on_exit = Some(strategy);
                 Ok(this.clone())
             },
         );

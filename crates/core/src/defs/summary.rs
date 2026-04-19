@@ -313,9 +313,10 @@ impl ContainerDef {
             env,
             volume_mounts,
             on_exit: match self.on_exit {
-                OnExit::Restart => "restart",
-                OnExit::Terminate => "terminate",
-                OnExit::RestartOnFailure => "restart_on_failure",
+                None => "default",
+                Some(OnExit::Restart) => "restart",
+                Some(OnExit::Terminate) => "terminate",
+                Some(OnExit::RestartOnFailure) => "restart_on_failure",
             },
             memory: self.memory.clone(),
             cpus: self.cpus,

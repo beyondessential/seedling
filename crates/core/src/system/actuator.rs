@@ -10,7 +10,10 @@ use parking_lot::Mutex as ParkingMutex;
 use snafu::{IntoError, ResultExt, Snafu};
 
 use crate::{
-    defs::resource::{Resource, ResourceKind},
+    defs::{
+        enums::OnExit,
+        resource::{Resource, ResourceKind},
+    },
     runtime::{
         db::Db, external_volume_mappings, identity::ResourceInstance, registry::InstanceRegistry,
         site_volumes,
@@ -228,7 +231,8 @@ impl Actuator {
                     let container = pod.container.lock();
                     let image = container.image.clone().unwrap_or_default();
                     let raw_mounts = pod.service_mounts.clone();
-                    let restart = map_on_exit(container.on_exit);
+                    // r[impl container.on-exit]
+                    let restart = map_on_exit(container.on_exit.unwrap_or(OnExit::Restart));
                     drop(container);
                     let vols = collect_container_volumes(
                         &pod,
@@ -268,7 +272,9 @@ impl Actuator {
                     let container = pod.container.lock();
                     let image = container.image.clone().unwrap_or_default();
                     let raw_mounts = pod.service_mounts.clone();
-                    let restart = map_on_exit(container.on_exit);
+                    // r[impl container.on-exit]
+                    // Jobs default to Terminate so systemd does not restart them on completion.
+                    let restart = map_on_exit(container.on_exit.unwrap_or(OnExit::Terminate));
                     drop(container);
                     let vols = collect_container_volumes(
                         &pod,

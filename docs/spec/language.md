@@ -491,7 +491,7 @@ This is currently the only value.
 
 > l[container.on-exit]
 > The `container.on_exit(strategy: OnExit)` builder method defines the strategy used when the command exits.
-> The default is [`OnExit.Restart`](#l--const.on-exit.restart).
+> The default is [`OnExit.Restart`](#l--const.on-exit.restart) for Deployments and [`OnExit.Terminate`](#l--const.on-exit.terminate) for Jobs.
 
 > l[container.memory]
 > The `container.memory(limit: string)` builder method sets the memory limit for the container.
