@@ -124,8 +124,8 @@ async fn main() {
     let session_lifetime = Duration::from_secs(cfg.auth.session_lifetime_secs);
     let password_hash = cfg.auth.password_hash;
 
-    let cert_sans = derive_sans(&http_addrs);
-    let cert_store = Arc::new(RwLock::new(CertStore::new(cert_sans)));
+    // SANs are irrelevant — browsers validate the WT cert by hash, not hostname.
+    let cert_store = Arc::new(RwLock::new(CertStore::new(vec!["seedling-web".to_owned()])));
 
     let (rotation_tx, rotation_rx) = tokio::sync::watch::channel(());
 
@@ -172,12 +172,4 @@ async fn main() {
     // Wait indefinitely.
     tokio::signal::ctrl_c().await.expect("ctrl-c handler");
     tracing::info!("shutting down");
-}
-
-fn derive_sans(addrs: &[SocketAddr]) -> Vec<String> {
-    let mut sans: Vec<String> = addrs.iter().map(|a| a.ip().to_string()).collect();
-    sans.push("localhost".to_owned());
-    sans.sort_unstable();
-    sans.dedup();
-    sans
 }
