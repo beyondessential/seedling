@@ -59,6 +59,11 @@ impl Reconciler {
     }
 
     // r[fault.image-pull]
+    // An image_pull_failed fault is scoped to an IMAGE reference, not to a
+    // specific instance — the fault's meaning is "this image is unavailable",
+    // and anyone observing that image present on the system resolves it. We
+    // therefore deduplicate on image ref at file time and clear on image ref
+    // whenever any instance in the app successfully pulls the same image.
     pub(super) fn file_image_pull_faults(&self, app: &str, update: &pods::PodActuationUpdate) {
         let app = app.to_owned();
         let image_pull_failures: Vec<(ResourceInstance, String)> = update
@@ -66,24 +71,25 @@ impl Reconciler {
             .iter()
             .map(|(inst, r)| (inst.clone(), r.clone()))
             .collect();
-        let image_pull_successes: Vec<ResourceInstance> = update
+        let image_pull_successes: Vec<String> = update
             .image_pull_successes
             .iter()
-            .map(|(inst, _)| inst.clone())
+            .map(|(_, r)| r.clone())
             .collect();
         self.db.call(move |db| {
             for (instance, reference) in &image_pull_failures {
                 let inst_hex = instance.id.to_hex();
                 let kind_str = format!("{:?}", instance.kind).to_lowercase();
+                let desc = format!("failed to pull image: {reference}");
+                // Dedupe on the fault's description: if another instance in
+                // this app has already reported the same image unavailable,
+                // we don't file a second fault. Operators see one fault per
+                // broken image, not one per instance.
                 let already_filed = faults::list_active_faults(db, Some(&app))
                     .unwrap_or_default()
                     .iter()
-                    .any(|f| {
-                        f.kind == "image_pull_failed"
-                            && f.instance_id.as_deref() == Some(&inst_hex)
-                    });
+                    .any(|f| f.kind == "image_pull_failed" && f.description == desc);
                 if !already_filed {
-                    let desc = format!("failed to pull image: {reference}");
                     if let Err(e) = faults::file_fault(
                         db,
                         &app,
@@ -97,15 +103,12 @@ impl Reconciler {
                     }
                 }
             }
-            for instance in &image_pull_successes {
-                let inst_hex = instance.id.to_hex();
+            for reference in &image_pull_successes {
+                let desc = format!("failed to pull image: {reference}");
                 let cleared: Vec<_> = faults::list_active_faults(db, Some(&app))
                     .unwrap_or_default()
                     .into_iter()
-                    .filter(|f| {
-                        f.kind == "image_pull_failed"
-                            && f.instance_id.as_deref() == Some(&inst_hex)
-                    })
+                    .filter(|f| f.kind == "image_pull_failed" && f.description == desc)
                     .collect();
                 for f in cleared {
                     if let Err(e) = faults::clear_fault(db, &f.id, &app) {
@@ -147,14 +150,12 @@ impl Reconciler {
                     }
                 }
             }
-            // r[fault.image-pull] r[fault.container-start]
-            // When a unit is observed healthy (container is running), every
-            // per-instance transient fault is cleared. image_pull_failed
-            // joins the list because a running container necessarily had its
-            // image pulled successfully — previously the clear was only
-            // triggered from actuator.start()'s success arm, which can miss
-            // cases where the image becomes available out-of-band or between
-            // reconcile ticks.
+            // When a unit is observed healthy, clear the transient per-instance
+            // faults that the actuator path may have filed against it.
+            // image_pull_failed is handled separately in file_image_pull_faults
+            // because it is scoped by image reference rather than instance —
+            // pods.rs now emits an image_pull_success for every healthy
+            // instance which triggers that per-image clear.
             for instance in &unit_healthy {
                 let inst_hex = instance.id.to_hex();
                 let cleared: Vec<_> = faults::list_active_faults(db, Some(&app))
@@ -167,7 +168,6 @@ impl Reconciler {
                                 | "start_failed"
                                 | "observe_failed"
                                 | "stop_failed"
-                                | "image_pull_failed"
                         ) && f.instance_id.as_deref() == Some(&inst_hex)
                     })
                     .collect();

@@ -281,6 +281,14 @@ async fn actuate_one_pod(
         if obs.is_running && (!obs.spec_stale || inhibit_stop) {
             // Running and either current-spec or kept alive by rolling strategy.
             result.unit_healthy = Some(dr.instance.clone());
+            // r[fault.image-pull] A running container means its image is
+            // present on the node. Report the image as successfully pulled so
+            // the faults reconciler can clear any stale image_pull_failed
+            // fault for the same reference — including ones filed against a
+            // different instance that happened to notice the pull failure.
+            if let Some(img) = image_ref_for_instance(&dr.definition) {
+                result.image_pull_success = Some((dr.instance.clone(), img));
+            }
         } else if obs.unit_failed || (obs.unit_active && !obs.is_running) {
             result.unit_failure = Some(dr.instance.clone());
         }
@@ -314,13 +322,7 @@ async fn actuate_one_pod(
                 return Some(obs.result);
             }
 
-            let image_ref = match &dr.definition {
-                Resource::Deployment(dep) => {
-                    dep.def.lock().pod.lock().container.lock().image.clone()
-                }
-                Resource::Job(job) => job.def.lock().pod.lock().container.lock().image.clone(),
-                _ => None,
-            };
+            let image_ref = image_ref_for_instance(&dr.definition);
             match actuator.start(&dr.instance, &dr.definition).await {
                 Ok(Some(_)) | Ok(None) => {
                     if let Some(img) = image_ref {
@@ -395,6 +397,17 @@ async fn actuate_one_pod(
 /// Determine which stale instances should have their stop inhibited based on
 /// the deployment's update strategy.
 ///
+/// Extract the container image reference from a Deployment or Job resource
+/// definition. Returns `None` for non-container resource kinds or when the
+/// definition has no image set.
+fn image_ref_for_instance(definition: &Resource) -> Option<String> {
+    match definition {
+        Resource::Deployment(dep) => dep.def.lock().pod.lock().container.lock().image.clone(),
+        Resource::Job(job) => job.def.lock().pod.lock().container.lock().image.clone(),
+        _ => None,
+    }
+}
+
 /// Returns a set of instance display names that must NOT be stopped this tick,
 /// and whether a rolling update is still active for the deployment.
 fn compute_stop_inhibitions(
