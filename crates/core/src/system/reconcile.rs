@@ -235,10 +235,16 @@ impl Reconciler {
                 None => continue,
             };
             let phase = entry.phase.lock().clone();
+            // r[impl desired-state.during-install]
+            // Installing apps participate in reconciliation exactly like
+            // Installed apps: the install closure's rt.start() / rt.stop()
+            // calls populate active_progress and the reconciler actuates the
+            // resources placed into the desired state. Only NotInstalled
+            // apps — those that have neither been installed nor have an
+            // install currently in flight — are skipped.
             match phase {
-                AppPhase::Installed | AppPhase::Uninstalling => {}
-                // The gate is widened to include Installing in the next commit.
-                AppPhase::NotInstalled | AppPhase::Installing => continue,
+                AppPhase::Installed | AppPhase::Installing | AppPhase::Uninstalling => {}
+                AppPhase::NotInstalled => continue,
             }
             let _ = status;
             let progress = entry.active_progress.read();
@@ -255,8 +261,9 @@ impl Reconciler {
             };
             let desired = match phase {
                 AppPhase::Uninstalling => compute_uninstalling(&name, &app_def, &*self.registry),
-                AppPhase::NotInstalled | AppPhase::Installing => unreachable!(),
-                AppPhase::Installed => compute(
+                AppPhase::NotInstalled => unreachable!(),
+                // r[impl desired-state.during-install]
+                AppPhase::Installed | AppPhase::Installing => compute(
                     &name,
                     &app_def,
                     (*progress).as_ref(),
