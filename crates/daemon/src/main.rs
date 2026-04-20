@@ -553,6 +553,25 @@ async fn main() {
         dns_servers,
     });
 
+    // Pre-pull the ubuntu image used by volume shells so it is warm before
+    // the first operator opens a volume shell session.
+    {
+        let cr = Arc::clone(&driver.container);
+        tokio::spawn(async move {
+            let image = "ubuntu:latest";
+            match cr.image_exists(image).await {
+                Ok(false) => {
+                    tracing::info!(%image, "pre-pulling volume shell image");
+                    if let Err(e) = cr.pull_image(image).await {
+                        tracing::warn!(%image, "volume shell image pre-pull failed: {e}");
+                    }
+                }
+                Ok(true) => {}
+                Err(e) => tracing::warn!(%image, "image_exists check failed: {e}"),
+            }
+        });
+    }
+
     // Spawn the reconciler + schedule ticker now that OiState is available.
     {
         let (mut reconciler, tick_notify, schedule_db, schedule_scheduler, schedule_registry) =
