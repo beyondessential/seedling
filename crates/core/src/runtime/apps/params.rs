@@ -4,8 +4,14 @@ use crate::runtime::db::Db;
 
 use super::AppEntry;
 
+/// Read only the plaintext `params` table. Prefer `load_all_params_for_app`
+/// in any reload path — secret params live in a separate table and this
+/// function silently ignores them.
 // i[param.store]
-pub fn load_params_for_app(db: &Db, app_name: &str) -> rusqlite::Result<BTreeMap<String, String>> {
+pub(super) fn load_params_for_app(
+    db: &Db,
+    app_name: &str,
+) -> rusqlite::Result<BTreeMap<String, String>> {
     let mut stmt = db
         .conn
         .prepare("SELECT param_name, value FROM params WHERE app_name = ?1 ORDER BY param_name")?;

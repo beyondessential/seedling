@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use tokio::sync::Notify;
 
+use super::params::load_params_for_app;
 use super::*;
 use crate::runtime::db::Db;
 

@@ -18,9 +18,7 @@ mod params;
 mod registry_faults;
 pub mod secret_params;
 
-pub use params::{
-    delete_app_params, delete_one_param, load_params_for_app, sync_script_error_fault, upsert_param,
-};
+pub use params::{delete_app_params, delete_one_param, sync_script_error_fault, upsert_param};
 pub use registry_faults::sync_registry_faults;
 
 #[derive(Debug)]
@@ -372,7 +370,7 @@ pub fn load_all_params_for_app(
     cipher: &crate::runtime::secrets::Cipher,
     app_name: &str,
 ) -> BTreeMap<String, String> {
-    let mut merged = load_params_for_app(db, app_name).unwrap_or_default();
+    let mut merged = params::load_params_for_app(db, app_name).unwrap_or_default();
     match secret_params::load_secret_params_for_app(db, cipher, app_name) {
         Ok(secrets) => merged.extend(secrets),
         Err(e) => tracing::warn!(app = %app_name, "failed to load secret params: {e}"),
