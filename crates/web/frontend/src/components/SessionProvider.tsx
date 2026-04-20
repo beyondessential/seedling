@@ -122,15 +122,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const closeShell = useCallback((id: string) => {
     setShellTabs((prev) => {
       const next = prev.filter((t) => t.id !== id);
+      setActiveShellId((active) => {
+        if (active !== id) return active;
+        return next.length > 0 ? next[next.length - 1].id : null;
+      });
       return next;
     });
-    setActiveShellId((prev) => {
-      if (prev !== id) return prev;
-      // Activate the previous tab, or null if none left
-      const remaining = shellTabs.filter((t) => t.id !== id);
-      return remaining.length > 0 ? remaining[remaining.length - 1].id : null;
-    });
-  }, [shellTabs]);
+  }, []);
 
   useEffect(() => {
     if (probeRan.current) return;
