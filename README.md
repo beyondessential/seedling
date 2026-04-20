@@ -25,3 +25,7 @@ Documentation is a bit sparse at the moment.
 - [Dynamic vs static resources](./docs/resource-context-rules.md)
 - [Low-level networking docs](./docs/networking.md)
 - [Comprehensive specifications](./docs/spec/)
+
+## Apps
+
+We have some standard apps in [apps/](./apps/).
