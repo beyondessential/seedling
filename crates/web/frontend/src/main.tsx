@@ -1,14 +1,22 @@
-import { CssBaseline, ThemeProvider } from "@mui/material";
-import { StrictMode } from "react";
+import { CssBaseline, ThemeProvider, useMediaQuery } from "@mui/material";
+import { StrictMode, useMemo } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
-import theme from "./theme";
+import { makeTheme } from "./theme";
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
+function Root() {
+  const prefersDark = useMediaQuery("(prefers-color-scheme: dark)");
+  const theme = useMemo(() => makeTheme(prefersDark ? "dark" : "light"), [prefersDark]);
+  return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <App />
     </ThemeProvider>
+  );
+}
+
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <Root />
   </StrictMode>,
 );
