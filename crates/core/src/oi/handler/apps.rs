@@ -525,7 +525,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
             "name": s.name,
             "description": s.description,
             "kind": "shell",
-            "params": {},
+            "params": serialize_param_schema(&s.params),
         }));
     }
 

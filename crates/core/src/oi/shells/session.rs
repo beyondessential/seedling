@@ -40,6 +40,8 @@ pub(crate) async fn open_shell_session(
         name: String,
         rows: u16,
         cols: u16,
+        #[serde(default)]
+        params: Option<std::collections::BTreeMap<String, String>>,
     }
     #[derive(serde::Deserialize)]
     struct Request {
@@ -75,6 +77,7 @@ pub(crate) async fn open_shell_session(
     let shell_name = params.name;
     let initial_rows = params.rows;
     let initial_cols = params.cols;
+    let submitted_params = params.params.unwrap_or_default();
 
     // All registry access is done in a synchronous closure so no lock guard
     // crosses an await point (parking_lot guards are not Send).
@@ -86,15 +89,16 @@ pub(crate) async fn open_shell_session(
         if !matches!(*entry.phase.lock(), AppPhase::Installed) {
             return Err(("not_installed", format!("app is not installed: {app_name}")));
         }
-        {
+        let shell_params_schema = {
             let def = entry.app.def.load();
-            if !def.shells.contains_key(&shell_name) {
-                return Err(("not_found", format!("shell not found: {shell_name}")));
+            match def.shells.get(&shell_name) {
+                Some(s) => s.params.clone(),
+                None => return Err(("not_found", format!("shell not found: {shell_name}"))),
             }
-        }
-        Ok((entry.app.clone(), entry.script.clone()))
+        };
+        Ok((entry.app.clone(), entry.script.clone(), shell_params_schema))
     })();
-    let (app, script) = match lookup {
+    let (app, script, shell_params_schema) = match lookup {
         Ok(v) => v,
         Err((code, msg)) => {
             let resp = serde_json::to_vec(&serde_json::json!({
@@ -104,6 +108,31 @@ pub(crate) async fn open_shell_session(
             let _ = send.write_all(&resp).await;
             let _ = send.finish();
             return;
+        }
+    };
+
+    let validated_params: serde_json::Map<String, serde_json::Value> = if shell_params_schema
+        .is_empty()
+    {
+        serde_json::Map::new()
+    } else {
+        match crate::oi::handler::actions::install::validate_requirements(
+            &shell_params_schema,
+            &submitted_params,
+        ) {
+            Ok(filled) => filled
+                .into_iter()
+                .map(|(k, v)| (k, serde_json::Value::String(v)))
+                .collect(),
+            Err(e) => {
+                let resp = serde_json::to_vec(&serde_json::json!({
+                    "error": { "code": "requirements_invalid", "message": e.message }
+                }))
+                .unwrap_or_default();
+                let _ = send.write_all(&resp).await;
+                let _ = send.finish();
+                return;
+            }
         }
     };
 
@@ -157,6 +186,7 @@ pub(crate) async fn open_shell_session(
     let op_id_for_log = operation_id.clone();
     let app_name_for_task = app_name.clone();
     let shell_name_for_task = shell_name.clone();
+    let validated_params_for_task = validated_params;
 
     let run_result = tokio::task::spawn_blocking(move || {
         let (engine, mut scope, _) = crate::setup_language(&script_limits);
@@ -199,7 +229,7 @@ pub(crate) async fn open_shell_session(
                     registry: Arc::clone(&registry),
                     active_progress: None,
                     tick_notify: None,
-                    params: serde_json::Map::new(),
+                    params: validated_params_for_task.clone(),
                     is_shell: true,
                     db: None,
                     source_generation: 0,

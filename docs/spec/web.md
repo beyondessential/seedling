@@ -115,11 +115,12 @@ Absent specification bugs, anything not defined here is either defined in anothe
 
 > w[shells.ui]
 > The app detail page exposes each shell defined in the app (from `/apps/show`'s `actions[].kind=="shell"`) as an "Open shell" button.
-> Clicking navigates to `/apps/:name/shell/:shellName`, a full-viewport terminal view rendered with xterm.js.
-> The terminal view must fit to the viewport and send resize events when the window size changes.
+> If the shell declares `params`, clicking the button first shows a params dialog (identical in structure to the action invoke dialog) to collect param values before opening the session.
+> Shells open in a persistent tabbed sidebar on the left of the main layout.
+> Multiple shell sessions may be open simultaneously, each in its own tab.
+> The sidebar must fit the terminal to the available space and send resize events when the sidebar or window size changes.
 > On clean exit, an overlay must show the exit code with options to close or reopen the shell.
-> Closing the tab or navigating away before a clean exit must trigger `/shells/stop` to tear down the daemon session.
-> MVP: one shell per browser tab; custom BSL `params` are not supported.
+> Closing a tab before a clean exit must trigger `/shells/stop` to tear down the daemon session.
 
 > w[routes.keys]
 > The web interface exposes OI key management: listing authorized client keys, authorising new keys, and revoking existing keys.

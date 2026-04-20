@@ -107,4 +107,5 @@ impl CustomType for Action {
 pub struct ShellDef {
     pub name: String,
     pub description: Option<String>,
+    pub params: BTreeMap<String, ParamDef>,
 }

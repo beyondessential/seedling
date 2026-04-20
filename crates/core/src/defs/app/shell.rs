@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use rhai::{EvalAltResult, FnPtr, Map, TypeBuilder};
 
 use super::super::action::ShellDef;
@@ -18,6 +20,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                         ShellDef {
                             name: name_owned.clone(),
                             description: None,
+                            params: BTreeMap::new(),
                         },
                     );
                     d
@@ -35,6 +38,8 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
              -> Result<(), Box<EvalAltResult>> {
                 super::super::validate_name(name)?;
                 let desc = super::extract_description(&options);
+                // l[impl action.option-params]
+                let params = parse_shell_params(&options)?;
                 let name_owned: String = name.into();
                 this.def.rcu(|d| {
                     let mut d = (**d).clone();
@@ -43,6 +48,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                         ShellDef {
                             name: name_owned.clone(),
                             description: desc.clone(),
+                            params: params.clone(),
                         },
                     );
                     d
@@ -51,4 +57,19 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                 Ok(())
             },
         );
+}
+
+fn parse_shell_params(
+    options: &Map,
+) -> Result<
+    BTreeMap<String, super::super::install::ParamDef>,
+    Box<rhai::EvalAltResult>,
+> {
+    match options
+        .get("params")
+        .and_then(|v| v.read_lock::<Map>().map(|m| m.clone()))
+    {
+        Some(params_map) => super::install::parse_param_defs(&params_map),
+        None => Ok(BTreeMap::new()),
+    }
 }
