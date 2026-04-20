@@ -264,23 +264,53 @@ async fn cleanup_dynamic_resources(
                     break;
                 }
 
-                let all_stopped = {
+                // Collect the instances the reconciler is tearing down. Both
+                // checks below run against this snapshot so we don't hold
+                // the active_progress lock across .await.
+                let cleanup_instances: Vec<ResourceInstance> = {
                     let guard = active_progress.read();
-                    if let Some(p) = &*guard {
-                        p.dynamic_defs.keys().all(|inst| {
-                            let inst = inst.clone();
-                            state.db.call(move |db| {
-                                let obs = query_observations(db, &inst).unwrap_or_default();
-                                derive_lifecycle_state(&inst, &obs)
-                                    .has_reached(LifecycleState::Terminated)
-                            })
-                        })
-                    } else {
-                        true
-                    }
+                    guard
+                        .as_ref()
+                        .map(|p| p.dynamic_defs.keys().cloned().collect())
+                        .unwrap_or_default()
                 };
 
-                if all_stopped {
+                let lifecycles_terminal = cleanup_instances.iter().all(|inst| {
+                    let inst = inst.clone();
+                    state.db.call(move |db| {
+                        let obs = query_observations(db, &inst).unwrap_or_default();
+                        derive_lifecycle_state(&inst, &obs)
+                            .has_reached(LifecycleState::Terminated)
+                    })
+                });
+
+                // A container with `podman --rm` can reach the Unscheduled
+                // lifecycle state via `container_removed` before the
+                // reconciler has had a chance to remove the pod network.
+                // Breaking out of cleanup at that point leaks the network
+                // and the next Job on the same app trips over "subnet
+                // already used". Require every pod network to also be gone.
+                let mut networks_all_gone = true;
+                for inst in &cleanup_instances {
+                    let net_name = format!("seedling-{}", inst.display_name);
+                    match state.driver.container.network_exists(&net_name).await {
+                        Ok(false) => {}
+                        Ok(true) => {
+                            networks_all_gone = false;
+                            break;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                instance = %inst.display_name,
+                                "network_exists check failed during cleanup; assuming present: {e}"
+                            );
+                            networks_all_gone = false;
+                            break;
+                        }
+                    }
+                }
+
+                if lifecycles_terminal && networks_all_gone {
                     break;
                 }
 

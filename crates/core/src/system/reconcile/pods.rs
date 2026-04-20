@@ -80,6 +80,11 @@ struct ObservedInstance<'a> {
     container_exists: bool,
     /// Container has exited but not yet been removed (ContainerExited fact present).
     has_exited: bool,
+    /// The pod's dedicated podman network is present. A network can outlive its
+    /// container (e.g. when `podman --rm` removes the container but the network
+    /// was left behind), so the Unscheduled stop path must key on this instead
+    /// of on container existence alone.
+    network_exists: bool,
     result: PodInstanceResult,
 }
 
@@ -124,6 +129,7 @@ async fn observe_one_pod<'a>(
                 unit_active: false,
                 container_exists: false,
                 has_exited: false,
+                network_exists: false,
                 result,
             });
         }
@@ -182,6 +188,9 @@ async fn observe_one_pod<'a>(
     let has_exited = facts
         .iter()
         .any(|(f, _)| matches!(f, ObservationFact::ContainerExited { .. }));
+    let network_exists = facts
+        .iter()
+        .any(|(f, _)| matches!(f, ObservationFact::NetworkPresent));
 
     // Collect running pods from the pre-actuation observation.
     //
@@ -220,6 +229,7 @@ async fn observe_one_pod<'a>(
         unit_active,
         container_exists,
         has_exited,
+        network_exists,
         result,
     })
 }
@@ -371,7 +381,18 @@ async fn actuate_one_pod(
                 }
             }
         }
-        LifecycleState::Unscheduled if obs.is_running || obs.container_exists => {
+        // r[actuate.deployment.stop]
+        // A pod network can outlive its container: when podman --rm removes
+        // the container on exit, the per-pod network stays behind until
+        // explicitly removed. The previous guard only fired for
+        // is_running || container_exists, so Unscheduled --rm jobs leaked
+        // their /64 — and the next Job in the same app hit
+        // "subnet … is already used" when its UUID's first byte happened to
+        // collide. Include network_exists so we always reach actuator.stop
+        // while any pod-scoped infrastructure remains.
+        LifecycleState::Unscheduled
+            if obs.is_running || obs.container_exists || obs.network_exists =>
+        {
             result.running = None;
             result
                 .observations
