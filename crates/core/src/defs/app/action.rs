@@ -13,16 +13,21 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
             "on_action",
             |this: &mut App, name: &str, closure: FnPtr| -> Result<Action, Box<EvalAltResult>> {
                 super::super::validate_name(name)?;
-                let app_name = this.def.lock().name.clone();
-                this.def.lock().actions.insert(
-                    name.into(),
-                    ActionDef {
-                        name: name.into(),
-                        description: None,
-                        schedules: Vec::new(),
-                        params: BTreeMap::new(),
-                    },
-                );
+                let app_name = this.def.load().name.clone();
+                let name_owned: String = name.into();
+                this.def.rcu(|d| {
+                    let mut d = (**d).clone();
+                    d.actions.insert(
+                        name_owned.clone(),
+                        ActionDef {
+                            name: name_owned.clone(),
+                            description: None,
+                            schedules: Vec::new(),
+                            params: BTreeMap::new(),
+                        },
+                    );
+                    d
+                });
                 super::capture_action(name.into(), closure);
                 Ok(Action::new(name.into(), app_name))
             },
@@ -35,19 +40,24 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
              options: Map|
              -> Result<Action, Box<EvalAltResult>> {
                 super::super::validate_name(name)?;
-                let app_name = this.def.lock().name.clone();
+                let app_name = this.def.load().name.clone();
                 let desc = super::extract_description(&options);
                 // l[impl action.option-params]
                 let params = parse_action_params(&options)?;
-                this.def.lock().actions.insert(
-                    name.into(),
-                    ActionDef {
-                        name: name.into(),
-                        description: desc,
-                        schedules: Vec::new(),
-                        params,
-                    },
-                );
+                let name_owned: String = name.into();
+                this.def.rcu(|d| {
+                    let mut d = (**d).clone();
+                    d.actions.insert(
+                        name_owned.clone(),
+                        ActionDef {
+                            name: name_owned.clone(),
+                            description: desc.clone(),
+                            schedules: Vec::new(),
+                            params: params.clone(),
+                        },
+                    );
+                    d
+                });
                 super::capture_action(name.into(), closure);
                 Ok(Action::new(name.into(), app_name))
             },
@@ -56,33 +66,41 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
     // l[impl action.start]
     builder
         .with_fn("on_start", |this: &mut App, closure: FnPtr| -> Action {
-            let app_name = this.def.lock().name.clone();
-            this.def.lock().actions.insert(
-                "start".into(),
-                ActionDef {
-                    name: "start".into(),
-                    description: None,
-                    schedules: Vec::new(),
-                    params: BTreeMap::new(),
-                },
-            );
+            let app_name = this.def.load().name.clone();
+            this.def.rcu(|d| {
+                let mut d = (**d).clone();
+                d.actions.insert(
+                    "start".into(),
+                    ActionDef {
+                        name: "start".into(),
+                        description: None,
+                        schedules: Vec::new(),
+                        params: BTreeMap::new(),
+                    },
+                );
+                d
+            });
             super::capture_action("start".into(), closure);
             Action::new("start".into(), app_name)
         })
         .with_fn(
             "on_start",
             |this: &mut App, closure: FnPtr, options: Map| -> Action {
-                let app_name = this.def.lock().name.clone();
+                let app_name = this.def.load().name.clone();
                 let desc = super::extract_description(&options);
-                this.def.lock().actions.insert(
-                    "start".into(),
-                    ActionDef {
-                        name: "start".into(),
-                        description: desc,
-                        schedules: Vec::new(),
-                        params: BTreeMap::new(),
-                    },
-                );
+                this.def.rcu(|d| {
+                    let mut d = (**d).clone();
+                    d.actions.insert(
+                        "start".into(),
+                        ActionDef {
+                            name: "start".into(),
+                            description: desc.clone(),
+                            schedules: Vec::new(),
+                            params: BTreeMap::new(),
+                        },
+                    );
+                    d
+                });
                 super::capture_action("start".into(), closure);
                 Action::new("start".into(), app_name)
             },

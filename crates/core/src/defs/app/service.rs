@@ -20,7 +20,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                 let adef = action_def().ok_or_else(|| -> Box<EvalAltResult> {
                     "internal: action context but no action AppDef set".into()
                 })?;
-                let def = adef.lock();
+                let def = adef.load();
                 let id = ResourceId {
                     kind: ResourceKind::Service,
                     name: rname,
@@ -36,21 +36,20 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                 }
             } else {
                 let weak = std::sync::Arc::downgrade(&this.def);
-                let mut def = this.def.lock();
                 let id = ResourceId {
                     kind: ResourceKind::Service,
                     name: rname.clone(),
                 };
-                let resource = def.resources.entry(id).or_insert_with(|| {
-                    Resource::Service(Service::new_with_app(rname, weak.clone()))
+                this.def.rcu(|d| {
+                    let mut d = (**d).clone();
+                    d.resources.entry(id.clone()).or_insert_with(|| {
+                        Resource::Service(Service::new_with_app(rname.clone(), weak.clone()))
+                    });
+                    d
                 });
-                match resource {
-                    Resource::Service(s) => {
-                        if s.app_def.is_none() {
-                            s.app_def = Some(weak);
-                        }
-                        Ok(s.clone())
-                    }
+                let def = this.def.load();
+                match def.resources.get(&id) {
+                    Some(Resource::Service(s)) => Ok(s.clone()),
                     _ => unreachable!(),
                 }
             }

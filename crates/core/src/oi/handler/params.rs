@@ -96,7 +96,7 @@ fn schedule_on_change(
     let (has_on_change, is_installed, tick_notify) = {
         let reg = state.registry.read();
         let entry = reg.get(app).expect("confirmed registered");
-        let has = entry.app.def.lock().param_changes.contains(param_name);
+        let has = entry.app.def.load().param_changes.contains(param_name);
         let installed = matches!(
             *entry.phase.lock(),
             AppPhase::Installed | AppPhase::Uninstalling

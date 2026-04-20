@@ -15,7 +15,7 @@ fn ingress_builder_chain() {
             .http(80);
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     assert!(
         def.resources
             .keys()

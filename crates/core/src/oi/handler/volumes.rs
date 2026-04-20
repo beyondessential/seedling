@@ -66,7 +66,7 @@ pub(crate) fn list_exported(state: &OiState) -> HandlerResult {
         let Some(entry) = registry.get(&app_name) else {
             continue;
         };
-        let def = entry.app.def.lock();
+        let def = entry.app.def.load();
         for (id, resource) in &def.resources {
             if let crate::defs::resource::Resource::Volume(vol) = resource {
                 let vol_def = vol.def.lock();
@@ -393,7 +393,7 @@ pub(crate) fn unmap_external_volume(
     {
         let reg = state.registry.read();
         if let Some(entry) = reg.get(&params.app) {
-            let def = entry.app.def.lock();
+            let def = entry.app.def.load();
             let has_volume = def.resources.keys().any(|id| {
                 id.kind == crate::defs::resource::ResourceKind::ExternalVolume
                     && id.name.as_str() == params.external_name
@@ -530,7 +530,7 @@ pub(crate) fn list_declared_external_volumes(state: &OiState) -> HandlerResult {
     let mut items: Vec<serde_json::Value> = reg
         .iter()
         .flat_map(|entry| {
-            let def = entry.app.def.lock();
+            let def = entry.app.def.load();
             def.resources
                 .keys()
                 .filter(|id| id.kind == ResourceKind::ExternalVolume)

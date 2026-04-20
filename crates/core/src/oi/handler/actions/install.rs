@@ -102,7 +102,7 @@ fn validate_install_params(
 ) -> Result<BTreeMap<String, String>, OiError> {
     let reg = state.registry.read();
     let entry = reg.get(app_name).expect("caller confirmed exists");
-    let def = entry.app.def.lock();
+    let def = entry.app.def.load();
     match &def.install {
         None => {
             if submitted.is_empty() {
@@ -151,7 +151,7 @@ pub(crate) fn invoke_install(
             )));
         }
 
-        entry.app.def.lock().install.is_some()
+        entry.app.def.load().install.is_some()
     };
 
     let filled = validate_install_params(state, app_name, &submitted)?;

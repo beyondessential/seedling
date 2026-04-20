@@ -934,6 +934,7 @@ function ActionsSection({
   operatingAction?: string;
   onRefresh: () => void;
 }) {
+  const navigate = useNavigate();
   const [invoking, setInvoking] = useState<AppAction | null>(null);
 
   const canInstall = status === "not_installed" && !hasScriptError;
@@ -977,7 +978,17 @@ function ActionsSection({
                     {a.description}
                   </TableCell>
                   <TableCell align="right">
-                    {isInvokable && (
+                    {/* w[shells.ui] */}
+                    {a.kind === "shell" ? (
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() => navigate(`/apps/${appName}/shell/${a.name}`)}
+                        disabled={!canInvoke}
+                      >
+                        Open shell
+                      </Button>
+                    ) : isInvokable && (
                       isRunning ? (
                         <Button
                           size="small"

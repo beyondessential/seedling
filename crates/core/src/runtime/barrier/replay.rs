@@ -296,7 +296,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     // Clear the thread-local barrier-hit flag at the start of each pass.
     clear_barrier_hit();
 
-    let app_name = app.def.lock().name.clone();
+    let app_name = app.def.load().name.clone();
     let rt =
         RuntimeInstance::with_context(Arc::clone(&ctx), app_name.clone(), registry, db.clone());
 
@@ -307,7 +307,11 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     // stored one as an idempotency check, then also discarded.
     let (closure, is_param_change, is_shell) = {
         let (mut fresh_scope, fresh_app) = crate::defs::scope();
-        fresh_app.def.lock().name = app_name;
+        fresh_app.def.rcu(|d| {
+            let mut d = (**d).clone();
+            d.name = app_name.clone();
+            d
+        });
         // i[param.store] — restore persisted param values so is_set()/value()
         // return correct results when the script is re-evaluated for closure recovery.
         *fresh_app.stored.lock() = app.stored.lock().clone();
@@ -317,7 +321,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         if let Err(e) = run_result {
             return OperationResult::Failed(e);
         }
-        check_idempotent(&fresh_app.def.lock(), &app.def.lock());
+        check_idempotent(&*fresh_app.def.load(), &*app.def.load());
 
         let (closure, is_install, is_shell) = if action_name == "install" {
             if let Some(c) = captured.install {
@@ -341,7 +345,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
             )));
         };
         let is_param_change =
-            !is_install && fresh_app.def.lock().param_changes.contains(action_name);
+            !is_install && fresh_app.def.load().param_changes.contains(action_name);
         (closure, is_param_change, is_shell)
         // captured, fresh_scope, and fresh_app are all dropped here.
     };
@@ -354,7 +358,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     let old_app = if is_param_change && source_generation > 0 {
         match (&db, &script_limits) {
             (Some(db_arc), Some(limits)) => {
-                let app_name_owned = app.def.lock().name.clone();
+                let app_name_owned = app.def.load().name.clone();
                 let db_locked = db_arc.lock();
                 match generations::reconstruct_app_def(
                     &db_locked,
@@ -413,7 +417,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     let call_ast = engine
         .compile(call_script)
         .expect("static call script must compile");
-    let action_def = Arc::new(Mutex::new(app.def.lock().clone()));
+    let action_def = Arc::new(arc_swap::ArcSwap::new(app.def.load_full()));
     let result = {
         let _guard =
             ActionClosureGuard::new(action_def, op_id_str.clone(), operation_volume_bindings);

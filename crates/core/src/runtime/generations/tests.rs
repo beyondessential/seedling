@@ -110,7 +110,7 @@ fn reconstruct_at_prior_generation_uses_old_script_and_params() {
 
     let old_image = app_old
         .def
-        .lock()
+        .load()
         .resources
         .iter()
         .find_map(|(_, r)| match r {
@@ -121,7 +121,7 @@ fn reconstruct_at_prior_generation_uses_old_script_and_params() {
         });
     let new_image = app_new
         .def
-        .lock()
+        .load()
         .resources
         .iter()
         .find_map(|(_, r)| match r {

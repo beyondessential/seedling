@@ -13,7 +13,7 @@ fn deployment_with_image_and_scale() {
             .scale(3);
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()
@@ -42,7 +42,7 @@ fn deployment_scale_range() {
             .scale(1..8);
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()
@@ -66,7 +66,7 @@ fn deployment_on_update_replace() {
             .on_update(OnUpdate.Replace);
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()
@@ -90,7 +90,7 @@ fn deployment_on_terminate_recreate() {
             .on_terminate(OnTerminate.Recreate);
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()
@@ -125,7 +125,7 @@ fn scale_fixed_accepts_10() {
         app.deployment("web").scale(10);
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()
@@ -157,7 +157,7 @@ fn scale_range_lower_bound_accepts_10() {
         app.deployment("web").scale(10..20);
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()
@@ -199,7 +199,7 @@ fn scale_range_allows_zero_lower_bound() {
         app.deployment("web").scale(0..5);
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()
@@ -226,7 +226,7 @@ fn deployment_implements_pod_interface() {
             .env("PORT", "8080");
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()

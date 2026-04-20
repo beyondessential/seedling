@@ -96,7 +96,7 @@ pub(crate) async fn forward_port_session(
                 format!("app not installed: {}", params.app),
             ));
         }
-        let def = entry.app.def.lock();
+        let def = entry.app.def.load();
         let found = def.resources.keys().any(|rid| {
             rid.kind == ResourceKind::Service && rid.name.as_str() == params.service.as_str()
         });

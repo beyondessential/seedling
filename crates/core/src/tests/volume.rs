@@ -11,7 +11,7 @@ fn volume_named() {
         let v = app.volume("data");
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     assert!(
         def.resources
             .keys()
@@ -43,7 +43,7 @@ fn volume_readonly() {
         let v = app.volume("cfg").readonly();
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()
@@ -65,7 +65,7 @@ fn volume_write() {
         v.write("/app.conf", "key=value");
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()
@@ -169,7 +169,7 @@ fn volume_write_multiple() {
         v.write("/b.conf", "bbb");
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()
@@ -191,7 +191,7 @@ fn external_volume_creates_resource() {
         let v = app.external_volume("pg-socket");
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     assert!(
         def.resources
             .keys()
@@ -478,7 +478,9 @@ fn external_volume_in_action_picks_up_operation_binding() {
     set_operation_volume_bindings(bindings.clone());
 
     let _guard = ActionClosureGuard::new(
-        std::sync::Arc::new(parking_lot::Mutex::new(crate::defs::app::AppDef::default())),
+        std::sync::Arc::new(arc_swap::ArcSwap::new(std::sync::Arc::new(
+            crate::defs::app::AppDef::default(),
+        ))),
         String::new(),
         std::collections::HashMap::new(),
     );
@@ -602,7 +604,9 @@ fn operation_bindings_cleared_after_guard_drops() {
 
     {
         let _guard = crate::runtime::barrier::runtime::ActionClosureGuard::new(
-            std::sync::Arc::new(parking_lot::Mutex::new(crate::defs::app::AppDef::default())),
+            std::sync::Arc::new(arc_swap::ArcSwap::new(std::sync::Arc::new(
+                crate::defs::app::AppDef::default(),
+            ))),
             String::new(),
             std::collections::HashMap::new(),
         );

@@ -30,7 +30,7 @@ pub(crate) fn register_backup_app(
         let entry = reg
             .get(&params.app)
             .ok_or_else(|| OiError::not_found(format!("app not found: {}", params.app)))?;
-        let def = entry.app.def.lock();
+        let def = entry.app.def.load();
         let missing: Vec<&str> = backup_actions::REQUIRED_ACTIONS
             .iter()
             .copied()
@@ -331,7 +331,7 @@ async fn run_strategy_backup(
     {
         let reg = state.registry.read();
         let valid = reg.get(&backing_app_name).is_some_and(|entry| {
-            let def = entry.app.def.lock();
+            let def = entry.app.def.load();
             backup_actions::REQUIRED_ACTIONS
                 .iter()
                 .all(|a| def.actions.contains_key(*a))
@@ -734,7 +734,7 @@ fn validate_backup_app_actions(
 ) -> Result<(), OiError> {
     let reg = state.registry.read();
     let valid = reg.get(backing_app_name).is_some_and(|entry| {
-        let def = entry.app.def.lock();
+        let def = entry.app.def.load();
         backup_actions::REQUIRED_ACTIONS
             .iter()
             .all(|a| def.actions.contains_key(*a))

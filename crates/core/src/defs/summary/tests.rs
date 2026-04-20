@@ -131,8 +131,8 @@ fn end_to_end_real_app_diff() {
         kind: ResourceKind::Deployment,
         name: std::sync::Arc::new("web".to_string()),
     };
-    let cur_resource = cur.def.lock().resources.get(&id).cloned().unwrap();
-    let prop_resource = prop.def.lock().resources.get(&id).cloned().unwrap();
+    let cur_resource = cur.def.load().resources.get(&id).cloned().unwrap();
+    let prop_resource = prop.def.load().resources.get(&id).cloned().unwrap();
 
     let fields = diff_fields(&cur_resource.summary(), &prop_resource.summary());
     assert_eq!(

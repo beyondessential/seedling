@@ -241,7 +241,8 @@ impl Reconciler {
             }
             let _ = status;
             let progress = entry.active_progress.read();
-            let app_def = entry.app.def.lock().clone();
+            let app_def_arc = entry.app.def.load_full();
+            let app_def = (*app_def_arc).clone();
             // r[impl autonomous.scale]
             let effective_scales = self.compute_effective_scales(&name, &app_def);
             // r[impl resource.stop]

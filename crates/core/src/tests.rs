@@ -50,14 +50,18 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
     // exactly as run_operation does. FnPtrs are never stored persistently.
     let (actions, shells, install, param_changes) = {
         let (mut fresh_scope, fresh_app) = defs::scope();
-        fresh_app.def.lock().name = app.def.lock().name.clone();
+        fresh_app.def.rcu(|old| {
+            let mut new_def = (**old).clone();
+            new_def.name = app.def.load().name.clone();
+            new_def
+        });
         defs::app::begin_closure_capture();
         engine
             .run_ast_with_scope(&mut fresh_scope, script_ast)
             .expect("re-run for exercise should succeed");
         let captured = defs::app::end_closure_capture();
 
-        let def = fresh_app.def.lock();
+        let def = fresh_app.def.load();
         let actions: Vec<_> = captured.actions.into_iter().collect();
         let shells: Vec<_> = captured.shells.into_iter().collect();
         let install = def
@@ -79,7 +83,9 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
         println!("exercising action: {name}");
         let result = {
             let _guard = ActionClosureGuard::new(
-                std::sync::Arc::new(parking_lot::Mutex::new(crate::defs::app::AppDef::default())),
+                std::sync::Arc::new(arc_swap::ArcSwap::new(std::sync::Arc::new(
+                    crate::defs::app::AppDef::default(),
+                ))),
                 String::new(),
                 std::collections::HashMap::new(),
             );
@@ -109,7 +115,9 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
         println!("exercising shell: {name}");
         let result = {
             let _guard = ActionClosureGuard::new(
-                std::sync::Arc::new(parking_lot::Mutex::new(crate::defs::app::AppDef::default())),
+                std::sync::Arc::new(arc_swap::ArcSwap::new(std::sync::Arc::new(
+                    crate::defs::app::AppDef::default(),
+                ))),
                 String::new(),
                 std::collections::HashMap::new(),
             );
@@ -139,7 +147,9 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
         println!("exercising install");
         let result = {
             let _guard = ActionClosureGuard::new(
-                std::sync::Arc::new(parking_lot::Mutex::new(crate::defs::app::AppDef::default())),
+                std::sync::Arc::new(arc_swap::ArcSwap::new(std::sync::Arc::new(
+                    crate::defs::app::AppDef::default(),
+                ))),
                 String::new(),
                 std::collections::HashMap::new(),
             );
@@ -171,9 +181,9 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
             let call_script = "__bsl_closure.call(__bsl_rt, __bsl_old_app)";
             let result = {
                 let _guard = ActionClosureGuard::new(
-                    std::sync::Arc::new(parking_lot::Mutex::new(
+                    std::sync::Arc::new(arc_swap::ArcSwap::new(std::sync::Arc::new(
                         crate::defs::app::AppDef::default(),
-                    )),
+                    ))),
                     String::new(),
                     std::collections::HashMap::new(),
                 );

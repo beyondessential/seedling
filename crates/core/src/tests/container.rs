@@ -29,7 +29,7 @@ fn container_image_sets_uri() {
         app.deployment("web").image("docker.io/library/nginx:latest");
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()
@@ -71,7 +71,7 @@ fn image_rejects_no_tag_or_digest() {
 fn image_accepts_registry_with_tag() {
     let app =
         run_test_script_app(r#"app.deployment("web").image("docker.io/library/nginx:latest");"#);
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()
@@ -134,7 +134,7 @@ fn container_command_string() {
         app.job("task").command("run");
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()
@@ -159,7 +159,7 @@ fn container_command_array() {
             .command(["bash", "-c", "echo hello"]);
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()
@@ -186,7 +186,7 @@ fn container_arg_single() {
         app.job("task").command("run").arg("--verbose");
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()
@@ -213,7 +213,7 @@ fn container_arg_array() {
         app.job("task").command("run").arg(["--verbose", "--dry-run"]);
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()
@@ -243,7 +243,7 @@ fn container_env_override() {
             .env("KEY", "new");
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()
@@ -571,7 +571,7 @@ fn container_workdir_sets_path() {
             .workdir("/app");
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()
@@ -603,7 +603,7 @@ fn container_on_exit_strategy() {
             .on_exit(OnExit.Terminate);
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()

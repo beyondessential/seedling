@@ -174,7 +174,7 @@ fn evaluate_script_injects_params_into_stored() {
     assert!(err.is_none(), "unexpected script error: {err:?}");
 
     assert!(
-        app.def.lock().params.contains_key("hostname"),
+        app.def.load().params.contains_key("hostname"),
         "hostname should be in declared params"
     );
     assert_eq!(
@@ -197,7 +197,7 @@ fn evaluate_script_absent_param_has_no_stored_value() {
     assert!(err.is_none(), "unexpected script error: {err:?}");
 
     assert!(
-        app.def.lock().params.contains_key("hostname"),
+        app.def.load().params.contains_key("hostname"),
         "hostname should be recorded as declared"
     );
     assert!(
@@ -241,7 +241,7 @@ fn registry_load_from_db_restores_params() {
     let entry = registry.get("myapp").expect("app should be registered");
 
     assert!(
-        entry.app.def.lock().params.contains_key("hostname"),
+        entry.app.def.load().params.contains_key("hostname"),
         "hostname should be in declared params after load"
     );
     assert_eq!(

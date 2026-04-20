@@ -20,7 +20,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                 let adef = action_def().ok_or_else(|| -> Box<EvalAltResult> {
                     "internal: action context but no action AppDef set".into()
                 })?;
-                let def = adef.lock();
+                let def = adef.load();
                 let id = ResourceId {
                     kind: ResourceKind::Deployment,
                     name: rname,
@@ -35,20 +35,24 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                     None => Err(format!("no static deployment named '{}'", name).into()),
                 }
             } else {
-                let mut def = this.def.lock();
                 let id = ResourceId {
                     kind: ResourceKind::Deployment,
                     name: rname.clone(),
                 };
-                let resource = def.resources.entry(id).or_insert_with(|| {
-                    Resource::Deployment(Deployment {
-                        name: rname,
-                        def: Default::default(),
-                        frozen: false,
-                    })
+                this.def.rcu(|d| {
+                    let mut d = (**d).clone();
+                    d.resources.entry(id.clone()).or_insert_with(|| {
+                        Resource::Deployment(Deployment {
+                            name: rname.clone(),
+                            def: Default::default(),
+                            frozen: false,
+                        })
+                    });
+                    d
                 });
-                match resource {
-                    Resource::Deployment(d) => Ok(d.clone()),
+                let def = this.def.load();
+                match def.resources.get(&id) {
+                    Some(Resource::Deployment(d)) => Ok(d.clone()),
                     _ => unreachable!(),
                 }
             }

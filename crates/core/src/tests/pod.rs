@@ -35,7 +35,7 @@ fn pod_mount_serviceport() {
             .mount(sp);
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()
@@ -61,7 +61,7 @@ fn pod_http_route_binding() {
             .http(3000, traffic.route("/api"));
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()
@@ -88,7 +88,7 @@ fn pod_http_service_defaults_to_root_route() {
             .http(3000, traffic);
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()
@@ -114,7 +114,7 @@ fn pod_tcp_binding() {
             .tcp(8080, svc);
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()
@@ -141,7 +141,7 @@ fn pod_tcp_with_service_port() {
             .tcp(5432, sp);
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()
@@ -167,7 +167,7 @@ fn pod_udp_binding_with_service() {
             .udp(53, svc);
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()
@@ -194,7 +194,7 @@ fn pod_udp_binding_with_service_port() {
             .udp(53, sp);
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()

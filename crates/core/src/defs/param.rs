@@ -43,7 +43,7 @@ impl CustomType for Param {
                     .into());
                 }
                 {
-                    let mut def = this.app.def.lock();
+                    let def = this.app.def.load();
                     if def.param_changes.contains(&this.name) {
                         return Err(format!(
                             "on_change already registered for parameter '{}'",
@@ -51,8 +51,13 @@ impl CustomType for Param {
                         )
                         .into());
                     }
-                    def.param_changes.insert(this.name.clone());
                 }
+                let name_clone = this.name.clone();
+                this.app.def.rcu(|d| {
+                    let mut d = (**d).clone();
+                    d.param_changes.insert(name_clone.clone());
+                    d
+                });
                 crate::defs::app::capture_param_change(this.name.clone(), closure);
                 Ok(())
             },
@@ -71,46 +76,56 @@ impl CustomType for Param {
                         )
                         .into()
                     })?;
-                this.app
-                    .def
-                    .lock()
-                    .params
-                    .entry(this.name.clone())
-                    .and_modify(|def| def.kind = kind);
+                let name_clone = this.name.clone();
+                this.app.def.rcu(|d| {
+                    let mut d = (**d).clone();
+                    d.params
+                        .entry(name_clone.clone())
+                        .and_modify(|def| def.kind = kind);
+                    d
+                });
                 Ok(this.clone())
             },
         );
 
         // l[impl param.schema.required]
         builder.with_fn("required", |this: &mut Self, required: bool| -> Self {
-            this.app
-                .def
-                .lock()
-                .params
-                .entry(this.name.clone())
-                .and_modify(|def| def.required = required);
+            let name_clone = this.name.clone();
+            this.app.def.rcu(|d| {
+                let mut d = (**d).clone();
+                d.params
+                    .entry(name_clone.clone())
+                    .and_modify(|def| def.required = required);
+                d
+            });
             this.clone()
         });
 
         // l[impl param.schema.default-value]
         builder.with_fn("default_value", |this: &mut Self, value: &str| -> Self {
-            this.app
-                .def
-                .lock()
-                .params
-                .entry(this.name.clone())
-                .and_modify(|def| def.default_value = Some(value.to_owned()));
+            let name_clone = this.name.clone();
+            let value_owned = value.to_owned();
+            this.app.def.rcu(|d| {
+                let mut d = (**d).clone();
+                d.params
+                    .entry(name_clone.clone())
+                    .and_modify(|def| def.default_value = Some(value_owned.clone()));
+                d
+            });
             this.clone()
         });
 
         // l[impl param.schema.description]
         builder.with_fn("description", |this: &mut Self, desc: &str| -> Self {
-            this.app
-                .def
-                .lock()
-                .params
-                .entry(this.name.clone())
-                .and_modify(|def| def.description = Some(desc.to_owned()));
+            let name_clone = this.name.clone();
+            let desc_owned = desc.to_owned();
+            this.app.def.rcu(|d| {
+                let mut d = (**d).clone();
+                d.params
+                    .entry(name_clone.clone())
+                    .and_modify(|def| def.description = Some(desc_owned.clone()));
+                d
+            });
             this.clone()
         });
     }

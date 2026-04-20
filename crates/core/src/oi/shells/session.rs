@@ -87,7 +87,7 @@ pub(crate) async fn open_shell_session(
             return Err(("not_installed", format!("app is not installed: {app_name}")));
         }
         {
-            let def = entry.app.def.lock();
+            let def = entry.app.def.load();
             if !def.shells.contains_key(&shell_name) {
                 return Err(("not_found", format!("shell not found: {shell_name}")));
             }

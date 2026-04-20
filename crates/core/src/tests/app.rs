@@ -37,7 +37,7 @@ fn app_methods_are_defined() {
 #[test]
 fn app_holds_resources() {
     let app = run_test_script_app(r#"let s = app.service("web");"#);
-    let def = app.def.lock();
+    let def = app.def.load();
     assert!(
         def.resources
             .keys()
@@ -54,7 +54,7 @@ fn top_level_resources_are_static() {
         let dep = app.deployment("static-dep");
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     assert!(
         def.resources
             .keys()
@@ -82,7 +82,7 @@ fn closures_create_dynamic_resources() {
         });
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     assert!(def.actions.contains_key("start"));
 }
 
@@ -95,7 +95,7 @@ fn same_name_returns_same_resource() {
         let b = app.service("data");
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let count = def
         .resources
         .keys()
@@ -108,6 +108,6 @@ fn same_name_returns_same_resource() {
 #[test]
 fn param_declared_in_script_appears_in_params() {
     let app = run_test_script_app(r#"let x = app.param("foo");"#);
-    let def = app.def.lock();
+    let def = app.def.load();
     assert!(def.params.contains_key("foo"));
 }

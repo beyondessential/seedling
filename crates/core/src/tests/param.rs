@@ -25,7 +25,7 @@ fn param_value_used_in_string_interpolation() {
         app.deployment("web").image(tag);
         "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let dep = def.resources.values().next().expect("one resource");
     // The image is constructed during script eval; we just verify no panic.
     let _ = dep;
@@ -35,7 +35,7 @@ fn param_value_used_in_string_interpolation() {
 #[test]
 fn unset_param_is_not_set() {
     let app = run_test_script_app(r#"let _host = app.param("host");"#);
-    let def = app.def.lock();
+    let def = app.def.load();
     assert!(
         def.params.contains_key("host"),
         "host should be in declared params"
@@ -59,7 +59,7 @@ fn on_change_registers_handler_in_app_def() {
         p.on_change(|rt| {});
         "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     assert!(
         def.param_changes.contains("version"),
         "on_change should register handler in AppDef.param_changes",
@@ -75,7 +75,7 @@ fn on_change_two_arg_closure_registers() {
         p.on_change(|rt, old| {});
         "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     assert!(def.param_changes.contains("domain"));
 }
 
@@ -88,7 +88,7 @@ fn on_change_different_params_each_register() {
         app.param("domain").on_change(|rt| {});
         "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     assert!(def.param_changes.contains("version"));
     assert!(def.param_changes.contains("domain"));
 }
@@ -140,7 +140,7 @@ fn stored_param_is_set_returns_true() {
     )
     .expect("script should evaluate without error");
 
-    let def = app.def.lock();
+    let def = app.def.load();
     assert!(
         def.params.contains_key("hostname"),
         "hostname should be recorded as declared"
@@ -162,7 +162,7 @@ fn unset_param_is_set_returns_false() {
     )
     .expect("script should evaluate without error");
 
-    let def = app.def.lock();
+    let def = app.def.load();
     assert!(
         def.params.contains_key("hostname"),
         "hostname should be recorded as declared even when unset"
@@ -210,7 +210,7 @@ fn param_used_in_closure_captures_injected_value() {
     .expect("script should evaluate");
 
     assert!(
-        app.def.lock().params.contains_key("version"),
+        app.def.load().params.contains_key("version"),
         "version should be recorded as declared"
     );
     assert_eq!(
@@ -319,7 +319,7 @@ fn param_schema_builder_methods_set_fields() {
             .description("Admin email address");
         "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let schema = def
         .params
         .get("admin-email")
@@ -337,7 +337,7 @@ fn param_schema_builder_methods_set_fields() {
 #[test]
 fn param_schema_defaults_when_no_builder_methods() {
     let app = run_test_script_app(r#"app.param("host");"#);
-    let def = app.def.lock();
+    let def = app.def.load();
     let schema = def.params.get("host").expect("param should be declared");
     assert!(matches!(schema.kind, crate::defs::install::ParamKind::Text));
     assert!(!schema.required);
@@ -349,7 +349,7 @@ fn param_schema_defaults_when_no_builder_methods() {
 #[test]
 fn param_schema_kind_password() {
     let app = run_test_script_app(r#"app.param("secret").kind("password");"#);
-    let def = app.def.lock();
+    let def = app.def.load();
     let schema = def.params.get("secret").unwrap();
     assert!(matches!(
         schema.kind,
@@ -371,7 +371,7 @@ fn param_schema_builder_methods_return_same_param_for_chaining() {
         let p = app.param("site-name").description("Site name").required(true);
         "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let schema = def
         .params
         .get("site-name")

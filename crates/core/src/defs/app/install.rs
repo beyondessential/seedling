@@ -9,8 +9,12 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
     // l[impl action.install]
     builder
         .with_fn("on_install", |this: &mut App, closure: FnPtr| {
-            this.def.lock().install = Some(InstallDef {
-                requirements: BTreeMap::new(),
+            this.def.rcu(|d| {
+                let mut d = (**d).clone();
+                d.install = Some(InstallDef {
+                    requirements: BTreeMap::new(),
+                });
+                d
             });
             super::capture_install(closure);
         })
@@ -23,7 +27,13 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                     .and_then(|v| v.read_lock::<Map>().map(|m| m.clone()))
                     .unwrap_or_default();
                 let reqs = parse_param_defs(&params_map)?;
-                this.def.lock().install = Some(InstallDef { requirements: reqs });
+                this.def.rcu(|d| {
+                    let mut d = (**d).clone();
+                    d.install = Some(InstallDef {
+                        requirements: reqs.clone(),
+                    });
+                    d
+                });
                 super::capture_install(closure);
                 Ok(())
             },

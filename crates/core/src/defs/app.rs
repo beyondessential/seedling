@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use rhai::{CustomType, FnPtr, Map, TypeBuilder};
 
@@ -88,10 +89,10 @@ fn capture_install(fnptr: FnPtr) {
 }
 
 thread_local! {
-    static APPDEF_HOLDER: RefCell<Option<Holder<AppDef>>> = const { RefCell::new(None) };
+    static APPDEF_HOLDER: RefCell<Option<Arc<arc_swap::ArcSwap<AppDef>>>> = const { RefCell::new(None) };
 }
 
-pub(crate) fn set_appdef_holder(holder: &Holder<AppDef>) {
+pub(crate) fn set_appdef_holder(holder: &Arc<arc_swap::ArcSwap<AppDef>>) {
     APPDEF_HOLDER.with(|h| *h.borrow_mut() = Some(holder.clone()));
 }
 
@@ -103,10 +104,13 @@ pub(crate) fn clear_appdef_holder() {
 pub(crate) fn append_action_schedule(action_name: &str, expr: &str) {
     APPDEF_HOLDER.with(|h| {
         if let Some(ref holder) = *h.borrow() {
-            let mut def = holder.lock();
-            if let Some(action_def) = def.actions.get_mut(action_name) {
-                action_def.schedules.push(expr.to_owned());
-            }
+            holder.rcu(|d| {
+                let mut d = (**d).clone();
+                if let Some(action_def) = d.actions.get_mut(action_name) {
+                    action_def.schedules.push(expr.to_owned());
+                }
+                d
+            });
         }
     });
 }
@@ -144,12 +148,21 @@ fn extract_description(options: &Map) -> Option<String> {
 
 // l[impl app.type]
 // l[impl app.constructor]
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct App {
-    pub def: Holder<AppDef>,
+    pub def: Arc<arc_swap::ArcSwap<AppDef>>,
     /// Operator-provided parameter values, pre-populated from the database before
     /// script evaluation. Not BSL-driven — the script cannot modify this directly.
     pub stored: Holder<BTreeMap<String, String>>,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        Self {
+            def: Arc::new(arc_swap::ArcSwap::new(Arc::new(AppDef::default()))),
+            stored: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
+        }
+    }
 }
 
 impl std::fmt::Debug for App {

@@ -105,7 +105,7 @@ pub(crate) fn invoke_action(
             )));
         }
 
-        let def = entry.app.def.lock();
+        let def = entry.app.def.load();
         if def.shells.contains_key(action_name) {
             return Err(OiError::not_found(format!(
                 "'{action_name}' is a shell action; use /shells/start"

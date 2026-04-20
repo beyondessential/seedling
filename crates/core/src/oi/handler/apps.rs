@@ -97,7 +97,7 @@ fn sync_action_schedules(state: &OiState, app_name: &str) {
         let Some(entry) = reg.get(app_name) else {
             return;
         };
-        let def = entry.app.def.lock();
+        let def = entry.app.def.load();
         def.actions
             .values()
             .flat_map(|a| {
@@ -223,7 +223,7 @@ pub(crate) fn effective_app_status(
 
     // Collect resource IDs with a brief def lock, then release before touching db.
     let resource_ids: Vec<(ResourceKind, Arc<String>)> = {
-        let def = entry.app.def.lock();
+        let def = entry.app.def.load();
         def.resources
             .keys()
             .map(|id| (id.kind, Arc::clone(&id.name)))
@@ -321,7 +321,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         stopped::load_stopped(&db, name).unwrap_or_default()
     };
 
-    let def = entry.app.def.lock();
+    let def = entry.app.def.load();
 
     // i[app.describe]
     let params_json: Vec<Value> = def
@@ -775,8 +775,8 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams) -> HandlerResult
         entry.app.clone()
     };
 
-    let cur_def = current_app.def.lock();
-    let prop_def = proposed_app.def.lock();
+    let cur_def = current_app.def.load();
+    let prop_def = proposed_app.def.load();
 
     let mut diff: Vec<Value> = Vec::new();
     for id in prop_def.resources.keys() {
@@ -1121,7 +1121,7 @@ pub(crate) fn update_app(
             if let Some(e) = proposed_err {
                 return Err(OiError::new(ErrorCode::ScriptError, e.to_string()));
             }
-            let def = proposed.def.lock();
+            let def = proposed.def.load();
             let missing: Vec<&str> = seedling_protocol::backup_actions::REQUIRED_ACTIONS
                 .iter()
                 .copied()
@@ -1160,7 +1160,7 @@ pub(crate) fn update_app(
     {
         let reg = state.registry.read();
         if let Some(entry) = reg.get(name) {
-            let def = entry.app.def.lock();
+            let def = entry.app.def.load();
             let deployment_bounds: std::collections::BTreeMap<String, (u16, u16)> = def
                 .resources
                 .iter()
@@ -1216,7 +1216,7 @@ pub(crate) fn update_app(
         let valid_services: std::collections::HashSet<String> = {
             let reg = state.registry.read();
             if let Some(entry) = reg.get(name) {
-                let def = entry.app.def.lock();
+                let def = entry.app.def.load();
                 def.resources
                     .keys()
                     .filter(|rid| rid.kind == ResourceKind::Service)
@@ -1266,7 +1266,7 @@ pub(crate) fn restart_deployment(
         .ok_or_else(|| OiError::not_found(format!("app not found: {name}")))?;
 
     {
-        let def = entry.app.def.lock();
+        let def = entry.app.def.load();
         let found = def.resources.iter().any(|(id, resource)| {
             matches!(resource, Resource::Deployment(_)) && id.name.as_str() == deployment_name
         });
@@ -1303,7 +1303,7 @@ pub(crate) fn scale_app(state: &OiState, params: ScaleParams, ctx: &RequestCtx) 
         .get(name)
         .ok_or_else(|| OiError::not_found(format!("app not found: {name}")))?;
 
-    let def = entry.app.def.lock();
+    let def = entry.app.def.load();
     let (low, high) = {
         let mut found = None;
         for (id, resource) in &def.resources {
@@ -1389,7 +1389,7 @@ pub(crate) fn stop_resource(
         .ok_or_else(|| OiError::not_found(format!("app not found: {app}")))?;
 
     {
-        let def = entry.app.def.lock();
+        let def = entry.app.def.load();
         let found = def
             .resources
             .iter()

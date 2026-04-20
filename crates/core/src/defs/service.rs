@@ -1,6 +1,5 @@
 use std::sync::Weak;
 
-use parking_lot::Mutex;
 use rhai::{CustomType, EvalAltResult, TypeBuilder};
 
 use super::{
@@ -22,7 +21,7 @@ pub struct Service {
     pub def: Holder<ServiceDef>,
     /// Weak back-reference to the owning `AppDef` so that `ingress()` can
     /// register the created `Ingress` into `app_def.resources`.
-    pub(super) app_def: Option<Weak<Mutex<AppDef>>>,
+    pub(super) app_def: Option<Weak<arc_swap::ArcSwap<AppDef>>>,
     pub frozen: bool,
 }
 
@@ -42,7 +41,10 @@ impl Service {
         }
     }
 
-    pub(super) fn new_with_app(name: ResourceName, app_def: Weak<Mutex<AppDef>>) -> Self {
+    pub(super) fn new_with_app(
+        name: ResourceName,
+        app_def: Weak<arc_swap::ArcSwap<AppDef>>,
+    ) -> Self {
         Self {
             name,
             def: Default::default(),
@@ -111,9 +113,13 @@ impl CustomType for Service {
                             kind: ResourceKind::Ingress,
                             name: ingress.name.clone(),
                         };
-                        arc.lock()
-                            .resources
-                            .insert(id, Resource::Ingress(ingress.clone()));
+                        let ingress_clone = ingress.clone();
+                        arc.rcu(|d| {
+                            let mut d = (**d).clone();
+                            d.resources
+                                .insert(id.clone(), Resource::Ingress(ingress_clone.clone()));
+                            d
+                        });
                     }
                     Ok(ingress)
                 },

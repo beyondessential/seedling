@@ -164,7 +164,7 @@ fn resource_types_exist() {
         let vol = app.volume("data");
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     assert!(
         def.resources
             .keys()

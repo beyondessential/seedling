@@ -12,7 +12,7 @@ const FAULT_KIND: &str = "disallowed_registry";
 /// Collect the set of distinct registry hostnames from all container images in
 /// the app's evaluated resources.
 fn collect_image_registries(entry: &AppEntry) -> BTreeSet<String> {
-    let def = entry.app.def.lock();
+    let def = entry.app.def.load();
     let mut registries = BTreeSet::new();
 
     for resource in def.resources.values() {

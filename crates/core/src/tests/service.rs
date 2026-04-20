@@ -5,7 +5,7 @@ use defs::resource::ResourceKind;
 #[test]
 fn service_creates_resource() {
     let app = run_test_script_app(r#"let s = app.service("web");"#);
-    let def = app.def.lock();
+    let def = app.def.load();
     assert!(
         def.resources
             .keys()
@@ -52,7 +52,7 @@ fn service_http_specialisation() {
         let h = app.service("api").http(8080);
     "#,
     );
-    let def = app.def.lock();
+    let def = app.def.load();
     let id = def
         .resources
         .keys()

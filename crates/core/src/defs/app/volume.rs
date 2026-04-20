@@ -22,7 +22,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                 let adef = action_def().ok_or_else(|| -> Box<EvalAltResult> {
                     "internal: action context but no action AppDef set".into()
                 })?;
-                let def = adef.lock();
+                let def = adef.load();
                 let id = ResourceId {
                     kind: ResourceKind::Volume,
                     name: rname,
@@ -37,17 +37,20 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                     None => Err(format!("no static volume named '{}'", name).into()),
                 }
             } else {
-                let mut def = this.def.lock();
                 let id = ResourceId {
                     kind: ResourceKind::Volume,
                     name: rname.clone(),
                 };
-                let resource = def
-                    .resources
-                    .entry(id)
-                    .or_insert_with(|| Resource::Volume(Volume::new(Some(rname))));
-                match resource {
-                    Resource::Volume(v) => Ok(v.clone()),
+                this.def.rcu(|d| {
+                    let mut d = (**d).clone();
+                    d.resources
+                        .entry(id.clone())
+                        .or_insert_with(|| Resource::Volume(Volume::new(Some(rname.clone()))));
+                    d
+                });
+                let def = this.def.load();
+                match def.resources.get(&id) {
+                    Some(Resource::Volume(v)) => Ok(v.clone()),
                     _ => unreachable!(),
                 }
             }
@@ -76,19 +79,23 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
             super::super::validate_name(name)?;
             let rname = ResourceName::new(name.into());
             let op_binding = get_operation_volume_binding(name);
-            let mut def = this.def.lock();
             let id = ResourceId {
                 kind: ResourceKind::ExternalVolume,
                 name: rname.clone(),
             };
-            let resource = def.resources.entry(id).or_insert_with(|| {
-                Resource::ExternalVolume(ExternalVolume {
-                    name: rname,
-                    operation_binding: op_binding,
-                })
+            this.def.rcu(|d| {
+                let mut d = (**d).clone();
+                d.resources.entry(id.clone()).or_insert_with(|| {
+                    Resource::ExternalVolume(ExternalVolume {
+                        name: rname.clone(),
+                        operation_binding: op_binding.clone(),
+                    })
+                });
+                d
             });
-            match resource {
-                Resource::ExternalVolume(v) => Ok(Dynamic::from(v.clone())),
+            let def = this.def.load();
+            match def.resources.get(&id) {
+                Some(Resource::ExternalVolume(v)) => Ok(Dynamic::from(v.clone())),
                 _ => unreachable!(),
             }
         },

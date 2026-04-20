@@ -1,6 +1,5 @@
 use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
-use parking_lot::Mutex;
 use rhai::{CustomType, Dynamic, EvalAltResult, Map, TypeBuilder};
 
 use crate::defs::app::AppDef;
@@ -52,14 +51,14 @@ pub fn is_in_action_closure() -> bool {
 // ---------------------------------------------------------------------------
 
 thread_local! {
-    static ACTION_DEF: RefCell<Option<Arc<Mutex<AppDef>>>> = const { RefCell::new(None) };
+    static ACTION_DEF: RefCell<Option<Arc<arc_swap::ArcSwap<AppDef>>>> = const { RefCell::new(None) };
 }
 
-pub fn action_def() -> Option<Arc<Mutex<AppDef>>> {
+pub fn action_def() -> Option<Arc<arc_swap::ArcSwap<AppDef>>> {
     ACTION_DEF.with(|cell| cell.borrow().clone())
 }
 
-fn set_action_def(def: Arc<Mutex<AppDef>>) {
+fn set_action_def(def: Arc<arc_swap::ArcSwap<AppDef>>) {
     ACTION_DEF.with(|cell| *cell.borrow_mut() = Some(def));
 }
 
@@ -124,7 +123,7 @@ pub struct ActionClosureGuard;
 
 impl ActionClosureGuard {
     pub fn new(
-        action_def: Arc<Mutex<AppDef>>,
+        action_def: Arc<arc_swap::ArcSwap<AppDef>>,
         op_id: String,
         bindings: HashMap<String, OperationVolumeBinding>,
     ) -> Self {
@@ -140,7 +139,7 @@ impl ActionClosureGuard {
 impl Default for ActionClosureGuard {
     fn default() -> Self {
         Self::new(
-            Arc::new(Mutex::new(AppDef::default())),
+            Arc::new(arc_swap::ArcSwap::new(Arc::new(AppDef::default()))),
             String::new(),
             HashMap::new(),
         )

@@ -11,16 +11,19 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
         |this: &mut App, name: &str| -> Result<super::super::param::Param, Box<EvalAltResult>> {
             super::super::validate_name(name)?;
             let value = this.stored.lock().get(name).cloned();
-            this.def
-                .lock()
-                .params
-                .entry(name.into())
-                .or_insert_with(|| ParamDef {
-                    kind: ParamKind::Text,
-                    required: false,
-                    default_value: None,
-                    description: None,
-                });
+            let name_owned: String = name.into();
+            this.def.rcu(|d| {
+                let mut d = (**d).clone();
+                d.params
+                    .entry(name_owned.clone())
+                    .or_insert_with(|| ParamDef {
+                        kind: ParamKind::Text,
+                        required: false,
+                        default_value: None,
+                        description: None,
+                    });
+                d
+            });
             Ok(super::super::param::Param {
                 name: name.into(),
                 value,

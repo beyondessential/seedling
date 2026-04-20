@@ -7,6 +7,7 @@ publish.workspace = true
 [dependencies]
 seedling-protocol = { path = "../protocol" }
 
+arc-swap = "1.7.1"
 clap.workspace = true
 cronexpr = "1.4.0"
 ed25519-dalek.workspace = true
