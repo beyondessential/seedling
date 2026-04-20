@@ -10,6 +10,9 @@
 // Each registered instance corresponds to one Kopia repository.  If you need
 // to back up multiple independent volumes to the same bucket, use separate
 // instances with different --prefix values.
+//
+// Run the "connect" action after rotating credentials or changing
+// bucket/prefix/endpoint/region.
 
 // ── Image ─────────────────────────────────────────────────────────────────────
 
@@ -88,15 +91,27 @@ let retention_annual = app.param("retention-annual")
     .default_value("3")
     .description("Annual snapshots to keep");
 
+// ── State volume ──────────────────────────────────────────────────────────────
+
+// Persistent Kopia state: repository config, content cache, and logs.
+// Populated by the install (or connect) action; read by every other action
+// so they do not need to re-connect to the repository on every run.
+let state = app.volume("state");
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// Environment for every Kopia job.  AWS credentials are passed via env vars;
-// the AWS SDK (used by Kopia internally) picks them up automatically.
+// Environment for every Kopia job.  Credentials come from the env so the AWS
+// SDK and Kopia pick them up automatically; path env vars redirect Kopia's
+// config, cache, and logs into the state volume.
 let kopia_env = || {
     let e = [
-        #{ name: "KOPIA_PASSWORD",       value: passphrase.value() },
+        #{ name: "KOPIA_PASSWORD",        value: passphrase.value() },
         #{ name: "AWS_ACCESS_KEY_ID",     value: access_key.value() },
         #{ name: "AWS_SECRET_ACCESS_KEY", value: secret_key.value() },
+        #{ name: "KOPIA_CONFIG_PATH",     value: "/kopia-state/repository.config" },
+        #{ name: "KOPIA_CACHE_DIRECTORY", value: "/kopia-state/cache" },
+        #{ name: "KOPIA_LOG_DIR",         value: "/kopia-state/logs" },
+        #{ name: "KOPIA_CHECK_FOR_UPDATES", value: "false" },
     ];
     if region.is_set() {
         e + [#{ name: "AWS_REGION", value: region.value() }]
@@ -105,39 +120,23 @@ let kopia_env = || {
     }
 };
 
-// Shell fragment that connects to the S3 repository.
-// Credentials come from the environment (kopia_env); non-sensitive config
-// is inlined.  The image is Alpine-based so busybox sh is available.
-let connect_sh = || {
-    let cmd = "kopia repository connect s3 --no-check-for-updates" +
-        " '--bucket=" + bucket.value() + "'" +
+// Shell fragment: S3 flags shared by `repository create` and `repository connect`.
+// Inline values are not sensitive; secrets come from env vars.  The image is
+// Alpine-based so busybox sh and its single-quote handling are available.
+let s3_args_sh = || {
+    let args = " '--bucket=" + bucket.value() + "'" +
         " '--override-hostname=" + hostname.value() + "'";
-    let cmd = if prefix.is_set() {
-        cmd + " '--prefix=" + prefix.value() + "'"
-    } else { cmd };
+    let args = if prefix.is_set() {
+        args + " '--prefix=" + prefix.value() + "'"
+    } else { args };
     if endpoint.is_set() {
-        cmd + " '--endpoint=" + endpoint.value() + "'"
+        args + " '--endpoint=" + endpoint.value() + "'"
     } else if region.is_set() {
-        cmd + " --region=$AWS_REGION"
-    } else { cmd }
+        args + " --region=$AWS_REGION"
+    } else { args }
 };
 
-// Shell fragment that creates the S3 repository (used only during install).
-let create_sh = || {
-    let cmd = "kopia repository create s3" +
-        " '--bucket=" + bucket.value() + "'" +
-        " '--override-hostname=" + hostname.value() + "'";
-    let cmd = if prefix.is_set() {
-        cmd + " '--prefix=" + prefix.value() + "'"
-    } else { cmd };
-    if endpoint.is_set() {
-        cmd + " '--endpoint=" + endpoint.value() + "'"
-    } else if region.is_set() {
-        cmd + " --region=$AWS_REGION"
-    } else { cmd }
-};
-
-// Shell fragment that writes the global policy from current param values.
+// Shell fragment: write the global policy from current param values.
 let policy_sh = || {
     "kopia policy set --global" +
     " '--compression=" + (if compression.is_set() { compression.value() } else { "zstd-fastest" }) + "'" +
@@ -148,26 +147,43 @@ let policy_sh = || {
     " '--keep-annual=" + (if retention_annual.is_set() { retention_annual.value() } else { "3" }) + "'"
 };
 
-// Base job for all Kopia tasks.  Writable rootfs is required so Kopia can
-// write its repository config to ~/.config/kopia/.
+// Base job for every Kopia task.  Writable rootfs covers any stray writes
+// (e.g. to /tmp); the repository config and cache live in the state volume.
 let kopia_job = || {
     app.job()
         .image(image.call())
         .env(kopia_env.call())
         .writable_rootfs()
+        .mount("/kopia-state", state)
 };
 
 // ── Install ───────────────────────────────────────────────────────────────────
 
 // Creates the Kopia repository in S3 and applies the initial global policy.
-// Run this once after setting all required params.
+// After this runs, the state volume holds the repository config that every
+// other action reads.
 app.on_install(|rt, _param| {
     rt.start(kopia_job.call()
         .command(["sh", "-c",
-            create_sh.call() + " && " + policy_sh.call()
+            "kopia repository create s3" + s3_args_sh.call() +
+            " && " + policy_sh.call()
         ])
     ).terminated().ensure_success();
 }, #{});
+
+// ── Connection management ─────────────────────────────────────────────────────
+
+// Re-connects to the existing Kopia repository using the current params.
+// Run this after rotating AWS credentials or changing bucket/prefix/endpoint/region.
+// Safe to run at any time: it overwrites the stored repository config.
+app.on_action("connect", |rt, _param| {
+    rt.start(kopia_job.call()
+        .command(["sh", "-c",
+            "rm -f /kopia-state/repository.config && " +
+            "kopia repository connect s3" + s3_args_sh.call()
+        ])
+    ).terminated().ensure_success();
+}, #{ description: "Re-connect to the Kopia repository using current params" });
 
 // ── Required backup actions ───────────────────────────────────────────────────
 
@@ -175,9 +191,7 @@ app.on_action("save-snapshot", |rt, _param| {
     let source = app.external_volume("source");
     rt.start(kopia_job.call()
         .mount("/source", source)
-        .command(["sh", "-c",
-            connect_sh.call() + " && kopia snapshot create /source"
-        ])
+        .command(["kopia", "snapshot", "create", "/source"])
     ).terminated().ensure_success();
 }, #{ description: "Upload a volume snapshot to the Kopia repository" });
 
@@ -186,7 +200,7 @@ app.on_action("list-snapshots", |rt, _param| {
     rt.start(kopia_job.call()
         .mount("/output", output)
         .command(["sh", "-c",
-            connect_sh.call() + " && kopia snapshot list --json > /output/snapshots.json"
+            "kopia snapshot list --json > /output/snapshots.json"
         ])
     ).terminated().ensure_success();
 }, #{ description: "List snapshots in the Kopia repository" });
@@ -197,7 +211,7 @@ app.on_action("restore-snapshot", |rt, param| {
         .env([#{ name: "KOPIA_SNAPSHOT_ID", value: param["snapshot"] }])
         .mount("/destination", dest)
         .command(["sh", "-c",
-            connect_sh.call() + " && kopia snapshot restore \"$KOPIA_SNAPSHOT_ID\" /destination"
+            "kopia snapshot restore \"$KOPIA_SNAPSHOT_ID\" /destination"
         ])
     ).terminated().ensure_success();
 }, #{ description: "Restore a Kopia snapshot to a new volume" });
@@ -208,20 +222,16 @@ app.on_action("restore-snapshot", |rt, param| {
 // indexes.  Runs nightly at a stable time.
 app.on_action("maintenance", |rt, _param| {
     rt.start(kopia_job.call()
-        .command(["sh", "-c",
-            connect_sh.call() + " && kopia maintenance run"
-        ])
+        .command(["kopia", "maintenance", "run"])
     ).terminated().ensure_success();
 }, #{ description: "Run quick maintenance (expire snapshots, compact indexes)" })
     .on_schedule("H 3 * * *");
 
-// Full maintenance: includes garbage collection of unreferenced blobs.
-// Runs weekly.
+// Full maintenance: includes garbage collection of unreferenced blobs.  Runs
+// weekly.
 app.on_action("maintenance-full", |rt, _param| {
     rt.start(kopia_job.call()
-        .command(["sh", "-c",
-            connect_sh.call() + " && kopia maintenance run --full"
-        ])
+        .command(["kopia", "maintenance", "run", "--full"])
     ).terminated().ensure_success();
 }, #{ description: "Run full maintenance including garbage collection" })
     .on_schedule("H 4 * * 0");
@@ -230,9 +240,7 @@ app.on_action("maintenance-full", |rt, _param| {
 // policy.  Run this manually after changing any policy params.
 app.on_action("apply-policy", |rt, _param| {
     rt.start(kopia_job.call()
-        .command(["sh", "-c",
-            connect_sh.call() + " && " + policy_sh.call()
-        ])
+        .command(["sh", "-c", policy_sh.call()])
     ).terminated().ensure_success();
 }, #{ description: "Apply current compression and retention settings to the global policy" });
 
@@ -242,8 +250,6 @@ app.on_action("apply-policy", |rt, _param| {
 // so they can run arbitrary kopia commands to inspect or repair the repository.
 app.on_shell("kopia", |_rt, shell, _param| {
     shell.attach(kopia_job.call()
-        .command(["sh", "-c",
-            connect_sh.call() + " && exec sh"
-        ])
+        .command("sh")
     );
 }, #{ description: "Shell with the Kopia repository connected" });
