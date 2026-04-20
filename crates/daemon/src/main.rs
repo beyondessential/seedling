@@ -320,11 +320,46 @@ async fn main() {
     let scheduler = Arc::new(parking_lot::Mutex::new(Scheduler::new()));
 
     // ---------------------------------------------------------------------------
-    // Startup orphan cleanup — remove dynamic resources left by a previous run
+    // Load the persisted in-flight operation (if any) so we can both skip its
+    // resources during orphan cleanup below and replay it after the reconciler
+    // comes online.
+    // r[impl operation.lifecycle.events] r[impl barrier.replay]
     // ---------------------------------------------------------------------------
 
+    let persisted_operation = db
+        .call(|db| seedling_core::runtime::history::load_current_operation(db))
+        .unwrap_or_else(|e| {
+            tracing::warn!("failed to load current_operation on startup: {e}");
+            None
+        });
+    if let Some(op) = &persisted_operation {
+        tracing::info!(
+            app = %op.app,
+            action = %op.action_name,
+            operation_id = %op.operation_id.0,
+            "found interrupted operation; will replay after startup"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Startup orphan cleanup — remove dynamic resources left by a previous run.
+    // Resources owned by the operation we are about to replay are kept so the
+    // replay picks up where it left off.
+    // ---------------------------------------------------------------------------
+
+    let replay_op_id: Option<String> = persisted_operation
+        .as_ref()
+        .map(|op| op.operation_id.0.clone());
     {
         let records = db.call(|db| seedling_core::runtime::desired::list_dynamic_resources(db));
+        // Keep resources that belong to the operation we're about to replay;
+        // the replay will take ownership of them. Everything else from a
+        // prior run gets cleaned up here.
+        let records: Result<Vec<_>, _> = records.map(|rs| {
+            rs.into_iter()
+                .filter(|r| Some(&r.operation_id) != replay_op_id.as_ref())
+                .collect()
+        });
         match records {
             Ok(records) if !records.is_empty() => {
                 tracing::warn!(
@@ -381,9 +416,18 @@ async fn main() {
                     });
                 }
 
-                // Clear all orphaned records.
-                db.call(|db| {
-                    if let Err(e) = db.conn.execute("DELETE FROM dynamic_resources", []) {
+                // Clear cleaned records but keep rows owned by the operation
+                // we are about to replay.
+                let preserve_op_id = replay_op_id.clone();
+                db.call(move |db| {
+                    let result = match &preserve_op_id {
+                        Some(op_id) => db.conn.execute(
+                            "DELETE FROM dynamic_resources WHERE operation_id != ?1",
+                            [op_id],
+                        ),
+                        None => db.conn.execute("DELETE FROM dynamic_resources", []),
+                    };
+                    if let Err(e) = result {
                         tracing::warn!("failed to clear orphaned dynamic resource records: {e}");
                     }
                 });
@@ -568,6 +612,17 @@ async fn main() {
         cipher,
     });
 
+    // ---------------------------------------------------------------------------
+    // Replay any interrupted lifecycle operation. Runs after OiState is built
+    // but before the reconciler starts ticking, so the install closure's
+    // rt.start() calls are picked up by the first reconciliation tick.
+    // r[impl operation.lifecycle.events] r[impl barrier.replay]
+    // ---------------------------------------------------------------------------
+
+    if let Some(op) = persisted_operation {
+        replay_interrupted_operation(Arc::clone(&oi_state), op);
+    }
+
     // Pre-pull the ubuntu image used by volume shells so it is warm before
     // the first operator opens a volume shell session.
     {
@@ -740,6 +795,187 @@ async fn main() {
     }
     for ep in oi_endpoints {
         ep.wait_idle().await;
+    }
+}
+
+// r[impl operation.lifecycle.events] r[impl barrier.replay]
+// i[impl action.invoke.install.validation]
+/// Resume an interrupted lifecycle operation. Called after OiState is built
+/// and the cipher is available, before the reconciler starts ticking.
+///
+/// For install operations whose params were persisted encrypted, decrypt and
+/// spawn_accepted_operation with the restored params. Non-install operations
+/// have no params to restore — they re-run with an empty params map, relying
+/// on the action-log replay to reproduce their rt.start/stop sequence
+/// deterministically.
+///
+/// If the operation cannot be replayed (missing ciphertext for an install,
+/// app no longer registered, decrypt failure), the function clears the
+/// current_operation row, reverts any Installing phase to NotInstalled, and
+/// files an install_interrupted fault so the operator can see why.
+fn replay_interrupted_operation(
+    state: Arc<OiState>,
+    op: seedling_core::runtime::history::CurrentOperation,
+) {
+    use seedling_core::runtime::{
+        apps::AppPhase,
+        history::{clear_current_operation, load_current_install_params},
+        scheduler::ScheduleResult,
+    };
+
+    let app_name = op.app.clone();
+    let action_name = op.action_name.clone();
+    let is_install = action_name == "install";
+
+    // Check that the app is still registered. If the previous run
+    // deregistered mid-operation (shouldn't happen, but defensive), drop
+    // the row and move on.
+    let phase_opt = {
+        let reg = state.registry.read();
+        reg.get(&app_name).map(|e| e.phase.lock().clone())
+    };
+    let Some(phase) = phase_opt else {
+        tracing::warn!(
+            app = %app_name,
+            operation_id = %op.operation_id.0,
+            "interrupted operation references an unregistered app; discarding"
+        );
+        state.db.call(|db| {
+            let _ = clear_current_operation(db);
+        });
+        return;
+    };
+
+    // For install, load and decrypt the persisted params.
+    let params = if is_install {
+        let cipher = Arc::clone(&state.cipher);
+        let loaded = state
+            .db
+            .call(move |db| load_current_install_params(db, &cipher));
+        match loaded {
+            Ok(Some(params)) => params,
+            Ok(None) => {
+                tracing::error!(
+                    app = %app_name,
+                    "interrupted install has no persisted params; reverting to NotInstalled"
+                );
+                revert_install_and_fault(&state, &app_name);
+                return;
+            }
+            Err(e) => {
+                tracing::error!(
+                    app = %app_name,
+                    "failed to decrypt interrupted install params: {e}; reverting to NotInstalled"
+                );
+                revert_install_and_fault(&state, &app_name);
+                return;
+            }
+        }
+    } else {
+        serde_json::Map::new()
+    };
+
+    // Sanity-check phase vs action. An install must find its app in
+    // Installing (or NotInstalled if the phase persistence raced with a
+    // crash). A non-install must not find its app in Installing.
+    if is_install && !matches!(phase, AppPhase::Installing | AppPhase::NotInstalled) {
+        tracing::warn!(
+            app = %app_name,
+            ?phase,
+            "interrupted install but phase is not Installing; clearing row"
+        );
+        state.db.call(|db| {
+            let _ = clear_current_operation(db);
+        });
+        return;
+    }
+
+    // Register with the scheduler so concurrency gates report "in progress"
+    // for the duration of the replay.
+    let params_for_sched = params.clone();
+    let sched_result = state.scheduler.lock().request_with_id(
+        &app_name,
+        &action_name,
+        params_for_sched,
+        op.source_generation,
+        op.target_generation,
+        "replay",
+        op.operation_id.clone(),
+    );
+    if !matches!(sched_result, ScheduleResult::Accepted) {
+        tracing::error!(
+            app = %app_name,
+            "scheduler refused to accept replay slot: {sched_result:?}"
+        );
+        return;
+    }
+
+    tracing::info!(
+        app = %app_name,
+        action = %action_name,
+        operation_id = %op.operation_id.0,
+        "replaying interrupted operation"
+    );
+
+    seedling_core::oi::handler::actions::lifecycle::spawn_accepted_operation(
+        state,
+        app_name,
+        action_name,
+        op.operation_id,
+        params,
+        op.source_generation,
+        op.target_generation,
+        "replay".to_owned(),
+        None,
+    );
+}
+
+/// Flip a persisted Installing row back to NotInstalled and file a fault
+/// indicating the install was interrupted and could not be replayed.
+// i[impl action.invoke.install.completion]
+fn revert_install_and_fault(state: &Arc<OiState>, app_name: &str) {
+    use seedling_core::runtime::apps::AppPhase;
+    use seedling_core::runtime::history::clear_current_operation;
+
+    // Only flip if the app is actually in Installing.
+    let was_installing = {
+        let reg = state.registry.read();
+        reg.get(app_name)
+            .map(|e| matches!(*e.phase.lock(), AppPhase::Installing))
+            .unwrap_or(false)
+    };
+
+    if was_installing {
+        {
+            let mut reg = state.registry.write();
+            if let Some(entry) = reg.get_mut(app_name) {
+                *entry.phase.lock() = AppPhase::NotInstalled;
+            }
+        }
+        let app_owned = app_name.to_owned();
+        state.db.call(move |db| {
+            if let Err(e) = db.conn.execute(
+                "UPDATE registered_apps SET installing = 0, installed = 0, uninstalling = 0 \
+                 WHERE name = ?1",
+                [&app_owned],
+            ) {
+                tracing::warn!(app = %app_owned, "failed to persist revert: {e}");
+            }
+            let _ = clear_current_operation(db);
+            let _ = seedling_core::runtime::faults::file_fault(
+                db,
+                &app_owned,
+                None,
+                None,
+                None,
+                "install_interrupted",
+                "install was interrupted by a runtime restart and could not be replayed",
+            );
+        });
+    } else {
+        state.db.call(|db| {
+            let _ = clear_current_operation(db);
+        });
     }
 }
 
