@@ -62,6 +62,8 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("invalid request: {e}")))?;
 
     let result = match req.method.as_str() {
+        // i[status.ping]
+        "/server/ping" => status::ping(),
         // i[status.get]
         "/server/status" => status::get_status(state),
         // i[app.list]

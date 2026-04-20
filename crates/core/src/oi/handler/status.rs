@@ -17,6 +17,15 @@ async fn component_status(state: &Arc<OiState>, containers: &[&str]) -> &'static
     "stopped"
 }
 
+/// Liveness probe. Clients wanting to confirm the daemon is reachable and
+/// responsive use this instead of /server/status — it never touches the
+/// container runtime, never allocates a registry read lock, and returns the
+/// same shape regardless of daemon state.
+// i[status.ping]
+pub(crate) fn ping() -> HandlerResult {
+    Ok(json!({}))
+}
+
 // i[status.infra]
 pub(crate) async fn get_infra_status(state: &Arc<OiState>) -> HandlerResult {
     let proxy = component_status(state, &["seedling-caddy-blue", "seedling-caddy-green"]).await;

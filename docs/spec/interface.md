@@ -158,6 +158,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - `proxy`: `"running"` if at least one proxy container slot is running, otherwise `"stopped"`.
 > - `resolver`: `"running"` if at least one resolver container slot is running, otherwise `"stopped"`.
 
+> i[status.ping]
+> `/server/ping` is a trivial liveness probe. It accepts no params, returns an empty object `{}`, and must never fail except on transport errors. Clients use it to confirm the daemon is reachable without incurring the cost of `/server/status`.
+
 > i[status.get]
 > `/server/status` returns a summary of the running Seedling instance.
 > It must always succeed and must not perform any expensive computation.

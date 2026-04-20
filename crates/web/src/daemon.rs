@@ -162,7 +162,13 @@ impl DaemonConn {
     }
 
     pub async fn probe(&self) -> Result<(), ClientError> {
-        match self.inner.lock().await.request("ping", json!({})).await {
+        match self
+            .inner
+            .lock()
+            .await
+            .request("/server/ping", json!({}))
+            .await
+        {
             Ok(_) | Err(ClientError::Api { .. }) => Ok(()),
             Err(e) => Err(e),
         }
@@ -200,7 +206,7 @@ impl DaemonConn {
             .0;
         let actor = Self::make_actor(&self.fingerprint);
         let new_client = OiClient::connect(self.addr, self.auth.clone(), &identity, actor).await?;
-        match new_client.request("ping", json!({})).await {
+        match new_client.request("/server/ping", json!({})).await {
             Ok(_) | Err(ClientError::Api { .. }) => {}
             Err(e) => return Err(e),
         }
