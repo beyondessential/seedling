@@ -4,6 +4,7 @@ import { ProtectedRoute } from "./components/ProtectedRoute";
 import { SessionProvider } from "./components/SessionProvider";
 import AppDetail from "./routes/AppDetail";
 import Apps from "./routes/Apps";
+import Backups from "./routes/Backups";
 import CreateApp from "./routes/CreateApp";
 import EditScript from "./routes/EditScript";
 import Faults from "./routes/Faults";
@@ -25,6 +26,7 @@ const router = createBrowserRouter([
       { path: "apps/:name/script", element: <EditScript /> },
       { path: "faults", element: <Faults /> },
       { path: "volumes", element: <Volumes /> },
+      { path: "backups", element: <Backups /> },
       { path: "apps/:name/logs", element: <Logs /> },
       { path: "apps/:name/shell/:shellName", element: <Shell /> },
       { path: "infra/:component/logs", element: <InfraLogs /> },

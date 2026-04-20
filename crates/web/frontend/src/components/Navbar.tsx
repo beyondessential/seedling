@@ -1,3 +1,4 @@
+import BackupIcon from "@mui/icons-material/Backup";
 import EventNoteIcon from "@mui/icons-material/EventNote";
 import PeopleAltIcon from "@mui/icons-material/PeopleAlt";
 import StorageIcon from "@mui/icons-material/Storage";
@@ -96,6 +97,16 @@ export function Navbar() {
             sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
           >
             <StorageIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Backups">
+          <IconButton
+            size="small"
+            component={Link}
+            to="/backups"
+            sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
+          >
+            <BackupIcon fontSize="small" />
           </IconButton>
         </Tooltip>
         <Tooltip title={`${sessionCount} connected client${sessionCount === 1 ? "" : "s"}`}>

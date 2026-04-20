@@ -278,6 +278,26 @@ export type VolumeRef =
   | { kind: "site"; name: string }
   | { kind: "app"; app: string; volume: string };
 
+export interface BackupApp {
+  name: string;
+  app: string;
+}
+
+export const BACKUP_SCHEDULES = ["every hour", "twice a day", "every day"] as const;
+export type BackupSchedule = (typeof BACKUP_SCHEDULES)[number];
+
+export interface BackupStrategy {
+  name: string;
+  via: string;
+  schedule: BackupSchedule;
+  volumes: string[];
+}
+
+export interface BackupRunResult {
+  volume: string;
+  operation_id: string;
+}
+
 export interface ConnectRequest {
   token?: string;
   password?: string;
