@@ -27,7 +27,7 @@ import type { AppSummary, SeedlingEvent } from "../lib/types";
 const APP_LIST_EVENTS: Set<string> = new Set([
   "AppRegistered", "AppDeregistered", "AppUpdated",
   "OperationStarted", "OperationCompleted", "OperationFailed",
-  "FaultFiled", "FaultCleared",
+  "FaultFiled", "FaultCleared", "ResourceStopped", "ResourceUnstopped",
 ]);
 
 export default function Apps() {
@@ -96,11 +96,16 @@ export default function Apps() {
                     </Link>
                   </TableCell>
                   <TableCell>
-                    <Chip
-                      label={statusLabel(app.status, app.action_name)}
-                      color={statusColor(app.status)}
-                      size="small"
-                    />
+                    <Box sx={{ display: "flex", gap: 0.5, alignItems: "center" }}>
+                      <Chip
+                        label={statusLabel(app.status, app.action_name)}
+                        color={statusColor(app.status)}
+                        size="small"
+                      />
+                      {app.has_stopped_resources && (
+                        <Chip label="partially running" size="small" color="warning" variant="outlined" />
+                      )}
+                    </Box>
                   </TableCell>
                 </TableRow>
               ))}

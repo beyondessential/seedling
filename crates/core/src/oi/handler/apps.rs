@@ -20,7 +20,9 @@ use crate::{
         history::{find_instances_for_group, query_observations},
         identity::{InstanceId, InstanceVariant, ResourceInstance},
         lifecycle::LifecycleState,
-        restart_gens, scaling, transition_phase,
+        restart_gens, scaling,
+        stopped::{self, kind_str, parse_kind},
+        transition_phase,
     },
 };
 
@@ -79,6 +81,13 @@ pub(crate) struct ScaleParams {
 pub(crate) struct RestartParams {
     pub app: String,
     pub deployment: String,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ResourceStopParams {
+    pub app: String,
+    pub kind: String,
+    pub name: String,
 }
 
 // r[impl schedule.prune]
@@ -162,6 +171,7 @@ fn serialize_param_schema(
 }
 
 // i[app.list]
+// i[impl resource.stop.status]
 pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
     let reg = state.registry.read();
     let apps = reg.list();
@@ -173,7 +183,14 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
                 Some(entry) => effective_app_status(base_status, entry, &db),
                 None => base_status,
             };
-            let mut obj = json!({ "name": name, "status": status.name() });
+            let has_stopped = stopped::load_stopped(&db, &name)
+                .map(|s| !s.is_empty())
+                .unwrap_or(false);
+            let mut obj = json!({
+                "name": name,
+                "status": status.name(),
+                "has_stopped_resources": has_stopped,
+            });
             if let AppStatus::Operating { action_name } = &status {
                 obj["action_name"] = json!(action_name);
             }
@@ -368,6 +385,11 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
             | AppStatus::Uninstalling
     );
     // i[app.describe]
+    // i[impl resource.stop.status]
+    let stopped_set = {
+        let db = state.db.lock();
+        stopped::load_stopped(&db, name).unwrap_or_default()
+    };
     let mut resources_json: Vec<Value> = {
         let db = state.db.lock();
         def.resources
@@ -416,12 +438,14 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                     })
                     .collect();
 
+                let is_stopped = stopped_set.contains(&(id.kind, id.name.as_str().to_owned()));
                 let mut resource_obj = json!({
                     "name": id.name.as_str(),
                     "type": resource_type_str,
                     "instances": instances_json,
                     "faults": resource_faults,
                     "def": to_value(resource.summary()).unwrap_or(Value::Null),
+                    "stopped": is_stopped,
                 });
 
                 // i[impl scale.describe]
@@ -514,11 +538,18 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         }
     }
 
+    // i[impl resource.stop.status]
+    let stopped_resources_json: Vec<Value> = stopped_set
+        .iter()
+        .map(|(k, n)| json!({ "kind": kind_str(*k), "name": n }))
+        .collect();
+
     let mut desc = json!({
         "status": status.name(),
         "generation": generation,
         "faults": app_faults_json,
         "resources": resources_json,
+        "stopped_resources": stopped_resources_json,
         "params": params_json,
         "unknown_params": unknown_params_json,
         "actions": actions_json,
@@ -962,6 +993,9 @@ pub(crate) fn deregister_app(
         if let Err(e) = restart_gens::delete_restart_gens_for_app(&db, name) {
             tracing::warn!(app = %name, "failed to clean up restart generations during deregister: {e}");
         }
+        if let Err(e) = stopped::delete_stopped_for_app(&db, name) {
+            tracing::warn!(app = %name, "failed to clean up stopped resources during deregister: {e}");
+        }
     }
     {
         let db = state.db.lock();
@@ -1005,6 +1039,9 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
         }
         if let Err(e) = restart_gens::delete_restart_gens_for_app(&db, name) {
             tracing::warn!(app = %name, "failed to clear restart generations on uninstall: {e}");
+        }
+        if let Err(e) = stopped::delete_stopped_for_app(&db, name) {
+            tracing::warn!(app = %name, "failed to clear stopped resources on uninstall: {e}");
         }
     }
 
@@ -1301,4 +1338,142 @@ fn resource_kind_from_debug_str(s: &str) -> Option<ResourceKind> {
         "ExternalVolume" => Some(ResourceKind::ExternalVolume),
         _ => None,
     }
+}
+
+// i[impl resource.stop]
+pub(crate) fn stop_resource(
+    state: &OiState,
+    params: ResourceStopParams,
+    ctx: &RequestCtx,
+) -> HandlerResult {
+    let app = params.app.as_str();
+    let resource_name = params.name.as_str();
+
+    let kind = parse_kind(&params.kind).filter(|k| {
+        matches!(
+            k,
+            ResourceKind::Deployment | ResourceKind::Job | ResourceKind::Ingress
+        )
+    });
+    let kind = kind.ok_or_else(|| {
+        OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!(
+                "kind {:?} cannot be stopped; only deployment, job, or ingress are stoppable",
+                params.kind
+            ),
+        )
+    })?;
+
+    let reg = state.registry.read();
+    let entry = reg
+        .get(app)
+        .ok_or_else(|| OiError::not_found(format!("app not found: {app}")))?;
+
+    {
+        let def = entry.app.def.lock();
+        let found = def
+            .resources
+            .iter()
+            .any(|(id, _)| id.kind == kind && id.name.as_str() == resource_name);
+        if !found {
+            return Err(OiError::not_found(format!(
+                "resource {}/{resource_name} not found in app {app}",
+                kind_str(kind)
+            )));
+        }
+    }
+
+    {
+        let db = state.db.lock();
+        stopped::stop_resource(&db, app, kind, resource_name)
+            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
+    }
+
+    entry.tick_notify.notify_one();
+
+    let ks = kind_str(kind);
+    tracing::info!(app = %app, kind = %ks, name = %resource_name, "resource stopped");
+    ctx.events.resource_stopped(app, ks, resource_name);
+
+    Ok(json!({}))
+}
+
+// i[impl resource.unstop]
+pub(crate) fn unstop_resource(
+    state: &OiState,
+    params: ResourceStopParams,
+    ctx: &RequestCtx,
+) -> HandlerResult {
+    let app = params.app.as_str();
+    let resource_name = params.name.as_str();
+
+    let kind = parse_kind(&params.kind).ok_or_else(|| {
+        OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!("unknown resource kind: {:?}", params.kind),
+        )
+    })?;
+
+    {
+        let reg = state.registry.read();
+        if !reg.is_registered(app) {
+            return Err(OiError::not_found(format!("app not found: {app}")));
+        }
+    }
+
+    {
+        let db = state.db.lock();
+        stopped::unstop_resource(&db, app, kind, resource_name)
+            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
+    }
+
+    let ks = kind_str(kind);
+    tracing::info!(app = %app, kind = %ks, name = %resource_name, "resource unstopped");
+    ctx.events.resource_unstopped(app, ks, resource_name);
+
+    let reg = state.registry.read();
+    if let Some(entry) = reg.get(app) {
+        entry.tick_notify.notify_one();
+    }
+
+    Ok(json!({}))
+}
+
+// i[impl resource.unstop-all]
+pub(crate) fn unstop_all_resources(
+    state: &OiState,
+    params: AppParams,
+    ctx: &RequestCtx,
+) -> HandlerResult {
+    let app = params.app.as_str();
+
+    {
+        let reg = state.registry.read();
+        if !reg.is_registered(app) {
+            return Err(OiError::not_found(format!("app not found: {app}")));
+        }
+    }
+
+    let stopped_list = {
+        let db = state.db.lock();
+        let set = stopped::load_stopped(&db, app)
+            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
+        stopped::unstop_all(&db, app)
+            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
+        set
+    };
+
+    for (kind, name) in &stopped_list {
+        let ks = kind_str(*kind);
+        tracing::info!(app = %app, kind = %ks, name = %name, "resource unstopped (unstop-all)");
+        ctx.events.resource_unstopped(app, ks, name);
+    }
+
+    let reg = state.registry.read();
+    if let Some(entry) = reg.get(app) {
+        entry.tick_notify.notify_one();
+    }
+
+    Ok(json!({}))
 }

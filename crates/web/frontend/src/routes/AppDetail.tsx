@@ -4,6 +4,8 @@ import CheckIcon from "@mui/icons-material/Check";
 import ClearIcon from "@mui/icons-material/Clear";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import EditIcon from "@mui/icons-material/Edit";
+import PauseIcon from "@mui/icons-material/Pause";
+import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import RemoveIcon from "@mui/icons-material/Remove";
 import RestoreIcon from "@mui/icons-material/Restore";
@@ -159,6 +161,8 @@ function ResourceDefDetail({ def }: { def: ResourceDef }) {
   return null;
 }
 
+const STOPPABLE_KINDS = new Set(["deployment", "job", "ingress"]);
+
 function ResourcesSection({
   appName,
   resources,
@@ -170,6 +174,7 @@ function ResourcesSection({
 }) {
   const { execute, loading: scaling } = useOiAction();
   const { execute: executeRestart, loading: restarting } = useOiAction();
+  const { execute: executeStop, loading: stopping } = useOiAction();
 
   const scale = async (deploymentName: string, value: number) => {
     try {
@@ -188,6 +193,24 @@ function ResourcesSection({
     }
   };
 
+  const stopResource = async (kind: string, resourceName: string) => {
+    try {
+      await executeStop("/apps/resource/stop", { app: appName, kind, name: resourceName });
+      onRefresh();
+    } catch {
+      // errors surfaced by useOiAction globally
+    }
+  };
+
+  const unstopResource = async (kind: string, resourceName: string) => {
+    try {
+      await executeStop("/apps/resource/unstop", { app: appName, kind, name: resourceName });
+      onRefresh();
+    } catch {
+      // errors surfaced by useOiAction globally
+    }
+  };
+
   if (resources.length === 0)
     return <Typography color="text.secondary">No resources.</Typography>;
   return (
@@ -199,6 +222,11 @@ function ResourcesSection({
             <Typography variant="caption" color="text.secondary">
               {r.type}
             </Typography>
+            {r.stopped && (
+              <Chip label="stopped" size="small" color="warning" variant="outlined"
+                sx={{ fontSize: "0.65rem", height: 18, "& .MuiChip-label": { px: 0.75 } }}
+              />
+            )}
             {(r.type === "deployment" || r.type === "job") && (
               <Tooltip title="View resource logs">
                 <IconButton
@@ -259,6 +287,34 @@ function ResourcesSection({
                   </IconButton>
                 </span>
               </Tooltip>
+            )}
+            {STOPPABLE_KINDS.has(r.type) && (
+              r.stopped ? (
+                <Tooltip title="Unstop resource">
+                  <span>
+                    <IconButton
+                      size="small"
+                      onClick={() => void unstopResource(r.type, r.name)}
+                      disabled={stopping}
+                      color="success"
+                    >
+                      <PlayArrowIcon sx={{ fontSize: 14 }} />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              ) : (
+                <Tooltip title="Stop resource">
+                  <span>
+                    <IconButton
+                      size="small"
+                      onClick={() => void stopResource(r.type, r.name)}
+                      disabled={stopping}
+                    >
+                      <PauseIcon sx={{ fontSize: 14 }} />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              )
             )}
           </Box>
           <FaultList faults={r.faults} />
@@ -1040,13 +1096,14 @@ function AppRemovalDialog({
 const APP_DETAIL_EVENTS: Set<string> = new Set([
   "AppUpdated", "OperationStarted", "OperationCompleted", "OperationFailed",
   "ParamSet", "ParamUnset", "ResourceStateChanged", "FaultFiled", "FaultCleared",
-  "ScaleChanged", "DeploymentRestarted",
+  "ScaleChanged", "DeploymentRestarted", "ResourceStopped", "ResourceUnstopped",
 ]);
 
 export default function AppDetail() {
   const { name } = useParams<{ name: string }>();
   const navigate = useNavigate();
   const [removalOpen, setRemovalOpen] = useState(false);
+  const { execute: executeUnstopAll, loading: unstoppingAll } = useOiAction();
   const { data, loading, error, refetch } = useOiQuery<AppDetail>(
     "/apps/show",
     { app: name },
@@ -1170,6 +1227,33 @@ export default function AppDetail() {
                   {data.current_operation.barrier.deadline_secs}s)
                 </>
               )}
+            </Alert>
+          )}
+
+          {data.stopped_resources.length > 0 && (
+            <Alert
+              severity="warning"
+              action={
+                <Button
+                  color="inherit"
+                  size="small"
+                  disabled={unstoppingAll}
+                  onClick={async () => {
+                    try {
+                      await executeUnstopAll("/apps/unstop", { app: name });
+                      refetch();
+                    } catch {
+                      // surfaced by useOiAction globally
+                    }
+                  }}
+                >
+                  Unstop all
+                </Button>
+              }
+            >
+              Partially running —{" "}
+              {data.stopped_resources.map((r) => `${r.kind}/${r.name}`).join(", ")}{" "}
+              {data.stopped_resources.length === 1 ? "is" : "are"} stopped.
             </Alert>
           )}
 

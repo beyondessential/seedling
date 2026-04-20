@@ -268,7 +268,33 @@ Absent specification bugs, anything that is not defined here is either defined i
 > The app must be registered and the named deployment must exist in the current AppDef; otherwise `not_found` is returned.
 > A restart does not change the deployment's definition or generation. Running instances are replaced with fresh containers carrying the same configuration.
 > The restart is durable: if the process restarts before the reconciler finishes, the replacement will resume on the next startup.
+> On success, the response is `{ operation_id }` where `operation_id` is a unique string identifying this restart operation.
+
+# Resource Stop / Unstop
+
+> i[resource.stop]
+> `/apps/resource/stop { app, kind, name }` turns off a named resource within an installed app without changing its declared configuration.
+> `kind` must be one of `deployment`, `job`, or `ingress`; other kinds (`service`, `volume`, `externalvolume`) return `invalid_request`.
+> The app must be registered and the named resource must exist in the current AppDef; otherwise `not_found` is returned.
+> Stopping a deployment scales its running instances to zero without modifying the declared scale bounds; unstopping later restores the declared effective scale.
+> Stopping a job or ingress marks it as unscheduled without removing its definition.
+> A stopped state is durable and survives process restarts.
 > On success, the response is `{}`.
+
+> i[resource.unstop]
+> `/apps/resource/unstop { app, kind, name }` reverses a previous stop for the named resource.
+> If the resource was not stopped, this is a no-op and returns `{}`.
+> On success, the response is `{}`.
+
+> i[resource.unstop-all]
+> `/apps/unstop { app }` unstops all resources for the named app in one call.
+> If no resources are stopped, this is a no-op and returns `{}`.
+> On success, the response is `{}`.
+
+> i[resource.stop.status]
+> `/apps/show` includes a `stopped` boolean field on each resource that has been stopped via `/apps/resource/stop`.
+> The top-level response includes a `stopped_resources` array of `{ kind, name }` objects listing every resource currently stopped for the app.
+> `/apps/list` includes a `has_stopped_resources` boolean field on each app summary indicating whether any resources are currently stopped.
 
 # App Script Retrieval
 

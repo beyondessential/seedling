@@ -94,6 +94,22 @@ pub(super) enum AppsCommand {
     },
     /// Restart a deployment (follows its update strategy without changing config)
     Restart { app: String, deployment: String },
+    /// Stop a resource (scale deployments to zero, unschedule jobs/ingresses)
+    StopResource {
+        app: String,
+        /// Resource kind: deployment, job, or ingress
+        kind: String,
+        /// Resource name
+        name: String,
+    },
+    /// Unstop a previously stopped resource
+    UnstopResource {
+        app: String,
+        kind: String,
+        name: String,
+    },
+    /// Unstop all stopped resources for an app
+    Unstop { app: String },
     /// Forward a local port to a service
     Forward {
         app: String,
@@ -458,6 +474,33 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                         "/apps/restart",
                         serde_json::json!({ "app": app, "deployment": deployment }),
                     )
+                    .await,
+            );
+        }
+        AppsCommand::StopResource { app, kind, name } => {
+            print_result(
+                client
+                    .request(
+                        "/apps/resource/stop",
+                        serde_json::json!({ "app": app, "kind": kind, "name": name }),
+                    )
+                    .await,
+            );
+        }
+        AppsCommand::UnstopResource { app, kind, name } => {
+            print_result(
+                client
+                    .request(
+                        "/apps/resource/unstop",
+                        serde_json::json!({ "app": app, "kind": kind, "name": name }),
+                    )
+                    .await,
+            );
+        }
+        AppsCommand::Unstop { app } => {
+            print_result(
+                client
+                    .request("/apps/unstop", serde_json::json!({ "app": app }))
                     .await,
             );
         }

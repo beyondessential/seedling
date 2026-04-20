@@ -7,6 +7,7 @@ use crate::runtime::barrier::{ActionLogEntry, CallKind};
 use crate::runtime::db::Db;
 use crate::runtime::identity::ResourceInstance;
 use crate::runtime::lifecycle::LifecycleState;
+use crate::runtime::stopped::StoppedSet;
 use crate::runtime::{InstanceRegistry, RegistryError};
 
 /// Pre-computed effective scales for all deployments in an app.
@@ -143,9 +144,10 @@ pub fn compute(
     operation_progress: Option<&OperationProgress>,
     registry: &dyn InstanceRegistry,
     effective_scales: &EffectiveScales,
+    stopped: &StoppedSet,
 ) -> Result<DesiredState, RegistryError> {
     match operation_progress {
-        None => compute_steady(app_name, app_def, registry, effective_scales),
+        None => compute_steady(app_name, app_def, registry, effective_scales, stopped),
         Some(progress) => Ok(compute_during_operation(app_def, progress)),
     }
 }
@@ -178,24 +180,26 @@ pub fn compute_uninstalling(
 
 // r[impl desired-state.steady]
 // r[impl autonomous.scale]
+// r[impl resource.stop]
 fn compute_steady(
     app_name: &str,
     app_def: &AppDef,
     registry: &dyn InstanceRegistry,
     effective_scales: &EffectiveScales,
+    stopped: &StoppedSet,
 ) -> Result<DesiredState, RegistryError> {
     let mut resources = Vec::new();
 
     for (id, resource) in &app_def.resources {
+        let is_stopped = stopped.contains(&(id.kind, id.name.as_str().to_owned()));
+
         if id.kind == ResourceKind::Deployment
             && let Some(&(_low, _high, effective)) = effective_scales.get(id.name.as_str())
         {
-            let group = registry.ensure_scaled_group(
-                app_name,
-                id.kind,
-                Some(id.name.as_str()),
-                effective,
-            )?;
+            // r[impl resource.stop]
+            let scale = if is_stopped { 0 } else { effective };
+            let group =
+                registry.ensure_scaled_group(app_name, id.kind, Some(id.name.as_str()), scale)?;
             for inst in group.keep {
                 resources.push(DesiredResource {
                     instance: inst,
@@ -215,9 +219,15 @@ fn compute_steady(
 
         // Non-deployment resources: singleton.
         let inst = registry.get_or_create_singleton(app_name, id.kind, Some(id.name.as_str()))?;
+        // r[impl resource.stop]
+        let desired = if is_stopped {
+            LifecycleState::Unscheduled
+        } else {
+            LifecycleState::Ready
+        };
         resources.push(DesiredResource {
             instance: inst,
-            desired: LifecycleState::Ready,
+            desired,
             definition: resource.clone(),
         });
     }

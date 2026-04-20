@@ -11,6 +11,7 @@ export interface AppSummary {
   name: string;
   status: AppStatus;
   action_name?: string;
+  has_stopped_resources?: boolean;
 }
 
 export interface FaultRecord {
@@ -68,6 +69,11 @@ export type ResourceDef =
   | { kind: "volume"; readonly: boolean; tmpfs: boolean; writes: Record<string, string>; exported: boolean; export_description: string | null }
   | { kind: "external_volume" };
 
+export interface StoppedResource {
+  kind: string;
+  name: string;
+}
+
 export interface AppResource {
   name: string;
   type: string;
@@ -75,6 +81,7 @@ export interface AppResource {
   faults: FaultRecord[];
   scale?: ScaleBounds;
   def?: ResourceDef;
+  stopped?: boolean;
 }
 
 export interface AppParam {
@@ -118,6 +125,7 @@ export interface AppDetail {
   generation: number;
   faults: FaultRecord[];
   resources: AppResource[];
+  stopped_resources: StoppedResource[];
   params: AppParam[];
   unknown_params: AppParam[];
   actions: AppAction[];

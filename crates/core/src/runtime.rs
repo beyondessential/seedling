@@ -24,6 +24,7 @@ pub mod scaling;
 pub mod scheduler;
 pub mod schedules;
 pub mod site_volumes;
+pub mod stopped;
 
 pub use apps::{AppEntry, AppPhase, AppRegistry, AppStatus, ScriptError, transition_phase};
 pub use barrier::oracle::{DbWorldOracle, TestWorldOracle, WorldStateOracle};

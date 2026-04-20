@@ -11,6 +11,7 @@ use crate::runtime::barrier::{ActionLogEntry, CallKind};
 use crate::runtime::identity::{InstanceVariant, ResourceInstance};
 use crate::runtime::lifecycle::LifecycleState;
 use crate::runtime::registry::EphemeralInstanceRegistry;
+use crate::runtime::stopped::StoppedSet;
 
 // -----------------------------------------------------------------------
 // Helpers
@@ -111,7 +112,15 @@ fn steady_state_all_resources_are_ready() {
     let app_def = make_app_def(&["web", "api"]);
     let registry = EphemeralInstanceRegistry::new();
     let scales = default_effective_scales(&app_def);
-    let state = compute("myapp", &app_def, None, &registry, &scales).unwrap();
+    let state = compute(
+        "myapp",
+        &app_def,
+        None,
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
 
     assert_eq!(state.resources.len(), 2);
     assert!(
@@ -128,7 +137,15 @@ fn steady_state_resource_names_match_app_def() {
     let app_def = make_app_def(&["web", "api"]);
     let registry = EphemeralInstanceRegistry::new();
     let scales = default_effective_scales(&app_def);
-    let state = compute("myapp", &app_def, None, &registry, &scales).unwrap();
+    let state = compute(
+        "myapp",
+        &app_def,
+        None,
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
 
     let map = to_map(state);
     assert!(map.contains_key("web"));
@@ -141,7 +158,15 @@ fn steady_state_instances_carry_app_name() {
     let app_def = make_app_def(&["web"]);
     let registry = EphemeralInstanceRegistry::new();
     let scales = default_effective_scales(&app_def);
-    let state = compute("myapp", &app_def, None, &registry, &scales).unwrap();
+    let state = compute(
+        "myapp",
+        &app_def,
+        None,
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
 
     assert_eq!(state.resources[0].instance.app, "myapp");
 }
@@ -152,7 +177,15 @@ fn steady_state_empty_app_def_gives_empty_desired_state() {
     let app_def = AppDef::default();
     let registry = EphemeralInstanceRegistry::new();
     let scales = default_effective_scales(&app_def);
-    let state = compute("myapp", &app_def, None, &registry, &scales).unwrap();
+    let state = compute(
+        "myapp",
+        &app_def,
+        None,
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
     assert!(state.is_empty());
 }
 
@@ -167,7 +200,15 @@ fn operation_with_no_starts_gives_empty_desired_state() {
     let progress = OperationProgress::new();
     let registry = EphemeralInstanceRegistry::new();
     let scales = default_effective_scales(&app_def);
-    let state = compute("myapp", &app_def, Some(&progress), &registry, &scales).unwrap();
+    let state = compute(
+        "myapp",
+        &app_def,
+        Some(&progress),
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
     assert!(state.is_empty());
 }
 
@@ -180,7 +221,15 @@ fn started_resource_is_desired_at_ready() {
 
     let registry = EphemeralInstanceRegistry::new();
     let scales = default_effective_scales(&app_def);
-    let state = compute("myapp", &app_def, Some(&progress), &registry, &scales).unwrap();
+    let state = compute(
+        "myapp",
+        &app_def,
+        Some(&progress),
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
 
     assert_eq!(state.resources.len(), 1);
     assert_eq!(state.resources[0].desired, LifecycleState::Ready);
@@ -196,7 +245,15 @@ fn stopped_resource_is_desired_at_unscheduled() {
 
     let registry = EphemeralInstanceRegistry::new();
     let scales = default_effective_scales(&app_def);
-    let state = compute("myapp", &app_def, Some(&progress), &registry, &scales).unwrap();
+    let state = compute(
+        "myapp",
+        &app_def,
+        Some(&progress),
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
 
     assert_eq!(state.resources.len(), 1);
     assert_eq!(state.resources[0].desired, LifecycleState::Unscheduled);
@@ -213,7 +270,15 @@ fn stop_after_start_overrides_to_unscheduled() {
 
     let registry = EphemeralInstanceRegistry::new();
     let scales = default_effective_scales(&app_def);
-    let state = compute("myapp", &app_def, Some(&progress), &registry, &scales).unwrap();
+    let state = compute(
+        "myapp",
+        &app_def,
+        Some(&progress),
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
 
     assert_eq!(state.resources.len(), 1);
     assert_eq!(state.resources[0].desired, LifecycleState::Unscheduled);
@@ -228,7 +293,15 @@ fn started_resource_not_in_app_def_is_dropped() {
 
     let registry = EphemeralInstanceRegistry::new();
     let scales = default_effective_scales(&app_def);
-    let state = compute("myapp", &app_def, Some(&progress), &registry, &scales).unwrap();
+    let state = compute(
+        "myapp",
+        &app_def,
+        Some(&progress),
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
 
     assert!(state.is_empty());
 }
@@ -246,7 +319,15 @@ fn from_log_start_entry_maps_to_ready() {
 
     let registry = EphemeralInstanceRegistry::new();
     let scales = default_effective_scales(&app_def);
-    let state = compute("myapp", &app_def, Some(&progress), &registry, &scales).unwrap();
+    let state = compute(
+        "myapp",
+        &app_def,
+        Some(&progress),
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
 
     let map = to_map(state);
     assert_eq!(map["web"], LifecycleState::Ready);
@@ -261,7 +342,15 @@ fn from_log_stop_entry_maps_to_unscheduled() {
 
     let registry = EphemeralInstanceRegistry::new();
     let scales = default_effective_scales(&app_def);
-    let state = compute("myapp", &app_def, Some(&progress), &registry, &scales).unwrap();
+    let state = compute(
+        "myapp",
+        &app_def,
+        Some(&progress),
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
 
     let map = to_map(state);
     assert_eq!(map["web"], LifecycleState::Unscheduled);
@@ -288,7 +377,15 @@ fn from_log_later_entry_overrides_earlier_for_same_resource() {
 
     let registry = EphemeralInstanceRegistry::new();
     let scales = default_effective_scales(&app_def);
-    let state = compute("myapp", &app_def, Some(&progress), &registry, &scales).unwrap();
+    let state = compute(
+        "myapp",
+        &app_def,
+        Some(&progress),
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
 
     let map = to_map(state);
     assert_eq!(map["web"], LifecycleState::Unscheduled);
@@ -306,7 +403,15 @@ fn from_log_multiple_resources_in_one_entry() {
 
     let registry = EphemeralInstanceRegistry::new();
     let scales = default_effective_scales(&app_def);
-    let state = compute("myapp", &app_def, Some(&progress), &registry, &scales).unwrap();
+    let state = compute(
+        "myapp",
+        &app_def,
+        Some(&progress),
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
 
     assert_eq!(state.resources.len(), 2);
     assert!(
@@ -323,7 +428,15 @@ fn definition_field_is_populated_from_app_def() {
     let app_def = make_app_def(&["web"]);
     let registry = EphemeralInstanceRegistry::new();
     let scales = default_effective_scales(&app_def);
-    let state = compute("myapp", &app_def, None, &registry, &scales).unwrap();
+    let state = compute(
+        "myapp",
+        &app_def,
+        None,
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
 
     assert_eq!(state.resources.len(), 1);
     assert!(matches!(
@@ -342,7 +455,15 @@ fn scaled_deployment_produces_multiple_instances() {
     let app_def = make_app_def_scaled(&[("web", 1..3)]);
     let registry = EphemeralInstanceRegistry::new();
     let scales = custom_effective_scales(&[("web", 1, 3, 3)]);
-    let state = compute("myapp", &app_def, None, &registry, &scales).unwrap();
+    let state = compute(
+        "myapp",
+        &app_def,
+        None,
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
 
     let ready: Vec<_> = state
         .resources
@@ -366,11 +487,27 @@ fn scaled_deployment_effective_less_than_existing_marks_excess_unscheduled() {
 
     // First, create 4 instances.
     let scales_4 = custom_effective_scales(&[("web", 1, 5, 4)]);
-    let _ = compute("myapp", &app_def, None, &registry, &scales_4).unwrap();
+    let _ = compute(
+        "myapp",
+        &app_def,
+        None,
+        &registry,
+        &scales_4,
+        &StoppedSet::new(),
+    )
+    .unwrap();
 
     // Now scale down to 2.
     let scales_2 = custom_effective_scales(&[("web", 1, 5, 2)]);
-    let state = compute("myapp", &app_def, None, &registry, &scales_2).unwrap();
+    let state = compute(
+        "myapp",
+        &app_def,
+        None,
+        &registry,
+        &scales_2,
+        &StoppedSet::new(),
+    )
+    .unwrap();
 
     let ready: Vec<_> = state
         .resources
@@ -392,7 +529,15 @@ fn fixed_scale_one_uses_scaled_instance() {
     let app_def = make_app_def(&["web"]);
     let registry = EphemeralInstanceRegistry::new();
     let scales = default_effective_scales(&app_def);
-    let state = compute("myapp", &app_def, None, &registry, &scales).unwrap();
+    let state = compute(
+        "myapp",
+        &app_def,
+        None,
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
 
     assert_eq!(state.resources.len(), 1);
     assert_eq!(
@@ -408,7 +553,15 @@ fn fixed_scale_two_uses_scaled_instances() {
     let app_def = make_app_def_scaled(&[("web", 2..2)]);
     let registry = EphemeralInstanceRegistry::new();
     let scales = custom_effective_scales(&[("web", 2, 2, 2)]);
-    let state = compute("myapp", &app_def, None, &registry, &scales).unwrap();
+    let state = compute(
+        "myapp",
+        &app_def,
+        None,
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
 
     assert_eq!(state.resources.len(), 2);
     assert!(
@@ -426,7 +579,15 @@ fn scale_zero_lower_bound_starts_with_zero_instances() {
     let app_def = make_app_def_scaled(&[("web", 0..3)]);
     let registry = EphemeralInstanceRegistry::new();
     let scales = custom_effective_scales(&[("web", 0, 3, 0)]);
-    let state = compute("myapp", &app_def, None, &registry, &scales).unwrap();
+    let state = compute(
+        "myapp",
+        &app_def,
+        None,
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
 
     let ready: Vec<_> = state
         .resources
@@ -446,7 +607,15 @@ fn scaled_instances_have_distinct_ids() {
     let app_def = make_app_def_scaled(&[("web", 1..5)]);
     let registry = EphemeralInstanceRegistry::new();
     let scales = custom_effective_scales(&[("web", 1, 5, 3)]);
-    let state = compute("myapp", &app_def, None, &registry, &scales).unwrap();
+    let state = compute(
+        "myapp",
+        &app_def,
+        None,
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
 
     let ids: Vec<_> = state.resources.iter().map(|r| r.instance.id).collect();
     let unique: std::collections::HashSet<_> = ids.iter().collect();
@@ -460,7 +629,15 @@ fn scaled_instances_are_stable_across_recomputes() {
     let registry = EphemeralInstanceRegistry::new();
     let scales = custom_effective_scales(&[("web", 1, 5, 3)]);
 
-    let state1 = compute("myapp", &app_def, None, &registry, &scales).unwrap();
+    let state1 = compute(
+        "myapp",
+        &app_def,
+        None,
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
     let ids1: Vec<_> = state1
         .resources
         .iter()
@@ -468,7 +645,15 @@ fn scaled_instances_are_stable_across_recomputes() {
         .map(|r| r.instance.id)
         .collect();
 
-    let state2 = compute("myapp", &app_def, None, &registry, &scales).unwrap();
+    let state2 = compute(
+        "myapp",
+        &app_def,
+        None,
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
     let ids2: Vec<_> = state2
         .resources
         .iter()
@@ -490,7 +675,15 @@ fn scale_up_preserves_existing_instances() {
 
     // Start with 2.
     let scales_2 = custom_effective_scales(&[("web", 1, 5, 2)]);
-    let state1 = compute("myapp", &app_def, None, &registry, &scales_2).unwrap();
+    let state1 = compute(
+        "myapp",
+        &app_def,
+        None,
+        &registry,
+        &scales_2,
+        &StoppedSet::new(),
+    )
+    .unwrap();
     let ids_2: Vec<_> = state1
         .resources
         .iter()
@@ -501,7 +694,15 @@ fn scale_up_preserves_existing_instances() {
 
     // Scale up to 4.
     let scales_4 = custom_effective_scales(&[("web", 1, 5, 4)]);
-    let state2 = compute("myapp", &app_def, None, &registry, &scales_4).unwrap();
+    let state2 = compute(
+        "myapp",
+        &app_def,
+        None,
+        &registry,
+        &scales_4,
+        &StoppedSet::new(),
+    )
+    .unwrap();
     let ids_4: Vec<_> = state2
         .resources
         .iter()
@@ -530,7 +731,7 @@ fn mixed_fixed_and_scalable_deployments() {
 
     let registry = EphemeralInstanceRegistry::new();
     let scales = custom_effective_scales(&[("fixed-dep", 1, 1, 1), ("scalable-dep", 1, 3, 2)]);
-    let state = compute("myapp", &def, None, &registry, &scales).unwrap();
+    let state = compute("myapp", &def, None, &registry, &scales, &StoppedSet::new()).unwrap();
 
     let fixed: Vec<_> = state
         .resources
@@ -571,7 +772,15 @@ fn singleton_to_scaled_transition_marks_old_singleton_excess() {
 
     // Now compute with scaled path — the singleton should appear as excess.
     let scales = custom_effective_scales(&[("web", 1, 1, 1)]);
-    let state = compute("myapp", &app_def, None, &registry, &scales).unwrap();
+    let state = compute(
+        "myapp",
+        &app_def,
+        None,
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
 
     let ready: Vec<_> = state
         .resources
@@ -610,7 +819,15 @@ fn uninstall_tears_down_all_scaled_instances() {
 
     // Create 3 scaled instances via steady-state compute.
     let scales = custom_effective_scales(&[("web", 1, 5, 3)]);
-    let _ = compute("myapp", &app_def, None, &registry, &scales).unwrap();
+    let _ = compute(
+        "myapp",
+        &app_def,
+        None,
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
 
     // Now compute uninstalling — all 3 should be Unscheduled.
     let state = compute_uninstalling("myapp", &app_def, &registry).unwrap();

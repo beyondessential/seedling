@@ -171,6 +171,24 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
+    // r[impl resource.stop]
+    ResourceStopped {
+        timestamp: Timestamp,
+        app: String,
+        kind: String,
+        name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
+    // r[impl resource.unstop]
+    ResourceUnstopped {
+        timestamp: Timestamp,
+        app: String,
+        kind: String,
+        name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
     ServerBusy {
         timestamp: Timestamp,
         reason: String,
@@ -379,6 +397,28 @@ impl EventSender {
         });
     }
 
+    // r[impl resource.stop]
+    pub fn resource_stopped(&self, app: &str, kind: &str, name: &str, actor: Option<Arc<Actor>>) {
+        self.emit(OiEvent::ResourceStopped {
+            timestamp: now(),
+            app: app.to_owned(),
+            kind: kind.to_owned(),
+            name: name.to_owned(),
+            actor,
+        });
+    }
+
+    // r[impl resource.unstop]
+    pub fn resource_unstopped(&self, app: &str, kind: &str, name: &str, actor: Option<Arc<Actor>>) {
+        self.emit(OiEvent::ResourceUnstopped {
+            timestamp: now(),
+            app: app.to_owned(),
+            kind: kind.to_owned(),
+            name: name.to_owned(),
+            actor,
+        });
+    }
+
     /// Build a context for the three operation lifecycle events.
     /// The context is `Clone + Send + 'static` and can cross the blocking thread boundary.
     // i[wire.actor]
@@ -509,6 +549,18 @@ impl EventSenderWithActor {
             operation_id,
             Some(Arc::clone(&self.actor)),
         );
+    }
+
+    // r[impl resource.stop]
+    pub fn resource_stopped(&self, app: &str, kind: &str, name: &str) {
+        self.inner
+            .resource_stopped(app, kind, name, Some(Arc::clone(&self.actor)));
+    }
+
+    // r[impl resource.unstop]
+    pub fn resource_unstopped(&self, app: &str, kind: &str, name: &str) {
+        self.inner
+            .resource_unstopped(app, kind, name, Some(Arc::clone(&self.actor)));
     }
 }
 

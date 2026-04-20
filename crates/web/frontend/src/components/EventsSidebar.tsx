@@ -16,7 +16,9 @@ const MAX_WIDTH = 700;
 
 function eventColor(type: string): "default" | "success" | "error" | "warning" | "info" {
   if (type === "FaultCleared") return "success";
+  if (type === "ResourceUnstopped") return "success";
   if (type.includes("Fault")) return "error";
+  if (type === "ResourceStopped") return "warning";
   if (type.includes("Failed") || type.includes("Exited")) return "warning";
   if (type.includes("Completed") || type.includes("Registered")) return "success";
   if (type === "DeploymentRestarted") return "info";
@@ -39,6 +41,8 @@ function eventSummary(ev: SeedlingEvent): string {
     case "ResourceStateChanged": return `${ev.resource_type ?? ""}/${ev.resource_name ?? ""} → ${ev.state ?? ""}`;
     case "ScaleChanged": return `${ev.deployment ?? ""} scaled to ${ev.scale ?? "?"}`;
     case "DeploymentRestarted": return `${ev.deployment ?? ""} restarted`;
+    case "ResourceStopped": return `${ev.kind ?? ""}/${ev.name ?? ""} stopped`;
+    case "ResourceUnstopped": return `${ev.kind ?? ""}/${ev.name ?? ""} unstopped`;
     case "ForwardStarted": return `forward :${ev.port ?? "?"} started`;
     case "ForwardStopped": return `forward stopped`;
     case "ShellExited": return `shell exited (${ev.exit_code ?? "?"})`;

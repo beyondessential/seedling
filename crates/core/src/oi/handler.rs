@@ -74,6 +74,12 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/apps/scale" => apps::scale_app(state, parse_params(req.params)?, ctx),
         // i[deployment.restart]
         "/apps/restart" => apps::restart_deployment(state, parse_params(req.params)?, ctx),
+        // i[resource.stop]
+        "/apps/resource/stop" => apps::stop_resource(state, parse_params(req.params)?, ctx),
+        // i[resource.unstop]
+        "/apps/resource/unstop" => apps::unstop_resource(state, parse_params(req.params)?, ctx),
+        // i[resource.unstop-all]
+        "/apps/unstop" => apps::unstop_all_resources(state, parse_params(req.params)?, ctx),
         // i[app.script]
         "/apps/script" => apps::get_app_script(state, parse_params(req.params)?),
         // i[generation.history]

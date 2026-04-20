@@ -22,7 +22,7 @@ use crate::{
         desired::{DesiredState, EffectiveScales, compute, compute_uninstalling},
         identity::InstanceId,
         lifecycle::LifecycleState,
-        scaling,
+        scaling, stopped,
     },
     system::{
         System, actuator::Actuator, caddy, observer::Observer, resolver, types::DataPlaneRules,
@@ -244,6 +244,11 @@ impl Reconciler {
             let app_def = entry.app.def.lock().clone();
             // r[impl autonomous.scale]
             let effective_scales = self.compute_effective_scales(&name, &app_def);
+            // r[impl resource.stop]
+            let stopped_set = {
+                let db = self.db.lock();
+                stopped::load_stopped(&db, &name).unwrap_or_default()
+            };
             let desired = match phase {
                 AppPhase::Uninstalling => compute_uninstalling(&name, &app_def, &*self.registry),
                 AppPhase::NotInstalled => unreachable!(),
@@ -253,6 +258,7 @@ impl Reconciler {
                     (*progress).as_ref(),
                     &*self.registry,
                     &effective_scales,
+                    &stopped_set,
                 ),
             };
             let desired = match desired {
