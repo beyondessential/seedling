@@ -34,6 +34,7 @@ pub(crate) fn list_forwards(state: &Arc<OiState>, params: ListForwardsParams) ->
                 "port": r.port,
                 "proto": r.proto,
                 "opened_at": r.opened_at.to_string(),
+                "actor": r.actor,
             })
         })
         .collect();

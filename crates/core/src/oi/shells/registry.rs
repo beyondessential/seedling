@@ -2,6 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use jiff::Timestamp;
 use parking_lot::Mutex;
+use seedling_protocol::actor::Actor;
 use uuid::Uuid;
 
 pub type SessionId = Uuid;
@@ -11,6 +12,7 @@ pub struct ShellSession {
     pub app: String,
     pub name: String,
     pub opened_at: Timestamp,
+    pub actor: Option<Actor>,
     /// The podman container name (display_name) for this session.
     pub container_name: String,
     pub(crate) pty_master_fd: std::os::unix::io::RawFd,
@@ -23,6 +25,7 @@ pub struct ShellRecord {
     pub app: String,
     pub name: String,
     pub opened_at: Timestamp,
+    pub actor: Option<Actor>,
     pub container_name: String,
 }
 
@@ -83,6 +86,7 @@ impl ShellRegistry {
                 app: s.app.clone(),
                 name: s.name.clone(),
                 opened_at: s.opened_at,
+                actor: s.actor.clone(),
                 container_name: s.container_name.clone(),
             })
             .collect()

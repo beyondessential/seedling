@@ -49,6 +49,7 @@ pub(crate) fn list_shells(state: &Arc<OiState>, params: ListShellsParams) -> Han
                 "app": r.app,
                 "name": r.name,
                 "opened_at": r.opened_at.to_string(),
+                "actor": r.actor,
             })
         })
         .collect();

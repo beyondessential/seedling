@@ -218,6 +218,7 @@ export interface ShellSession {
   app: string;
   name: string;
   opened_at: string;
+  actor?: Actor;
 }
 
 export interface ForwardSession {
@@ -227,6 +228,7 @@ export interface ForwardSession {
   port: number;
   proto: string;
   opened_at: string;
+  actor?: Actor;
 }
 
 export interface ConnectedClients {

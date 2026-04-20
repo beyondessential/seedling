@@ -9,7 +9,6 @@ import EditScript from "./routes/EditScript";
 import Faults from "./routes/Faults";
 import Login from "./routes/Login";
 import Logs from "./routes/Logs";
-import Sessions from "./routes/Sessions";
 import Shell from "./routes/Shell";
 import Volumes from "./routes/Volumes";
 
@@ -24,7 +23,6 @@ const router = createBrowserRouter([
       { path: "apps/:name", element: <AppDetail /> },
       { path: "apps/:name/script", element: <EditScript /> },
       { path: "faults", element: <Faults /> },
-      { path: "sessions", element: <Sessions /> },
       { path: "volumes", element: <Volumes /> },
       { path: "apps/:name/logs", element: <Logs /> },
       { path: "apps/:name/shell/:shellName", element: <Shell /> },

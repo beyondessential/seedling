@@ -61,6 +61,8 @@ pub(crate) async fn open_volume_shell_session(
     #[derive(serde::Deserialize)]
     struct Request {
         #[serde(default)]
+        actor: Option<seedling_protocol::actor::Actor>,
+        #[serde(default)]
         params: serde_json::Value,
     }
 
@@ -89,6 +91,7 @@ pub(crate) async fn open_volume_shell_session(
         Ok(r) => r,
         Err(e) => err!("not_found", format!("invalid request: {e}")),
     };
+    let req_actor = req.actor;
     let params: Params = match serde_json::from_value(req.params) {
         Ok(p) => p,
         Err(e) => err!("requirements_invalid", format!("invalid params: {e}")),
@@ -315,6 +318,7 @@ pub(crate) async fn open_volume_shell_session(
         app: "_volumes".into(),
         name: session_name.clone(),
         opened_at: jiff::Timestamp::now(),
+        actor: req_actor,
         container_name: container_name.clone(),
         pty_master_fd,
         stop_tx,

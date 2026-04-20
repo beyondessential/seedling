@@ -102,7 +102,7 @@ export function Navbar() {
           <IconButton
             size="small"
             component={Link}
-            to="/sessions"
+            to="/"
             sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
           >
             <Badge

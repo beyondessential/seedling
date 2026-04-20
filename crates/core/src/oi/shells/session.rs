@@ -46,6 +46,8 @@ pub(crate) async fn open_shell_session(
     #[derive(serde::Deserialize)]
     struct Request {
         #[serde(default)]
+        actor: Option<seedling_protocol::actor::Actor>,
+        #[serde(default)]
         params: serde_json::Value,
     }
 
@@ -61,6 +63,7 @@ pub(crate) async fn open_shell_session(
             return;
         }
     };
+    let req_actor = req.actor;
     let params: Params = match serde_json::from_value(req.params) {
         Ok(p) => p,
         Err(e) => {
@@ -429,6 +432,7 @@ pub(crate) async fn open_shell_session(
         app: app_name.clone(),
         name: shell_name.clone(),
         opened_at: jiff::Timestamp::now(),
+        actor: req_actor,
         container_name: container_name.clone(),
         pty_master_fd,
         stop_tx,

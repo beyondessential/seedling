@@ -1,12 +1,15 @@
 import AddIcon from "@mui/icons-material/Add";
 import RefreshIcon from "@mui/icons-material/Refresh";
+import StopIcon from "@mui/icons-material/Stop";
 import {
   Box,
   Button,
   Chip,
   CircularProgress,
+  Divider,
   IconButton,
   Paper,
+  Stack,
   Table,
   TableBody,
   TableCell,
@@ -19,10 +22,11 @@ import {
 import { useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { OiErrorAlert } from "../components/OiErrorAlert";
+import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
 import { useEventRefresh } from "../hooks/useEventRefresh";
 import { statusColor, statusLabel } from "../lib/status";
-import type { AppSummary, SeedlingEvent } from "../lib/types";
+import type { Actor, AppSummary, ConnectedClients, SeedlingEvent } from "../lib/types";
 
 const APP_LIST_EVENTS: Set<string> = new Set([
   "AppRegistered", "AppDeregistered", "AppUpdated",
@@ -30,46 +34,71 @@ const APP_LIST_EVENTS: Set<string> = new Set([
   "FaultFiled", "FaultCleared", "ResourceStopped", "ResourceUnstopped",
 ]);
 
+const SESSION_EVENTS: Set<string> = new Set([
+  "WebSessionStarted", "WebSessionStopped",
+  "ShellStarted", "ShellExited",
+  "ForwardStarted", "ForwardStopped",
+]);
+
+function actorLabel(actor?: Actor): string {
+  if (!actor) return "—";
+  return actor.display ?? actor.id ?? actor.kind ?? "—";
+}
+
 export default function Apps() {
-  const { data, loading, error, refetch } =
+  const { data: apps, loading: appsLoading, error: appsError, refetch: refetchApps } =
     useOiQuery<AppSummary[]>("/apps/list", {});
-  const matchesApps = useCallback((ev: SeedlingEvent) => APP_LIST_EVENTS.has(ev.type), []);
-  useEventRefresh(refetch, matchesApps);
+  const { data: clients, loading: clientsLoading, error: clientsError, refetch: refetchClients } =
+    useOiQuery<ConnectedClients>("/connected-clients/list", {});
+  const { execute: stopShell } = useOiAction();
+  const { execute: stopForward } = useOiAction();
+
+  const matchApps = useCallback((ev: SeedlingEvent) => APP_LIST_EVENTS.has(ev.type), []);
+  const matchSessions = useCallback((ev: SeedlingEvent) => SESSION_EVENTS.has(ev.type), []);
+  useEventRefresh(refetchApps, matchApps);
+  useEventRefresh(refetchClients, matchSessions);
+
   const navigate = useNavigate();
+
+  const handleStopShell = async (sessionId: string) => {
+    await stopShell("/shells/stop", { session_id: sessionId });
+    refetchClients();
+  };
+
+  const handleStopForward = async (forwardId: string) => {
+    await stopForward("/forwards/stop", { forward_id: forwardId });
+    refetchClients();
+  };
+
+  const shells = clients?.shells ?? [];
+  const forwards = clients?.forwards ?? [];
 
   return (
     <Box sx={{ p: 3, maxWidth: 900, mx: "auto" }}>
+      {/* Apps */}
       <Box sx={{ display: "flex", alignItems: "center", mb: 2, gap: 1 }}>
-        <Typography variant="h5" sx={{ flexGrow: 1 }}>
-          Apps
-        </Typography>
-        <Button
-          size="small"
-          variant="contained"
-          startIcon={<AddIcon />}
-          component={Link}
-          to="/apps/new"
-        >
+        <Typography variant="h5" sx={{ flexGrow: 1 }}>Apps</Typography>
+        <Button size="small" variant="contained" startIcon={<AddIcon />} component={Link} to="/apps/new">
           New app
         </Button>
         <Tooltip title="Refresh">
           <span>
-            <IconButton onClick={refetch} disabled={loading} size="small">
+            <IconButton onClick={refetchApps} disabled={appsLoading} size="small">
               <RefreshIcon />
             </IconButton>
           </span>
         </Tooltip>
       </Box>
 
-      {error && <OiErrorAlert error={error} />}
+      {appsError && <OiErrorAlert error={appsError} />}
 
-      {loading && !data && (
+      {appsLoading && !apps && (
         <Box sx={{ display: "flex", justifyContent: "center", mt: 4 }}>
           <CircularProgress />
         </Box>
       )}
 
-      {data && (
+      {apps && (
         <TableContainer component={Paper} variant="outlined">
           <Table size="small">
             <TableHead>
@@ -79,14 +108,14 @@ export default function Apps() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {data.length === 0 && (
+              {apps.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={2} align="center" sx={{ color: "text.secondary", py: 4 }}>
                     No apps registered.
                   </TableCell>
                 </TableRow>
               )}
-              {data.map((app) => (
+              {apps.map((app) => (
                 <TableRow
                   key={app.name}
                   hover
@@ -111,6 +140,125 @@ export default function Apps() {
             </TableBody>
           </Table>
         </TableContainer>
+      )}
+
+      {/* Sessions */}
+      {(shells.length > 0 || forwards.length > 0) && (
+        <>
+          <Divider sx={{ my: 4 }} />
+          <Box sx={{ display: "flex", alignItems: "center", mb: 2, gap: 1 }}>
+            <Typography variant="h5" sx={{ flexGrow: 1 }}>Active Sessions</Typography>
+            <Tooltip title="Refresh">
+              <span>
+                <IconButton onClick={refetchClients} disabled={clientsLoading} size="small">
+                  <RefreshIcon />
+                </IconButton>
+              </span>
+            </Tooltip>
+          </Box>
+          {clientsError && <OiErrorAlert error={clientsError} />}
+          <Stack spacing={3}>
+            {shells.length > 0 && (
+              <Box>
+                <Typography variant="subtitle1" sx={{ mb: 1, fontWeight: 600 }}>
+                  Shells ({shells.length})
+                </Typography>
+                <TableContainer component={Paper} variant="outlined">
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>App</TableCell>
+                        <TableCell>Shell</TableCell>
+                        <TableCell>Actor</TableCell>
+                        <TableCell>Opened</TableCell>
+                        <TableCell width={40} />
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {shells.map((s) => (
+                        <TableRow key={s.session_id}>
+                          <TableCell sx={{ fontFamily: "monospace" }}>
+                            {s.app === "_volumes"
+                              ? <Typography variant="caption" color="text.secondary">volumes</Typography>
+                              : <Link to={`/apps/${s.app}`}>{s.app}</Link>}
+                          </TableCell>
+                          <TableCell sx={{ fontFamily: "monospace" }}>{s.name}</TableCell>
+                          <TableCell sx={{ color: "text.secondary" }}>{actorLabel(s.actor)}</TableCell>
+                          <TableCell sx={{ color: "text.secondary" }}>
+                            {new Date(s.opened_at).toLocaleString()}
+                          </TableCell>
+                          <TableCell align="right" sx={{ px: 0.5 }}>
+                            <Tooltip title="Stop shell">
+                              <IconButton
+                                size="small"
+                                color="error"
+                                onClick={() => void handleStopShell(s.session_id)}
+                              >
+                                <StopIcon sx={{ fontSize: 16 }} />
+                              </IconButton>
+                            </Tooltip>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </Box>
+            )}
+
+            {forwards.length > 0 && (
+              <Box>
+                <Typography variant="subtitle1" sx={{ mb: 1, fontWeight: 600 }}>
+                  Port Forwards ({forwards.length})
+                </Typography>
+                <TableContainer component={Paper} variant="outlined">
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>App</TableCell>
+                        <TableCell>Service</TableCell>
+                        <TableCell>Port</TableCell>
+                        <TableCell>Proto</TableCell>
+                        <TableCell>Actor</TableCell>
+                        <TableCell>Opened</TableCell>
+                        <TableCell width={40} />
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {forwards.map((f) => (
+                        <TableRow key={f.forward_id}>
+                          <TableCell sx={{ fontFamily: "monospace" }}>
+                            <Link to={`/apps/${f.app}`}>{f.app}</Link>
+                          </TableCell>
+                          <TableCell sx={{ fontFamily: "monospace" }}>{f.service}</TableCell>
+                          <TableCell sx={{ fontFamily: "monospace" }}>{f.port}</TableCell>
+                          <TableCell>
+                            <Chip label={f.proto} size="small" variant="outlined" />
+                          </TableCell>
+                          <TableCell sx={{ color: "text.secondary" }}>{actorLabel(f.actor)}</TableCell>
+                          <TableCell sx={{ color: "text.secondary" }}>
+                            {new Date(f.opened_at).toLocaleString()}
+                          </TableCell>
+                          <TableCell align="right" sx={{ px: 0.5 }}>
+                            <Tooltip title="Stop forward">
+                              <IconButton
+                                size="small"
+                                color="error"
+                                onClick={() => void handleStopForward(f.forward_id)}
+                              >
+                                <StopIcon sx={{ fontSize: 16 }} />
+                              </IconButton>
+                            </Tooltip>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </Box>
+            )}
+          </Stack>
+        </>
       )}
     </Box>
   );

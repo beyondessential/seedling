@@ -32,6 +32,8 @@ pub(crate) async fn forward_port_session(
     #[derive(serde::Deserialize)]
     struct Request {
         #[serde(default)]
+        actor: Option<seedling_protocol::actor::Actor>,
+        #[serde(default)]
         params: serde_json::Value,
     }
     #[derive(serde::Deserialize)]
@@ -58,6 +60,7 @@ pub(crate) async fn forward_port_session(
             return;
         }
     };
+    let req_actor = req.actor;
     let params: Params = match serde_json::from_value(req.params) {
         Ok(p) => p,
         Err(e) => {
@@ -186,6 +189,7 @@ pub(crate) async fn forward_port_session(
         proto,
         target_addr,
         opened_at: jiff::Timestamp::now(),
+        actor: req_actor,
         stop_tx,
         udp_tx,
     });
