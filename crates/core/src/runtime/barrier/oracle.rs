@@ -21,6 +21,21 @@ pub trait WorldStateOracle: Send + Sync {
         let _ = resource;
         false
     }
+
+    /// Returns `Some(true)` when the resource has terminated successfully,
+    /// `Some(false)` when it has terminated unsuccessfully, and `None` when
+    /// the resource has not yet terminated or when success is not meaningful
+    /// for this resource kind.
+    ///
+    /// For container-backed resources (Deployment, Job), success means the
+    /// last `container_exited` observation recorded `exit_code == 0`. For
+    /// Service/Ingress/Volume, termination is always success (the resource
+    /// has no process exit code to inspect).
+    // l[impl rt.termination.ensure-success]
+    fn termination_success(&self, resource: &ResourceInstance) -> Option<bool> {
+        let _ = resource;
+        None
+    }
 }
 
 /// A simple in-memory oracle for tests.
@@ -31,6 +46,7 @@ pub trait WorldStateOracle: Send + Sync {
 pub struct TestWorldOracle {
     states: Mutex<HashMap<(ResourceKind, Option<String>), LifecycleState>>,
     valid_certs: Mutex<std::collections::HashSet<(ResourceKind, Option<String>)>>,
+    exit_codes: Mutex<HashMap<(ResourceKind, Option<String>), i32>>,
 }
 
 impl TestWorldOracle {
@@ -38,6 +54,7 @@ impl TestWorldOracle {
         Self {
             states: Mutex::new(HashMap::new()),
             valid_certs: Mutex::new(std::collections::HashSet::new()),
+            exit_codes: Mutex::new(HashMap::new()),
         }
     }
 
@@ -52,6 +69,14 @@ impl TestWorldOracle {
         self.valid_certs
             .lock()
             .insert((resource.kind, resource.name));
+    }
+
+    /// Record an exit code for a container-backed resource. Used by
+    /// `termination_success()` to report success/failure.
+    pub fn set_exit_code(&self, resource: ResourceInstance, exit_code: i32) {
+        self.exit_codes
+            .lock()
+            .insert((resource.kind, resource.name), exit_code);
     }
 }
 
@@ -74,6 +99,33 @@ impl WorldStateOracle for TestWorldOracle {
         self.valid_certs
             .lock()
             .contains(&(resource.kind, resource.name.clone()))
+    }
+
+    // l[impl rt.termination.ensure-success]
+    fn termination_success(&self, resource: &ResourceInstance) -> Option<bool> {
+        match resource.kind {
+            ResourceKind::Deployment | ResourceKind::Job => self
+                .exit_codes
+                .lock()
+                .get(&(resource.kind, resource.name.clone()))
+                .map(|&code| code == 0),
+            ResourceKind::Service
+            | ResourceKind::HttpService
+            | ResourceKind::Ingress
+            | ResourceKind::Volume
+            | ResourceKind::ExternalVolume => {
+                // Non-container resources: termination itself is success.
+                // Only claim success once the resource is actually terminated.
+                if self.lifecycle_state(resource) == LifecycleState::Terminated
+                    || self.lifecycle_state(resource) == LifecycleState::Unscheduled
+                {
+                    Some(true)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
     }
 }
 
@@ -126,6 +178,55 @@ impl WorldStateOracle for DbWorldOracle {
             }
             valid
         })
+    }
+
+    // l[impl rt.termination.ensure-success]
+    fn termination_success(&self, resource: &ResourceInstance) -> Option<bool> {
+        let kind = resource.kind;
+        let resource_clone = resource.clone();
+        match kind {
+            ResourceKind::Deployment | ResourceKind::Job => self.db.call(move |db| {
+                let observations =
+                    crate::runtime::history::query_observations(db, &resource_clone).ok()?;
+                // Walk newest-to-oldest and return the last container_exited
+                // observation's exit_code. A subsequent container_removed
+                // doesn't change the outcome — the exit code from the most
+                // recent exit is the one we care about.
+                let latest_exit = observations
+                    .iter()
+                    .rev()
+                    .find(|obs| obs.obs_kind == "container_exited")?;
+                let code = latest_exit
+                    .payload
+                    .get("exit_code")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(-1);
+                Some(code == 0)
+            }),
+            ResourceKind::Service
+            | ResourceKind::HttpService
+            | ResourceKind::Ingress
+            | ResourceKind::Volume
+            | ResourceKind::ExternalVolume => {
+                // Non-container resources: once terminated, treat as success.
+                let resource_for_state = resource.clone();
+                let state = self.db.call(move |db| {
+                    let observations = match crate::runtime::history::query_observations(
+                        db,
+                        &resource_for_state,
+                    ) {
+                        Ok(obs) => obs,
+                        Err(_) => return LifecycleState::Pending,
+                    };
+                    derive_lifecycle_state(&resource_for_state, &observations)
+                });
+                match state {
+                    LifecycleState::Terminated | LifecycleState::Unscheduled => Some(true),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
     }
 }
 

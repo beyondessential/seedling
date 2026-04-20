@@ -880,6 +880,29 @@ impl Started {
         drop(g);
         Err(make_barrier_error(condition))
     }
+
+    // l[impl rt.termination.ensure-success]
+    /// Consult the world oracle for every resource in this `Started` group
+    /// and aggregate their termination outcomes. All resources must report
+    /// `Some(true)` for the group to be considered successful; any `Some(false)`
+    /// makes the group a failure; any `None` (resource didn't record a
+    /// meaningful outcome — e.g. a Deployment or Job that the oracle has no
+    /// exit observation for) is conservatively treated as failure too, so an
+    /// ensure_success() call never silently passes for a resource whose
+    /// success state is unknown.
+    fn compute_termination(&self) -> Termination {
+        let Some(ctx) = &self.ctx else {
+            // Stub context (no real world to query) — treat as success so
+            // BSL parse/type-check runs don't flap.
+            return Termination { success: true };
+        };
+        let world = Arc::clone(&ctx.lock().world);
+        let success = self
+            .resources
+            .iter()
+            .all(|r| world.termination_success(r).unwrap_or(false));
+        Termination { success }
+    }
 }
 
 impl CustomType for Started {
@@ -928,14 +951,14 @@ impl CustomType for Started {
                 "terminated",
                 |this: &mut Self| -> Result<Termination, Box<EvalAltResult>> {
                     this.check_barrier(LifecycleState::Terminated, 30)?;
-                    Ok(Termination { success: true })
+                    Ok(this.compute_termination())
                 },
             )
             .with_fn(
                 "terminated",
                 |this: &mut Self, d: i64| -> Result<Termination, Box<EvalAltResult>> {
                     this.check_barrier(LifecycleState::Terminated, d.max(0) as u64)?;
-                    Ok(Termination { success: true })
+                    Ok(this.compute_termination())
                 },
             )
             // l[impl rt.started.type]: Collection methods on Started return Started

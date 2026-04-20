@@ -563,3 +563,109 @@ fn db_oracle_uses_query_observations_from_history() {
     let oracle = DbWorldOracle::new(DbHandle::from_db(db));
     assert_eq!(oracle.lifecycle_state(&resource), LifecycleState::Ready);
 }
+
+// -----------------------------------------------------------------------
+// termination_success
+// -----------------------------------------------------------------------
+
+// l[verify rt.termination.ensure-success]
+#[test]
+fn db_oracle_termination_success_none_before_exit() {
+    let db = Db::open_in_memory().expect("open");
+    let resource = dep("app", "job");
+    insert_observation(&db, &resource, "container_running", &serde_json::json!({}))
+        .expect("insert");
+    let oracle = DbWorldOracle::new(DbHandle::from_db(db));
+    assert_eq!(oracle.termination_success(&resource), None);
+}
+
+// l[verify rt.termination.ensure-success]
+#[test]
+fn db_oracle_termination_success_true_on_exit_zero() {
+    let db = Db::open_in_memory().expect("open");
+    let resource = dep("app", "job");
+    insert_observation(
+        &db,
+        &resource,
+        "container_exited",
+        &serde_json::json!({ "exit_code": 0 }),
+    )
+    .expect("insert");
+    let oracle = DbWorldOracle::new(DbHandle::from_db(db));
+    assert_eq!(oracle.termination_success(&resource), Some(true));
+}
+
+// l[verify rt.termination.ensure-success]
+#[test]
+fn db_oracle_termination_success_false_on_nonzero_exit() {
+    let db = Db::open_in_memory().expect("open");
+    let resource = dep("app", "job");
+    insert_observation(
+        &db,
+        &resource,
+        "container_exited",
+        &serde_json::json!({ "exit_code": 1 }),
+    )
+    .expect("insert");
+    let oracle = DbWorldOracle::new(DbHandle::from_db(db));
+    assert_eq!(oracle.termination_success(&resource), Some(false));
+}
+
+// l[verify rt.termination.ensure-success]
+#[test]
+fn db_oracle_termination_success_uses_latest_exit() {
+    let db = Db::open_in_memory().expect("open");
+    let resource = dep("app", "job");
+    // First run fails, second run succeeds (container restarted).
+    insert_observation(
+        &db,
+        &resource,
+        "container_exited",
+        &serde_json::json!({ "exit_code": 42 }),
+    )
+    .expect("insert");
+    insert_observation(&db, &resource, "container_running", &serde_json::json!({}))
+        .expect("insert");
+    insert_observation(
+        &db,
+        &resource,
+        "container_exited",
+        &serde_json::json!({ "exit_code": 0 }),
+    )
+    .expect("insert");
+    let oracle = DbWorldOracle::new(DbHandle::from_db(db));
+    assert_eq!(oracle.termination_success(&resource), Some(true));
+}
+
+// l[verify rt.termination.ensure-success]
+#[test]
+fn db_oracle_termination_success_services_terminate_successfully() {
+    let db = Db::open_in_memory().expect("open");
+    let resource = svc("api");
+    insert_observation(&db, &resource, "stop_sent", &serde_json::json!({})).expect("insert");
+    insert_observation(&db, &resource, "network_removed", &serde_json::json!({})).expect("insert");
+    let oracle = DbWorldOracle::new(DbHandle::from_db(db));
+    assert_eq!(oracle.termination_success(&resource), Some(true));
+}
+
+// l[verify rt.termination.ensure-success]
+#[test]
+fn db_oracle_termination_success_non_terminal_service_returns_none() {
+    let db = Db::open_in_memory().expect("open");
+    let resource = ing("api");
+    insert_observation(&db, &resource, "ingress_configured", &serde_json::json!({}))
+        .expect("insert");
+    let oracle = DbWorldOracle::new(DbHandle::from_db(db));
+    assert_eq!(oracle.termination_success(&resource), None);
+}
+
+// l[verify rt.termination.ensure-success]
+#[test]
+fn db_oracle_termination_success_volume_terminated_is_success() {
+    let db = Db::open_in_memory().expect("open");
+    let resource = vol("data");
+    insert_observation(&db, &resource, "stop_sent", &serde_json::json!({})).expect("insert");
+    insert_observation(&db, &resource, "volume_removed", &serde_json::json!({})).expect("insert");
+    let oracle = DbWorldOracle::new(DbHandle::from_db(db));
+    assert_eq!(oracle.termination_success(&resource), Some(true));
+}
