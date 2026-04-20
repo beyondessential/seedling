@@ -53,11 +53,28 @@ fn param_is_secret(state: &OiState, app: &str, name: &str) -> bool {
         .unwrap_or(false)
 }
 
+// i[impl param.set] i[impl param.unset]
+// Params cannot be mutated while an operation is in flight for the app:
+// captured-closure state inside the operation would become inconsistent with
+// the new param value. The scheduler is the primary source of truth; the
+// phase check covers the narrow window between boot (phase = Installing
+// persisted by a prior process) and the replay path re-registering the
+// operation with the in-memory scheduler.
 fn reject_if_op_in_progress(state: &OiState, app: &str) -> Result<(), OiError> {
+    use crate::runtime::apps::AppPhase;
     if state.scheduler.lock().has_operation_for(app) {
         return Err(OiError::new(
             ErrorCode::OperationInProgress,
             format!("operation in progress for app: {app}"),
+        ));
+    }
+    let reg = state.registry.read();
+    if let Some(entry) = reg.get(app)
+        && matches!(*entry.phase.lock(), AppPhase::Installing)
+    {
+        return Err(OiError::new(
+            ErrorCode::OperationInProgress,
+            format!("install is in progress for app: {app}"),
         ));
     }
     Ok(())

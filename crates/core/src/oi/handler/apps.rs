@@ -1239,20 +1239,34 @@ pub(crate) fn deregister_app(
         ));
     }
 
-    // Reject if the app is not in the NotInstalled phase.
+    // Reject if the app is not in the NotInstalled phase. The message
+    // distinguishes the three non-removable phases so operators know whether
+    // to wait (Installing, Uninstalling) or run a separate uninstall first
+    // (Installed).
     {
         let reg = state.registry.read();
         if let Some(entry) = reg.get(name) {
             let phase = entry.phase.lock();
-            if !matches!(*phase, AppPhase::NotInstalled) {
-                return Err(OiError::new(
-                    ErrorCode::RequirementsInvalid,
-                    if matches!(*phase, AppPhase::Uninstalling) {
-                        format!("app is still uninstalling: {name}")
-                    } else {
-                        format!("app is installed; call uninstall first: {name}")
-                    },
-                ));
+            match *phase {
+                AppPhase::NotInstalled => {}
+                AppPhase::Installing => {
+                    return Err(OiError::new(
+                        ErrorCode::OperationInProgress,
+                        format!("an install is in progress; wait for it to finish: {name}"),
+                    ));
+                }
+                AppPhase::Uninstalling => {
+                    return Err(OiError::new(
+                        ErrorCode::RequirementsInvalid,
+                        format!("app is still uninstalling: {name}"),
+                    ));
+                }
+                AppPhase::Installed => {
+                    return Err(OiError::new(
+                        ErrorCode::RequirementsInvalid,
+                        format!("app is installed; call uninstall first: {name}"),
+                    ));
+                }
             }
             drop(phase);
         }
@@ -1305,11 +1319,20 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
         let entry = reg
             .get(name)
             .ok_or_else(|| OiError::not_found(format!("app not found: {name}")))?;
-        if !matches!(*entry.phase.lock(), AppPhase::Installed) {
-            return Err(OiError::new(
-                ErrorCode::NotInstalled,
-                format!("app is not installed: {name}"),
-            ));
+        match *entry.phase.lock() {
+            AppPhase::Installed => {}
+            AppPhase::Installing => {
+                return Err(OiError::new(
+                    ErrorCode::OperationInProgress,
+                    format!("install is in progress; cannot uninstall yet: {name}"),
+                ));
+            }
+            AppPhase::NotInstalled | AppPhase::Uninstalling => {
+                return Err(OiError::new(
+                    ErrorCode::NotInstalled,
+                    format!("app is not installed: {name}"),
+                ));
+            }
         }
         Arc::clone(&entry.phase)
     };
