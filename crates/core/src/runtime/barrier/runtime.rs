@@ -10,7 +10,7 @@ use crate::runtime::barrier::{
 };
 use crate::runtime::db::Db;
 use crate::runtime::registry::{InstanceRegistry, RegistryError};
-use crate::runtime::{LifecycleState, ResourceInstance};
+use crate::runtime::{LifecycleState, ResourceInstance, restart_gens};
 
 // ---------------------------------------------------------------------------
 // Thread-local flag: set when a BarrierHit is thrown so that subsequent
@@ -634,6 +634,29 @@ impl CustomType for RuntimeInstance {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
             .with_name("RuntimeInstance")
+            // l[impl rt.restart]
+            .with_fn(
+                "restart",
+                |this: &mut Self, resource: Dynamic| -> Result<(), Box<EvalAltResult>> {
+                    use crate::defs::deployment::Deployment;
+                    let dep = resource.try_cast::<Deployment>().ok_or_else(
+                        || -> Box<EvalAltResult> { "rt.restart expects a Deployment".into() },
+                    )?;
+                    let dep_name = dep.name.as_str().to_owned();
+                    if dep_name.is_empty() {
+                        return Err("rt.restart requires a named deployment".into());
+                    }
+                    if let Some(db) = &this.db {
+                        let db = db.lock();
+                        restart_gens::bump_restart_gen(&db, &this.app_name, &dep_name).map_err(
+                            |e| -> Box<EvalAltResult> {
+                                format!("rt.restart db error: {e}").into()
+                            },
+                        )?;
+                    }
+                    Ok(())
+                },
+            )
             // l[impl rt.start]
             .with_fn(
                 "start",

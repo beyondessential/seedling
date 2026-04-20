@@ -66,6 +66,8 @@ const SQL_V24: &str = include_str!("db/migrations/v24.sql");
 // r[impl backup.execution]
 const SQL_V25: &str = include_str!("db/migrations/v25.sql");
 const SQL_V26: &str = include_str!("db/migrations/v26.sql");
+// i[impl deployment.restart]
+const SQL_V27: &str = include_str!("db/migrations/v27.sql");
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -191,6 +193,11 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 26,
         sql: SQL_V26,
+        custom_run: None,
+    },
+    Migration {
+        version: 27,
+        sql: SQL_V27,
         custom_run: None,
     },
 ];

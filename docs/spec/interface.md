@@ -261,6 +261,15 @@ Absent specification bugs, anything that is not defined here is either defined i
 > `/apps/show` includes, for each Deployment resource, a `scale` object with fields `low` (lower bound), `high` (upper bound), and `current` (the effective scale).
 > `current` is the stored scaling decision clamped to the declared bounds, or the lower bound if no decision has been stored.
 
+# Deployment Restart
+
+> i[deployment.restart]
+> `/apps/restart { app, deployment }` triggers a restart of all running instances of the named Deployment within the installed app, following its configured update strategy (`on_update`: rolling or replace).
+> The app must be registered and the named deployment must exist in the current AppDef; otherwise `not_found` is returned.
+> A restart does not change the deployment's definition or generation. Running instances are replaced with fresh containers carrying the same configuration.
+> The restart is durable: if the process restarts before the reconciler finishes, the replacement will resume on the next startup.
+> On success, the response is `{}`.
+
 # App Script Retrieval
 
 > i[app.script]

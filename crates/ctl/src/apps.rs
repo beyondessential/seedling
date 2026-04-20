@@ -92,6 +92,8 @@ pub(super) enum AppsCommand {
         #[command(subcommand)]
         direction: ScaleDirection,
     },
+    /// Restart a deployment (follows its update strategy without changing config)
+    Restart { app: String, deployment: String },
     /// Forward a local port to a service
     Forward {
         app: String,
@@ -445,6 +447,16 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                     .request(
                         "/apps/scale",
                         serde_json::json!({ "app": app, "deployment": deployment, "scale": scale }),
+                    )
+                    .await,
+            );
+        }
+        AppsCommand::Restart { app, deployment } => {
+            print_result(
+                client
+                    .request(
+                        "/apps/restart",
+                        serde_json::json!({ "app": app, "deployment": deployment }),
                     )
                     .await,
             );

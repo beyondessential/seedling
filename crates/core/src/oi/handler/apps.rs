@@ -20,7 +20,7 @@ use crate::{
         history::{find_instances_for_group, query_observations},
         identity::{InstanceId, InstanceVariant, ResourceInstance},
         lifecycle::LifecycleState,
-        scaling, transition_phase,
+        restart_gens, scaling, transition_phase,
     },
 };
 
@@ -73,6 +73,12 @@ pub(crate) struct ScaleParams {
     pub app: String,
     pub deployment: String,
     pub scale: u16,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct RestartParams {
+    pub app: String,
+    pub deployment: String,
 }
 
 // r[impl schedule.prune]
@@ -953,6 +959,9 @@ pub(crate) fn deregister_app(
         if let Err(e) = scaling::delete_scaling_decisions_for_app(&db, name) {
             tracing::warn!(app = %name, "failed to clean up scaling decisions during deregister: {e}");
         }
+        if let Err(e) = restart_gens::delete_restart_gens_for_app(&db, name) {
+            tracing::warn!(app = %name, "failed to clean up restart generations during deregister: {e}");
+        }
     }
     {
         let db = state.db.lock();
@@ -993,6 +1002,9 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
         // i[impl scale.reset-on-uninstall]
         if let Err(e) = scaling::delete_scaling_decisions_for_app(&db, name) {
             tracing::warn!(app = %name, "failed to clear scaling decisions on uninstall: {e}");
+        }
+        if let Err(e) = restart_gens::delete_restart_gens_for_app(&db, name) {
+            tracing::warn!(app = %name, "failed to clear restart generations on uninstall: {e}");
         }
     }
 
@@ -1182,6 +1194,48 @@ pub(crate) fn update_app(
         },
     );
     Ok(json!({ "generation": generation }))
+}
+
+// i[impl deployment.restart]
+pub(crate) fn restart_deployment(
+    state: &OiState,
+    params: RestartParams,
+    ctx: &RequestCtx,
+) -> HandlerResult {
+    let name = params.app.as_str();
+    let deployment_name = params.deployment.as_str();
+
+    let reg = state.registry.read();
+    let entry = reg
+        .get(name)
+        .ok_or_else(|| OiError::not_found(format!("app not found: {name}")))?;
+
+    {
+        let def = entry.app.def.lock();
+        let found = def.resources.iter().any(|(id, resource)| {
+            matches!(resource, Resource::Deployment(_)) && id.name.as_str() == deployment_name
+        });
+        if !found {
+            return Err(OiError::not_found(format!(
+                "deployment not found: {deployment_name}"
+            )));
+        }
+    }
+
+    let operation_id = uuid::Uuid::new_v4().to_string();
+
+    {
+        let db = state.db.lock();
+        restart_gens::bump_restart_gen(&db, name, deployment_name)
+            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
+    }
+
+    entry.tick_notify.notify_one();
+
+    ctx.events
+        .deployment_restarted(name, deployment_name, &operation_id);
+
+    Ok(json!({ "operation_id": operation_id }))
 }
 
 // i[impl scale.set]

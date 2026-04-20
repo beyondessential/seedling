@@ -29,9 +29,10 @@ pub fn deployment_spec(
     dns_servers: &[Ipv6Addr],
     volumes_dir: Option<&Path>,
     external_volumes: &HashMap<String, ResolvedExternalMount>,
+    restart_gen: u64,
 ) -> ContainerSpec {
     let pod = def.pod.lock();
-    spec_from_pod(
+    let mut spec = spec_from_pod(
         &pod,
         instance,
         network,
@@ -39,7 +40,13 @@ pub fn deployment_spec(
         dns_servers,
         volumes_dir,
         external_volumes,
-    )
+    );
+    // r[impl deployment.restart]
+    if restart_gen > 0 {
+        spec.labels
+            .insert("seedling.restart-gen".to_string(), restart_gen.to_string());
+    }
+    spec
 }
 
 /// Builds a `ContainerSpec` for a `Job` instance.
@@ -56,9 +63,10 @@ pub fn job_spec(
     dns_servers: &[Ipv6Addr],
     volumes_dir: Option<&Path>,
     external_volumes: &HashMap<String, ResolvedExternalMount>,
+    restart_gen: u64,
 ) -> ContainerSpec {
     let pod = def.pod.lock();
-    spec_from_pod(
+    let mut spec = spec_from_pod(
         &pod,
         instance,
         network,
@@ -66,7 +74,12 @@ pub fn job_spec(
         dns_servers,
         volumes_dir,
         external_volumes,
-    )
+    );
+    if restart_gen > 0 {
+        spec.labels
+            .insert("seedling.restart-gen".to_string(), restart_gen.to_string());
+    }
+    spec
 }
 
 /// Produces the `podman run [...]` argv from a `ContainerSpec`.

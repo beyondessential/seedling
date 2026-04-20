@@ -162,6 +162,15 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
+    // r[impl deployment.restart]
+    DeploymentRestarted {
+        timestamp: Timestamp,
+        app: String,
+        deployment: String,
+        operation_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
     ServerBusy {
         timestamp: Timestamp,
         reason: String,
@@ -353,6 +362,23 @@ impl EventSender {
         });
     }
 
+    // r[impl deployment.restart]
+    pub fn deployment_restarted(
+        &self,
+        app: &str,
+        deployment: &str,
+        operation_id: &str,
+        actor: Option<Arc<Actor>>,
+    ) {
+        self.emit(OiEvent::DeploymentRestarted {
+            timestamp: now(),
+            app: app.to_owned(),
+            deployment: deployment.to_owned(),
+            operation_id: operation_id.to_owned(),
+            actor,
+        });
+    }
+
     /// Build a context for the three operation lifecycle events.
     /// The context is `Clone + Send + 'static` and can cross the blocking thread boundary.
     // i[wire.actor]
@@ -473,6 +499,16 @@ impl EventSenderWithActor {
             previous_generation,
             Some(Arc::clone(&self.actor)),
         )
+    }
+
+    // r[impl deployment.restart]
+    pub fn deployment_restarted(&self, app: &str, deployment: &str, operation_id: &str) {
+        self.inner.deployment_restarted(
+            app,
+            deployment,
+            operation_id,
+            Some(Arc::clone(&self.actor)),
+        );
     }
 }
 

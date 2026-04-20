@@ -169,11 +169,20 @@ function ResourcesSection({
   onRefresh: () => void;
 }) {
   const { execute, loading: scaling } = useOiAction();
+  const { execute: executeRestart, loading: restarting } = useOiAction();
 
   const scale = async (deploymentName: string, value: number) => {
     try {
       await execute("/apps/scale", { app: appName, deployment: deploymentName, scale: value });
       onRefresh();
+    } catch {
+      // errors surfaced by useOiAction globally
+    }
+  };
+
+  const restart = async (deploymentName: string) => {
+    try {
+      await executeRestart("/apps/restart", { app: appName, deployment: deploymentName });
     } catch {
       // errors surfaced by useOiAction globally
     }
@@ -237,6 +246,19 @@ function ResourcesSection({
                   </Typography>
                 </Box>
               </>
+            )}
+            {r.type === "deployment" && (
+              <Tooltip title="Restart deployment">
+                <span>
+                  <IconButton
+                    size="small"
+                    onClick={() => void restart(r.name)}
+                    disabled={restarting}
+                  >
+                    <RefreshIcon sx={{ fontSize: 14 }} />
+                  </IconButton>
+                </span>
+              </Tooltip>
             )}
           </Box>
           <FaultList faults={r.faults} />
@@ -1018,7 +1040,7 @@ function AppRemovalDialog({
 const APP_DETAIL_EVENTS: Set<string> = new Set([
   "AppUpdated", "OperationStarted", "OperationCompleted", "OperationFailed",
   "ParamSet", "ParamUnset", "ResourceStateChanged", "FaultFiled", "FaultCleared",
-  "ScaleChanged",
+  "ScaleChanged", "DeploymentRestarted",
 ]);
 
 export default function AppDetail() {

@@ -362,6 +362,7 @@ pub(crate) async fn open_shell_session(
         &state.dns_servers,
         None,
         &std::collections::HashMap::new(),
+        0,
     );
     container_spec.health = None;
     container_spec

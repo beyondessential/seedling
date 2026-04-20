@@ -19,6 +19,7 @@ pub mod identity;
 pub mod lifecycle;
 pub mod registries;
 pub mod registry;
+pub mod restart_gens;
 pub mod scaling;
 pub mod scheduler;
 pub mod schedules;

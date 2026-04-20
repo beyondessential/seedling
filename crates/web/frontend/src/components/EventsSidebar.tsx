@@ -19,6 +19,7 @@ function eventColor(type: string): "default" | "success" | "error" | "warning" |
   if (type.includes("Fault")) return "error";
   if (type.includes("Failed") || type.includes("Exited")) return "warning";
   if (type.includes("Completed") || type.includes("Registered")) return "success";
+  if (type === "DeploymentRestarted") return "info";
   if (type.includes("Started") || type.includes("Changed") || type.includes("State")) return "info";
   return "default";
 }
@@ -37,6 +38,7 @@ function eventSummary(ev: SeedlingEvent): string {
     case "FaultCleared": return `fault cleared: ${ev.kind ?? ""}`;
     case "ResourceStateChanged": return `${ev.resource_type ?? ""}/${ev.resource_name ?? ""} → ${ev.state ?? ""}`;
     case "ScaleChanged": return `${ev.deployment ?? ""} scaled to ${ev.scale ?? "?"}`;
+    case "DeploymentRestarted": return `${ev.deployment ?? ""} restarted`;
     case "ForwardStarted": return `forward :${ev.port ?? "?"} started`;
     case "ForwardStopped": return `forward stopped`;
     case "ShellExited": return `shell exited (${ev.exit_code ?? "?"})`;

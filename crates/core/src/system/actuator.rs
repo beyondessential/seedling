@@ -17,7 +17,7 @@ use crate::{
     },
     runtime::{
         db::Db, external_volume_mappings, identity::ResourceInstance, registry::InstanceRegistry,
-        site_volumes,
+        restart_gens, site_volumes,
     },
     system::{
         System,
@@ -272,6 +272,12 @@ impl Actuator {
                         return Err(ExternalVolumeNotMappedSnafu { name: name.clone() }.build());
                     }
                 }
+                // r[impl deployment.restart]
+                let restart_gen = {
+                    let dep_name = instance.name.as_deref().unwrap_or("");
+                    let db = self.db.lock();
+                    restart_gens::load_restart_gen(&db, &instance.app, dep_name).unwrap_or(0)
+                };
                 self.start_pod_instance(
                     instance,
                     &image,
@@ -289,6 +295,7 @@ impl Actuator {
                             &self.dns_servers,
                             Some(self.driver.volume_store.volumes_dir()),
                             &external_vols,
+                            restart_gen,
                         );
                         podman_args(&spec)
                     },
@@ -354,6 +361,7 @@ impl Actuator {
                             &self.dns_servers,
                             Some(self.driver.volume_store.volumes_dir()),
                             &external_vols,
+                            0,
                         );
                         podman_args(&spec)
                     },
@@ -563,6 +571,12 @@ impl Actuator {
                         return None;
                     }
                 };
+                // r[impl deployment.restart]
+                let dep_name = instance.name.as_deref().unwrap_or("");
+                let restart_gen = {
+                    let db = self.db.lock();
+                    restart_gens::load_restart_gen(&db, &instance.app, dep_name).unwrap_or(0)
+                };
                 deployment_spec(
                     &def,
                     instance,
@@ -572,6 +586,7 @@ impl Actuator {
                     &self.dns_servers,
                     Some(self.driver.volume_store.volumes_dir()),
                     &self.resolve_external_volumes(&instance.app),
+                    restart_gen,
                 )
             }
             Resource::Job(job) => {
@@ -593,6 +608,7 @@ impl Actuator {
                     &self.dns_servers,
                     Some(self.driver.volume_store.volumes_dir()),
                     &self.resolve_external_volumes(&instance.app),
+                    0,
                 )
             }
             _ => return None,
