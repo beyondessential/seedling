@@ -283,7 +283,7 @@ pub(crate) fn snapshot_site_volume(
     use crate::runtime::site_volumes::{SiteVolumeDef, SiteVolumeKind};
 
     let (source_app, source_volume, source_path) =
-        parse_source_vol_id(&params.source, &state.driver.volume_store)
+        parse_source_vol_id(&params.source, state)
             .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e))?;
 
     tokio::task::block_in_place(|| {
@@ -324,9 +324,15 @@ pub(crate) fn snapshot_site_volume(
     Ok(json!({ "created": true, "name": params.name }))
 }
 
+/// Resolve a volume id like `_site/<name>` or `<app>/<volume>` to the tuple
+/// `(source_app, source_volume_name, on_disk_path)`. For app-scoped volumes
+/// the on-disk path is pulled from the registry's display_name rather than
+/// rebuilt from the BSL name — the naming scheme ("<app>-volume-<name>" for
+/// kind=Volume via the default arm of new_singleton) is not something any
+/// caller should hand-roll.
 fn parse_source_vol_id(
     vol_id: &str,
-    vol_store: &crate::system::volume_store::VolumeStore,
+    state: &OiState,
 ) -> Result<(Option<String>, String, std::path::PathBuf), String> {
     let (prefix, vol) = vol_id.split_once('/').ok_or_else(|| {
         format!("invalid source {vol_id:?}: expected _site/<name> or <app>/<volume>")
@@ -337,12 +343,29 @@ fn parse_source_vol_id(
         ));
     }
     if prefix == "_site" {
-        let path = vol_store.site_path(vol);
+        let path = state.driver.volume_store.site_path(vol);
         Ok((None, vol.to_owned(), path))
     } else {
-        let vol_name = format!("{prefix}-{vol}");
-        let path = vol_store.path(&vol_name);
-        Ok((Some(prefix.to_owned()), vol.to_owned(), path))
+        let app = prefix.to_owned();
+        let vol_name = vol.to_owned();
+        let instances = {
+            let app = app.clone();
+            let vol_name = vol_name.clone();
+            state.db.call(move |db| {
+                crate::runtime::history::find_instances_for_group(
+                    db,
+                    &app,
+                    crate::defs::resource::ResourceKind::Volume,
+                    Some(&vol_name),
+                )
+                .unwrap_or_default()
+            })
+        };
+        let inst = instances.into_iter().next().ok_or_else(|| {
+            format!("no volume {prefix}/{vol} known to the registry")
+        })?;
+        let path = state.driver.volume_store.path(&inst.display_name);
+        Ok((Some(app), vol_name, path))
     }
 }
 

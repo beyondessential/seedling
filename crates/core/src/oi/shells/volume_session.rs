@@ -156,10 +156,38 @@ pub(crate) async fn open_volume_shell_session(
             }
 
             VolumeRef::App { app, volume } => {
-                let vol_name = format!("{app}-{volume}");
-                let path = vol_store.path(&vol_name);
+                // Look the volume up via the registry rather than
+                // reconstructing the on-disk name. ResourceKind::Volume
+                // uses "<app>-volume-<name>" (kind_slug) for its
+                // display_name, not the "<app>-<name>" form Deployments
+                // use — so hand-rolling here would miss every real
+                // volume.
+                let app_owned = app.clone();
+                let vol_owned = volume.clone();
+                let instances = tokio::task::block_in_place(|| {
+                    state.db.call(move |db| {
+                        crate::runtime::history::find_instances_for_group(
+                            db,
+                            &app_owned,
+                            ResourceKind::Volume,
+                            Some(&vol_owned),
+                        )
+                        .unwrap_or_default()
+                    })
+                });
+                let inst = match instances.into_iter().next() {
+                    Some(i) => i,
+                    None => err!(
+                        "not_found",
+                        format!("app volume not found: {app}/{volume}")
+                    ),
+                };
+                let path = vol_store.path(&inst.display_name);
                 if !path.exists() {
-                    err!("not_found", format!("app volume not found: {app}/{volume}"));
+                    err!(
+                        "not_found",
+                        format!("app volume storage not found: {app}/{volume}")
+                    );
                 }
                 let display_name = sanitise_name(&format!("{app}.{volume}"));
                 (path, false, display_name)

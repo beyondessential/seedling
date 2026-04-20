@@ -1,4 +1,5 @@
 import AddIcon from "@mui/icons-material/Add";
+import CameraAltIcon from "@mui/icons-material/CameraAlt";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import EditIcon from "@mui/icons-material/Edit";
 import LinkOffIcon from "@mui/icons-material/LinkOff";
@@ -419,6 +420,100 @@ function MultiVolumeShellDialog({
 }
 
 
+/// Take a point-in-time snapshot of a volume, landing it as a new managed
+/// site volume of kind=Snapshot (read-only at the filesystem level on
+/// BTRFS). Backed by /volumes/site/snapshot; the operator picks a name for
+/// the snapshot and the backend records its provenance.
+///
+/// Rendered with `key={source}` at the call site so switching which volume
+/// is being snapshotted remounts and resets the name field to the fresh
+/// default.
+function SnapshotVolumeDialog({
+  onClose,
+  source,
+  sourceLabel,
+  onSuccess,
+}: {
+  onClose: () => void;
+  /** Source volume id: `_site/<name>` or `<app>/<volume>`. */
+  source: string;
+  /** Human-readable source label for the dialog body. */
+  sourceLabel: string;
+  onSuccess: () => void;
+}) {
+  const { execute, loading, error, clearError } = useOiAction();
+  const [name, setName] = useState(() => defaultSnapshotName(source));
+
+  const handleClose = () => {
+    clearError();
+    onClose();
+  };
+
+  const handleSubmit = async () => {
+    if (!name.trim()) return;
+    const result = await execute("/volumes/site/snapshot", {
+      name: name.trim(),
+      source,
+    });
+    if (result !== null) {
+      onSuccess();
+      handleClose();
+    }
+  };
+
+  return (
+    <Dialog open onClose={handleClose} maxWidth="xs" fullWidth>
+      <DialogTitle>Snapshot volume</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ mt: 0.5 }}>
+          {error && <OiErrorAlert error={error} />}
+          <Typography variant="body2" color="text.secondary">
+            Capture a point-in-time copy of{" "}
+            <Box component="span" sx={{ fontFamily: "monospace" }}>
+              {sourceLabel}
+            </Box>{" "}
+            as a new read-only site volume.
+          </Typography>
+          <TextField
+            label="Snapshot name"
+            size="small"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            inputProps={{ style: { fontFamily: "monospace" } }}
+            autoFocus
+            helperText="Must be unique across site volumes"
+          />
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={handleClose} disabled={loading}>
+          Cancel
+        </Button>
+        <Button
+          variant="contained"
+          startIcon={<CameraAltIcon />}
+          onClick={() => void handleSubmit()}
+          disabled={loading || !name.trim()}
+        >
+          {loading ? "Snapshotting…" : "Snapshot"}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+/// Build a default snapshot name like `<source>-20260421-134530`.
+function defaultSnapshotName(source: string): string {
+  const now = new Date();
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  const stamp =
+    `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
+    `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const safe = source.replace(/[^a-zA-Z0-9._-]/g, "-").replace(/^-+|-+$/g, "");
+  return `${safe}-${stamp}`;
+}
+
+
 // w[impl routes.volumes]
 export default function Volumes() {
   const {
@@ -458,6 +553,9 @@ export default function Volumes() {
   const [createOpen, setCreateOpen] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
   const [shellPickerOpen, setShellPickerOpen] = useState(false);
+  const [snapshotTarget, setSnapshotTarget] = useState<
+    { source: string; label: string } | null
+  >(null);
   const [remapTarget, setRemapTarget] = useState<ExternalMapping | null>(null);
   const [prefillTarget, setPrefillTarget] = useState<{ app: string; name: string } | null>(null);
 
@@ -551,7 +649,7 @@ export default function Volumes() {
                       <TableCell width={90}>Kind</TableCell>
                       <TableCell>Info</TableCell>
                       <TableCell width={160}>Created</TableCell>
-                      <TableCell width={72} />
+                      <TableCell width={108} />
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -579,6 +677,19 @@ export default function Volumes() {
                               onClick={() => openVolumeShell([{ kind: "site", name: v.name }], v.name)}
                             >
                               <TerminalIcon sx={{ fontSize: 16 }} />
+                            </IconButton>
+                          </Tooltip>
+                          <Tooltip title="Snapshot">
+                            <IconButton
+                              size="small"
+                              onClick={() =>
+                                setSnapshotTarget({
+                                  source: `_site/${v.name}`,
+                                  label: v.name,
+                                })
+                              }
+                            >
+                              <CameraAltIcon sx={{ fontSize: 16 }} />
                             </IconButton>
                           </Tooltip>
                           <Tooltip title="Delete">
@@ -620,6 +731,7 @@ export default function Volumes() {
                       <TableCell>App</TableCell>
                       <TableCell>Volume</TableCell>
                       <TableCell>Description</TableCell>
+                      <TableCell width={80} />
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -633,6 +745,34 @@ export default function Volumes() {
                         </TableCell>
                         <TableCell sx={{ color: "text.secondary" }}>
                           {v.description ?? "—"}
+                        </TableCell>
+                        <TableCell align="right" sx={{ px: 0.5, whiteSpace: "nowrap" }}>
+                          <Tooltip title="Open shell">
+                            <IconButton
+                              size="small"
+                              onClick={() =>
+                                openVolumeShell(
+                                  [{ kind: "app", app: v.app, volume: v.volume_name }],
+                                  `${v.app}/${v.volume_name}`,
+                                )
+                              }
+                            >
+                              <TerminalIcon sx={{ fontSize: 16 }} />
+                            </IconButton>
+                          </Tooltip>
+                          <Tooltip title="Snapshot">
+                            <IconButton
+                              size="small"
+                              onClick={() =>
+                                setSnapshotTarget({
+                                  source: `${v.app}/${v.volume_name}`,
+                                  label: `${v.app}/${v.volume_name}`,
+                                })
+                              }
+                            >
+                              <CameraAltIcon sx={{ fontSize: 16 }} />
+                            </IconButton>
+                          </Tooltip>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -818,6 +958,18 @@ export default function Volumes() {
         heldVols={heldVols ?? []}
         onOpen={(volumes, label) => openVolumeShell(volumes, label)}
       />
+
+      {snapshotTarget && (
+        <SnapshotVolumeDialog
+          key={snapshotTarget.source}
+          source={snapshotTarget.source}
+          sourceLabel={snapshotTarget.label}
+          onClose={() => setSnapshotTarget(null)}
+          onSuccess={() => {
+            refetchSite();
+          }}
+        />
+      )}
 
       {(mapOpen || remapTarget != null || prefillTarget != null) && (
         <MapVolumeDialog
