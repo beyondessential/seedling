@@ -8,6 +8,7 @@ import {
   Alert,
   Box,
   Button,
+  Checkbox,
   Chip,
   CircularProgress,
   Dialog,
@@ -20,6 +21,11 @@ import {
   FormLabel,
   IconButton,
   InputLabel,
+  List,
+  ListItem,
+  ListItemButton,
+  ListItemIcon,
+  ListItemText,
   MenuItem,
   Paper,
   Radio,
@@ -36,7 +42,7 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { MapVolumeDialog } from "../components/MapVolumeDialog";
 import { OiErrorAlert } from "../components/OiErrorAlert";
@@ -49,6 +55,7 @@ import type {
   ExternalMapping,
   HeldVolume,
   SiteVolume,
+  VolumeRef,
 } from "../lib/types";
 
 // w[impl routes.volumes]
@@ -214,6 +221,204 @@ function CreateSiteVolumeDialog({
 }
 
 
+/// Opens a single shell session with one or more volumes mounted side-by-side.
+/// Operators land in /mnt when multiple volumes are selected (the backend
+/// sets workdir to the single mount point when only one is chosen).
+function MultiVolumeShellDialog({
+  open,
+  onClose,
+  siteVols,
+  exportedVols,
+  heldVols,
+  onOpen,
+}: {
+  open: boolean;
+  onClose: () => void;
+  siteVols: SiteVolume[];
+  exportedVols: ExportedVolume[];
+  heldVols: HeldVolume[];
+  onOpen: (volumes: VolumeRef[], label: string) => void;
+}) {
+  // Selection is keyed by a stable identifier string — "site:<name>",
+  // "app:<app>/<vol>", "held:<id>" — so a selected entry survives a
+  // re-render that reorders the lists.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  const toggle = (key: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+
+  const { refs, label } = useMemo(() => {
+    const refs: VolumeRef[] = [];
+    const labels: string[] = [];
+    for (const v of siteVols) {
+      const key = `site:${v.name}`;
+      if (selected.has(key)) {
+        refs.push({ kind: "site", name: v.name });
+        labels.push(v.name);
+      }
+    }
+    for (const v of exportedVols) {
+      const key = `app:${v.app}/${v.volume_name}`;
+      if (selected.has(key)) {
+        refs.push({ kind: "app", app: v.app, volume: v.volume_name });
+        labels.push(`${v.app}/${v.volume_name}`);
+      }
+    }
+    for (const h of heldVols) {
+      const key = `held:${h.id}`;
+      if (selected.has(key)) {
+        refs.push({ kind: "held", id: h.id });
+        labels.push(`held:${h.app}/${h.display_name}`);
+      }
+    }
+    const label =
+      labels.length === 0
+        ? ""
+        : labels.length === 1
+          ? labels[0]
+          : `${labels.length} volumes`;
+    return { refs, label };
+  }, [selected, siteVols, exportedVols, heldVols]);
+
+  const handleOpen = () => {
+    if (refs.length === 0) return;
+    onOpen(refs, label);
+    setSelected(new Set());
+    onClose();
+  };
+
+  const handleClose = () => {
+    setSelected(new Set());
+    onClose();
+  };
+
+  const sectionLabel = (title: string, count: number) =>
+    count === 0 ? `${title} (none)` : title;
+
+  return (
+    <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
+      <DialogTitle>Open shell over volumes</DialogTitle>
+      <DialogContent>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Mount multiple volumes side-by-side under <code>/mnt</code> so you
+          can <code>cp</code>, <code>rsync</code>, diff, or recover data
+          across them from a single shell.
+        </Typography>
+
+        <Box sx={{ mb: 2 }}>
+          <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+            {sectionLabel("Site volumes", siteVols.length)}
+          </Typography>
+          <List dense disablePadding>
+            {siteVols.map((v) => {
+              const key = `site:${v.name}`;
+              return (
+                <ListItem key={key} disablePadding>
+                  <ListItemButton onClick={() => toggle(key)} dense>
+                    <ListItemIcon sx={{ minWidth: 32 }}>
+                      <Checkbox
+                        edge="start"
+                        size="small"
+                        checked={selected.has(key)}
+                        tabIndex={-1}
+                        disableRipple
+                      />
+                    </ListItemIcon>
+                    <ListItemText
+                      primary={v.name}
+                      primaryTypographyProps={{ sx: { fontFamily: "monospace" } }}
+                      secondary={v.kind}
+                    />
+                  </ListItemButton>
+                </ListItem>
+              );
+            })}
+          </List>
+        </Box>
+
+        <Box sx={{ mb: 2 }}>
+          <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+            {sectionLabel("Exported app volumes", exportedVols.length)}
+          </Typography>
+          <List dense disablePadding>
+            {exportedVols.map((v) => {
+              const key = `app:${v.app}/${v.volume_name}`;
+              return (
+                <ListItem key={key} disablePadding>
+                  <ListItemButton onClick={() => toggle(key)} dense>
+                    <ListItemIcon sx={{ minWidth: 32 }}>
+                      <Checkbox
+                        edge="start"
+                        size="small"
+                        checked={selected.has(key)}
+                        tabIndex={-1}
+                        disableRipple
+                      />
+                    </ListItemIcon>
+                    <ListItemText
+                      primary={`${v.app}/${v.volume_name}`}
+                      primaryTypographyProps={{ sx: { fontFamily: "monospace" } }}
+                      secondary={v.description ?? undefined}
+                    />
+                  </ListItemButton>
+                </ListItem>
+              );
+            })}
+          </List>
+        </Box>
+
+        <Box>
+          <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+            {sectionLabel("Held volumes", heldVols.length)}
+          </Typography>
+          <List dense disablePadding>
+            {heldVols.map((h) => {
+              const key = `held:${h.id}`;
+              return (
+                <ListItem key={key} disablePadding>
+                  <ListItemButton onClick={() => toggle(key)} dense>
+                    <ListItemIcon sx={{ minWidth: 32 }}>
+                      <Checkbox
+                        edge="start"
+                        size="small"
+                        checked={selected.has(key)}
+                        tabIndex={-1}
+                        disableRipple
+                      />
+                    </ListItemIcon>
+                    <ListItemText
+                      primary={`${h.app}/${h.display_name}`}
+                      primaryTypographyProps={{ sx: { fontFamily: "monospace" } }}
+                      secondary={h.reason}
+                    />
+                  </ListItemButton>
+                </ListItem>
+              );
+            })}
+          </List>
+        </Box>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={handleClose}>Cancel</Button>
+        <Button
+          variant="contained"
+          startIcon={<TerminalIcon />}
+          onClick={handleOpen}
+          disabled={refs.length === 0}
+        >
+          Open shell {refs.length > 0 ? `(${refs.length})` : ""}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+
 // w[impl routes.volumes]
 export default function Volumes() {
   const {
@@ -252,6 +457,7 @@ export default function Volumes() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
+  const [shellPickerOpen, setShellPickerOpen] = useState(false);
   const [remapTarget, setRemapTarget] = useState<ExternalMapping | null>(null);
   const [prefillTarget, setPrefillTarget] = useState<{ app: string; name: string } | null>(null);
 
@@ -287,6 +493,18 @@ export default function Volumes() {
         <Typography variant="h5" sx={{ flexGrow: 1 }}>
           Volumes
         </Typography>
+        <Button
+          size="small"
+          startIcon={<TerminalIcon />}
+          onClick={() => setShellPickerOpen(true)}
+          disabled={
+            (siteVols?.length ?? 0) === 0 &&
+            (exportedVols?.length ?? 0) === 0 &&
+            (heldVols?.length ?? 0) === 0
+          }
+        >
+          Open shell…
+        </Button>
         <Tooltip title="Refresh">
           <span>
             <IconButton onClick={refreshAll} disabled={anyLoading} size="small">
@@ -590,6 +808,15 @@ export default function Volumes() {
         }}
         siteVolumes={siteVols ?? []}
         exportedVolumes={exportedVols ?? []}
+      />
+
+      <MultiVolumeShellDialog
+        open={shellPickerOpen}
+        onClose={() => setShellPickerOpen(false)}
+        siteVols={siteVols ?? []}
+        exportedVols={exportedVols ?? []}
+        heldVols={heldVols ?? []}
+        onOpen={(volumes, label) => openVolumeShell(volumes, label)}
       />
 
       {(mapOpen || remapTarget != null || prefillTarget != null) && (

@@ -282,6 +282,15 @@ pub(crate) async fn open_volume_shell_session(
         }
     }
 
+    // Drop the operator at the most useful directory: the single mount
+    // point when they're inspecting one volume, or /mnt when several are
+    // mounted side-by-side so they can `ls` to see what's available.
+    let workdir = if resolved.len() == 1 {
+        Some(resolved[0].target.clone())
+    } else {
+        Some("/mnt".to_owned())
+    };
+
     let mounts: Vec<Mount> = resolved
         .into_iter()
         .map(|r| Mount {
@@ -312,7 +321,7 @@ pub(crate) async fn open_volume_shell_session(
         extra_caps: vec![],
         writable_rootfs: true,
         pids_limit: 1024,
-        workdir: None,
+        workdir,
     };
 
     let mut exec_handle = match state.container_runtime.exec(spec).await {
