@@ -44,7 +44,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > l[bsl.port]
 > Various methods and resources use port numbers.
 >
-> Unless otherwise specified, a port number must be a non-zero positive integer below 65535.
+> Unless otherwise specified, a port number must be a non-zero positive integer below 65536.
 > If an invalid port is provided, the method must throw.
 
 > l[bsl.resource]
