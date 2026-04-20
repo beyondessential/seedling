@@ -298,6 +298,14 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         })
         .collect();
 
+    // i[impl resource.stop.status]
+    // Load stopped set before acquiring def.lock() to avoid lock-order inversion
+    // (effective_app_status holds db then acquires def; we must not hold def then acquire db).
+    let stopped_set = {
+        let db = state.db.lock();
+        stopped::load_stopped(&db, name).unwrap_or_default()
+    };
+
     let def = entry.app.def.lock();
 
     // i[app.describe]
@@ -385,11 +393,6 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
             | AppStatus::Uninstalling
     );
     // i[app.describe]
-    // i[impl resource.stop.status]
-    let stopped_set = {
-        let db = state.db.lock();
-        stopped::load_stopped(&db, name).unwrap_or_default()
-    };
     let mut resources_json: Vec<Value> = {
         let db = state.db.lock();
         def.resources
