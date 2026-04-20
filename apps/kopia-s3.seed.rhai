@@ -7,12 +7,16 @@
 //   4. Register as a backup provider:
 //        seedling-ctl backups apps register --name <name> --app <this-app>
 //
-// Each registered instance corresponds to one Kopia repository.  If you need
+// Each registered instance corresponds to one Kopia repository. If you need
 // to back up multiple independent volumes to the same bucket, use separate
 // instances with different --prefix values.
 //
 // Run the "connect" action after rotating credentials or changing
 // bucket/prefix/endpoint/region.
+
+const AN_HOUR = 3600;
+const TWENTY_MINUTES = 1200;
+const TWO_MINUTES = 120;
 
 // ── Image ─────────────────────────────────────────────────────────────────────
 
@@ -100,7 +104,7 @@ let state = app.volume("state");
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// Environment for every Kopia job.  Credentials come from the env so the AWS
+// Environment for every Kopia job. Credentials come from the env so the AWS
 // SDK and Kopia pick them up automatically; path env vars redirect Kopia's
 // config, cache, and logs into the state volume.
 let kopia_env = || {
@@ -121,7 +125,7 @@ let kopia_env = || {
 };
 
 // Shell fragment: S3 flags shared by `repository create` and `repository connect`.
-// Inline values are not sensitive; secrets come from env vars.  The image is
+// Inline values are not sensitive; secrets come from env vars. The image is
 // Alpine-based so busybox sh and its single-quote handling are available.
 let s3_args_sh = || {
     let args = " '--bucket=" + bucket.value() + "'" +
@@ -147,7 +151,7 @@ let policy_sh = || {
     " '--keep-annual=" + (if retention_annual.is_set() { retention_annual.value() } else { "3" }) + "'"
 };
 
-// Base job for every Kopia task.  Writable rootfs covers any stray writes
+// Base job for every Kopia task. Writable rootfs covers any stray writes
 // (e.g. to /tmp); the repository config and cache live in the state volume.
 let kopia_job = || {
     app.job()
@@ -160,8 +164,8 @@ let kopia_job = || {
 // ── Install ───────────────────────────────────────────────────────────────────
 
 // Connects to the Kopia repository in S3, creating it if it does not yet
-// exist, and applies the global policy.  After this runs, the state volume
-// holds the repository config that every other action reads.  Safe to
+// exist, and applies the global policy. After this runs, the state volume
+// holds the repository config that every other action reads. Safe to
 // re-run: the create step is skipped when a repository is already present.
 app.on_install(|rt, _param| {
     rt.start(kopia_job.call()
@@ -170,7 +174,7 @@ app.on_install(|rt, _param| {
             " || kopia repository create s3" + s3_args_sh.call() +
             "; } && " + policy_sh.call()
         ])
-    ).terminated().ensure_success();
+    ).terminated(TWO_MINUTES).ensure_success();
 }, #{});
 
 // ── Connection management ─────────────────────────────────────────────────────
@@ -184,7 +188,7 @@ app.on_action("connect", |rt, _param| {
             "rm -f /kopia-state/repository.config && " +
             "kopia repository connect s3" + s3_args_sh.call()
         ])
-    ).terminated().ensure_success();
+    ).terminated(TWO_MINUTES).ensure_success();
 }, #{ description: "Re-connect to the Kopia repository using current params" });
 
 // ── Required backup actions ───────────────────────────────────────────────────
@@ -194,7 +198,7 @@ app.on_action("save-snapshot", |rt, _param| {
     rt.start(kopia_job.call()
         .mount("/source", source)
         .command(["kopia", "snapshot", "create", "/source"])
-    ).terminated().ensure_success();
+    ).terminated(AN_HOUR).ensure_success();
 }, #{ description: "Upload a volume snapshot to the Kopia repository" });
 
 app.on_action("list-snapshots", |rt, _param| {
@@ -204,7 +208,7 @@ app.on_action("list-snapshots", |rt, _param| {
         .command(["sh", "-c",
             "kopia snapshot list --json > /output/snapshots.json"
         ])
-    ).terminated().ensure_success();
+    ).terminated(AN_HOUR).ensure_success();
 }, #{ description: "List snapshots in the Kopia repository" });
 
 app.on_action("restore-snapshot", |rt, param| {
@@ -215,35 +219,35 @@ app.on_action("restore-snapshot", |rt, param| {
         .command(["sh", "-c",
             "kopia snapshot restore \"$KOPIA_SNAPSHOT_ID\" /destination"
         ])
-    ).terminated().ensure_success();
+    ).terminated(AN_HOUR).ensure_success();
 }, #{ description: "Restore a Kopia snapshot to a new volume" });
 
 // ── Maintenance actions ───────────────────────────────────────────────────────
 
 // Quick maintenance: expire snapshots per the retention policy and compact
-// indexes.  Runs nightly at a stable time.
+// indexes. Runs nightly at a stable time.
 app.on_action("maintenance", |rt, _param| {
     rt.start(kopia_job.call()
         .command(["kopia", "maintenance", "run"])
-    ).terminated().ensure_success();
+    ).terminated(TWENTY_MINUTES);
 }, #{ description: "Run quick maintenance (expire snapshots, compact indexes)" })
     .on_schedule("H 3 * * *");
 
-// Full maintenance: includes garbage collection of unreferenced blobs.  Runs
-// weekly.
+// Full maintenance: includes garbage collection of unreferenced blobs.
+// Runs weekly.
 app.on_action("maintenance-full", |rt, _param| {
     rt.start(kopia_job.call()
         .command(["kopia", "maintenance", "run", "--full"])
-    ).terminated().ensure_success();
+    ).terminated(TWENTY_MINUTES);
 }, #{ description: "Run full maintenance including garbage collection" })
     .on_schedule("H 4 * * 0");
 
 // Applies the current compression and retention param values to the global
-// policy.  Run this manually after changing any policy params.
+// policy. Run this manually after changing any policy params.
 app.on_action("apply-policy", |rt, _param| {
     rt.start(kopia_job.call()
         .command(["sh", "-c", policy_sh.call()])
-    ).terminated().ensure_success();
+    ).terminated(TWO_MINUTES).ensure_success();
 }, #{ description: "Apply current compression and retention settings to the global policy" });
 
 // ── Shell ─────────────────────────────────────────────────────────────────────
