@@ -10,6 +10,7 @@ import Faults from "./routes/Faults";
 import Login from "./routes/Login";
 import Logs from "./routes/Logs";
 import Sessions from "./routes/Sessions";
+import Shell from "./routes/Shell";
 import Volumes from "./routes/Volumes";
 
 const router = createBrowserRouter([
@@ -26,6 +27,7 @@ const router = createBrowserRouter([
       { path: "sessions", element: <Sessions /> },
       { path: "volumes", element: <Volumes /> },
       { path: "apps/:name/logs", element: <Logs /> },
+      { path: "apps/:name/shell/:shellName", element: <Shell /> },
     ],
   },
 ]);
