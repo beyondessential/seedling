@@ -139,7 +139,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > |---|---|
 > | `not_found` | The referenced app, action, shell, session, or param does not exist. |
 > | `not_installed` | The app is `NotInstalled` and the requested operation requires it to be installed. |
-> | `already_installed` | `/apps/install/invoke` was called but the app is not `NotInstalled`. |
+> | `already_installed` | `/apps/install/invoke` was called but the app is already `Installed` or `Uninstalling`. |
+> | `install_in_progress` | `/apps/install/invoke` was called but an install for this app is already running. |
 > | `operation_in_progress` | A lifecycle operation is running and the request conflicts with it. |
 > | `already_queued` | An operation is already queued for this app. |
 > | `requirements_invalid` | Install requirements failed validation; per-field errors are included in `message`. |
@@ -207,16 +208,17 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[app.status]
 > Every managed app is in exactly one of the following derived states at any time:
 >
-> - `NotInstalled`: the install action has never completed successfully for this app.
+> - `NotInstalled`: the install action has never completed successfully for this app, and no install is currently in progress.
+> - `Installing`: an install operation is in progress for this app. The reconciler actuates resources the install closure has placed into the desired state per [desired-state.during-install](#r--desired-state.during-install).
 > - `Deregistering`: deregistration was requested and resource teardown is in progress.
-> - `Operating`: a lifecycle operation is in progress. Includes the field `action_name`.
+> - `Operating`: a lifecycle operation other than `install` is in progress. Includes the field `action_name`.
 > - `Running`: steady state; no active faults; all resources are at their desired lifecycle states.
 > - `Degraded`: steady state, but one or more resources are not at their desired lifecycle state or have an active fault. Resources that are actively being torn down (`Terminating` or `Terminated` lifecycle state) are not counted as degraded — they are transitioning to `Unscheduled` and do not represent a fault condition.
 > - `Faulted`: one or more active faults exist and at least one resource has been excluded from active reconciliation.
 
 > i[app.status.priority]
 > When multiple conditions apply simultaneously, the state with the highest priority is reported.
-> Priority order, highest first: `Deregistering`, `Operating`, `NotInstalled`, `Faulted`, `Degraded`, `Running`.
+> Priority order, highest first: `Deregistering`, `Installing`, `Operating`, `NotInstalled`, `Faulted`, `Degraded`, `Running`.
 
 # App Description
 
@@ -397,7 +399,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 # Action Invocation
 
 > i[action.not-installed-gate]
-> While an app is `NotInstalled`, all action and shell invocations except `/apps/install/invoke` are rejected with `not_installed`.
+> While an app is `NotInstalled` or `Installing`, all action and shell invocations except `/apps/install/invoke` are rejected with `not_installed`.
 
 > i[action.invoke]
 > `/apps/action/invoke { app, name, params? }` schedules the named action as a lifecycle operation.
@@ -410,21 +412,27 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > i[action.invoke.install]
 > `/apps/install/invoke { app, params? }` schedules the install action.
-> It is only valid when the app is `NotInstalled`; otherwise `already_installed` is returned.
+> It is only valid when the app is `NotInstalled`.
+> If the app is already `Installing`, the request is rejected with `install_in_progress`.
+> If the app is `Installed` or `Uninstalling`, the request is rejected with `already_installed`.
 > If the app has an active `script_error` fault, the request is rejected with `script_error`.
 > `params` is an optional JSON object of param key to string value. The values are delivered to the install closure as `param`.
 > If the app has no explicit install action, `params` must be absent or empty.
 > Params are validated before the operation is enqueued; validation failure returns `requirements_invalid`.
 > Returns `{ "schedule": "accepted" }` or `{ "schedule": "queued" }` on success, or an error.
+> On `accepted`, the app atomically transitions to `Installing`.
 
 > i[action.invoke.install.validation]
 > Params are validated according to the kinds defined in the language spec before the operation is enqueued.
 > A required field with no provided value and no `default_value` is a validation error.
-> The params object is passed to the install action closure and discarded when the install operation completes; it is never persisted.
+> The params object is passed to the install action closure and is persisted alongside the operation record (see [operation.params](#r--operation.params)) so that a runtime restart during the install can replay the operation.
+> Values of params whose effective `secret` flag is `true` must be protected in persisted form as defined in [secret.storage](#r--secret.storage).
+> The persisted params are cleared when the install operation completes, regardless of outcome.
 
 > i[action.invoke.install.completion]
-> When an install operation completes successfully, the app transitions out of `NotInstalled`.
-> On subsequent runtime restarts, the runtime will initiate the `start` action for this app automatically, as specified in the runtime spec.
+> When an install operation completes successfully, the app transitions `Installing → Installed`.
+> When an install operation fails, the app transitions `Installing → NotInstalled` and an `operation_failed` fault is filed carrying the failure detail.
+> On subsequent runtime restarts, the runtime will initiate the `start` action for `Installed` apps automatically, as specified in the runtime spec.
 
 # Shell Sessions
 

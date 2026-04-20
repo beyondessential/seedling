@@ -86,6 +86,11 @@ Absent specification bugs, anything that is not defined here is either defined i
 > The reconciler must only act on resources that the operation has placed into the desired state so far.
 > Resources that are not in the desired state during an operation are left untouched: any running instances continue to run with whatever spec they were last started with, and no rotation is performed against them until the operation either schedules them explicitly or completes (returning the app to steady state).
 
+> r[desired-state.during-install]
+> An install operation obeys the same rules as any other lifecycle operation under [desired-state.during-operation](#r--desired-state.during-operation).
+> While an app is in the `Installing` status, the reconciler must actuate resources the install closure has placed into the desired state, exactly as it would for any other in-progress operation.
+> The fact that the app has never previously been installed does not exempt the reconciler from actuating these resources.
+
 # Generation
 
 > r[generation.definition]
@@ -348,7 +353,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Lifecycle operations are initiated by these events:
 >
 > - **Normal boot** (prior state exists, no interrupted operation): the `start` action.
-> - **Boot, interrupted operation exists**: replay of the interrupted operation.
+> - **Boot, interrupted operation exists**: replay of the interrupted operation. This includes installs that were in progress when the runtime stopped; an app persisted in the `Installing` status must have its install replayed from the persisted params and action log.
 > - **Param change**: the `on_change` handler registered on the parameter that changed, when the change matches one of the [transitions](#l--param.on-change.transitions) in the language spec, the app is installed, and a handler is registered.
 > - **Operator request**: a named action, including `install`.
 > - **Schedule**: a BSL `on_schedule` cron expression fires.
