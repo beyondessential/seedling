@@ -4,6 +4,7 @@ TODO.txt
 *.db
 *.db-*
 *.seed.rhai
+!apps/*.seed.rhai
 *.log
 crates/web/frontend/node_modules/
 crates/web/frontend/dist/
