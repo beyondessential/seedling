@@ -70,6 +70,7 @@ export default function Apps() {
     refetchClients();
   };
 
+  const webSessions = clients?.web ?? [];
   const shells = clients?.shells ?? [];
   const forwards = clients?.forwards ?? [];
 
@@ -143,7 +144,7 @@ export default function Apps() {
       )}
 
       {/* Sessions */}
-      {(shells.length > 0 || forwards.length > 0) && (
+      {(webSessions.length > 0 || shells.length > 0 || forwards.length > 0) && (
         <>
           <Divider sx={{ my: 4 }} />
           <Box sx={{ display: "flex", alignItems: "center", mb: 2, gap: 1 }}>
@@ -158,6 +159,36 @@ export default function Apps() {
           </Box>
           {clientsError && <OiErrorAlert error={clientsError} />}
           <Stack spacing={3}>
+            {webSessions.length > 0 && (
+              <Box>
+                <Typography variant="subtitle1" sx={{ mb: 1, fontWeight: 600 }}>
+                  Web UI ({webSessions.length})
+                </Typography>
+                <TableContainer component={Paper} variant="outlined">
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>User</TableCell>
+                        <TableCell>Connected</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {webSessions.map((s) => (
+                        <TableRow key={s.id}>
+                          <TableCell sx={{ color: "text.secondary" }}>
+                            {s.actor_display ?? s.actor_id ?? s.actor_kind ?? "—"}
+                          </TableCell>
+                          <TableCell sx={{ color: "text.secondary" }}>
+                            {new Date(s.connected_at).toLocaleString()}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </Box>
+            )}
+
             {shells.length > 0 && (
               <Box>
                 <Typography variant="subtitle1" sx={{ mb: 1, fontWeight: 600 }}>
