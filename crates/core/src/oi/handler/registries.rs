@@ -67,9 +67,10 @@ fn re_evaluate_all_apps(state: &OiState) {
             }
         };
         let name_clone = name.clone();
+        let cipher = std::sync::Arc::clone(&state.cipher);
         let loaded_params = state
             .db
-            .call(move |db| apps::load_params_for_app(db, &name_clone).unwrap_or_default());
+            .call(move |db| apps::load_all_params_for_app(db, &cipher, &name_clone));
         state
             .registry
             .write()

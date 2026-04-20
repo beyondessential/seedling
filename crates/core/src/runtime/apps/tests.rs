@@ -206,6 +206,75 @@ fn evaluate_script_absent_param_has_no_stored_value() {
     );
 }
 
+// Regression test: when a param is declared with kind("password") (implying
+// is_secret=true) and its value is stored in secret_params, `load_all_params_for_app`
+// must decrypt it into app.stored so scripts can read it back.
+#[test]
+fn reload_after_secret_param_set_populates_stored() {
+    use secrecy::SecretString;
+
+    let db = Db::open_in_memory().expect("open");
+    let cipher = crate::runtime::secrets::Cipher::for_tests();
+
+    let script = r#"
+        app.param("apikey").kind("password");
+    "#;
+
+    secret_params::upsert_secret_param(
+        &db,
+        &cipher,
+        "myapp",
+        "apikey",
+        &SecretString::new("sekret123".to_owned().into()),
+    )
+    .expect("upsert secret");
+
+    let loaded = load_all_params_for_app(&db, &cipher, "myapp");
+    let (app, err) = evaluate_script("myapp", script, &loaded, &crate::ScriptLimits::default());
+    assert!(err.is_none(), "script error: {err:?}");
+
+    assert_eq!(
+        app.stored.lock().get("apikey").map(String::as_str),
+        Some("sekret123"),
+        "secret param must be decrypted into app.stored after reload"
+    );
+}
+
+// Regression test for the "install says secret param isn't set" bug.
+// The OLD `load_params_for_app` only reads the plaintext `params` table,
+// so reload paths that used it (script update, registry re-eval) would
+// silently drop all secret values, leaving `app.stored` empty.
+// All reload paths must use `load_all_params_for_app`.
+#[test]
+fn load_params_for_app_alone_misses_secrets() {
+    use secrecy::SecretString;
+
+    let db = Db::open_in_memory().expect("open");
+    let cipher = crate::runtime::secrets::Cipher::for_tests();
+
+    secret_params::upsert_secret_param(
+        &db,
+        &cipher,
+        "myapp",
+        "apikey",
+        &SecretString::new("sekret".to_owned().into()),
+    )
+    .expect("upsert secret");
+
+    let plaintext_only = load_params_for_app(&db, "myapp").expect("load");
+    assert!(
+        plaintext_only.get("apikey").is_none(),
+        "plaintext-only loader must not surface secrets (confirms the trap)"
+    );
+
+    let merged = load_all_params_for_app(&db, &cipher, "myapp");
+    assert_eq!(
+        merged.get("apikey").map(String::as_str),
+        Some("sekret"),
+        "merged loader must surface secrets for reload paths"
+    );
+}
+
 // i[verify param.store]
 #[test]
 fn registry_load_from_db_restores_params() {

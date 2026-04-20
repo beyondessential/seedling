@@ -979,8 +979,9 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams) -> HandlerResult
         entry.script.clone()
     };
     let name_owned = name.to_owned();
+    let cipher = std::sync::Arc::clone(&state.cipher);
     let current_params = state.db.call(move |db| {
-        crate::runtime::apps::load_params_for_app(db, &name_owned).unwrap_or_default()
+        crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned)
     });
 
     // Build the proposed param map from current with the proposals overlaid.
@@ -1382,10 +1383,10 @@ pub(crate) fn update_app(
 
     // Reload script and apply to in-memory AppDef immediately.
     let name_owned = name.to_owned();
-    let loaded_params = state
-        .db
-        .call(move |db| crate::runtime::apps::load_params_for_app(db, &name_owned))
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db params: {e}")))?;
+    let cipher = std::sync::Arc::clone(&state.cipher);
+    let loaded_params = state.db.call(move |db| {
+        crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned)
+    });
     state.registry.write().reload(
         name,
         script.to_owned(),
