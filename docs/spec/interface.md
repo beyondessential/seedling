@@ -772,7 +772,20 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > `strategy` is the strategy name; `volume` is the volume identifier within the strategy (e.g. `"myapp/data"` or `"_site/vol"`).
 >
+> The action is expected to filter its output to only snapshots it took for that volume via `save-snapshot`, so that restores cannot accidentally select a snapshot belonging to a different volume that shares the same backend repository. The information needed to filter is delivered via the `backup` param object (see [backup.action.backup-param](#i--backup.action.backup-param)).
+>
 > Returns the parsed JSON written by the action to its `"output"` volume as `snapshots.json`.
+
+> i[backup.action.backup-param]
+> When Seedling invokes any of the three required backup actions (`save-snapshot`, `list-snapshots`, `restore-snapshot`) on a registered backup app, the param map passed to the action closure must contain a key `backup` whose value is an object with the following string fields:
+>
+> - `strategy`: the strategy name that caused this invocation.
+> - `app`: the BSL app whose volume is being backed up, or the literal `"_site"` for site-scoped volumes.
+> - `volume`: the named volume within `app` (for `"_site"`, the site volume name).
+>
+> `save-snapshot` is expected to stamp `app` + `volume` (and optionally `strategy`) onto the resulting snapshot via the backend's tagging mechanism. `list-snapshots` is expected to filter its output by the same identity. `restore-snapshot` is expected to verify the requested snapshot matches before writing to the destination.
+>
+> `restore-snapshot` additionally receives an opaque `snapshot` string param (the identifier previously returned by `list-snapshots`).
 
 > i[backup.restore]
 > `/backups/restore { strategy, volume, snapshot }` restores a snapshot to a new site volume.

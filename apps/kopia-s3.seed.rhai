@@ -95,18 +95,18 @@ let retention_annual = app.param("retention-annual")
     .default_value("3")
     .description("Annual snapshots to keep");
 
-// ── State volume ──────────────────────────────────────────────────────────────
+// ── State volumes ──────────────────────────────────────────────────────────────
 
 // Persistent Kopia state: repository config, content cache, and logs.
 // Populated by the install (or connect) action; read by every other action
 // so they do not need to re-connect to the repository on every run.
-let state = app.volume("state");
+let config = app.volume("config");
+let cache = app.volume("cache");
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 // Environment for every Kopia job. Credentials come from the env so the AWS
-// SDK and Kopia pick them up automatically; path env vars redirect Kopia's
-// config, cache, and logs into the state volume.
+// SDK and Kopia pick them up automatically.
 let kopia_env = || {
     let e = [
         #{ name: "KOPIA_PASSWORD",        value: passphrase.value() },
@@ -148,24 +148,22 @@ let policy_sh = || {
     " '--keep-annual=" + (if retention_annual.is_set() { retention_annual.value() } else { "3" }) + "'"
 };
 
-let tmp = app.volume("tmp").tmpfs();
-
 // Base job for every Kopia task. Writable rootfs covers any stray writes
-// (e.g. to /tmp); the repository config and cache live in the state volume.
+// (e.g. to /tmp); the repository config and cache live in the state volumes.
 let kopia_job = || {
     app.job()
         .image(image.call())
         .env(kopia_env.call())
-        .mount("/app", state)
-        .mount("/tmp", tmp)
+        .writable_rootfs()
+        .mount("/app/config", config)
+        .mount("/app/cache", cache)
 };
 
 // ── Install ───────────────────────────────────────────────────────────────────
 
 // Connects to the Kopia repository in S3, creating it if it does not yet
-// exist, and applies the global policy. After this runs, the state volume
-// holds the repository config that every other action reads. Safe to
-// re-run: the create step is skipped when a repository is already present.
+// exist, and applies the global policy. After this runs, the state volumes
+// hold the repository config that every other action reads.
 app.on_install(|rt, _param| {
     rt.start(kopia_job.call()
         .command(["sh", "-c",
@@ -184,7 +182,7 @@ app.on_install(|rt, _param| {
 app.on_action("connect", |rt, _param| {
     rt.start(kopia_job.call()
         .command(["sh", "-c",
-            "rm -f /kopia-state/repository.config && " +
+            "rm -f /app/config/repository.config && " +
             "kopia repository connect s3" + s3_args_sh.call()
         ])
     ).terminated(TWO_MINUTES).ensure_success();
@@ -192,31 +190,60 @@ app.on_action("connect", |rt, _param| {
 
 // ── Required backup actions ───────────────────────────────────────────────────
 
-app.on_action("save-snapshot", |rt, _param| {
+// Kopia's native snapshot source is (hostname, username, path). We map the
+// backup object onto those three so a single repository can hold snapshots
+// of multiple apps without them colliding:
+//   - hostname := backup.app    (the BSL app that owns the source volume)
+//   - username := the operator hostname param (a stable node label)
+//   - path     := /source/<backup.volume>
+// list-snapshots then filters on `hostname:path`, and restore-snapshot
+// double-checks the filter before writing.
+app.on_action("save-snapshot", |rt, param| {
     let source = app.external_volume("source");
+    let backup = param["backup"];
     rt.start(kopia_job.call()
         .mount("/source", source)
-        .command(["kopia", "snapshot", "create", "/source"])
+        .command(["sh", "-c",
+            "kopia snapshot create" +
+            " '--override-hostname=" + backup["app"] + "'" +
+            " '--override-username=" + hostname.value() + "'" +
+            " /source"
+        ])
     ).terminated(AN_HOUR).ensure_success();
 }, #{ description: "Upload a volume snapshot to the Kopia repository" });
 
-app.on_action("list-snapshots", |rt, _param| {
+app.on_action("list-snapshots", |rt, param| {
     let output = app.external_volume("output");
+    let backup = param["backup"];
     rt.start(kopia_job.call()
         .mount("/output", output)
         .command(["sh", "-c",
-            "kopia snapshot list --json > /output/snapshots.json"
+            "kopia snapshot list --json" +
+            " '" + backup["app"] + "@" + hostname.value() + ":/source'" +
+            " > /output/snapshots.json"
         ])
     ).terminated(AN_HOUR).ensure_success();
 }, #{ description: "List snapshots in the Kopia repository" });
 
 app.on_action("restore-snapshot", |rt, param| {
     let dest = app.external_volume("destination");
+    let backup = param["backup"];
     rt.start(kopia_job.call()
-        .env([#{ name: "KOPIA_SNAPSHOT_ID", value: param["snapshot"] }])
+        .env([
+            #{ name: "KOPIA_SNAPSHOT_ID",  value: param["snapshot"] },
+            #{ name: "EXPECTED_SOURCE",    value: backup["app"] + "@" + hostname.value() + ":/source" },
+        ])
         .mount("/destination", dest)
         .command(["sh", "-c",
-            "kopia snapshot restore \"$KOPIA_SNAPSHOT_ID\" /destination"
+            // Refuse to restore if the snapshot isn't one of ours under the
+            // requested (app, node) source — a mismatch would overwrite the
+            // destination with data from an unrelated volume.
+            "kopia snapshot list --json \"$EXPECTED_SOURCE\" | \
+               grep -q \"\\\"$KOPIA_SNAPSHOT_ID\\\"\" || { \
+                 echo \"refusing to restore: $KOPIA_SNAPSHOT_ID not under $EXPECTED_SOURCE\" >&2; \
+                 exit 1; \
+               } && \
+             kopia snapshot restore \"$KOPIA_SNAPSHOT_ID\" /destination"
         ])
     ).terminated(AN_HOUR).ensure_success();
 }, #{ description: "Restore a Kopia snapshot to a new volume" });

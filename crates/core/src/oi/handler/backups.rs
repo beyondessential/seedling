@@ -523,12 +523,24 @@ async fn run_volume_backup(
             },
         );
 
+        // Pass the structured backup object through so the action can stamp
+        // (strategy, app, volume) onto the snapshot. list-snapshots and
+        // restore-snapshot receive the same object and are expected to
+        // filter on it — otherwise an operator restoring "myapp/data" from
+        // a strategy that shares a backend repository with "otherapp/logs"
+        // could see both, pick wrong, and overwrite the wrong target.
+        let mut action_params = serde_json::Map::new();
+        action_params.insert(
+            "backup".to_owned(),
+            build_backup_param(&strategy.name, vol_id),
+        );
+
         let success = run_operation_for_backup(
             state,
             backing_app_name,
             "save-snapshot",
             operation_id.clone(),
-            serde_json::Map::new(),
+            action_params,
             0,
             0,
             bindings,
@@ -643,7 +655,10 @@ async fn list_snapshots_async(state: &Arc<OiState>, params: ListSnapshotsParams)
     );
 
     let mut action_params = serde_json::Map::new();
-    action_params.insert("volume".to_owned(), json!(params.volume));
+    action_params.insert(
+        "backup".to_owned(),
+        build_backup_param(&params.strategy, &params.volume),
+    );
 
     let success = run_operation_for_backup(
         state,
@@ -729,8 +744,11 @@ async fn restore_backup_async(state: &Arc<OiState>, params: RestoreBackupParams)
     );
 
     let mut action_params = serde_json::Map::new();
+    action_params.insert(
+        "backup".to_owned(),
+        build_backup_param(&params.strategy, &params.volume),
+    );
     action_params.insert("snapshot".to_owned(), json!(params.snapshot));
-    action_params.insert("volume".to_owned(), json!(params.volume));
 
     let success = run_operation_for_backup(
         state,
@@ -799,6 +817,35 @@ fn validate_backup_app_actions(
         ));
     }
     Ok(())
+}
+
+/// Build the `backup` object passed to every backup-app action closure.
+///
+/// The object carries the structured identity of the backup operation —
+/// which strategy triggered it, which app owns the source volume, and which
+/// named volume within that app is being backed up. Backup apps use it for
+/// two things:
+///
+///  1. **save-snapshot** tags the remote snapshot with `app` + `volume` so
+///     the snapshot can be attributed later.
+///  2. **list-snapshots** filters its JSON output to only the snapshots
+///     matching the `app` + `volume` combination.
+///
+/// `restore-snapshot` also receives this object in addition to the opaque
+/// `snapshot` identifier; the action is expected to verify the snapshot
+/// belongs to the requested `app`/`volume` pair before writing to the
+/// destination volume.
+///
+/// The volume id has the shape `"<app>/<volume>"` or `"_site/<volume>"` — we
+/// split it once on `/` to produce the structured fields.
+// i[impl backup.action.backup-param]
+fn build_backup_param(strategy_name: &str, vol_id: &str) -> serde_json::Value {
+    let (app, volume) = vol_id.split_once('/').unwrap_or((vol_id, ""));
+    json!({
+        "strategy": strategy_name,
+        "app": app,
+        "volume": volume,
+    })
 }
 
 fn parse_vol_id_to_path(

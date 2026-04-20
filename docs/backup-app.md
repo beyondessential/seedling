@@ -10,6 +10,24 @@ When Seedling invokes a backup action, it injects _operation-scoped volume bindi
 
 The external volume names are fixed and documented per action below.
 
+Seedling also passes every backup action a structured **backup object** in its `param` map, under the `backup` key. It describes the identity of the backup operation:
+
+```
+param["backup"] = #{
+    strategy: "daily-kopia",   // strategy that caused this invocation
+    app:      "myapp",         // BSL app whose volume is being backed up,
+                               //   or "_site" for site-scoped volumes
+    volume:   "data",          // named volume within `app`
+}
+```
+
+Backup apps use the object for two things that make multi-volume backups work correctly:
+
+1. **save-snapshot** stamps `app` + `volume` (and optionally `strategy`) onto the snapshot, via the backend's tag / hostname / prefix mechanism. Without this, there's no way to attribute a snapshot to a source volume after the fact.
+2. **list-snapshots** filters its output to only snapshots matching the `app` + `volume` pair. Without filtering, an operator listing snapshots for `myapp/data` would see snapshots of `otherapp/logs` too if both are stored in the same backend repository — `restore-snapshot` takes the snapshot id as an opaque string, so a wrong pick would silently restore the wrong data into the wrong target.
+
+`restore-snapshot` receives the same `backup` object plus an opaque `snapshot` string naming the specific snapshot to restore.
+
 ## Required actions
 
 A backup app must define exactly these three actions using `app.on_action()`. The names must match exactly.
@@ -24,18 +42,27 @@ Called by Seedling when a scheduled or manually triggered backup runs for a volu
 |---|---|---|
 | `source` | read-only | A point-in-time snapshot of the volume being backed up |
 
-**Params:** none beyond what Seedling provides internally.
+**Params:**
 
-**Contract:** read from `source`, persist the data to whatever external backend the backup app uses (object storage, a remote server, etc.). Exit successfully on success; Seedling will retry up to twice on failure and file a `backup_failed` fault if all attempts fail.
+| Key | Type | Description |
+|---|---|---|
+| `backup` | object | The [backup object](#what-seedling-provides) identifying this backup operation |
+
+**Contract:** read from `source` and persist the data to whatever external backend the backup app uses (object storage, a remote server, etc.). Stamp `backup.app` + `backup.volume` onto the snapshot so that [`list-snapshots`](#list-snapshots) can filter by volume later. Exit successfully on success; Seedling will retry up to twice on failure and file a `backup_failed` fault if all attempts fail.
 
 ```rhai
-app.on_action("save-snapshot", |rt, _param| {
+app.on_action("save-snapshot", |rt, param| {
     let source = app.external_volume("source");
+    let backup = param["backup"];
     let job = app.job()
         .image("ghcr.io/example/backup-tool:latest")
         .mount("/source", source)
         .env("DEST_BUCKET", bucket.value())
-        .command(["backup-tool", "upload", "/source"]);
+        // Stamp app+volume so list-snapshots can filter by them.
+        .command(["backup-tool", "upload",
+                  "--app", backup["app"],
+                  "--volume", backup["volume"],
+                  "/source"]);
     rt.start(job).terminated().ensure_success();
 }, #{ description: "Upload a snapshot to object storage" });
 ```
@@ -54,22 +81,32 @@ Called synchronously when an operator requests a list of available snapshots for
 
 | Key | Type | Description |
 |---|---|---|
-| `volume` | string | The volume ID being queried, e.g. `myapp/data` or `_site/myvol` |
+| `backup` | object | The [backup object](#what-seedling-provides) identifying which volume's snapshots to list |
 
 **Contract:** write a file at `/output/snapshots.json` (where `/output` is the mountpoint of the `output` binding) containing valid JSON describing the available snapshots. The JSON is returned verbatim to the operator via the API and displayed in the UI — it can be any structure, but an array of objects is the most useful because the UI will render them as a table and offer a per-row restore button.
+
+The output **must be filtered to only include snapshots that were taken via this app's `save-snapshot` action for the same `backup.app` + `backup.volume`**. A single backup app commonly stores multiple volumes' snapshots in the same remote backend (one Kopia repository, one S3 bucket with prefix-per-volume, etc.), and the operator requesting a list for `myapp/data` would be dangerously confused by snapshots of `otherapp/logs` showing up in the same list — the restore step takes the snapshot identifier as an opaque string, so nothing prevents an operator from accidentally selecting a snapshot that belongs to a different volume and writing it over the wrong target.
+
+How you implement the filter depends on your backend:
+
+- **Kopia**: `save-snapshot` sets `--override-hostname=<app>` and runs `kopia snapshot create /source/<volume>` (or uses a stable `--tags` value). `list-snapshots` passes `--hostname=<app>` and filters on source path.
+- **restic**: tag snapshots on save (`--tag app=<app> --tag volume=<volume>`), filter on list (`--tag app=<app> --tag volume=<volume>`).
+- **Object-storage roll-your-own**: prefix keys with `<app>/<volume>/` on save; list under that prefix on retrieve.
 
 The `snapshot` identifier used in `restore-snapshot` must be derivable from the data in this file. A common convention is an `id` or `name` field on each object.
 
 ```rhai
 app.on_action("list-snapshots", |rt, param| {
     let output = app.external_volume("output");
-    let vol = param["volume"];
+    let backup = param["backup"];
     let job = app.job()
         .image("ghcr.io/example/backup-tool:latest")
         .mount("/output", output)
         .env("DEST_BUCKET", bucket.value())
-        .env("VOLUME", vol)
-        .command(["backup-tool", "list", "--volume", vol, "--out", "/output/snapshots.json"]);
+        .command(["backup-tool", "list",
+                  "--app", backup["app"],
+                  "--volume", backup["volume"],
+                  "--out", "/output/snapshots.json"]);
     rt.start(job).terminated().ensure_success();
 }, #{ description: "List available snapshots" });
 ```
@@ -97,38 +134,40 @@ Called synchronously when an operator requests that a specific snapshot be resto
 
 | Key | Type | Description |
 |---|---|---|
+| `backup` | object | The [backup object](#what-seedling-provides) identifying the source volume |
 | `snapshot` | string | The snapshot identifier chosen by the operator (from the `list-snapshots` output) |
-| `volume` | string | The original volume ID that was backed up, e.g. `myapp/data` |
 
-**Contract:** write the restored snapshot data into `destination`. On success, Seedling makes the site volume available to the operator under a generated name (e.g. `restore-mystrategy-<uuid>`). On failure, the site volume is deleted and an error is returned.
+**Contract:** verify that the requested `snapshot` belongs to the `backup.app` + `backup.volume` pair (a restore mismatch would silently overwrite unrelated data), then write the restored snapshot data into `destination`. On success, Seedling makes the site volume available to the operator under a generated name (e.g. `restore-mystrategy-<uuid>`). On failure (including the app/volume mismatch check), exit non-zero; the site volume is deleted and an error is returned to the operator.
 
 ```rhai
 app.on_action("restore-snapshot", |rt, param| {
     let dest = app.external_volume("destination");
+    let backup = param["backup"];
     let snapshot = param["snapshot"];
-    let vol = param["volume"];
     let job = app.job()
         .image("ghcr.io/example/backup-tool:latest")
         .mount("/destination", dest)
         .env("DEST_BUCKET", bucket.value())
-        .env("SNAPSHOT", snapshot)
-        .env("VOLUME", vol)
-        .command(["backup-tool", "restore", snapshot, "--to", "/destination"]);
+        .command(["backup-tool", "restore",
+                  "--app", backup["app"],
+                  "--volume", backup["volume"],
+                  "--snapshot", snapshot,
+                  "--to", "/destination"]);
     rt.start(job).terminated().ensure_success();
 }, #{ description: "Restore a snapshot" });
 ```
 
 ## Registration
 
-Once the app is registered in Seedling, it must be registered as a backup provider before it can be used in backup strategies:
+Once the app is registered in Seedling, it must be opted in to the backup role before it can be used in backup strategies:
 
 ```
-seedling-ctl backups apps register --name my-backup --app my-backup-app
+seedling-ctl backups apps register --app my-backup-app
 ```
 
-Seedling validates at registration time that all three required actions are present. If the underlying app is later updated and an action disappears, Seedling re-validates and will refuse the update.
+Seedling validates at registration time that all three required actions are present. If the app is later updated and an action disappears, Seedling re-validates and will refuse the update.
 
-Only one invocation of the backup app runs at a time: Seedling serialises concurrent backup operations for the same provider.
+Only one invocation of the backup app runs at a time: Seedling serialises concurrent backup operations for the same app.
 
 ## Complete example
 
@@ -171,39 +210,53 @@ let image = "ghcr.io/example/s3-backup:1.0.0";
 
 // ── Required actions ─────────────────────────────────────────────────────────
 
-app.on_action("save-snapshot", |rt, _param| {
+app.on_action("save-snapshot", |rt, param| {
     let source = app.external_volume("source");
+    let backup = param["backup"];
     rt.start(
         app.job()
             .image(image)
             .env(base_env.call())
             .mount("/source", source)
-            .command(["s3-backup", "save", "/source"])
+            // Stamp app+volume onto the snapshot so list-snapshots can filter.
+            .command(["s3-backup", "save",
+                      "--app", backup["app"],
+                      "--volume", backup["volume"],
+                      "/source"])
     ).terminated().ensure_success();
 }, #{ description: "Upload a volume snapshot to S3" });
 
 app.on_action("list-snapshots", |rt, param| {
     let output = app.external_volume("output");
+    let backup = param["backup"];
+    // Filter by app+volume so the operator only sees matching snapshots.
     rt.start(
         app.job()
             .image(image)
             .env(base_env.call())
-            .env("VOLUME", param["volume"])
             .mount("/output", output)
-            .command(["s3-backup", "list", "--volume", param["volume"], "--out", "/output/snapshots.json"])
+            .command(["s3-backup", "list",
+                      "--app", backup["app"],
+                      "--volume", backup["volume"],
+                      "--out", "/output/snapshots.json"])
     ).terminated().ensure_success();
 }, #{ description: "List available snapshots on S3" });
 
 app.on_action("restore-snapshot", |rt, param| {
     let dest = app.external_volume("destination");
+    let backup = param["backup"];
     rt.start(
         app.job()
             .image(image)
             .env(base_env.call())
-            .env("VOLUME", param["volume"])
-            .env("SNAPSHOT", param["snapshot"])
             .mount("/destination", dest)
-            .command(["s3-backup", "restore", param["snapshot"], "--to", "/destination"])
+            // The backup tool must refuse to restore if the snapshot's
+            // stamped app+volume don't match these.
+            .command(["s3-backup", "restore",
+                      "--app", backup["app"],
+                      "--volume", backup["volume"],
+                      "--snapshot", param["snapshot"],
+                      "--to", "/destination"])
     ).terminated().ensure_success();
 }, #{ description: "Restore a snapshot from S3" });
 ```
@@ -214,4 +267,4 @@ app.on_action("restore-snapshot", |rt, param| {
 - **`snapshots.json` format**: make the snapshot identifier (`id`, `name`, or similar) a stable, opaque string that your `restore-snapshot` action can use directly. ISO 8601 timestamps work well when combined with a volume path prefix.
 - **Concurrency**: Seedling serialises all invocations of your backup app's actions — `save-snapshot`, `list-snapshots`, and `restore-snapshot` will never overlap with each other for the same registered backup app.
 - **Credentials**: store secrets as `kind: "password"` parameters so the UI masks them. They are never stored in plaintext by Seedling itself.
-- **Multiple volumes**: a single backup app registration can serve any number of strategies covering any volumes. The `volume` param tells you which volume is being operated on, so you can namespace your remote storage accordingly.
+- **Multiple volumes**: a single backup app registration can serve any number of strategies covering any volumes. The [backup object](#what-seedling-provides) in `param["backup"]` tells you which (strategy, app, volume) triple is being operated on — use it both to stamp stored snapshots (on `save-snapshot`) and to filter the returned list (on `list-snapshots`). See the filtering note under [`list-snapshots`](#list-snapshots).
