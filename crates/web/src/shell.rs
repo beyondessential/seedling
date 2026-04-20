@@ -74,6 +74,7 @@ impl Drop for ShellSessionGuard {
     }
 }
 
+// w[routes.shells]
 // w[shells.wire]
 /// Handle a `/shells/start` request from the browser.
 ///

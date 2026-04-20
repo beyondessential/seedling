@@ -99,6 +99,27 @@ Absent specification bugs, anything not defined here is either defined in anothe
 
 > w[routes.shells]
 > The web interface exposes interactive shell sessions, allowing operators to open a terminal session within an app's context directly from the browser.
+> See [shells.wire](#w--shells.wire), [shells.ui](#w--shells.ui), and [shells.resize](#w--shells.resize) for the wire protocol and UI details.
+
+> w[shells.wire]
+> The browser opens a single WT bidirectional stream and writes one newline-terminated JSON request line `{"method":"/shells/start","params":{"app","name","rows","cols"}}`.
+> The gateway writes back one newline-terminated JSON line — either `{"result":{"session_id","stdout_stream_id","stderr_stream_id",...}}` or `{"error":{...}}` — then the stream carries raw stdin bytes upstream and the final `{"exit_code":N}\n` frame downstream, followed by FIN.
+> The gateway also opens two server-initiated WT unidirectional streams, one for stdout and one for stderr.
+> Each uni stream begins with an 8-byte big-endian QUIC stream ID that matches the corresponding `stdout_stream_id` or `stderr_stream_id` in the handshake response; subsequent bytes are raw PTY output.
+> The browser reads the 8-byte prefix to route each uni stream to the correct shell session.
+> Since the gateway uses a shared QUIC connection to the daemon, stream IDs are unique across all concurrent shells on a given browser session; no rewriting or additional multiplexing is required.
+
+> w[shells.resize]
+> Terminal resize is sent as a standard `/shells/resize` OI request over the browser's shared WebTransport session.
+> The browser coalesces resize events to at most one in-flight request at a time.
+
+> w[shells.ui]
+> The app detail page exposes each shell defined in the app (from `/apps/show`'s `actions[].kind=="shell"`) as an "Open shell" button.
+> Clicking navigates to `/apps/:name/shell/:shellName`, a full-viewport terminal view rendered with xterm.js.
+> The terminal view must fit to the viewport and send resize events when the window size changes.
+> On clean exit, an overlay must show the exit code with options to close or reopen the shell.
+> Closing the tab or navigating away before a clean exit must trigger `/shells/stop` to tear down the daemon session.
+> MVP: one shell per browser tab; custom BSL `params` are not supported.
 
 > w[routes.keys]
 > The web interface exposes OI key management: listing authorized client keys, authorising new keys, and revoking existing keys.
