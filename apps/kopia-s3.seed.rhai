@@ -15,10 +15,10 @@
 
 let version = app.param("version")
     .required(false)
-    .default_value("0.17.0")
+    .default_value("0.22.3")
     .description("Kopia image tag (docker.io/kopia/kopia:<tag>)");
 
-let image = || `docker.io/kopia/kopia:${if version.is_set() { version.value() } else { "0.17.0" }}`;
+let image = || `docker.io/kopia/kopia:${if version.is_set() { version.value() } else { "latest" }}`;
 
 // ── Connection params ─────────────────────────────────────────────────────────
 
