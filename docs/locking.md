@@ -22,10 +22,30 @@ In `daemon/src/main.rs`, `schedule_db = Arc::clone(&db)` — this is the
 **same** `Arc<Mutex<Db>>` as `state.db`. The schedule ticker therefore
 contends directly with OI handlers for that mutex.
 
+## Per-app `def` sub-lock
+
+Each `AppEntry` contains `app.def: Arc<Mutex<AppDef>>` — a per-app mutex
+protecting the current app definition. This is a *sub-lock* of the registry: it
+is only reachable through an `AppEntry` obtained while holding `registry.read()`
+or `registry.write()`.
+
+Because `describe_app` holds `def.lock()` across `db.lock()` calls (needed to
+iterate resources and query instance state simultaneously), the required order
+for the two locks is:
+
+```
+def → db
+```
+
+Any function that accepts `db` as a parameter (or holds `db.lock()` before
+calling into a helper) must **not** then acquire `def.lock()` inside that
+helper. See `effective_app_status` for the correct pattern: collect resource
+IDs from `def` in a brief separate lock, release `def`, then query `db`.
+
 ## Required acquisition order
 
 ```
-registry → db → scheduler
+registry → def (per-app) → db → scheduler
 ```
 
 Never acquire a lock that is earlier in this chain while already holding one
@@ -33,8 +53,10 @@ that is later. For example:
 
 - Holding `db.lock()` then acquiring `registry.read()` — **forbidden**
 - Holding `registry.write()` then acquiring `db.lock()` — **forbidden**
+- Holding `db.lock()` then acquiring `def.lock()` — **forbidden**
 - Holding `db.lock()` then acquiring `scheduler.lock()` — allowed
 - Holding `registry.read()` then acquiring `db.lock()` — allowed
+- Holding `def.lock()` then acquiring `db.lock()` — allowed
 
 `trusted_keys` and `forwards` are independent of this chain. They may be
 acquired in any order relative to each other, but do not hold them together
@@ -101,6 +123,20 @@ work, either:
   async work.
 - Use `tokio::sync::Mutex` if the lock genuinely needs to span a yield point
   (rare; prefer restructuring).
+
+## Historical deadlock: def/db inversion in describe_app (fixed 2026-04)
+
+Two concurrent `/apps/show` requests would deadlock:
+
+1. Request A: acquires `def.lock()` (for the resources JSON loop), then blocks
+   waiting for `db.lock()`.
+2. Request B: `effective_app_status` is called with `db` held as a temporary,
+   then acquires `def.lock()` inside the function — blocks because Request A
+   holds it.
+
+Fix: `effective_app_status` now collects resource IDs from `def` in a brief
+separate lock, releases `def`, then queries `db`. It never holds both
+simultaneously, breaking the cycle.
 
 ## Deadlock detection in debug builds
 

@@ -203,6 +203,11 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
 /// Refines a base `AppStatus::Running` into `Running` or `Degraded` by
 /// checking whether all resource instances have reached `Ready`.  All other
 /// statuses are returned unchanged.
+///
+/// Lock ordering: this function must never hold `def.lock()` while `db` is
+/// already held by the caller (that would invert the def → db order used in
+/// `describe_app` and cause a deadlock). Collect resource IDs from `def`
+/// first, then release the lock before querying `db`.
 pub(crate) fn effective_app_status(
     base: AppStatus,
     entry: &AppEntry,
@@ -213,13 +218,21 @@ pub(crate) fn effective_app_status(
     }
 
     let app_name = &entry.name;
-    let def = entry.app.def.lock();
+
+    // Collect resource IDs with a brief def lock, then release before touching db.
+    let resource_ids: Vec<(ResourceKind, std::sync::Arc<String>)> = {
+        let def = entry.app.def.lock();
+        def.resources
+            .keys()
+            .map(|id| (id.kind, std::sync::Arc::clone(&id.name)))
+            .collect()
+    };
 
     let has_faults = faults::has_active_faults(db, app_name).unwrap_or(false);
 
-    let all_ready = def.resources.keys().all(|id| {
-        let instances = find_instances_for_group(db, app_name, id.kind, Some(id.name.as_str()))
-            .unwrap_or_default();
+    let all_ready = resource_ids.iter().all(|(kind, name)| {
+        let instances =
+            find_instances_for_group(db, app_name, *kind, Some(name.as_str())).unwrap_or_default();
         if instances.is_empty() {
             return false;
         }
@@ -235,8 +248,7 @@ pub(crate) fn effective_app_status(
                     | LifecycleState::Terminating
                     | LifecycleState::Terminated
             ) {
-                // Instances being torn down are transitioning to Unscheduled
-                // and must not drag the app to Degraded.
+                // Instances being torn down must not drag the app to Degraded.
             } else {
                 return false;
             }
