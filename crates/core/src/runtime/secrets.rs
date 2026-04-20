@@ -141,7 +141,7 @@ mod tests {
     fn insecure_perms_rejected() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("loose.key");
-        std::fs::write(&path, &[0u8; 32]).unwrap();
+        std::fs::write(&path, [0u8; 32]).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(matches!(
             Cipher::load_or_create(&path),

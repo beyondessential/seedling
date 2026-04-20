@@ -156,7 +156,6 @@ let kopia_job = || {
     app.job()
         .image(image.call())
         .env(kopia_env.call())
-        .writable_rootfs()
         .mount("/app", state)
         .mount("/tmp", tmp)
 };

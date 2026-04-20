@@ -292,7 +292,7 @@ fn load_params_for_app_alone_misses_secrets() {
 
     let plaintext_only = load_params_for_app(&db, "myapp").expect("load");
     assert!(
-        plaintext_only.get("apikey").is_none(),
+        !plaintext_only.contains_key("apikey"),
         "plaintext-only loader must not surface secrets (confirms the trap)"
     );
 
