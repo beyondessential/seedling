@@ -8,7 +8,7 @@ import { Link } from "react-router-dom";
 import { useEventRefresh } from "../hooks/useEventRefresh";
 import { useOiQuery } from "../hooks/useOi";
 import { useSessionContext } from "./SessionProvider";
-import type { ConnectedClients, FaultRecord, SeedlingEvent } from "../lib/types";
+import type { ConnectedClients, FaultRecord, HeldVolume, SeedlingEvent } from "../lib/types";
 
 interface StatusSummary {
   hostname: string;
@@ -26,19 +26,31 @@ const isSessionEvent = (ev: SeedlingEvent) =>
   ev.type === "ForwardStarted" ||
   ev.type === "ForwardStopped";
 
+// Volumes are held when an /apps/update strips a named volume from the
+// script; AppUpdated is the only event that can cause the count to change.
+// Deregister can also drop an app, but any strategies/apps that referenced
+// the held volume's source app stay intact — the count doesn't drop on
+// deregister either.
+const isHeldVolumeEvent = (ev: SeedlingEvent) => ev.type === "AppUpdated";
+
 export function Navbar() {
   const { data } = useOiQuery<StatusSummary>("/server/status", {});
   const { data: faults, refetch: refetchFaults } = useOiQuery<FaultRecord[]>("/faults/list", {});
   const { data: clients, refetch: refetchClients } =
     useOiQuery<ConnectedClients>("/connected-clients/list", {});
+  const { data: heldVols, refetch: refetchHeld } =
+    useOiQuery<HeldVolume[]>("/volumes/held/list", {});
   const { reconnecting, sidebarOpen, setSidebarOpen } = useSessionContext();
 
   const matchFaults = useCallback(isFaultEvent, []);
   const matchSessions = useCallback(isSessionEvent, []);
+  const matchHeldVolumes = useCallback(isHeldVolumeEvent, []);
   useEventRefresh(refetchFaults, matchFaults);
   useEventRefresh(refetchClients, matchSessions);
+  useEventRefresh(refetchHeld, matchHeldVolumes);
 
   const faultCount = faults?.length ?? 0;
+  const heldCount = heldVols?.length ?? 0;
   const sessionCount =
     (clients?.web.length ?? 0) +
     (clients?.shells.length ?? 0) +
@@ -89,14 +101,33 @@ export function Navbar() {
             {data.hostname}
           </Typography>
         )}
-        <Tooltip title="Volumes">
+        <Tooltip
+          title={
+            heldCount > 0
+              ? `Volumes · ${heldCount} held volume${heldCount === 1 ? "" : "s"} pending review`
+              : "Volumes"
+          }
+        >
           <IconButton
             size="small"
             component={Link}
             to="/volumes"
             sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
           >
-            <StorageIcon fontSize="small" />
+            <Badge
+              badgeContent={heldCount}
+              color="warning"
+              sx={{
+                "& .MuiBadge-badge": {
+                  fontSize: "0.6rem",
+                  minWidth: 14,
+                  height: 14,
+                  padding: "0 3px",
+                },
+              }}
+            >
+              <StorageIcon fontSize="small" />
+            </Badge>
           </IconButton>
         </Tooltip>
         <Tooltip title="Backups">

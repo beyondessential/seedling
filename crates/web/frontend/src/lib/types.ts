@@ -281,7 +281,8 @@ export interface HeldVolume {
 
 export type VolumeRef =
   | { kind: "site"; name: string }
-  | { kind: "app"; app: string; volume: string };
+  | { kind: "app"; app: string; volume: string }
+  | { kind: "held"; id: string };
 
 export interface BackupApp {
   app: string;

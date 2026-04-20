@@ -530,7 +530,7 @@ export default function Volumes() {
                       <TableCell>Volume</TableCell>
                       <TableCell>Reason</TableCell>
                       <TableCell width={160}>Held since</TableCell>
-                      <TableCell width={40} />
+                      <TableCell width={80} />
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -548,7 +548,20 @@ export default function Volumes() {
                         <TableCell sx={{ color: "text.secondary" }}>
                           {new Date(h.held_at).toLocaleString()}
                         </TableCell>
-                        <TableCell align="right" sx={{ px: 0.5 }}>
+                        <TableCell align="right" sx={{ px: 0.5, whiteSpace: "nowrap" }}>
+                          <Tooltip title="Open shell">
+                            <IconButton
+                              size="small"
+                              onClick={() =>
+                                openVolumeShell(
+                                  [{ kind: "held", id: h.id }],
+                                  `held: ${h.app}/${h.display_name}`,
+                                )
+                              }
+                            >
+                              <TerminalIcon sx={{ fontSize: 16 }} />
+                            </IconButton>
+                          </Tooltip>
                           <Tooltip title="Confirm delete">
                             <IconButton
                               size="small"

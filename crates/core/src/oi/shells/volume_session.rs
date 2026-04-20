@@ -20,6 +20,11 @@ use super::registry::ShellSession;
 enum VolumeRef {
     Site { name: String },
     App { app: String, volume: String },
+    // Inspect a held volume's data. The `id` is the one returned by
+    // /volumes/held/list. Mounted read-write so the operator can cherry-
+    // pick files back out into another volume if they want to recover a
+    // subset before deleting the rest.
+    Held { id: String },
 }
 
 struct ResolvedMount {
@@ -157,6 +162,25 @@ pub(crate) async fn open_volume_shell_session(
                     err!("not_found", format!("app volume not found: {app}/{volume}"));
                 }
                 let display_name = sanitise_name(&format!("{app}.{volume}"));
+                (path, false, display_name)
+            }
+
+            VolumeRef::Held { id } => {
+                let path = match vol_store.held_path(id) {
+                    Some(p) => p,
+                    None => err!("not_found", format!("held volume not found: {id}")),
+                };
+                // Look up the meta so the mount point carries a human
+                // name instead of a raw UUID.
+                let held_list = match vol_store.list_held() {
+                    Ok(v) => v,
+                    Err(e) => err!("internal_error", format!("list held: {e}")),
+                };
+                let meta = held_list.iter().find(|m| m.id == *id);
+                let label = meta
+                    .map(|m| format!("held-{}-{}", m.app, m.volume_name))
+                    .unwrap_or_else(|| format!("held-{id}"));
+                let display_name = sanitise_name(&label);
                 (path, false, display_name)
             }
         };

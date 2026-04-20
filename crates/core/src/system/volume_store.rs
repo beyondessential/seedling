@@ -114,6 +114,22 @@ impl VolumeStore {
         Ok(meta)
     }
 
+    /// Host path for a held volume's data directory.
+    ///
+    /// Returns `None` if no held volume with the given id is registered
+    /// (either the id is bogus or the volume's meta.json has been
+    /// hand-removed). The caller should use this as the definitive source
+    /// of truth rather than constructing the path themselves.
+    pub fn held_path(&self, id: &str) -> Option<PathBuf> {
+        let held_dir = self.held_dir();
+        let data_path = held_dir.join(id);
+        let meta_path = held_dir.join(format!("{id}.meta.json"));
+        if !meta_path.exists() || !data_path.exists() {
+            return None;
+        }
+        Some(data_path)
+    }
+
     pub fn list_held(&self) -> std::io::Result<Vec<HeldVolumeMeta>> {
         let held_dir = self.held_dir();
         if !held_dir.exists() {
