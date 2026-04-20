@@ -9,7 +9,9 @@ use super::HandlerResult;
 // i[status.get]
 pub(crate) fn get_status(state: &OiState) -> HandlerResult {
     let uptime = state.start_time.elapsed().as_secs();
-    let hostname = whoami::devicename().unwrap_or_else(|_| String::from("unknown"));
+    let hostname = whoami::devicename()
+        .or_else(|_| whoami::hostname())
+        .unwrap_or_else(|_| "unknown".into());
     let reg = state.registry.read();
     let apps = reg.list();
     let apps_total = apps.len();
