@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { AuthRequired, connect } from "../lib/session";
 import type { Session } from "../lib/session";
 import type { SeedlingEvent } from "../lib/types";
+import { UniRouter } from "../lib/uni-router";
 
 const EVENTS_CACHE_SIZE = 200;
 const SIDEBAR_STORAGE_KEY = "seedling.eventsSidebar";
@@ -18,6 +19,7 @@ interface SessionCtx {
   setSidebarOpen: (open: boolean) => void;
   sidebarWidth: number;
   setSidebarWidth: (w: number) => void;
+  uniRouter: UniRouter | null;
 }
 
 export const SessionContext = createContext<SessionCtx>({
@@ -30,6 +32,7 @@ export const SessionContext = createContext<SessionCtx>({
   setSidebarOpen: () => undefined,
   sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
   setSidebarWidth: () => undefined,
+  uniRouter: null,
 });
 
 export function useSessionContext() {
@@ -41,6 +44,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [probing, setProbing] = useState(true);
   const [reconnecting, setReconnecting] = useState(false);
   const [events, setEvents] = useState<SeedlingEvent[]>([]);
+  const [uniRouter, setUniRouter] = useState<UniRouter | null>(null);
   const [sidebarOpen, setSidebarOpenState] = useState<boolean>(() => {
     try {
       return localStorage.getItem(SIDEBAR_STORAGE_KEY) === "true";
@@ -131,6 +135,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     };
   }, [session, doReconnect]);
 
+  // Start the uni-stream router pump for the duration of a session.
+  // w[shells.wire]
+  useEffect(() => {
+    if (!session) {
+      setUniRouter(null);
+      return;
+    }
+    const router = new UniRouter();
+    router.startPump(session.wt);
+    setUniRouter(router);
+  }, [session]);
+
   // Subscribe to events for the duration of a session.
   useEffect(() => {
     if (!session) return;
@@ -157,6 +173,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     <SessionContext.Provider value={{
       session, probing, reconnecting, setSession,
       events, sidebarOpen, setSidebarOpen, sidebarWidth, setSidebarWidth,
+      uniRouter,
     }}>
       {children}
     </SessionContext.Provider>

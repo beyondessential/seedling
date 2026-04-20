@@ -5,6 +5,7 @@ export interface Session {
   token: string;
   actor: Actor;
   client: WtClient;
+  wt: WebTransport;
 }
 
 export async function connect(credential: ConnectRequest): Promise<Session> {
@@ -24,7 +25,7 @@ export async function connect(credential: ConnectRequest): Promise<Session> {
   const data = (await res.json()) as ConnectResponse;
   const wt = await openWebTransport(data.wt_url, data.cert_hashes);
   const client = new WtClient(wt, data.actor);
-  return { token: data.token, actor: data.actor, client };
+  return { token: data.token, actor: data.actor, client, wt };
 }
 
 export class AuthRequired extends Error {
