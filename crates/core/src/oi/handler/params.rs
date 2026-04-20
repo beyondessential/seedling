@@ -29,10 +29,13 @@ pub(crate) struct UnsetParamParams {
 }
 
 fn current_param_value(state: &OiState, app: &str, name: &str) -> Result<Option<String>, OiError> {
-    let db = state.db.lock();
-    let map = crate::runtime::apps::load_params_for_app(&db, app)
+    let app_owned = app.to_owned();
+    let name_owned = name.to_owned();
+    let map = state
+        .db
+        .call(move |db| crate::runtime::apps::load_params_for_app(db, &app_owned))
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
-    Ok(map.get(name).cloned())
+    Ok(map.get(&name_owned).cloned())
 }
 
 fn reject_if_op_in_progress(state: &OiState, app: &str) -> Result<(), OiError> {
@@ -50,15 +53,17 @@ fn reload_and_persist_apperror(
     app: &str,
     new_generation: generations::Generation,
 ) -> Result<(), OiError> {
+    use crate::oi::handler::apps::{extract_persist_fields, persist_app_fields, sync_fault_state};
+
     let script = {
         let reg = state.registry.read();
         reg.get(app).expect("confirmed registered").script.clone()
     };
-    let loaded_params = {
-        let db = state.db.lock();
-        crate::runtime::apps::load_params_for_app(&db, app)
-            .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?
-    };
+    let app_owned = app.to_owned();
+    let loaded_params = state
+        .db
+        .call(move |db| crate::runtime::apps::load_params_for_app(db, &app_owned))
+        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
     state
         .registry
         .write()
@@ -66,9 +71,7 @@ fn reload_and_persist_apperror(
     {
         let reg = state.registry.read();
         if let Some(entry) = reg.get(app) {
-            let db = state.db.lock();
-            crate::runtime::apps::sync_script_error_fault(&db, entry);
-            crate::runtime::apps::sync_registry_faults(&db, entry);
+            sync_fault_state(&state.db, entry);
         }
     }
     {
@@ -80,8 +83,12 @@ fn reload_and_persist_apperror(
     {
         let reg = state.registry.read();
         let entry = reg.get(app).expect("confirmed registered");
-        let db = state.db.lock();
-        crate::runtime::apps::AppRegistry::persist_app(&db, entry)
+        let (app_name, generation_n, installed, uninstalling) = extract_persist_fields(entry);
+        state
+            .db
+            .call(move |db| {
+                persist_app_fields(db, &app_name, generation_n, installed, uninstalling)
+            })
             .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db persist: {e}")))?;
     }
     Ok(())
@@ -129,10 +136,13 @@ fn schedule_on_change(
                 .unwrap_or_default();
             drop(sched);
             if !op_id.is_empty() {
-                let db = state.db.lock();
-                if let Err(e) = generations::attach_operation(&db, app, generation, &op_id) {
-                    tracing::warn!(app, generation, "failed to attach op to generation: {e}");
-                }
+                let app_owned = app.to_owned();
+                let op_id_owned = op_id.clone();
+                state.db.call(move |db| {
+                    if let Err(e) = generations::attach_operation(db, &app_owned, generation, &op_id_owned) {
+                        tracing::warn!(app = %app_owned, generation, "failed to attach op to generation: {e}");
+                    }
+                });
             }
             tick_notify.notify_one();
             Ok("accepted")
@@ -199,17 +209,23 @@ pub(crate) fn set_param(
         reg.get(app).map(|e| e.current_generation).unwrap_or(0)
     };
 
-    {
-        let db = state.db.lock();
-        crate::runtime::apps::upsert_param(&db, app, param_name, value)
-            .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
-    }
-
-    let generation = {
-        let db = state.db.lock();
-        generations::bump_param_set(&db, app, param_name, previous_value.as_deref(), value)
-            .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db generation: {e}")))?
-    };
+    let app_owned = app.to_owned();
+    let param_name_owned = param_name.to_owned();
+    let value_owned = value.to_owned();
+    let prev_owned = previous_value.clone();
+    let generation = state
+        .db
+        .call(move |db| -> rusqlite::Result<_> {
+            crate::runtime::apps::upsert_param(db, &app_owned, &param_name_owned, &value_owned)?;
+            generations::bump_param_set(
+                db,
+                &app_owned,
+                &param_name_owned,
+                prev_owned.as_deref(),
+                &value_owned,
+            )
+        })
+        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
 
     reload_and_persist_apperror(state, app, generation)?;
 
@@ -260,17 +276,16 @@ pub(crate) fn unset_param(
         reg.get(app).map(|e| e.current_generation).unwrap_or(0)
     };
 
-    {
-        let db = state.db.lock();
-        crate::runtime::apps::delete_one_param(&db, app, param_name)
-            .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
-    }
-
-    let generation = {
-        let db = state.db.lock();
-        generations::bump_param_unset(&db, app, param_name, &previous_value)
-            .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db generation: {e}")))?
-    };
+    let app_owned = app.to_owned();
+    let param_name_owned = param_name.to_owned();
+    let prev_owned = previous_value.clone();
+    let generation = state
+        .db
+        .call(move |db| -> rusqlite::Result<_> {
+            crate::runtime::apps::delete_one_param(db, &app_owned, &param_name_owned)?;
+            generations::bump_param_unset(db, &app_owned, &param_name_owned, &prev_owned)
+        })
+        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
 
     reload_and_persist_apperror(state, app, generation)?;
 

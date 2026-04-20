@@ -14,9 +14,10 @@ pub(crate) struct ListFaultsParams {
 
 // i[fault.list]
 pub(crate) fn list_faults(state: &OiState, params: ListFaultsParams) -> HandlerResult {
-    let app = params.app.as_deref();
-    let db = state.db.lock();
-    let records = faults::list_active_faults(&db, app)
+    let app = params.app.clone();
+    let records = state
+        .db
+        .call(move |db| faults::list_active_faults(db, app.as_deref()))
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db query: {e}")))?;
     let result: Vec<serde_json::Value> = records
         .into_iter()

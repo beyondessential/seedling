@@ -3,7 +3,6 @@ use std::{
     io::{self, BufWriter, Write},
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
 use tokio::{sync::broadcast, task::JoinHandle};
@@ -11,7 +10,7 @@ use tracing::{error, warn};
 
 use seedling_protocol::events::OiEvent;
 
-use crate::runtime::db::Db;
+use crate::runtime::db::DbHandle;
 
 // r[impl audit.log]
 pub struct AuditWriter {
@@ -73,7 +72,7 @@ impl AuditWriter {
 pub fn spawn_audit_task(
     path: PathBuf,
     mut rx: broadcast::Receiver<OiEvent>,
-    db: Arc<parking_lot::Mutex<Db>>,
+    db: DbHandle,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut writer = match AuditWriter::open(&path) {
@@ -95,16 +94,17 @@ pub fn spawn_audit_task(
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     // r[impl audit.log.resilience]
                     warn!(dropped = n, "audit log receiver lagged, events lost");
-                    let db = db.lock();
-                    let _ = crate::runtime::faults::file_fault(
-                        &db,
-                        "seedling",
-                        None,
-                        None,
-                        None,
-                        "audit_lag",
-                        &format!("audit log receiver lagged, {n} events dropped"),
-                    );
+                    db.call(move |db| {
+                        let _ = crate::runtime::faults::file_fault(
+                            db,
+                            "seedling",
+                            None,
+                            None,
+                            None,
+                            "audit_lag",
+                            &format!("audit log receiver lagged, {n} events dropped"),
+                        );
+                    });
                 }
                 Err(broadcast::error::RecvError::Closed) => {
                     break;

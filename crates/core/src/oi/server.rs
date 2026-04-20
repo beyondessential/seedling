@@ -69,8 +69,10 @@ fn synthesise_actor(state: &OiState, fp: Option<&str>) -> Arc<Actor> {
     let id = fp.map(str::to_owned);
     let display = fp
         .and_then(|f| {
-            let db = state.db.lock();
-            super::auth::get_label(&db, f).ok().flatten()
+            let f = f.to_owned();
+            state
+                .db
+                .call(move |db| super::auth::get_label(db, &f).ok().flatten())
         })
         .or_else(|| id.clone());
     Arc::new(Actor {
@@ -100,10 +102,16 @@ pub async fn run(
     state.spki_fingerprint.set(fingerprint.clone()).ok();
 
     {
-        let db = state.db.lock();
-        super::auth::load_from_db(&db, &state.trusted_keys)
+        let trusted_keys = Arc::clone(&state.trusted_keys);
+        state
+            .db
+            .call(move |db| super::auth::load_from_db(db, &trusted_keys))
             .map_err(|e| format!("loading authorized keys: {e}"))?;
-        super::auth::import_bootstrap_file(data_dir, &db, &state.trusted_keys)
+        let trusted_keys = Arc::clone(&state.trusted_keys);
+        let data_dir = data_dir.to_owned();
+        state
+            .db
+            .call(move |db| super::auth::import_bootstrap_file(&data_dir, db, &trusted_keys))
             .map_err(|e| format!("reading bootstrap file: {e}"))?;
     }
 
@@ -189,8 +197,10 @@ async fn handle_connection(
     let client: String = client_fp
         .as_deref()
         .and_then(|fp| {
-            let db = state.db.lock();
-            super::auth::get_label(&db, fp).ok().flatten()
+            let fp = fp.to_owned();
+            state
+                .db
+                .call(move |db| super::auth::get_label(db, &fp).ok().flatten())
         })
         .or_else(|| client_fp.clone())
         .unwrap_or_else(|| "unauthenticated".to_owned());

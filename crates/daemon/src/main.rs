@@ -8,11 +8,13 @@ use std::{
 use clap::Parser;
 use futures_util::FutureExt;
 use lloggs::LoggingArgs;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use seedling_core::{
     oi::{self, server::DEFAULT_MAX_STREAMS, state::OiState},
     runtime::{
-        AppRegistry, InstanceRegistry, Scheduler, audit, db::Db, gc::GcConfig,
+        AppRegistry, InstanceRegistry, Scheduler, audit,
+        db::{Db, DbHandle},
+        gc::GcConfig,
         registry::DbInstanceRegistry,
     },
     system::{
@@ -300,16 +302,16 @@ async fn main() {
     });
 
     let registry = Arc::new(RwLock::new(registry));
-    let db = Arc::new(Mutex::new(db));
-    let scheduler = Arc::new(Mutex::new(Scheduler::new()));
+    let db = DbHandle::from_db(db);
+    let scheduler = Arc::new(parking_lot::Mutex::new(Scheduler::new()));
 
     // ---------------------------------------------------------------------------
     // Startup orphan cleanup — remove dynamic resources left by a previous run
     // ---------------------------------------------------------------------------
 
     {
-        let db = db.lock();
-        match seedling_core::runtime::desired::list_dynamic_resources(&db) {
+        let records = db.call(|db| seedling_core::runtime::desired::list_dynamic_resources(db));
+        match records {
             Ok(records) if !records.is_empty() => {
                 tracing::warn!(
                     count = records.len(),
@@ -365,17 +367,12 @@ async fn main() {
                     });
                 }
 
-                if let Err(e) =
-                    seedling_core::runtime::desired::delete_dynamic_resources_for_operation(&db, "")
-                {
-                    // delete_dynamic_resources_for_operation with "" won't match.
-                    // Use a direct DELETE all instead.
-                    let _ = e;
-                }
                 // Clear all orphaned records.
-                if let Err(e) = db.conn.execute("DELETE FROM dynamic_resources", []) {
-                    tracing::warn!("failed to clear orphaned dynamic resource records: {e}");
-                }
+                db.call(|db| {
+                    if let Err(e) = db.conn.execute("DELETE FROM dynamic_resources", []) {
+                        tracing::warn!("failed to clear orphaned dynamic resource records: {e}");
+                    }
+                });
                 tracing::info!("orphaned dynamic resource cleanup complete");
             }
             Ok(_) => {}
@@ -478,14 +475,14 @@ async fn main() {
     // Global reconciler
     // ---------------------------------------------------------------------------
 
-    let instance_registry: Arc<dyn InstanceRegistry> = Arc::new(DbInstanceRegistry::new(Arc::new(
-        parking_lot::Mutex::new(Db::open(&db_path).unwrap_or_else(|e| {
+    let instance_registry: Arc<dyn InstanceRegistry> = Arc::new(DbInstanceRegistry::new(
+        DbHandle::open(&db_path).unwrap_or_else(|e| {
             tracing::error!("cannot open instance registry db: {e}");
             std::process::exit(1);
-        })),
-    )));
+        }),
+    ));
 
-    let obs_db = Db::open(&db_path).unwrap_or_else(|e| {
+    let obs_db = DbHandle::open(&db_path).unwrap_or_else(|e| {
         tracing::error!("cannot open observations db: {e}");
         std::process::exit(1);
     });
@@ -494,11 +491,10 @@ async fn main() {
     seedling_core::runtime::faults::init(event_tx.clone());
 
     // Audit log — subscribe before anything emits events.
-    let _audit_handle =
-        audit::spawn_audit_task(args.audit_log, event_tx.subscribe(), Arc::clone(&db));
+    let _audit_handle = audit::spawn_audit_task(args.audit_log, event_tx.subscribe(), db.clone());
 
     // Periodic garbage collection of operational tables.
-    let _gc_handle = seedling_core::runtime::gc::spawn_gc_task(Arc::clone(&db), args.gc.into());
+    let _gc_handle = seedling_core::runtime::gc::spawn_gc_task(db.clone(), args.gc.into());
 
     let shells = seedling_core::oi::shells::ShellRegistry::new();
 
@@ -520,7 +516,7 @@ async fn main() {
     // constructed, so that scheduled-action fires can spawn lifecycle operations.
     let reconciler_handle = {
         let tick_notify = Arc::clone(&tick_notify);
-        let schedule_db = Arc::clone(&db);
+        let schedule_db = db.clone();
         let schedule_scheduler = Arc::clone(&scheduler);
         let schedule_registry = Arc::clone(&registry);
         (
@@ -542,7 +538,7 @@ async fn main() {
         registry: Arc::clone(&registry),
         spki_fingerprint: std::sync::OnceLock::new(),
         start_time: Instant::now(),
-        db: Arc::clone(&db),
+        db: db.clone(),
         scheduler: Arc::clone(&scheduler),
         tick_notify: Arc::clone(&tick_notify),
         db_path: db_path.clone(),
@@ -594,17 +590,17 @@ async fn main() {
                         })
                         .collect()
                 };
-                let accepted_fires = {
-                    let db_guard = schedule_db.lock();
+                let accepted_fires = schedule_db.call_ref(|db| {
                     let mut sched = schedule_scheduler.lock();
-                    let fired = schedule_ticker.maybe_tick(&db_guard, &mut sched, &|app_name| {
+                    let fired = schedule_ticker.maybe_tick(db, &mut sched, &|app_name| {
                         app_generations.get(app_name).copied()
                     });
+                    drop(sched);
                     fired
                         .into_iter()
                         .filter(|f| f.accepted && f.operation_id.is_some())
                         .collect::<Vec<_>>()
-                };
+                });
                 for fire in accepted_fires {
                     if let Some(op_id) = fire.operation_id {
                         seedling_core::oi::handler::actions::lifecycle::spawn_accepted_operation(
@@ -622,10 +618,7 @@ async fn main() {
                 }
 
                 // r[impl backup.execution]
-                let due_strategies = {
-                    let db_guard = schedule_db.lock();
-                    backup_ticker.maybe_tick(&db_guard)
-                };
+                let due_strategies = schedule_db.call_ref(|db| backup_ticker.maybe_tick(db));
                 for due in due_strategies {
                     let ids: Vec<_> = due
                         .volumes

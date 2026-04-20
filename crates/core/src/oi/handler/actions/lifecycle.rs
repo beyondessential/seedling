@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
 
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use seedling_protocol::events::OperationEventCtx;
 use tokio::sync::Notify;
 
@@ -8,32 +8,27 @@ use crate::{
     defs::{app::App, volume::OperationVolumeBinding},
     oi::state::OiState,
     runtime::{
-        AppPhase, AppRegistry, InstanceRegistry,
+        AppPhase, InstanceRegistry,
         barrier::{
             OperationId,
             oracle::DbWorldOracle,
             replay::{DbActionLog, OperationContext, OperationResult, run_operation},
         },
-        db::Db,
+        db::DbHandle,
         desired::OperationProgress,
         faults,
         registry::DbInstanceRegistry,
     },
 };
 
-struct OperationDbs {
-    db: Arc<Mutex<Db>>,
-}
-
-fn open_operation_dbs(db_path: &Path, app_name: &str) -> Option<OperationDbs> {
-    let db = match Db::open(db_path) {
-        Ok(db) => Arc::new(Mutex::new(db)),
+fn open_operation_dbs(db_path: &Path, app_name: &str) -> Option<DbHandle> {
+    match DbHandle::open(db_path) {
+        Ok(db) => Some(db),
         Err(e) => {
             tracing::error!(app = %app_name, "open operation db: {e}");
-            return None;
+            None
         }
-    };
-    Some(OperationDbs { db })
+    }
 }
 
 /// Run the operation loop synchronously until completion or failure.
@@ -44,7 +39,7 @@ fn open_operation_dbs(db_path: &Path, app_name: &str) -> Option<OperationDbs> {
 fn run_operation_loop(
     app: &App,
     script: &str,
-    dbs: OperationDbs,
+    db: DbHandle,
     params: serde_json::Map<String, serde_json::Value>,
     active_progress: Arc<RwLock<Option<OperationProgress>>>,
     tick_notify: Arc<Notify>,
@@ -61,29 +56,26 @@ fn run_operation_loop(
         Ok(a) => a,
         Err(e) => {
             tracing::error!(app = %app_name, action = %action_name, "script compile error: {e}");
-            let db = dbs.db.lock();
-            let _ = faults::file_fault(
-                &db,
-                app_name,
-                None,
-                None,
-                None,
-                "operation_failed",
-                &format!("script compile error in {action_name}: {e}"),
-            );
+            let app_name_owned = app_name.to_owned();
+            let desc = format!("script compile error in {action_name}: {e}");
+            db.call(move |db| {
+                let _ = faults::file_fault(
+                    db,
+                    &app_name_owned,
+                    None,
+                    None,
+                    None,
+                    "operation_failed",
+                    &desc,
+                );
+            });
             return false;
         }
     };
 
-    let log = DbActionLog::new(
-        Arc::clone(&dbs.db),
-        operation_id.clone(),
-        app_name,
-        action_name,
-    );
-    let world = Arc::new(DbWorldOracle::new(Arc::clone(&dbs.db)));
-    let registry: Arc<dyn InstanceRegistry> =
-        Arc::new(DbInstanceRegistry::new(Arc::clone(&dbs.db)));
+    let log = DbActionLog::new(db.clone(), operation_id.clone(), app_name, action_name);
+    let world = Arc::new(DbWorldOracle::new(db.clone()));
+    let registry: Arc<dyn InstanceRegistry> = Arc::new(DbInstanceRegistry::new(db.clone()));
 
     loop {
         let result = run_operation(
@@ -100,7 +92,7 @@ fn run_operation_loop(
                 tick_notify: Some(Arc::clone(&tick_notify)),
                 params: params.clone(),
                 is_shell: false,
-                db: Some(Arc::clone(&dbs.db)),
+                db: Some(db.clone()),
                 source_generation: op_ctx.source_generation,
                 target_generation: op_ctx.target_generation,
                 script_limits: Some(script_limits.clone()),
@@ -110,23 +102,28 @@ fn run_operation_loop(
         );
         match result {
             OperationResult::Completed => {
-                let db = dbs.db.lock();
-                faults::clear_faults_by_kind(&db, app_name, "operation_failed").ok();
+                let app_name_owned = app_name.to_owned();
+                db.call(move |db| {
+                    faults::clear_faults_by_kind(db, &app_name_owned, "operation_failed").ok();
+                });
                 op_ctx.completed();
                 return true;
             }
             OperationResult::Failed(e) => {
                 tracing::error!(app = %app_name, action = %action_name, "operation failed: {e}");
-                let db = dbs.db.lock();
-                let _ = faults::file_fault(
-                    &db,
-                    app_name,
-                    None,
-                    None,
-                    None,
-                    "operation_failed",
-                    &format!("{action_name} failed: {e}"),
-                );
+                let app_name_owned = app_name.to_owned();
+                let desc = format!("{action_name} failed: {e}");
+                db.call(move |db| {
+                    let _ = faults::file_fault(
+                        db,
+                        &app_name_owned,
+                        None,
+                        None,
+                        None,
+                        "operation_failed",
+                        &desc,
+                    );
+                });
                 op_ctx.failed(&e.to_string());
                 return false;
             }
@@ -153,14 +150,13 @@ async fn cleanup_dynamic_resources(
     use crate::runtime::history::query_observations;
     use crate::runtime::identity::{InstanceId, InstanceVariant, ResourceInstance};
 
-    let dynamic_records: Vec<_> = {
-        let db = state.db.lock();
-        list_dynamic_resources(&db)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|r| r.operation_id == operation_id_str)
-            .collect()
-    };
+    let op_id_for_filter = operation_id_str.to_owned();
+    let dynamic_records: Vec<_> = state
+        .db
+        .call(move |db| list_dynamic_resources(db).unwrap_or_default())
+        .into_iter()
+        .filter(|r| r.operation_id == op_id_for_filter)
+        .collect();
 
     if !dynamic_records.is_empty() {
         let mut cleanup = OperationProgress::new();
@@ -228,10 +224,12 @@ async fn cleanup_dynamic_resources(
                     let guard = active_progress.read();
                     if let Some(p) = &*guard {
                         p.dynamic_defs.keys().all(|inst| {
-                            let db = state.db.lock();
-                            let obs = query_observations(&db, inst).unwrap_or_default();
-                            derive_lifecycle_state(inst, &obs)
-                                .has_reached(LifecycleState::Terminated)
+                            let inst = inst.clone();
+                            state.db.call(move |db| {
+                                let obs = query_observations(db, &inst).unwrap_or_default();
+                                derive_lifecycle_state(&inst, &obs)
+                                    .has_reached(LifecycleState::Terminated)
+                            })
                         })
                     } else {
                         true
@@ -248,16 +246,19 @@ async fn cleanup_dynamic_resources(
         }
     }
 
-    let db = state.db.lock();
-    if let Err(e) = delete_dynamic_resources_for_operation(&db, operation_id_str) {
-        tracing::error!(
-            operation_id = %operation_id_str,
-            "failed to delete dynamic resource records: {e}"
-        );
-    }
+    let op_id_owned = operation_id_str.to_owned();
+    state.db.call(move |db| {
+        if let Err(e) = delete_dynamic_resources_for_operation(db, &op_id_owned) {
+            tracing::error!(
+                operation_id = %op_id_owned,
+                "failed to delete dynamic resource records: {e}"
+            );
+        }
+    });
 }
 
 fn finalize_install(state: &OiState, app_name: &str) {
+    use crate::oi::handler::apps::{extract_persist_fields, persist_app_fields};
     // i[action.invoke.install.completion]
     // Update the in-memory phase under the write lock, then persist under a
     // read lock. Never hold the write lock while acquiring db: the schedule
@@ -272,8 +273,10 @@ fn finalize_install(state: &OiState, app_name: &str) {
     {
         let reg = state.registry.read();
         if let Some(entry) = reg.get(app_name) {
-            let db = state.db.lock();
-            if let Err(e) = AppRegistry::persist_app(&db, entry) {
+            let (app_n, generation_n, installed, uninstalling) = extract_persist_fields(entry);
+            if let Err(e) = state.db.call(move |db| {
+                persist_app_fields(db, &app_n, generation_n, installed, uninstalling)
+            }) {
                 tracing::error!(app = %app_name, "persist installed flag: {e}");
             }
         }
@@ -339,14 +342,14 @@ pub fn spawn_accepted_operation(
             let op_ctx = op_ctx.clone();
 
             tokio::task::spawn_blocking(move || {
-                let dbs = match open_operation_dbs(&db_path, &app_name) {
+                let db = match open_operation_dbs(&db_path, &app_name) {
                     Some(d) => d,
                     None => return false,
                 };
                 run_operation_loop(
                     &app,
                     &script,
-                    dbs,
+                    db,
                     params,
                     active_progress,
                     tick_notify,
@@ -434,14 +437,14 @@ pub(crate) async fn run_operation_for_backup(
         let tick_notify_clone = Arc::clone(&tick_notify);
         let op_ctx = op_ctx.clone();
         tokio::task::spawn_blocking(move || {
-            let dbs = match open_operation_dbs(&db_path, &op_ctx.app) {
+            let db = match open_operation_dbs(&db_path, &op_ctx.app) {
                 Some(d) => d,
                 None => return false,
             };
             run_operation_loop(
                 &app,
                 &script,
-                dbs,
+                db,
                 params,
                 active_progress_clone,
                 tick_notify_clone,

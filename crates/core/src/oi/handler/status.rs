@@ -26,7 +26,7 @@ pub(crate) fn get_status(state: &OiState) -> HandlerResult {
         "apps_total": apps_total,
         "apps_by_status": apps_by_status,
         "active_operations": 0,
-        "active_faults": faults::count_active_faults(&state.db.lock()).unwrap_or(0),
+        "active_faults": state.db.call(|db| faults::count_active_faults(db).unwrap_or(0)),
         "active_shells": state.shells.list(None).len(),
         "active_forwards": state.forwards.lock().count(),
     }))

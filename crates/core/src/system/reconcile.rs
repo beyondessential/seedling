@@ -18,7 +18,7 @@ use crate::{
     runtime::{
         AppPhase, InstanceRegistry,
         apps::{AppRegistry, transition_phase},
-        db::Db,
+        db::DbHandle,
         desired::{DesiredState, EffectiveScales, compute, compute_uninstalling},
         identity::InstanceId,
         lifecycle::LifecycleState,
@@ -66,37 +66,38 @@ const OBS_KINDS: &[&str] = &[
 /// Load all existing `(instance_id, obs_kind)` pairs from the DB so that
 /// observations persisted in a previous session are not re-written with a
 /// fresh timestamp on restart.
-fn seed_written_obs_arc(db: &Arc<Mutex<Db>>) -> HashSet<(InstanceId, &'static str)> {
+fn seed_written_obs(db: &DbHandle) -> HashSet<(InstanceId, &'static str)> {
     fn intern(s: &str) -> Option<&'static str> {
         OBS_KINDS.iter().find(|&&k| k == s).copied()
     }
 
-    let db = db.lock();
-    let mut set = HashSet::new();
-    let Ok(mut stmt) = db
-        .conn
-        .prepare("SELECT DISTINCT instance_id, obs_kind FROM world_observations")
-    else {
-        return set;
-    };
-    let Ok(rows) = stmt.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    }) else {
-        return set;
-    };
-    for row in rows {
-        let Ok((id_hex, kind_str)) = row else {
-            continue;
+    db.call(|db| {
+        let mut set = HashSet::new();
+        let Ok(mut stmt) = db
+            .conn
+            .prepare("SELECT DISTINCT instance_id, obs_kind FROM world_observations")
+        else {
+            return set;
         };
-        let Some(kind) = intern(&kind_str) else {
-            continue;
+        let Ok(rows) = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        }) else {
+            return set;
         };
-        let Ok(n) = u128::from_str_radix(&id_hex, 16) else {
-            continue;
-        };
-        set.insert((InstanceId(uuid::Uuid::from_u128(n)), kind));
-    }
-    set
+        for row in rows {
+            let Ok((id_hex, kind_str)) = row else {
+                continue;
+            };
+            let Some(kind) = intern(&kind_str) else {
+                continue;
+            };
+            let Ok(n) = u128::from_str_radix(&id_hex, 16) else {
+                continue;
+            };
+            set.insert((InstanceId(uuid::Uuid::from_u128(n)), kind));
+        }
+        set
+    })
 }
 
 /// A pod instance observed to be running before this tick's actuations.
@@ -140,7 +141,7 @@ pub struct Reconciler {
     caddy_admin_client: Arc<AsyncRwLock<reqwest::Client>>,
     caddy_v4_addr: Option<Ipv4Addr>,
     data_dir: PathBuf,
-    db: Arc<Mutex<Db>>,
+    db: DbHandle,
     registry: Arc<dyn InstanceRegistry>,
     app_registry: Arc<RwLock<AppRegistry>>,
     written_obs: HashSet<(InstanceId, &'static str)>,
@@ -182,7 +183,7 @@ impl Reconciler {
         registry: Arc<dyn InstanceRegistry>,
         caddy_admin_client: Arc<AsyncRwLock<reqwest::Client>>,
         data_dir: PathBuf,
-        db: Db,
+        db: DbHandle,
         app_registry: Arc<RwLock<AppRegistry>>,
         event_tx: EventSender,
         dns_servers: Vec<Ipv6Addr>,
@@ -190,14 +191,13 @@ impl Reconciler {
         shells: Arc<ShellRegistry>,
     ) -> Self {
         let observer = Observer::new(Arc::clone(&driver));
-        let db = Arc::new(Mutex::new(db));
-        let written_obs = seed_written_obs_arc(&db);
+        let written_obs = seed_written_obs(&db);
         let actuator = Actuator::new(
             Arc::clone(&driver),
             node_prefix,
             Arc::clone(&registry),
             dns_servers,
-            Arc::clone(&db),
+            db.clone(),
         );
         Self {
             driver,
@@ -247,8 +247,10 @@ impl Reconciler {
             let effective_scales = self.compute_effective_scales(&name, &app_def);
             // r[impl resource.stop]
             let stopped_set = {
-                let db = self.db.lock();
-                stopped::load_stopped(&db, &name).unwrap_or_default()
+                let app_name_for_stop = name.clone();
+                self.db.call(move |db| {
+                    stopped::load_stopped(db, &app_name_for_stop).unwrap_or_default()
+                })
             };
             let desired = match phase {
                 AppPhase::Uninstalling => compute_uninstalling(&name, &app_def, &*self.registry),
@@ -295,24 +297,44 @@ impl Reconciler {
     /// Build the effective-scale map for every Deployment in an app.
     // r[impl update.rolling.over-provision]
     fn compute_effective_scales(&self, app_name: &str, app_def: &AppDef) -> EffectiveScales {
-        let db = self.db.lock();
-        let mut scales = EffectiveScales::new();
-        for (id, resource) in &app_def.resources {
-            if let Resource::Deployment(deployment) = resource {
-                let dep_def = deployment.def.lock();
-                let low = dep_def.scale.start;
-                let high = dep_def.scale.end;
-                let mut effective =
-                    scaling::effective_scale(&db, app_name, id.name.as_str(), low, high)
-                        .unwrap_or(low);
-                if self
-                    .rolling_updates
-                    .contains(&(app_name.to_owned(), id.name.as_str().to_owned()))
-                {
-                    effective = effective.saturating_add(1);
+        // Collect the data we need before entering db.call().
+        let deployments: Vec<(String, u16, u16)> = app_def
+            .resources
+            .iter()
+            .filter_map(|(id, resource)| {
+                if let Resource::Deployment(deployment) = resource {
+                    let dep_def = deployment.def.lock();
+                    Some((
+                        id.name.as_str().to_owned(),
+                        dep_def.scale.start,
+                        dep_def.scale.end,
+                    ))
+                } else {
+                    None
                 }
-                scales.insert(id.name.as_str().to_owned(), (low, high, effective));
+            })
+            .collect();
+        let app_name_owned = app_name.to_owned();
+        let scale_data: Vec<(String, u16, u16, u16)> = self.db.call(move |db| {
+            deployments
+                .into_iter()
+                .map(|(dep_name, low, high)| {
+                    let effective =
+                        scaling::effective_scale(db, &app_name_owned, &dep_name, low, high)
+                            .unwrap_or(low);
+                    (dep_name, low, high, effective)
+                })
+                .collect()
+        });
+        let mut scales = EffectiveScales::new();
+        for (dep_name, low, high, mut effective) in scale_data {
+            if self
+                .rolling_updates
+                .contains(&(app_name.to_owned(), dep_name.clone()))
+            {
+                effective = effective.saturating_add(1);
             }
+            scales.insert(dep_name, (low, high, effective));
         }
         scales
     }
@@ -682,20 +704,23 @@ impl Reconciler {
             let unit_prefix = format!("seedling-{}-", app.name);
             match self.driver.process.list_units(&unit_prefix).await {
                 Ok(units) if units.is_empty() => {
-                    let db = self.db.lock();
-                    transition_phase(
-                        &app.phase_handle,
-                        AppPhase::NotInstalled,
-                        &db,
-                        &app.name,
-                        "",
-                    );
-                    if let Err(e) = db.conn.execute(
-                        "DELETE FROM resource_instances WHERE app = ?1",
-                        rusqlite::params![app.name],
-                    ) {
-                        warn!(app = %app.name, "failed to clean up resource instances during uninstall: {e}");
-                    }
+                    let app_name_owned = app.name.clone();
+                    let phase_handle = Arc::clone(&app.phase_handle);
+                    self.db.call(move |db| {
+                        transition_phase(
+                            &phase_handle,
+                            AppPhase::NotInstalled,
+                            db,
+                            &app_name_owned,
+                            "",
+                        );
+                        if let Err(e) = db.conn.execute(
+                            "DELETE FROM resource_instances WHERE app = ?1",
+                            rusqlite::params![app_name_owned],
+                        ) {
+                            warn!(app = %app_name_owned, "failed to clean up resource instances during uninstall: {e}");
+                        }
+                    });
                     let app_instance_ids: HashSet<InstanceId> = app
                         .desired
                         .resources

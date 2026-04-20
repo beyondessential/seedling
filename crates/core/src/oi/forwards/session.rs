@@ -114,7 +114,7 @@ pub(crate) async fn forward_port_session(
     }
 
     let target_addr = {
-        let registry = DbInstanceRegistry::new(Arc::clone(&state.db));
+        let registry = DbInstanceRegistry::new(state.db.clone());
         let instance = match registry.get_or_create_singleton(
             &params.app,
             ResourceKind::Service,

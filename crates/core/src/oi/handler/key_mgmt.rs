@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use serde::Deserialize;
 use serde_json::json;
 
@@ -25,8 +27,9 @@ pub(crate) struct RevokeKeyParams {
 
 // i[key.list]
 pub(crate) fn list_keys(state: &OiState) -> HandlerResult {
-    let db = state.db.lock();
-    let rows = crate::oi::auth::list_keys(&db)
+    let rows = state
+        .db
+        .call(|db| crate::oi::auth::list_keys(db))
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
     let result: Vec<serde_json::Value> = rows
         .into_iter()
@@ -39,8 +42,12 @@ pub(crate) fn list_keys(state: &OiState) -> HandlerResult {
 
 // i[key.authorize]
 pub(crate) fn authorize_key(state: &OiState, params: AuthorizeKeyParams) -> HandlerResult {
-    let db = state.db.lock();
-    crate::oi::auth::authorize_key(&db, &state.trusted_keys, &params.fingerprint, &params.label)
+    let trusted_keys = Arc::clone(&state.trusted_keys);
+    let fingerprint = params.fingerprint.clone();
+    let label = params.label.clone();
+    state
+        .db
+        .call(move |db| crate::oi::auth::authorize_key(db, &trusted_keys, &fingerprint, &label))
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
     tracing::info!(fingerprint = %params.fingerprint, label = %params.label, "authorized key");
     Ok(json!({}))
@@ -48,8 +55,11 @@ pub(crate) fn authorize_key(state: &OiState, params: AuthorizeKeyParams) -> Hand
 
 // i[key.revoke]
 pub(crate) fn revoke_key(state: &OiState, params: RevokeKeyParams) -> HandlerResult {
-    let db = state.db.lock();
-    let removed = crate::oi::auth::revoke_key(&db, &state.trusted_keys, &params.fingerprint)
+    let trusted_keys = Arc::clone(&state.trusted_keys);
+    let fingerprint = params.fingerprint.clone();
+    let removed = state
+        .db
+        .call(move |db| crate::oi::auth::revoke_key(db, &trusted_keys, &fingerprint))
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
     if removed {
         tracing::info!(fingerprint = %params.fingerprint, "revoked key");

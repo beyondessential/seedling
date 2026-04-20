@@ -16,8 +16,8 @@ use crate::{
         resource::{Resource, ResourceKind},
     },
     runtime::{
-        db::Db, external_volume_mappings, identity::ResourceInstance, registry::InstanceRegistry,
-        restart_gens, site_volumes,
+        db::DbHandle, external_volume_mappings, identity::ResourceInstance,
+        registry::InstanceRegistry, restart_gens, site_volumes,
     },
     system::{
         System,
@@ -126,7 +126,7 @@ pub struct Actuator {
     dns_servers: Vec<Ipv6Addr>,
     /// Images currently being pulled or that have exhausted retries.
     pulling: Arc<ParkingMutex<HashMap<String, PullState>>>,
-    db: Arc<ParkingMutex<Db>>,
+    db: DbHandle,
 }
 
 impl Actuator {
@@ -135,7 +135,7 @@ impl Actuator {
         node_prefix: Ipv6Net,
         registry: Arc<dyn InstanceRegistry>,
         dns_servers: Vec<Ipv6Addr>,
-        db: Arc<ParkingMutex<Db>>,
+        db: DbHandle,
     ) -> Self {
         Self {
             driver,
@@ -153,17 +153,15 @@ impl Actuator {
     ) -> HashMap<String, crate::system::types::ResolvedExternalMount> {
         use crate::system::types::{MountSource, ResolvedExternalMount};
 
-        let db = self.db.lock();
-        let mappings = match external_volume_mappings::list_for_app(&db, app) {
-            Ok(m) => m,
-            Err(e) => {
-                tracing::warn!(app = app, error = %e, "failed to load external volume mappings");
-                return HashMap::new();
-            }
-        };
-
-        let site_vols = site_volumes::list(&db).unwrap_or_default();
-        drop(db);
+        let app_owned = app.to_owned();
+        let (mappings, site_vols) = self.db.call(move |db| {
+            let mappings = external_volume_mappings::list_for_app(db, &app_owned).unwrap_or_else(|e| {
+                tracing::warn!(app = %app_owned, error = %e, "failed to load external volume mappings");
+                vec![]
+            });
+            let site_vols = site_volumes::list(db).unwrap_or_default();
+            (mappings, site_vols)
+        });
 
         let vol_store = &self.driver.volume_store;
         let mut resolved = HashMap::new();
@@ -274,9 +272,11 @@ impl Actuator {
                 }
                 // r[impl deployment.restart]
                 let restart_gen = {
-                    let dep_name = instance.name.as_deref().unwrap_or("");
-                    let db = self.db.lock();
-                    restart_gens::load_restart_gen(&db, &instance.app, dep_name).unwrap_or(0)
+                    let app_name = instance.app.clone();
+                    let dep_name = instance.name.as_deref().unwrap_or("").to_owned();
+                    self.db.call(move |db| {
+                        restart_gens::load_restart_gen(db, &app_name, &dep_name).unwrap_or(0)
+                    })
                 };
                 self.start_pod_instance(
                     instance,
@@ -572,10 +572,12 @@ impl Actuator {
                     }
                 };
                 // r[impl deployment.restart]
-                let dep_name = instance.name.as_deref().unwrap_or("");
+                let dep_name = instance.name.as_deref().unwrap_or("").to_owned();
                 let restart_gen = {
-                    let db = self.db.lock();
-                    restart_gens::load_restart_gen(&db, &instance.app, dep_name).unwrap_or(0)
+                    let app_name = instance.app.clone();
+                    self.db.call(move |db| {
+                        restart_gens::load_restart_gen(db, &app_name, &dep_name).unwrap_or(0)
+                    })
                 };
                 deployment_spec(
                     &def,

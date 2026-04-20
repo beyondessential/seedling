@@ -90,6 +90,145 @@ pub(crate) struct ResourceStopParams {
     pub name: String,
 }
 
+/// Extract the fields needed to persist an app entry without holding `&AppEntry`.
+pub(crate) fn extract_persist_fields(
+    entry: &crate::runtime::apps::AppEntry,
+) -> (String, u64, bool, bool) {
+    use crate::runtime::apps::AppPhase;
+    let phase = entry.phase.lock();
+    let installed = matches!(*phase, AppPhase::Installed | AppPhase::Uninstalling);
+    let uninstalling = matches!(*phase, AppPhase::Uninstalling);
+    (
+        entry.name.clone(),
+        entry.current_generation,
+        installed,
+        uninstalling,
+    )
+}
+
+/// Persist app row fields to the DB.
+pub(crate) fn persist_app_fields(
+    db: &crate::runtime::db::Db,
+    name: &str,
+    generation_n: u64,
+    installed: bool,
+    uninstalling: bool,
+) -> rusqlite::Result<()> {
+    db.conn.execute(
+        "INSERT OR REPLACE INTO registered_apps (name, installed, uninstalling, current_generation) \
+         VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![name, installed as i64, uninstalling as i64, generation_n as i64],
+    )?;
+    Ok(())
+}
+
+/// Synchronise script-error and disallowed-registry faults for `entry` without
+/// holding `&AppEntry` across the DB call boundary.
+pub(crate) fn sync_fault_state(
+    db: &crate::runtime::db::DbHandle,
+    entry: &crate::runtime::apps::AppEntry,
+) {
+    use crate::defs::{container::image_registry, resource::Resource};
+    let app_name = entry.name.clone();
+    let script_error = entry.script_error.clone();
+    let used_registries: std::collections::BTreeSet<String> = {
+        let def = entry.app.def.load();
+        let mut regs = std::collections::BTreeSet::new();
+        for resource in def.resources.values() {
+            let image = match resource {
+                Resource::Deployment(d) => {
+                    let dd = d.def.lock();
+                    let pod = dd.pod.lock();
+                    pod.container.lock().image.clone()
+                }
+                Resource::Job(j) => {
+                    let jd = j.def.lock();
+                    let pod = jd.pod.lock();
+                    pod.container.lock().image.clone()
+                }
+                _ => None,
+            };
+            if let Some(ref img) = image
+                && let Some(reg) = image_registry(img)
+            {
+                regs.insert(reg.to_owned());
+            }
+        }
+        regs
+    };
+    db.call(move |db| {
+        // Sync script_error fault.
+        {
+            use crate::runtime::faults;
+            let existing: Vec<_> = faults::list_active_faults(db, Some(&app_name))
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|f| f.kind == "script_error")
+                .collect();
+            match &script_error {
+                Some((msg, _)) => {
+                    let dominated = existing.iter().any(|f| f.description == *msg);
+                    if !dominated {
+                        for f in &existing {
+                            if let Err(e) = faults::clear_fault(db, &f.id, &app_name) {
+                                tracing::warn!(app = %app_name, fault_id = %f.id, "failed to clear stale script-error fault: {e}");
+                            }
+                        }
+                        if let Err(e) = faults::file_fault(db, &app_name, None, None, None, "script_error", msg) {
+                            tracing::warn!(app = %app_name, "failed to file script-error fault: {e}");
+                        }
+                    }
+                }
+                None => {
+                    for f in &existing {
+                        if let Err(e) = faults::clear_fault(db, &f.id, &app_name) {
+                            tracing::warn!(app = %app_name, fault_id = %f.id, "failed to clear script-error fault: {e}");
+                        }
+                    }
+                }
+            }
+        }
+        // Sync disallowed_registry fault.
+        {
+            use crate::runtime::{faults, registries as reg_mod};
+            let allowed: std::collections::BTreeSet<String> =
+                reg_mod::list_allowed_registries(db)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect();
+            let disallowed: Vec<&str> = used_registries
+                .iter()
+                .filter(|r| !allowed.contains(*r))
+                .map(String::as_str)
+                .collect();
+            let existing: Vec<_> = faults::list_active_faults(db, Some(&app_name))
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|f| f.kind == "disallowed_registry")
+                .collect();
+            if disallowed.is_empty() {
+                for f in &existing {
+                    if let Err(e) = faults::clear_fault(db, &f.id, &app_name) {
+                        tracing::warn!(app = %app_name, fault_id = %f.id, "failed to clear disallowed_registry fault: {e}");
+                    }
+                }
+            } else {
+                let description = format!("image references use disallowed registries: {}", disallowed.join(", "));
+                if !existing.iter().any(|f| f.description == description) {
+                    for f in &existing {
+                        if let Err(e) = faults::clear_fault(db, &f.id, &app_name) {
+                            tracing::warn!(app = %app_name, fault_id = %f.id, "failed to clear stale disallowed_registry fault: {e}");
+                        }
+                    }
+                    if let Err(e) = faults::file_fault(db, &app_name, None, None, None, "disallowed_registry", &description) {
+                        tracing::warn!(app = %app_name, "failed to file disallowed_registry fault: {e}");
+                    }
+                }
+            }
+        }
+    });
+}
+
 // r[impl schedule.prune]
 fn sync_action_schedules(state: &OiState, app_name: &str) {
     let valid_pairs: Vec<(String, String)> = {
@@ -108,13 +247,19 @@ fn sync_action_schedules(state: &OiState, app_name: &str) {
             .collect()
     };
 
-    let db = state.db.lock();
-    if let Err(e) = crate::runtime::db::prune_schedules(&db, app_name, &valid_pairs) {
-        tracing::warn!(app = %app_name, "failed to prune schedules: {e}");
-    }
-    if let Err(e) = crate::runtime::db::ensure_schedules(&db, app_name, &valid_pairs) {
-        tracing::warn!(app = %app_name, "failed to ensure schedules: {e}");
-    }
+    let app_name_owned = app_name.to_owned();
+    let valid_pairs_owned = valid_pairs.clone();
+    state.db.call(move |db| {
+        if let Err(e) = crate::runtime::db::prune_schedules(db, &app_name_owned, &valid_pairs_owned)
+        {
+            tracing::warn!(app = %app_name_owned, "failed to prune schedules: {e}");
+        }
+        if let Err(e) =
+            crate::runtime::db::ensure_schedules(db, &app_name_owned, &valid_pairs_owned)
+        {
+            tracing::warn!(app = %app_name_owned, "failed to ensure schedules: {e}");
+        }
+    });
 }
 
 fn validate_name(name: &str) -> Result<(), OiError> {
@@ -183,10 +328,12 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
                 None => base_status,
             };
             let has_stopped = {
-                let db = state.db.lock();
-                stopped::load_stopped(&db, &name)
-                    .map(|s| !s.is_empty())
-                    .unwrap_or(false)
+                let name_clone = name.clone();
+                state.db.call(move |db| {
+                    stopped::load_stopped(db, &name_clone)
+                        .map(|s| !s.is_empty())
+                        .unwrap_or(false)
+                })
             };
             let mut obj = json!({
                 "name": name,
@@ -205,21 +352,16 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
 /// Refines a base `AppStatus::Running` into `Running` or `Degraded` by
 /// checking whether all resource instances have reached `Ready`.  All other
 /// statuses are returned unchanged.
-///
-/// Lock ordering: acquires `def.lock()` briefly to collect resource IDs, then
-/// releases it before acquiring `db`. Callers must NOT hold `db` when calling
-/// this function — that would invert the canonical `def → db` ordering and
-/// cause a deadlock.
 pub(crate) fn effective_app_status(
     base: AppStatus,
     entry: &AppEntry,
-    db: &parking_lot::Mutex<crate::runtime::db::Db>,
+    db: &crate::runtime::db::DbHandle,
 ) -> AppStatus {
     if !matches!(base, AppStatus::Running) {
         return base;
     }
 
-    let app_name = &entry.name;
+    let app_name = entry.name.clone();
 
     // Collect resource IDs with a brief def lock, then release before touching db.
     let resource_ids: Vec<(ResourceKind, Arc<String>)> = {
@@ -230,44 +372,43 @@ pub(crate) fn effective_app_status(
             .collect()
     };
 
-    // Acquire db only after def is released to maintain def → db ordering.
-    let db = db.lock();
+    db.call(move |db| {
+        let has_faults = faults::has_active_faults(db, &app_name).unwrap_or(false);
 
-    let has_faults = faults::has_active_faults(&db, app_name).unwrap_or(false);
-
-    let all_ready = resource_ids.iter().all(|(kind, name)| {
-        let instances =
-            find_instances_for_group(&db, app_name, *kind, Some(name.as_str())).unwrap_or_default();
-        if instances.is_empty() {
-            return false;
-        }
-        let mut has_ready = false;
-        for inst in &instances {
-            let obs = query_observations(&db, inst).unwrap_or_default();
-            let state = derive_lifecycle_state(inst, &obs);
-            if state == LifecycleState::Ready {
-                has_ready = true;
-            } else if matches!(
-                state,
-                LifecycleState::Unscheduled
-                    | LifecycleState::Terminating
-                    | LifecycleState::Terminated
-            ) {
-                // Instances being torn down must not drag the app to Degraded.
-            } else {
+        let all_ready = resource_ids.iter().all(|(kind, name)| {
+            let instances = find_instances_for_group(db, &app_name, *kind, Some(name.as_str()))
+                .unwrap_or_default();
+            if instances.is_empty() {
                 return false;
             }
-        }
-        has_ready
-    });
+            let mut has_ready = false;
+            for inst in &instances {
+                let obs = query_observations(db, inst).unwrap_or_default();
+                let state = derive_lifecycle_state(inst, &obs);
+                if state == LifecycleState::Ready {
+                    has_ready = true;
+                } else if matches!(
+                    state,
+                    LifecycleState::Unscheduled
+                        | LifecycleState::Terminating
+                        | LifecycleState::Terminated
+                ) {
+                    // Instances being torn down must not drag the app to Degraded.
+                } else {
+                    return false;
+                }
+            }
+            has_ready
+        });
 
-    if has_faults {
-        AppStatus::Faulted
-    } else if all_ready {
-        AppStatus::Running
-    } else {
-        AppStatus::Degraded
-    }
+        if has_faults {
+            AppStatus::Faulted
+        } else if all_ready {
+            AppStatus::Running
+        } else {
+            AppStatus::Degraded
+        }
+    })
 }
 
 // i[app.describe]
@@ -286,16 +427,16 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     // Load stored param values from DB. Names come from AppDef; values come
     // from the params table. Params declared by the script but never set by
     // the operator are shown as null.
-    let stored_params = {
-        let db = state.db.lock();
-        crate::runtime::apps::load_params_for_app(&db, name).unwrap_or_default()
-    };
+    let name_owned = name.to_owned();
+    let stored_params = state.db.call(move |db| {
+        crate::runtime::apps::load_params_for_app(db, &name_owned).unwrap_or_default()
+    });
 
     // Fetch all active faults for this app once, then split by level.
-    let all_faults_for_app = {
-        let db = state.db.lock();
-        faults::list_active_faults(&db, Some(name)).unwrap_or_default()
-    };
+    let name_owned = name.to_owned();
+    let all_faults_for_app = state
+        .db
+        .call(move |db| faults::list_active_faults(db, Some(&name_owned)).unwrap_or_default());
 
     // i[app.describe] — app-level faults from the DB.
     let app_faults_json: Vec<Value> = all_faults_for_app
@@ -317,8 +458,10 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
 
     // i[impl resource.stop.status]
     let stopped_set = {
-        let db = state.db.lock();
-        stopped::load_stopped(&db, name).unwrap_or_default()
+        let name_owned = name.to_owned();
+        state
+            .db
+            .call(move |db| stopped::load_stopped(db, &name_owned).unwrap_or_default())
     };
 
     let def = entry.app.def.load();
@@ -408,17 +551,60 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
             | AppStatus::Uninstalling
     );
     // i[app.describe]
-    let mut resources_json: Vec<Value> = {
-        let db = state.db.lock();
-        def.resources
-            .iter()
-            .map(|(id, resource)| {
+    // Collect the data we need from resources before calling into the DB thread.
+    struct ResourceInfo {
+        kind: ResourceKind,
+        name_str: String,
+        summary: Value,
+        // For deployments: (low, high)
+        scale_bounds: Option<(u16, u16)>,
+        export: Option<Value>,
+    }
+    let resource_infos: Vec<ResourceInfo> = def
+        .resources
+        .iter()
+        .map(|(id, resource)| {
+            let scale_bounds = if let Resource::Deployment(deployment) = resource {
+                let dep_def = deployment.def.lock();
+                Some((dep_def.scale.start, dep_def.scale.end))
+            } else {
+                None
+            };
+            let export = if let Resource::Volume(vol) = resource {
+                let vol_def = vol.def.lock();
+                vol_def.exported.as_ref().map(|export_opts| {
+                    let mut export = json!({ "exported": true });
+                    if let Some(desc) = &export_opts.description {
+                        export["description"] = json!(desc);
+                    }
+                    export
+                })
+            } else {
+                None
+            };
+            ResourceInfo {
+                kind: id.kind,
+                name_str: id.name.as_str().to_owned(),
+                summary: to_value(resource.summary()).unwrap_or(Value::Null),
+                scale_bounds,
+                export,
+            }
+        })
+        .collect();
+
+    let name_owned = name.to_owned();
+    let all_faults_clone = all_faults_for_app.clone();
+    let stopped_set_clone = stopped_set.clone();
+    let mut resources_json: Vec<Value> = state.db.call(move |db| {
+        resource_infos
+            .into_iter()
+            .map(|info| {
                 let instances_json: Vec<Value> = if query_instances {
-                    find_instances_for_group(&db, name, id.kind, Some(id.name.as_str()))
+                    find_instances_for_group(db, &name_owned, info.kind, Some(&info.name_str))
                         .unwrap_or_default()
                         .iter()
                         .map(|inst| {
-                            let observations = query_observations(&db, inst).unwrap_or_default();
+                            let observations = query_observations(db, inst).unwrap_or_default();
                             let (lifecycle, transition_time) =
                                 derive_state_with_transition_time(inst, &observations);
                             json!({
@@ -435,12 +621,12 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                     vec![]
                 };
 
-                let resource_type_str = format!("{:?}", id.kind).to_lowercase();
-                let resource_faults: Vec<Value> = all_faults_for_app
+                let resource_type_str = format!("{:?}", info.kind).to_lowercase();
+                let resource_faults: Vec<Value> = all_faults_clone
                     .iter()
                     .filter(|f| {
                         f.resource_type.as_deref() == Some(&resource_type_str)
-                            && f.resource_name.as_deref() == Some(id.name.as_str())
+                            && f.resource_name.as_deref() == Some(&info.name_str)
                     })
                     .map(|f| {
                         json!({
@@ -456,23 +642,21 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                     })
                     .collect();
 
-                let is_stopped = stopped_set.contains(&(id.kind, id.name.as_str().to_owned()));
+                let is_stopped = stopped_set_clone.contains(&(info.kind, info.name_str.clone()));
                 let mut resource_obj = json!({
-                    "name": id.name.as_str(),
+                    "name": &info.name_str,
                     "type": resource_type_str,
                     "instances": instances_json,
                     "faults": resource_faults,
-                    "def": to_value(resource.summary()).unwrap_or(Value::Null),
+                    "def": info.summary,
                     "stopped": is_stopped,
                 });
 
                 // i[impl scale.describe]
-                if let Resource::Deployment(deployment) = resource {
-                    let dep_def = deployment.def.lock();
-                    let low = dep_def.scale.start;
-                    let high = dep_def.scale.end;
-                    let current = scaling::effective_scale(&db, name, id.name.as_str(), low, high)
-                        .unwrap_or(low);
+                if let Some((low, high)) = info.scale_bounds {
+                    let current =
+                        scaling::effective_scale(db, &name_owned, &info.name_str, low, high)
+                            .unwrap_or(low);
                     resource_obj["scale"] = json!({
                         "low": low,
                         "high": high,
@@ -480,80 +664,79 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                     });
                 }
 
-                if let Resource::Volume(vol) = resource {
-                    let vol_def = vol.def.lock();
-                    if let Some(export_opts) = &vol_def.exported {
-                        let mut export = json!({ "exported": true });
-                        if let Some(desc) = &export_opts.description {
-                            export["description"] = json!(desc);
-                        }
-                        resource_obj["export"] = export;
-                    }
+                if let Some(export) = info.export {
+                    resource_obj["export"] = export;
                 }
 
                 resource_obj
             })
             .collect()
-    };
+    });
 
     // Append dynamic resources (started inside action closures, not in AppDef).
     if query_instances {
-        let db = state.db.lock();
-        let dyn_records = list_dynamic_resources_for_app(&db, name).unwrap_or_default();
-        for rec in dyn_records {
-            let Some(id) = InstanceId::from_hex(&rec.instance_id) else {
-                continue;
-            };
-            let Some(kind) = resource_kind_from_debug_str(&rec.kind) else {
-                continue;
-            };
-            let inst = ResourceInstance {
-                id,
-                app: rec.app.clone(),
-                kind,
-                name: rec.resource_name.clone(),
-                variant: InstanceVariant::Singleton,
-                display_name: rec.display_name.clone(),
-            };
-            let observations = query_observations(&db, &inst).unwrap_or_default();
-            let (lifecycle, transition_time) =
-                derive_state_with_transition_time(&inst, &observations);
-            let kind_str = format!("{:?}", kind).to_lowercase();
-            let display_name = rec
-                .resource_name
-                .as_deref()
-                .unwrap_or(&rec.display_name)
-                .to_owned();
-            let instance_faults: Vec<Value> = all_faults_for_app
-                .iter()
-                .filter(|f| f.instance_id.as_deref() == Some(&rec.instance_id))
-                .map(|f| {
-                    json!({
-                        "id": f.id,
-                        "app": f.app,
-                        "resource_type": f.resource_type,
-                        "resource_name": f.resource_name,
-                        "instance_id": f.instance_id,
-                        "kind": f.kind,
-                        "timestamp": f.timestamp.to_string(),
-                        "description": f.description,
+        let name_owned = name.to_owned();
+        let all_faults_clone2 = all_faults_for_app.clone();
+        let dyn_entries: Vec<Value> = state.db.call(move |db| {
+            let dyn_records = list_dynamic_resources_for_app(db, &name_owned).unwrap_or_default();
+            let mut out = Vec::new();
+            for rec in dyn_records {
+                let Some(id) = InstanceId::from_hex(&rec.instance_id) else {
+                    continue;
+                };
+                let Some(kind) = resource_kind_from_debug_str(&rec.kind) else {
+                    continue;
+                };
+                let inst = ResourceInstance {
+                    id,
+                    app: rec.app.clone(),
+                    kind,
+                    name: rec.resource_name.clone(),
+                    variant: InstanceVariant::Singleton,
+                    display_name: rec.display_name.clone(),
+                };
+                let observations = query_observations(db, &inst).unwrap_or_default();
+                let (lifecycle, transition_time) =
+                    derive_state_with_transition_time(&inst, &observations);
+                let kind_str = format!("{:?}", kind).to_lowercase();
+                let display_name = rec
+                    .resource_name
+                    .as_deref()
+                    .unwrap_or(&rec.display_name)
+                    .to_owned();
+                let instance_faults: Vec<Value> = all_faults_clone2
+                    .iter()
+                    .filter(|f| f.instance_id.as_deref() == Some(&rec.instance_id))
+                    .map(|f| {
+                        json!({
+                            "id": f.id,
+                            "app": f.app,
+                            "resource_type": f.resource_type,
+                            "resource_name": f.resource_name,
+                            "instance_id": f.instance_id,
+                            "kind": f.kind,
+                            "timestamp": f.timestamp.to_string(),
+                            "description": f.description,
+                        })
                     })
-                })
-                .collect();
-            resources_json.push(json!({
-                "name": display_name,
-                "type": kind_str,
-                "instances": [{
-                    "id": rec.instance_id,
-                    "display_name": rec.display_name,
-                    "lifecycle": format!("{lifecycle:?}"),
-                    "transition_time": transition_time.and_then(|t| {
-                        jiff::Timestamp::try_from(t).ok().map(|ts| ts.to_string())
-                    }),
-                }],
-                "faults": instance_faults,
-            }));
-        }
+                    .collect();
+                out.push(json!({
+                    "name": display_name,
+                    "type": kind_str,
+                    "instances": [{
+                        "id": rec.instance_id,
+                        "display_name": rec.display_name,
+                        "lifecycle": format!("{lifecycle:?}"),
+                        "transition_time": transition_time.and_then(|t| {
+                            jiff::Timestamp::try_from(t).ok().map(|ts| ts.to_string())
+                        }),
+                    }],
+                    "faults": instance_faults,
+                }));
+            }
+            out
+        });
+        resources_json.extend(dyn_entries);
     }
 
     // i[impl resource.stop.status]
@@ -603,10 +786,14 @@ pub(crate) fn get_app_script(state: &OiState, params: GetScriptParams) -> Handle
         }
     }
 
-    let db = state.db.lock();
+    let name_owned = name.to_owned();
     let (generation, script) = match params.generation {
         Some(gen_n) => {
-            let script = crate::runtime::apps::get_script_at_generation(&db, name, gen_n)
+            let script = state
+                .db
+                .call(move |db| {
+                    crate::runtime::apps::get_script_at_generation(db, &name_owned, gen_n)
+                })
                 .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?
                 .ok_or_else(|| {
                     OiError::not_found(format!("generation {gen_n} not found for app {name}"))
@@ -614,7 +801,10 @@ pub(crate) fn get_app_script(state: &OiState, params: GetScriptParams) -> Handle
             (gen_n, script)
         }
         None => {
-            let (gen_n, script) = crate::runtime::apps::get_current_script(&db, name)
+            let name_owned2 = name.to_owned();
+            let (gen_n, script) = state
+                .db
+                .call(move |db| crate::runtime::apps::get_current_script(db, &name_owned2))
                 .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?
                 .ok_or_else(|| OiError::not_found(format!("no script found for app: {name}")))?;
             (gen_n, script)
@@ -635,27 +825,38 @@ pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -
     }
 
     let limit = params.limit.unwrap_or(50).clamp(1, 200);
-    let db = state.db.lock();
-    let entries = crate::runtime::generations::list(&db, name, params.before, limit)
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
+    let name_owned = name.to_owned();
+    let before = params.before;
+    let (entries, script_changed_for) = state
+        .db
+        .call(move |db| -> rusqlite::Result<_> {
+            let entries = crate::runtime::generations::list(db, &name_owned, before, limit)?;
 
-    // Determine for each entry whether the script content changed relative to
-    // the immediately preceding generation (informational, per i[generation.history]).
-    let mut script_changed_for: std::collections::BTreeMap<u64, bool> =
-        std::collections::BTreeMap::new();
-    for entry in &entries {
-        let prior = if entry.generation > 1 {
-            crate::runtime::generations::script_hash_at(&db, name, entry.generation - 1).ok()
-        } else {
-            None
-        };
-        let changed = matches!(
-            entry.kind,
-            crate::runtime::generations::Kind::Register
-                | crate::runtime::generations::Kind::ScriptUpdate
-        ) || prior.as_deref() != Some(entry.script_hash.as_str());
-        script_changed_for.insert(entry.generation, changed);
-    }
+            // Determine for each entry whether the script content changed relative to
+            // the immediately preceding generation (informational, per i[generation.history]).
+            let mut script_changed_for: std::collections::BTreeMap<u64, bool> =
+                std::collections::BTreeMap::new();
+            for entry in &entries {
+                let prior = if entry.generation > 1 {
+                    crate::runtime::generations::script_hash_at(
+                        db,
+                        &name_owned,
+                        entry.generation - 1,
+                    )
+                    .ok()
+                } else {
+                    None
+                };
+                let changed = matches!(
+                    entry.kind,
+                    crate::runtime::generations::Kind::Register
+                        | crate::runtime::generations::Kind::ScriptUpdate
+                ) || prior.as_deref() != Some(entry.script_hash.as_str());
+                script_changed_for.insert(entry.generation, changed);
+            }
+            Ok((entries, script_changed_for))
+        })
+        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
 
     let result: Vec<Value> = entries
         .into_iter()
@@ -732,13 +933,15 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams) -> HandlerResult
         }));
     }
 
-    let (current_script, current_params) = {
+    let current_script = {
         let reg = state.registry.read();
         let entry = reg.get(name).expect("confirmed registered");
-        let db = state.db.lock();
-        let stored = crate::runtime::apps::load_params_for_app(&db, name).unwrap_or_default();
-        (entry.script.clone(), stored)
+        entry.script.clone()
     };
+    let name_owned = name.to_owned();
+    let current_params = state.db.call(move |db| {
+        crate::runtime::apps::load_params_for_app(db, &name_owned).unwrap_or_default()
+    });
 
     // Build the proposed param map from current with the proposals overlaid.
     let mut proposed_param_map = current_params.clone();
@@ -830,11 +1033,13 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams) -> HandlerResult
     // actions as errors in the plan output.
     let mut errors: Vec<String> = Vec::new();
     {
-        let db = state.db.lock();
-        if crate::runtime::backup_apps::get_by_app(&db, name)
+        let name_owned = name.to_owned();
+        let is_backup_app = state
+            .db
+            .call(move |db| crate::runtime::backup_apps::get_by_app(db, &name_owned))
             .map_err(|e| OiError::new(ErrorCode::Internal, format!("db backup apps: {e}")))?
-            .is_some()
-        {
+            .is_some();
+        if is_backup_app {
             let missing: Vec<&str> = seedling_protocol::backup_actions::REQUIRED_ACTIONS
                 .iter()
                 .copied()
@@ -894,17 +1099,22 @@ pub(crate) fn register_app(
     {
         let reg = state.registry.read();
         let entry = reg.get(name).expect("just registered");
-        let db = state.db.lock();
-        AppRegistry::persist_app(&db, entry)
+        let (app_name, generation_n, installed, uninstalling) = extract_persist_fields(entry);
+        state
+            .db
+            .call(move |db| {
+                persist_app_fields(db, &app_name, generation_n, installed, uninstalling)
+            })
             .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db persist: {e}")))?;
     }
 
     // r[impl generation.bumps] — initial registration creates generation 1.
-    let generation = {
-        let db = state.db.lock();
-        crate::runtime::generations::bump_register(&db, name, script)
-            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db generation: {e}")))?
-    };
+    let name_owned = name.to_owned();
+    let script_owned = script.to_owned();
+    let generation = state
+        .db
+        .call(move |db| crate::runtime::generations::bump_register(db, &name_owned, &script_owned))
+        .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db generation: {e}")))?;
     {
         let mut reg = state.registry.write();
         if let Some(entry) = reg.get_mut(name) {
@@ -915,17 +1125,19 @@ pub(crate) fn register_app(
     {
         let reg = state.registry.read();
         let entry = reg.get(name).expect("just registered");
-        let db = state.db.lock();
-        AppRegistry::persist_app(&db, entry)
+        let (app_name, generation_n, installed, uninstalling) = extract_persist_fields(entry);
+        state
+            .db
+            .call(move |db| {
+                persist_app_fields(db, &app_name, generation_n, installed, uninstalling)
+            })
             .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db persist: {e}")))?;
     }
 
     {
         let reg = state.registry.read();
         if let Some(entry) = reg.get(name) {
-            let db = state.db.lock();
-            crate::runtime::apps::sync_script_error_fault(&db, entry);
-            crate::runtime::apps::sync_registry_faults(&db, entry);
+            sync_fault_state(&state.db, entry);
         }
     }
 
@@ -980,47 +1192,35 @@ pub(crate) fn deregister_app(
     }
 
     // Remove from DB.
-    {
-        let db = state.db.lock();
-        AppRegistry::remove_app(&db, name)
-            .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db remove: {e}")))?;
-    }
-    {
-        let db = state.db.lock();
-        crate::runtime::apps::delete_app_params(&db, name)
-            .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db param cleanup: {e}")))?;
-    }
-    // r[impl generation.deregister]
-    {
-        let db = state.db.lock();
-        if let Err(e) = crate::runtime::generations::delete_for_app(&db, name) {
-            tracing::warn!(app = %name, "failed to delete generation history during deregister: {e}");
-        }
-    }
-    {
-        let db = state.db.lock();
-        if let Err(e) = crate::runtime::faults::clear_all_faults_for_app(&db, name) {
-            tracing::warn!(app = %name, "failed to clear faults during deregister: {e}");
-        }
-    }
-    {
-        let db = state.db.lock();
-        if let Err(e) = scaling::delete_scaling_decisions_for_app(&db, name) {
-            tracing::warn!(app = %name, "failed to clean up scaling decisions during deregister: {e}");
-        }
-        if let Err(e) = restart_gens::delete_restart_gens_for_app(&db, name) {
-            tracing::warn!(app = %name, "failed to clean up restart generations during deregister: {e}");
-        }
-        if let Err(e) = stopped::delete_stopped_for_app(&db, name) {
-            tracing::warn!(app = %name, "failed to clean up stopped resources during deregister: {e}");
-        }
-    }
-    {
-        let db = state.db.lock();
-        if let Err(e) = crate::runtime::db::delete_schedules_for_app(&db, name) {
-            tracing::warn!(app = %name, "failed to clean up schedules during deregister: {e}");
-        }
-    }
+    let name_owned = name.to_owned();
+    state
+        .db
+        .call(move |db| {
+            AppRegistry::remove_app(db, &name_owned)
+                .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db remove: {e}")))?;
+            crate::runtime::apps::delete_app_params(db, &name_owned)
+                .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db param cleanup: {e}")))?;
+            // r[impl generation.deregister]
+            if let Err(e) = crate::runtime::generations::delete_for_app(db, &name_owned) {
+                tracing::warn!(app = %name_owned, "failed to delete generation history during deregister: {e}");
+            }
+            if let Err(e) = crate::runtime::faults::clear_all_faults_for_app(db, &name_owned) {
+                tracing::warn!(app = %name_owned, "failed to clear faults during deregister: {e}");
+            }
+            if let Err(e) = scaling::delete_scaling_decisions_for_app(db, &name_owned) {
+                tracing::warn!(app = %name_owned, "failed to clean up scaling decisions during deregister: {e}");
+            }
+            if let Err(e) = restart_gens::delete_restart_gens_for_app(db, &name_owned) {
+                tracing::warn!(app = %name_owned, "failed to clean up restart generations during deregister: {e}");
+            }
+            if let Err(e) = stopped::delete_stopped_for_app(db, &name_owned) {
+                tracing::warn!(app = %name_owned, "failed to clean up stopped resources during deregister: {e}");
+            }
+            if let Err(e) = crate::runtime::db::delete_schedules_for_app(db, &name_owned) {
+                tracing::warn!(app = %name_owned, "failed to clean up schedules during deregister: {e}");
+            }
+            Ok::<_, OiError>(())
+        })?;
 
     // Remove from in-memory registry.
     state.registry.write().deregister(name);
@@ -1048,20 +1248,20 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
     };
 
     // Persist the transition before waking the reconciler.
-    {
-        let db = state.db.lock();
-        transition_phase(&phase_arc, AppPhase::Uninstalling, &db, name, "");
+    let name_owned = name.to_owned();
+    state.db.call(move |db| {
+        transition_phase(&phase_arc, AppPhase::Uninstalling, db, &name_owned, "");
         // i[impl scale.reset-on-uninstall]
-        if let Err(e) = scaling::delete_scaling_decisions_for_app(&db, name) {
-            tracing::warn!(app = %name, "failed to clear scaling decisions on uninstall: {e}");
+        if let Err(e) = scaling::delete_scaling_decisions_for_app(db, &name_owned) {
+            tracing::warn!(app = %name_owned, "failed to clear scaling decisions on uninstall: {e}");
         }
-        if let Err(e) = restart_gens::delete_restart_gens_for_app(&db, name) {
-            tracing::warn!(app = %name, "failed to clear restart generations on uninstall: {e}");
+        if let Err(e) = restart_gens::delete_restart_gens_for_app(db, &name_owned) {
+            tracing::warn!(app = %name_owned, "failed to clear restart generations on uninstall: {e}");
         }
-        if let Err(e) = stopped::delete_stopped_for_app(&db, name) {
-            tracing::warn!(app = %name, "failed to clear stopped resources on uninstall: {e}");
+        if let Err(e) = stopped::delete_stopped_for_app(db, &name_owned) {
+            tracing::warn!(app = %name_owned, "failed to clear stopped resources on uninstall: {e}");
         }
-    }
+    });
 
     // Wake the reconciler so it starts cleanup immediately.
     {
@@ -1107,11 +1307,15 @@ pub(crate) fn update_app(
     // i[impl backup.app.validation]
     // If this app is a registered backup app, validate the new script still
     // declares all required backup actions before applying the update.
+    // i[impl backup.app.validation]
     {
-        let db = state.db.lock();
-        if let Some(_reg) = crate::runtime::backup_apps::get_by_app(&db, name)
+        let name_owned = name.to_owned();
+        let is_backup_app = state
+            .db
+            .call(move |db| crate::runtime::backup_apps::get_by_app(db, &name_owned))
             .map_err(|e| OiError::new(ErrorCode::Internal, format!("db backup apps: {e}")))?
-        {
+            .is_some();
+        if is_backup_app {
             let (proposed, proposed_err) = crate::runtime::apps::evaluate_script(
                 name,
                 script,
@@ -1137,11 +1341,11 @@ pub(crate) fn update_app(
     }
 
     // Reload script and apply to in-memory AppDef immediately.
-    let loaded_params = {
-        let db = state.db.lock();
-        crate::runtime::apps::load_params_for_app(&db, name)
-            .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db params: {e}")))?
-    };
+    let name_owned = name.to_owned();
+    let loaded_params = state
+        .db
+        .call(move |db| crate::runtime::apps::load_params_for_app(db, &name_owned))
+        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db params: {e}")))?;
     state.registry.write().reload(
         name,
         script.to_owned(),
@@ -1151,9 +1355,7 @@ pub(crate) fn update_app(
     {
         let reg = state.registry.read();
         if let Some(entry) = reg.get(name) {
-            let db = state.db.lock();
-            crate::runtime::apps::sync_script_error_fault(&db, entry);
-            crate::runtime::apps::sync_registry_faults(&db, entry);
+            sync_fault_state(&state.db, entry);
         }
     }
     // r[impl scaling.clamp]
@@ -1177,10 +1379,12 @@ pub(crate) fn update_app(
                 })
                 .collect();
             drop(def);
-            let db = state.db.lock();
-            if let Err(e) = scaling::clamp_scaling_decisions(&db, name, &deployment_bounds) {
-                tracing::error!(app = %name, error = %e, "failed to clamp scaling decisions");
-            }
+            let name_owned = name.to_owned();
+            state.db.call(move |db| {
+                if let Err(e) = scaling::clamp_scaling_decisions(db, &name_owned, &deployment_bounds) {
+                    tracing::error!(app = %name_owned, error = %e, "failed to clamp scaling decisions");
+                }
+            });
         }
     }
     // Wake reconciler to pick up new desired state.
@@ -1189,11 +1393,14 @@ pub(crate) fn update_app(
     }
 
     // r[impl generation.bumps] — script update bumps the generation.
-    let generation = {
-        let db = state.db.lock();
-        crate::runtime::generations::bump_script_update(&db, name, script)
-            .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db generation: {e}")))?
-    };
+    let name_owned = name.to_owned();
+    let script_owned = script.to_owned();
+    let generation = state
+        .db
+        .call(move |db| {
+            crate::runtime::generations::bump_script_update(db, &name_owned, &script_owned)
+        })
+        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db generation: {e}")))?;
     {
         let mut reg = state.registry.write();
         if let Some(entry) = reg.get_mut(name) {
@@ -1204,8 +1411,12 @@ pub(crate) fn update_app(
     {
         let reg = state.registry.read();
         let entry = reg.get(name).expect("confirmed registered");
-        let db = state.db.lock();
-        AppRegistry::persist_app(&db, entry)
+        let (app_name, generation_n, installed, uninstalling) = extract_persist_fields(entry);
+        state
+            .db
+            .call(move |db| {
+                persist_app_fields(db, &app_name, generation_n, installed, uninstalling)
+            })
             .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db update generation: {e}")))?;
     }
 
@@ -1279,11 +1490,12 @@ pub(crate) fn restart_deployment(
 
     let operation_id = uuid::Uuid::new_v4().to_string();
 
-    {
-        let db = state.db.lock();
-        restart_gens::bump_restart_gen(&db, name, deployment_name)
-            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
-    }
+    let name_owned = name.to_owned();
+    let deployment_name_owned = deployment_name.to_owned();
+    state
+        .db
+        .call(move |db| restart_gens::bump_restart_gen(db, &name_owned, &deployment_name_owned))
+        .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
 
     entry.tick_notify.notify_one();
 
@@ -1320,19 +1532,17 @@ pub(crate) fn scale_app(state: &OiState, params: ScaleParams, ctx: &RequestCtx) 
     };
     drop(def);
 
-    let (previous_scale, new_scale) = {
-        let db = state.db.lock();
-        let current = scaling::effective_scale(&db, name, deployment_name, low, high)
+    let name_owned = name.to_owned();
+    let deployment_name_owned = deployment_name.to_owned();
+    let new_scale_clamped = params.scale.clamp(low, high);
+    let (previous_scale, new_scale) = state.db.call(move |db| -> Result<_, OiError> {
+        let current = scaling::effective_scale(db, &name_owned, &deployment_name_owned, low, high)
             .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
-
-        let new_scale = params.scale.clamp(low, high);
-
         // i[impl scale.decision-persistence]
-        scaling::save_scaling_decision(&db, name, deployment_name, new_scale)
+        scaling::save_scaling_decision(db, &name_owned, &deployment_name_owned, new_scale_clamped)
             .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
-
-        (current, new_scale)
-    };
+        Ok((current, new_scale_clamped))
+    })?;
 
     entry.tick_notify.notify_one();
 
@@ -1402,11 +1612,12 @@ pub(crate) fn stop_resource(
         }
     }
 
-    {
-        let db = state.db.lock();
-        stopped::stop_resource(&db, app, kind, resource_name)
-            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
-    }
+    let app_owned = app.to_owned();
+    let resource_name_owned = resource_name.to_owned();
+    state
+        .db
+        .call(move |db| stopped::stop_resource(db, &app_owned, kind, &resource_name_owned))
+        .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
 
     entry.tick_notify.notify_one();
 
@@ -1440,11 +1651,12 @@ pub(crate) fn unstop_resource(
         }
     }
 
-    {
-        let db = state.db.lock();
-        stopped::unstop_resource(&db, app, kind, resource_name)
-            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
-    }
+    let app_owned = app.to_owned();
+    let resource_name_owned = resource_name.to_owned();
+    state
+        .db
+        .call(move |db| stopped::unstop_resource(db, &app_owned, kind, &resource_name_owned))
+        .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
 
     let ks = kind_str(kind);
     tracing::info!(app = %app, kind = %ks, name = %resource_name, "resource unstopped");
@@ -1473,14 +1685,14 @@ pub(crate) fn unstop_all_resources(
         }
     }
 
-    let stopped_list = {
-        let db = state.db.lock();
-        let set = stopped::load_stopped(&db, app)
+    let app_owned = app.to_owned();
+    let stopped_list = state.db.call(move |db| -> Result<_, OiError> {
+        let set = stopped::load_stopped(db, &app_owned)
             .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
-        stopped::unstop_all(&db, app)
+        stopped::unstop_all(db, &app_owned)
             .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
-        set
-    };
+        Ok(set)
+    })?;
 
     for (kind, name) in &stopped_list {
         let ks = kind_str(*kind);

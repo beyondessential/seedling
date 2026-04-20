@@ -2,11 +2,17 @@ use std::{collections::BTreeMap, time::Duration};
 
 use tracing::{error, warn};
 
-use crate::runtime::{
-    AppPhase,
-    barrier::oracle::derive_lifecycle_state,
-    history::{delete_instance, find_instances_for_group, insert_observation, query_observations},
-    lifecycle::LifecycleState,
+use crate::{
+    defs::resource::ResourceKind,
+    runtime::{
+        AppPhase,
+        barrier::oracle::derive_lifecycle_state,
+        history::{
+            delete_instance, find_instances_for_group, insert_observation, query_observations,
+        },
+        identity::{InstanceId, ResourceInstance},
+        lifecycle::LifecycleState,
+    },
 };
 
 use super::{AppSnapshot, Reconciler};
@@ -18,48 +24,86 @@ use super::{AppSnapshot, Reconciler};
 // r[impl fault.cert-acquisition]
 const CERT_ACQUISITION_DEADLINE: Duration = Duration::from_secs(180);
 
+/// Input to the DB lookup performed in emit_state_changes.
+#[derive(Clone)]
+struct DesiredGroup {
+    app: String,
+    kind: ResourceKind,
+    res_name: Option<String>,
+    kind_str: String,
+}
+
+/// Result returned from the DB lookup.
+#[derive(Clone)]
+struct StateEntry {
+    app: String,
+    kind_str: String,
+    res_name: String,
+    hex: String,
+    inst_id: InstanceId,
+    state: LifecycleState,
+}
+
 impl Reconciler {
     pub(super) fn emit_state_changes(&mut self, apps: &[AppSnapshot]) {
-        let db = self.db.lock();
+        let groups: Vec<DesiredGroup> = apps
+            .iter()
+            .flat_map(|app| {
+                app.desired.resources.iter().map(move |dr| DesiredGroup {
+                    app: app.name.clone(),
+                    kind: dr.instance.kind,
+                    res_name: dr.instance.name.as_deref().map(|s| s.to_owned()),
+                    kind_str: format!("{:?}", dr.instance.kind).to_lowercase(),
+                })
+            })
+            .collect();
+
+        let entries: Vec<StateEntry> = self.db.call(move |db| {
+            let mut out = Vec::new();
+            for g in &groups {
+                let instances = find_instances_for_group(db, &g.app, g.kind, g.res_name.as_deref())
+                    .unwrap_or_default();
+                for inst in instances {
+                    let hex = inst.id.to_hex();
+                    let obs = query_observations(db, &inst).unwrap_or_default();
+                    let state = derive_lifecycle_state(&inst, &obs);
+                    out.push(StateEntry {
+                        app: g.app.clone(),
+                        kind_str: g.kind_str.clone(),
+                        res_name: g.res_name.as_deref().unwrap_or("").to_owned(),
+                        hex,
+                        inst_id: inst.id,
+                        state,
+                    });
+                }
+            }
+            out
+        });
+
         let mut new_states = BTreeMap::new();
 
+        for entry in &entries {
+            let key = (entry.app.clone(), entry.hex.clone());
+            if let Some(&prev) = self.prev_states.get(&key)
+                && prev != entry.state
+            {
+                self.event_tx.resource_state_changed(
+                    &entry.app,
+                    &entry.kind_str,
+                    &entry.res_name,
+                    &entry.hex,
+                    &format!("{:?}", entry.state),
+                );
+            }
+            new_states.insert(key, entry.state);
+        }
+
+        // For desired resources that had no DB instances yet, mark Pending.
         for app in apps {
             for dr in &app.desired.resources {
-                let kind_str = format!("{:?}", dr.instance.kind).to_lowercase();
-                let res_name = dr.instance.name.as_deref().unwrap_or("");
                 let inst_hex = dr.instance.id.to_hex();
-
-                let instances = find_instances_for_group(
-                    &db,
-                    &app.name,
-                    dr.instance.kind,
-                    dr.instance.name.as_deref(),
-                )
-                .unwrap_or_default();
-
-                for inst in &instances {
-                    let hex = inst.id.to_hex();
-                    let obs = query_observations(&db, inst).unwrap_or_default();
-                    let state = derive_lifecycle_state(inst, &obs);
-                    let key = (app.name.clone(), hex.clone());
-
-                    if let Some(&prev) = self.prev_states.get(&key)
-                        && prev != state
-                    {
-                        self.event_tx.resource_state_changed(
-                            &app.name,
-                            &kind_str,
-                            res_name,
-                            &hex,
-                            &format!("{state:?}"),
-                        );
-                    }
-
-                    new_states.insert(key, state);
-                }
-
-                if instances.is_empty() {
-                    let key = (app.name.clone(), inst_hex);
+                let key = (app.name.clone(), inst_hex.clone());
+                if !entries.iter().any(|e| e.inst_id == dr.instance.id) {
                     new_states.insert(key, LifecycleState::Pending);
                 }
             }
@@ -96,8 +140,6 @@ impl Reconciler {
         };
 
         let now = std::time::Instant::now();
-        // Track which hostnames are still being awaited so we can prune the
-        // first-seen map for ones that are no longer in any app's warm set.
         let mut active_hostnames: std::collections::BTreeSet<String> =
             std::collections::BTreeSet::new();
         for (_, hostname) in &targets {
@@ -111,9 +153,6 @@ impl Reconciler {
 
         let observations = crate::system::caddy::observe_certs(&path, &targets);
 
-        // Identify hostnames that are still un-acquired and have exceeded the
-        // deadline → file fault. Conversely, hostnames whose cert appeared
-        // clear any prior fault.
         let observed_hostnames: std::collections::BTreeSet<String> = observations
             .iter()
             .filter_map(|(_, _, payload)| {
@@ -151,7 +190,6 @@ impl Reconciler {
     /// stale IDs.  Only runs for `Installed` apps (uninstall cleanup is handled
     /// separately by `run_uninstall_phase`).
     pub(super) fn retire_unscheduled_excess(&mut self, apps: &[AppSnapshot]) {
-        let db = self.db.lock();
         for app in apps {
             if app.phase != AppPhase::Installed {
                 continue;
@@ -160,25 +198,14 @@ impl Reconciler {
                 if dr.desired != LifecycleState::Unscheduled {
                     continue;
                 }
-                let obs = match query_observations(&db, &dr.instance) {
-                    Ok(obs) => obs,
-                    Err(e) => {
-                        tracing::warn!(
-                            app = %app.name,
-                            instance = %dr.instance.display_name,
-                            error = %e,
-                            "retire excess: failed to query observations"
-                        );
-                        continue;
-                    }
-                };
-                match derive_lifecycle_state(&dr.instance, &obs) {
+                let instance = dr.instance.clone();
+                let state = self.db.call(move |db| {
+                    let obs = query_observations(db, &instance).unwrap_or_default();
+                    derive_lifecycle_state(&instance, &obs)
+                });
+                match state {
                     LifecycleState::Unscheduled => {}
                     LifecycleState::Terminating | LifecycleState::Terminated => {
-                        // written_obs is blocking the terminal observation (e.g.
-                        // container_removed) from being written, keeping the
-                        // lifecycle stuck.  Clear it so the next tick can record
-                        // the removal and advance to Unscheduled.
                         self.written_obs.retain(|(id, _)| *id != dr.instance.id);
                         tracing::debug!(
                             app = %app.name,
@@ -189,7 +216,8 @@ impl Reconciler {
                     }
                     _ => continue,
                 }
-                match delete_instance(&db, dr.instance.id) {
+                let instance_id = dr.instance.id;
+                match self.db.call(move |db| delete_instance(db, instance_id)) {
                     Ok(()) => {
                         self.written_obs.retain(|(id, _)| *id != dr.instance.id);
                         tracing::debug!(
@@ -214,11 +242,7 @@ impl Reconciler {
     // r[impl observe.persist]
     pub(super) fn persist_obs(
         &mut self,
-        batch: Vec<(
-            crate::runtime::identity::ResourceInstance,
-            &'static str,
-            serde_json::Value,
-        )>,
+        batch: Vec<(ResourceInstance, &'static str, serde_json::Value)>,
     ) {
         for (instance, kind, payload) in batch {
             if !self.written_obs.insert((instance.id, kind)) {
@@ -229,11 +253,12 @@ impl Reconciler {
                 );
                 continue;
             }
-            let db = self.db.lock();
-            if let Err(e) = insert_observation(&db, &instance, kind, &payload) {
+            if let Err(e) = self
+                .db
+                .call(move |db| insert_observation(db, &instance, kind, &payload))
+            {
                 error!(
                     error = %e,
-                    instance = %instance.display_name,
                     obs = kind,
                     "reconciler: failed to persist observation"
                 );

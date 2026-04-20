@@ -4,7 +4,6 @@ use parking_lot::{Mutex, RwLock};
 use rhai::{AST, Dynamic, Engine, EvalAltResult, Scope};
 use tokio::sync::Notify;
 
-use crate::runtime::db::Db;
 use crate::runtime::desired::OperationProgress;
 use crate::runtime::generations;
 use crate::runtime::history;
@@ -86,7 +85,7 @@ impl ActionLog for InMemoryActionLog {
 
 // r[impl history.action-log]
 pub struct DbActionLog {
-    db: Arc<Mutex<Db>>,
+    db: crate::runtime::db::DbHandle,
     operation_id: super::OperationId,
     app: String,
     action_name: String,
@@ -94,7 +93,7 @@ pub struct DbActionLog {
 
 impl DbActionLog {
     pub fn new(
-        db: Arc<Mutex<Db>>,
+        db: crate::runtime::db::DbHandle,
         operation_id: super::OperationId,
         app: impl Into<String>,
         action_name: impl Into<String>,
@@ -110,43 +109,46 @@ impl DbActionLog {
 
 impl ActionLog for DbActionLog {
     fn load(&self) -> Result<Vec<super::ActionLogEntry>, Box<dyn std::error::Error + Send + Sync>> {
-        let db = self.db.lock();
-        Ok(history::load_action_log(&db, &self.operation_id)?)
+        let op_id = self.operation_id.clone();
+        Ok(self
+            .db
+            .call(move |db| history::load_action_log(db, &op_id))?)
     }
 
     fn commit(&self, entries: &[super::ActionLogEntry]) {
-        let db = self.db.lock();
+        let op_id = self.operation_id.clone();
+        let app = self.app.clone();
+        let action_name = self.action_name.clone();
         // r[impl reconciliation.idempotency]
-        for entry in entries {
-            if let Err(e) = history::insert_action_log_entry(
-                &db,
-                &self.operation_id,
-                &self.app,
-                &self.action_name,
-                entry,
-            ) {
-                // UNIQUE constraint violations are expected during replay —
-                // the same entry is committed again idempotently.
-                if matches!(
-                    &e,
-                    rusqlite::Error::SqliteFailure(
-                        rusqlite::ffi::Error {
-                            code: rusqlite::ffi::ErrorCode::ConstraintViolation,
-                            ..
-                        },
-                        _,
-                    )
-                ) {
-                    continue;
+        let entries = entries.to_vec();
+        self.db.call(move |db| {
+            for entry in &entries {
+                if let Err(e) =
+                    history::insert_action_log_entry(db, &op_id, &app, &action_name, entry)
+                {
+                    // UNIQUE constraint violations are expected during replay —
+                    // the same entry is committed again idempotently.
+                    if matches!(
+                        &e,
+                        rusqlite::Error::SqliteFailure(
+                            rusqlite::ffi::Error {
+                                code: rusqlite::ffi::ErrorCode::ConstraintViolation,
+                                ..
+                            },
+                            _,
+                        )
+                    ) {
+                        continue;
+                    }
+                    tracing::warn!(
+                        app = %app,
+                        action = %action_name,
+                        call_index = entry.call_index,
+                        "failed to commit action log entry: {e}",
+                    );
                 }
-                tracing::warn!(
-                    app = %self.app,
-                    action = %self.action_name,
-                    call_index = entry.call_index,
-                    "failed to commit action log entry: {e}",
-                );
             }
-        }
+        });
     }
 }
 
@@ -225,7 +227,7 @@ pub struct OperationContext<'a, W: WorldStateOracle + 'static> {
     /// Affects the call script used to invoke the closure.
     pub is_shell: bool,
     /// DB handle for persisting dynamic resources created during the operation.
-    pub db: Option<Arc<parking_lot::Mutex<Db>>>,
+    pub db: Option<crate::runtime::db::DbHandle>,
     /// Generation that was current immediately before the change that
     /// triggered this operation. Used to materialise `old` for `on_change`
     /// handlers.
@@ -357,25 +359,27 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     // closure-call script still references the variable.
     let old_app = if is_param_change && source_generation > 0 {
         match (&db, &script_limits) {
-            (Some(db_arc), Some(limits)) => {
+            (Some(db_handle), Some(limits)) => {
                 let app_name_owned = app.def.load().name.clone();
-                let db_locked = db_arc.lock();
-                match generations::reconstruct_app_def(
-                    &db_locked,
-                    &app_name_owned,
-                    source_generation,
-                    limits,
-                ) {
-                    Ok(a) => a,
-                    Err(e) => {
-                        tracing::warn!(
-                            app = %app_name_owned,
-                            source_generation,
-                            "failed to reconstruct old App for on_change; using empty: {e}"
-                        );
-                        App::default()
+                let limits = limits.clone();
+                db_handle.call(move |db| {
+                    match generations::reconstruct_app_def(
+                        db,
+                        &app_name_owned,
+                        source_generation,
+                        &limits,
+                    ) {
+                        Ok(a) => a,
+                        Err(e) => {
+                            tracing::warn!(
+                                app = %app_name_owned,
+                                source_generation,
+                                "failed to reconstruct old App for on_change; using empty: {e}"
+                            );
+                            App::default()
+                        }
                     }
-                }
+                })
             }
             _ => {
                 debug_assert!(

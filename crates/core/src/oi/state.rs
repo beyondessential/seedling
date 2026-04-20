@@ -17,7 +17,7 @@ pub struct OiState {
     /// Set once by the server after key generation; never changes after that.
     pub spki_fingerprint: OnceLock<String>,
     pub start_time: Instant,
-    pub db: Arc<parking_lot::Mutex<crate::runtime::db::Db>>,
+    pub db: crate::runtime::db::DbHandle,
     pub scheduler: Arc<parking_lot::Mutex<crate::runtime::Scheduler>>,
     pub tick_notify: Arc<tokio::sync::Notify>,
     pub db_path: PathBuf,

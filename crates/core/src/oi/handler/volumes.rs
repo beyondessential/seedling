@@ -150,13 +150,15 @@ pub(crate) fn create_site_volume(state: &OiState, params: CreateSiteVolumeParams
         })?;
     }
 
-    let db = state.db.lock();
-    crate::runtime::site_volumes::create(&db, &def).map_err(|e| {
-        OiError::new(
-            ErrorCode::Internal,
-            format!("failed to store site volume: {e}"),
-        )
-    })?;
+    state
+        .db
+        .call(move |db| crate::runtime::site_volumes::create(db, &def))
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("failed to store site volume: {e}"),
+            )
+        })?;
 
     Ok(json!({ "created": true }))
 }
@@ -164,13 +166,15 @@ pub(crate) fn create_site_volume(state: &OiState, params: CreateSiteVolumeParams
 pub(crate) fn list_site_volumes(state: &OiState) -> HandlerResult {
     use crate::runtime::site_volumes::SiteVolumeKind;
 
-    let db = state.db.lock();
-    let volumes = crate::runtime::site_volumes::list(&db).map_err(|e| {
-        OiError::new(
-            ErrorCode::Internal,
-            format!("failed to list site volumes: {e}"),
-        )
-    })?;
+    let volumes = state
+        .db
+        .call(|db| crate::runtime::site_volumes::list(db))
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("failed to list site volumes: {e}"),
+            )
+        })?;
 
     let items: Vec<_> = volumes
         .iter()
@@ -212,13 +216,16 @@ pub(crate) struct DeleteSiteVolumeParams {
 
 // r[impl volume.site.lifecycle]
 pub(crate) fn delete_site_volume(state: &OiState, params: DeleteSiteVolumeParams) -> HandlerResult {
-    let db = state.db.lock();
-    let def = crate::runtime::site_volumes::get(&db, &params.name).map_err(|e| {
-        OiError::new(
-            ErrorCode::Internal,
-            format!("failed to look up site volume: {e}"),
-        )
-    })?;
+    let name_owned = params.name.clone();
+    let def = state
+        .db
+        .call(move |db| crate::runtime::site_volumes::get(db, &name_owned))
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("failed to look up site volume: {e}"),
+            )
+        })?;
 
     let def = def.ok_or_else(|| {
         OiError::new(
@@ -246,12 +253,16 @@ pub(crate) fn delete_site_volume(state: &OiState, params: DeleteSiteVolumeParams
         })?;
     }
 
-    crate::runtime::site_volumes::delete(&db, &params.name).map_err(|e| {
-        OiError::new(
-            ErrorCode::Internal,
-            format!("failed to delete site volume: {e}"),
-        )
-    })?;
+    let name_owned = params.name.clone();
+    state
+        .db
+        .call(move |db| crate::runtime::site_volumes::delete(db, &name_owned))
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("failed to delete site volume: {e}"),
+            )
+        })?;
 
     Ok(json!({ "deleted": true }))
 }
@@ -300,13 +311,15 @@ pub(crate) fn snapshot_site_volume(
         created_at: jiff::Timestamp::now().to_string(),
     };
 
-    let db = state.db.lock();
-    crate::runtime::site_volumes::create(&db, &def).map_err(|e| {
-        OiError::new(
-            ErrorCode::Internal,
-            format!("failed to store snapshot site volume: {e}"),
-        )
-    })?;
+    state
+        .db
+        .call(move |db| crate::runtime::site_volumes::create(db, &def))
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("failed to store snapshot site volume: {e}"),
+            )
+        })?;
 
     Ok(json!({ "created": true, "name": params.name }))
 }
@@ -365,13 +378,15 @@ pub(crate) fn map_external_volume(
         read_only: params.read_only,
     };
 
-    let db = state.db.lock();
-    external_volume_mappings::create(&db, &mapping).map_err(|e| {
-        OiError::new(
-            ErrorCode::Internal,
-            format!("failed to create mapping: {e}"),
-        )
-    })?;
+    state
+        .db
+        .call(move |db| external_volume_mappings::create(db, &mapping))
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("failed to create mapping: {e}"),
+            )
+        })?;
 
     state.tick_notify.notify_one();
     Ok(json!({ "mapped": true }))
@@ -411,8 +426,11 @@ pub(crate) fn unmap_external_volume(
         }
     }
 
-    let db = state.db.lock();
-    let deleted = external_volume_mappings::delete(&db, &params.app, &params.external_name)
+    let app_owned = params.app.clone();
+    let external_name_owned = params.external_name.clone();
+    let deleted = state
+        .db
+        .call(move |db| external_volume_mappings::delete(db, &app_owned, &external_name_owned))
         .map_err(|e| {
             OiError::new(
                 ErrorCode::Internal,
@@ -452,13 +470,15 @@ pub(crate) fn remap_external_volume(
         read_only: params.read_only,
     };
 
-    let db = state.db.lock();
-    let updated = external_volume_mappings::update(&db, &mapping).map_err(|e| {
-        OiError::new(
-            ErrorCode::Internal,
-            format!("failed to update mapping: {e}"),
-        )
-    })?;
+    let updated = state
+        .db
+        .call(move |db| external_volume_mappings::update(db, &mapping))
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("failed to update mapping: {e}"),
+            )
+        })?;
 
     if !updated {
         return Err(OiError::new(
@@ -486,13 +506,17 @@ pub(crate) fn list_external_mappings(
 ) -> HandlerResult {
     use crate::runtime::external_volume_mappings::{self, MappingTarget};
 
-    let db = state.db.lock();
-    let mappings = if let Some(app) = &params.app {
-        external_volume_mappings::list_for_app(&db, app)
-    } else {
-        external_volume_mappings::list_all(&db)
-    }
-    .map_err(|e| OiError::new(ErrorCode::Internal, format!("failed to list mappings: {e}")))?;
+    let app_filter = params.app.clone();
+    let mappings = state
+        .db
+        .call(move |db| {
+            if let Some(app) = &app_filter {
+                external_volume_mappings::list_for_app(db, app)
+            } else {
+                external_volume_mappings::list_all(db)
+            }
+        })
+        .map_err(|e| OiError::new(ErrorCode::Internal, format!("failed to list mappings: {e}")))?;
 
     let items: Vec<_> = mappings
         .iter()

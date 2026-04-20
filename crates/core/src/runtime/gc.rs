@@ -1,12 +1,10 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use jiff::Timestamp;
-use parking_lot::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{debug, error};
 
-use crate::runtime::db::Db;
+use crate::runtime::db::{Db, DbHandle};
 
 pub struct GcConfig {
     pub interval: Duration,
@@ -29,13 +27,15 @@ impl Default for GcConfig {
 }
 
 // r[impl gc.background]
-pub fn spawn_gc_task(db: Arc<Mutex<Db>>, config: GcConfig) -> JoinHandle<()> {
+pub fn spawn_gc_task(db: DbHandle, config: GcConfig) -> JoinHandle<()> {
+    use std::sync::Arc;
+    let config = Arc::new(config);
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(config.interval);
         loop {
             ticker.tick().await;
-            let db = db.lock();
-            run_gc_cycle(&db, &config);
+            let cfg = Arc::clone(&config);
+            db.call(move |db| run_gc_cycle(db, &cfg));
         }
     })
 }

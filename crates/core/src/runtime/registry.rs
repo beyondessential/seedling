@@ -1,9 +1,9 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
 use parking_lot::Mutex;
 
 use crate::defs::resource::ResourceKind;
-use crate::runtime::db::Db;
+use crate::runtime::db::{Db, DbHandle};
 use crate::runtime::history;
 use crate::runtime::identity::{InstanceVariant, ResourceInstance};
 
@@ -192,11 +192,11 @@ impl InstanceRegistry for EphemeralInstanceRegistry {
 /// Looks instances up in the SQLite instance registry, creating and persisting
 /// new ones when none exist for the requested `(app, kind, name)` group.
 pub struct DbInstanceRegistry {
-    db: Arc<Mutex<Db>>,
+    db: DbHandle,
 }
 
 impl DbInstanceRegistry {
-    pub fn new(db: Arc<Mutex<Db>>) -> Self {
+    pub fn new(db: DbHandle) -> Self {
         Self { db }
     }
 }
@@ -208,8 +208,11 @@ impl InstanceRegistry for DbInstanceRegistry {
         kind: ResourceKind,
         name: Option<&str>,
     ) -> Result<ResourceInstance, RegistryError> {
-        let db = self.db.lock();
-        Ok(history::get_or_create_singleton(&db, app, kind, name)?)
+        let app = app.to_owned();
+        let name = name.map(|s| s.to_owned());
+        Ok(self
+            .db
+            .call(move |db| history::get_or_create_singleton(db, &app, kind, name.as_deref()))?)
     }
 
     fn ensure_scaled_group(
@@ -219,35 +222,39 @@ impl InstanceRegistry for DbInstanceRegistry {
         name: Option<&str>,
         count: u16,
     ) -> Result<ScaledGroup, RegistryError> {
-        let db = self.db.lock();
-        let existing = history::find_instances_for_group(&db, app, kind, name)?;
+        let app = app.to_owned();
+        let name = name.map(|s| s.to_owned());
+        Ok(self.db.call(move |db| -> rusqlite::Result<ScaledGroup> {
+            let existing = history::find_instances_for_group(db, &app, kind, name.as_deref())?;
 
-        // Separate singletons (stale after a scale-definition change) from
-        // scaled instances that participate in the group.
-        let mut singletons = Vec::new();
-        let mut scaled = Vec::new();
-        for inst in existing {
-            match inst.variant {
-                InstanceVariant::Singleton => singletons.push(inst),
-                InstanceVariant::Scaled => scaled.push(inst),
+            // Separate singletons (stale after a scale-definition change) from
+            // scaled instances that participate in the group.
+            let mut singletons = Vec::new();
+            let mut scaled = Vec::new();
+            for inst in existing {
+                match inst.variant {
+                    InstanceVariant::Singleton => singletons.push(inst),
+                    InstanceVariant::Scaled => scaled.push(inst),
+                }
             }
-        }
 
-        let count = usize::from(count);
-        while scaled.len() < count {
-            let instance = ResourceInstance::new_scaled(app, kind, name.unwrap_or(""));
-            history::insert_instance(&db, &instance)?;
-            scaled.push(instance);
-        }
+            let count = usize::from(count);
+            while scaled.len() < count {
+                let instance =
+                    ResourceInstance::new_scaled(&app, kind, name.as_deref().unwrap_or(""));
+                history::insert_instance(db, &instance)?;
+                scaled.push(instance);
+            }
 
-        let keep = scaled[..count].to_vec();
-        let mut excess = scaled[count..].to_vec();
+            let keep = scaled[..count].to_vec();
+            let mut excess = scaled[count..].to_vec();
 
-        // Lingering singletons are always excess — the reconciler will
-        // unschedule them so the old container is torn down cleanly.
-        excess.extend(singletons);
+            // Lingering singletons are always excess — the reconciler will
+            // unschedule them so the old container is torn down cleanly.
+            excess.extend(singletons);
 
-        Ok(ScaledGroup { keep, excess })
+            Ok(ScaledGroup { keep, excess })
+        })?)
     }
 
     fn find_all_instances(
@@ -256,7 +263,10 @@ impl InstanceRegistry for DbInstanceRegistry {
         kind: ResourceKind,
         name: Option<&str>,
     ) -> Result<Vec<ResourceInstance>, RegistryError> {
-        let db = self.db.lock();
-        Ok(history::find_instances_for_group(&db, app, kind, name)?)
+        let app = app.to_owned();
+        let name = name.map(|s| s.to_owned());
+        Ok(self
+            .db
+            .call(move |db| history::find_instances_for_group(db, &app, kind, name.as_deref()))?)
     }
 }

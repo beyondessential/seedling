@@ -48,13 +48,17 @@ pub(crate) fn register_backup_app(
         }
     }
 
-    let db = state.db.lock();
-    backup_apps::register(&db, &params.name, &params.app).map_err(|e| {
-        OiError::new(
-            ErrorCode::Internal,
-            format!("failed to register backup app: {e}"),
-        )
-    })?;
+    let name_owned = params.name.clone();
+    let app_owned = params.app.clone();
+    state
+        .db
+        .call(move |db| backup_apps::register(db, &name_owned, &app_owned))
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("failed to register backup app: {e}"),
+            )
+        })?;
 
     Ok(json!({ "registered": true }))
 }
@@ -69,15 +73,27 @@ pub(crate) fn deregister_backup_app(
     state: &OiState,
     params: DeregisterBackupAppParams,
 ) -> HandlerResult {
-    let db = state.db.lock();
-
     // i[impl backup.app.deregister] — reject if any strategy references this backup app.
-    let in_use = backup_strategies::references_backup_app(&db, &params.name).map_err(|e| {
-        OiError::new(
-            ErrorCode::Internal,
-            format!("failed to check strategy references: {e}"),
-        )
+    let name_owned = params.name.clone();
+    let (in_use, deleted) = state.db.call(move |db| -> Result<_, OiError> {
+        let in_use = backup_strategies::references_backup_app(db, &name_owned).map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("failed to check strategy references: {e}"),
+            )
+        })?;
+        if in_use {
+            return Ok((true, false));
+        }
+        let deleted = backup_apps::deregister(db, &name_owned).map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("failed to deregister backup app: {e}"),
+            )
+        })?;
+        Ok((false, deleted))
     })?;
+
     if in_use {
         return Err(OiError::new(
             ErrorCode::BackupAppInUse,
@@ -87,13 +103,6 @@ pub(crate) fn deregister_backup_app(
             ),
         ));
     }
-
-    let deleted = backup_apps::deregister(&db, &params.name).map_err(|e| {
-        OiError::new(
-            ErrorCode::Internal,
-            format!("failed to deregister backup app: {e}"),
-        )
-    })?;
 
     if !deleted {
         return Err(OiError::not_found(format!(
@@ -107,8 +116,7 @@ pub(crate) fn deregister_backup_app(
 
 // i[impl backup.app.list]
 pub(crate) fn list_backup_apps(state: &OiState) -> HandlerResult {
-    let db = state.db.lock();
-    let apps = backup_apps::list_all(&db).map_err(|e| {
+    let apps = state.db.call(|db| backup_apps::list_all(db)).map_err(|e| {
         OiError::new(
             ErrorCode::Internal,
             format!("failed to list backup apps: {e}"),
@@ -135,12 +143,6 @@ pub(crate) struct CreateStrategyParams {
 pub(crate) fn create_strategy(state: &OiState, params: CreateStrategyParams) -> HandlerResult {
     validate_schedule(&params.schedule)?;
 
-    let db = state.db.lock();
-
-    backup_apps::get_by_name(&db, &params.via)
-        .map_err(|e| OiError::new(ErrorCode::Internal, format!("db backup apps: {e}")))?
-        .ok_or_else(|| OiError::not_found(format!("no backup app named {:?}", params.via)))?;
-
     let strategy = backup_strategies::BackupStrategy {
         name: params.name,
         via: params.via,
@@ -148,11 +150,17 @@ pub(crate) fn create_strategy(state: &OiState, params: CreateStrategyParams) -> 
         volumes: params.volumes,
         last_fired_at: None,
     };
-    backup_strategies::create(&db, &strategy).map_err(|e| {
-        OiError::new(
-            ErrorCode::Internal,
-            format!("failed to create strategy: {e}"),
-        )
+    state.db.call(move |db| -> Result<_, OiError> {
+        backup_apps::get_by_name(db, &strategy.via)
+            .map_err(|e| OiError::new(ErrorCode::Internal, format!("db backup apps: {e}")))?
+            .ok_or_else(|| OiError::not_found(format!("no backup app named {:?}", strategy.via)))?;
+        backup_strategies::create(db, &strategy).map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("failed to create strategy: {e}"),
+            )
+        })?;
+        Ok(())
     })?;
 
     Ok(json!({ "created": true }))
@@ -165,8 +173,10 @@ pub(crate) struct StrategyNameParams {
 
 // i[impl backup.strategy.show]
 pub(crate) fn show_strategy(state: &OiState, params: StrategyNameParams) -> HandlerResult {
-    let db = state.db.lock();
-    let strategy = backup_strategies::get(&db, &params.name)
+    let name_owned = params.name.clone();
+    let strategy = state
+        .db
+        .call(move |db| backup_strategies::get(db, &name_owned))
         .map_err(|e| OiError::new(ErrorCode::Internal, format!("db strategies: {e}")))?
         .ok_or_else(|| OiError::not_found(format!("no strategy named {:?}", params.name)))?;
 
@@ -175,13 +185,15 @@ pub(crate) fn show_strategy(state: &OiState, params: StrategyNameParams) -> Hand
 
 // i[impl backup.strategy.list]
 pub(crate) fn list_strategies(state: &OiState) -> HandlerResult {
-    let db = state.db.lock();
-    let strategies = backup_strategies::list_all(&db).map_err(|e| {
-        OiError::new(
-            ErrorCode::Internal,
-            format!("failed to list strategies: {e}"),
-        )
-    })?;
+    let strategies = state
+        .db
+        .call(|db| backup_strategies::list_all(db))
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("failed to list strategies: {e}"),
+            )
+        })?;
 
     Ok(json!(
         strategies.iter().map(strategy_to_json).collect::<Vec<_>>()
@@ -202,26 +214,29 @@ pub(crate) fn update_strategy(state: &OiState, params: UpdateStrategyParams) -> 
         validate_schedule(sched)?;
     }
 
-    let db = state.db.lock();
-
-    if let Some(via) = &params.via {
-        backup_apps::get_by_name(&db, via)
-            .map_err(|e| OiError::new(ErrorCode::Internal, format!("db backup apps: {e}")))?
-            .ok_or_else(|| OiError::not_found(format!("no backup app named {via:?}")))?;
-    }
-
-    let updated = backup_strategies::update(
-        &db,
-        &params.name,
-        params.via.as_deref(),
-        params.schedule.as_deref(),
-        params.volumes.as_deref(),
-    )
-    .map_err(|e| {
-        OiError::new(
-            ErrorCode::Internal,
-            format!("failed to update strategy: {e}"),
+    let name_owned = params.name.clone();
+    let via_owned = params.via.clone();
+    let schedule_owned = params.schedule.clone();
+    let volumes_owned = params.volumes.clone();
+    let updated = state.db.call(move |db| -> Result<bool, OiError> {
+        if let Some(ref via) = via_owned {
+            backup_apps::get_by_name(db, via)
+                .map_err(|e| OiError::new(ErrorCode::Internal, format!("db backup apps: {e}")))?
+                .ok_or_else(|| OiError::not_found(format!("no backup app named {via:?}")))?;
+        }
+        backup_strategies::update(
+            db,
+            &name_owned,
+            via_owned.as_deref(),
+            schedule_owned.as_deref(),
+            volumes_owned.as_deref(),
         )
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("failed to update strategy: {e}"),
+            )
+        })
     })?;
 
     if !updated {
@@ -236,13 +251,16 @@ pub(crate) fn update_strategy(state: &OiState, params: UpdateStrategyParams) -> 
 
 // i[impl backup.strategy.delete]
 pub(crate) fn delete_strategy(state: &OiState, params: StrategyNameParams) -> HandlerResult {
-    let db = state.db.lock();
-    let deleted = backup_strategies::delete(&db, &params.name).map_err(|e| {
-        OiError::new(
-            ErrorCode::Internal,
-            format!("failed to delete strategy: {e}"),
-        )
-    })?;
+    let name_owned = params.name.clone();
+    let deleted = state
+        .db
+        .call(move |db| backup_strategies::delete(db, &name_owned))
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("failed to delete strategy: {e}"),
+            )
+        })?;
 
     if !deleted {
         return Err(OiError::not_found(format!(
@@ -261,11 +279,12 @@ pub(crate) struct RunBackupParams {
 
 // i[impl backup.run]
 pub(crate) fn run_backup(state: &Arc<OiState>, params: RunBackupParams) -> HandlerResult {
-    let db = state.db.lock();
-    let strategy = backup_strategies::get(&db, &params.strategy)
+    let strategy_name = params.strategy.clone();
+    let strategy = state
+        .db
+        .call(move |db| backup_strategies::get(db, &strategy_name))
         .map_err(|e| OiError::new(ErrorCode::Internal, format!("db strategies: {e}")))?
         .ok_or_else(|| OiError::not_found(format!("no strategy named {:?}", params.strategy)))?;
-    drop(db);
 
     let ids: Vec<OperationId> = strategy
         .volumes
@@ -305,25 +324,29 @@ async fn run_strategy_backup(
     operation_ids: &[OperationId],
     is_manual: bool,
 ) {
-    let (backup_app_name, backing_app_name) = {
-        let db = state.db.lock();
-        match backup_apps::get_by_name(&db, &strategy.via) {
-            Ok(Some(ba)) => (ba.name, ba.app),
-            Ok(None) => {
-                tracing::error!(
-                    strategy = %strategy.name,
-                    via = %strategy.via,
-                    "backup app no longer registered"
-                );
-                return;
-            }
-            Err(e) => {
-                tracing::error!(
-                    strategy = %strategy.name,
-                    "failed to look up backup app: {e}"
-                );
-                return;
-            }
+    let via_owned = strategy.via.clone();
+    let strategy_name_for_err = strategy.name.clone();
+    let lookup = tokio::task::block_in_place(|| {
+        state
+            .db
+            .call(move |db| backup_apps::get_by_name(db, &via_owned))
+    });
+    let (backup_app_name, backing_app_name) = match lookup {
+        Ok(Some(ba)) => (ba.name, ba.app),
+        Ok(None) => {
+            tracing::error!(
+                strategy = %strategy_name_for_err,
+                via = %strategy.via,
+                "backup app no longer registered"
+            );
+            return;
+        }
+        Err(e) => {
+            tracing::error!(
+                strategy = %strategy_name_for_err,
+                "failed to look up backup app: {e}"
+            );
+            return;
         }
     };
 
@@ -342,16 +365,20 @@ async fn run_strategy_backup(
                 app = %backing_app_name,
                 "backup app missing required actions at fire time"
             );
-            let db = state.db.lock();
-            let _ = faults::file_fault(
-                &db,
-                &backing_app_name,
-                None,
-                None,
-                None,
-                "backup_app_unavailable",
-                &format!("backup app {backing_app_name:?} is missing required backup actions"),
-            );
+            let app_owned = backing_app_name.clone();
+            tokio::task::block_in_place(|| {
+                state.db.call(move |db| {
+                    let _ = faults::file_fault(
+                        db,
+                        &app_owned,
+                        None,
+                        None,
+                        None,
+                        "backup_app_unavailable",
+                        &format!("backup app {app_owned:?} is missing required backup actions"),
+                    );
+                })
+            });
             return;
         }
     }
@@ -396,16 +423,21 @@ async fn run_volume_backup(
         Ok(p) => p,
         Err(e) => {
             tracing::error!(strategy = %strategy.name, vol = %vol_id, "invalid volume id: {e}");
-            let db = state.db.lock();
-            let _ = faults::file_fault(
-                &db,
-                backing_app_name,
-                None,
-                None,
-                None,
-                "backup_source_unavailable",
-                &format!("strategy {:?}: {e}", strategy.name),
-            );
+            let app_owned = backing_app_name.to_owned();
+            let desc = format!("strategy {:?}: {e}", strategy.name);
+            tokio::task::block_in_place(|| {
+                state.db.call(move |db| {
+                    let _ = faults::file_fault(
+                        db,
+                        &app_owned,
+                        None,
+                        None,
+                        None,
+                        "backup_source_unavailable",
+                        &desc,
+                    );
+                })
+            });
             return;
         }
     };
@@ -413,19 +445,24 @@ async fn run_volume_backup(
     // r[impl backup.execution]
     if !source_path.exists() {
         tracing::error!(strategy = %strategy.name, vol = %vol_id, "source volume path does not exist");
-        let db = state.db.lock();
-        let _ = faults::file_fault(
-            &db,
-            backing_app_name,
-            None,
-            None,
-            None,
-            "backup_source_unavailable",
-            &format!(
-                "strategy {:?}: volume {vol_id:?} path does not exist",
-                strategy.name
-            ),
+        let app_owned = backing_app_name.to_owned();
+        let desc = format!(
+            "strategy {:?}: volume {vol_id:?} path does not exist",
+            strategy.name
         );
+        tokio::task::block_in_place(|| {
+            state.db.call(move |db| {
+                let _ = faults::file_fault(
+                    db,
+                    &app_owned,
+                    None,
+                    None,
+                    None,
+                    "backup_source_unavailable",
+                    &desc,
+                );
+            })
+        });
         return;
     }
 
@@ -444,19 +481,24 @@ async fn run_volume_backup(
                 "failed to create snapshot: {e}"
             );
             if attempt >= 2 {
-                let db = state.db.lock();
-                let _ = faults::file_fault(
-                    &db,
-                    backing_app_name,
-                    None,
-                    None,
-                    None,
-                    "backup_failed",
-                    &format!(
-                        "strategy {:?}: failed to snapshot volume {vol_id:?}: {e}",
-                        strategy.name
-                    ),
+                let app_owned = backing_app_name.to_owned();
+                let desc = format!(
+                    "strategy {:?}: failed to snapshot volume {vol_id:?}: {e}",
+                    strategy.name
                 );
+                tokio::task::block_in_place(|| {
+                    state.db.call(move |db| {
+                        let _ = faults::file_fault(
+                            db,
+                            &app_owned,
+                            None,
+                            None,
+                            None,
+                            "backup_failed",
+                            &desc,
+                        );
+                    })
+                });
             }
             if attempt < 2 {
                 let delay = backup_execution::random_delay_secs(&strategy.schedule);
@@ -496,9 +538,13 @@ async fn run_volume_backup(
         let _ = vol_store.remove_site(&snapshot_name).await;
 
         if success {
-            let db = state.db.lock();
-            faults::clear_faults_by_kind(&db, backing_app_name, "backup_failed").ok();
-            faults::clear_faults_by_kind(&db, backing_app_name, "backup_source_unavailable").ok();
+            let app_owned = backing_app_name.to_owned();
+            tokio::task::block_in_place(|| {
+                state.db.call(move |db| {
+                    faults::clear_faults_by_kind(db, &app_owned, "backup_failed").ok();
+                    faults::clear_faults_by_kind(db, &app_owned, "backup_source_unavailable").ok();
+                })
+            });
             return;
         }
 
@@ -521,19 +567,17 @@ async fn run_volume_backup(
             vol = %vol_id,
             "backup save-snapshot failed after retry"
         );
-        let db = state.db.lock();
-        let _ = faults::file_fault(
-            &db,
-            backing_app_name,
-            None,
-            None,
-            None,
-            "backup_failed",
-            &format!(
-                "strategy {:?}: save-snapshot failed for volume {vol_id:?}",
-                strategy.name
-            ),
+        let app_owned = backing_app_name.to_owned();
+        let desc = format!(
+            "strategy {:?}: save-snapshot failed for volume {vol_id:?}",
+            strategy.name
         );
+        tokio::task::block_in_place(|| {
+            state.db.call(move |db| {
+                let _ =
+                    faults::file_fault(db, &app_owned, None, None, None, "backup_failed", &desc);
+            })
+        });
         return;
     }
 }
@@ -713,19 +757,25 @@ fn resolve_backup_app(
     strategy_name: &str,
     _volume: &str,
 ) -> Result<(String, String), OiError> {
-    let db = state.db.lock();
-    let strategy = backup_strategies::get(&db, strategy_name)
-        .map_err(|e| OiError::new(ErrorCode::Internal, format!("db strategies: {e}")))?
-        .ok_or_else(|| OiError::not_found(format!("no strategy named {strategy_name:?}")))?;
-    let ba = backup_apps::get_by_name(&db, &strategy.via)
-        .map_err(|e| OiError::new(ErrorCode::Internal, format!("db backup apps: {e}")))?
-        .ok_or_else(|| {
-            OiError::not_found(format!(
-                "backup app {:?} no longer registered",
-                strategy.via
-            ))
-        })?;
-    Ok((ba.name, ba.app))
+    let strategy_name_owned = strategy_name.to_owned();
+    state
+        .db
+        .call(move |db| -> Result<(String, String), OiError> {
+            let strategy = backup_strategies::get(db, &strategy_name_owned)
+                .map_err(|e| OiError::new(ErrorCode::Internal, format!("db strategies: {e}")))?
+                .ok_or_else(|| {
+                    OiError::not_found(format!("no strategy named {strategy_name_owned:?}"))
+                })?;
+            let ba = backup_apps::get_by_name(db, &strategy.via)
+                .map_err(|e| OiError::new(ErrorCode::Internal, format!("db backup apps: {e}")))?
+                .ok_or_else(|| {
+                    OiError::not_found(format!(
+                        "backup app {:?} no longer registered",
+                        strategy.via
+                    ))
+                })?;
+            Ok((ba.name, ba.app))
+        })
 }
 
 fn validate_backup_app_actions(

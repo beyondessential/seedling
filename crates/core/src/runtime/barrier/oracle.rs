@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
@@ -83,46 +82,50 @@ impl WorldStateOracle for TestWorldOracle {
 // ---------------------------------------------------------------------------
 
 pub struct DbWorldOracle {
-    db: Arc<Mutex<crate::runtime::db::Db>>,
+    db: crate::runtime::db::DbHandle,
 }
 
 impl DbWorldOracle {
-    pub fn new(db: Arc<Mutex<crate::runtime::db::Db>>) -> Self {
+    pub fn new(db: crate::runtime::db::DbHandle) -> Self {
         Self { db }
     }
 }
 
 impl WorldStateOracle for DbWorldOracle {
     fn lifecycle_state(&self, resource: &ResourceInstance) -> LifecycleState {
-        let db = self.db.lock();
-        let observations = match crate::runtime::history::query_observations(&db, resource) {
-            Ok(obs) => obs,
-            Err(_) => return LifecycleState::Pending,
-        };
-        derive_lifecycle_state(resource, &observations)
+        let resource = resource.clone();
+        self.db.call(move |db| {
+            let observations = match crate::runtime::history::query_observations(db, &resource) {
+                Ok(obs) => obs,
+                Err(_) => return LifecycleState::Pending,
+            };
+            derive_lifecycle_state(&resource, &observations)
+        })
     }
 
     fn cert_valid_for(&self, resource: &ResourceInstance) -> bool {
         if resource.kind != ResourceKind::Ingress {
             return false;
         }
-        let db = self.db.lock();
-        let observations = match crate::runtime::history::query_observations(&db, resource) {
-            Ok(obs) => obs,
-            Err(_) => return false,
-        };
-        // Most recent cert observation determines current validity.
-        // `cert_valid` overrides any earlier `cert_acquisition_failed` and
-        // vice-versa.
-        let mut valid = false;
-        for obs in &observations {
-            match obs.obs_kind.as_str() {
-                "cert_valid" => valid = true,
-                "cert_acquisition_failed" => valid = false,
-                _ => {}
+        let resource = resource.clone();
+        self.db.call(move |db| {
+            let observations = match crate::runtime::history::query_observations(db, &resource) {
+                Ok(obs) => obs,
+                Err(_) => return false,
+            };
+            // Most recent cert observation determines current validity.
+            // `cert_valid` overrides any earlier `cert_acquisition_failed` and
+            // vice-versa.
+            let mut valid = false;
+            for obs in &observations {
+                match obs.obs_kind.as_str() {
+                    "cert_valid" => valid = true,
+                    "cert_acquisition_failed" => valid = false,
+                    _ => {}
+                }
             }
-        }
-        valid
+            valid
+        })
     }
 }
 

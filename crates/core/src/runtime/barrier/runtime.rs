@@ -7,7 +7,6 @@ use crate::defs::volume::OperationVolumeBinding;
 use crate::runtime::barrier::{
     ActionLogEntry, BarrierCondition, BarrierRecord, CallKind, SharedContext,
 };
-use crate::runtime::db::Db;
 use crate::runtime::registry::{InstanceRegistry, RegistryError};
 use crate::runtime::{LifecycleState, ResourceInstance, restart_gens};
 
@@ -199,7 +198,7 @@ pub struct RuntimeInstance {
     pub ctx: Option<SharedContext>,
     pub app_name: String,
     pub registry: Arc<dyn InstanceRegistry>,
-    pub db: Option<Arc<parking_lot::Mutex<Db>>>,
+    pub db: Option<crate::runtime::db::DbHandle>,
 }
 
 impl std::fmt::Debug for RuntimeInstance {
@@ -226,7 +225,7 @@ impl RuntimeInstance {
         ctx: SharedContext,
         app_name: impl Into<String>,
         registry: Arc<dyn InstanceRegistry>,
-        db: Option<Arc<parking_lot::Mutex<Db>>>,
+        db: Option<crate::runtime::db::DbHandle>,
     ) -> Self {
         Self {
             ctx: Some(ctx),
@@ -416,14 +415,12 @@ impl RuntimeInstance {
             let op_id = ctx.lock().operation_id.0.clone();
             for (instance, maybe_def) in &resources_with_defs {
                 if maybe_def.is_some() {
-                    let db = db.lock();
-                    if let Err(e) =
-                        crate::runtime::desired::insert_dynamic_resource(&db, instance, &op_id)
-                    {
-                        tracing::warn!(
-                            instance_id = %instance.id.to_hex(),
-                            "failed to persist dynamic resource: {e}"
-                        );
+                    let instance = instance.clone();
+                    let op_id = op_id.clone();
+                    if let Err(e) = db.call(move |db| {
+                        crate::runtime::desired::insert_dynamic_resource(db, &instance, &op_id)
+                    }) {
+                        tracing::warn!("failed to persist dynamic resource: {e}");
                     }
                 }
             }
@@ -646,12 +643,11 @@ impl CustomType for RuntimeInstance {
                         return Err("rt.restart requires a named deployment".into());
                     }
                     if let Some(db) = &this.db {
-                        let db = db.lock();
-                        restart_gens::bump_restart_gen(&db, &this.app_name, &dep_name).map_err(
-                            |e| -> Box<EvalAltResult> {
+                        let app_name = this.app_name.clone();
+                        db.call(move |db| restart_gens::bump_restart_gen(db, &app_name, &dep_name))
+                            .map_err(|e| -> Box<EvalAltResult> {
                                 format!("rt.restart db error: {e}").into()
-                            },
-                        )?;
+                            })?;
                     }
                     Ok(())
                 },

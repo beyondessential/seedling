@@ -466,5 +466,94 @@ pub fn delete_schedules_for_app(db: &Db, app: &str) -> rusqlite::Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// DbHandle — single-threaded DB actor
+// ---------------------------------------------------------------------------
+
+type DbJob = Box<dyn FnOnce(&Db) + Send + 'static>;
+
+/// A cheaply-cloneable handle to a dedicated SQLite database thread.
+///
+/// All DB access is serialised through a single background `std::thread`.
+/// Callers submit closures that receive `&Db` and block synchronously until
+/// the closure returns. This eliminates the explicit mutex and the deadlock
+/// risks that come with mixing db and other lock orderings.
+#[derive(Clone)]
+pub struct DbHandle {
+    tx: std::sync::mpsc::SyncSender<DbJob>,
+}
+
+impl DbHandle {
+    pub fn open(path: &Path) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let db = Db::open(path)?;
+        Ok(Self::from_db(db))
+    }
+
+    pub fn open_in_memory() -> rusqlite::Result<Self> {
+        let db = Db::open_in_memory()?;
+        Ok(Self::from_db(db))
+    }
+
+    pub fn from_db(db: Db) -> Self {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<DbJob>(64);
+        std::thread::Builder::new()
+            .name("seedling-db".into())
+            .spawn(move || {
+                while let Ok(f) = rx.recv() {
+                    f(&db);
+                }
+            })
+            .expect("failed to spawn database thread");
+        Self { tx }
+    }
+
+    /// Submit `f` to the database thread and block until it returns.
+    pub fn call<R>(&self, f: impl FnOnce(&Db) -> R + Send + 'static) -> R
+    where
+        R: Send + 'static,
+    {
+        let (result_tx, result_rx) = std::sync::mpsc::sync_channel::<R>(0);
+        let job: DbJob = Box::new(move |db| {
+            let _ = result_tx.send(f(db));
+        });
+        self.tx.send(job).expect("database thread has exited");
+        result_rx
+            .recv()
+            .expect("database thread exited without returning result")
+    }
+
+    /// Like [`call`] but does not require the closure to be `'static`.
+    ///
+    /// Safe because this function blocks until the DB thread finishes executing
+    /// the closure, so captured borrows cannot escape their source lifetimes.
+    /// The transmute merely removes the `'static` bound from the erased type;
+    /// the blocking rendezvous enforces the actual lifetime constraint.
+    pub fn call_ref<'a, R>(&self, f: impl FnOnce(&Db) -> R + Send + 'a) -> R
+    where
+        R: Send + 'static,
+    {
+        let (result_tx, result_rx) = std::sync::mpsc::sync_channel::<R>(0);
+        // Wrap the closure so it sends its result through the channel.
+        let wrapper: Box<dyn FnOnce(&Db) + Send + 'a> = Box::new(move |db| {
+            let _ = result_tx.send(f(db));
+        });
+        // SAFETY: The sync_channel rendezvous (capacity 0) guarantees this
+        // function does not return until the DB thread has called the closure
+        // and sent its result.  Therefore the closure — and any borrows it
+        // captures — cannot outlive the calling stack frame.  We widen the
+        // lifetime only to satisfy the `DbJob: 'static` bound on the channel.
+        let job: DbJob = unsafe {
+            std::mem::transmute::<
+                Box<dyn FnOnce(&Db) + Send + 'a>,
+                Box<dyn FnOnce(&Db) + Send + 'static>,
+            >(wrapper)
+        };
+        self.tx.send(job).expect("database thread has exited");
+        result_rx
+            .recv()
+            .expect("database thread exited without returning result")
+    }
+}
+
 #[cfg(test)]
 mod tests;

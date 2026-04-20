@@ -13,7 +13,6 @@ use crate::{
     },
     runtime::{
         AppPhase,
-        apps::AppRegistry,
         scheduler::{RejectReason, ScheduleResult},
     },
 };
@@ -166,8 +165,20 @@ pub(crate) fn invoke_install(
         {
             let reg = state.registry.read();
             if let Some(entry) = reg.get(app_name) {
-                let db = state.db.lock();
-                AppRegistry::persist_app(&db, entry)
+                use crate::oi::handler::apps::{extract_persist_fields, persist_app_fields};
+                let (app_name_owned, generation_n, installed, uninstalling) =
+                    extract_persist_fields(entry);
+                state
+                    .db
+                    .call(move |db| {
+                        persist_app_fields(
+                            db,
+                            &app_name_owned,
+                            generation_n,
+                            installed,
+                            uninstalling,
+                        )
+                    })
                     .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db persist: {e}")))?;
             }
         }

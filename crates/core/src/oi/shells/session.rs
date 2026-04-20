@@ -151,7 +151,7 @@ pub(crate) async fn open_shell_session(
 
     let result_slot: Arc<Mutex<Option<ShellOutcome>>> = Arc::new(Mutex::new(None));
     let result_slot_for_task = Arc::clone(&result_slot);
-    let db_for_task = Arc::clone(&state.db);
+    let db_for_task = state.db.clone();
     let script_limits = state.script_limits.clone();
     let operation_id = OperationId::new();
     let op_id_for_log = operation_id.clone();
@@ -172,14 +172,14 @@ pub(crate) async fn open_shell_session(
         };
         let db = db_for_task;
         let registry: Arc<dyn crate::runtime::InstanceRegistry> =
-            Arc::new(DbInstanceRegistry::new(Arc::clone(&db)));
+            Arc::new(DbInstanceRegistry::new(db.clone()));
         let log = DbActionLog::new(
-            Arc::clone(&db),
+            db.clone(),
             op_id_for_log.clone(),
             app_name_for_task.clone(),
             shell_name_for_task.clone(),
         );
-        let world = Arc::new(DbWorldOracle::new(Arc::clone(&db)));
+        let world = Arc::new(DbWorldOracle::new(db.clone()));
 
         set_shell_attach_ctx(ShellAttachCtx {
             app_name: app_name_for_task.clone(),
@@ -326,7 +326,7 @@ pub(crate) async fn open_shell_session(
         if service_mounts.is_empty() {
             vec![]
         } else {
-            let mount_registry = DbInstanceRegistry::new(Arc::clone(&state.db));
+            let mount_registry = DbInstanceRegistry::new(state.db.clone());
             let result: Result<Vec<_>, RegistryError> = service_mounts
                 .iter()
                 .map(|sp| {
