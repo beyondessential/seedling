@@ -908,7 +908,13 @@ function ActionInvokeDialog({
   );
 }
 
-function InstallingSection({ faults }: { faults: FaultRecord[] }) {
+function InstallingSection({
+  appName,
+  faults,
+}: {
+  appName: string;
+  faults: FaultRecord[];
+}) {
   const installFaults = faults.filter((f) => f.kind === "operation_failed");
   return (
     <Box
@@ -923,10 +929,15 @@ function InstallingSection({ faults }: { faults: FaultRecord[] }) {
       <CircularProgress />
       <Typography color="text.secondary" sx={{ textAlign: "center" }}>
         Install in progress — the runtime is actuating your resources.
-        <br />
-        See the operation panel above for barrier progress, or the app logs for
-        container output.
       </Typography>
+      <Button
+        size="small"
+        startIcon={<ArticleIcon />}
+        component={Link}
+        to={`/apps/${appName}/logs`}
+      >
+        View container logs
+      </Button>
       {installFaults.length > 0 && (
         <Alert severity="error" sx={{ width: "100%", mt: 1 }}>
           <Typography variant="subtitle2" gutterBottom>
@@ -951,17 +962,23 @@ function InstallSection({
   appName,
   installAction,
   hasScriptError,
+  faults,
   onRefresh,
 }: {
   appName: string;
   installAction: AppAction | undefined;
   hasScriptError: boolean;
+  faults: FaultRecord[];
   onRefresh: () => void;
 }) {
   const { execute, loading } = useOiAction();
   const [dialogOpen, setDialogOpen] = useState(false);
 
   const hasParams = installAction && Object.keys(installAction.params).length > 0;
+  // Surface the most-recent operation_failed fault so operators who land here
+  // after a failed install (or just after uninstall) can see what went wrong
+  // and jump straight to the logs, without having to hunt for the Logs button.
+  const operationFailures = faults.filter((f) => f.kind === "operation_failed");
 
   const handleInstall = async () => {
     if (hasParams) {
@@ -993,6 +1010,30 @@ function InstallSection({
           disabled={loading || hasScriptError}
         >
           {loading ? "Installing…" : "Install"}
+        </Button>
+        {operationFailures.length > 0 && (
+          <Alert severity="error" sx={{ width: "100%", mt: 2 }}>
+            <Typography variant="subtitle2" gutterBottom>
+              The last install attempt failed:
+            </Typography>
+            {operationFailures.map((f) => (
+              <Typography
+                key={f.id}
+                variant="body2"
+                sx={{ fontFamily: "monospace", whiteSpace: "pre-wrap" }}
+              >
+                {f.description}
+              </Typography>
+            ))}
+          </Alert>
+        )}
+        <Button
+          size="small"
+          startIcon={<ArticleIcon />}
+          component={Link}
+          to={`/apps/${appName}/logs`}
+        >
+          View logs from previous runs
         </Button>
       </Box>
       {installAction && (
@@ -1569,10 +1610,11 @@ export default function AppDetail() {
               appName={name!}
               installAction={data.actions.find((a) => a.kind === "install")}
               hasScriptError={data.faults.some((f) => f.kind === "script_error")}
+              faults={data.faults}
               onRefresh={refetch}
             />
           ) : data.status === "installing" ? (
-            <InstallingSection faults={data.faults} />
+            <InstallingSection appName={name!} faults={data.faults} />
           ) : (
             <>
               <Section title="Actions">
