@@ -91,6 +91,38 @@ struct Args {
     key_file: Option<std::path::PathBuf>,
 }
 
+// w[daemon.connect-retry]
+async fn connect_daemon_with_retry(
+    addr: std::net::SocketAddr,
+    auth: ClientAuth,
+    key_file: &std::path::Path,
+) -> DaemonConn {
+    let mut backoff = Duration::from_secs(1);
+    loop {
+        match DaemonConn::connect(addr, auth.clone(), key_file).await {
+            Err(e) => {
+                tracing::warn!(
+                    "daemon connection failed: {e} — retrying in {}s",
+                    backoff.as_secs()
+                );
+            }
+            Ok(daemon) => match daemon.probe().await {
+                Ok(()) => return daemon,
+                Err(e) => {
+                    tracing::warn!(
+                        fingerprint = %daemon.fingerprint,
+                        "daemon probe failed: {e} — if this key is not yet authorised, run: seedling-ctl user add {} seedling-web — retrying in {}s",
+                        daemon.fingerprint,
+                        backoff.as_secs(),
+                    );
+                }
+            },
+        }
+        tokio::time::sleep(backoff).await;
+        backoff = (backoff * 2).min(Duration::from_secs(30));
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
@@ -179,21 +211,9 @@ async fn main() {
 
     let key_file = args.key_file.unwrap_or_else(DaemonConn::default_key_path);
 
-    let daemon = DaemonConn::connect(args.daemon_addr, daemon_auth, &key_file)
-        .await
-        .unwrap_or_else(|e| {
-            tracing::error!("daemon connection failed: {e}");
-            std::process::exit(1);
-        });
-    daemon.probe().await.unwrap_or_else(|e| {
-        tracing::error!(
-            fingerprint = %daemon.fingerprint,
-            "daemon rejected connection: {e} — authorise this key with: seedling-ctl user add {} seedling-web",
-            daemon.fingerprint,
-        );
-        std::process::exit(1);
-    });
-    let daemon = Arc::new(daemon);
+    // w[daemon.connect-retry]
+    let daemon =
+        Arc::new(connect_daemon_with_retry(args.daemon_addr, daemon_auth, &key_file).await);
 
     let cert_store = Arc::new(RwLock::new(CertStore::new()));
 

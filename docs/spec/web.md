@@ -15,6 +15,12 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > This endpoint is designed to sit behind a TLS-terminating reverse proxy in non-loopback deployments.
 > Browsers treat loopback origins as secure contexts, so TLS is not required for local development.
 
+> w[daemon.connect-retry]
+> If the initial connection to the seedling daemon fails at startup, the web interface must retry with exponential backoff rather than exiting.
+> The retry interval starts at one second and doubles on each attempt up to a maximum of thirty seconds.
+> Each failed attempt must produce a warning log message.
+> The web interface keeps retrying indefinitely until a connection is established and verified.
+
 # Authentication
 
 > w[auth.connect]
