@@ -434,6 +434,23 @@ async fn handle_bidi_stream(
         return;
     }
 
+    // i[status.infra]
+    if maybe_method.as_deref() == Some("/infra/status") {
+        let result = super::handler::get_infra_status(&state).await;
+        let response = match result {
+            Ok(v) => serde_json::to_vec(&json!({ "result": v })).expect("serialisation"),
+            Err(e) => serde_json::to_vec(&json!({
+                "error": { "code": e.code, "message": e.message }
+            }))
+            .expect("serialisation"),
+        };
+        if let Err(e) = send.write_all(&response).await {
+            tracing::warn!("stream write error: {e}");
+        }
+        let _ = send.finish();
+        return;
+    }
+
     // i[forward.request] — /forwards/start keeps the control stream open for the
     // duration of the forward; it must be handled outside the normal req/resp path.
     if maybe_method.as_deref() == Some("/forwards/start") {

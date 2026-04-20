@@ -9,7 +9,13 @@ import {
   Typography,
 } from "@mui/material";
 import { useSessionContext } from "./SessionProvider";
+import { useOiQuery } from "../hooks/useOi";
 import type { SeedlingEvent } from "../lib/types";
+
+interface InfraStatus {
+  proxy: "running" | "stopped";
+  resolver: "running" | "stopped";
+}
 
 const MIN_WIDTH = 220;
 const MAX_WIDTH = 700;
@@ -95,9 +101,15 @@ function EventRow({ ev }: { ev: SeedlingEvent }) {
 
 export function EventsSidebar() {
   const { events, sidebarWidth, setSidebarWidth } = useSessionContext();
+  const { data: infra, refetch: refetchInfra } = useOiQuery<InfraStatus>("/infra/status", {});
   const dragging = useRef(false);
   const startX = useRef(0);
   const startWidth = useRef(0);
+
+  useEffect(() => {
+    const id = setInterval(() => { refetchInfra(); }, 10_000);
+    return () => clearInterval(id);
+  }, [refetchInfra]);
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     dragging.current = true;
@@ -174,6 +186,42 @@ export function EventsSidebar() {
         ) : (
           events.map((ev, i) => <EventRow key={i} ev={ev} />)
         )}
+      </Box>
+
+      <Divider />
+
+      <Box sx={{ px: 1.5, py: 0.75 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.75 }}>
+          Infrastructure
+        </Typography>
+        {(["proxy", "resolver"] as const).map((key) => {
+          const status = infra?.[key] ?? "stopped";
+          const label = key === "proxy" ? "Proxy" : "Resolver";
+          return (
+            <Box key={key} sx={{ display: "flex", alignItems: "center", gap: 0.75, mb: 0.5 }}>
+              <Typography variant="caption" sx={{ width: 52, flexShrink: 0, color: "text.secondary" }}>
+                {label}
+              </Typography>
+              <Chip
+                label={status}
+                size="small"
+                color={status === "running" ? "success" : "default"}
+                variant="outlined"
+                sx={{ fontSize: "0.65rem", height: 18, "& .MuiChip-label": { px: 0.75 } }}
+              />
+              <Tooltip title={`View ${label} logs`}>
+                <Typography
+                  component={Link}
+                  to={`/infra/${key}/logs`}
+                  variant="caption"
+                  sx={{ color: "text.disabled", "&:hover": { color: "text.secondary" }, ml: "auto" }}
+                >
+                  logs
+                </Typography>
+              </Tooltip>
+            </Box>
+          );
+        })}
       </Box>
     </Paper>
   );

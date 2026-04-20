@@ -20,6 +20,8 @@ mod registries;
 mod status;
 mod volumes;
 
+pub(crate) use status::get_infra_status;
+
 /// Context derived from an incoming OI request, passed through dispatch.
 pub struct RequestCtx {
     pub events: EventSenderWithActor,

@@ -7,6 +7,7 @@ import Apps from "./routes/Apps";
 import CreateApp from "./routes/CreateApp";
 import EditScript from "./routes/EditScript";
 import Faults from "./routes/Faults";
+import InfraLogs from "./routes/InfraLogs";
 import Login from "./routes/Login";
 import Logs from "./routes/Logs";
 import Shell from "./routes/Shell";
@@ -26,6 +27,7 @@ const router = createBrowserRouter([
       { path: "volumes", element: <Volumes /> },
       { path: "apps/:name/logs", element: <Logs /> },
       { path: "apps/:name/shell/:shellName", element: <Shell /> },
+      { path: "infra/:component/logs", element: <InfraLogs /> },
     ],
   },
 ]);

@@ -150,6 +150,13 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 # Status
 
+> i[status.infra]
+> `/infra/status` returns the running state of infrastructure components managed by the Seedling daemon.
+> The response contains the following fields:
+>
+> - `proxy`: `"running"` if at least one proxy container slot is running, otherwise `"stopped"`.
+> - `resolver`: `"running"` if at least one resolver container slot is running, otherwise `"stopped"`.
+
 > i[status.get]
 > `/server/status` returns a summary of the running Seedling instance.
 > It must always succeed and must not perform any expensive computation.
