@@ -537,6 +537,53 @@ async fn main() {
         }
     }
 
+    // Podman-level scan for orphaned shell-session containers.
+    //
+    // Shell sessions (both regular shells labelled "seedling.session=shell"
+    // and volume shells labelled "seedling.session=volume-shell") are tied to
+    // a live PTY / QUIC stream in the daemon process. After a daemon restart
+    // the PTY fds are dead and the session is unrecoverable, so any such
+    // container is an orphan. Runs BEFORE the pod-network scan so the
+    // newly-dead shell's network is picked up as an orphan immediately.
+    {
+        let driver_ref = Arc::clone(&driver);
+        let orphan_shells: Vec<seedling_core::system::types::ContainerSummary> =
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    driver_ref
+                        .container
+                        .list(seedling_core::system::types::ContainerFilter {
+                            label_key: Some("seedling.session"),
+                            ..Default::default()
+                        })
+                        .await
+                        .unwrap_or_default()
+                })
+            });
+        if !orphan_shells.is_empty() {
+            tracing::warn!(
+                count = orphan_shells.len(),
+                "found orphaned shell-session containers from a previous run; removing"
+            );
+            let driver_ref = Arc::clone(&driver);
+            for container in &orphan_shells {
+                tracing::info!(
+                    container = %container.name,
+                    session = container.labels.get("seedling.session").map(|s| s.as_str()).unwrap_or("?"),
+                    "removing orphaned shell container"
+                );
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        let _ = driver_ref
+                            .container
+                            .remove_container(&container.name, true)
+                            .await;
+                    })
+                });
+            }
+        }
+    }
+
     // Podman-level scan for orphaned seedling pod networks.
     //
     // A network can outlive its container (e.g. podman --rm removed the
@@ -564,23 +611,34 @@ async fn main() {
             })
         });
 
+        // Collect live containers keyed by EITHER of our two seedling labels:
+        // seedling.app (reconciler-spawned Jobs and Deployments) and
+        // seedling.session (operator-opened shell sessions, including volume
+        // shells that don't carry a seedling.app label). Union the two sets
+        // so a network whose backing container is a running volume-shell
+        // isn't mistakenly considered an orphan.
         let live_containers: std::collections::HashSet<String> = {
             let driver_ref = Arc::clone(&driver);
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {
-                    driver_ref
-                        .container
-                        .list(seedling_core::system::types::ContainerFilter {
-                            label_key: Some("seedling.app"),
-                            ..Default::default()
-                        })
-                        .await
-                        .unwrap_or_default()
+                    let mut names: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
+                    for label in ["seedling.app", "seedling.session"] {
+                        let found = driver_ref
+                            .container
+                            .list(seedling_core::system::types::ContainerFilter {
+                                label_key: Some(label),
+                                ..Default::default()
+                            })
+                            .await
+                            .unwrap_or_default();
+                        for c in found {
+                            names.insert(c.name);
+                        }
+                    }
+                    names
                 })
             })
-            .into_iter()
-            .map(|c| c.name)
-            .collect()
         };
 
         let is_infra = |name: &str| {
