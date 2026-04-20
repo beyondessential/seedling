@@ -73,6 +73,8 @@ const SQL_V28: &str = include_str!("db/migrations/v28.sql");
 // r[impl secret.storage]
 // r[impl secret.history]
 const SQL_V29: &str = include_str!("db/migrations/v29.sql");
+// i[impl action.invoke.install] r[impl operation.params]
+const SQL_V30: &str = include_str!("db/migrations/v30.sql");
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -213,6 +215,11 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 29,
         sql: SQL_V29,
+        custom_run: None,
+    },
+    Migration {
+        version: 30,
+        sql: SQL_V30,
         custom_run: None,
     },
 ];
