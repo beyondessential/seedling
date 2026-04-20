@@ -40,6 +40,7 @@ import { useCallback, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { MapVolumeDialog } from "../components/MapVolumeDialog";
 import { OiErrorAlert } from "../components/OiErrorAlert";
+import { useSessionContext } from "../components/SessionProvider";
 import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
 import { useEventRefresh } from "../hooks/useEventRefresh";
@@ -934,8 +935,9 @@ function ActionsSection({
   operatingAction?: string;
   onRefresh: () => void;
 }) {
-  const navigate = useNavigate();
   const [invoking, setInvoking] = useState<AppAction | null>(null);
+  const [openingShell, setOpeningShell] = useState<AppAction | null>(null);
+  const { openShell } = useSessionContext();
 
   const canInstall = status === "not_installed" && !hasScriptError;
   const canInvoke =
@@ -983,7 +985,13 @@ function ActionsSection({
                       <Button
                         size="small"
                         variant="outlined"
-                        onClick={() => navigate(`/apps/${appName}/shell/${a.name}`)}
+                        onClick={() => {
+                          if (Object.keys(a.params).length > 0) {
+                            setOpeningShell(a);
+                          } else {
+                            openShell(appName, a.name, {});
+                          }
+                        }}
                         disabled={!canInvoke}
                       >
                         Open shell
@@ -1026,7 +1034,118 @@ function ActionsSection({
           onSuccess={onRefresh}
         />
       )}
+      {openingShell && (
+        <ShellOpenDialog
+          key={openingShell.name}
+          action={openingShell}
+          open={true}
+          onClose={() => setOpeningShell(null)}
+          onOpen={(params) => {
+            openShell(appName, openingShell.name, params);
+            setOpeningShell(null);
+          }}
+        />
+      )}
     </>
+  );
+}
+
+function ShellOpenDialog({
+  action,
+  open,
+  onClose,
+  onOpen,
+}: {
+  action: AppAction;
+  open: boolean;
+  onClose: () => void;
+  onOpen: (params: Record<string, string>) => void;
+}) {
+  const [values, setValues] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      Object.entries(action.params).map(([k, def]: [string, InstallRequirement]) => [
+        k,
+        def.default_value ?? "",
+      ]),
+    ),
+  );
+  const [showPasswords, setShowPasswords] = useState<Record<string, boolean>>({});
+
+  const toggleShow = (key: string) =>
+    setShowPasswords((s) => ({ ...s, [key]: !s[key] }));
+
+  const paramEntries = Object.entries(action.params) as [string, InstallRequirement][];
+  const hasWeakPassword = paramEntries.some(
+    ([key, def]) =>
+      def.kind === "password" &&
+      values[key] != null &&
+      !isStrongPassword(values[key]),
+  );
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle sx={{ fontFamily: "monospace", pb: 1 }}>
+        Open shell: {action.name}
+      </DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ mt: 0.5 }}>
+          {paramEntries.map(([key, def]) => {
+            const isPassword = def.kind === "password" || def.kind === "weak-password";
+            const val = values[key] ?? "";
+            const weak = def.kind === "password" && val.length > 0 && !isStrongPassword(val);
+            const helperText =
+              def.kind === "password" && val.length > 0
+                ? weak ? "Password is too weak" : (def.description ?? undefined)
+                : def.kind === "weak-password" && val.length > 0
+                  ? `Strength: ${passwordScore(val)}/4${def.description ? ` — ${def.description}` : ""}`
+                  : (def.description ?? undefined);
+            return (
+              <TextField
+                key={key}
+                label={key}
+                size="small"
+                value={val}
+                onChange={(e) => setValues((v) => ({ ...v, [key]: e.target.value }))}
+                helperText={helperText}
+                error={weak}
+                type={showPasswords[key] ? "text" : paramFieldType(def.kind)}
+                required={def.required}
+                inputProps={{ style: { fontFamily: "monospace" } }}
+                InputProps={
+                  isPassword
+                    ? {
+                        endAdornment: (
+                          <InputAdornment position="end">
+                            <Tooltip title={showPasswords[key] ? "Hide" : "Show"}>
+                              <IconButton size="small" onClick={() => toggleShow(key)} edge="end">
+                                {showPasswords[key] ? (
+                                  <VisibilityOffIcon fontSize="small" />
+                                ) : (
+                                  <VisibilityIcon fontSize="small" />
+                                )}
+                              </IconButton>
+                            </Tooltip>
+                          </InputAdornment>
+                        ),
+                      }
+                    : undefined
+                }
+              />
+            );
+          })}
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button
+          variant="contained"
+          onClick={() => onOpen(values)}
+          disabled={hasWeakPassword}
+        >
+          Open shell
+        </Button>
+      </DialogActions>
+    </Dialog>
   );
 }
 

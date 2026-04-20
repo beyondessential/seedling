@@ -7,7 +7,16 @@ import { UniRouter } from "../lib/uni-router";
 const EVENTS_CACHE_SIZE = 200;
 const SIDEBAR_STORAGE_KEY = "seedling.eventsSidebar";
 const SIDEBAR_WIDTH_STORAGE_KEY = "seedling.eventsSidebarWidth";
+const SHELLS_SIDEBAR_WIDTH_STORAGE_KEY = "seedling.shellsSidebarWidth";
 const DEFAULT_SIDEBAR_WIDTH = 340;
+const DEFAULT_SHELLS_SIDEBAR_WIDTH = 600;
+
+export interface ShellTab {
+  id: string;
+  app: string;
+  shellName: string;
+  params: Record<string, string>;
+}
 
 interface SessionCtx {
   session: Session | null;
@@ -20,6 +29,13 @@ interface SessionCtx {
   sidebarWidth: number;
   setSidebarWidth: (w: number) => void;
   uniRouter: UniRouter | null;
+  shellTabs: ShellTab[];
+  activeShellId: string | null;
+  setActiveShellId: (id: string | null) => void;
+  openShell: (app: string, shellName: string, params: Record<string, string>) => void;
+  closeShell: (id: string) => void;
+  shellsSidebarWidth: number;
+  setShellsSidebarWidth: (w: number) => void;
 }
 
 export const SessionContext = createContext<SessionCtx>({
@@ -33,11 +49,20 @@ export const SessionContext = createContext<SessionCtx>({
   sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
   setSidebarWidth: () => undefined,
   uniRouter: null,
+  shellTabs: [],
+  activeShellId: null,
+  setActiveShellId: () => undefined,
+  openShell: () => undefined,
+  closeShell: () => undefined,
+  shellsSidebarWidth: DEFAULT_SHELLS_SIDEBAR_WIDTH,
+  setShellsSidebarWidth: () => undefined,
 });
 
 export function useSessionContext() {
   return useContext(SessionContext);
 }
+
+let tabIdCounter = 0;
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
@@ -60,6 +85,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       return DEFAULT_SIDEBAR_WIDTH;
     }
   });
+  const [shellsSidebarWidth, setShellsSidebarWidthState] = useState<number>(() => {
+    try {
+      const v = parseInt(localStorage.getItem(SHELLS_SIDEBAR_WIDTH_STORAGE_KEY) ?? "", 10);
+      return isNaN(v) ? DEFAULT_SHELLS_SIDEBAR_WIDTH : Math.max(300, Math.min(v, 1200));
+    } catch {
+      return DEFAULT_SHELLS_SIDEBAR_WIDTH;
+    }
+  });
+  const [shellTabs, setShellTabs] = useState<ShellTab[]>([]);
+  const [activeShellId, setActiveShellId] = useState<string | null>(null);
   const probeRan = useRef(false);
 
   const setSidebarOpen = useCallback((open: boolean) => {
@@ -71,6 +106,31 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setSidebarWidthState(w);
     try { localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(w)); } catch { /* ignore */ }
   }, []);
+
+  const setShellsSidebarWidth = useCallback((w: number) => {
+    setShellsSidebarWidthState(w);
+    try { localStorage.setItem(SHELLS_SIDEBAR_WIDTH_STORAGE_KEY, String(w)); } catch { /* ignore */ }
+  }, []);
+
+  const openShell = useCallback((app: string, shellName: string, params: Record<string, string>) => {
+    const id = String(++tabIdCounter);
+    const tab: ShellTab = { id, app, shellName, params };
+    setShellTabs((prev) => [...prev, tab]);
+    setActiveShellId(id);
+  }, []);
+
+  const closeShell = useCallback((id: string) => {
+    setShellTabs((prev) => {
+      const next = prev.filter((t) => t.id !== id);
+      return next;
+    });
+    setActiveShellId((prev) => {
+      if (prev !== id) return prev;
+      // Activate the previous tab, or null if none left
+      const remaining = shellTabs.filter((t) => t.id !== id);
+      return remaining.length > 0 ? remaining[remaining.length - 1].id : null;
+    });
+  }, [shellTabs]);
 
   useEffect(() => {
     if (probeRan.current) return;
@@ -174,6 +234,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       session, probing, reconnecting, setSession,
       events, sidebarOpen, setSidebarOpen, sidebarWidth, setSidebarWidth,
       uniRouter,
+      shellTabs, activeShellId, setActiveShellId, openShell, closeShell,
+      shellsSidebarWidth, setShellsSidebarWidth,
     }}>
       {children}
     </SessionContext.Provider>

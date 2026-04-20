@@ -6,6 +6,7 @@ export interface OpenShellParams {
   name: string;
   rows: number;
   cols: number;
+  params?: Record<string, string>;
 }
 
 export interface OpenShellResult {
