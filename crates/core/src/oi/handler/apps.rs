@@ -175,17 +175,19 @@ fn serialize_param_schema(
 pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
     let reg = state.registry.read();
     let apps = reg.list();
-    let db = state.db.lock();
     let result: Vec<Value> = apps
         .into_iter()
         .map(|(name, base_status)| {
             let status = match reg.get(&name) {
-                Some(entry) => effective_app_status(base_status, entry, &db),
+                Some(entry) => effective_app_status(base_status, entry, &state.db),
                 None => base_status,
             };
-            let has_stopped = stopped::load_stopped(&db, &name)
-                .map(|s| !s.is_empty())
-                .unwrap_or(false);
+            let has_stopped = {
+                let db = state.db.lock();
+                stopped::load_stopped(&db, &name)
+                    .map(|s| !s.is_empty())
+                    .unwrap_or(false)
+            };
             let mut obj = json!({
                 "name": name,
                 "status": status.name(),
@@ -204,14 +206,14 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
 /// checking whether all resource instances have reached `Ready`.  All other
 /// statuses are returned unchanged.
 ///
-/// Lock ordering: this function must never hold `def.lock()` while `db` is
-/// already held by the caller (that would invert the def → db order used in
-/// `describe_app` and cause a deadlock). Collect resource IDs from `def`
-/// first, then release the lock before querying `db`.
+/// Lock ordering: acquires `def.lock()` briefly to collect resource IDs, then
+/// releases it before acquiring `db`. Callers must NOT hold `db` when calling
+/// this function — that would invert the canonical `def → db` ordering and
+/// cause a deadlock.
 pub(crate) fn effective_app_status(
     base: AppStatus,
     entry: &AppEntry,
-    db: &crate::runtime::db::Db,
+    db: &parking_lot::Mutex<crate::runtime::db::Db>,
 ) -> AppStatus {
     if !matches!(base, AppStatus::Running) {
         return base;
@@ -220,25 +222,28 @@ pub(crate) fn effective_app_status(
     let app_name = &entry.name;
 
     // Collect resource IDs with a brief def lock, then release before touching db.
-    let resource_ids: Vec<(ResourceKind, std::sync::Arc<String>)> = {
+    let resource_ids: Vec<(ResourceKind, Arc<String>)> = {
         let def = entry.app.def.lock();
         def.resources
             .keys()
-            .map(|id| (id.kind, std::sync::Arc::clone(&id.name)))
+            .map(|id| (id.kind, Arc::clone(&id.name)))
             .collect()
     };
 
-    let has_faults = faults::has_active_faults(db, app_name).unwrap_or(false);
+    // Acquire db only after def is released to maintain def → db ordering.
+    let db = db.lock();
+
+    let has_faults = faults::has_active_faults(&db, app_name).unwrap_or(false);
 
     let all_ready = resource_ids.iter().all(|(kind, name)| {
         let instances =
-            find_instances_for_group(db, app_name, *kind, Some(name.as_str())).unwrap_or_default();
+            find_instances_for_group(&db, app_name, *kind, Some(name.as_str())).unwrap_or_default();
         if instances.is_empty() {
             return false;
         }
         let mut has_ready = false;
         for inst in &instances {
-            let obs = query_observations(db, inst).unwrap_or_default();
+            let obs = query_observations(&db, inst).unwrap_or_default();
             let state = derive_lifecycle_state(inst, &obs);
             if state == LifecycleState::Ready {
                 has_ready = true;
@@ -276,7 +281,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     let generation = entry.current_generation;
 
     let base_status = reg.status_of(name).unwrap();
-    let status = effective_app_status(base_status, entry, &state.db.lock());
+    let status = effective_app_status(base_status, entry, &state.db);
 
     // Load stored param values from DB. Names come from AppDef; values come
     // from the params table. Params declared by the script but never set by
@@ -311,8 +316,6 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         .collect();
 
     // i[impl resource.stop.status]
-    // Load stopped set before acquiring def.lock() to avoid lock-order inversion
-    // (effective_app_status holds db then acquires def; we must not hold def then acquire db).
     let stopped_set = {
         let db = state.db.lock();
         stopped::load_stopped(&db, name).unwrap_or_default()
