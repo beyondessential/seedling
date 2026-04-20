@@ -1433,6 +1433,31 @@ pub(crate) fn update_app(
         }
     }
 
+    // r[impl actuate.volume.hold]
+    // Capture the set of named non-tmpfs volumes in the current AppDef before
+    // the reload swaps it out. After reload we diff against the new set to
+    // find volumes that were removed from the script and hold their on-disk
+    // data for operator review — without this, the reconciler would simply
+    // stop iterating over the removed resource on its next tick and the
+    // data would sit unreferenced in /opt/seedling/volumes forever.
+    let previous_named_volumes: Vec<String> = {
+        let reg = state.registry.read();
+        reg.get(name)
+            .map(|entry| {
+                let def = entry.app.def.load();
+                def.resources
+                    .iter()
+                    .filter_map(|(id, resource)| match resource {
+                        Resource::Volume(v) if !v.def.lock().tmpfs => {
+                            Some(id.name.as_str().to_owned())
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
     // Reload script and apply to in-memory AppDef immediately.
     let name_owned = name.to_owned();
     let cipher = std::sync::Arc::clone(&state.cipher);
@@ -1445,6 +1470,94 @@ pub(crate) fn update_app(
         &loaded_params,
         &state.script_limits,
     );
+
+    // r[impl actuate.volume.hold]
+    // Diff previous vs current volume resources and hold anything the new
+    // script dropped. Runs synchronously with the update so there's no
+    // window where the operator sees the old volume as gone but the on-disk
+    // data hasn't been relocated yet.
+    {
+        let current_named_volumes: std::collections::HashSet<String> = {
+            let reg = state.registry.read();
+            reg.get(name)
+                .map(|entry| {
+                    let def = entry.app.def.load();
+                    def.resources
+                        .iter()
+                        .filter_map(|(id, resource)| match resource {
+                            Resource::Volume(v) if !v.def.lock().tmpfs => {
+                                Some(id.name.as_str().to_owned())
+                            }
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let removed_volumes: Vec<String> = previous_named_volumes
+            .into_iter()
+            .filter(|n| !current_named_volumes.contains(n))
+            .collect();
+        if !removed_volumes.is_empty() {
+            let vol_store = &state.driver.volume_store;
+            for vol_name in &removed_volumes {
+                // The on-disk name follows the same format the actuator uses
+                // when creating: "<app>-<volume-name>". Ignore NotFound so a
+                // rename/reload of an app that never had data for this
+                // volume (e.g. a brand-new declaration that got immediately
+                // withdrawn) doesn't turn into a user-visible error.
+                let display_name = format!("{name}-{vol_name}");
+                match tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(
+                        vol_store.hold(&display_name, name, "removed from app definition"),
+                    )
+                }) {
+                    Ok(meta) => {
+                        tracing::info!(
+                            app = %name,
+                            volume = %vol_name,
+                            held_id = %meta.id,
+                            "held volume removed from app definition"
+                        );
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        // No on-disk data; nothing to hold. Fall through to
+                        // delete the instance row.
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            app = %name,
+                            volume = %vol_name,
+                            "failed to hold removed volume: {e}"
+                        );
+                    }
+                }
+                // Drop the instance row(s) so the registry matches the new
+                // AppDef. find_all_instances looks up by (app, kind, name);
+                // we iterate the result and delete each.
+                let name_owned = name.to_owned();
+                let vol_name_owned = vol_name.clone();
+                state.db.call(move |db| {
+                    let instances = crate::runtime::history::find_instances_for_group(
+                        db,
+                        &name_owned,
+                        crate::defs::resource::ResourceKind::Volume,
+                        Some(&vol_name_owned),
+                    )
+                    .unwrap_or_default();
+                    for inst in instances {
+                        if let Err(e) = crate::runtime::history::delete_instance(db, inst.id) {
+                            tracing::warn!(
+                                app = %name_owned,
+                                instance = %inst.display_name,
+                                "failed to delete instance row for held volume: {e}"
+                            );
+                        }
+                    }
+                });
+            }
+        }
+    }
     {
         let reg = state.registry.read();
         if let Some(entry) = reg.get(name) {
