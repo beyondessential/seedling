@@ -29,7 +29,7 @@ pub(crate) struct RevokeKeyParams {
 pub(crate) fn list_keys(state: &OiState) -> HandlerResult {
     let rows = state
         .db
-        .call(|db| crate::oi::auth::list_keys(db))
+        .call(crate::oi::auth::list_keys)
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
     let result: Vec<serde_json::Value> = rows
         .into_iter()

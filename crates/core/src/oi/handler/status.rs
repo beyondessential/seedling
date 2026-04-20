@@ -8,11 +8,10 @@ use super::HandlerResult;
 
 async fn component_status(state: &Arc<OiState>, containers: &[&str]) -> &'static str {
     for name in containers {
-        if let Ok(Some(s)) = state.container_runtime.inspect(name).await {
-            if matches!(s.status, ContainerStatus::Running) {
+        if let Ok(Some(s)) = state.container_runtime.inspect(name).await
+            && matches!(s.status, ContainerStatus::Running) {
                 return "running";
             }
-        }
     }
     "stopped"
 }

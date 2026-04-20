@@ -116,7 +116,7 @@ pub(crate) fn deregister_backup_app(
 
 // i[impl backup.app.list]
 pub(crate) fn list_backup_apps(state: &OiState) -> HandlerResult {
-    let apps = state.db.call(|db| backup_apps::list_all(db)).map_err(|e| {
+    let apps = state.db.call(backup_apps::list_all).map_err(|e| {
         OiError::new(
             ErrorCode::Internal,
             format!("failed to list backup apps: {e}"),
@@ -187,7 +187,7 @@ pub(crate) fn show_strategy(state: &OiState, params: StrategyNameParams) -> Hand
 pub(crate) fn list_strategies(state: &OiState) -> HandlerResult {
     let strategies = state
         .db
-        .call(|db| backup_strategies::list_all(db))
+        .call(backup_strategies::list_all)
         .map_err(|e| {
             OiError::new(
                 ErrorCode::Internal,

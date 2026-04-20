@@ -327,7 +327,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         if let Err(e) = run_result {
             return OperationResult::Failed(e);
         }
-        check_idempotent(&*fresh_app.def.load(), &*app.def.load());
+        check_idempotent(&fresh_app.def.load(), &app.def.load());
 
         let (closure, is_install, is_shell) = if action_name == "install" {
             if let Some(c) = captured.install {

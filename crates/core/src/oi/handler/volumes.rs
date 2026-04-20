@@ -168,7 +168,7 @@ pub(crate) fn list_site_volumes(state: &OiState) -> HandlerResult {
 
     let volumes = state
         .db
-        .call(|db| crate::runtime::site_volumes::list(db))
+        .call(crate::runtime::site_volumes::list)
         .map_err(|e| {
             OiError::new(
                 ErrorCode::Internal,

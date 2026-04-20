@@ -434,15 +434,14 @@ fn migrate_newly_secret_params(
 ) {
     let def = app.def.load();
     for (param_name, param_def) in &def.params {
-        if param_def.is_secret() {
-            if let Err(e) = secret_params::migrate_to_secret(db, cipher, app_name, param_name) {
+        if param_def.is_secret()
+            && let Err(e) = secret_params::migrate_to_secret(db, cipher, app_name, param_name) {
                 tracing::warn!(
                     app = %app_name,
                     param = %param_name,
                     "failed to migrate param to secret storage: {e}"
                 );
             }
-        }
     }
 }
 

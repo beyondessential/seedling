@@ -367,7 +367,7 @@ async fn main() {
     // ---------------------------------------------------------------------------
 
     let persisted_operation = db
-        .call(|db| seedling_core::runtime::history::load_current_operation(db))
+        .call(seedling_core::runtime::history::load_current_operation)
         .unwrap_or_else(|e| {
             tracing::warn!("failed to load current_operation on startup: {e}");
             None
@@ -391,7 +391,7 @@ async fn main() {
         .as_ref()
         .map(|op| op.operation_id.0.clone());
     {
-        let records = db.call(|db| seedling_core::runtime::desired::list_dynamic_resources(db));
+        let records = db.call(seedling_core::runtime::desired::list_dynamic_resources);
         // Keep resources that belong to the operation we're about to replay;
         // the replay will take ownership of them. Everything else from a
         // prior run gets cleaned up here.

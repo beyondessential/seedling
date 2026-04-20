@@ -19,7 +19,7 @@ pub(crate) struct RegistryParams {
 pub(crate) fn list_registries(state: &OiState) -> HandlerResult {
     let registries = state
         .db
-        .call(|db| registries::list_allowed_registries(db))
+        .call(registries::list_allowed_registries)
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
     Ok(json!({ "registries": registries }))
 }

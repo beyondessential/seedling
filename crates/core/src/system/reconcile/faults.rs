@@ -89,8 +89,8 @@ impl Reconciler {
                     .unwrap_or_default()
                     .iter()
                     .any(|f| f.kind == "image_pull_failed" && f.description == desc);
-                if !already_filed {
-                    if let Err(e) = faults::file_fault(
+                if !already_filed
+                    && let Err(e) = faults::file_fault(
                         db,
                         &app,
                         Some(&kind_str),
@@ -101,7 +101,6 @@ impl Reconciler {
                     ) {
                         tracing::warn!(app = %app, instance = %inst_hex, "failed to file image-pull fault: {e}");
                     }
-                }
             }
             for reference in &image_pull_successes {
                 let desc = format!("failed to pull image: {reference}");
@@ -122,8 +121,8 @@ impl Reconciler {
     // r[fault.container-start]
     pub(super) fn file_unit_failure_faults(&self, app: &str, update: &pods::PodActuationUpdate) {
         let app = app.to_owned();
-        let unit_failures: Vec<ResourceInstance> = update.unit_failures.iter().cloned().collect();
-        let unit_healthy: Vec<ResourceInstance> = update.unit_healthy.iter().cloned().collect();
+        let unit_failures: Vec<ResourceInstance> = update.unit_failures.to_vec();
+        let unit_healthy: Vec<ResourceInstance> = update.unit_healthy.to_vec();
         self.db.call(move |db| {
             for instance in &unit_failures {
                 let inst_hex = instance.id.to_hex();
@@ -188,7 +187,7 @@ impl Reconciler {
             .iter()
             .map(|(inst, name)| (inst.clone(), name.clone()))
             .collect();
-        let unit_healthy: Vec<ResourceInstance> = update.unit_healthy.iter().cloned().collect();
+        let unit_healthy: Vec<ResourceInstance> = update.unit_healthy.to_vec();
         self.db.call(move |db| {
             for (instance, vol_name) in &external_volume_failures {
                 let inst_hex = instance.id.to_hex();
@@ -331,7 +330,7 @@ impl Reconciler {
     ) {
         let app = app.to_owned();
         let registry_failures: Vec<ResourceInstance> =
-            update.registry_failures.iter().cloned().collect();
+            update.registry_failures.to_vec();
         let image_pull_successes: Vec<ResourceInstance> = update
             .image_pull_successes
             .iter()
