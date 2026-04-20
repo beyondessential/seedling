@@ -159,14 +159,16 @@ let kopia_job = || {
 
 // ── Install ───────────────────────────────────────────────────────────────────
 
-// Creates the Kopia repository in S3 and applies the initial global policy.
-// After this runs, the state volume holds the repository config that every
-// other action reads.
+// Connects to the Kopia repository in S3, creating it if it does not yet
+// exist, and applies the global policy.  After this runs, the state volume
+// holds the repository config that every other action reads.  Safe to
+// re-run: the create step is skipped when a repository is already present.
 app.on_install(|rt, _param| {
     rt.start(kopia_job.call()
         .command(["sh", "-c",
-            "kopia repository create s3" + s3_args_sh.call() +
-            " && " + policy_sh.call()
+            "{ kopia repository connect s3" + s3_args_sh.call() +
+            " || kopia repository create s3" + s3_args_sh.call() +
+            "; } && " + policy_sh.call()
         ])
     ).terminated().ensure_success();
 }, #{});
