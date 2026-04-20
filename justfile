@@ -23,6 +23,7 @@ watch-build:
 
 # Watch the built binary and restart the daemon on changes (requires sudo)
 watch-run:
+    rm seedling.log
     watchexec -IrW target/debug --ignore-nothing -f seedling \
         -E SSLKEYLOGFILE=/tmp/seedling.keylog \
         'sudo --preserve-env=SEEDLING_LOG --preserve-env=SSLKEYLOGFILE \
