@@ -30,9 +30,9 @@ fn emit_filed(record: &FaultRecord) {
     }
 }
 
-fn emit_cleared(id: &str, app: &str) {
+fn emit_cleared(id: &str, app: &str, kind: &str) {
     if let Some(tx) = EVENT_TX.get() {
-        tx.fault_cleared(id, app);
+        tx.fault_cleared(id, app, kind);
     }
 }
 
@@ -85,15 +85,29 @@ pub fn file_fault(
 }
 
 /// Clear a single fault by ID. The `app` is needed for the event broadcast;
-/// pass it from the context that looked up the fault record.
+/// pass it from the context that looked up the fault record. The fault's
+/// kind is read in the same statement and included in the emitted
+/// `FaultCleared` event so clients can render a meaningful summary without
+/// having to remember every fault ID they saw.
 pub fn clear_fault(db: &crate::runtime::db::Db, fault_id: &str, app: &str) -> rusqlite::Result<()> {
     let now = Timestamp::now();
+    // Read the kind before the UPDATE — after clearing, the row is no longer
+    // "active" but still exists, so this also works post-clear, but reading
+    // up-front keeps the happy path to a single pair of statements.
+    let kind: Option<String> = db
+        .conn
+        .query_row(
+            "SELECT kind FROM faults WHERE id = ?1",
+            [fault_id],
+            |row| row.get(0),
+        )
+        .ok();
     let changed = db.conn.execute(
         "UPDATE faults SET cleared_at = ?1 WHERE id = ?2 AND cleared_at IS NULL",
         rusqlite::params![now.to_string(), fault_id],
     )?;
     if changed > 0 {
-        emit_cleared(fault_id, app);
+        emit_cleared(fault_id, app, kind.as_deref().unwrap_or(""));
     }
     Ok(())
 }

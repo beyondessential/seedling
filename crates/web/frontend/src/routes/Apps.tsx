@@ -29,7 +29,7 @@ import { statusColor, statusLabel } from "../lib/status";
 import type { Actor, AppSummary, ConnectedClients, SeedlingEvent } from "../lib/types";
 
 const APP_LIST_EVENTS: Set<string> = new Set([
-  "AppRegistered", "AppDeregistered", "AppUpdated",
+  "AppRegistered", "AppDeregistered", "AppUpdated", "AppPhaseChanged",
   "OperationStarted", "OperationCompleted", "OperationFailed",
   "FaultFiled", "FaultCleared", "ResourceStopped", "ResourceUnstopped",
 ]);

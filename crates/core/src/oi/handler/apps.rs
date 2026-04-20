@@ -1353,6 +1353,11 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
         }
     });
 
+    // i[impl event.types]
+    // Notify clients the app entered Uninstalling. The reconciler will emit a
+    // second AppPhaseChanged(not_installed) once teardown completes.
+    state.event_tx.app_phase_changed(name, "uninstalling", None);
+
     // Wake the reconciler so it starts cleanup immediately.
     {
         let reg = state.registry.read();

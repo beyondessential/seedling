@@ -972,6 +972,9 @@ fn revert_install_and_fault(state: &Arc<OiState>, app_name: &str) {
                 "install was interrupted by a runtime restart and could not be replayed",
             );
         });
+        state
+            .event_tx
+            .app_phase_changed(app_name, "not_installed", None);
     } else {
         state.db.call(|db| {
             let _ = clear_current_operation(db);

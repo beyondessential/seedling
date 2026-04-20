@@ -1354,7 +1354,8 @@ function AppRemovalDialog({
 }
 
 const APP_DETAIL_EVENTS: Set<string> = new Set([
-  "AppUpdated", "OperationStarted", "OperationCompleted", "OperationFailed",
+  "AppUpdated", "AppPhaseChanged",
+  "OperationStarted", "OperationCompleted", "OperationFailed",
   "ParamSet", "ParamUnset", "ResourceStateChanged", "FaultFiled", "FaultCleared",
   "ScaleChanged", "DeploymentRestarted", "ResourceStopped", "ResourceUnstopped",
 ]);
@@ -1617,26 +1618,40 @@ export default function AppDetail() {
             <InstallingSection appName={name!} faults={data.faults} />
           ) : (
             <>
-              <Section title="Actions">
-                <ActionsSection
-                  appName={name!}
-                  actions={data.actions}
-                  status={data.status}
-                  hasScriptError={data.faults.some((f) => f.kind === "script_error")}
-                  operatingAction={data.current_operation?.action_name}
-                  onRefresh={refetch}
-                />
-              </Section>
+              {data.status === "uninstalling" && (
+                <Alert severity="info" icon={<CircularProgress size={16} />}>
+                  Uninstalling — tearing down resources. The app will reappear
+                  as not-installed once teardown completes.
+                </Alert>
+              )}
+              <Box
+                sx={{
+                  opacity: data.status === "uninstalling" ? 0.5 : 1,
+                  pointerEvents: data.status === "uninstalling" ? "none" : "auto",
+                  transition: "opacity 0.15s",
+                }}
+              >
+                <Section title="Actions">
+                  <ActionsSection
+                    appName={name!}
+                    actions={data.actions}
+                    status={data.status}
+                    hasScriptError={data.faults.some((f) => f.kind === "script_error")}
+                    operatingAction={data.current_operation?.action_name}
+                    onRefresh={refetch}
+                  />
+                </Section>
 
-              <Divider />
+                <Divider sx={{ my: 3 }} />
 
-              <Section title="Resources">
-                <ResourcesSection
-                  appName={name!}
-                  resources={data.resources}
-                  onRefresh={refetch}
-                />
-              </Section>
+                <Section title="Resources">
+                  <ResourcesSection
+                    appName={name!}
+                    resources={data.resources}
+                    onRefresh={refetch}
+                  />
+                </Section>
+              </Box>
             </>
           )}
         </Stack>

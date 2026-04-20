@@ -729,6 +729,12 @@ impl Reconciler {
                             warn!(app = %app_name_owned, "failed to clean up resource instances during uninstall: {e}");
                         }
                     });
+                    // i[impl event.types]
+                    // Uninstall is reconciler-driven and therefore emits no
+                    // OperationCompleted event; this phase change is the only
+                    // signal the UI gets that teardown has finished.
+                    self.event_tx
+                        .app_phase_changed(&app.name, "not_installed", None);
                     let app_instance_ids: HashSet<InstanceId> = app
                         .desired
                         .resources

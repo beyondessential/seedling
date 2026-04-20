@@ -654,13 +654,14 @@ Absent specification bugs, anything that is not defined here is either defined i
 > | `AppRegistered` | `app`, `generation` |
 > | `AppDeregistered` | `app` |
 > | `AppUpdated` | `app`, `generation`, `previous_generation` |
+> | `AppPhaseChanged` | `app`, `phase` |
 > | `ParamSet` | `app`, `name`, `previous_value`, `new_value`, `generation`, `previous_generation` |
 > | `ParamUnset` | `app`, `name`, `previous_value`, `generation`, `previous_generation` |
 > | `OperationStarted` | `app`, `action_name`, `operation_id`, `source_generation`, `target_generation`, `trigger` |
 > | `OperationCompleted` | `app`, `action_name`, `operation_id`, `source_generation`, `target_generation` |
 > | `OperationFailed` | `app`, `action_name`, `operation_id`, `source_generation`, `target_generation`, `error` |
 > | `FaultFiled` | all fault record fields |
-> | `FaultCleared` | `id`, `app` |
+> | `FaultCleared` | `id`, `app`, `kind` |
 > | `ResourceStateChanged` | `app`, `resource_type`, `resource_name`, `instance_id`, `state` |
 > | `ShellStarted` | `session_id`, `app`, `name` |
 > | `ShellExited` | `session_id`, `exit_code` |

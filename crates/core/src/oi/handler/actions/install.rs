@@ -194,6 +194,10 @@ pub(crate) fn invoke_install(
                     .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db persist: {e}")))?;
             }
         }
+        // i[impl event.types]
+        state
+            .event_tx
+            .app_phase_changed(app_name, "installed", None);
         state.tick_notify.notify_one();
         tracing::info!(app = %app_name, schedule = "accepted", "invoke_install (immediate)");
         return Ok(json!({ "schedule": "accepted" }));

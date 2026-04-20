@@ -33,6 +33,19 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
+    // i[impl event.types]
+    /// Emitted on every transition of `AppPhase`. Phase is one of
+    /// `"not_installed"`, `"installing"`, `"installed"`, `"uninstalling"`.
+    /// The WebUI relies on this to refresh after uninstall completes,
+    /// because uninstall is not driven by a BSL operation and therefore
+    /// does not emit OperationStarted/OperationCompleted.
+    AppPhaseChanged {
+        timestamp: Timestamp,
+        app: String,
+        phase: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
     // r[impl audit.log.generations]
     // i[impl param.store.secret]
     ParamSet {
@@ -117,6 +130,10 @@ pub enum OiEvent {
         timestamp: Timestamp,
         id: String,
         app: String,
+        /// Kind of the fault that was cleared. Mirrors
+        /// [`FaultFiled::kind`] so UIs can render a useful summary without
+        /// having to remember every fault ID they saw.
+        kind: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
@@ -268,6 +285,17 @@ impl EventSender {
         });
     }
 
+    /// Emit `AppPhaseChanged`. `phase` is the lowercase snake-case phase name
+    /// matching [`crate::events::OiEvent::AppPhaseChanged::phase`].
+    pub fn app_phase_changed(&self, app: &str, phase: &str, actor: Option<Arc<Actor>>) {
+        self.emit(OiEvent::AppPhaseChanged {
+            timestamp: now(),
+            app: app.to_owned(),
+            phase: phase.to_owned(),
+            actor,
+        });
+    }
+
     /// Build a context for scale-change events.
     /// Captures the deployment identity and bounds; call `.changed(new, prev)` to emit.
     pub fn scale(
@@ -315,11 +343,12 @@ impl EventSender {
         });
     }
 
-    pub fn fault_cleared(&self, id: &str, app: &str) {
+    pub fn fault_cleared(&self, id: &str, app: &str, kind: &str) {
         self.emit(OiEvent::FaultCleared {
             timestamp: now(),
             id: id.to_owned(),
             app: app.to_owned(),
+            kind: kind.to_owned(),
             actor: None,
         });
     }
@@ -503,6 +532,11 @@ impl EventSenderWithActor {
             previous_generation,
             Some(Arc::clone(&self.actor)),
         );
+    }
+
+    pub fn app_phase_changed(&self, app: &str, phase: &str) {
+        self.inner
+            .app_phase_changed(app, phase, Some(Arc::clone(&self.actor)));
     }
 
     pub fn scale(

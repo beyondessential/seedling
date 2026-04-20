@@ -165,6 +165,8 @@ export interface SeedlingEvent {
   // AppRegistered / AppUpdated
   generation?: number;
   previous_generation?: number;
+  // AppPhaseChanged
+  phase?: string;
   // ParamSet / ParamUnset
   name?: string;
   // OperationStarted / OperationCompleted / OperationFailed

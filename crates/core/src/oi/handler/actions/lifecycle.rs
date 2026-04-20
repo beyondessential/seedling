@@ -305,8 +305,10 @@ async fn cleanup_dynamic_resources(
 /// registry write lock across the db call: the schedule ticker holds db then
 /// acquires registry.read(), so registry.write() + db.lock() in either order
 /// deadlocks with it.
+// i[impl event.types]
 fn set_phase_and_persist(state: &OiState, app_name: &str, new_phase: AppPhase) {
     use crate::oi::handler::apps::{extract_persist_fields, persist_app_fields};
+    let phase_str = phase_event_name(&new_phase);
     {
         let mut reg = state.registry.write();
         if let Some(entry) = reg.get_mut(app_name) {
@@ -332,7 +334,17 @@ fn set_phase_and_persist(state: &OiState, app_name: &str, new_phase: AppPhase) {
             }
         }
     }
+    state.event_tx.app_phase_changed(app_name, phase_str, None);
     state.tick_notify.notify_one();
+}
+
+fn phase_event_name(phase: &AppPhase) -> &'static str {
+    match phase {
+        AppPhase::NotInstalled => "not_installed",
+        AppPhase::Installing => "installing",
+        AppPhase::Installed => "installed",
+        AppPhase::Uninstalling => "uninstalling",
+    }
 }
 
 // i[impl action.invoke.install]
