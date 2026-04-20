@@ -2,11 +2,13 @@ use std::net::Ipv6Addr;
 
 use ipnet::{Ipv4Net, Ipv6Net};
 
+pub use forwarder::spawn_dns_forwarder;
 pub use startup::{
     ResolverAddrs, ResolverStartupError, ensure_resolver_running, teardown_resolver,
 };
 
 mod config;
+mod forwarder;
 mod startup;
 
 /// Derives the resolver network /64 prefix from the node prefix.
@@ -32,6 +34,20 @@ pub fn resolver_addr(node_prefix: &Ipv6Net) -> Ipv6Addr {
     addr[..6].copy_from_slice(&bytes[..6]);
     addr[6] = 0xfd;
     addr[15] = 53;
+    Ipv6Addr::from(addr)
+}
+
+/// Returns the host-side bridge gateway IPv6 address of the resolver
+/// network (`<prefix>:fd00::1`). Netavark assigns this address when the
+/// resolver bridge is created; it is the address containers reach when
+/// sending to their default gateway, and — on the host side — the
+/// address the in-process DNS forwarder binds to.
+pub fn resolver_gateway_addr(node_prefix: &Ipv6Net) -> Ipv6Addr {
+    let bytes = node_prefix.network().octets();
+    let mut addr = [0u8; 16];
+    addr[..6].copy_from_slice(&bytes[..6]);
+    addr[6] = 0xfd;
+    addr[15] = 1;
     Ipv6Addr::from(addr)
 }
 

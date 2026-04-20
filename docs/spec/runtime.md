@@ -887,10 +887,19 @@ Absent specification bugs, anything that is not defined here is either defined i
 > workloads remain.
 
 > r[infra.resolver.config]
-> The runtime must generate a resolver configuration that always includes forwarding to the
-> host's upstream resolvers and response caching. When [NAT64 is active](#r--infra.nat64.mode),
-> the configuration must additionally enable DNS64 synthesis of AAAA records under the
-> well-known prefix `64:ff9b::/96`.
+> The runtime must generate a resolver configuration that forwards all queries to the
+> configured upstreams (see [infra.resolver.upstreams](#r--infra.resolver.upstreams)) and
+> caches responses. When [NAT64 is active](#r--infra.nat64.mode), the configuration must
+> additionally enable DNS64 synthesis of AAAA records under the well-known prefix
+> `64:ff9b::/96`.
+
+> r[infra.resolver.upstreams]
+> The runtime must accept a command-line argument that specifies an explicit list of
+> upstream DNS servers (`host:port` addresses) for the resolver to forward to. When the
+> argument is unset, the runtime must arrange for the resolver to forward to the host's
+> system DNS (so containers inherit the host's split-DNS and search-domain configuration);
+> this arrangement must work even when the host system DNS listens only on loopback
+> addresses unreachable from inside the resolver container.
 
 > r[infra.resolver.address]
 > The resolver must listen on a stable node-wide IPv6 address derived from the node prefix,

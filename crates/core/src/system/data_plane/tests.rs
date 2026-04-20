@@ -6,8 +6,8 @@ use crate::system::types::{ForwardProto, IngressRule};
 
 use super::nft::{
     ct_state_established_related_accept, ct_status_dnat_accept, dnat_lb,
-    drop_unsolicited_inbound_stmts, ingress_rule_stmts, output_ingress_rule_stmts,
-    seedling_forward_stmts,
+    drop_unsolicited_inbound_stmts, ingress_rule_stmts, loopback_masquerade_stmts,
+    output_ingress_rule_stmts, seedling_forward_stmts,
 };
 
 fn test_rule(port: u16, proto: ForwardProto) -> IngressRule {
@@ -287,4 +287,22 @@ fn seedling_forward_stmts_json() {
         json.contains("\"accept\""),
         "must contain accept, got: {json}"
     );
+}
+
+#[test]
+fn loopback_masquerade_scoped_to_dnat_connections() {
+    let stmts_list = loopback_masquerade_stmts();
+    assert_eq!(stmts_list.len(), 2, "one rule per address family");
+    for stmts in &stmts_list {
+        let json = serde_json::to_string(stmts).expect("serialize");
+        assert!(
+            json.contains("\"masquerade\""),
+            "rule must masquerade, got: {json}"
+        );
+        assert!(
+            json.contains("\"ct\"") && json.contains("\"status\"") && json.contains("\"dnat\""),
+            "rule must be gated on ct status dnat so plain loopback traffic \
+             (e.g. DNS to 127.0.0.53) is not masqueraded, got: {json}"
+        );
+    }
 }

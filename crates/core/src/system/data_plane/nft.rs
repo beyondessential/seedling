@@ -365,24 +365,31 @@ pub(super) fn dnat_lb(backends: &[(Ipv6Addr, u16)]) -> Statement<'static> {
 /// causes Caddy to respond to its own loopback — the reply never leaves
 /// the container. MASQUERADE rewrites the source to the bridge gateway IP
 /// so the response comes back through the bridge and conntrack reverses it.
+///
+/// Scoped to `ct status & dnat == dnat` so it only fires on connections
+/// that actually hit a DNAT rule. Without this guard the masquerade also
+/// caught plain loopback traffic (e.g. DNS queries to 127.0.0.53), whose
+/// rewritten source then got dropped by systemd-resolved's BPF filter.
 pub(super) fn loopback_masquerade_stmts() -> Vec<Vec<Statement<'static>>> {
     vec![
-        // IPv4: src 127.0.0.0/8 → masquerade
+        // IPv4: src 127.0.0.0/8, connection was DNAT'd → masquerade
         vec![
             match_nfproto(NFPROTO_IPV4),
             match_eq(
                 payload_expr("ip", "saddr"),
                 prefix_expr("127.0.0.0".to_owned(), 8),
             ),
+            match_ct_status_dnat(),
             Statement::Masquerade(None),
         ],
-        // IPv6: src ::1/128 → masquerade
+        // IPv6: src ::1, connection was DNAT'd → masquerade
         vec![
             match_nfproto(NFPROTO_IPV6),
             match_eq(
                 payload_expr("ip6", "saddr"),
                 Expression::String(Cow::Borrowed("::1")),
             ),
+            match_ct_status_dnat(),
             Statement::Masquerade(None),
         ],
     ]
@@ -409,24 +416,27 @@ pub(super) fn ct_state_established_related_accept() -> Vec<Statement<'static>> {
     ]
 }
 
-// r[impl infra.dataplane.forward-policy]
-pub(super) fn ct_status_dnat_accept() -> Vec<Statement<'static>> {
+/// Produces `ct status & dnat == dnat` — matches packets belonging to
+/// connections that had a DNAT rule applied.
+pub(super) fn match_ct_status_dnat() -> Statement<'static> {
     let ct_expr = Expression::Named(NamedExpression::CT(CT {
         key: Cow::Borrowed("status"),
         family: None,
         dir: None,
     }));
-    vec![
-        Statement::Match(Match {
-            left: Expression::BinaryOperation(Box::new(BinaryOperation::AND(
-                ct_expr,
-                Expression::String(Cow::Borrowed("dnat")),
-            ))),
-            right: Expression::String(Cow::Borrowed("dnat")),
-            op: Operator::EQ,
-        }),
-        Statement::Accept(None),
-    ]
+    Statement::Match(Match {
+        left: Expression::BinaryOperation(Box::new(BinaryOperation::AND(
+            ct_expr,
+            Expression::String(Cow::Borrowed("dnat")),
+        ))),
+        right: Expression::String(Cow::Borrowed("dnat")),
+        op: Operator::EQ,
+    })
+}
+
+// r[impl infra.dataplane.forward-policy]
+pub(super) fn ct_status_dnat_accept() -> Vec<Statement<'static>> {
+    vec![match_ct_status_dnat(), Statement::Accept(None)]
 }
 
 // r[impl infra.dataplane.forward-policy]

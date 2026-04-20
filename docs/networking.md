@@ -176,13 +176,20 @@ leaves the container.
 
 A `postrouting` chain with masquerade rules fixes this:
 
-    meta nfproto ipv4 ip saddr 127.0.0.0/8 masquerade
-    meta nfproto ipv6 ip6 saddr ::1 masquerade
+    meta nfproto ipv4 ip saddr 127.0.0.0/8 ct status & dnat == dnat masquerade
+    meta nfproto ipv6 ip6 saddr ::1 ct status & dnat == dnat masquerade
 
 MASQUERADE rewrites the source to the bridge gateway IP so the
 response goes back through the bridge. Conntrack reverses both the
 SNAT and DNAT on the return path, delivering the response to the
 original caller with the expected loopback source address.
+
+The `ct status & dnat == dnat` guard scopes the masquerade to
+connections that actually hit a DNAT rule. Without it, the rule also
+catches plain loopback traffic like DNS queries to `127.0.0.53`: the
+rewritten source (the host's LAN address) is then silently dropped by
+systemd-resolved's BPF filter, which only accepts loopback-sourced
+queries on the primary stub.
 
 ### HTTP ingress
 

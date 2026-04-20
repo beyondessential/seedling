@@ -160,6 +160,11 @@ pub struct Reconciler {
     rolling_updates: HashSet<(String, String)>,
     /// Whether seedling is providing its own NAT64 translator.
     nat64_active: bool,
+    /// Upstream DNS servers CoreDNS forwards to. When `--dns-upstreams`
+    /// is set, these are the operator-supplied servers; otherwise it's
+    /// a single entry pointing at seedling's in-process forwarder on
+    /// the resolver-bridge gateway.
+    dns_upstreams: Vec<std::net::SocketAddr>,
     /// The resolver container's IPv6 address (set after resolver startup).
     resolver_addr: Option<Ipv6Addr>,
     /// Host-filesystem path of the Caddy data volume. Resolved lazily on the
@@ -187,6 +192,7 @@ impl Reconciler {
         app_registry: Arc<RwLock<AppRegistry>>,
         event_tx: EventSender,
         dns_servers: Vec<Ipv6Addr>,
+        dns_upstreams: Vec<std::net::SocketAddr>,
         nat64_active: bool,
         shells: Arc<ShellRegistry>,
     ) -> Self {
@@ -216,6 +222,7 @@ impl Reconciler {
             prev_states: BTreeMap::new(),
             rolling_updates: HashSet::new(),
             nat64_active,
+            dns_upstreams,
             resolver_addr: None,
             shells,
             caddy_data_path: tokio::sync::OnceCell::new(),
@@ -400,6 +407,7 @@ impl Reconciler {
                     &*self.driver.process,
                     &self.node_prefix,
                     &self.data_dir,
+                    &self.dns_upstreams,
                     self.nat64_active,
                 ),
             ),

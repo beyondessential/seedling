@@ -22,7 +22,7 @@ const TWO_MINUTES = 120;
 
 let version = app.param("version")
     .required(false)
-    .default_value("0.22.3")
+    .default_value("0.22")
     .description("Kopia image tag (docker.io/kopia/kopia:<tag>)");
 
 let image = || `docker.io/kopia/kopia:${if version.is_set() { version.value() } else { "latest" }}`;
@@ -112,9 +112,6 @@ let kopia_env = || {
         #{ name: "KOPIA_PASSWORD",        value: passphrase.value() },
         #{ name: "AWS_ACCESS_KEY_ID",     value: access_key.value() },
         #{ name: "AWS_SECRET_ACCESS_KEY", value: secret_key.value() },
-        #{ name: "KOPIA_CONFIG_PATH",     value: "/kopia-state/repository.config" },
-        #{ name: "KOPIA_CACHE_DIRECTORY", value: "/kopia-state/cache" },
-        #{ name: "KOPIA_LOG_DIR",         value: "/kopia-state/logs" },
         #{ name: "KOPIA_CHECK_FOR_UPDATES", value: "false" },
     ];
     if region.is_set() {
@@ -151,6 +148,8 @@ let policy_sh = || {
     " '--keep-annual=" + (if retention_annual.is_set() { retention_annual.value() } else { "3" }) + "'"
 };
 
+let tmp = app.volume("tmp").tmpfs();
+
 // Base job for every Kopia task. Writable rootfs covers any stray writes
 // (e.g. to /tmp); the repository config and cache live in the state volume.
 let kopia_job = || {
@@ -158,7 +157,8 @@ let kopia_job = || {
         .image(image.call())
         .env(kopia_env.call())
         .writable_rootfs()
-        .mount("/kopia-state", state)
+        .mount("/app", state)
+        .mount("/tmp", tmp)
 };
 
 // ── Install ───────────────────────────────────────────────────────────────────
@@ -256,6 +256,6 @@ app.on_action("apply-policy", |rt, _param| {
 // so they can run arbitrary kopia commands to inspect or repair the repository.
 app.on_shell("kopia", |_rt, shell, _param| {
     shell.attach(kopia_job.call()
-        .command("sh")
+        .command("bash")
     );
 }, #{ description: "Shell with the Kopia repository connected" });

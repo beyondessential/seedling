@@ -18,8 +18,11 @@ use seedling_core::{
         registry::DbInstanceRegistry,
     },
     system::{
-        System, nat64::should_activate_nat64, node_prefix_from_machine_id, reconcile::Reconciler,
-        resolver::resolver_addr,
+        System,
+        nat64::should_activate_nat64,
+        node_prefix_from_machine_id,
+        reconcile::Reconciler,
+        resolver::{resolver_addr, resolver_gateway_addr, spawn_dns_forwarder},
     },
 };
 use tokio::sync::Notify;
@@ -71,6 +74,16 @@ struct Args {
     /// OI listen port, used with --interface. Conflicts with --listen.
     #[arg(long, default_value_t = oi::DEFAULT_PORT, conflicts_with = "listen")]
     port: u16,
+
+    /// Upstream DNS servers for the in-pod CoreDNS resolver
+    /// (comma-separated `host:port` / `[host]:port`). When set, CoreDNS
+    /// forwards directly to these servers and the built-in forwarder is
+    /// skipped. When unset, CoreDNS forwards to seedling's in-process
+    /// forwarder, which proxies to systemd-resolved's extra stub at
+    /// `127.0.0.54:53` (preserving split DNS, search domains, etc.).
+    // r[impl infra.resolver.upstreams]
+    #[arg(long, value_delimiter = ',')]
+    dns_upstreams: Vec<std::net::SocketAddr>,
 }
 
 #[derive(clap::Args)]
@@ -295,6 +308,33 @@ async fn main() {
     }
 
     let dns_servers: Vec<std::net::Ipv6Addr> = vec![resolver_addr(&node_prefix)];
+
+    // DNS upstream resolution. By default CoreDNS forwards to an
+    // in-process proxy on the resolver-bridge gateway which in turn
+    // forwards to systemd-resolved's extra stub (127.0.0.54:53), so
+    // containers inherit the host's split DNS / MagicDNS / search
+    // domains. `--dns-upstreams` overrides this and points CoreDNS
+    // straight at the operator-supplied servers.
+    let (dns_upstreams, forwarder_handle) = if args.dns_upstreams.is_empty() {
+        let gw = resolver_gateway_addr(&node_prefix);
+        let forwarder_listen = std::net::SocketAddr::new(std::net::IpAddr::V6(gw), 53);
+        let host_stub: std::net::SocketAddr =
+            "127.0.0.54:53".parse().expect("static socket addr parses");
+        tracing::info!(
+            %forwarder_listen,
+            upstream = %host_stub,
+            "starting DNS forwarder (no --dns-upstreams given)"
+        );
+        let handle = spawn_dns_forwarder(forwarder_listen, host_stub);
+        (vec![forwarder_listen], Some(handle))
+    } else {
+        tracing::info!(
+            upstreams = ?args.dns_upstreams,
+            "using explicit DNS upstreams; skipping in-process forwarder"
+        );
+        (args.dns_upstreams.clone(), None)
+    };
+    let _dns_forwarder_handle = forwarder_handle;
 
     let (driver, caddy_admin_client) = System::setup(node_prefix, &data_dir, use_btrfs)
         .await
@@ -591,6 +631,7 @@ async fn main() {
         Arc::clone(&registry),
         event_tx.clone(),
         dns_servers.clone(),
+        dns_upstreams,
         nat64_active,
         Arc::clone(&shells),
     );

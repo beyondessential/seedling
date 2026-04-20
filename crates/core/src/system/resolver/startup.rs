@@ -1,4 +1,8 @@
-use std::{net::Ipv6Addr, path::Path, time::Duration};
+use std::{
+    net::{Ipv6Addr, SocketAddr},
+    path::Path,
+    time::Duration,
+};
 
 use ipnet::Ipv6Net;
 use rusqlite::OptionalExtension;
@@ -174,8 +178,6 @@ async fn start_slot(
                 resolver_ip.to_string(),
                 "--volume".to_owned(),
                 format!("{corefile_str}:/Corefile:ro"),
-                "--volume".to_owned(),
-                "/etc/resolv.conf:/etc/resolv.host.conf:ro".to_owned(),
                 RESOLVER_IMAGE.to_owned(),
                 "-conf".to_owned(),
                 "/Corefile".to_owned(),
@@ -261,6 +263,7 @@ pub async fn ensure_resolver_running(
     process: &dyn ProcessManager,
     node_prefix: &Ipv6Net,
     data_dir: &Path,
+    upstreams: &[SocketAddr],
     nat64_active: bool,
 ) -> Result<ResolverAddrs, ResolverStartupError> {
     let resolver_prefix = resolver_network_prefix(node_prefix);
@@ -285,7 +288,7 @@ pub async fn ensure_resolver_running(
 
     // 2. Write the Corefile.
     let corefile_path = data_dir.join("Corefile");
-    let corefile_content = super::config::generate_corefile(nat64_active);
+    let corefile_content = super::config::generate_corefile(upstreams, nat64_active);
     std::fs::write(&corefile_path, corefile_content).context(IoSnafu)?;
 
     // 3. Read active container from DB (default blue).
