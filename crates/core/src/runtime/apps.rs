@@ -34,9 +34,11 @@ impl std::error::Error for ScriptError {}
 
 /// The installation phase of an app. Stored in `registered_apps` and shared
 /// with the reconciler via Arc so the reconciler can transition it on cleanup.
+// i[impl app.status]
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppPhase {
     NotInstalled,
+    Installing,
     Installed,
     Uninstalling,
 }
@@ -46,6 +48,7 @@ pub enum AppPhase {
 #[serde(rename_all = "snake_case")]
 pub enum AppStatus {
     NotInstalled,
+    Installing,
     Uninstalling,
     Operating { action_name: String },
     Running,
@@ -57,6 +60,7 @@ impl AppStatus {
     pub fn name(&self) -> &'static str {
         match self {
             Self::NotInstalled => "not_installed",
+            Self::Installing => "installing",
             Self::Uninstalling => "uninstalling",
             Self::Operating { .. } => "operating",
             Self::Running => "running",
@@ -199,25 +203,23 @@ impl AppRegistry {
     ) -> rusqlite::Result<Self> {
         let mut registry = Self::new();
         let mut stmt = db.conn.prepare(
-            "SELECT name, installed, uninstalling, current_generation FROM registered_apps ORDER BY name",
+            "SELECT name, installed, uninstalling, installing, current_generation \
+             FROM registered_apps ORDER BY name",
         )?;
-        let rows: Vec<(String, bool, bool, i64)> = stmt
+        let rows: Vec<(String, bool, bool, bool, i64)> = stmt
             .query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, bool>(1)?,
                     row.get::<_, bool>(2)?,
-                    row.get::<_, i64>(3)?,
+                    row.get::<_, bool>(3)?,
+                    row.get::<_, i64>(4)?,
                 ))
             })?
             .collect::<rusqlite::Result<_>>()?;
 
-        for (name, installed, uninstalling, current_gen) in rows {
-            let phase = match (installed, uninstalling) {
-                (_, true) => AppPhase::Uninstalling,
-                (true, _) => AppPhase::Installed,
-                (false, _) => AppPhase::NotInstalled,
-            };
+        for (name, installed, uninstalling, installing, current_gen) in rows {
+            let phase = decode_phase(&name, installed, uninstalling, installing);
             if current_gen <= 0 {
                 tracing::warn!(app = %name, "skipping app with no current generation");
                 continue;
@@ -271,16 +273,16 @@ impl AppRegistry {
 
     // i[app.persist]
     pub fn persist_app(db: &Db, entry: &AppEntry) -> rusqlite::Result<()> {
-        let phase = entry.phase.lock();
-        let installed = matches!(*phase, AppPhase::Installed | AppPhase::Uninstalling);
-        let uninstalling = matches!(*phase, AppPhase::Uninstalling);
+        let (installed, uninstalling, installing) = encode_phase(&entry.phase.lock());
         db.conn.execute(
-            "INSERT OR REPLACE INTO registered_apps (name, installed, uninstalling, current_generation) \
-             VALUES (?1, ?2, ?3, ?4)",
+            "INSERT OR REPLACE INTO registered_apps \
+                 (name, installed, uninstalling, installing, current_generation) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
             rusqlite::params![
                 entry.name,
                 installed as i64,
                 uninstalling as i64,
+                installing as i64,
                 entry.current_generation as i64,
             ],
         )?;
@@ -331,6 +333,8 @@ fn derive_status(entry: &AppEntry) -> AppStatus {
     let phase = entry.phase.lock();
     match *phase {
         AppPhase::NotInstalled => AppStatus::NotInstalled,
+        // i[impl app.status]
+        AppPhase::Installing => AppStatus::Installing,
         AppPhase::Uninstalling => AppStatus::Uninstalling,
         AppPhase::Installed => {
             if entry.active_progress.read().is_some() {
@@ -344,6 +348,45 @@ fn derive_status(entry: &AppEntry) -> AppStatus {
     }
 }
 
+/// Encode a phase as the `(installed, uninstalling, installing)` triple stored
+/// in `registered_apps`. Exactly one of the three is ever set, except that
+/// `Uninstalling` sets `installed` alongside `uninstalling` so that a halted
+/// migration or manual intervention reading only `installed` still sees the app
+/// as "has been installed".
+fn encode_phase(phase: &AppPhase) -> (bool, bool, bool) {
+    match phase {
+        AppPhase::NotInstalled => (false, false, false),
+        AppPhase::Installing => (false, false, true),
+        AppPhase::Installed => (true, false, false),
+        AppPhase::Uninstalling => (true, true, false),
+    }
+}
+
+/// Inverse of [`encode_phase`]. Tolerates inconsistent triples (e.g. both
+/// `installed` and `installing` set) by preferring the earliest-in-state-
+/// -machine interpretation and logging a warning — a defensive arm that
+/// should not trigger under the invariant that the encoder is the only
+/// writer.
+fn decode_phase(app: &str, installed: bool, uninstalling: bool, installing: bool) -> AppPhase {
+    if uninstalling {
+        return AppPhase::Uninstalling;
+    }
+    if installing {
+        if installed {
+            tracing::warn!(
+                app,
+                "registered_apps row has both installed=1 and installing=1; treating as Installing"
+            );
+        }
+        return AppPhase::Installing;
+    }
+    if installed {
+        AppPhase::Installed
+    } else {
+        AppPhase::NotInstalled
+    }
+}
+
 /// Update the phase both in the shared Arc and in the database.
 pub fn transition_phase(
     phase_arc: &Mutex<AppPhase>,
@@ -353,11 +396,15 @@ pub fn transition_phase(
     _script: &str,
 ) {
     *phase_arc.lock() = new_phase.clone();
-    let installed = matches!(new_phase, AppPhase::Installed | AppPhase::Uninstalling);
-    let uninstalling = matches!(new_phase, AppPhase::Uninstalling);
+    let (installed, uninstalling, installing) = encode_phase(&new_phase);
     if let Err(e) = db.conn.execute(
-        "UPDATE registered_apps SET installed = ?1, uninstalling = ?2 WHERE name = ?3",
-        rusqlite::params![installed as i64, uninstalling as i64, app_name],
+        "UPDATE registered_apps SET installed = ?1, uninstalling = ?2, installing = ?3 WHERE name = ?4",
+        rusqlite::params![
+            installed as i64,
+            uninstalling as i64,
+            installing as i64,
+            app_name,
+        ],
     ) {
         tracing::error!(app = %app_name, "failed to persist phase transition: {e}");
     }

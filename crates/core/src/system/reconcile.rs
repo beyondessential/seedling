@@ -237,7 +237,8 @@ impl Reconciler {
             let phase = entry.phase.lock().clone();
             match phase {
                 AppPhase::Installed | AppPhase::Uninstalling => {}
-                AppPhase::NotInstalled => continue,
+                // The gate is widened to include Installing in the next commit.
+                AppPhase::NotInstalled | AppPhase::Installing => continue,
             }
             let _ = status;
             let progress = entry.active_progress.read();
@@ -254,7 +255,7 @@ impl Reconciler {
             };
             let desired = match phase {
                 AppPhase::Uninstalling => compute_uninstalling(&name, &app_def, &*self.registry),
-                AppPhase::NotInstalled => unreachable!(),
+                AppPhase::NotInstalled | AppPhase::Installing => unreachable!(),
                 AppPhase::Installed => compute(
                     &name,
                     &app_def,

@@ -275,9 +275,17 @@ fn finalize_install(state: &OiState, app_name: &str) {
     {
         let reg = state.registry.read();
         if let Some(entry) = reg.get(app_name) {
-            let (app_n, generation_n, installed, uninstalling) = extract_persist_fields(entry);
+            let (app_n, generation_n, installed, uninstalling, installing) =
+                extract_persist_fields(entry);
             if let Err(e) = state.db.call(move |db| {
-                persist_app_fields(db, &app_n, generation_n, installed, uninstalling)
+                persist_app_fields(
+                    db,
+                    &app_n,
+                    generation_n,
+                    installed,
+                    uninstalling,
+                    installing,
+                )
             }) {
                 tracing::error!(app = %app_name, "persist installed flag: {e}");
             }

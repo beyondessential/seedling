@@ -166,7 +166,7 @@ pub(crate) fn invoke_install(
             let reg = state.registry.read();
             if let Some(entry) = reg.get(app_name) {
                 use crate::oi::handler::apps::{extract_persist_fields, persist_app_fields};
-                let (app_name_owned, generation_n, installed, uninstalling) =
+                let (app_name_owned, generation_n, installed, uninstalling, installing) =
                     extract_persist_fields(entry);
                 state
                     .db
@@ -177,6 +177,7 @@ pub(crate) fn invoke_install(
                             generation_n,
                             installed,
                             uninstalling,
+                            installing,
                         )
                     })
                     .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db persist: {e}")))?;

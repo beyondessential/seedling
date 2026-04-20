@@ -103,11 +103,19 @@ fn reload_and_persist_apperror(
     {
         let reg = state.registry.read();
         let entry = reg.get(app).expect("confirmed registered");
-        let (app_name, generation_n, installed, uninstalling) = extract_persist_fields(entry);
+        let (app_name, generation_n, installed, uninstalling, installing) =
+            extract_persist_fields(entry);
         state
             .db
             .call(move |db| {
-                persist_app_fields(db, &app_name, generation_n, installed, uninstalling)
+                persist_app_fields(
+                    db,
+                    &app_name,
+                    generation_n,
+                    installed,
+                    uninstalling,
+                    installing,
+                )
             })
             .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db persist: {e}")))?;
     }

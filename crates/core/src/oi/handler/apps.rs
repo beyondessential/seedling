@@ -93,16 +93,18 @@ pub(crate) struct ResourceStopParams {
 /// Extract the fields needed to persist an app entry without holding `&AppEntry`.
 pub(crate) fn extract_persist_fields(
     entry: &crate::runtime::apps::AppEntry,
-) -> (String, u64, bool, bool) {
+) -> (String, u64, bool, bool, bool) {
     use crate::runtime::apps::AppPhase;
     let phase = entry.phase.lock();
     let installed = matches!(*phase, AppPhase::Installed | AppPhase::Uninstalling);
     let uninstalling = matches!(*phase, AppPhase::Uninstalling);
+    let installing = matches!(*phase, AppPhase::Installing);
     (
         entry.name.clone(),
         entry.current_generation,
         installed,
         uninstalling,
+        installing,
     )
 }
 
@@ -113,11 +115,19 @@ pub(crate) fn persist_app_fields(
     generation_n: u64,
     installed: bool,
     uninstalling: bool,
+    installing: bool,
 ) -> rusqlite::Result<()> {
     db.conn.execute(
-        "INSERT OR REPLACE INTO registered_apps (name, installed, uninstalling, current_generation) \
-         VALUES (?1, ?2, ?3, ?4)",
-        rusqlite::params![name, installed as i64, uninstalling as i64, generation_n as i64],
+        "INSERT OR REPLACE INTO registered_apps \
+             (name, installed, uninstalling, installing, current_generation) \
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![
+            name,
+            installed as i64,
+            uninstalling as i64,
+            installing as i64,
+            generation_n as i64,
+        ],
     )?;
     Ok(())
 }
@@ -1140,11 +1150,19 @@ pub(crate) fn register_app(
     {
         let reg = state.registry.read();
         let entry = reg.get(name).expect("just registered");
-        let (app_name, generation_n, installed, uninstalling) = extract_persist_fields(entry);
+        let (app_name, generation_n, installed, uninstalling, installing) =
+            extract_persist_fields(entry);
         state
             .db
             .call(move |db| {
-                persist_app_fields(db, &app_name, generation_n, installed, uninstalling)
+                persist_app_fields(
+                    db,
+                    &app_name,
+                    generation_n,
+                    installed,
+                    uninstalling,
+                    installing,
+                )
             })
             .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db persist: {e}")))?;
     }
@@ -1166,11 +1184,19 @@ pub(crate) fn register_app(
     {
         let reg = state.registry.read();
         let entry = reg.get(name).expect("just registered");
-        let (app_name, generation_n, installed, uninstalling) = extract_persist_fields(entry);
+        let (app_name, generation_n, installed, uninstalling, installing) =
+            extract_persist_fields(entry);
         state
             .db
             .call(move |db| {
-                persist_app_fields(db, &app_name, generation_n, installed, uninstalling)
+                persist_app_fields(
+                    db,
+                    &app_name,
+                    generation_n,
+                    installed,
+                    uninstalling,
+                    installing,
+                )
             })
             .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db persist: {e}")))?;
     }
@@ -1452,11 +1478,19 @@ pub(crate) fn update_app(
     {
         let reg = state.registry.read();
         let entry = reg.get(name).expect("confirmed registered");
-        let (app_name, generation_n, installed, uninstalling) = extract_persist_fields(entry);
+        let (app_name, generation_n, installed, uninstalling, installing) =
+            extract_persist_fields(entry);
         state
             .db
             .call(move |db| {
-                persist_app_fields(db, &app_name, generation_n, installed, uninstalling)
+                persist_app_fields(
+                    db,
+                    &app_name,
+                    generation_n,
+                    installed,
+                    uninstalling,
+                    installing,
+                )
             })
             .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db update generation: {e}")))?;
     }
