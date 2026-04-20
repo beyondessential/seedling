@@ -153,10 +153,14 @@ function SnapshotsDialog({
                   <Table size="small">
                     <TableHead>
                       <TableRow>
+                        {/* Action column first so the restore button is
+                            visible at the start of every row, even when
+                            the snapshot detail fields are wide enough to
+                            require horizontal scrolling. */}
+                        <TableCell width={48} />
                         {Object.keys(snapshotList[0] as object).map((k) => (
                           <TableCell key={k}>{k}</TableCell>
                         ))}
-                        <TableCell width={90} />
                       </TableRow>
                     </TableHead>
                     <TableBody>
@@ -167,12 +171,7 @@ function SnapshotsDialog({
                           : [["value", String(item)]];
                         return (
                           <TableRow key={i}>
-                            {fields.map(([k, v]) => (
-                              <TableCell key={k} sx={{ fontFamily: "monospace", fontSize: "0.8rem" }}>
-                                {String(v)}
-                              </TableCell>
-                            ))}
-                            <TableCell align="right">
+                            <TableCell sx={{ px: 0.5 }}>
                               {id ? (
                                 <Tooltip title={`Restore snapshot "${id}"`}>
                                   <span>
@@ -187,6 +186,11 @@ function SnapshotsDialog({
                                 </Tooltip>
                               ) : null}
                             </TableCell>
+                            {fields.map(([k, v]) => (
+                              <TableCell key={k} sx={{ fontFamily: "monospace", fontSize: "0.8rem" }}>
+                                {String(v)}
+                              </TableCell>
+                            ))}
                           </TableRow>
                         );
                       })}
