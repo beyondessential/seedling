@@ -1,5 +1,6 @@
 export type AppStatus =
   | "not_installed"
+  | "installing"
   | "uninstalling"
   | "deregistering"
   | "operating"

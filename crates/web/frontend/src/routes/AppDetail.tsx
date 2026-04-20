@@ -395,12 +395,18 @@ function ResourcesSection({
 function ParamsSection({
   appName,
   params,
+  status,
   onRefresh,
 }: {
   appName: string;
   params: AppParam[];
+  status: AppStatus;
   onRefresh: () => void;
 }) {
+  // Params cannot be mutated while the app has an operation in flight; the
+  // backend rejects with operation_in_progress. Disable the edit/add
+  // affordances and explain why, rather than letting users hit a server error.
+  const editsDisabled = status === "installing" || status === "operating";
   const { execute, loading, error, clearError } = useOiAction();
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -520,13 +526,25 @@ function ParamsSection({
     </TableRow>
   ) : null;
 
+  const disabledBanner = editsDisabled ? (
+    <Alert severity="info" sx={{ mb: 1 }}>
+      Params are read-only while an operation is in progress for this app.
+    </Alert>
+  ) : null;
+
   if (params.length === 0 && !adding) {
     return (
       <Stack spacing={1}>
+        {disabledBanner}
         {error && <OiErrorAlert error={error} />}
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
           <Typography color="text.secondary">No params.</Typography>
-          <Button size="small" startIcon={<AddIcon fontSize="small" />} onClick={startAdd}>
+          <Button
+            size="small"
+            startIcon={<AddIcon fontSize="small" />}
+            onClick={startAdd}
+            disabled={editsDisabled}
+          >
             Set param
           </Button>
         </Box>
@@ -541,10 +559,16 @@ function ParamsSection({
 
   return (
     <Stack spacing={1}>
+      {disabledBanner}
       {error && <OiErrorAlert error={error} />}
       <Box sx={{ display: "flex", justifyContent: "flex-end" }}>
         {!adding && (
-          <Button size="small" startIcon={<AddIcon fontSize="small" />} onClick={startAdd}>
+          <Button
+            size="small"
+            startIcon={<AddIcon fontSize="small" />}
+            onClick={startAdd}
+            disabled={editsDisabled}
+          >
             Set param
           </Button>
         )}
@@ -683,34 +707,40 @@ function ParamsSection({
                   </TableCell>
                   <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
                     <Tooltip title={p.value == null && !p.is_set ? "Set" : "Edit"}>
-                      <IconButton
-                        size="small"
-                        onClick={() => startEdit(p)}
-                        disabled={loading}
-                      >
-                        <EditIcon fontSize="small" />
-                      </IconButton>
+                      <span>
+                        <IconButton
+                          size="small"
+                          onClick={() => startEdit(p)}
+                          disabled={loading || editsDisabled}
+                        >
+                          <EditIcon fontSize="small" />
+                        </IconButton>
+                      </span>
                     </Tooltip>
                     {p.value != null && !p.required && (
                       <Tooltip title="Unset">
-                        <IconButton
-                          size="small"
-                          onClick={() => void unset(p.name)}
-                          disabled={loading}
-                        >
-                          <DeleteOutlineIcon fontSize="small" />
-                        </IconButton>
+                        <span>
+                          <IconButton
+                            size="small"
+                            onClick={() => void unset(p.name)}
+                            disabled={loading || editsDisabled}
+                          >
+                            <DeleteOutlineIcon fontSize="small" />
+                          </IconButton>
+                        </span>
                       </Tooltip>
                     )}
                     {p.value != null && p.required && p.default_value != null && (
                       <Tooltip title="Reset to default">
-                        <IconButton
-                          size="small"
-                          onClick={() => void unset(p.name)}
-                          disabled={loading}
-                        >
-                          <RestoreIcon fontSize="small" />
-                        </IconButton>
+                        <span>
+                          <IconButton
+                            size="small"
+                            onClick={() => void unset(p.name)}
+                            disabled={loading || editsDisabled}
+                          >
+                            <RestoreIcon fontSize="small" />
+                          </IconButton>
+                        </span>
                       </Tooltip>
                     )}
                   </TableCell>
@@ -878,6 +908,45 @@ function ActionInvokeDialog({
   );
 }
 
+function InstallingSection({ faults }: { faults: FaultRecord[] }) {
+  const installFaults = faults.filter((f) => f.kind === "operation_failed");
+  return (
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 2,
+        py: 6,
+      }}
+    >
+      <CircularProgress />
+      <Typography color="text.secondary" sx={{ textAlign: "center" }}>
+        Install in progress — the runtime is actuating your resources.
+        <br />
+        See the operation panel above for barrier progress, or the app logs for
+        container output.
+      </Typography>
+      {installFaults.length > 0 && (
+        <Alert severity="error" sx={{ width: "100%", mt: 1 }}>
+          <Typography variant="subtitle2" gutterBottom>
+            The install is currently failing:
+          </Typography>
+          {installFaults.map((f) => (
+            <Typography
+              key={f.id}
+              variant="body2"
+              sx={{ fontFamily: "monospace", whiteSpace: "pre-wrap" }}
+            >
+              {f.description}
+            </Typography>
+          ))}
+        </Alert>
+      )}
+    </Box>
+  );
+}
+
 function InstallSection({
   appName,
   installAction,
@@ -962,6 +1031,7 @@ function ActionsSection({
   const canInvoke =
     !hasScriptError &&
     status !== "not_installed" &&
+    status !== "installing" &&
     status !== "uninstalling" &&
     status !== "deregistering" &&
     status !== "operating";
@@ -1303,6 +1373,7 @@ export default function AppDetail() {
           </Button>
         )}
         {data?.status !== "not_installed" &&
+          data?.status !== "installing" &&
           data?.status !== "uninstalling" &&
           data?.status !== "deregistering" && (
           <Button
@@ -1418,6 +1489,7 @@ export default function AppDetail() {
             <ParamsSection
               appName={name!}
               params={data.params}
+              status={data.status}
               onRefresh={refetch}
             />
           </Section>
@@ -1499,6 +1571,8 @@ export default function AppDetail() {
               hasScriptError={data.faults.some((f) => f.kind === "script_error")}
               onRefresh={refetch}
             />
+          ) : data.status === "installing" ? (
+            <InstallingSection faults={data.faults} />
           ) : (
             <>
               <Section title="Actions">
