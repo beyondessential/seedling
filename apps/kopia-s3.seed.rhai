@@ -205,8 +205,10 @@ app.on_action("save-snapshot", |rt, param| {
         .mount("/source", source)
         .command(["sh", "-c",
             "kopia snapshot create" +
-            " '--override-hostname=" + backup["app"] + "'" +
-            " '--override-username=" + hostname.value() + "'" +
+            " --tags 'source:seedling'" +
+            " --tags 'strategy:" + backup["strategy"] + "'" +
+            " --tags 'app:" + backup["app"] + "'" +
+            " --tags 'volume:" + backup["volume"] + "'" +
             " /source"
         ])
     ).terminated(AN_HOUR).ensure_success();
@@ -219,31 +221,33 @@ app.on_action("list-snapshots", |rt, param| {
         .mount("/output", output)
         .command(["sh", "-c",
             "kopia snapshot list --json" +
-            " '" + backup["app"] + "@" + hostname.value() + ":/source'" +
+            " --tags 'source:seedling'" +
+            " --tags 'strategy:" + backup["strategy"] + "'" +
+            " --tags 'app:" + backup["app"] + "'" +
+            " --tags 'volume:" + backup["volume"] + "'" +
+            " > /output/kopia.json"
+        ])
+    ).terminated(TWENTY_MINUTES).ensure_success();
+    rt.start(app.job()
+        .image("docker.io/library/alpine:latest")
+        .writable_rootfs()
+        .mount("/output", output)
+        .command(["sh", "-c",
+            "apk add jq && " +
+            "jq '[.[] | {id: .id, tags: ((.tags // {}) | tojson), size: .stats.totalSize, started: .startTime, ended: .endTime, description: .description}]'" +
+            " /output/kopia.json" +
             " > /output/snapshots.json"
         ])
-    ).terminated(AN_HOUR).ensure_success();
+    ).terminated().ensure_success();
 }, #{ description: "List snapshots in the Kopia repository" });
 
 app.on_action("restore-snapshot", |rt, param| {
     let dest = app.external_volume("destination");
     let backup = param["backup"];
     rt.start(kopia_job.call()
-        .env([
-            #{ name: "KOPIA_SNAPSHOT_ID",  value: param["snapshot"] },
-            #{ name: "EXPECTED_SOURCE",    value: backup["app"] + "@" + hostname.value() + ":/source" },
-        ])
         .mount("/destination", dest)
-        .command(["sh", "-c",
-            // Refuse to restore if the snapshot isn't one of ours under the
-            // requested (app, node) source — a mismatch would overwrite the
-            // destination with data from an unrelated volume.
-            "kopia snapshot list --json \"$EXPECTED_SOURCE\" | \
-               grep -q \"\\\"$KOPIA_SNAPSHOT_ID\\\"\" || { \
-                 echo \"refusing to restore: $KOPIA_SNAPSHOT_ID not under $EXPECTED_SOURCE\" >&2; \
-                 exit 1; \
-               } && \
-             kopia snapshot restore \"$KOPIA_SNAPSHOT_ID\" /destination"
+        .command([
+             "kopia", "snapshot", "restore", param["snapshot"], "/destination"
         ])
     ).terminated(AN_HOUR).ensure_success();
 }, #{ description: "Restore a Kopia snapshot to a new volume" });

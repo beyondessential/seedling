@@ -83,13 +83,13 @@ Called synchronously when an operator requests a list of available snapshots for
 |---|---|---|
 | `backup` | object | The [backup object](#what-seedling-provides) identifying which volume's snapshots to list |
 
-**Contract:** write a file at `/output/snapshots.json` (where `/output` is the mountpoint of the `output` binding) containing valid JSON describing the available snapshots. The JSON is returned verbatim to the operator via the API and displayed in the UI — it can be any structure, but an array of objects is the most useful because the UI will render them as a table and offer a per-row restore button.
+**Contract:** write a file at `/output/snapshots.json` (where `/output` is the mountpoint of the `output` binding) containing a valid JSON array of objects describing the available snapshots. Each object must have an `id` key which will be used for restoring.
 
 The output **must be filtered to only include snapshots that were taken via this app's `save-snapshot` action for the same `backup.app` + `backup.volume`**. A single backup app commonly stores multiple volumes' snapshots in the same remote backend (one Kopia repository, one S3 bucket with prefix-per-volume, etc.), and the operator requesting a list for `myapp/data` would be dangerously confused by snapshots of `otherapp/logs` showing up in the same list — the restore step takes the snapshot identifier as an opaque string, so nothing prevents an operator from accidentally selecting a snapshot that belongs to a different volume and writing it over the wrong target.
 
 How you implement the filter depends on your backend:
 
-- **Kopia**: `save-snapshot` sets `--override-hostname=<app>` and runs `kopia snapshot create /source/<volume>` (or uses a stable `--tags` value). `list-snapshots` passes `--hostname=<app>` and filters on source path.
+- **Kopia**: tag snapshots on save (`--tags app:<app> --tags volume:<volume>`), filter on list (`--tags app:<app> --tags volume:<volume>`).
 - **restic**: tag snapshots on save (`--tag app=<app> --tag volume=<volume>`), filter on list (`--tag app=<app> --tag volume=<volume>`).
 - **Object-storage roll-your-own**: prefix keys with `<app>/<volume>/` on save; list under that prefix on retrieve.
 
@@ -119,6 +119,8 @@ The JSON written to `snapshots.json` might look like:
   { "id": "2024-01-14T03:00:00Z", "size_bytes": 98304000 }
 ]
 ```
+
+It's preferable to post-process the output to return a well-formed snapshots.json without extra fields; the web UI will not render nested objects and arrays for example.
 
 ### `restore-snapshot`
 
