@@ -578,7 +578,7 @@ function ParamsSection({
                         if (e.key === "Escape") cancel();
                       }}
                       autoFocus
-                      type={showPassword ? "text" : paramFieldType(p.kind)}
+                      type={showPassword ? "text" : paramFieldType(p.kind, p.secret)}
                       error={
                         p.kind === "password" &&
                         draft.length > 0 &&
@@ -597,7 +597,7 @@ function ParamsSection({
                       InputProps={{
                         endAdornment: (
                           <InputAdornment position="end">
-                            {(p.kind === "password" ||
+                            {(p.secret || p.kind === "password" ||
                               p.kind === "weak-password") && (
                               <Tooltip
                                 title={
@@ -661,14 +661,17 @@ function ParamsSection({
                   </TableCell>
                   <TableCell sx={{ fontFamily: "monospace" }}>
                     {(() => {
-                      const isPassword = p.kind === "password" || p.kind === "weak-password";
+                      const isMasked = p.secret || p.kind === "password" || p.kind === "weak-password";
+                      if (p.secret && p.is_set) {
+                        return "••••••••";
+                      }
                       if (p.value != null) {
-                        return isPassword ? "••••••••" : p.value;
+                        return isMasked ? "••••••••" : p.value;
                       }
                       if (p.default_value != null) {
                         return (
                           <Box component="span" sx={{ color: "text.disabled" }}>
-                            {isPassword ? "••••••••" : p.default_value}
+                            {isMasked ? "••••••••" : p.default_value}
                             <Typography component="span" variant="caption" sx={{ ml: 0.5 }}>
                               (default)
                             </Typography>
@@ -679,7 +682,7 @@ function ParamsSection({
                     })()}
                   </TableCell>
                   <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
-                    <Tooltip title={p.value == null ? "Set" : "Edit"}>
+                    <Tooltip title={p.value == null && !p.is_set ? "Set" : "Edit"}>
                       <IconButton
                         size="small"
                         onClick={() => startEdit(p)}
@@ -722,8 +725,8 @@ function ParamsSection({
   );
 }
 
-function paramFieldType(kind: string): string {
-  if (kind === "password" || kind === "weak-password") return "password";
+function paramFieldType(kind: string, secret?: boolean): string {
+  if (secret || kind === "password" || kind === "weak-password") return "password";
   if (kind === "email") return "email";
   return "text";
 }

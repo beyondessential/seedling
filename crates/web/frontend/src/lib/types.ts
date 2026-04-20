@@ -87,6 +87,8 @@ export interface AppResource {
 export interface AppParam {
   name: string;
   value: string | null;
+  is_set: boolean;
+  secret: boolean;
   kind: string;
   required: boolean;
   description: string | null;

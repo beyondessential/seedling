@@ -947,3 +947,28 @@ Absent specification bugs, anything that is not defined here is either defined i
 > DNS64 so that lookups for IPv4-only names return synthesised AAAA records under
 > `64:ff9b::/96`. When NAT64 is not active, DNS64 synthesis must be disabled in the
 > resolver configuration.
+
+# Secret Parameter Storage
+
+> r[secret.key]
+> The runtime must provision and maintain a secret key for use in protecting secret parameter values.
+> The key file must have the same file-permission restriction as the main database (access restricted to the owner).
+> If no key file exists on startup the runtime must create one automatically with a freshly generated key.
+> The key file must be stored on the same volume as the database.
+
+> r[secret.storage]
+> Secret parameter values (those whose effective `secret` flag is `true`) must be stored separately from non-secret parameters and must be protected at rest using the [secret key](#r--secret.key).
+> Non-secret parameter values continue to be stored unprotected.
+> The two storage locations are transparent to BSL scripts: `app.param(name).value()` returns the decrypted string regardless of whether the value is secret.
+
+> r[secret.history]
+> Entries in the [generation history](#r--generation.history) that record a previous or new value for a secret parameter must protect those values using the [secret key](#r--secret.key).
+> History retrieval must decrypt these values internally before serving them to callers that are authorised to reconstruct past generations.
+
+> r[secret.redaction]
+> When a secret parameter value is requested via an operator interface (such as a describe or history RPC), it must never be returned to the caller.
+> The redaction decision is based on whether the parameter is currently secret in the live AppDef, regardless of what the schema was when the value was originally stored.
+> Absence of the value must be signalled by a machine-readable marker so clients can distinguish "not set" from "set but redacted".
+
+> r[secret.migration]
+> When a parameter transitions from non-secret to secret (because the BSL script is updated or the `secret` flag is changed), the runtime must move the existing stored value from non-secret storage to secret storage at the next opportunity, without requiring operator intervention.

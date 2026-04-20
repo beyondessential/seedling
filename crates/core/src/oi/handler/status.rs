@@ -2,18 +2,11 @@ use std::{collections::HashMap, sync::Arc};
 
 use serde_json::json;
 
-use crate::{
-    oi::state::OiState,
-    runtime::faults,
-    system::types::ContainerStatus,
-};
+use crate::{oi::state::OiState, runtime::faults, system::types::ContainerStatus};
 
 use super::HandlerResult;
 
-async fn component_status(
-    state: &Arc<OiState>,
-    containers: &[&str],
-) -> &'static str {
+async fn component_status(state: &Arc<OiState>, containers: &[&str]) -> &'static str {
     for name in containers {
         if let Ok(Some(s)) = state.container_runtime.inspect(name).await {
             if matches!(s.status, ContainerStatus::Running) {
@@ -27,7 +20,11 @@ async fn component_status(
 // i[status.infra]
 pub(crate) async fn get_infra_status(state: &Arc<OiState>) -> HandlerResult {
     let proxy = component_status(state, &["seedling-caddy-blue", "seedling-caddy-green"]).await;
-    let resolver = component_status(state, &["seedling-resolver-blue", "seedling-resolver-green"]).await;
+    let resolver = component_status(
+        state,
+        &["seedling-resolver-blue", "seedling-resolver-green"],
+    )
+    .await;
     Ok(json!({ "proxy": proxy, "resolver": resolver }))
 }
 

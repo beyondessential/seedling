@@ -23,6 +23,7 @@ pub mod restart_gens;
 pub mod scaling;
 pub mod scheduler;
 pub mod schedules;
+pub mod secrets;
 pub mod site_volumes;
 pub mod stopped;
 

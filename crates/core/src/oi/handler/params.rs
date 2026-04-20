@@ -1,5 +1,6 @@
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
+use secrecy::SecretString;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -31,11 +32,25 @@ pub(crate) struct UnsetParamParams {
 fn current_param_value(state: &OiState, app: &str, name: &str) -> Result<Option<String>, OiError> {
     let app_owned = app.to_owned();
     let name_owned = name.to_owned();
+    let cipher = Arc::clone(&state.cipher);
     let map = state
         .db
-        .call(move |db| crate::runtime::apps::load_params_for_app(db, &app_owned))
+        .call(move |db| -> rusqlite::Result<BTreeMap<String, String>> {
+            Ok(crate::runtime::apps::load_all_params_for_app(
+                db, &cipher, &app_owned,
+            ))
+        })
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
     Ok(map.get(&name_owned).cloned())
+}
+
+fn param_is_secret(state: &OiState, app: &str, name: &str) -> bool {
+    state
+        .registry
+        .read()
+        .get(app)
+        .and_then(|e| e.app.def.load().params.get(name).map(|d| d.is_secret()))
+        .unwrap_or(false)
 }
 
 fn reject_if_op_in_progress(state: &OiState, app: &str) -> Result<(), OiError> {
@@ -60,9 +75,14 @@ fn reload_and_persist_apperror(
         reg.get(app).expect("confirmed registered").script.clone()
     };
     let app_owned = app.to_owned();
+    let cipher = Arc::clone(&state.cipher);
     let loaded_params = state
         .db
-        .call(move |db| crate::runtime::apps::load_params_for_app(db, &app_owned))
+        .call(move |db| -> rusqlite::Result<BTreeMap<String, String>> {
+            Ok(crate::runtime::apps::load_all_params_for_app(
+                db, &cipher, &app_owned,
+            ))
+        })
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
     state
         .registry
@@ -170,6 +190,7 @@ fn schedule_on_change(
 // i[param.store]
 // i[param.set]
 // i[param.unknown]
+// i[impl param.store.secret]
 // l[impl param.on-change.transitions]
 // l[impl param.on-change.not-on-install]
 pub(crate) fn set_param(
@@ -209,20 +230,47 @@ pub(crate) fn set_param(
         reg.get(app).map(|e| e.current_generation).unwrap_or(0)
     };
 
+    let is_secret = param_is_secret(state, app, param_name);
     let app_owned = app.to_owned();
     let param_name_owned = param_name.to_owned();
     let value_owned = value.to_owned();
     let prev_owned = previous_value.clone();
+    let cipher = Arc::clone(&state.cipher);
+
     let generation = state
         .db
         .call(move |db| -> rusqlite::Result<_> {
-            crate::runtime::apps::upsert_param(db, &app_owned, &param_name_owned, &value_owned)?;
+            if is_secret {
+                let secret_val = SecretString::new(value_owned.clone().into());
+                crate::runtime::apps::secret_params::upsert_secret_param(
+                    db,
+                    &cipher,
+                    &app_owned,
+                    &param_name_owned,
+                    &secret_val,
+                )?;
+                crate::runtime::apps::delete_one_param(db, &app_owned, &param_name_owned)?;
+            } else {
+                crate::runtime::apps::upsert_param(
+                    db,
+                    &app_owned,
+                    &param_name_owned,
+                    &value_owned,
+                )?;
+                crate::runtime::apps::secret_params::delete_one_secret_param(
+                    db,
+                    &app_owned,
+                    &param_name_owned,
+                )?;
+            }
             generations::bump_param_set(
                 db,
                 &app_owned,
                 &param_name_owned,
                 prev_owned.as_deref(),
                 &value_owned,
+                &cipher,
+                is_secret,
             )
         })
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
@@ -231,9 +279,16 @@ pub(crate) fn set_param(
 
     let schedule = schedule_on_change(state, app, param_name, generation)?;
 
-    ctx.events
-        .param_change(app, generation, previous_generation)
-        .set(param_name, previous_value.as_deref(), value);
+    // i[impl param.store.secret]
+    if is_secret {
+        ctx.events
+            .param_change(app, generation, previous_generation)
+            .set_redacted(param_name);
+    } else {
+        ctx.events
+            .param_change(app, generation, previous_generation)
+            .set(param_name, previous_value.as_deref(), value);
+    }
 
     tracing::info!(app, param = param_name, generation, schedule, "set_param");
     Ok(json!({ "schedule": schedule, "generation": generation }))
@@ -276,14 +331,30 @@ pub(crate) fn unset_param(
         reg.get(app).map(|e| e.current_generation).unwrap_or(0)
     };
 
+    let is_secret = param_is_secret(state, app, param_name);
+
     let app_owned = app.to_owned();
     let param_name_owned = param_name.to_owned();
     let prev_owned = previous_value.clone();
+    let cipher = Arc::clone(&state.cipher);
     let generation = state
         .db
         .call(move |db| -> rusqlite::Result<_> {
+            // Delete from both tables to handle any migration state.
             crate::runtime::apps::delete_one_param(db, &app_owned, &param_name_owned)?;
-            generations::bump_param_unset(db, &app_owned, &param_name_owned, &prev_owned)
+            crate::runtime::apps::secret_params::delete_one_secret_param(
+                db,
+                &app_owned,
+                &param_name_owned,
+            )?;
+            generations::bump_param_unset(
+                db,
+                &app_owned,
+                &param_name_owned,
+                &prev_owned,
+                &cipher,
+                is_secret,
+            )
         })
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
 
@@ -291,9 +362,16 @@ pub(crate) fn unset_param(
 
     let schedule = schedule_on_change(state, app, param_name, generation)?;
 
-    ctx.events
-        .param_change(app, generation, previous_generation)
-        .unset(param_name, &previous_value);
+    // i[impl param.store.secret]
+    if is_secret {
+        ctx.events
+            .param_change(app, generation, previous_generation)
+            .unset_redacted(param_name);
+    } else {
+        ctx.events
+            .param_change(app, generation, previous_generation)
+            .unset(param_name, &previous_value);
+    }
 
     tracing::info!(app, param = param_name, generation, schedule, "unset_param");
     Ok(json!({ "schedule": schedule, "generation": generation }))

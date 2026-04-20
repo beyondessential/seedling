@@ -128,5 +128,18 @@ impl CustomType for Param {
             });
             this.clone()
         });
+
+        // l[impl param.schema.secret]
+        builder.with_fn("secret", |this: &mut Self, secret: bool| -> Self {
+            let name_clone = this.name.clone();
+            this.app.def.rcu(|d| {
+                let mut d = (**d).clone();
+                d.params
+                    .entry(name_clone.clone())
+                    .and_modify(|def| def.secret = secret);
+                d
+            });
+            this.clone()
+        });
     }
 }

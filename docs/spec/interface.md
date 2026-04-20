@@ -237,8 +237,14 @@ Absent specification bugs, anything that is not defined here is either defined i
 >   for `volume`: `{ readonly, tmpfs, writes, exported, export_description }`.
 >   `container` has fields `image`, `command`, `args`, `env`, `volume_mounts`, `on_exit`, `memory`, `cpus`, `extra_caps`, `writable_rootfs`, `pids_limit`.
 >   `pod` has fields `service_mounts`, `http_bindings`, `tcp_bindings`, `udp_bindings` (each an array of strings).
-> - `params`: array of objects with fields `name`, `value`, `kind`, `required`, `description`, and `default_value`.
->   `value` is `null` if the param has not been set. The schema fields (`kind`, `required`, `description`, `default_value`) reflect any metadata set via the BSL param builder methods.
+> - `params`: array of objects with fields `name`, `value`, `is_set`, `secret`, `kind`, `required`, `description`, and `default_value`.
+>   `is_set` is `true` when the parameter has a stored value.
+>   `value` is the string value if the parameter is set and not secret; `null` if the parameter is unset or if it is secret.
+>   `secret` is `true` when the parameter's effective secret flag is `true` (see [param.schema.secret](#l--param.schema.secret) and [param.schema.secret-from-kind](#l--param.schema.secret-from-kind)).
+>   The schema fields (`kind`, `required`, `description`, `default_value`) reflect any metadata set via the BSL param builder methods.
+
+> i[app.describe.param-secret]
+> When a param's effective `secret` flag is `true`, its `value` must be `null` in the response regardless of whether a value is stored. Clients must use `is_set` to distinguish an unset secret from a set-but-redacted secret.
 > - `unknown_params`: array of objects with fields `name` and `value`, listing parameters that have a stored value in the database but whose name does not appear in the app's current script evaluation. This is informational only; these values have no effect until the script is updated to reference them.
 > - `actions`: array of objects with fields `name`, `description`, `kind`, and `params`.
 >   `kind` is one of `action`, `shell`, `install`, or `lifecycle`. The `lifecycle` kind is used for the Start Action, which is driven autonomously and cannot be manually invoked.
@@ -323,8 +329,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - `timestamp`: RFC 3339 timestamp.
 > - `kind`: `"register" | "script_update" | "param_set" | "param_unset"`.
 > - `param_name`: present for `param_set` and `param_unset`.
-> - `previous_value`: present for `param_set` and `param_unset`; `null` if the parameter was unset before this entry, otherwise a string.
-> - `new_value`: present for `param_set` and `param_unset`; `null` for `param_unset`, otherwise a string.
+> - `previous_value`: present for `param_set` and `param_unset`; `null` if the parameter was unset before this entry, if the parameter is currently secret, or if the value has been redacted. See `redacted`.
+> - `new_value`: present for `param_set` and `param_unset`; `null` for `param_unset`, if the parameter is currently secret, or if the value has been redacted. See `redacted`.
+> - `redacted`: boolean; `true` when the parameter named by `param_name` is currently secret, in which case `previous_value` and `new_value` are `null` regardless of whether values were recorded.
 > - `script_changed`: boolean; `true` for `register` and `script_update`, otherwise `true` only if the script content for this generation differs from the immediately preceding generation. (For `param_set` / `param_unset`, this is always `false`.)
 > - `operation_id`: identifier of the lifecycle operation triggered by this change, if any.
 > - `outcome`: `"pending" | "succeeded" | "failed"`; `null` if no lifecycle operation was triggered. When `failed`, an `error` field carries a short description.
@@ -354,6 +361,10 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Param values are stored durably, keyed by `(app_name, param_name)`.
 > They are restored into the script scope on every script evaluation.
 > A param with no stored value is treated as absent.
+
+> i[param.store.secret]
+> The `set` and `unset` operations must route secret parameter values (those whose effective `secret` flag is `true`) through protected storage as defined in [secret.storage](#r--secret.storage).
+> Events emitted for secret parameter changes must never carry the plaintext values.
 
 > i[param.set]
 > `/apps/params/set { app, name, value }` persists the value and bumps the app's [generation](#r--generation.definition) with a `ParamSet` history entry. If the change matches one of the [transitions](#l--param.on-change.transitions) defined in the language spec, an `on_change` handler is registered for that param, and the app is installed, the handler is scheduled as a lifecycle operation.

@@ -9,11 +9,12 @@
 
 use std::{collections::BTreeMap, fmt::Write as FmtWrite};
 
+use secrecy::{ExposeSecret, SecretString};
 use sha2::{Digest, Sha256};
 
 use crate::{
     defs::app::App,
-    runtime::{apps, db::Db},
+    runtime::{apps, db::Db, secrets::Cipher},
 };
 
 pub type Generation = u64;
@@ -81,6 +82,10 @@ pub struct HistoryEntry {
     pub param_name: Option<String>,
     pub previous_value: Option<String>,
     pub new_value: Option<String>,
+    /// True when the previous value was stored encrypted (redact in responses).
+    pub previous_value_redacted: bool,
+    /// True when the new value was stored encrypted (redact in responses).
+    pub new_value_redacted: bool,
     pub script_hash: String,
     pub operation_id: Option<String>,
     pub outcome: Option<Outcome>,
@@ -235,22 +240,49 @@ fn current_script_hash(db: &Db, app: &str) -> rusqlite::Result<String> {
 
 /// Bump the generation for a parameter set (transitioning to `Some(new)`).
 /// The previous value (`None` for `None → Some`) is recorded for history.
+// r[impl secret.history]
 pub fn bump_param_set(
     db: &Db,
     app: &str,
     name: &str,
     previous: Option<&str>,
     new_value: &str,
+    cipher: &Cipher,
+    is_secret: bool,
 ) -> rusqlite::Result<Generation> {
     let hash = current_script_hash(db, app)?;
     let gen_n = next_generation_for(db, app)?;
-    db.conn.execute(
-        "INSERT INTO generations
-            (app, generation, created_at, kind, param_name,
-             previous_value, new_value, script_hash)
-         VALUES (?1, ?2, ?3, 'param_set', ?4, ?5, ?6, ?7)",
-        rusqlite::params![app, gen_n as i64, now(), name, previous, new_value, hash],
-    )?;
+    if is_secret {
+        let prev_ct = previous
+            .map(|p| {
+                let s = SecretString::new(p.to_owned().into());
+                cipher
+                    .encrypt(&s)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+            })
+            .transpose()?;
+        let new_ct = {
+            let s = SecretString::new(new_value.to_owned().into());
+            cipher
+                .encrypt(&s)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+        };
+        db.conn.execute(
+            "INSERT INTO generations
+                (app, generation, created_at, kind, param_name,
+                 previous_value_ciphertext, new_value_ciphertext, script_hash)
+             VALUES (?1, ?2, ?3, 'param_set', ?4, ?5, ?6, ?7)",
+            rusqlite::params![app, gen_n as i64, now(), name, prev_ct, new_ct, hash],
+        )?;
+    } else {
+        db.conn.execute(
+            "INSERT INTO generations
+                (app, generation, created_at, kind, param_name,
+                 previous_value, new_value, script_hash)
+             VALUES (?1, ?2, ?3, 'param_set', ?4, ?5, ?6, ?7)",
+            rusqlite::params![app, gen_n as i64, now(), name, previous, new_value, hash],
+        )?;
+    }
     db.conn.execute(
         "UPDATE registered_apps SET current_generation = ?1 WHERE name = ?2",
         rusqlite::params![gen_n as i64, app],
@@ -259,21 +291,40 @@ pub fn bump_param_set(
 }
 
 /// Bump the generation for a parameter unset (transitioning to `None`).
+// r[impl secret.history]
 pub fn bump_param_unset(
     db: &Db,
     app: &str,
     name: &str,
     previous: &str,
+    cipher: &Cipher,
+    is_secret: bool,
 ) -> rusqlite::Result<Generation> {
     let hash = current_script_hash(db, app)?;
     let gen_n = next_generation_for(db, app)?;
-    db.conn.execute(
-        "INSERT INTO generations
-            (app, generation, created_at, kind, param_name,
-             previous_value, new_value, script_hash)
-         VALUES (?1, ?2, ?3, 'param_unset', ?4, ?5, NULL, ?6)",
-        rusqlite::params![app, gen_n as i64, now(), name, previous, hash],
-    )?;
+    if is_secret {
+        let prev_ct = {
+            let s = SecretString::new(previous.to_owned().into());
+            cipher
+                .encrypt(&s)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+        };
+        db.conn.execute(
+            "INSERT INTO generations
+                (app, generation, created_at, kind, param_name,
+                 previous_value_ciphertext, script_hash)
+             VALUES (?1, ?2, ?3, 'param_unset', ?4, ?5, ?6)",
+            rusqlite::params![app, gen_n as i64, now(), name, prev_ct, hash],
+        )?;
+    } else {
+        db.conn.execute(
+            "INSERT INTO generations
+                (app, generation, created_at, kind, param_name,
+                 previous_value, new_value, script_hash)
+             VALUES (?1, ?2, ?3, 'param_unset', ?4, ?5, NULL, ?6)",
+            rusqlite::params![app, gen_n as i64, now(), name, previous, hash],
+        )?;
+    }
     db.conn.execute(
         "UPDATE registered_apps SET current_generation = ?1 WHERE name = ?2",
         rusqlite::params![gen_n as i64, app],
@@ -330,7 +381,8 @@ pub fn list(
     let entries = if let Some(before) = before {
         let mut stmt = db.conn.prepare(
             "SELECT generation, created_at, kind, param_name, previous_value,
-                    new_value, script_hash, operation_id, outcome, outcome_error
+                    new_value, script_hash, operation_id, outcome, outcome_error,
+                    previous_value_ciphertext, new_value_ciphertext
              FROM generations
              WHERE app = ?1 AND generation < ?2
              ORDER BY generation DESC
@@ -340,7 +392,8 @@ pub fn list(
     } else {
         let mut stmt = db.conn.prepare(
             "SELECT generation, created_at, kind, param_name, previous_value,
-                    new_value, script_hash, operation_id, outcome, outcome_error
+                    new_value, script_hash, operation_id, outcome, outcome_error,
+                    previous_value_ciphertext, new_value_ciphertext
              FROM generations
              WHERE app = ?1
              ORDER BY generation DESC
@@ -356,6 +409,8 @@ fn rows_to_entries(mut rows: rusqlite::Rows<'_>) -> rusqlite::Result<Vec<History
     while let Some(row) = rows.next()? {
         let kind_str: String = row.get(2)?;
         let outcome_str: Option<String> = row.get(8)?;
+        let prev_ct: Option<Vec<u8>> = row.get(10)?;
+        let new_ct: Option<Vec<u8>> = row.get(11)?;
         out.push(HistoryEntry {
             generation: row.get::<_, i64>(0)? as Generation,
             created_at: row.get(1)?,
@@ -363,6 +418,8 @@ fn rows_to_entries(mut rows: rusqlite::Rows<'_>) -> rusqlite::Result<Vec<History
             param_name: row.get(3)?,
             previous_value: row.get(4)?,
             new_value: row.get(5)?,
+            previous_value_redacted: prev_ct.is_some(),
+            new_value_redacted: new_ct.is_some(),
             script_hash: row.get(6)?,
             operation_id: row.get(7)?,
             outcome: outcome_str.as_deref().and_then(Outcome::parse),
@@ -376,7 +433,8 @@ fn rows_to_entries(mut rows: rusqlite::Rows<'_>) -> rusqlite::Result<Vec<History
 pub fn get(db: &Db, app: &str, generation: Generation) -> rusqlite::Result<Option<HistoryEntry>> {
     let mut stmt = db.conn.prepare(
         "SELECT generation, created_at, kind, param_name, previous_value,
-                new_value, script_hash, operation_id, outcome, outcome_error
+                new_value, script_hash, operation_id, outcome, outcome_error,
+                previous_value_ciphertext, new_value_ciphertext
          FROM generations
          WHERE app = ?1 AND generation = ?2",
     )?;
@@ -387,13 +445,15 @@ pub fn get(db: &Db, app: &str, generation: Generation) -> rusqlite::Result<Optio
 /// Build the parameter map at a specific generation by walking history.
 /// For each parameter, the most recent ParamSet/ParamUnset entry at or before
 /// `generation` is taken; ParamUnset (or no entry) yields None.
+// r[impl secret.history]
 pub fn param_map_at(
     db: &Db,
     app: &str,
     generation: Generation,
+    cipher: &Cipher,
 ) -> rusqlite::Result<BTreeMap<String, String>> {
     let mut stmt = db.conn.prepare(
-        "SELECT param_name, kind, new_value
+        "SELECT param_name, kind, new_value, new_value_ciphertext
          FROM generations
          WHERE app = ?1
            AND generation <= ?2
@@ -411,10 +471,23 @@ pub fn param_map_at(
         }
         last_param = Some(name.clone());
         let kind: String = row.get(1)?;
-        if kind == "param_set"
-            && let Some(value) = row.get::<_, Option<String>>(2)?
-        {
-            map.insert(name, value);
+        if kind == "param_set" {
+            let plaintext: Option<String> = row.get(2)?;
+            let ciphertext: Option<Vec<u8>> = row.get(3)?;
+            let value = if let Some(ct) = ciphertext {
+                match cipher.decrypt(&ct) {
+                    Ok(s) => Some(s.expose_secret().to_owned()),
+                    Err(e) => {
+                        tracing::error!(app, param = %name, "failed to decrypt param history for reconstruction: {e}");
+                        None
+                    }
+                }
+            } else {
+                plaintext
+            };
+            if let Some(v) = value {
+                map.insert(name, v);
+            }
         }
     }
     Ok(map)
@@ -450,6 +523,7 @@ pub fn reconstruct_app_def(
     app: &str,
     generation: Generation,
     limits: &crate::ScriptLimits,
+    cipher: &Cipher,
 ) -> Result<App, Error> {
     if get(db, app, generation)?.is_none() {
         return Err(Error::NotFound {
@@ -459,7 +533,7 @@ pub fn reconstruct_app_def(
     }
     let hash = script_hash_at(db, app, generation)?;
     let script = script_body(db, &hash)?.ok_or_else(|| Error::MissingScript(hash.clone()))?;
-    let params = param_map_at(db, app, generation)?;
+    let params = param_map_at(db, app, generation, cipher)?;
     let (evaled, script_error) = apps::evaluate_script(app, &script, &params, limits);
     if let Some(e) = script_error {
         return Err(Error::Script(e));

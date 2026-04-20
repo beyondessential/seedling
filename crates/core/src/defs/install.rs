@@ -13,6 +13,15 @@ pub struct ParamDef {
     pub required: bool,
     pub default_value: Option<String>,
     pub description: Option<String>,
+    // l[impl param.schema.secret]
+    pub secret: bool,
+}
+
+impl ParamDef {
+    // l[impl param.schema.secret-from-kind]
+    pub fn is_secret(&self) -> bool {
+        self.secret || matches!(self.kind, ParamKind::Password | ParamKind::WeakPassword)
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]

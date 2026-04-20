@@ -260,7 +260,7 @@ This is currently the only value.
 > l[param.schema]
 > A `Param` returned by `app.param()` may have schema metadata attached to it using builder methods. These methods return the same `Param` so calls can be chained.
 >
-> Schema metadata describes how the parameter should be presented and validated in management interfaces. Defaults: `kind` is `"text"`, `required` is `false`, `default_value` is absent, `description` is absent.
+> Schema metadata describes how the parameter should be presented and validated in management interfaces. Defaults: `kind` is `"text"`, `required` is `false`, `default_value` is absent, `description` is absent, `secret` is `false` (unless implied by `kind`).
 
 > l[param.schema.kind]
 > `param.kind(kind: string)` sets the kind of the parameter. Valid values are the same as for [Install Action params](#l--action.install.requirements): `"text"`, `"email"`, `"password"`, `"weak-password"`. Providing an unknown kind must throw.
@@ -273,6 +273,13 @@ This is currently the only value.
 
 > l[param.schema.description]
 > `param.description(description: string)` sets the human-readable description for the parameter.
+
+> l[param.schema.secret]
+> `param.secret(secret: bool)` marks the parameter as sensitive. When `true`, the parameter's value must be stored with confidentiality at rest, must never be returned to API clients or emitted in events, and must not appear in logs.
+
+> l[param.schema.secret-from-kind]
+> Parameters with `kind` `"password"` or `"weak-password"` are implicitly secret: their `secret` flag is treated as `true` unless explicitly overridden with `param.secret(false)`.
+> The `secret` builder may be called after `kind` to override this implication in either direction.
 
 # Service
 
@@ -712,7 +719,8 @@ This is currently the only value.
 > - `kind` (optional): how to present/validate the field, defaults to `"text"`;
 > - `required` (optional): boolean, defaults to `true`;
 > - `description` (optional): free-form text, for the operator to understand what the value is or is for;
-> - `default_value` (optional): string, the value to use if none is provided.
+> - `default_value` (optional): string, the value to use if none is provided;
+> - `secret` (optional): boolean; defaults to `false`, but `"password"` and `"weak-password"` kinds imply `true` unless explicitly set to `false`. When `true`, the value is treated as sensitive for the duration of the install operation.
 >
 > If `default_value` is set and `required` is `true`, the default value is pre-populated in the field input (but the field is still mandatory and cannot be submitted empty).
 

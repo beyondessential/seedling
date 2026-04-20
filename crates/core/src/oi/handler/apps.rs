@@ -309,6 +309,7 @@ fn serialize_param_schema(
                     "required": req.required,
                     "description": req.description,
                     "default_value": req.default_value,
+                    "secret": req.is_secret(),
                 }),
             )
         })
@@ -424,13 +425,14 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     let base_status = reg.status_of(name).unwrap();
     let status = effective_app_status(base_status, entry, &state.db);
 
-    // Load stored param values from DB. Names come from AppDef; values come
-    // from the params table. Params declared by the script but never set by
-    // the operator are shown as null.
+    // Load stored param values from DB (both plaintext and secret tables).
+    // Names come from AppDef; values come from the params/secret_params tables.
+    // Params declared by the script but never set by the operator are shown as null.
     let name_owned = name.to_owned();
-    let stored_params = state.db.call(move |db| {
-        crate::runtime::apps::load_params_for_app(db, &name_owned).unwrap_or_default()
-    });
+    let cipher = std::sync::Arc::clone(&state.cipher);
+    let stored_params = state
+        .db
+        .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned));
 
     // Fetch all active faults for this app once, then split by level.
     let name_owned = name.to_owned();
@@ -467,22 +469,39 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     let def = entry.app.def.load();
 
     // i[app.describe]
+    // i[impl app.describe.param-secret]
     let params_json: Vec<Value> = def
         .params
         .iter()
         .map(|(k, schema)| {
-            let value = stored_params
-                .get(k)
-                .map(|v| Value::String(v.clone()))
-                .unwrap_or(Value::Null);
-            json!({
-                "name": k,
-                "value": value,
-                "kind": install_requirement_kind_str(schema.kind),
-                "required": schema.required,
-                "description": schema.description,
-                "default_value": schema.default_value,
-            })
+            let is_set = stored_params.contains_key(k);
+            if schema.is_secret() {
+                json!({
+                    "name": k,
+                    "value": Value::Null,
+                    "is_set": is_set,
+                    "secret": true,
+                    "kind": install_requirement_kind_str(schema.kind),
+                    "required": schema.required,
+                    "description": schema.description,
+                    "default_value": schema.default_value,
+                })
+            } else {
+                let value = stored_params
+                    .get(k)
+                    .map(|v| Value::String(v.clone()))
+                    .unwrap_or(Value::Null);
+                json!({
+                    "name": k,
+                    "value": value,
+                    "is_set": is_set,
+                    "secret": false,
+                    "kind": install_requirement_kind_str(schema.kind),
+                    "required": schema.required,
+                    "description": schema.description,
+                    "default_value": schema.default_value,
+                })
+            }
         })
         .collect();
 
@@ -824,6 +843,14 @@ pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -
         }
     }
 
+    // Snapshot the live param schema once for redaction decisions.
+    let live_params_schema = {
+        let reg = state.registry.read();
+        reg.get(name)
+            .map(|e| e.app.def.load().params.clone())
+            .unwrap_or_default()
+    };
+
     let limit = params.limit.unwrap_or(50).clamp(1, 200);
     let name_owned = name.to_owned();
     let before = params.before;
@@ -873,14 +900,27 @@ pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -
                 crate::runtime::generations::Kind::ParamSet
                     | crate::runtime::generations::Kind::ParamUnset
             ) {
-                obj.insert(
-                    "previous_value".into(),
-                    e.previous_value.map_or(Value::Null, Value::String),
-                );
-                obj.insert(
-                    "new_value".into(),
-                    e.new_value.map_or(Value::Null, Value::String),
-                );
+                // i[impl generation.history]
+                // r[impl secret.redaction]
+                let is_secret = e
+                    .param_name
+                    .as_deref()
+                    .and_then(|n| live_params_schema.get(n))
+                    .map(|d| d.is_secret())
+                    .unwrap_or(false);
+                let redacted = is_secret || e.previous_value_redacted || e.new_value_redacted;
+                if redacted {
+                    obj.insert("redacted".into(), json!(true));
+                } else {
+                    obj.insert(
+                        "previous_value".into(),
+                        e.previous_value.map_or(Value::Null, Value::String),
+                    );
+                    obj.insert(
+                        "new_value".into(),
+                        e.new_value.map_or(Value::Null, Value::String),
+                    );
+                }
             }
             obj.insert(
                 "script_changed".into(),

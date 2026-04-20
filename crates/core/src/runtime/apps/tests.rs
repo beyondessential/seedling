@@ -232,8 +232,10 @@ fn registry_load_from_db_restores_params() {
         )
         .expect("set current_generation");
 
+    let cipher = crate::runtime::secrets::Cipher::for_tests();
     let registry = AppRegistry::load_from_db(
         &db,
+        &cipher,
         Arc::new(Notify::new()),
         &crate::ScriptLimits::default(),
     )

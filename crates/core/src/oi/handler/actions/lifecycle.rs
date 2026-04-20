@@ -45,6 +45,7 @@ fn run_operation_loop(
     tick_notify: Arc<Notify>,
     op_ctx: &OperationEventCtx,
     script_limits: &crate::ScriptLimits,
+    cipher: Arc<crate::runtime::secrets::Cipher>,
     operation_volume_bindings: HashMap<String, OperationVolumeBinding>,
 ) -> bool {
     let app_name = op_ctx.app.as_str();
@@ -96,6 +97,7 @@ fn run_operation_loop(
                 source_generation: op_ctx.source_generation,
                 target_generation: op_ctx.target_generation,
                 script_limits: Some(script_limits.clone()),
+                cipher: Some(Arc::clone(&cipher)),
                 operation_volume_bindings: operation_volume_bindings.clone(),
             },
             &mut scope,
@@ -318,6 +320,7 @@ pub fn spawn_accepted_operation(
     let db_path = state.db_path.clone();
     let event_tx = state.event_tx.clone();
     let script_limits = state.script_limits.clone();
+    let cipher = Arc::clone(&state.cipher);
     let is_install = action_name == "install";
 
     tokio::spawn(async move {
@@ -340,6 +343,7 @@ pub fn spawn_accepted_operation(
             let tick_notify = Arc::clone(&tick_notify);
             let params = params.clone();
             let op_ctx = op_ctx.clone();
+            let cipher = Arc::clone(&cipher);
 
             tokio::task::spawn_blocking(move || {
                 let db = match open_operation_dbs(&db_path, &app_name) {
@@ -355,6 +359,7 @@ pub fn spawn_accepted_operation(
                     tick_notify,
                     &op_ctx,
                     &script_limits,
+                    cipher,
                     HashMap::new(),
                 )
             })
@@ -420,6 +425,7 @@ pub(crate) async fn run_operation_for_backup(
 
     let db_path = state.db_path.clone();
     let script_limits = state.script_limits.clone();
+    let cipher = Arc::clone(&state.cipher);
     let operation_id_str = operation_id.0.clone();
 
     let op_ctx = state.event_tx.operation(
@@ -450,6 +456,7 @@ pub(crate) async fn run_operation_for_backup(
                 tick_notify_clone,
                 &op_ctx,
                 &script_limits,
+                cipher,
                 operation_volume_bindings,
             )
         })

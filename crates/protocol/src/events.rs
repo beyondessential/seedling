@@ -34,23 +34,32 @@ pub enum OiEvent {
         actor: Option<Arc<Actor>>,
     },
     // r[impl audit.log.generations]
+    // i[impl param.store.secret]
     ParamSet {
         timestamp: Timestamp,
         app: String,
         name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
         previous_value: Option<String>,
-        new_value: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        new_value: Option<String>,
+        #[serde(skip_serializing_if = "is_false")]
+        redacted: bool,
         generation: u64,
         previous_generation: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
     // r[impl audit.log.generations]
+    // i[impl param.store.secret]
     ParamUnset {
         timestamp: Timestamp,
         app: String,
         name: String,
-        previous_value: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        previous_value: Option<String>,
+        #[serde(skip_serializing_if = "is_false")]
+        redacted: bool,
         generation: u64,
         previous_generation: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -215,6 +224,10 @@ pub fn new_event_channel() -> EventSender {
 
 fn now() -> Timestamp {
     Timestamp::now()
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl EventSender {
@@ -634,7 +647,23 @@ impl ParamEventCtx {
             app: self.app.clone(),
             name: name.to_owned(),
             previous_value: previous_value.map(str::to_owned),
-            new_value: new_value.to_owned(),
+            new_value: Some(new_value.to_owned()),
+            redacted: false,
+            generation: self.generation,
+            previous_generation: self.previous_generation,
+            actor: self.actor.clone(),
+        });
+    }
+
+    // i[impl param.store.secret]
+    pub fn set_redacted(&self, name: &str) {
+        self.tx.emit(OiEvent::ParamSet {
+            timestamp: now(),
+            app: self.app.clone(),
+            name: name.to_owned(),
+            previous_value: None,
+            new_value: None,
+            redacted: true,
             generation: self.generation,
             previous_generation: self.previous_generation,
             actor: self.actor.clone(),
@@ -646,7 +675,22 @@ impl ParamEventCtx {
             timestamp: now(),
             app: self.app.clone(),
             name: name.to_owned(),
-            previous_value: previous_value.to_owned(),
+            previous_value: Some(previous_value.to_owned()),
+            redacted: false,
+            generation: self.generation,
+            previous_generation: self.previous_generation,
+            actor: self.actor.clone(),
+        });
+    }
+
+    // i[impl param.store.secret]
+    pub fn unset_redacted(&self, name: &str) {
+        self.tx.emit(OiEvent::ParamUnset {
+            timestamp: now(),
+            app: self.app.clone(),
+            name: name.to_owned(),
+            previous_value: None,
+            redacted: true,
             generation: self.generation,
             previous_generation: self.previous_generation,
             actor: self.actor.clone(),

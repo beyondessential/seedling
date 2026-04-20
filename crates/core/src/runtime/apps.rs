@@ -16,6 +16,7 @@ use crate::{
 
 mod params;
 mod registry_faults;
+pub mod secret_params;
 
 pub use params::{
     delete_app_params, delete_one_param, load_params_for_app, sync_script_error_fault, upsert_param,
@@ -194,6 +195,7 @@ impl AppRegistry {
     // i[app.persist]
     pub fn load_from_db(
         db: &Db,
+        cipher: &crate::runtime::secrets::Cipher,
         tick_notify: Arc<Notify>,
         limits: &crate::ScriptLimits,
     ) -> rusqlite::Result<Self> {
@@ -242,14 +244,11 @@ impl AppRegistry {
                     continue;
                 }
             };
-            let stored = match load_params_for_app(db, &name) {
-                Ok(p) => p,
-                Err(e) => {
-                    tracing::warn!("failed to load params for app '{name}': {e}");
-                    BTreeMap::new()
-                }
-            };
+            let stored = load_all_params_for_app(db, cipher, &name);
             let (app, raw_error) = evaluate_script(&name, &script, &stored, limits);
+            // r[impl secret.migration] — after the script declares which params are secret,
+            // migrate any plaintext rows that should now be encrypted.
+            migrate_newly_secret_params(db, cipher, &name, &app);
             let script_error = raw_error.map(|e| {
                 tracing::warn!("failed to reload script for app '{name}': {e}");
                 (e.to_string(), Timestamp::now())
@@ -363,6 +362,42 @@ pub fn transition_phase(
         rusqlite::params![installed as i64, uninstalling as i64, app_name],
     ) {
         tracing::error!(app = %app_name, "failed to persist phase transition: {e}");
+    }
+}
+
+/// Load both plaintext and secret params, merging into a single map.
+/// Used before script evaluation, when schema isn't known yet.
+pub fn load_all_params_for_app(
+    db: &Db,
+    cipher: &crate::runtime::secrets::Cipher,
+    app_name: &str,
+) -> BTreeMap<String, String> {
+    let mut merged = load_params_for_app(db, app_name).unwrap_or_default();
+    match secret_params::load_secret_params_for_app(db, cipher, app_name) {
+        Ok(secrets) => merged.extend(secrets),
+        Err(e) => tracing::warn!(app = %app_name, "failed to load secret params: {e}"),
+    }
+    merged
+}
+
+// r[impl secret.migration]
+fn migrate_newly_secret_params(
+    db: &Db,
+    cipher: &crate::runtime::secrets::Cipher,
+    app_name: &str,
+    app: &App,
+) {
+    let def = app.def.load();
+    for (param_name, param_def) in &def.params {
+        if param_def.is_secret() {
+            if let Err(e) = secret_params::migrate_to_secret(db, cipher, app_name, param_name) {
+                tracing::warn!(
+                    app = %app_name,
+                    param = %param_name,
+                    "failed to migrate param to secret storage: {e}"
+                );
+            }
+        }
     }
 }
 

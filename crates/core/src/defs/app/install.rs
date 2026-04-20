@@ -71,6 +71,11 @@ pub(super) fn parse_param_defs(
                 .get("description")
                 .and_then(|v| v.clone().into_string().ok());
 
+            let secret = req_map
+                .get("secret")
+                .and_then(|v| v.as_bool().ok())
+                .unwrap_or(false);
+
             reqs.insert(
                 key.to_string(),
                 ParamDef {
@@ -78,6 +83,7 @@ pub(super) fn parse_param_defs(
                     required,
                     default_value,
                     description,
+                    secret,
                 },
             );
         }

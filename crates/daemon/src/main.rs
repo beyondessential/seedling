@@ -257,6 +257,20 @@ async fn main() {
         std::process::exit(1);
     });
 
+    let cipher = {
+        let key_path = data_dir.join("seedling.db.key");
+        let c = seedling_core::runtime::secrets::Cipher::load_or_create(&key_path).unwrap_or_else(
+            |e| {
+                tracing::error!(
+                    "cannot load or create secret key {}: {e}",
+                    key_path.display()
+                );
+                std::process::exit(1);
+            },
+        );
+        std::sync::Arc::new(c)
+    };
+
     // ---------------------------------------------------------------------------
     // System backends
     // ---------------------------------------------------------------------------
@@ -294,7 +308,7 @@ async fn main() {
     // ---------------------------------------------------------------------------
 
     let registry = tokio::task::block_in_place(|| {
-        AppRegistry::load_from_db(&db, Arc::clone(&tick_notify), &script_limits)
+        AppRegistry::load_from_db(&db, &cipher, Arc::clone(&tick_notify), &script_limits)
     })
     .unwrap_or_else(|e| {
         tracing::error!("failed to load registered apps: {e}");
@@ -551,6 +565,7 @@ async fn main() {
         event_tx: event_tx.clone(),
         script_limits,
         dns_servers,
+        cipher,
     });
 
     // Pre-pull the ubuntu image used by volume shells so it is warm before

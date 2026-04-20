@@ -35,4 +35,6 @@ pub struct OiState {
     pub script_limits: crate::ScriptLimits,
     /// DNS servers injected into workload containers' /etc/resolv.conf.
     pub dns_servers: Vec<std::net::Ipv6Addr>,
+    // r[impl secret.key]
+    pub cipher: Arc<crate::runtime::secrets::Cipher>,
 }

@@ -241,6 +241,9 @@ pub struct OperationContext<'a, W: WorldStateOracle + 'static> {
     /// `on_change` handlers. Required only when source_generation > 0 and
     /// the action is a parameter-change handler.
     pub script_limits: Option<crate::ScriptLimits>,
+    /// Cipher for decrypting secret param history when reconstructing the
+    /// prior `App` for `on_change` handlers.
+    pub cipher: Option<std::sync::Arc<crate::runtime::secrets::Cipher>>,
     /// Operation-scoped external volume bindings injected by the runtime.
     /// Empty for normal operations; populated for internal operations such as
     /// backup actions that need to expose snapshot paths to the closure.
@@ -273,6 +276,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         source_generation,
         target_generation: _,
         script_limits,
+        cipher,
         operation_volume_bindings,
     } = op;
 
@@ -358,16 +362,18 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     // empty: the spec only defines `old` for on_change handlers, but the
     // closure-call script still references the variable.
     let old_app = if is_param_change && source_generation > 0 {
-        match (&db, &script_limits) {
-            (Some(db_handle), Some(limits)) => {
+        match (&db, &script_limits, &cipher) {
+            (Some(db_handle), Some(limits), Some(cipher)) => {
                 let app_name_owned = app.def.load().name.clone();
                 let limits = limits.clone();
+                let cipher = std::sync::Arc::clone(cipher);
                 db_handle.call(move |db| {
                     match generations::reconstruct_app_def(
                         db,
                         &app_name_owned,
                         source_generation,
                         &limits,
+                        &cipher,
                     ) {
                         Ok(a) => a,
                         Err(e) => {
@@ -384,7 +390,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
             _ => {
                 debug_assert!(
                     false,
-                    "param_change replay missing db or script_limits in OperationContext"
+                    "param_change replay missing db, script_limits, or cipher in OperationContext"
                 );
                 App::default()
             }
