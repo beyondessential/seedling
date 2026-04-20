@@ -19,18 +19,18 @@ check:
 
 # Watch source files and rebuild on changes
 watch-build:
-    SKIP_FRONTEND_BUILD=1 watchexec cargo build
+    SKIP_FRONTEND_BUILD=1 watchexec -I cargo build
 
 # Watch the built binary and restart the daemon on changes (requires sudo)
 watch-run:
-    watchexec -IrW target/debug --ignore-nothing \
+    watchexec -IrW target/debug --ignore-nothing -f seedling \
         -E SSLKEYLOGFILE=/tmp/seedling.keylog \
         'sudo --preserve-env=SEEDLING_LOG --preserve-env=SSLKEYLOGFILE \
-        target/debug/seedling --data-dir {{data_dir}} {{verbosity}} 2>&1 | tee -a seedling.log'
+        target/debug/seedling --data-dir {{ data_dir }} {{ verbosity }} 2>&1 | tee -a seedling.log'
 
 # Run seedling-ctl with arbitrary arguments
 ctl *args:
-    target/debug/seedling-ctl {{args}}
+    target/debug/seedling-ctl {{ args }}
 
 # Tail the live event feed from the daemon
 events:
