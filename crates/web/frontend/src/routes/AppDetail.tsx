@@ -1,5 +1,6 @@
 import AddIcon from "@mui/icons-material/Add";
 import ArticleIcon from "@mui/icons-material/Article";
+import CameraAltIcon from "@mui/icons-material/CameraAlt";
 import CheckIcon from "@mui/icons-material/Check";
 import ClearIcon from "@mui/icons-material/Clear";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
@@ -42,6 +43,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { MapVolumeDialog } from "../components/MapVolumeDialog";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useSessionContext } from "../components/SessionProvider";
+import { SnapshotVolumeDialog } from "../components/SnapshotVolumeDialog";
 import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
 import { useEventRefresh } from "../hooks/useEventRefresh";
@@ -178,6 +180,9 @@ function ResourcesSection({
   const { execute: executeRestart, loading: restarting } = useOiAction();
   const { execute: executeStop, loading: stopping } = useOiAction();
   const { openVolumeShell } = useSessionContext();
+  const [snapshotTarget, setSnapshotTarget] = useState<
+    { source: string; label: string } | null
+  >(null);
 
   const scale = async (deploymentName: string, value: number) => {
     try {
@@ -214,8 +219,23 @@ function ResourcesSection({
     }
   };
 
+  const snapshotDialog = snapshotTarget && (
+    <SnapshotVolumeDialog
+      key={snapshotTarget.source}
+      source={snapshotTarget.source}
+      sourceLabel={snapshotTarget.label}
+      onClose={() => setSnapshotTarget(null)}
+      onSuccess={onRefresh}
+    />
+  );
+
   if (resources.length === 0)
-    return <Typography color="text.secondary">No resources.</Typography>;
+    return (
+      <>
+        <Typography color="text.secondary">No resources.</Typography>
+        {snapshotDialog}
+      </>
+    );
   return (
     <Stack spacing={2}>
       {resources.map((r) => (
@@ -293,17 +313,32 @@ function ResourcesSection({
             )}
             {/* w[volumes.shell-ui] */}
             {r.type === "volume" && (
-              <Tooltip title="Open shell">
-                <IconButton
-                  size="small"
-                  onClick={() => openVolumeShell(
-                    [{ kind: "app", app: appName, volume: r.name }],
-                    `${appName}.${r.name}`,
-                  )}
-                >
-                  <TerminalIcon sx={{ fontSize: 14 }} />
-                </IconButton>
-              </Tooltip>
+              <>
+                <Tooltip title="Open shell">
+                  <IconButton
+                    size="small"
+                    onClick={() => openVolumeShell(
+                      [{ kind: "app", app: appName, volume: r.name }],
+                      `${appName}.${r.name}`,
+                    )}
+                  >
+                    <TerminalIcon sx={{ fontSize: 14 }} />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title="Snapshot">
+                  <IconButton
+                    size="small"
+                    onClick={() =>
+                      setSnapshotTarget({
+                        source: `${appName}/${r.name}`,
+                        label: `${appName}/${r.name}`,
+                      })
+                    }
+                  >
+                    <CameraAltIcon sx={{ fontSize: 14 }} />
+                  </IconButton>
+                </Tooltip>
+              </>
             )}
             {STOPPABLE_KINDS.has(r.type) && (
               r.stopped ? (
@@ -388,6 +423,7 @@ function ResourcesSection({
           </TableContainer>
         </Box>
       ))}
+      {snapshotDialog}
     </Stack>
   );
 }
