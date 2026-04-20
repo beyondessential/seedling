@@ -521,38 +521,6 @@ impl DbHandle {
             .recv()
             .expect("database thread exited without returning result")
     }
-
-    /// Like [`call`] but does not require the closure to be `'static`.
-    ///
-    /// Safe because this function blocks until the DB thread finishes executing
-    /// the closure, so captured borrows cannot escape their source lifetimes.
-    /// The transmute merely removes the `'static` bound from the erased type;
-    /// the blocking rendezvous enforces the actual lifetime constraint.
-    pub fn call_ref<'a, R>(&self, f: impl FnOnce(&Db) -> R + Send + 'a) -> R
-    where
-        R: Send + 'static,
-    {
-        let (result_tx, result_rx) = std::sync::mpsc::sync_channel::<R>(0);
-        // Wrap the closure so it sends its result through the channel.
-        let wrapper: Box<dyn FnOnce(&Db) + Send + 'a> = Box::new(move |db| {
-            let _ = result_tx.send(f(db));
-        });
-        // SAFETY: The sync_channel rendezvous (capacity 0) guarantees this
-        // function does not return until the DB thread has called the closure
-        // and sent its result.  Therefore the closure — and any borrows it
-        // captures — cannot outlive the calling stack frame.  We widen the
-        // lifetime only to satisfy the `DbJob: 'static` bound on the channel.
-        let job: DbJob = unsafe {
-            std::mem::transmute::<
-                Box<dyn FnOnce(&Db) + Send + 'a>,
-                Box<dyn FnOnce(&Db) + Send + 'static>,
-            >(wrapper)
-        };
-        self.tx.send(job).expect("database thread has exited");
-        result_rx
-            .recv()
-            .expect("database thread exited without returning result")
-    }
 }
 
 #[cfg(test)]

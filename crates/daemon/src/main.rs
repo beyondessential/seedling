@@ -581,44 +581,57 @@ async fn main() {
                 // r[impl schedule.tick]
                 // Snapshot generations before acquiring the DB to maintain
                 // consistent lock order (registry → db) across the codebase.
-                let app_generations: std::collections::HashMap<String, u64> = {
-                    let reg = schedule_registry.read();
-                    reg.list()
-                        .into_iter()
-                        .filter_map(|(name, _)| {
-                            reg.get(&name).map(|e| (name, e.current_generation))
-                        })
-                        .collect()
-                };
-                let accepted_fires = schedule_db.call_ref(|db| {
-                    let mut sched = schedule_scheduler.lock();
-                    let fired = schedule_ticker.maybe_tick(db, &mut sched, &|app_name| {
-                        app_generations.get(app_name).copied()
-                    });
-                    drop(sched);
-                    fired
-                        .into_iter()
-                        .filter(|f| f.accepted && f.operation_id.is_some())
-                        .collect::<Vec<_>>()
-                });
-                for fire in accepted_fires {
-                    if let Some(op_id) = fire.operation_id {
-                        seedling_core::oi::handler::actions::lifecycle::spawn_accepted_operation(
-                            Arc::clone(&oi_state_for_sched),
-                            fire.app,
-                            fire.action,
-                            op_id,
-                            serde_json::Map::new(),
-                            fire.generation,
-                            fire.generation,
-                            "schedule".to_owned(),
-                            None,
+                if let Some((now, is_startup)) = schedule_ticker.maybe_tick() {
+                    let app_generations: std::collections::HashMap<String, u64> = {
+                        let reg = schedule_registry.read();
+                        reg.list()
+                            .into_iter()
+                            .filter_map(|(name, _)| {
+                                reg.get(&name).map(|e| (name, e.current_generation))
+                            })
+                            .collect()
+                    };
+                    let sched_arc = Arc::clone(&schedule_scheduler);
+                    let accepted_fires = schedule_db.call(move |db| {
+                        let mut sched = sched_arc.lock();
+                        let fired = seedling_core::runtime::schedules::check_due_schedules(
+                            db,
+                            &mut sched,
+                            now,
+                            is_startup,
+                            &|app_name| app_generations.get(app_name).copied(),
                         );
+                        drop(sched);
+                        fired
+                            .into_iter()
+                            .filter(|f| f.accepted && f.operation_id.is_some())
+                            .collect::<Vec<_>>()
+                    });
+                    for fire in accepted_fires {
+                        if let Some(op_id) = fire.operation_id {
+                            seedling_core::oi::handler::actions::lifecycle::spawn_accepted_operation(
+                                Arc::clone(&oi_state_for_sched),
+                                fire.app,
+                                fire.action,
+                                op_id,
+                                serde_json::Map::new(),
+                                fire.generation,
+                                fire.generation,
+                                "schedule".to_owned(),
+                                None,
+                            );
+                        }
                     }
                 }
 
                 // r[impl backup.execution]
-                let due_strategies = schedule_db.call_ref(|db| backup_ticker.maybe_tick(db));
+                let due_strategies = if let Some(now) = backup_ticker.maybe_tick() {
+                    schedule_db.call(move |db| {
+                        seedling_core::runtime::backup_execution::check_due_strategies(db, now)
+                    })
+                } else {
+                    Vec::new()
+                };
                 for due in due_strategies {
                     let ids: Vec<_> = due
                         .volumes

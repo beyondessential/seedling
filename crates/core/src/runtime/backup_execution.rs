@@ -125,17 +125,20 @@ impl BackupTicker {
     }
 
     // r[impl backup.execution]
-    pub fn maybe_tick(&mut self, db: &Db) -> Vec<DueStrategy> {
+    /// Returns `Some(now)` if it is time to run a backup tick, updating
+    /// internal state. The caller should then call `check_due_strategies(db,
+    /// now)` on the DB thread. Returns `None` if the interval has not elapsed.
+    pub fn maybe_tick(&mut self) -> Option<Timestamp> {
         let now = Timestamp::now();
         if let Some(last) = self.last_check {
             let threshold = last
                 .checked_add(SignedDuration::from_secs(60))
                 .unwrap_or(last);
             if now < threshold {
-                return Vec::new();
+                return None;
             }
         }
         self.last_check = Some(now);
-        check_due_strategies(db, now)
+        Some(now)
     }
 }

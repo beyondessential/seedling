@@ -190,26 +190,23 @@ impl ScheduleTicker {
     }
 
     // r[impl schedule.tick]
-    pub fn maybe_tick(
-        &mut self,
-        db: &Db,
-        scheduler: &mut Scheduler,
-        app_generations: &dyn Fn(&str) -> Option<u64>,
-    ) -> Vec<FiredSchedule> {
+    /// Returns `Some((now, is_startup))` if it is time to run a schedule tick,
+    /// updating internal state. The caller should then pass those parameters to
+    /// `check_due_schedules`. Returns `None` if the interval has not elapsed.
+    pub fn maybe_tick(&mut self) -> Option<(Timestamp, bool)> {
         let now = Timestamp::now();
         if let Some(last) = self.last_check {
             let threshold = last
                 .checked_add(SignedDuration::from_secs(60))
                 .unwrap_or(last);
             if now < threshold {
-                return Vec::new();
+                return None;
             }
         }
-
+        let is_startup = self.is_startup;
         self.last_check = Some(now);
-        let result = check_due_schedules(db, scheduler, now, self.is_startup, app_generations);
         self.is_startup = false;
-        result
+        Some((now, is_startup))
     }
 }
 
