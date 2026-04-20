@@ -1,6 +1,8 @@
 import UploadFileIcon from "@mui/icons-material/UploadFile";
-import { Box, Button, Typography } from "@mui/material";
+import { Box, Button, Typography, useTheme } from "@mui/material";
+import CodeMirror from "@uiw/react-codemirror";
 import { useRef, useState } from "react";
+import { rhaiLanguage } from "../lib/rhai-lang";
 
 interface Props {
   value: string;
@@ -9,6 +11,7 @@ interface Props {
 }
 
 export function ScriptEditor({ value, onChange, minHeight = "60vh" }: Props) {
+  const { palette: { mode } } = useTheme();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -71,30 +74,35 @@ export function ScriptEditor({ value, onChange, minHeight = "60vh" }: Props) {
           onChange={handleFileChange}
         />
       </Box>
-      <textarea
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
+      <Box
         onDragOver={handleDragOver}
         onDragLeave={() => setDragOver(false)}
         onDrop={handleDrop}
-        spellCheck={false}
-        style={{
-          width: "100%",
-          minHeight,
-          fontFamily: "monospace",
-          fontSize: "0.875rem",
-          lineHeight: 1.5,
-          padding: "12px",
-          boxSizing: "border-box",
-          resize: "vertical",
-          border: `1px solid ${dragOver ? "rgba(144,202,249,0.7)" : "rgba(255,255,255,0.23)"}`,
-          borderRadius: "4px",
-          background: dragOver ? "rgba(144,202,249,0.05)" : "transparent",
-          color: "inherit",
-          outline: "none",
-          transition: "border-color 0.15s, background 0.15s",
+        sx={{
+          border: "1px solid",
+          borderColor: dragOver ? "primary.main" : "divider",
+          borderRadius: 1,
+          overflow: "hidden",
+          transition: "border-color 0.15s",
+          "& .cm-editor": { minHeight },
+          "& .cm-scroller": { fontFamily: "monospace", fontSize: "0.875rem" },
         }}
-      />
+      >
+        <CodeMirror
+          value={value}
+          onChange={onChange}
+          extensions={[rhaiLanguage]}
+          theme={mode}
+          basicSetup={{
+            lineNumbers: true,
+            foldGutter: true,
+            highlightActiveLine: true,
+            highlightSelectionMatches: true,
+            closeBrackets: true,
+            tabSize: 4,
+          }}
+        />
+      </Box>
     </Box>
   );
 }
