@@ -3,7 +3,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use super::*;
 use crate::defs::resource::ResourceKind;
 use crate::runtime::db::{Db, DbHandle};
-use crate::runtime::history::{WorldObservation, insert_observation, query_observations};
+use crate::runtime::history::{insert_observation, query_observations, WorldObservation};
 
 fn dep(app: &str, name: &str) -> ResourceInstance {
     ResourceInstance::new_singleton(app, ResourceKind::Deployment, name)
@@ -666,6 +666,84 @@ fn db_oracle_termination_success_volume_terminated_is_success() {
     let resource = vol("data");
     insert_observation(&db, &resource, "stop_sent", &serde_json::json!({})).expect("insert");
     insert_observation(&db, &resource, "volume_removed", &serde_json::json!({})).expect("insert");
+    let oracle = DbWorldOracle::new(DbHandle::from_db(db));
+    assert_eq!(oracle.termination_success(&resource), Some(true));
+}
+
+// l[verify rt.termination.ensure-success]
+// Jobs run with `podman --rm` auto-remove on exit. The observer then sees
+// ContainerMissing rather than ContainerExited, so no container_exited
+// observation is ever written. A healthy unit exit must still report
+// success — otherwise ensure_success() fails on every such job.
+#[test]
+fn db_oracle_termination_success_rm_clean_exit_is_success() {
+    let db = Db::open_in_memory().expect("open");
+    let resource = dep("app", "job");
+    insert_observation(&db, &resource, "container_running", &serde_json::json!({}))
+        .expect("insert");
+    insert_observation(&db, &resource, "container_removed", &serde_json::json!({}))
+        .expect("insert");
+    let oracle = DbWorldOracle::new(DbHandle::from_db(db));
+    assert_eq!(oracle.termination_success(&resource), Some(true));
+}
+
+// l[verify rt.termination.ensure-success]
+// If systemd reports the unit failed, treat as failure even when the
+// container's exit code was unobservable (podman --rm raced the
+// inspect).
+#[test]
+fn db_oracle_termination_success_unit_failed_is_failure() {
+    let db = Db::open_in_memory().expect("open");
+    let resource = dep("app", "job");
+    insert_observation(&db, &resource, "container_running", &serde_json::json!({}))
+        .expect("insert");
+    insert_observation(&db, &resource, "unit_failed", &serde_json::json!({})).expect("insert");
+    insert_observation(&db, &resource, "container_removed", &serde_json::json!({}))
+        .expect("insert");
+    let oracle = DbWorldOracle::new(DbHandle::from_db(db));
+    assert_eq!(oracle.termination_success(&resource), Some(false));
+}
+
+// l[verify rt.termination.ensure-success]
+// When we DO capture a known exit code, trust it over the fallback —
+// a healthy unit exit with a non-zero container exit must still be
+// reported as a failure.
+#[test]
+fn db_oracle_termination_success_exit_code_wins_over_unit_success() {
+    let db = Db::open_in_memory().expect("open");
+    let resource = dep("app", "job");
+    insert_observation(&db, &resource, "container_running", &serde_json::json!({}))
+        .expect("insert");
+    insert_observation(
+        &db,
+        &resource,
+        "container_exited",
+        &serde_json::json!({ "exit_code": 7 }),
+    )
+    .expect("insert");
+    insert_observation(&db, &resource, "container_removed", &serde_json::json!({}))
+        .expect("insert");
+    let oracle = DbWorldOracle::new(DbHandle::from_db(db));
+    assert_eq!(oracle.termination_success(&resource), Some(false));
+}
+
+// l[verify rt.termination.ensure-success]
+// A container_exited with exit_code = -1 (podman didn't tell us) is an
+// unknown outcome. If no unit_failed is observed, fall through to the
+// terminal-seen fallback and succeed.
+#[test]
+fn db_oracle_termination_success_exit_code_unknown_falls_through() {
+    let db = Db::open_in_memory().expect("open");
+    let resource = dep("app", "job");
+    insert_observation(&db, &resource, "container_running", &serde_json::json!({}))
+        .expect("insert");
+    insert_observation(
+        &db,
+        &resource,
+        "container_exited",
+        &serde_json::json!({ "exit_code": -1 }),
+    )
+    .expect("insert");
     let oracle = DbWorldOracle::new(DbHandle::from_db(db));
     assert_eq!(oracle.termination_success(&resource), Some(true));
 }

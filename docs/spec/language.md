@@ -823,7 +823,9 @@ This spec defines the semantics of the Runtime Instance as far as BSL is concern
 > l[rt.termination.ensure-success]
 > The `termination.ensure_success()` method throws if the resource terminated without succeeding.
 >
-> For a container-backed resource (Deployment, Job), "succeeded" means the container's process exited with status 0. Any non-zero exit status — including termination by signal — is considered a failure. When a [Started](#l--rt.started.type) group holds multiple resources, all of them must have succeeded; otherwise `ensure_success()` throws.
+> For a container-backed resource (Deployment, Job), "succeeded" means the container's process exited with status 0. Any non-zero exit status — including termination by signal — is considered a failure. When the runtime observes the container's exit code directly, that observation is authoritative. When the exit code is unobservable (for example because the container was auto-removed before the runtime could inspect it), the runtime may fall back to secondary signals: a systemd-level unit failure counts as a failure; otherwise the run is treated as a success provided the instance reached a terminal lifecycle state.
+>
+> When a [Started](#l--rt.started.type) group holds multiple resources, all of them must have succeeded; otherwise `ensure_success()` throws.
 >
 > For other resource kinds with no natural exit code (Service, Ingress, Volume), termination itself is success.
 

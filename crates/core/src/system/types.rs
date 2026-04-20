@@ -441,9 +441,19 @@ impl ObservationFact {
             ObservationFact::VolumeBackendMismatch => {
                 vec![("volume_backend_mismatch", json!({}))]
             }
+            // l[impl rt.termination.ensure-success]
+            // UnitFailed is persisted because termination_success needs to
+            // distinguish "container exited but we didn't capture the exit
+            // code (e.g. --rm removed it before we inspected)" from "the
+            // systemd unit actually failed". The ContainerExited fact is the
+            // primary signal when we catch it; unit_failed is a reliable
+            // secondary signal from systemd for crashes/OOMs/signals that
+            // podman --rm cleans up before we can observe them.
+            ObservationFact::UnitFailed => vec![("unit_failed", json!({}))],
             // Ingress observations are emitted by proxy::apply, not here.
             // Network observations are used only for pod actuation decisions.
-            // Unit and health-failure facts have no direct oracle mapping.
+            // The remaining unit facts are consumed only within a single tick
+            // for actuation decisions and have no oracle mapping.
             ObservationFact::ContainerUnhealthy
             | ObservationFact::ContainerSpecHash(_)
             | ObservationFact::NetworkPresent
@@ -454,7 +464,6 @@ impl ObservationFact {
             | ObservationFact::RouteAbsent { .. }
             | ObservationFact::UnitActive
             | ObservationFact::UnitInactive
-            | ObservationFact::UnitFailed
             | ObservationFact::UnitGone => vec![],
         }
     }

@@ -49,6 +49,7 @@ const OBS_KINDS: &[&str] = &[
     "health_check_pass",
     "image_pull_started",
     "stop_sent",
+    "unit_failed",
     "volume_created",
     "volume_ready",
     "volume_removed",
