@@ -557,6 +557,13 @@ pub(crate) async fn run_operation_for_backup(
             ),
             None => {
                 tracing::error!(app = %backup_app_name, "run_operation_for_backup: app not found");
+                // The caller (backups.rs) has already taken a scheduler slot
+                // for this operation via acquire_scheduler_slot. Release it
+                // before bailing so a stale "active" entry doesn't block
+                // every subsequent backup request forever — previously this
+                // leak caused /backups/snapshots/list to spin in the
+                // acquire loop indefinitely.
+                state.scheduler.lock().complete_current();
                 return false;
             }
         }

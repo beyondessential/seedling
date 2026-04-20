@@ -2,63 +2,39 @@ use rusqlite::params;
 
 use crate::runtime::db::Db;
 
-#[derive(Debug, Clone)]
-pub struct BackupApp {
-    pub name: String,
-    pub app: String,
-}
-
 // i[impl backup.app.register]
-pub fn register(db: &Db, name: &str, app: &str) -> rusqlite::Result<()> {
-    db.conn.execute(
-        "INSERT INTO backup_apps (name, app) VALUES (?1, ?2)",
-        params![name, app],
-    )?;
+/// Opt `app` in to the backup role. The BSL script for `app` must already
+/// define the `save-snapshot`, `list-snapshots`, and `restore-snapshot`
+/// actions — that validation lives on the OI handler side.
+pub fn register(db: &Db, app: &str) -> rusqlite::Result<()> {
+    db.conn
+        .execute("INSERT INTO backup_apps (app) VALUES (?1)", params![app])?;
     Ok(())
 }
 
 // i[impl backup.app.deregister]
-pub fn deregister(db: &Db, name: &str) -> rusqlite::Result<bool> {
+pub fn deregister(db: &Db, app: &str) -> rusqlite::Result<bool> {
     let count = db
         .conn
-        .execute("DELETE FROM backup_apps WHERE name = ?1", params![name])?;
+        .execute("DELETE FROM backup_apps WHERE app = ?1", params![app])?;
     Ok(count > 0)
 }
 
-pub fn get_by_name(db: &Db, name: &str) -> rusqlite::Result<Option<BackupApp>> {
-    let mut stmt = db
-        .conn
-        .prepare("SELECT name, app FROM backup_apps WHERE name = ?1")?;
-    let mut rows = stmt.query_map(params![name], row_to_backup_app)?;
-    match rows.next() {
-        Some(row) => Ok(Some(row?)),
-        None => Ok(None),
-    }
-}
-
-pub fn get_by_app(db: &Db, app: &str) -> rusqlite::Result<Option<BackupApp>> {
-    let mut stmt = db
-        .conn
-        .prepare("SELECT name, app FROM backup_apps WHERE app = ?1")?;
-    let mut rows = stmt.query_map(params![app], row_to_backup_app)?;
-    match rows.next() {
-        Some(row) => Ok(Some(row?)),
-        None => Ok(None),
-    }
+/// Returns `true` if `app` is currently registered as a backup app.
+pub fn is_registered(db: &Db, app: &str) -> rusqlite::Result<bool> {
+    let count: i64 = db.conn.query_row(
+        "SELECT COUNT(*) FROM backup_apps WHERE app = ?1",
+        params![app],
+        |r| r.get(0),
+    )?;
+    Ok(count > 0)
 }
 
 // i[impl backup.app.list]
-pub fn list_all(db: &Db) -> rusqlite::Result<Vec<BackupApp>> {
+pub fn list_all(db: &Db) -> rusqlite::Result<Vec<String>> {
     let mut stmt = db
         .conn
-        .prepare("SELECT name, app FROM backup_apps ORDER BY name")?;
-    let rows = stmt.query_map([], row_to_backup_app)?;
+        .prepare("SELECT app FROM backup_apps ORDER BY app")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
     rows.collect()
-}
-
-fn row_to_backup_app(row: &rusqlite::Row<'_>) -> rusqlite::Result<BackupApp> {
-    Ok(BackupApp {
-        name: row.get(0)?,
-        app: row.get(1)?,
-    })
 }

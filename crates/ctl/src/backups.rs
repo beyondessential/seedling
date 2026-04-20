@@ -42,20 +42,18 @@ pub(super) enum BackupsCommand {
 
 #[derive(Subcommand)]
 pub(super) enum BackupAppsCommand {
-    /// Register an app as a backup app
+    /// Opt an app into the backup role. The app's BSL script must declare the
+    /// save-snapshot, list-snapshots, and restore-snapshot actions.
     Register {
-        /// Backup app registration name
-        #[arg(long)]
-        name: String,
         /// App name
         #[arg(long)]
         app: String,
     },
-    /// Deregister a backup app
+    /// Remove an app from the backup role
     Deregister {
-        /// Backup app registration name
+        /// App name
         #[arg(long)]
-        name: String,
+        app: String,
     },
     /// List registered backup apps
     List,
@@ -132,23 +130,23 @@ pub(super) async fn dispatch(client: &OiClient, cmd: BackupsCommand) {
     match cmd {
         BackupsCommand::Apps { command } => match command {
             // i[impl backup.app.register]
-            BackupAppsCommand::Register { name, app } => {
+            BackupAppsCommand::Register { app } => {
                 print_result(
                     client
                         .request(
                             "/backups/apps/register",
-                            serde_json::json!({ "name": name, "app": app }),
+                            serde_json::json!({ "app": app }),
                         )
                         .await,
                 );
             }
             // i[impl backup.app.deregister]
-            BackupAppsCommand::Deregister { name } => {
+            BackupAppsCommand::Deregister { app } => {
                 print_result(
                     client
                         .request(
                             "/backups/apps/deregister",
-                            serde_json::json!({ "name": name }),
+                            serde_json::json!({ "app": app }),
                         )
                         .await,
                 );

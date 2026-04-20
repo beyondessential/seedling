@@ -244,7 +244,7 @@ function CreateStrategyDialog({
   onSuccess: () => void;
 }) {
   const [name, setName] = useState("");
-  const [via, setVia] = useState(backupApps[0]?.name ?? "");
+  const [via, setVia] = useState(backupApps[0]?.app ?? "");
   const [schedule, setSchedule] = useState<string>(BACKUP_SCHEDULES[2]);
   const [volumes, setVolumes] = useState<string[]>([]);
 
@@ -280,8 +280,8 @@ function CreateStrategyDialog({
             <InputLabel>Backup app</InputLabel>
             <Select label="Backup app" value={via} onChange={(e) => setVia(e.target.value)}>
               {backupApps.map((a) => (
-                <MenuItem key={a.name} value={a.name} sx={{ fontFamily: "monospace" }}>
-                  {a.name} <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>({a.app})</Typography>
+                <MenuItem key={a.app} value={a.app} sx={{ fontFamily: "monospace" }}>
+                  {a.app}
                 </MenuItem>
               ))}
             </Select>
@@ -336,7 +336,6 @@ function RegisterBackupAppDialog({
   onClose: () => void;
   onSuccess: () => void;
 }) {
-  const [name, setName] = useState("");
   const [app, setApp] = useState(apps[0]?.name ?? "");
 
   const { execute, loading, error, clearError } = useOiAction();
@@ -344,7 +343,7 @@ function RegisterBackupAppDialog({
   const handleClose = () => { clearError(); onClose(); };
 
   const handleSubmit = async () => {
-    await execute("/backups/apps/register", { name, app });
+    await execute("/backups/apps/register", { app });
     onSuccess();
     handleClose();
   };
@@ -355,15 +354,6 @@ function RegisterBackupAppDialog({
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 0.5 }}>
           {error && <OiErrorAlert error={error} />}
-          <TextField
-            label="Registration name"
-            size="small"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            inputProps={{ style: { fontFamily: "monospace" } }}
-            helperText="A short name for this backup provider"
-            autoFocus
-          />
           <FormControl size="small">
             <InputLabel>App</InputLabel>
             <Select
@@ -377,11 +367,15 @@ function RegisterBackupAppDialog({
               ))}
             </Select>
           </FormControl>
+          <Typography variant="caption" color="text.secondary">
+            The app's BSL script must declare save-snapshot, list-snapshots,
+            and restore-snapshot actions.
+          </Typography>
         </Stack>
       </DialogContent>
       <DialogActions>
         <Button onClick={handleClose} disabled={loading}>Cancel</Button>
-        <Button variant="contained" onClick={() => void handleSubmit()} disabled={loading || !name || !app}>
+        <Button variant="contained" onClick={() => void handleSubmit()} disabled={loading || !app}>
           {loading ? "Registering…" : "Register"}
         </Button>
       </DialogActions>
@@ -421,8 +415,8 @@ export default function Backups() {
     refetchStrat();
   };
 
-  const handleDeregisterApp = async (name: string) => {
-    await doDeregister("/backups/apps/deregister", { name });
+  const handleDeregisterApp = async (app: string) => {
+    await doDeregister("/backups/apps/deregister", { app });
     refetchApps();
   };
 
@@ -559,21 +553,19 @@ export default function Backups() {
               <Table size="small">
                 <TableHead>
                   <TableRow>
-                    <TableCell>Name</TableCell>
                     <TableCell>App</TableCell>
                     <TableCell width={40} />
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {backupApps.map((a) => (
-                    <TableRow key={a.name}>
-                      <TableCell sx={{ fontFamily: "monospace", fontWeight: 500 }}>{a.name}</TableCell>
-                      <TableCell sx={{ fontFamily: "monospace" }}>
+                    <TableRow key={a.app}>
+                      <TableCell sx={{ fontFamily: "monospace", fontWeight: 500 }}>
                         <Link to={`/apps/${a.app}`}>{a.app}</Link>
                       </TableCell>
                       <TableCell align="right" sx={{ px: 0.5 }}>
                         <Tooltip title="Deregister">
-                          <IconButton size="small" onClick={() => void handleDeregisterApp(a.name)}>
+                          <IconButton size="small" onClick={() => void handleDeregisterApp(a.app)}>
                             <DeleteOutlineIcon sx={{ fontSize: 16 }} />
                           </IconButton>
                         </Tooltip>

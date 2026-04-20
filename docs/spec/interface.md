@@ -723,16 +723,16 @@ Absent specification bugs, anything that is not defined here is either defined i
 ## Backup Apps
 
 > i[backup.app.register]
-> `/backups/apps/register { name, app }` registers the named app as a backup app under the given backup-app name. The app must declare actions `save-snapshot`, `list-snapshots`, and `restore-snapshot`. If validation fails, the request is rejected.
+> `/backups/apps/register { app }` opts `app` in to the backup role. The app's BSL script must already declare the `save-snapshot`, `list-snapshots`, and `restore-snapshot` actions; otherwise the request is rejected with `requirements_invalid`.
 >
 > Returns `{ "registered": true }` on success.
 
 > i[backup.app.deregister]
-> `/backups/apps/deregister { name }` removes a backup app registration.
-> If any backup strategies reference this backup app, the request is rejected with `backup_app_in_use`.
+> `/backups/apps/deregister { app }` removes `app` from the backup role.
+> If any backup strategies reference this app via their `via` field, the request is rejected with `backup_app_in_use`.
 
 > i[backup.app.list]
-> `/backups/apps/list {}` returns an array of registered backup apps with fields `name` and `app`.
+> `/backups/apps/list {}` returns an array of registered backup apps; each entry has a single field `app` naming the BSL app.
 
 > i[backup.app.validation]
 > On `/apps/update` for an app that is a registered backup app, the runtime must evaluate the new script and reject the update if the required actions (`save-snapshot`, `list-snapshots`, `restore-snapshot`) are no longer present.
@@ -744,7 +744,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > `/backups/strategies/create { name, via, schedule, volumes }` creates a named backup strategy.
 >
 > - `name`: strategy name (follows standard naming rules).
-> - `via`: name of a registered backup app.
+> - `via`: BSL app name of a registered backup app.
 > - `schedule`: one of `"every hour"`, `"twice a day"`, `"every day"`.
 > - `volumes`: array of source volume identifiers (`"<app>/<volume>"` or `"_site/<volume>"`).
 >

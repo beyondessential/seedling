@@ -1087,9 +1087,8 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams) -> HandlerResult
         let name_owned = name.to_owned();
         let is_backup_app = state
             .db
-            .call(move |db| crate::runtime::backup_apps::get_by_app(db, &name_owned))
-            .map_err(|e| OiError::new(ErrorCode::Internal, format!("db backup apps: {e}")))?
-            .is_some();
+            .call(move |db| crate::runtime::backup_apps::is_registered(db, &name_owned))
+            .map_err(|e| OiError::new(ErrorCode::Internal, format!("db backup apps: {e}")))?;
         if is_backup_app {
             let missing: Vec<&str> = seedling_protocol::backup_actions::REQUIRED_ACTIONS
                 .iter()
@@ -1407,9 +1406,8 @@ pub(crate) fn update_app(
         let name_owned = name.to_owned();
         let is_backup_app = state
             .db
-            .call(move |db| crate::runtime::backup_apps::get_by_app(db, &name_owned))
-            .map_err(|e| OiError::new(ErrorCode::Internal, format!("db backup apps: {e}")))?
-            .is_some();
+            .call(move |db| crate::runtime::backup_apps::is_registered(db, &name_owned))
+            .map_err(|e| OiError::new(ErrorCode::Internal, format!("db backup apps: {e}")))?;
         if is_backup_app {
             let (proposed, proposed_err) = crate::runtime::apps::evaluate_script(
                 name,

@@ -284,7 +284,6 @@ export type VolumeRef =
   | { kind: "app"; app: string; volume: string };
 
 export interface BackupApp {
-  name: string;
   app: string;
 }
 

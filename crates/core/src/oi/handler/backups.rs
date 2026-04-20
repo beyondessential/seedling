@@ -16,7 +16,6 @@ use crate::{
 
 #[derive(Deserialize)]
 pub(crate) struct RegisterBackupAppParams {
-    pub name: String,
     pub app: String,
 }
 
@@ -48,11 +47,10 @@ pub(crate) fn register_backup_app(
         }
     }
 
-    let name_owned = params.name.clone();
     let app_owned = params.app.clone();
     state
         .db
-        .call(move |db| backup_apps::register(db, &name_owned, &app_owned))
+        .call(move |db| backup_apps::register(db, &app_owned))
         .map_err(|e| {
             OiError::new(
                 ErrorCode::Internal,
@@ -65,7 +63,7 @@ pub(crate) fn register_backup_app(
 
 #[derive(Deserialize)]
 pub(crate) struct DeregisterBackupAppParams {
-    pub name: String,
+    pub app: String,
 }
 
 // i[impl backup.app.deregister]
@@ -74,9 +72,9 @@ pub(crate) fn deregister_backup_app(
     params: DeregisterBackupAppParams,
 ) -> HandlerResult {
     // i[impl backup.app.deregister] — reject if any strategy references this backup app.
-    let name_owned = params.name.clone();
+    let app_owned = params.app.clone();
     let (in_use, deleted) = state.db.call(move |db| -> Result<_, OiError> {
-        let in_use = backup_strategies::references_backup_app(db, &name_owned).map_err(|e| {
+        let in_use = backup_strategies::references_backup_app(db, &app_owned).map_err(|e| {
             OiError::new(
                 ErrorCode::Internal,
                 format!("failed to check strategy references: {e}"),
@@ -85,7 +83,7 @@ pub(crate) fn deregister_backup_app(
         if in_use {
             return Ok((true, false));
         }
-        let deleted = backup_apps::deregister(db, &name_owned).map_err(|e| {
+        let deleted = backup_apps::deregister(db, &app_owned).map_err(|e| {
             OiError::new(
                 ErrorCode::Internal,
                 format!("failed to deregister backup app: {e}"),
@@ -99,15 +97,15 @@ pub(crate) fn deregister_backup_app(
             ErrorCode::BackupAppInUse,
             format!(
                 "backup app {:?} is referenced by one or more strategies",
-                params.name
+                params.app
             ),
         ));
     }
 
     if !deleted {
         return Err(OiError::not_found(format!(
-            "no backup app named {:?}",
-            params.name
+            "app {:?} is not registered as a backup app",
+            params.app
         )));
     }
 
@@ -123,10 +121,7 @@ pub(crate) fn list_backup_apps(state: &OiState) -> HandlerResult {
         )
     })?;
 
-    let items: Vec<_> = apps
-        .iter()
-        .map(|a| json!({ "name": a.name, "app": a.app }))
-        .collect();
+    let items: Vec<_> = apps.iter().map(|a| json!({ "app": a })).collect();
 
     Ok(json!(items))
 }
@@ -151,9 +146,14 @@ pub(crate) fn create_strategy(state: &OiState, params: CreateStrategyParams) -> 
         last_fired_at: None,
     };
     state.db.call(move |db| -> Result<_, OiError> {
-        backup_apps::get_by_name(db, &strategy.via)
+        if !backup_apps::is_registered(db, &strategy.via)
             .map_err(|e| OiError::new(ErrorCode::Internal, format!("db backup apps: {e}")))?
-            .ok_or_else(|| OiError::not_found(format!("no backup app named {:?}", strategy.via)))?;
+        {
+            return Err(OiError::not_found(format!(
+                "app {:?} is not registered as a backup app",
+                strategy.via
+            )));
+        }
         backup_strategies::create(db, &strategy).map_err(|e| {
             OiError::new(
                 ErrorCode::Internal,
@@ -219,10 +219,13 @@ pub(crate) fn update_strategy(state: &OiState, params: UpdateStrategyParams) -> 
     let schedule_owned = params.schedule.clone();
     let volumes_owned = params.volumes.clone();
     let updated = state.db.call(move |db| -> Result<bool, OiError> {
-        if let Some(ref via) = via_owned {
-            backup_apps::get_by_name(db, via)
+        if let Some(ref via) = via_owned
+            && !backup_apps::is_registered(db, via)
                 .map_err(|e| OiError::new(ErrorCode::Internal, format!("db backup apps: {e}")))?
-                .ok_or_else(|| OiError::not_found(format!("no backup app named {via:?}")))?;
+        {
+            return Err(OiError::not_found(format!(
+                "app {via:?} is not registered as a backup app"
+            )));
         }
         backup_strategies::update(
             db,
@@ -324,16 +327,18 @@ async fn run_strategy_backup(
     operation_ids: &[OperationId],
     is_manual: bool,
 ) {
-    let via_owned = strategy.via.clone();
+    // With the nickname gone, strategy.via IS the BSL app name.
+    let backing_app_name = strategy.via.clone();
+    let via_owned = backing_app_name.clone();
     let strategy_name_for_err = strategy.name.clone();
-    let lookup = tokio::task::block_in_place(|| {
+    let registered = tokio::task::block_in_place(|| {
         state
             .db
-            .call(move |db| backup_apps::get_by_name(db, &via_owned))
+            .call(move |db| backup_apps::is_registered(db, &via_owned))
     });
-    let (backup_app_name, backing_app_name) = match lookup {
-        Ok(Some(ba)) => (ba.name, ba.app),
-        Ok(None) => {
+    match registered {
+        Ok(true) => {}
+        Ok(false) => {
             tracing::error!(
                 strategy = %strategy_name_for_err,
                 via = %strategy.via,
@@ -348,7 +353,7 @@ async fn run_strategy_backup(
             );
             return;
         }
-    };
+    }
 
     // r[impl backup.validation.fire-time]
     {
@@ -393,16 +398,7 @@ async fn run_strategy_backup(
 
     for (vol_id, op_id) in strategy.volumes.iter().zip(operation_ids.iter()) {
         // r[impl backup.execution.per-volume-failure]
-        run_volume_backup(
-            state,
-            &backup_app_name,
-            &backing_app_name,
-            strategy,
-            vol_id,
-            op_id,
-            is_manual,
-        )
-        .await;
+        run_volume_backup(state, &backing_app_name, strategy, vol_id, op_id, is_manual).await;
     }
 }
 
@@ -410,7 +406,6 @@ async fn run_strategy_backup(
 // r[impl backup.execution.retry]
 async fn run_volume_backup(
     state: &Arc<OiState>,
-    backup_app_name: &str,
     backing_app_name: &str,
     strategy: &backup_strategies::BackupStrategy,
     vol_id: &str,
@@ -511,7 +506,13 @@ async fn run_volume_backup(
         let snapshot_path = vol_store.site_path(&snapshot_name);
 
         // r[impl backup.execution]
-        acquire_scheduler_slot(state, backup_app_name, operation_id).await;
+        // The scheduler and registry are both keyed on the BSL app name
+        // (backing_app_name, e.g. "backup-kopia-s3"), not on the backup-app
+        // nickname (backup_app_name, e.g. "kopia"). Pass backing_app_name to
+        // both so the scheduler correctly serialises with other operations on
+        // the same BSL app and run_operation_for_backup actually finds the
+        // app in the registry.
+        acquire_scheduler_slot(state, backing_app_name, operation_id).await;
 
         let mut bindings = std::collections::HashMap::new();
         bindings.insert(
@@ -524,7 +525,7 @@ async fn run_volume_backup(
 
         let success = run_operation_for_backup(
             state,
-            backup_app_name,
+            backing_app_name,
             "save-snapshot",
             operation_id.clone(),
             serde_json::Map::new(),
@@ -617,8 +618,7 @@ pub(crate) fn list_snapshots(state: &Arc<OiState>, params: ListSnapshotsParams) 
 }
 
 async fn list_snapshots_async(state: &Arc<OiState>, params: ListSnapshotsParams) -> HandlerResult {
-    let (backup_app_name, backing_app_name) =
-        resolve_backup_app(state, &params.strategy, &params.volume)?;
+    let backing_app_name = resolve_backup_app(state, &params.strategy, &params.volume)?;
     validate_backup_app_actions(state, &backing_app_name)?;
 
     let tempdir = tempfile::tempdir().map_err(|e| {
@@ -629,7 +629,9 @@ async fn list_snapshots_async(state: &Arc<OiState>, params: ListSnapshotsParams)
     })?;
 
     let operation_id = OperationId::new();
-    acquire_scheduler_slot(state, &backup_app_name, &operation_id).await;
+    // Scheduler + registry are keyed on the BSL app (backing_app_name),
+    // not the backup-app nickname (backup_app_name).
+    acquire_scheduler_slot(state, &backing_app_name, &operation_id).await;
 
     let mut bindings = std::collections::HashMap::new();
     bindings.insert(
@@ -645,7 +647,7 @@ async fn list_snapshots_async(state: &Arc<OiState>, params: ListSnapshotsParams)
 
     let success = run_operation_for_backup(
         state,
-        &backup_app_name,
+        &backing_app_name,
         "list-snapshots",
         operation_id,
         action_params,
@@ -694,8 +696,7 @@ pub(crate) fn restore_backup(state: &Arc<OiState>, params: RestoreBackupParams) 
 }
 
 async fn restore_backup_async(state: &Arc<OiState>, params: RestoreBackupParams) -> HandlerResult {
-    let (backup_app_name, backing_app_name) =
-        resolve_backup_app(state, &params.strategy, &params.volume)?;
+    let backing_app_name = resolve_backup_app(state, &params.strategy, &params.volume)?;
     validate_backup_app_actions(state, &backing_app_name)?;
 
     let vol_store = &state.driver.volume_store;
@@ -713,7 +714,9 @@ async fn restore_backup_async(state: &Arc<OiState>, params: RestoreBackupParams)
     })?;
 
     let operation_id = OperationId::new();
-    acquire_scheduler_slot(state, &backup_app_name, &operation_id).await;
+    // Scheduler + registry are keyed on the BSL app (backing_app_name),
+    // not the backup-app nickname (backup_app_name).
+    acquire_scheduler_slot(state, &backing_app_name, &operation_id).await;
 
     let dest_path = vol_store.site_path(&site_vol_name);
     let mut bindings = std::collections::HashMap::new();
@@ -731,7 +734,7 @@ async fn restore_backup_async(state: &Arc<OiState>, params: RestoreBackupParams)
 
     let success = run_operation_for_backup(
         state,
-        &backup_app_name,
+        &backing_app_name,
         "restore-snapshot",
         operation_id,
         action_params,
@@ -752,30 +755,30 @@ async fn restore_backup_async(state: &Arc<OiState>, params: RestoreBackupParams)
     Ok(json!({ "site_volume": site_vol_name }))
 }
 
+/// Resolve the BSL app name backing a strategy. Errors if the strategy is
+/// missing or if its `via` app is no longer registered as a backup app.
 fn resolve_backup_app(
     state: &Arc<OiState>,
     strategy_name: &str,
     _volume: &str,
-) -> Result<(String, String), OiError> {
+) -> Result<String, OiError> {
     let strategy_name_owned = strategy_name.to_owned();
-    state
-        .db
-        .call(move |db| -> Result<(String, String), OiError> {
-            let strategy = backup_strategies::get(db, &strategy_name_owned)
-                .map_err(|e| OiError::new(ErrorCode::Internal, format!("db strategies: {e}")))?
-                .ok_or_else(|| {
-                    OiError::not_found(format!("no strategy named {strategy_name_owned:?}"))
-                })?;
-            let ba = backup_apps::get_by_name(db, &strategy.via)
-                .map_err(|e| OiError::new(ErrorCode::Internal, format!("db backup apps: {e}")))?
-                .ok_or_else(|| {
-                    OiError::not_found(format!(
-                        "backup app {:?} no longer registered",
-                        strategy.via
-                    ))
-                })?;
-            Ok((ba.name, ba.app))
-        })
+    state.db.call(move |db| -> Result<String, OiError> {
+        let strategy = backup_strategies::get(db, &strategy_name_owned)
+            .map_err(|e| OiError::new(ErrorCode::Internal, format!("db strategies: {e}")))?
+            .ok_or_else(|| {
+                OiError::not_found(format!("no strategy named {strategy_name_owned:?}"))
+            })?;
+        let registered = backup_apps::is_registered(db, &strategy.via)
+            .map_err(|e| OiError::new(ErrorCode::Internal, format!("db backup apps: {e}")))?;
+        if !registered {
+            return Err(OiError::not_found(format!(
+                "app {:?} is no longer registered as a backup app",
+                strategy.via
+            )));
+        }
+        Ok(strategy.via)
+    })
 }
 
 fn validate_backup_app_actions(
