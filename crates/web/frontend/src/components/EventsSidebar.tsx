@@ -15,6 +15,7 @@ const MIN_WIDTH = 220;
 const MAX_WIDTH = 700;
 
 function eventColor(type: string): "default" | "success" | "error" | "warning" | "info" {
+  if (type === "FaultCleared") return "success";
   if (type.includes("Fault")) return "error";
   if (type.includes("Failed") || type.includes("Exited")) return "warning";
   if (type.includes("Completed") || type.includes("Registered")) return "success";
