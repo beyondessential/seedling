@@ -416,6 +416,31 @@ async fn main() {
                     });
                 }
 
+                // Clear per-instance faults for every orphan we just tore
+                // down, so image_pull_failed / container_start_failed
+                // filed in a previous run don't linger after restart.
+                // r[fault.image-pull] r[fault.container-start]
+                let faulted_instances: Vec<(String, String)> = records
+                    .iter()
+                    .filter(|r| Some(&r.operation_id) != replay_op_id.as_ref())
+                    .map(|r| (r.app.clone(), r.instance_id.clone()))
+                    .collect();
+                db.call(move |db| {
+                    for (app, instance_id) in &faulted_instances {
+                        if let Err(e) = seedling_core::runtime::faults::clear_faults_for_instance(
+                            db,
+                            app,
+                            instance_id,
+                        ) {
+                            tracing::warn!(
+                                app = %app,
+                                instance_id = %instance_id,
+                                "failed to clear per-instance faults during orphan cleanup: {e}"
+                            );
+                        }
+                    }
+                });
+
                 // Clear cleaned records but keep rows owned by the operation
                 // we are about to replay.
                 let preserve_op_id = replay_op_id.clone();

@@ -290,8 +290,26 @@ async fn cleanup_dynamic_resources(
         }
     }
 
+    // r[fault.image-pull] r[fault.container-start]
+    // Clear per-instance faults for every dynamic resource that we just
+    // tore down. Without this, faults filed against short-lived Job
+    // instances (image_pull_failed, container_start_failed, …) persist
+    // forever because the instance id they reference has gone away.
+    let instance_ids_to_clear: Vec<(String, String)> = dynamic_records
+        .iter()
+        .map(|r| (r.app.clone(), r.instance_id.clone()))
+        .collect();
     let op_id_owned = operation_id_str.to_owned();
     state.db.call(move |db| {
+        for (app, instance_id) in &instance_ids_to_clear {
+            if let Err(e) = faults::clear_faults_for_instance(db, app, instance_id) {
+                tracing::warn!(
+                    app = %app,
+                    instance_id = %instance_id,
+                    "failed to clear per-instance faults during dynamic cleanup: {e}"
+                );
+            }
+        }
         if let Err(e) = delete_dynamic_resources_for_operation(db, &op_id_owned) {
             tracing::error!(
                 operation_id = %op_id_owned,

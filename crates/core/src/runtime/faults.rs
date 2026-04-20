@@ -96,11 +96,9 @@ pub fn clear_fault(db: &crate::runtime::db::Db, fault_id: &str, app: &str) -> ru
     // up-front keeps the happy path to a single pair of statements.
     let kind: Option<String> = db
         .conn
-        .query_row(
-            "SELECT kind FROM faults WHERE id = ?1",
-            [fault_id],
-            |row| row.get(0),
-        )
+        .query_row("SELECT kind FROM faults WHERE id = ?1", [fault_id], |row| {
+            row.get(0)
+        })
         .ok();
     let changed = db.conn.execute(
         "UPDATE faults SET cleared_at = ?1 WHERE id = ?2 AND cleared_at IS NULL",
@@ -182,6 +180,27 @@ pub fn clear_faults_by_kind(
 /// Clear all active faults for an app (used during deregistration).
 pub fn clear_all_faults_for_app(db: &crate::runtime::db::Db, app: &str) -> rusqlite::Result<()> {
     let to_clear = list_active_faults(db, Some(app))?;
+    for f in &to_clear {
+        clear_fault(db, &f.id, app)?;
+    }
+    Ok(())
+}
+
+/// Clear every active fault tied to a specific instance_id. Called when the
+/// instance is being torn down — either because the operation that created
+/// an ephemeral dynamic resource has finished, or because the resource is
+/// being retired. Without this, per-instance faults (image_pull_failed,
+/// container_start_failed, …) filed against short-lived Job instances
+/// linger forever because nothing ever references the dead instance id again.
+pub fn clear_faults_for_instance(
+    db: &crate::runtime::db::Db,
+    app: &str,
+    instance_id: &str,
+) -> rusqlite::Result<()> {
+    let to_clear: Vec<_> = list_active_faults(db, Some(app))?
+        .into_iter()
+        .filter(|f| f.instance_id.as_deref() == Some(instance_id))
+        .collect();
     for f in &to_clear {
         clear_fault(db, &f.id, app)?;
     }

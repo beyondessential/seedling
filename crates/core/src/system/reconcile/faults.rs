@@ -147,6 +147,14 @@ impl Reconciler {
                     }
                 }
             }
+            // r[fault.image-pull] r[fault.container-start]
+            // When a unit is observed healthy (container is running), every
+            // per-instance transient fault is cleared. image_pull_failed
+            // joins the list because a running container necessarily had its
+            // image pulled successfully — previously the clear was only
+            // triggered from actuator.start()'s success arm, which can miss
+            // cases where the image becomes available out-of-band or between
+            // reconcile ticks.
             for instance in &unit_healthy {
                 let inst_hex = instance.id.to_hex();
                 let cleared: Vec<_> = faults::list_active_faults(db, Some(&app))
@@ -159,6 +167,7 @@ impl Reconciler {
                                 | "start_failed"
                                 | "observe_failed"
                                 | "stop_failed"
+                                | "image_pull_failed"
                         ) && f.instance_id.as_deref() == Some(&inst_hex)
                     })
                     .collect();

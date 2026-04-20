@@ -232,9 +232,12 @@ fn clear_fault_emits_fault_cleared_event() {
     let mut found = false;
     loop {
         match rx.try_recv() {
-            Ok(seedling_protocol::events::OiEvent::FaultCleared { id: eid, app, .. }) => {
+            Ok(seedling_protocol::events::OiEvent::FaultCleared {
+                id: eid, app, kind, ..
+            }) => {
                 assert_eq!(eid, id);
                 assert_eq!(app, "myapp");
+                assert_eq!(kind, "script_error");
                 found = true;
                 break;
             }
@@ -243,4 +246,51 @@ fn clear_fault_emits_fault_cleared_event() {
         }
     }
     assert!(found, "expected a FaultCleared event");
+}
+
+// r[verify fault.image-pull]
+#[test]
+fn clear_faults_for_instance_only_removes_matching_instance() {
+    let db = Db::open_in_memory().expect("open");
+    init_test_events();
+    file_fault(
+        &db,
+        "myapp",
+        Some("job"),
+        None,
+        Some("instance-a"),
+        "image_pull_failed",
+        "bad a",
+    )
+    .expect("file a");
+    file_fault(
+        &db,
+        "myapp",
+        Some("job"),
+        None,
+        Some("instance-b"),
+        "container_start_failed",
+        "bad b",
+    )
+    .expect("file b");
+    // A fault with a different instance_id and a fault with no instance
+    // should both survive.
+    file_fault(
+        &db,
+        "myapp",
+        None,
+        None,
+        None,
+        "operation_failed",
+        "no instance",
+    )
+    .expect("file c");
+
+    clear_faults_for_instance(&db, "myapp", "instance-a").expect("clear a");
+
+    let remaining = list_active_faults(&db, Some("myapp")).expect("list");
+    let kinds: Vec<_> = remaining.iter().map(|f| f.kind.clone()).collect();
+    assert!(!kinds.contains(&"image_pull_failed".to_string()));
+    assert!(kinds.contains(&"container_start_failed".to_string()));
+    assert!(kinds.contains(&"operation_failed".to_string()));
 }
