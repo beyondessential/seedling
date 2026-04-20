@@ -272,6 +272,10 @@ export interface HeldVolume {
   held_at: string;
 }
 
+export type VolumeRef =
+  | { kind: "site"; name: string }
+  | { kind: "app"; app: string; volume: string };
+
 export interface ConnectRequest {
   token?: string;
   password?: string;

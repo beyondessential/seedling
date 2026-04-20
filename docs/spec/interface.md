@@ -461,6 +461,23 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[shell.concurrent]
 > Shell sessions may run concurrently with lifecycle operations and with other shell sessions.
 
+# Volume Shells
+
+> i[volumes.shell]
+> `/volumes/shell { volumes, rows, cols }` opens an interactive shell session inside an ephemeral Ubuntu container with one or more volumes bind-mounted at `/mnt/{display-name}`.
+>
+> `volumes` is an array of volume references. Each reference is one of:
+> - `{ "kind": "site", "name": "<name>" }` — a site volume.
+> - `{ "kind": "app", "app": "<app>", "volume": "<volume>" }` — a volume owned by an app.
+>
+> The `display-name` for a site volume is its `name`; for an app volume it is `<app>.<volume>`.
+> Display names are sanitised to be valid path components before use as mount-point suffixes.
+> Each volume is mounted read-only if the volume is inherently read-only (snapshot site volumes); otherwise it is mounted read-write.
+>
+> Volume shells use the same three-stream wire protocol as regular shell sessions (see [stream.shell](#i--stream.shell)).
+> They are registered in the shell session registry with `app = "_volumes"` and `name` set to the comma-separated list of display names; they appear in `/shells/list`, support `/shells/resize` and `/shells/stop`, and emit `ShellStarted`/`ShellExited` events identically to regular shell sessions.
+> Returns `not_found` if any referenced volume does not exist.
+
 # Port Forwards
 
 > i[forward.request]

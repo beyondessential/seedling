@@ -80,11 +80,17 @@ function ShellInstance({ tab, active }: { tab: ShellTab; active: boolean }) {
 
     const enc = new TextEncoder();
 
-    session.client
-      .openShell(
-        { app: tab.app, name: tab.shellName, rows: term.rows, cols: term.cols, params: tab.params },
-        uniRouter,
-      )
+    const openPromise = tab.kind === "volume"
+      ? session.client.openVolumeShell(
+          { volumes: tab.volumes, rows: term.rows, cols: term.cols },
+          uniRouter,
+        )
+      : session.client.openShell(
+          { app: tab.app, name: tab.shellName, rows: term.rows, cols: term.cols, params: tab.params },
+          uniRouter,
+        );
+
+    openPromise
       .then(({ sessionId: sid, writer, exitCode: exitPromise, stdout, stderr }) => {
         if (closed) { void writer.close().catch(() => undefined); return; }
         sessionIdRef.current = sid;
@@ -278,7 +284,7 @@ export function ShellsSidebar() {
               key={tab.id}
               label={
                 <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-                  <span>{tab.app}/{tab.shellName}</span>
+                  <span>{tab.kind === "volume" ? tab.label : `${tab.app}/${tab.shellName}`}</span>
                   <IconButton
                     size="small"
                     onClick={(e) => { e.stopPropagation(); closeShell(tab.id); }}

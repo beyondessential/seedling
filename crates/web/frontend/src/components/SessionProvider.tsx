@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { AuthRequired, connect } from "../lib/session";
 import type { Session } from "../lib/session";
-import type { SeedlingEvent } from "../lib/types";
+import type { SeedlingEvent, VolumeRef } from "../lib/types";
 import { UniRouter } from "../lib/uni-router";
 
 const EVENTS_CACHE_SIZE = 200;
@@ -11,12 +11,9 @@ const SHELLS_SIDEBAR_WIDTH_STORAGE_KEY = "seedling.shellsSidebarWidth";
 const DEFAULT_SIDEBAR_WIDTH = 340;
 const DEFAULT_SHELLS_SIDEBAR_WIDTH = 600;
 
-export interface ShellTab {
-  id: string;
-  app: string;
-  shellName: string;
-  params: Record<string, string>;
-}
+export type ShellTab =
+  | { kind: "shell"; id: string; app: string; shellName: string; params: Record<string, string> }
+  | { kind: "volume"; id: string; volumes: VolumeRef[]; label: string };
 
 interface SessionCtx {
   session: Session | null;
@@ -33,6 +30,7 @@ interface SessionCtx {
   activeShellId: string | null;
   setActiveShellId: (id: string | null) => void;
   openShell: (app: string, shellName: string, params: Record<string, string>) => void;
+  openVolumeShell: (volumes: VolumeRef[], label: string) => void;
   closeShell: (id: string) => void;
   shellsSidebarWidth: number;
   setShellsSidebarWidth: (w: number) => void;
@@ -53,6 +51,7 @@ export const SessionContext = createContext<SessionCtx>({
   activeShellId: null,
   setActiveShellId: () => undefined,
   openShell: () => undefined,
+  openVolumeShell: () => undefined,
   closeShell: () => undefined,
   shellsSidebarWidth: DEFAULT_SHELLS_SIDEBAR_WIDTH,
   setShellsSidebarWidth: () => undefined,
@@ -97,6 +96,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [activeShellId, setActiveShellId] = useState<string | null>(null);
   const probeRan = useRef(false);
 
+
   const setSidebarOpen = useCallback((open: boolean) => {
     setSidebarOpenState(open);
     try { localStorage.setItem(SIDEBAR_STORAGE_KEY, String(open)); } catch { /* ignore */ }
@@ -114,7 +114,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const openShell = useCallback((app: string, shellName: string, params: Record<string, string>) => {
     const id = String(++tabIdCounter);
-    const tab: ShellTab = { id, app, shellName, params };
+    const tab: ShellTab = { kind: "shell", id, app, shellName, params };
+    setShellTabs((prev) => [...prev, tab]);
+    setActiveShellId(id);
+  }, []);
+
+  const openVolumeShell = useCallback((volumes: VolumeRef[], label: string) => {
+    const id = String(++tabIdCounter);
+    const tab: ShellTab = { kind: "volume", id, volumes, label };
     setShellTabs((prev) => [...prev, tab]);
     setActiveShellId(id);
   }, []);
@@ -232,7 +239,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       session, probing, reconnecting, setSession,
       events, sidebarOpen, setSidebarOpen, sidebarWidth, setSidebarWidth,
       uniRouter,
-      shellTabs, activeShellId, setActiveShellId, openShell, closeShell,
+      shellTabs, activeShellId, setActiveShellId, openShell, openVolumeShell, closeShell,
       shellsSidebarWidth, setShellsSidebarWidth,
     }}>
       {children}

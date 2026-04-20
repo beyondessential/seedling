@@ -3,6 +3,7 @@ import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import EditIcon from "@mui/icons-material/Edit";
 import LinkOffIcon from "@mui/icons-material/LinkOff";
 import RefreshIcon from "@mui/icons-material/Refresh";
+import TerminalIcon from "@mui/icons-material/Terminal";
 import {
   Alert,
   Box,
@@ -39,6 +40,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { MapVolumeDialog } from "../components/MapVolumeDialog";
 import { OiErrorAlert } from "../components/OiErrorAlert";
+import { useSessionContext } from "../components/SessionProvider";
 import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
 import type {
@@ -246,6 +248,7 @@ export default function Volumes() {
   } = useOiQuery<HeldVolume[]>("/volumes/held/list", {});
 
   const { execute, error: actionError } = useOiAction();
+  const { openVolumeShell } = useSessionContext();
 
   const [createOpen, setCreateOpen] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
@@ -330,7 +333,7 @@ export default function Volumes() {
                       <TableCell width={90}>Kind</TableCell>
                       <TableCell>Info</TableCell>
                       <TableCell width={160}>Created</TableCell>
-                      <TableCell width={40} />
+                      <TableCell width={72} />
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -350,7 +353,16 @@ export default function Volumes() {
                         <TableCell sx={{ color: "text.secondary" }}>
                           {new Date(v.created_at).toLocaleString()}
                         </TableCell>
-                        <TableCell align="right" sx={{ px: 0.5 }}>
+                        {/* w[volumes.shell-ui] */}
+                        <TableCell align="right" sx={{ px: 0.5, whiteSpace: "nowrap" }}>
+                          <Tooltip title="Open shell">
+                            <IconButton
+                              size="small"
+                              onClick={() => openVolumeShell([{ kind: "site", name: v.name }], v.name)}
+                            >
+                              <TerminalIcon sx={{ fontSize: 16 }} />
+                            </IconButton>
+                          </Tooltip>
                           <Tooltip title="Delete">
                             <IconButton
                               size="small"

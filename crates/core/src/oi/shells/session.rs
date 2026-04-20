@@ -111,30 +111,29 @@ pub(crate) async fn open_shell_session(
         }
     };
 
-    let validated_params: serde_json::Map<String, serde_json::Value> = if shell_params_schema
-        .is_empty()
-    {
-        serde_json::Map::new()
-    } else {
-        match crate::oi::handler::actions::install::validate_requirements(
-            &shell_params_schema,
-            &submitted_params,
-        ) {
-            Ok(filled) => filled
-                .into_iter()
-                .map(|(k, v)| (k, serde_json::Value::String(v)))
-                .collect(),
-            Err(e) => {
-                let resp = serde_json::to_vec(&serde_json::json!({
-                    "error": { "code": "requirements_invalid", "message": e.message }
-                }))
-                .unwrap_or_default();
-                let _ = send.write_all(&resp).await;
-                let _ = send.finish();
-                return;
+    let validated_params: serde_json::Map<String, serde_json::Value> =
+        if shell_params_schema.is_empty() {
+            serde_json::Map::new()
+        } else {
+            match crate::oi::handler::actions::install::validate_requirements(
+                &shell_params_schema,
+                &submitted_params,
+            ) {
+                Ok(filled) => filled
+                    .into_iter()
+                    .map(|(k, v)| (k, serde_json::Value::String(v)))
+                    .collect(),
+                Err(e) => {
+                    let resp = serde_json::to_vec(&serde_json::json!({
+                        "error": { "code": "requirements_invalid", "message": e.message }
+                    }))
+                    .unwrap_or_default();
+                    let _ = send.write_all(&resp).await;
+                    let _ = send.finish();
+                    return;
+                }
             }
-        }
-    };
+        };
 
     let (mut stdout_send, stdout_stream_id) = match conn.open_uni().await {
         Ok(s) => {

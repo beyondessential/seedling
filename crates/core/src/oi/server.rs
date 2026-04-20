@@ -12,7 +12,7 @@ use super::{
     auth::{SeedlingClientVerifier, TrustedKeys},
     forwards::session::{forward_port_session, handle_forward_stream},
     handler::{RequestCtx, dispatch},
-    shells::open_shell_session,
+    shells::{open_shell_session, open_volume_shell_session},
     state::OiState,
 };
 
@@ -424,6 +424,13 @@ async fn handle_bidi_stream(
     if maybe_method.as_deref() == Some("/shells/start") {
         drop(stream_permit);
         open_shell_session(conn, send, recv, leftover, line, state).await;
+        return;
+    }
+
+    // i[volumes.shell]
+    if maybe_method.as_deref() == Some("/volumes/shell") {
+        drop(stream_permit);
+        open_volume_shell_session(conn, send, recv, leftover, line, state).await;
         return;
     }
 

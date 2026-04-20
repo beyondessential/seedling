@@ -163,11 +163,12 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
                 return;
             }
 
-            // Intercept /shells/start: the daemon opens server-initiated uni
-            // streams (stdout, stderr) that must be forwarded as WT uni streams
-            // with an 8-byte BE stream ID prefix so the browser can demux them.
-            // w[shells.wire]
-            if peeked.method == "/shells/start" {
+            // Intercept /shells/start and /volumes/shell: the daemon opens
+            // server-initiated uni streams (stdout, stderr) that must be
+            // forwarded as WT uni streams with an 8-byte BE stream ID prefix so
+            // the browser can demux them.
+            // w[shells.wire] w[volumes.shell-ui]
+            if peeked.method == "/shells/start" || peeked.method == "/volumes/shell" {
                 crate::shell::handle_shell_start(state3, conn2, wt_send, peeked).await;
                 return;
             }

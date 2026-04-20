@@ -61,10 +61,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
 
 fn parse_shell_params(
     options: &Map,
-) -> Result<
-    BTreeMap<String, super::super::install::ParamDef>,
-    Box<rhai::EvalAltResult>,
-> {
+) -> Result<BTreeMap<String, super::super::install::ParamDef>, Box<rhai::EvalAltResult>> {
     match options
         .get("params")
         .and_then(|v| v.read_lock::<Map>().map(|m| m.clone()))

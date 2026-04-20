@@ -9,6 +9,7 @@ import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import RemoveIcon from "@mui/icons-material/Remove";
 import RestoreIcon from "@mui/icons-material/Restore";
+import TerminalIcon from "@mui/icons-material/Terminal";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import {
@@ -176,6 +177,7 @@ function ResourcesSection({
   const { execute, loading: scaling } = useOiAction();
   const { execute: executeRestart, loading: restarting } = useOiAction();
   const { execute: executeStop, loading: stopping } = useOiAction();
+  const { openVolumeShell } = useSessionContext();
 
   const scale = async (deploymentName: string, value: number) => {
     try {
@@ -287,6 +289,20 @@ function ResourcesSection({
                     <RefreshIcon sx={{ fontSize: 14 }} />
                   </IconButton>
                 </span>
+              </Tooltip>
+            )}
+            {/* w[volumes.shell-ui] */}
+            {r.type === "volume" && (
+              <Tooltip title="Open shell">
+                <IconButton
+                  size="small"
+                  onClick={() => openVolumeShell(
+                    [{ kind: "app", app: appName, volume: r.name }],
+                    `${appName}.${r.name}`,
+                  )}
+                >
+                  <TerminalIcon sx={{ fontSize: 14 }} />
+                </IconButton>
               </Tooltip>
             )}
             {STOPPABLE_KINDS.has(r.type) && (

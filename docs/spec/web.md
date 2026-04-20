@@ -113,6 +113,11 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > Terminal resize is sent as a standard `/shells/resize` OI request over the browser's shared WebTransport session.
 > The browser coalesces resize events to at most one in-flight request at a time.
 
+> w[volumes.shell-ui]
+> Each site volume row in the Volumes page and each volume resource row in the App Detail page expose an "Open shell" button.
+> Clicking the button immediately opens a volume shell session (via `/volumes/shell`) for that single volume, using the existing shell sidebar.
+> The tab label is the volume's display name.
+
 > w[shells.ui]
 > The app detail page exposes each shell defined in the app (from `/apps/show`'s `actions[].kind=="shell"`) as an "Open shell" button.
 > If the shell declares `params`, clicking the button first shows a params dialog (identical in structure to the action invoke dialog) to collect param values before opening the session.

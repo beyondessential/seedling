@@ -1,4 +1,4 @@
-import type { Actor, LogEntry, LogStreamParams, OiRequest, OiResult, SeedlingEvent } from "./types";
+import type { Actor, LogEntry, LogStreamParams, OiRequest, OiResult, SeedlingEvent, VolumeRef } from "./types";
 import type { UniRouter } from "./uni-router";
 
 export interface OpenShellParams {
@@ -7,6 +7,12 @@ export interface OpenShellParams {
   rows: number;
   cols: number;
   params?: Record<string, string>;
+}
+
+export interface OpenVolumeShellParams {
+  volumes: VolumeRef[];
+  rows: number;
+  cols: number;
 }
 
 export interface OpenShellResult {
@@ -138,6 +144,54 @@ export class WtClient {
 
     // The exit frame arrives as the last line on the bidi recv side.
     // r[impl shells.exit]
+    const exitCode = new Promise<number>((resolve) => {
+      void (async () => {
+        try {
+          const line = await this._readOneLine(reader);
+          const frame = JSON.parse(line) as Record<string, unknown>;
+          resolve(typeof frame.exit_code === "number" ? frame.exit_code : -1);
+        } catch {
+          resolve(-1);
+        } finally {
+          reader.releaseLock();
+        }
+      })();
+    });
+
+    return { sessionId, writer, exitCode, stdout, stderr };
+  }
+
+  // w[volumes.shell-ui]
+  async openVolumeShell(
+    params: OpenVolumeShellParams,
+    uniRouter: UniRouter,
+  ): Promise<OpenShellResult> {
+    const stream = await this.wt.createBidirectionalStream();
+    const writer = stream.writable.getWriter();
+    const reader = stream.readable.getReader();
+
+    const req: OiRequest = { method: "/volumes/shell", actor: this.actor, params };
+    const encoder = new TextEncoder();
+    await writer.write(encoder.encode(JSON.stringify(req) + "\n"));
+
+    const handshakeLine = await this._readOneLine(reader);
+    const handshake = JSON.parse(handshakeLine) as Record<string, unknown>;
+    if ("error" in handshake) {
+      const err = handshake.error as Record<string, unknown>;
+      reader.releaseLock();
+      throw new Error(String(err.message ?? err.code ?? "volume shell open failed"));
+    }
+
+    const result = handshake.result as Record<string, unknown>;
+    const sessionId = result.session_id as string;
+    const stdoutId = BigInt(result.stdout_stream_id as number);
+    const stderrId = BigInt(result.stderr_stream_id as number);
+
+    const [stdout, stderr] = await Promise.all([
+      uniRouter.register(stdoutId),
+      uniRouter.register(stderrId),
+    ]);
+
     const exitCode = new Promise<number>((resolve) => {
       void (async () => {
         try {
