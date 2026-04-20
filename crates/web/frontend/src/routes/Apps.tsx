@@ -17,7 +17,7 @@ import {
   Typography,
 } from "@mui/material";
 import { useCallback } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useOiQuery } from "../hooks/useOi";
 import { useEventRefresh } from "../hooks/useEventRefresh";
@@ -35,6 +35,7 @@ export default function Apps() {
     useOiQuery<AppSummary[]>("/apps/list", {});
   const matchesApps = useCallback((ev: SeedlingEvent) => APP_LIST_EVENTS.has(ev.type), []);
   useEventRefresh(refetch, matchesApps);
+  const navigate = useNavigate();
 
   return (
     <Box sx={{ p: 3, maxWidth: 900, mx: "auto" }}>
@@ -86,15 +87,13 @@ export default function Apps() {
                 </TableRow>
               )}
               {data.map((app) => (
-                <TableRow key={app.name} hover>
-                  <TableCell>
-                    <Link
-                      to={`/apps/${app.name}`}
-                      style={{ textDecoration: "none", color: "inherit", fontWeight: 500 }}
-                    >
-                      {app.name}
-                    </Link>
-                  </TableCell>
+                <TableRow
+                  key={app.name}
+                  hover
+                  onClick={() => void navigate(`/apps/${app.name}`)}
+                  sx={{ cursor: "pointer" }}
+                >
+                  <TableCell sx={{ fontWeight: 500 }}>{app.name}</TableCell>
                   <TableCell>
                     <Box sx={{ display: "flex", gap: 0.5, alignItems: "center" }}>
                       <Chip
