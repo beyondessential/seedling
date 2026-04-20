@@ -673,6 +673,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[volume.site.snapshot]
 > A snapshot site volume is a read-only point-in-time snapshot of a named volume (app volume or managed site volume) that supports snapshotting. Only BTRFS-backed volumes support snapshotting. Snapshot site volumes carry metadata identifying their source. They are inherently read-only: even when mapped without the read-only flag, mounts of snapshot site volumes are always read-only.
 
+> r[volume.site.promote]
+> An operator may promote a snapshot site volume to a fresh managed site volume with an operator-chosen name. The runtime must materialise the new volume as a writable copy seeded from the snapshot's contents and record it as a managed site volume. The source snapshot is not modified and remains available; operators may independently delete it afterwards if they wish. Promotion is only supported on BTRFS-backed installations because it relies on the same snapshotting primitive as `volume.site.snapshot`.
+
 > r[actuate.volume.stop]
 > Stopping a Volume instance must remove the named volume.
 

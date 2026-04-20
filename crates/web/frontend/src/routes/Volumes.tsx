@@ -5,6 +5,7 @@ import EditIcon from "@mui/icons-material/Edit";
 import LinkOffIcon from "@mui/icons-material/LinkOff";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import TerminalIcon from "@mui/icons-material/Terminal";
+import UpgradeIcon from "@mui/icons-material/Upgrade";
 import {
   Alert,
   Box,
@@ -47,6 +48,7 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { MapVolumeDialog } from "../components/MapVolumeDialog";
 import { OiErrorAlert } from "../components/OiErrorAlert";
+import { PromoteSnapshotDialog } from "../components/PromoteSnapshotDialog";
 import { useSessionContext } from "../components/SessionProvider";
 import { SnapshotVolumeDialog } from "../components/SnapshotVolumeDialog";
 import { useOiAction } from "../hooks/useOiAction";
@@ -463,6 +465,7 @@ export default function Volumes() {
   const [snapshotTarget, setSnapshotTarget] = useState<
     { source: string; label: string } | null
   >(null);
+  const [promoteTarget, setPromoteTarget] = useState<string | null>(null);
   const [remapTarget, setRemapTarget] = useState<ExternalMapping | null>(null);
   const [prefillTarget, setPrefillTarget] = useState<{ app: string; name: string } | null>(null);
 
@@ -556,7 +559,7 @@ export default function Volumes() {
                       <TableCell width={90}>Kind</TableCell>
                       <TableCell>Info</TableCell>
                       <TableCell width={160}>Created</TableCell>
-                      <TableCell width={108} />
+                      <TableCell width={140} />
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -599,6 +602,16 @@ export default function Volumes() {
                               <CameraAltIcon sx={{ fontSize: 16 }} />
                             </IconButton>
                           </Tooltip>
+                          {v.kind === "snapshot" && (
+                            <Tooltip title="Promote to read-write volume">
+                              <IconButton
+                                size="small"
+                                onClick={() => setPromoteTarget(v.name)}
+                              >
+                                <UpgradeIcon sx={{ fontSize: 16 }} />
+                              </IconButton>
+                            </Tooltip>
+                          )}
                           <Tooltip title="Delete">
                             <IconButton
                               size="small"
@@ -872,6 +885,17 @@ export default function Volumes() {
           source={snapshotTarget.source}
           sourceLabel={snapshotTarget.label}
           onClose={() => setSnapshotTarget(null)}
+          onSuccess={() => {
+            refetchSite();
+          }}
+        />
+      )}
+
+      {promoteTarget && (
+        <PromoteSnapshotDialog
+          key={promoteTarget}
+          source={promoteTarget}
+          onClose={() => setPromoteTarget(null)}
           onSuccess={() => {
             refetchSite();
           }}

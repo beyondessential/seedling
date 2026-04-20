@@ -60,6 +60,13 @@ pub(super) enum SiteCommand {
         /// Source volume: _site/<name> or <app>/<volume>
         source: String,
     },
+    /// Promote a snapshot site volume to a fresh read-write managed site volume
+    Promote {
+        /// Source snapshot site volume name
+        source: String,
+        /// Name for the new managed site volume
+        name: String,
+    },
 }
 
 pub(super) async fn dispatch(client: &OiClient, cmd: VolumesCommand) {
@@ -142,6 +149,19 @@ pub(super) async fn dispatch(client: &OiClient, cmd: VolumesCommand) {
                             serde_json::json!({
                                 "name": name,
                                 "source": source,
+                            }),
+                        )
+                        .await,
+                );
+            }
+            SiteCommand::Promote { source, name } => {
+                print_result(
+                    client
+                        .request(
+                            "/volumes/site/promote",
+                            serde_json::json!({
+                                "source": source,
+                                "name": name,
                             }),
                         )
                         .await,

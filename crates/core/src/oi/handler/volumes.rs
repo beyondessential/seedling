@@ -324,6 +324,86 @@ pub(crate) fn snapshot_site_volume(
     Ok(json!({ "created": true, "name": params.name }))
 }
 
+#[derive(Deserialize)]
+pub(crate) struct PromoteSiteVolumeParams {
+    /// Name of the existing snapshot site volume to promote
+    pub source: String,
+    /// Name for the new managed site volume
+    pub name: String,
+}
+
+// r[impl volume.site.promote]
+pub(crate) fn promote_site_volume(
+    state: &OiState,
+    params: PromoteSiteVolumeParams,
+) -> HandlerResult {
+    use crate::runtime::site_volumes::{SiteVolumeDef, SiteVolumeKind};
+
+    let source_name = params.source.clone();
+    let source_def = state
+        .db
+        .call(move |db| crate::runtime::site_volumes::get(db, &source_name))
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("failed to look up source site volume: {e}"),
+            )
+        })?;
+
+    let source_def = source_def.ok_or_else(|| {
+        OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!("no site volume named {:?}", params.source),
+        )
+    })?;
+
+    if !matches!(source_def.kind, SiteVolumeKind::Snapshot { .. }) {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!(
+                "site volume {:?} is not a snapshot; only snapshot site volumes can be promoted",
+                params.source
+            ),
+        ));
+    }
+
+    let source_path = state.driver.volume_store.site_path(&params.source);
+
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            state
+                .driver
+                .volume_store
+                .promote_site_snapshot(&params.name, &source_path)
+                .await
+                .map_err(|e| {
+                    OiError::new(
+                        ErrorCode::Internal,
+                        format!("failed to promote snapshot: {e}"),
+                    )
+                })
+        })
+    })?;
+
+    let def = SiteVolumeDef {
+        name: params.name.clone(),
+        kind: SiteVolumeKind::Managed,
+        created_at: jiff::Timestamp::now().to_string(),
+    };
+
+    state
+        .db
+        .call(move |db| crate::runtime::site_volumes::create(db, &def))
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("failed to store promoted site volume: {e}"),
+            )
+        })?;
+
+    Ok(json!({ "promoted": true, "name": params.name }))
+}
+
 /// Resolve a volume id like `_site/<name>` or `<app>/<volume>` to the tuple
 /// `(source_app, source_volume_name, on_disk_path)`. For app-scoped volumes
 /// the on-disk path is pulled from the registry's display_name rather than
