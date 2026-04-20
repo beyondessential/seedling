@@ -1,5 +1,6 @@
 <llm-rules>
-- This repo uses jujutsu. Commit changes incrementally as you work.
+- This repo uses jujutsu. Commit changes incrementally as you work, do not squash changes aggressively to have a "clean" history.
+- The above is NOT a preference for smaller bits of incomplete work. It's better to do a large refactor so the code is RIGHT instead of doing many smaller changes that all have flaws.
 - Use `jj commit` over `jj describe` so that new changes can be applied as a new description easily.
 - Don't squash commits together unless really necessary. Granular history is more important than aesthetic history.
 - Remember to use --no-pager for jj commands, and to specify --message when using squash/commit/describe, to avoid opening an interactive view (which will block you/agents).
