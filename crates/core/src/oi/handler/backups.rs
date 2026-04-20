@@ -770,6 +770,37 @@ async fn restore_backup_async(state: &Arc<OiState>, params: RestoreBackupParams)
         ));
     }
 
+    // r[impl backup.restore]
+    // Register the newly populated site volume in the site_volumes table so
+    // it's visible via /volumes/site/list and the web UI. vol_store.create_site
+    // only creates the on-disk directory (or btrfs subvolume); without this
+    // insertion the restored data would sit on disk but be unreachable.
+    //
+    // Kind=Managed, not Snapshot: Snapshot implies btrfs-level read-only
+    // semantics, but the operator's intended use for a restored volume is
+    // usually to map it into an app and write to it (swap it in for the
+    // original). If they want a read-only view they can export it that way.
+    let created_at = jiff::Timestamp::now().to_string();
+    let def = crate::runtime::site_volumes::SiteVolumeDef {
+        name: site_vol_name.clone(),
+        kind: crate::runtime::site_volumes::SiteVolumeKind::Managed,
+        created_at,
+    };
+    if let Err(e) = state
+        .db
+        .call(move |db| crate::runtime::site_volumes::create(db, &def))
+    {
+        // The on-disk data is fine; only the registry insert failed. Tear
+        // down the directory so we don't leak orphan data whose existence
+        // the operator can't see. Returning the error is honest: the
+        // restore didn't achieve its stated effect.
+        let _ = vol_store.remove_site(&site_vol_name).await;
+        return Err(OiError::new(
+            ErrorCode::Internal,
+            format!("restore succeeded but failed to register site volume: {e}"),
+        ));
+    }
+
     Ok(json!({ "site_volume": site_vol_name }))
 }
 
