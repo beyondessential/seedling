@@ -1,11 +1,92 @@
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use seedling_protocol::actor::Actor;
 use seedling_protocol::client::{ClientAuth, ClientError, OiClient};
 use seedling_protocol::keys::ClientIdentity;
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt as _, BufReader};
+use tokio::sync::{Mutex, oneshot};
+
+/// Routes incoming daemon uni streams to registered handlers by QUIC stream ID.
+///
+/// When a shell session opens, the daemon opens server-initiated uni streams
+/// (stdout, stderr) whose IDs are announced in the handshake JSON. Callers
+/// register those IDs here before the streams arrive; the dispatcher delivers
+/// them when they come in, parking unknown IDs briefly until a handler
+/// registers.
+pub struct UniRouter {
+    inner: Mutex<UniRouterInner>,
+}
+
+struct UniRouterInner {
+    /// Callers waiting for a stream by ID.
+    waiting: HashMap<u64, oneshot::Sender<quinn::RecvStream>>,
+    /// Streams that arrived before their handler registered.
+    parked: HashMap<u64, quinn::RecvStream>,
+}
+
+impl UniRouter {
+    fn new() -> Self {
+        Self {
+            inner: Mutex::new(UniRouterInner {
+                waiting: HashMap::new(),
+                parked: HashMap::new(),
+            }),
+        }
+    }
+
+    /// Register interest in a uni stream with the given daemon-side QUIC stream ID.
+    ///
+    /// If the stream already arrived (parked), the returned receiver resolves
+    /// immediately. Otherwise it resolves when the dispatcher delivers it.
+    pub async fn register(&self, stream_id: u64) -> oneshot::Receiver<quinn::RecvStream> {
+        let (tx, rx) = oneshot::channel();
+        let mut inner = self.inner.lock().await;
+        if let Some(stream) = inner.parked.remove(&stream_id) {
+            let _ = tx.send(stream);
+        } else {
+            inner.waiting.insert(stream_id, tx);
+        }
+        rx
+    }
+
+    async fn deliver(&self, stream_id: u64, stream: quinn::RecvStream) {
+        let mut inner = self.inner.lock().await;
+        if let Some(tx) = inner.waiting.remove(&stream_id) {
+            let _ = tx.send(stream);
+        } else {
+            inner.parked.insert(stream_id, stream);
+        }
+    }
+
+    /// Cancel all outstanding registrations (connection closed/replaced).
+    async fn cancel_all(&self) {
+        let mut inner = self.inner.lock().await;
+        inner.waiting.clear();
+        inner.parked.clear();
+    }
+}
+
+/// Background task that accepts all incoming daemon uni streams and routes
+/// them to registered handlers via the `UniRouter`.
+async fn run_uni_dispatcher(conn: quinn::Connection, router: Arc<UniRouter>) {
+    loop {
+        match conn.accept_uni().await {
+            Ok(stream) => {
+                let stream_id = stream.id().index();
+                router.deliver(stream_id, stream).await;
+            }
+            Err(e) => {
+                tracing::debug!("uni dispatcher: connection closed: {e}");
+                router.cancel_all().await;
+                break;
+            }
+        }
+    }
+}
 
 pub struct DaemonConn {
     inner: tokio::sync::Mutex<OiClient>,
@@ -13,6 +94,7 @@ pub struct DaemonConn {
     addr: SocketAddr,
     auth: ClientAuth,
     key_path: PathBuf,
+    pub uni_router: Arc<UniRouter>,
 }
 
 impl DaemonConn {
@@ -40,12 +122,18 @@ impl DaemonConn {
         let fingerprint = identity.fingerprint.clone();
         let actor = Self::make_actor(&fingerprint);
         let client = OiClient::connect(addr, auth.clone(), &identity, actor).await?;
+
+        let uni_router = Arc::new(UniRouter::new());
+        let quic_conn = client.connection().clone();
+        tokio::spawn(run_uni_dispatcher(quic_conn, Arc::clone(&uni_router)));
+
         Ok(Self {
             inner: tokio::sync::Mutex::new(client),
             fingerprint,
             addr,
             auth,
             key_path: key_file.to_path_buf(),
+            uni_router,
         })
     }
 
@@ -98,6 +186,14 @@ impl DaemonConn {
         }
     }
 
+    /// Register interest in an incoming daemon uni stream by its QUIC stream ID.
+    ///
+    /// Call this after parsing the shell handshake response to receive the
+    /// daemon's server-initiated stdout/stderr streams.
+    pub async fn register_uni(&self, stream_id: u64) -> oneshot::Receiver<quinn::RecvStream> {
+        self.uni_router.register(stream_id).await
+    }
+
     async fn try_reconnect(&self) -> Result<(), ClientError> {
         let identity = ClientIdentity::load_or_generate(&self.key_path)
             .map_err(|e| ClientError::Connect(Box::new(e)))?
@@ -108,6 +204,14 @@ impl DaemonConn {
             Ok(_) | Err(ClientError::Api { .. }) => {}
             Err(e) => return Err(e),
         }
+
+        // Cancel outstanding registrations tied to the old connection.
+        self.uni_router.cancel_all().await;
+
+        // Spawn a new dispatcher for the new connection.
+        let quic_conn = new_client.connection().clone();
+        tokio::spawn(run_uni_dispatcher(quic_conn, Arc::clone(&self.uni_router)));
+
         *self.inner.lock().await = new_client;
         tracing::info!("daemon reconnected");
         Ok(())

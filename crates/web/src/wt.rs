@@ -122,9 +122,11 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
     // w[transport.webtransport]
     // w[routes.events]
     // w[routes.logs]
+    // w[shells.wire]
     while let Ok((mut wt_send, wt_recv)) = conn.accept_bi().await {
         let state3 = state.clone();
         let actor2 = Arc::clone(&actor);
+        let conn2 = conn.clone();
         tokio::spawn(async move {
             let peeked = match proxy::peek_request(wt_recv, &actor2).await {
                 Ok(p) => p,
@@ -158,6 +160,15 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
             if peeked.method == "/events/subscribe" {
                 let _ = wt_send.write_all(b"{\"result\":{}}\n").await;
                 state3.event_broker.serve_client(wt_send).await;
+                return;
+            }
+
+            // Intercept /shells/start: the daemon opens server-initiated uni
+            // streams (stdout, stderr) that must be forwarded as WT uni streams
+            // with an 8-byte BE stream ID prefix so the browser can demux them.
+            // w[shells.wire]
+            if peeked.method == "/shells/start" {
+                crate::shell::handle_shell_start(state3, conn2, wt_send, peeked).await;
                 return;
             }
 

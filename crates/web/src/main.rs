@@ -13,6 +13,7 @@ mod event_broker;
 mod http;
 mod interfaces;
 mod proxy;
+mod shell;
 mod spa;
 mod state;
 mod web_sessions;
