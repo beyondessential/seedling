@@ -386,6 +386,19 @@ pub(crate) async fn open_shell_session(
         }
     };
 
+    // l[impl action.shell]
+    // Match the reconciler's volume/external-volume resolution so a shell
+    // session sees the same on-disk state as a Job (bind-mounts under the
+    // volume store directory, same external-volume mappings). Previously we
+    // passed None for volumes_dir and an empty external_volumes map, which
+    // silently swapped bind-mounts for fresh podman-managed volumes with
+    // matching names — the shell would open inside a pristine empty volume
+    // and operators would see no data from the app's real state.
+    let external_volumes = crate::system::actuator::resolve_external_volumes(
+        &state.db,
+        &state.driver.volume_store,
+        &app_name,
+    );
     let mut container_spec = job_spec(
         &exec_target.job_def,
         &instance,
@@ -393,8 +406,8 @@ pub(crate) async fn open_shell_session(
         &(net_name.clone(), net_prefix),
         &resolved_mounts,
         &state.dns_servers,
-        None,
-        &std::collections::HashMap::new(),
+        Some(state.driver.volume_store.volumes_dir()),
+        &external_volumes,
         0,
     );
     container_spec.health = None;

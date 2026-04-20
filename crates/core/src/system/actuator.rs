@@ -151,73 +151,7 @@ impl Actuator {
         &self,
         app: &str,
     ) -> HashMap<String, crate::system::types::ResolvedExternalMount> {
-        use crate::system::types::{MountSource, ResolvedExternalMount};
-
-        let app_owned = app.to_owned();
-        let (mappings, site_vols) = self.db.call(move |db| {
-            let mappings = external_volume_mappings::list_for_app(db, &app_owned).unwrap_or_else(|e| {
-                tracing::warn!(app = %app_owned, error = %e, "failed to load external volume mappings");
-                vec![]
-            });
-            let site_vols = site_volumes::list(db).unwrap_or_default();
-            (mappings, site_vols)
-        });
-
-        let vol_store = &self.driver.volume_store;
-        let mut resolved = HashMap::new();
-
-        for mapping in mappings {
-            let mount = match &mapping.target {
-                external_volume_mappings::MappingTarget::Site { target_volume } => {
-                    let site_vol = site_vols.iter().find(|s| s.name == *target_volume);
-                    match site_vol {
-                        Some(sv) => {
-                            let path = match &sv.kind {
-                                site_volumes::SiteVolumeKind::Managed => {
-                                    vol_store.site_path(&sv.name)
-                                }
-                                site_volumes::SiteVolumeKind::Bind { host_path } => {
-                                    std::path::PathBuf::from(host_path)
-                                }
-                                site_volumes::SiteVolumeKind::Snapshot { .. } => {
-                                    vol_store.site_path(&sv.name)
-                                }
-                            };
-                            // r[impl volume.site.snapshot]
-                            // Snapshot volumes are inherently read-only at the filesystem level.
-                            let effective_read_only = mapping.read_only || sv.is_read_only();
-                            ResolvedExternalMount {
-                                source: MountSource::Bind(path),
-                                read_only: effective_read_only,
-                            }
-                        }
-                        None => {
-                            tracing::warn!(
-                                app = app,
-                                external = %mapping.external_name,
-                                target = %target_volume,
-                                "site volume not found for external volume mapping"
-                            );
-                            continue;
-                        }
-                    }
-                }
-                external_volume_mappings::MappingTarget::Exported {
-                    target_app,
-                    target_volume,
-                } => {
-                    let vol_name = format!("{target_app}-{target_volume}");
-                    let path = vol_store.path(&vol_name);
-                    ResolvedExternalMount {
-                        source: MountSource::Bind(path),
-                        read_only: mapping.read_only,
-                    }
-                }
-            };
-            resolved.insert(mapping.external_name, mount);
-        }
-
-        resolved
+        resolve_external_volumes(&self.db, &self.driver.volume_store, app)
     }
 
     // r[impl actuate.deployment.start]
@@ -618,4 +552,79 @@ impl Actuator {
 
         Some(spec_hash(&spec))
     }
+}
+
+/// Resolve the external-volume mappings for an app into concrete
+/// `ResolvedExternalMount` entries keyed by the BSL external-volume name.
+///
+/// Shared with the shell session path so an operator-opened shell mounts the
+/// same bind sources the reconciler would use for a Job or Deployment.
+// l[impl action.shell]
+pub fn resolve_external_volumes(
+    db: &DbHandle,
+    vol_store: &crate::system::volume_store::VolumeStore,
+    app: &str,
+) -> HashMap<String, crate::system::types::ResolvedExternalMount> {
+    use crate::system::types::{MountSource, ResolvedExternalMount};
+
+    let app_owned = app.to_owned();
+    let (mappings, site_vols) = db.call(move |db| {
+        let mappings = external_volume_mappings::list_for_app(db, &app_owned).unwrap_or_else(|e| {
+            tracing::warn!(app = %app_owned, error = %e, "failed to load external volume mappings");
+            vec![]
+        });
+        let site_vols = site_volumes::list(db).unwrap_or_default();
+        (mappings, site_vols)
+    });
+
+    let mut resolved = HashMap::new();
+    for mapping in mappings {
+        let mount = match &mapping.target {
+            external_volume_mappings::MappingTarget::Site { target_volume } => {
+                let site_vol = site_vols.iter().find(|s| s.name == *target_volume);
+                match site_vol {
+                    Some(sv) => {
+                        let path = match &sv.kind {
+                            site_volumes::SiteVolumeKind::Managed => vol_store.site_path(&sv.name),
+                            site_volumes::SiteVolumeKind::Bind { host_path } => {
+                                std::path::PathBuf::from(host_path)
+                            }
+                            site_volumes::SiteVolumeKind::Snapshot { .. } => {
+                                vol_store.site_path(&sv.name)
+                            }
+                        };
+                        // r[impl volume.site.snapshot]
+                        // Snapshot volumes are inherently read-only at the filesystem level.
+                        let effective_read_only = mapping.read_only || sv.is_read_only();
+                        ResolvedExternalMount {
+                            source: MountSource::Bind(path),
+                            read_only: effective_read_only,
+                        }
+                    }
+                    None => {
+                        tracing::warn!(
+                            app = app,
+                            external = %mapping.external_name,
+                            target = %target_volume,
+                            "site volume not found for external volume mapping"
+                        );
+                        continue;
+                    }
+                }
+            }
+            external_volume_mappings::MappingTarget::Exported {
+                target_app,
+                target_volume,
+            } => {
+                let vol_name = format!("{target_app}-{target_volume}");
+                let path = vol_store.path(&vol_name);
+                ResolvedExternalMount {
+                    source: MountSource::Bind(path),
+                    read_only: mapping.read_only,
+                }
+            }
+        };
+        resolved.insert(mapping.external_name, mount);
+    }
+    resolved
 }
