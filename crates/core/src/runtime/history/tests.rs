@@ -54,6 +54,59 @@ fn clear_current_operation_removes_record() {
     assert!(load_current_operation(&db).unwrap().is_none());
 }
 
+// r[verify operation.params] i[verify action.invoke.install.validation]
+#[test]
+fn install_params_round_trip_through_cipher() {
+    use crate::runtime::secrets::Cipher;
+
+    let db = Db::open_in_memory().unwrap();
+    let cipher = Cipher::for_tests();
+    let op = CurrentOperation {
+        operation_id: OperationId("install-op".into()),
+        app: "myapp".into(),
+        action_name: "install".into(),
+        source_generation: 1,
+        target_generation: 1,
+    };
+    let mut params = serde_json::Map::new();
+    params.insert("passphrase".into(), serde_json::json!("hunter2"));
+    params.insert("bucket".into(), serde_json::json!("my-backups"));
+
+    save_current_install_operation(&db, &cipher, &op, &params).unwrap();
+
+    // Metadata loads via the normal path.
+    let meta = load_current_operation(&db).unwrap().unwrap();
+    assert_eq!(meta.action_name, "install");
+
+    // Params decrypt back to the original map.
+    let restored = load_current_install_params(&db, &cipher).unwrap().unwrap();
+    assert_eq!(restored, params);
+
+    // Clearing the row clears the ciphertext too.
+    clear_current_operation(&db).unwrap();
+    assert!(load_current_install_params(&db, &cipher).unwrap().is_none());
+}
+
+// r[verify operation.params]
+#[test]
+fn non_install_operation_has_no_install_params() {
+    use crate::runtime::secrets::Cipher;
+
+    let db = Db::open_in_memory().unwrap();
+    let cipher = Cipher::for_tests();
+    let op = CurrentOperation {
+        operation_id: OperationId("start-op".into()),
+        app: "myapp".into(),
+        action_name: "start".into(),
+        source_generation: 1,
+        target_generation: 1,
+    };
+    save_current_operation(&db, &op).unwrap();
+
+    // A start operation has no install params to decrypt.
+    assert!(load_current_install_params(&db, &cipher).unwrap().is_none());
+}
+
 #[test]
 fn save_overwrites_previous_current_operation() {
     let db = Db::open_in_memory().unwrap();

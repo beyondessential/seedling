@@ -135,12 +135,23 @@ pub(crate) fn invoke_install(
             .get(app_name)
             .ok_or_else(|| OiError::not_found(format!("app not found: {app_name}")))?;
 
-        // i[action.invoke.install] - reject if already installed or uninstalling
-        if !matches!(*entry.phase.lock(), AppPhase::NotInstalled) {
-            return Err(OiError::new(
-                ErrorCode::AlreadyInstalled,
-                format!("app is already installed: {app_name}"),
-            ));
+        // i[action.invoke.install] - only NotInstalled apps may start an install.
+        // Installing: an install for this app is already running — distinct error.
+        // Installed / Uninstalling: install already happened (or is unwinding).
+        match *entry.phase.lock() {
+            AppPhase::NotInstalled => {}
+            AppPhase::Installing => {
+                return Err(OiError::new(
+                    ErrorCode::InstallInProgress,
+                    format!("install already in progress for app: {app_name}"),
+                ));
+            }
+            AppPhase::Installed | AppPhase::Uninstalling => {
+                return Err(OiError::new(
+                    ErrorCode::AlreadyInstalled,
+                    format!("app is already installed: {app_name}"),
+                ));
+            }
         }
 
         // i[action.invoke.install] - reject if script_error fault is active

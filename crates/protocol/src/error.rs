@@ -7,6 +7,9 @@ pub enum ErrorCode {
     NotFound,
     NotInstalled,
     AlreadyInstalled,
+    // i[wire.error-codes] InstallInProgress distinguishes "install is running
+    // right now" from "install already succeeded (or uninstall is in flight)".
+    InstallInProgress,
     OperationInProgress,
     AlreadyQueued,
     RequirementsInvalid,

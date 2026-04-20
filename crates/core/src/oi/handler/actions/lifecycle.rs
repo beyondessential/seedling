@@ -17,6 +17,10 @@ use crate::{
         db::DbHandle,
         desired::OperationProgress,
         faults,
+        history::{
+            CurrentOperation, clear_current_operation, save_current_install_operation,
+            save_current_operation,
+        },
         registry::DbInstanceRegistry,
     },
 };
@@ -78,6 +82,42 @@ fn run_operation_loop(
     let world = Arc::new(DbWorldOracle::new(db.clone()));
     let registry: Arc<dyn InstanceRegistry> = Arc::new(DbInstanceRegistry::new(db.clone()));
 
+    // r[impl operation.lifecycle.events] r[impl barrier.replay]
+    // Persist the current operation so a runtime restart can resume it.
+    // For install, also persist the encrypted params — the action log does not
+    // carry operator-supplied params, and install params are needed on replay.
+    {
+        let record = CurrentOperation {
+            operation_id: operation_id.clone(),
+            app: app_name.to_owned(),
+            action_name: action_name.to_owned(),
+            source_generation: op_ctx.source_generation,
+            target_generation: op_ctx.target_generation,
+        };
+        let is_install = action_name == "install";
+        let params_for_persist = params.clone();
+        let cipher_for_persist = Arc::clone(&cipher);
+        if let Err(e) = db.call(move |db| {
+            if is_install {
+                save_current_install_operation(
+                    db,
+                    &cipher_for_persist,
+                    &record,
+                    &params_for_persist,
+                )
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+            } else {
+                save_current_operation(db, &record)
+            }
+        }) {
+            tracing::warn!(
+                app = %app_name,
+                action = %action_name,
+                "failed to persist current_operation: {e}"
+            );
+        }
+    }
+
     loop {
         let result = run_operation(
             OperationContext {
@@ -107,6 +147,7 @@ fn run_operation_loop(
                 let app_name_owned = app_name.to_owned();
                 db.call(move |db| {
                     faults::clear_faults_by_kind(db, &app_name_owned, "operation_failed").ok();
+                    let _ = clear_current_operation(db);
                 });
                 op_ctx.completed();
                 return true;
@@ -125,6 +166,7 @@ fn run_operation_loop(
                         "operation_failed",
                         &desc,
                     );
+                    let _ = clear_current_operation(db);
                 });
                 op_ctx.failed(&e.to_string());
                 return false;
@@ -259,17 +301,16 @@ async fn cleanup_dynamic_resources(
     });
 }
 
-fn finalize_install(state: &OiState, app_name: &str) {
+/// Flip the app's phase in memory and persist the new row. Never hold the
+/// registry write lock across the db call: the schedule ticker holds db then
+/// acquires registry.read(), so registry.write() + db.lock() in either order
+/// deadlocks with it.
+fn set_phase_and_persist(state: &OiState, app_name: &str, new_phase: AppPhase) {
     use crate::oi::handler::apps::{extract_persist_fields, persist_app_fields};
-    // i[action.invoke.install.completion]
-    // Update the in-memory phase under the write lock, then persist under a
-    // read lock. Never hold the write lock while acquiring db: the schedule
-    // ticker holds db then acquires registry.read(), so registry.write() +
-    // db.lock() in either order creates a deadlock with it.
     {
         let mut reg = state.registry.write();
         if let Some(entry) = reg.get_mut(app_name) {
-            *entry.phase.lock() = AppPhase::Installed;
+            *entry.phase.lock() = new_phase;
         }
     }
     {
@@ -287,12 +328,29 @@ fn finalize_install(state: &OiState, app_name: &str) {
                     installing,
                 )
             }) {
-                tracing::error!(app = %app_name, "persist installed flag: {e}");
+                tracing::error!(app = %app_name, "persist phase transition: {e}");
             }
         }
     }
     state.tick_notify.notify_one();
+}
+
+// i[impl action.invoke.install]
+fn enter_installing_phase(state: &OiState, app_name: &str) {
+    set_phase_and_persist(state, app_name, AppPhase::Installing);
+    tracing::info!(app = %app_name, "install started; entering Installing phase");
+}
+
+// i[impl action.invoke.install.completion]
+fn finalize_install(state: &OiState, app_name: &str) {
+    set_phase_and_persist(state, app_name, AppPhase::Installed);
     tracing::info!(app = %app_name, "install completed; app is now installed");
+}
+
+// i[impl action.invoke.install.completion]
+fn revert_install_phase(state: &OiState, app_name: &str) {
+    set_phase_and_persist(state, app_name, AppPhase::NotInstalled);
+    tracing::info!(app = %app_name, "install failed; reverted to NotInstalled");
 }
 
 #[expect(
@@ -343,6 +401,14 @@ pub fn spawn_accepted_operation(
         );
         op_ctx.started(&trigger);
 
+        // i[impl action.invoke.install]
+        // Flip to Installing as soon as the install operation actually starts
+        // (covers both directly-accepted and later-dequeued installs because
+        // both paths funnel through spawn_accepted_operation).
+        if is_install {
+            enter_installing_phase(&state, &app_name);
+        }
+
         let operation_id_str = operation_id.0.clone();
 
         let success = {
@@ -380,8 +446,13 @@ pub fn spawn_accepted_operation(
         *active_progress.write() = None;
         tick_notify.notify_one();
 
-        if is_install && success {
-            finalize_install(&state, &app_name);
+        // i[impl action.invoke.install.completion]
+        if is_install {
+            if success {
+                finalize_install(&state, &app_name);
+            } else {
+                revert_install_phase(&state, &app_name);
+            }
         }
 
         let next = state.scheduler.lock().complete_current();

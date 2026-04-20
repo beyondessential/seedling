@@ -7,6 +7,34 @@ use super::params::load_params_for_app;
 use super::*;
 use crate::runtime::db::Db;
 
+// i[verify app.status] i[verify action.invoke.install]
+#[test]
+fn phase_encode_round_trip() {
+    use super::{decode_phase, encode_phase};
+    for phase in [
+        AppPhase::NotInstalled,
+        AppPhase::Installing,
+        AppPhase::Installed,
+        AppPhase::Uninstalling,
+    ] {
+        let (installed, uninstalling, installing) = encode_phase(&phase);
+        let decoded = decode_phase("test-app", installed, uninstalling, installing);
+        assert_eq!(decoded, phase, "round-trip for {phase:?}");
+    }
+}
+
+// i[verify app.status]
+#[test]
+fn decode_phase_prefers_uninstalling_over_conflicts() {
+    use super::decode_phase;
+    // All bits set: uninstalling wins because teardown is the highest-
+    // priority in-flight state.
+    assert_eq!(
+        decode_phase("test-app", true, true, true),
+        AppPhase::Uninstalling,
+    );
+}
+
 // i[verify param.store]
 #[test]
 fn upsert_and_load_params_round_trip() {
