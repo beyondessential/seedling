@@ -1501,55 +1501,70 @@ pub(crate) fn update_app(
         if !removed_volumes.is_empty() {
             let vol_store = &state.driver.volume_store;
             for vol_name in &removed_volumes {
-                // The on-disk name follows the same format the actuator uses
-                // when creating: "<app>-<volume-name>". Ignore NotFound so a
-                // rename/reload of an app that never had data for this
-                // volume (e.g. a brand-new declaration that got immediately
-                // withdrawn) doesn't turn into a user-visible error.
-                let display_name = format!("{name}-{vol_name}");
-                match tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(
-                        vol_store.hold(&display_name, name, "removed from app definition"),
-                    )
-                }) {
-                    Ok(meta) => {
-                        tracing::info!(
-                            app = %name,
-                            volume = %vol_name,
-                            held_id = %meta.id,
-                            "held volume removed from app definition"
-                        );
-                    }
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                        // No on-disk data; nothing to hold. Fall through to
-                        // delete the instance row.
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            app = %name,
-                            volume = %vol_name,
-                            "failed to hold removed volume: {e}"
-                        );
-                    }
-                }
-                // Drop the instance row(s) so the registry matches the new
-                // AppDef. find_all_instances looks up by (app, kind, name);
-                // we iterate the result and delete each.
+                // Each named volume may have one or more resource_instances
+                // rows. Use the registry's display_name (the authoritative
+                // on-disk name, which for volumes is "<app>-volume-<name>"
+                // via kind_slug, not the "<app>-<name>" form Deployments
+                // use) — hardcoding a format here would miss future
+                // identity-scheme changes and trip on legacy rows with a
+                // different slug.
                 let name_owned = name.to_owned();
                 let vol_name_owned = vol_name.clone();
-                state.db.call(move |db| {
-                    let instances = crate::runtime::history::find_instances_for_group(
+                let instances = state.db.call(move |db| {
+                    crate::runtime::history::find_instances_for_group(
                         db,
                         &name_owned,
                         crate::defs::resource::ResourceKind::Volume,
                         Some(&vol_name_owned),
                     )
-                    .unwrap_or_default();
-                    for inst in instances {
-                        if let Err(e) = crate::runtime::history::delete_instance(db, inst.id) {
+                    .unwrap_or_default()
+                });
+                for inst in &instances {
+                    match tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current().block_on(vol_store.hold(
+                            &inst.display_name,
+                            name,
+                            "removed from app definition",
+                        ))
+                    }) {
+                        Ok(meta) => {
+                            tracing::info!(
+                                app = %name,
+                                volume = %vol_name,
+                                display = %inst.display_name,
+                                held_id = %meta.id,
+                                "held volume removed from app definition"
+                            );
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                            // Volume declared but never created on disk
+                            // (e.g. the app was never installed, or the
+                            // user added + removed the volume quickly).
+                            // The instance row still needs cleanup below.
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                app = %name,
+                                volume = %vol_name,
+                                display = %inst.display_name,
+                                "failed to hold removed volume: {e}"
+                            );
+                        }
+                    }
+                }
+                // Drop the instance rows so the registry matches the new
+                // AppDef. Done after the hold so on failure the rows
+                // remain and the next /apps/update retry can try again.
+                let name_owned = name.to_owned();
+                let inst_ids: Vec<_> = instances.iter().map(|i| i.id).collect();
+                let inst_displays: Vec<_> =
+                    instances.iter().map(|i| i.display_name.clone()).collect();
+                state.db.call(move |db| {
+                    for (id, disp) in inst_ids.iter().zip(inst_displays.iter()) {
+                        if let Err(e) = crate::runtime::history::delete_instance(db, *id) {
                             tracing::warn!(
                                 app = %name_owned,
-                                instance = %inst.display_name,
+                                instance = %disp,
                                 "failed to delete instance row for held volume: {e}"
                             );
                         }
