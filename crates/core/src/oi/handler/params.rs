@@ -1,11 +1,12 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use secrecy::SecretString;
+use seedling_protocol::error::{ErrorCode, OiError};
+use seedling_protocol::names::AppName;
 use serde::Deserialize;
 use serde_json::json;
 
-use seedling_protocol::error::{ErrorCode, OiError};
-
+use super::HandlerResult;
 use crate::{
     oi::{handler::RequestCtx, state::OiState},
     runtime::{
@@ -14,23 +15,25 @@ use crate::{
     },
 };
 
-use super::HandlerResult;
-
 #[derive(Deserialize)]
 pub(crate) struct SetParamParams {
-    pub app: String,
+    pub app: AppName,
     pub name: String,
     pub value: String,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct UnsetParamParams {
-    pub app: String,
+    pub app: AppName,
     pub name: String,
 }
 
-fn current_param_value(state: &OiState, app: &str, name: &str) -> Result<Option<String>, OiError> {
-    let app_owned = app.to_owned();
+fn current_param_value(
+    state: &OiState,
+    app: &AppName,
+    name: &str,
+) -> Result<Option<String>, OiError> {
+    let app_owned = app.clone();
     let name_owned = name.to_owned();
     let cipher = Arc::clone(&state.cipher);
     let map = state
@@ -44,11 +47,11 @@ fn current_param_value(state: &OiState, app: &str, name: &str) -> Result<Option<
     Ok(map.get(&name_owned).cloned())
 }
 
-fn param_is_secret(state: &OiState, app: &str, name: &str) -> bool {
+fn param_is_secret(state: &OiState, app: &AppName, name: &str) -> bool {
     state
         .registry
         .read()
-        .get(app)
+        .get(app.as_str())
         .and_then(|e| e.app.def.load().params.get(name).map(|d| d.is_secret()))
         .unwrap_or(false)
 }
@@ -61,7 +64,7 @@ fn param_is_secret(state: &OiState, app: &str, name: &str) -> bool {
 // phase check covers the narrow window between boot (phase = Installing
 // persisted by a prior process) and the replay path re-registering the
 // operation with the in-memory scheduler.
-fn reject_if_op_in_progress(state: &OiState, app: &str) -> Result<(), OiError> {
+fn reject_if_op_in_progress(state: &OiState, app: &AppName) -> Result<(), OiError> {
     use crate::runtime::apps::AppPhase;
     if state.scheduler.lock().has_operation_for(app) {
         return Err(OiError::new(
@@ -70,7 +73,7 @@ fn reject_if_op_in_progress(state: &OiState, app: &str) -> Result<(), OiError> {
         ));
     }
     let reg = state.registry.read();
-    if let Some(entry) = reg.get(app)
+    if let Some(entry) = reg.get(app.as_str())
         && matches!(*entry.phase.lock(), AppPhase::Installing)
     {
         return Err(OiError::new(
@@ -83,16 +86,19 @@ fn reject_if_op_in_progress(state: &OiState, app: &str) -> Result<(), OiError> {
 
 fn reload_and_persist_apperror(
     state: &OiState,
-    app: &str,
+    app: &AppName,
     new_generation: generations::Generation,
 ) -> Result<(), OiError> {
     use crate::oi::handler::apps::{extract_persist_fields, persist_app_fields, sync_fault_state};
 
     let script = {
         let reg = state.registry.read();
-        reg.get(app).expect("confirmed registered").script.clone()
+        reg.get(app.as_str())
+            .expect("confirmed registered")
+            .script
+            .clone()
     };
-    let app_owned = app.to_owned();
+    let app_owned = app.clone();
     let cipher = Arc::clone(&state.cipher);
     let loaded_params = state
         .db
@@ -108,19 +114,19 @@ fn reload_and_persist_apperror(
         .reload(app, script, &loaded_params, &state.script_limits);
     {
         let reg = state.registry.read();
-        if let Some(entry) = reg.get(app) {
+        if let Some(entry) = reg.get(app.as_str()) {
             sync_fault_state(&state.db, entry);
         }
     }
     {
         let mut reg = state.registry.write();
-        if let Some(entry) = reg.get_mut(app) {
+        if let Some(entry) = reg.get_mut(app.as_str()) {
             entry.current_generation = new_generation;
         }
     }
     {
         let reg = state.registry.read();
-        let entry = reg.get(app).expect("confirmed registered");
+        let entry = reg.get(app.as_str()).expect("confirmed registered");
         let (app_name, generation_n, installed, uninstalling, installing) =
             extract_persist_fields(entry);
         state
@@ -142,13 +148,13 @@ fn reload_and_persist_apperror(
 
 fn schedule_on_change(
     state: &OiState,
-    app: &str,
+    app: &AppName,
     param_name: &str,
     generation: generations::Generation,
 ) -> Result<&'static str, OiError> {
     let (has_on_change, is_installed, tick_notify) = {
         let reg = state.registry.read();
-        let entry = reg.get(app).expect("confirmed registered");
+        let entry = reg.get(app.as_str()).expect("confirmed registered");
         let has = entry.app.def.load().param_changes.contains(param_name);
         let installed = matches!(
             *entry.phase.lock(),
@@ -182,7 +188,7 @@ fn schedule_on_change(
                 .unwrap_or_default();
             drop(sched);
             if !op_id.is_empty() {
-                let app_owned = app.to_owned();
+                let app_owned = app.clone();
                 let op_id_owned = op_id.clone();
                 state.db.call(move |db| {
                     if let Err(e) = generations::attach_operation(db, &app_owned, generation, &op_id_owned) {
@@ -224,13 +230,13 @@ pub(crate) fn set_param(
     params: SetParamParams,
     ctx: &RequestCtx,
 ) -> HandlerResult {
-    let app = params.app.as_str();
+    let app = &params.app;
     let param_name = params.name.as_str();
     let value = params.value.as_str();
 
     {
         let reg = state.registry.read();
-        if !reg.is_registered(app) {
+        if !reg.is_registered(app.as_str()) {
             return Err(OiError::not_found(format!("app not found: {app}")));
         }
     }
@@ -243,7 +249,9 @@ pub(crate) fn set_param(
     if previous_value.as_deref() == Some(value) {
         let generation = {
             let reg = state.registry.read();
-            reg.get(app).map(|e| e.current_generation).unwrap_or(0)
+            reg.get(app.as_str())
+                .map(|e| e.current_generation)
+                .unwrap_or(0)
         };
         return Ok(json!({
             "schedule": "not_scheduled",
@@ -253,11 +261,13 @@ pub(crate) fn set_param(
 
     let previous_generation = {
         let reg = state.registry.read();
-        reg.get(app).map(|e| e.current_generation).unwrap_or(0)
+        reg.get(app.as_str())
+            .map(|e| e.current_generation)
+            .unwrap_or(0)
     };
 
     let is_secret = param_is_secret(state, app, param_name);
-    let app_owned = app.to_owned();
+    let app_owned = app.clone();
     let param_name_owned = param_name.to_owned();
     let value_owned = value.to_owned();
     let prev_owned = previous_value.clone();
@@ -308,15 +318,15 @@ pub(crate) fn set_param(
     // i[impl param.store.secret]
     if is_secret {
         ctx.events
-            .param_change(app, generation, previous_generation)
+            .param_change(app.clone(), generation, previous_generation)
             .set_redacted(param_name);
     } else {
         ctx.events
-            .param_change(app, generation, previous_generation)
+            .param_change(app.clone(), generation, previous_generation)
             .set(param_name, previous_value.as_deref(), value);
     }
 
-    tracing::info!(app, param = param_name, generation, schedule, "set_param");
+    tracing::info!(app = %app, param = param_name, generation, schedule, "set_param");
     Ok(json!({ "schedule": schedule, "generation": generation }))
 }
 
@@ -328,12 +338,12 @@ pub(crate) fn unset_param(
     params: UnsetParamParams,
     ctx: &RequestCtx,
 ) -> HandlerResult {
-    let app = params.app.as_str();
+    let app = &params.app;
     let param_name = params.name.as_str();
 
     {
         let reg = state.registry.read();
-        if !reg.is_registered(app) {
+        if !reg.is_registered(app.as_str()) {
             return Err(OiError::not_found(format!("app not found: {app}")));
         }
     }
@@ -344,7 +354,9 @@ pub(crate) fn unset_param(
     let Some(previous_value) = previous_value else {
         let generation = {
             let reg = state.registry.read();
-            reg.get(app).map(|e| e.current_generation).unwrap_or(0)
+            reg.get(app.as_str())
+                .map(|e| e.current_generation)
+                .unwrap_or(0)
         };
         return Ok(json!({
             "schedule": "not_scheduled",
@@ -354,12 +366,14 @@ pub(crate) fn unset_param(
 
     let previous_generation = {
         let reg = state.registry.read();
-        reg.get(app).map(|e| e.current_generation).unwrap_or(0)
+        reg.get(app.as_str())
+            .map(|e| e.current_generation)
+            .unwrap_or(0)
     };
 
     let is_secret = param_is_secret(state, app, param_name);
 
-    let app_owned = app.to_owned();
+    let app_owned = app.clone();
     let param_name_owned = param_name.to_owned();
     let prev_owned = previous_value.clone();
     let cipher = Arc::clone(&state.cipher);
@@ -391,14 +405,14 @@ pub(crate) fn unset_param(
     // i[impl param.store.secret]
     if is_secret {
         ctx.events
-            .param_change(app, generation, previous_generation)
+            .param_change(app.clone(), generation, previous_generation)
             .unset_redacted(param_name);
     } else {
         ctx.events
-            .param_change(app, generation, previous_generation)
+            .param_change(app.clone(), generation, previous_generation)
             .unset(param_name, &previous_value);
     }
 
-    tracing::info!(app, param = param_name, generation, schedule, "unset_param");
+    tracing::info!(app = %app, param = param_name, generation, schedule, "unset_param");
     Ok(json!({ "schedule": schedule, "generation": generation }))
 }

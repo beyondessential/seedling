@@ -1,15 +1,14 @@
+use seedling_protocol::error::{ErrorCode, OiError};
+use seedling_protocol::names::AppName;
 use serde::Deserialize;
 use serde_json::json;
 
-use seedling_protocol::error::{ErrorCode, OiError};
-
-use crate::{oi::state::OiState, runtime::faults};
-
 use super::HandlerResult;
+use crate::{oi::state::OiState, runtime::faults};
 
 #[derive(Deserialize)]
 pub(crate) struct ListFaultsParams {
-    pub app: Option<String>,
+    pub app: Option<AppName>,
 }
 
 // i[fault.list]
@@ -17,7 +16,7 @@ pub(crate) fn list_faults(state: &OiState, params: ListFaultsParams) -> HandlerR
     let app = params.app.clone();
     let records = state
         .db
-        .call(move |db| faults::list_active_faults(db, app.as_deref()))
+        .call(move |db| faults::list_active_faults(db, app.as_ref()))
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db query: {e}")))?;
     let result: Vec<serde_json::Value> = records
         .into_iter()

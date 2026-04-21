@@ -3,6 +3,7 @@ use std::{collections::HashMap, fmt, net::Ipv6Addr, sync::Arc};
 use jiff::Timestamp;
 use parking_lot::Mutex;
 use seedling_protocol::actor::Actor;
+use seedling_protocol::names::AppName;
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
@@ -40,7 +41,7 @@ pub struct ForwardEntry {
     pub forward_key: u16,
     /// Stable connection identifier (`quinn::Connection::stable_id()`).
     pub conn_id: usize,
-    pub app: String,
+    pub app: AppName,
     pub service: String,
     pub port: u16,
     pub proto: ForwardProto,
@@ -57,7 +58,7 @@ pub struct ForwardEntry {
 // i[forward.record]
 pub struct ForwardRecord {
     pub forward_id: ForwardId,
-    pub app: String,
+    pub app: AppName,
     pub service: String,
     pub port: u16,
     pub proto: ForwardProto,

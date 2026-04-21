@@ -643,7 +643,7 @@ pub fn spawn_accepted_operation(
 )]
 pub(crate) async fn run_operation_for_backup(
     state: &Arc<OiState>,
-    backup_app_name: &str,
+    backup_app_name: &AppName,
     action_name: &str,
     operation_id: OperationId,
     params: serde_json::Map<String, serde_json::Value>,
@@ -653,7 +653,7 @@ pub(crate) async fn run_operation_for_backup(
 ) -> bool {
     let (app, active_progress, tick_notify, script) = {
         let reg = state.registry.read();
-        match reg.get(backup_app_name) {
+        match reg.get(backup_app_name.as_str()) {
             Some(e) => (
                 e.app.clone(),
                 Arc::clone(&e.active_progress),
@@ -680,7 +680,7 @@ pub(crate) async fn run_operation_for_backup(
     let operation_id_str = operation_id.0.clone();
 
     let op_ctx = state.event_tx.operation(
-        backup_app_name,
+        backup_app_name.clone(),
         action_name,
         &operation_id.0,
         source_generation,

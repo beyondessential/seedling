@@ -1,8 +1,10 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
+use seedling_protocol::names::AppName;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
+use super::registry::ShellSession;
 use crate::{
     defs::resource::ResourceKind,
     oi::state::OiState,
@@ -13,13 +15,11 @@ use crate::{
     },
 };
 
-use super::registry::ShellSession;
-
 #[derive(serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum VolumeRef {
     Site { name: String },
-    App { app: String, volume: String },
+    App { app: AppName, volume: String },
     // Inspect a held volume's data. The `id` is the one returned by
     // /volumes/held/list. Mounted read-write so the operator can cherry-
     // pick files back out into another volume if they want to recover a
@@ -156,7 +156,8 @@ pub(crate) async fn open_volume_shell_session(
             }
 
             VolumeRef::App { app, volume } => {
-                let on_disk_name = crate::runtime::identity::VolumeName::for_app(app, volume);
+                let on_disk_name =
+                    crate::runtime::identity::VolumeName::for_app(app.as_str(), volume);
                 let path = vol_store.path(&on_disk_name);
                 if !path.exists() {
                     err!(
@@ -206,7 +207,7 @@ pub(crate) async fn open_volume_shell_session(
     let instance_id = InstanceId::generate();
     let instance = ResourceInstance {
         id: instance_id,
-        app: "_volumes".into(),
+        app: AppName::new_unchecked("_volumes"),
         kind: ResourceKind::Job,
         name: Some("volume-shell".into()),
         variant: InstanceVariant::Scaled,
@@ -349,9 +350,10 @@ pub(crate) async fn open_volume_shell_session(
 
     let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel::<()>();
     let pty_master_fd = exec_handle.pty_master_fd;
+    let volumes_app = AppName::new_unchecked("_volumes");
     state.shells.insert(ShellSession {
         session_id,
-        app: "_volumes".into(),
+        app: volumes_app.clone(),
         name: session_name.clone(),
         opened_at: jiff::Timestamp::now(),
         actor: req_actor,
@@ -362,7 +364,7 @@ pub(crate) async fn open_volume_shell_session(
     // i[impl volumes.shell]
     state
         .event_tx
-        .shell_started(&session_id.to_string(), "_volumes", &session_name);
+        .shell_started(&session_id.to_string(), &volumes_app, &session_name);
 
     let _ = stderr_send.finish();
 

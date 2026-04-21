@@ -1,7 +1,7 @@
+use seedling_protocol::error::{ErrorCode, HandlerResult, OiError};
+use seedling_protocol::names::AppName;
 use serde::Deserialize;
 use serde_json::json;
-
-use seedling_protocol::error::{ErrorCode, HandlerResult, OiError};
 
 use crate::oi::{handler::RequestCtx, state::OiState};
 
@@ -70,7 +70,7 @@ pub(crate) fn list_exported(state: &OiState) -> HandlerResult {
     let mut exported = Vec::new();
 
     for (app_name, _status) in registry.list() {
-        let Some(entry) = registry.get(&app_name) else {
+        let Some(entry) = registry.get(app_name.as_str()) else {
             continue;
         };
         let def = entry.app.def.load();
@@ -102,7 +102,7 @@ pub(crate) fn list_app_volumes(state: &OiState) -> HandlerResult {
     let mut volumes = Vec::new();
 
     for (app_name, _status) in registry.list() {
-        let Some(entry) = registry.get(&app_name) else {
+        let Some(entry) = registry.get(app_name.as_str()) else {
             continue;
         };
         let def = entry.app.def.load();
@@ -350,8 +350,13 @@ pub(crate) fn delete_site_volume(
     };
     if let Some(meta) = &held_meta {
         // r[impl actuate.volume.hold.events]
+        //
+        // Site-originated holds carry the synthetic "_site" marker in place
+        // of an app name. Bypass validation so the pseudo-name round-trips
+        // through the event.
+        let held_app = AppName::new_unchecked(meta.app.clone());
         ctx.events
-            .held_volume_created(&meta.id, &meta.app, &meta.volume_name, &meta.reason);
+            .held_volume_created(&meta.id, &held_app, &meta.volume_name, &meta.reason);
     }
     // r[impl volume.site.lifecycle.events]
     ctx.events
@@ -419,7 +424,7 @@ pub(crate) fn snapshot_site_volume(
     // r[impl volume.site.snapshot.events]
     ctx.events.site_volume_snapshotted(
         &params.name,
-        event_source_app.as_deref(),
+        event_source_app.as_ref(),
         &event_source_volume,
     );
 
@@ -520,7 +525,7 @@ pub(crate) fn promote_site_volume(
 fn parse_source_vol_id(
     vol_id: &str,
     state: &OiState,
-) -> Result<(Option<String>, String, std::path::PathBuf), String> {
+) -> Result<(Option<AppName>, String, std::path::PathBuf), String> {
     let (prefix, vol) = vol_id.split_once('/').ok_or_else(|| {
         format!("invalid source {vol_id:?}: expected _site/<name> or <app>/<volume>")
     })?;
@@ -533,7 +538,8 @@ fn parse_source_vol_id(
         let path = state.driver.volume_store.site_path(vol);
         Ok((None, vol.to_owned(), path))
     } else {
-        let app = prefix.to_owned();
+        let app = AppName::new(prefix.to_owned())
+            .map_err(|e| format!("invalid app name {prefix:?}: {e}"))?;
         let vol_name = vol.to_owned();
         let instances = {
             let app = app.clone();
@@ -560,12 +566,12 @@ fn parse_source_vol_id(
 
 #[derive(Deserialize)]
 pub(crate) struct MapExternalVolumeParams {
-    pub app: String,
+    pub app: AppName,
     pub external_name: String,
     /// "exported" or "site"
     pub target_kind: String,
     /// Required when target_kind is "exported"
-    pub target_app: Option<String>,
+    pub target_app: Option<AppName>,
     pub target_volume: String,
     #[serde(default)]
     pub read_only: bool,
@@ -580,7 +586,7 @@ pub(crate) fn map_external_volume(
 
     let target = parse_mapping_target(
         &params.target_kind,
-        params.target_app.as_deref(),
+        params.target_app.as_ref(),
         &params.target_volume,
     )?;
 
@@ -608,7 +614,7 @@ pub(crate) fn map_external_volume(
         &app,
         &external_name,
         &params.target_kind,
-        params.target_app.as_deref(),
+        params.target_app.as_ref(),
         &params.target_volume,
         params.read_only,
     );
@@ -619,7 +625,7 @@ pub(crate) fn map_external_volume(
 
 #[derive(Deserialize)]
 pub(crate) struct UnmapExternalVolumeParams {
-    pub app: String,
+    pub app: AppName,
     pub external_name: String,
 }
 
@@ -633,7 +639,7 @@ pub(crate) fn unmap_external_volume(
     // Check if the app is installed (volume potentially in use).
     {
         let reg = state.registry.read();
-        if let Some(entry) = reg.get(&params.app) {
+        if let Some(entry) = reg.get(params.app.as_str()) {
             let def = entry.app.def.load();
             let has_volume = def.resources.keys().any(|id| {
                 id.kind == crate::defs::resource::ResourceKind::ExternalVolume
@@ -690,7 +696,7 @@ pub(crate) fn remap_external_volume(
 
     let target = parse_mapping_target(
         &params.target_kind,
-        params.target_app.as_deref(),
+        params.target_app.as_ref(),
         &params.target_volume,
     )?;
 
@@ -732,11 +738,7 @@ pub(crate) fn remap_external_volume(
         MappingTarget::Exported {
             target_app,
             target_volume,
-        } => (
-            "exported",
-            Some(target_app.as_str()),
-            target_volume.as_str(),
-        ),
+        } => ("exported", Some(target_app), target_volume.as_str()),
         MappingTarget::Site { target_volume } => ("site", None, target_volume.as_str()),
     };
     // r[impl volume.external.mapping.events]
@@ -745,7 +747,7 @@ pub(crate) fn remap_external_volume(
         &params.external_name,
         seedling_protocol::events::ExternalMappingSnapshot {
             kind: &params.target_kind,
-            app: params.target_app.as_deref(),
+            app: params.target_app.as_ref(),
             volume: &params.target_volume,
             read_only: params.read_only,
         },
@@ -764,7 +766,7 @@ pub(crate) fn remap_external_volume(
 
 #[derive(Deserialize)]
 pub(crate) struct ListExternalMappingsParams {
-    pub app: Option<String>,
+    pub app: Option<AppName>,
 }
 
 pub(crate) fn list_external_mappings(
@@ -845,7 +847,7 @@ pub(crate) fn list_declared_external_volumes(state: &OiState) -> HandlerResult {
 
 fn parse_mapping_target(
     kind: &str,
-    target_app: Option<&str>,
+    target_app: Option<&AppName>,
     target_volume: &str,
 ) -> Result<crate::runtime::external_volume_mappings::MappingTarget, OiError> {
     use crate::runtime::external_volume_mappings::MappingTarget;
@@ -859,7 +861,7 @@ fn parse_mapping_target(
                 )
             })?;
             Ok(MappingTarget::Exported {
-                target_app: app.to_owned(),
+                target_app: app.clone(),
                 target_volume: target_volume.to_owned(),
             })
         }

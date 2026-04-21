@@ -3,13 +3,14 @@ use std::{collections::HashMap, sync::Arc};
 use jiff::Timestamp;
 use parking_lot::Mutex;
 use seedling_protocol::actor::Actor;
+use seedling_protocol::names::AppName;
 use uuid::Uuid;
 
 pub type SessionId = Uuid;
 
 pub struct ShellSession {
     pub session_id: SessionId,
-    pub app: String,
+    pub app: AppName,
     pub name: String,
     pub opened_at: Timestamp,
     pub actor: Option<Actor>,
@@ -22,7 +23,7 @@ pub struct ShellSession {
 // i[shell.record]
 pub struct ShellRecord {
     pub session_id: SessionId,
-    pub app: String,
+    pub app: AppName,
     pub name: String,
     pub opened_at: Timestamp,
     pub actor: Option<Actor>,

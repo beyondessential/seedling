@@ -1,14 +1,13 @@
+use seedling_protocol::error::{ErrorCode, OiError};
+use seedling_protocol::names::AppName;
 use serde::Deserialize;
 use serde_json::json;
 
-use seedling_protocol::error::{ErrorCode, OiError};
-
+use super::HandlerResult;
 use crate::{
     oi::state::OiState,
     runtime::{apps, registries},
 };
-
-use super::HandlerResult;
 
 #[derive(Deserialize)]
 pub(crate) struct RegistryParams {
@@ -54,14 +53,14 @@ pub(crate) fn remove_registry(state: &OiState, params: RegistryParams) -> Handle
 }
 
 fn re_evaluate_all_apps(state: &OiState) {
-    let app_names: Vec<String> = {
+    let app_names: Vec<AppName> = {
         let reg = state.registry.read();
         reg.list().into_iter().map(|(name, _)| name).collect()
     };
     for name in &app_names {
         let script = {
             let reg = state.registry.read();
-            match reg.get(name) {
+            match reg.get(name.as_str()) {
                 Some(entry) => entry.script.clone(),
                 None => continue,
             }
@@ -77,7 +76,7 @@ fn re_evaluate_all_apps(state: &OiState) {
             .reload(name, script, &loaded_params, &state.script_limits);
         {
             let reg = state.registry.read();
-            if let Some(entry) = reg.get(name) {
+            if let Some(entry) = reg.get(name.as_str()) {
                 // Extract data from entry before the db.call since AppEntry is not Send.
                 let app_name = entry.name.clone();
                 let script_error = entry.script_error.clone();

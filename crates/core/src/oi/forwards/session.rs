@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
+use seedling_protocol::names::AppName;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
+use super::registry::{ForwardEntry, ForwardProto};
 use crate::{
     defs::resource::ResourceKind,
     oi::state::OiState,
@@ -12,8 +14,6 @@ use crate::{
     },
     system::translate::proxy::instance_ipv6,
 };
-
-use super::registry::{ForwardEntry, ForwardProto};
 
 struct StatusMsg {
     level: &'static str,
@@ -38,7 +38,7 @@ pub(crate) async fn forward_port_session(
     }
     #[derive(serde::Deserialize)]
     struct Params {
-        app: String,
+        app: AppName,
         service: String,
         port: u16,
         proto: String,
@@ -90,7 +90,7 @@ pub(crate) async fn forward_port_session(
 
     let lookup: Result<(), (&'static str, String)> = (|| {
         let reg = state.registry.read();
-        let Some(entry) = reg.get(&params.app) else {
+        let Some(entry) = reg.get(params.app.as_str()) else {
             return Err(("not_found", format!("app not found: {}", params.app)));
         };
         if !matches!(*entry.phase.lock(), AppPhase::Installed) {

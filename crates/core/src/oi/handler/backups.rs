@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use serde::Deserialize;
-use serde_json::json;
-
 use seedling_protocol::{
     backup_actions,
     error::{ErrorCode, HandlerResult, OiError},
+    names::AppName,
 };
+use serde::Deserialize;
+use serde_json::json;
 
 use crate::{
     defs::volume::{VolumeParamSpec, build_operation_volume_params},
@@ -16,7 +16,7 @@ use crate::{
 
 #[derive(Deserialize)]
 pub(crate) struct RegisterBackupAppParams {
-    pub app: String,
+    pub app: AppName,
 }
 
 // i[impl backup.app.register]
@@ -27,7 +27,7 @@ pub(crate) fn register_backup_app(
     {
         let reg = state.registry.read();
         let entry = reg
-            .get(&params.app)
+            .get(params.app.as_str())
             .ok_or_else(|| OiError::not_found(format!("app not found: {}", params.app)))?;
         let def = entry.app.def.load();
         let missing: Vec<&str> = backup_actions::REQUIRED_ACTIONS
@@ -63,7 +63,7 @@ pub(crate) fn register_backup_app(
 
 #[derive(Deserialize)]
 pub(crate) struct DeregisterBackupAppParams {
-    pub app: String,
+    pub app: AppName,
 }
 
 // i[impl backup.app.deregister]
@@ -129,7 +129,7 @@ pub(crate) fn list_backup_apps(state: &OiState) -> HandlerResult {
 #[derive(Deserialize)]
 pub(crate) struct CreateStrategyParams {
     pub name: String,
-    pub via: String,
+    pub via: AppName,
     pub schedule: String,
     pub volumes: Vec<String>,
 }
@@ -200,7 +200,7 @@ pub(crate) fn list_strategies(state: &OiState) -> HandlerResult {
 #[derive(Deserialize)]
 pub(crate) struct UpdateStrategyParams {
     pub name: String,
-    pub via: Option<String>,
+    pub via: Option<AppName>,
     pub schedule: Option<String>,
     pub volumes: Option<Vec<String>>,
 }
@@ -227,7 +227,7 @@ pub(crate) fn update_strategy(state: &OiState, params: UpdateStrategyParams) -> 
         backup_strategies::update(
             db,
             &name_owned,
-            via_owned.as_deref(),
+            via_owned.as_ref(),
             schedule_owned.as_deref(),
             volumes_owned.as_deref(),
         )
@@ -352,7 +352,7 @@ async fn run_strategy_backup(
     // r[impl backup.validation.fire-time]
     {
         let reg = state.registry.read();
-        let valid = reg.get(&backing_app_name).is_some_and(|entry| {
+        let valid = reg.get(backing_app_name.as_str()).is_some_and(|entry| {
             let def = entry.app.def.load();
             backup_actions::REQUIRED_ACTIONS
                 .iter()
@@ -400,7 +400,7 @@ async fn run_strategy_backup(
 // r[impl backup.execution.retry]
 async fn run_volume_backup(
     state: &Arc<OiState>,
-    backing_app_name: &str,
+    backing_app_name: &AppName,
     strategy: &backup_strategies::BackupStrategy,
     vol_id: &str,
     operation_id: &OperationId,
@@ -412,7 +412,7 @@ async fn run_volume_backup(
         Ok(p) => p,
         Err(e) => {
             tracing::error!(strategy = %strategy.name, vol = %vol_id, "invalid volume id: {e}");
-            let app_owned = backing_app_name.to_owned();
+            let app_owned = backing_app_name.clone();
             let desc = format!("strategy {:?}: {e}", strategy.name);
             tokio::task::block_in_place(|| {
                 state.db.call(move |db| {
@@ -433,7 +433,7 @@ async fn run_volume_backup(
 
     if !source_path.exists() {
         tracing::error!(strategy = %strategy.name, vol = %vol_id, "source volume path does not exist");
-        let app_owned = backing_app_name.to_owned();
+        let app_owned = backing_app_name.clone();
         let desc = format!(
             "strategy {:?}: volume {vol_id:?} path does not exist",
             strategy.name
@@ -468,7 +468,7 @@ async fn run_volume_backup(
                 "failed to create snapshot: {e}"
             );
             if attempt >= 2 {
-                let app_owned = backing_app_name.to_owned();
+                let app_owned = backing_app_name.clone();
                 let desc = format!(
                     "strategy {:?}: failed to snapshot volume {vol_id:?}: {e}",
                     strategy.name
@@ -546,7 +546,7 @@ async fn run_volume_backup(
         let _ = vol_store.remove_site(&snapshot_name).await;
 
         if success {
-            let app_owned = backing_app_name.to_owned();
+            let app_owned = backing_app_name.clone();
             tokio::task::block_in_place(|| {
                 state.db.call(move |db| {
                     faults::clear_faults_by_kind(db, &app_owned, "backup_failed").ok();
@@ -575,7 +575,7 @@ async fn run_volume_backup(
             vol = %vol_id,
             "backup save-snapshot failed after retry"
         );
-        let app_owned = backing_app_name.to_owned();
+        let app_owned = backing_app_name.clone();
         let desc = format!(
             "strategy {:?}: save-snapshot failed for volume {vol_id:?}",
             strategy.name
@@ -591,7 +591,11 @@ async fn run_volume_backup(
 }
 
 // r[impl backup.execution]
-async fn acquire_scheduler_slot(state: &Arc<OiState>, app_name: &str, operation_id: &OperationId) {
+async fn acquire_scheduler_slot(
+    state: &Arc<OiState>,
+    app_name: &AppName,
+    operation_id: &OperationId,
+) {
     loop {
         {
             let mut sched = state.scheduler.lock();
@@ -815,9 +819,9 @@ fn resolve_backup_app(
     state: &Arc<OiState>,
     strategy_name: &str,
     _volume: &str,
-) -> Result<String, OiError> {
+) -> Result<AppName, OiError> {
     let strategy_name_owned = strategy_name.to_owned();
-    state.db.call(move |db| -> Result<String, OiError> {
+    state.db.call(move |db| -> Result<AppName, OiError> {
         let strategy = backup_strategies::get(db, &strategy_name_owned)
             .map_err(|e| OiError::new(ErrorCode::Internal, format!("db strategies: {e}")))?
             .ok_or_else(|| {
@@ -837,10 +841,10 @@ fn resolve_backup_app(
 
 fn validate_backup_app_actions(
     state: &Arc<OiState>,
-    backing_app_name: &str,
+    backing_app_name: &AppName,
 ) -> Result<(), OiError> {
     let reg = state.registry.read();
-    let valid = reg.get(backing_app_name).is_some_and(|entry| {
+    let valid = reg.get(backing_app_name.as_str()).is_some_and(|entry| {
         let def = entry.app.def.load();
         backup_actions::REQUIRED_ACTIONS
             .iter()
@@ -936,7 +940,8 @@ fn compute_next_fire_at(s: &backup_strategies::BackupStrategy) -> Option<String>
     use jiff::{SignedDuration, Timestamp};
 
     let cronexpr_str = backup_execution::schedule_to_cronexpr(&s.schedule)?;
-    let crontab = crate::defs::action::parse_cron_expr(cronexpr_str, "backup", &s.name).ok()?;
+    let backup_app = AppName::new_unchecked("backup");
+    let crontab = crate::defs::action::parse_cron_expr(cronexpr_str, &backup_app, &s.name).ok()?;
 
     let now = Timestamp::now();
     let base_time = match &s.last_fired_at {

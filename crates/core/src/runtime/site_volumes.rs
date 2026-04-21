@@ -1,4 +1,5 @@
 use rusqlite::params;
+use seedling_protocol::names::AppName;
 
 use crate::runtime::db::Db;
 
@@ -24,7 +25,7 @@ pub enum SiteVolumeKind {
         host_path: String,
     },
     Snapshot {
-        source_app: Option<String>,
+        source_app: Option<AppName>,
         source_volume: String,
     },
 }
@@ -39,7 +40,7 @@ pub fn create(db: &Db, def: &SiteVolumeDef) -> rusqlite::Result<()> {
         } => (
             "snapshot",
             None,
-            source_app.as_deref(),
+            source_app.as_ref().map(|n| n.as_str()),
             Some(source_volume.as_str()),
         ),
     };
@@ -62,7 +63,7 @@ fn row_to_def(row: &rusqlite::Row<'_>) -> rusqlite::Result<SiteVolumeDef> {
     let name: String = row.get(0)?;
     let kind_str: String = row.get(1)?;
     let host_path: Option<String> = row.get(2)?;
-    let source_app: Option<String> = row.get(3)?;
+    let source_app: Option<AppName> = row.get(3)?;
     let source_volume: Option<String> = row.get(4)?;
     let created_at: String = row.get(5)?;
     let kind = match kind_str.as_str() {

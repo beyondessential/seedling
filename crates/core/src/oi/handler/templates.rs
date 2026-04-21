@@ -1,14 +1,9 @@
 use std::collections::BTreeMap;
 
+use seedling_protocol::error::{ErrorCode, HandlerResult, OiError};
+use seedling_protocol::names::AppName;
 use serde::Deserialize;
 use serde_json::{Value, json};
-
-use seedling_protocol::error::{ErrorCode, HandlerResult, OiError};
-
-use crate::{
-    oi::{handler::RequestCtx, state::OiState},
-    runtime::{self, apps::evaluate_script},
-};
 
 use super::{
     appdef_json::{
@@ -16,6 +11,10 @@ use super::{
         shell_entry_json,
     },
     apps::{self as apps_handler, AppScriptParams, validate_name},
+};
+use crate::{
+    oi::{handler::RequestCtx, state::OiState},
+    runtime::{self, apps::evaluate_script},
 };
 
 #[derive(Deserialize)]
@@ -42,7 +41,7 @@ pub(crate) struct PreviewParams {
 #[derive(Deserialize)]
 pub(crate) struct InstantiateParams {
     pub template: String,
-    pub app: String,
+    pub app: AppName,
 }
 
 // i[template.create]
@@ -176,7 +175,11 @@ pub(crate) fn preview_template(state: &OiState, params: PreviewParams) -> Handle
     };
 
     let empty_params: BTreeMap<String, String> = BTreeMap::new();
-    let (app, err) = evaluate_script(&display_name, &body, &empty_params, &state.script_limits);
+    // Previews are not installed — validating the display_name against AppName
+    // rules is overkill. Use new_unchecked so the "(preview)" placeholder is
+    // allowed to stand in for an unnamed preview.
+    let preview_app = AppName::new_unchecked(display_name.clone());
+    let (app, err) = evaluate_script(&preview_app, &body, &empty_params, &state.script_limits);
     let def = app.def.load();
 
     let resources_json: Vec<Value> = def

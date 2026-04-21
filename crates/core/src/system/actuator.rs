@@ -639,7 +639,7 @@ pub fn resolve_external_volumes(
                     }
                     None => {
                         tracing::warn!(
-                            app = app,
+                            app = %app,
                             external = %mapping.external_name,
                             target = %target_volume,
                             "site volume not found for external volume mapping"
@@ -652,7 +652,7 @@ pub fn resolve_external_volumes(
                 target_app,
                 target_volume,
             } => {
-                let vol_name = VolumeName::for_app(target_app, target_volume);
+                let vol_name = VolumeName::for_app(target_app.as_str(), target_volume);
                 let path = vol_store.path(&vol_name);
                 ResolvedExternalMount {
                     source: MountSource::Bind(path),

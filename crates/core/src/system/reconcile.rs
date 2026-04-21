@@ -154,7 +154,7 @@ pub struct Reconciler {
     event_tx: EventSender,
     shells: Arc<ShellRegistry>,
     /// Previous tick's lifecycle states, keyed by (app, instance_id_hex).
-    prev_states: BTreeMap<(String, String), LifecycleState>,
+    prev_states: BTreeMap<(AppName, String), LifecycleState>,
     /// Deployments with an active rolling update, keyed by (app, deployment_name).
     /// Set from pod actuation results; read by `compute_effective_scales` to bump
     /// the effective instance count by one during rollouts.
@@ -240,7 +240,7 @@ impl Reconciler {
         let reg = self.app_registry.read();
         let mut snapshots = Vec::new();
         for (name, status) in reg.list() {
-            let entry = match reg.get(&name) {
+            let entry = match reg.get(name.as_str()) {
                 Some(e) => e,
                 None => continue,
             };

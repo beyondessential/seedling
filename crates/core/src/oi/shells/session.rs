@@ -1,9 +1,11 @@
 use std::{collections::BTreeMap, net::Ipv6Addr, sync::Arc, time::Duration};
 
 use parking_lot::Mutex;
+use seedling_protocol::names::AppName;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
+use super::registry::ShellSession;
 use crate::{
     defs::resource::ResourceKind,
     oi::state::OiState,
@@ -24,8 +26,6 @@ use crate::{
     },
 };
 
-use super::registry::ShellSession;
-
 pub(crate) async fn open_shell_session(
     conn: quinn::Connection,
     mut send: quinn::SendStream,
@@ -37,7 +37,7 @@ pub(crate) async fn open_shell_session(
     // i[impl shell.open]
     #[derive(serde::Deserialize)]
     struct Params {
-        app: String,
+        app: AppName,
         name: String,
         rows: u16,
         cols: u16,
@@ -107,7 +107,7 @@ pub(crate) async fn open_shell_session(
     // crosses an await point (parking_lot guards are not Send).
     let lookup: Result<_, (&str, String)> = (|| {
         let reg = state.registry.read();
-        let Some(entry) = reg.get(&app_name) else {
+        let Some(entry) = reg.get(app_name.as_str()) else {
             return Err(("not_found", format!("app not found: {app_name}")));
         };
         if !matches!(*entry.phase.lock(), AppPhase::Installed) {
