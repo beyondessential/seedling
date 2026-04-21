@@ -14,6 +14,8 @@ import Login from "./routes/Login";
 import Logs from "./routes/Logs";
 import Registries from "./routes/Registries";
 import Shell from "./routes/Shell";
+import TemplateDetail from "./routes/TemplateDetail";
+import Templates from "./routes/Templates";
 import Volumes from "./routes/Volumes";
 
 const router = createBrowserRouter([
@@ -26,6 +28,8 @@ const router = createBrowserRouter([
       { path: "apps/new", element: <CreateApp /> },
       { path: "apps/:name", element: <AppDetail /> },
       { path: "apps/:name/script", element: <EditScript /> },
+      { path: "templates", element: <Templates /> },
+      { path: "templates/:name", element: <TemplateDetail /> },
       { path: "faults", element: <Faults /> },
       { path: "volumes", element: <Volumes /> },
       { path: "backups", element: <Backups /> },

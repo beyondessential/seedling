@@ -312,6 +312,34 @@ export interface BackupRunResult {
   operation_id: string;
 }
 
+export interface TemplateSummary {
+  name: string;
+  description: string | null;
+  created_at: string;
+}
+
+export interface Template {
+  name: string;
+  body: string;
+  description: string | null;
+  created_at: string;
+}
+
+export interface TemplatePreviewResource {
+  name: string;
+  type: string;
+  def?: ResourceDef;
+  scale?: { low: number; high: number };
+  export?: { exported: boolean; description?: string };
+}
+
+export interface TemplatePreview {
+  resources: TemplatePreviewResource[];
+  params: AppParam[];
+  actions: AppAction[];
+  script_error: string | null;
+}
+
 export interface ConnectRequest {
   token?: string;
   password?: string;
