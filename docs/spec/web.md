@@ -113,6 +113,10 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > Terminal resize is sent as a standard `/shells/resize` OI request over the browser's shared WebTransport session.
 > The browser coalesces resize events to at most one in-flight request at a time.
 
+> w[shells.exit]
+> When the daemon session ends, the gateway forwards the final `{"exit_code":N}\n` frame from the daemon's server-initiated bidi to the browser's bidi stream and closes the downstream half.
+> The browser reads this frame to surface the exit code in the UI per [shells.ui](#w--shells.ui).
+
 > w[volumes.shell-ui]
 > Each site volume row in the Volumes page and each volume resource row in the App Detail page expose an "Open shell" button.
 > Clicking the button immediately opens a volume shell session (via `/volumes/shell`) for that single volume, using the existing shell sidebar.

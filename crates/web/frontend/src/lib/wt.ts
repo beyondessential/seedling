@@ -143,7 +143,7 @@ export class WtClient {
     ]);
 
     // The exit frame arrives as the last line on the bidi recv side.
-    // r[impl shells.exit]
+    // w[impl shells.exit]
     const exitCode = new Promise<number>((resolve) => {
       void (async () => {
         try {

@@ -212,7 +212,7 @@ pub async fn handle_shell_start(
     };
 
     // Task D: daemon bidi recv → accumulate exit frame → forward to browser bidi.
-    // r[impl shells.exit]
+    // w[impl shells.exit]
     let exit_relay = async {
         let mut exit_buf = Vec::with_capacity(64);
         let mut byte = [0u8; 1];
