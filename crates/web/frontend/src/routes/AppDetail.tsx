@@ -451,11 +451,9 @@ function ParamsSection({
   // backend rejects with operation_in_progress. Disable the edit/add
   // affordances and explain why, rather than letting users hit a server error.
   const writeGuard = useGuard("write");
-  const editsDisabled =
-    status === "installing" || status === "operating" || !writeGuard.allowed;
-  const editsDisabledReason = !writeGuard.allowed
-    ? writeGuard.reason
-    : null;
+  const operationInFlight = status === "installing" || status === "operating";
+  const editsDisabled = operationInFlight || !writeGuard.allowed;
+  const editsDisabledReason = !writeGuard.allowed ? writeGuard.reason : null;
   const { execute, loading, error, clearError } = useOiAction();
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -575,7 +573,7 @@ function ParamsSection({
     </TableRow>
   ) : null;
 
-  const disabledBanner = editsDisabled ? (
+  const disabledBanner = operationInFlight ? (
     <Alert severity="info" sx={{ mb: 1 }}>
       Params are read-only while an operation is in progress for this app.
     </Alert>
