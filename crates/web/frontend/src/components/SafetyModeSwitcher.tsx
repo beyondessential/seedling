@@ -111,8 +111,8 @@ export function SafetyModeSwitcher() {
           variant={mode === "read" ? "outlined" : "filled"}
           sx={{
             mr: 1,
+            pl: "0.5em",
             fontFamily: "monospace",
-            "& .MuiChip-icon": { ml: "0.5em" },
           }}
         />
       </Tooltip>
