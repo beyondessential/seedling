@@ -183,9 +183,21 @@ fn run_operation_loop(
                 op_ctx.failed(&desc);
                 return false;
             }
-            OperationResult::Suspended(_) => {
+            OperationResult::Suspended(cond) => {
                 tick_notify.notify_one();
                 let waited = earliest_unsatisfied_barrier_wait_secs(&log);
+                // Surface long-running barriers so operators can tell a
+                // legitimately-long wait from a stuck one.
+                if waited > 0 && waited.is_multiple_of(600) {
+                    tracing::info!(
+                        app = %app_name,
+                        action = %action_name,
+                        state = ?cond.required_state,
+                        elapsed_secs = waited,
+                        deadline_secs = ?cond.deadline_secs,
+                        "barrier still waiting",
+                    );
+                }
                 wait_next_tick(&cancel_token, waited);
             }
         }
@@ -242,12 +254,10 @@ pub(crate) fn dynamic_poll_interval(waited_secs: u64) -> Duration {
     let poll = if waited_secs <= T_LOW_END {
         LOW
     } else if waited_secs <= T_MID_END {
-        let ratio = (waited_secs - T_LOW_END) as f64
-            / (T_MID_END - T_LOW_END) as f64;
+        let ratio = (waited_secs - T_LOW_END) as f64 / (T_MID_END - T_LOW_END) as f64;
         LOW + ((MID - LOW) as f64 * ratio) as u64
     } else if waited_secs <= T_HIGH_END {
-        let ratio = (waited_secs - T_MID_END) as f64
-            / (T_HIGH_END - T_MID_END) as f64;
+        let ratio = (waited_secs - T_MID_END) as f64 / (T_HIGH_END - T_MID_END) as f64;
         MID + ((HIGH - MID) as f64 * ratio) as u64
     } else {
         HIGH

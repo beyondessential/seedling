@@ -865,10 +865,7 @@ impl Started {
             && now.saturating_sub(started_at) >= d
         {
             return Err(Box::new(EvalAltResult::ErrorRuntime(
-                format!(
-                    "Barrier deadline of {d}s exceeded waiting for {required:?}"
-                )
-                .into(),
+                format!("Barrier deadline of {d}s exceeded waiting for {required:?}").into(),
                 rhai::Position::NONE,
             )));
         }
@@ -976,7 +973,10 @@ impl CustomType for Started {
             .with_fn(
                 "scheduled",
                 |this: &mut Self| -> Result<Started, Box<EvalAltResult>> {
-                    this.check_barrier(LifecycleState::Scheduled, Some(DEFAULT_SCHEDULED_DEADLINE_SECS))
+                    this.check_barrier(
+                        LifecycleState::Scheduled,
+                        Some(DEFAULT_SCHEDULED_DEADLINE_SECS),
+                    )
                 },
             )
             .with_fn(
@@ -1020,7 +1020,10 @@ impl CustomType for Started {
             .with_fn(
                 "terminated",
                 |this: &mut Self| -> Result<Termination, Box<EvalAltResult>> {
-                    this.check_barrier(LifecycleState::Terminated, Some(DEFAULT_TERMINATED_DEADLINE_SECS))?;
+                    this.check_barrier(
+                        LifecycleState::Terminated,
+                        Some(DEFAULT_TERMINATED_DEADLINE_SECS),
+                    )?;
                     Ok(this.compute_termination())
                 },
             )

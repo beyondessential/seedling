@@ -207,7 +207,7 @@ app.on_action("save-snapshot", |rt, param| {
             " --tags 'volume:" + backup["volume"] + "'" +
             " /source"
         ])
-    ).terminated().ensure_success();
+    ).terminated_eventually().ensure_success();
 }, #{ description: "Upload a volume snapshot to the Kopia repository" });
 
 app.on_action("list-snapshots", |rt, param| {
@@ -246,7 +246,7 @@ app.on_action("restore-snapshot", |rt, param| {
         .command([
              "kopia", "snapshot", "restore", param["snapshot"], "/destination"
         ])
-    ).terminated().ensure_success();
+    ).terminated_eventually().ensure_success();
 }, #{ description: "Restore a Kopia snapshot to a new volume" });
 
 // ── Maintenance actions ───────────────────────────────────────────────────────
@@ -261,11 +261,12 @@ app.on_action("maintenance", |rt, _param| {
     .on_schedule("H 3 * * *");
 
 // Full maintenance: includes garbage collection of unreferenced blobs.
-// Runs weekly.
+// Runs weekly. GC scales with repository size and can run for hours on
+// large repositories, so this waits indefinitely.
 app.on_action("maintenance-full", |rt, _param| {
     rt.start(kopia_job.call()
         .command(["kopia", "maintenance", "run", "--full"])
-    ).terminated();
+    ).terminated_eventually();
 }, #{ description: "Run full maintenance including garbage collection" })
     .on_schedule("H 4 * * 0");
 

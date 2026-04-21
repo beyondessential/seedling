@@ -12,8 +12,7 @@ use crate::defs::app::{App, AppDef, begin_closure_capture, end_closure_capture};
 use crate::defs::volume::OperationVolumeBinding;
 use crate::runtime::barrier::oracle::WorldStateOracle;
 use crate::runtime::barrier::runtime::{
-    ActionClosureGuard, RuntimeInstance, clear_barrier_hit, extract_barrier_hit,
-    extract_cancel_hit,
+    ActionClosureGuard, RuntimeInstance, clear_barrier_hit, extract_barrier_hit, extract_cancel_hit,
 };
 use crate::runtime::barrier::{
     ActionLogEntry, BarrierCondition, CancelToken, OperationId, ReplayContext,

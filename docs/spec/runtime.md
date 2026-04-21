@@ -384,6 +384,13 @@ Absent specification bugs, anything that is not defined here is either defined i
 > When a lifecycle operation completes (the action closure returns), the full [desired state](#r--desired-state.steady) — derived from the AppDef at the app's current generation — takes effect and the reconciler maintains it autonomously.
 > The operation's outcome is recorded in the [generation history](#r--generation.history) entry that triggered it (when applicable).
 
+> r[operation.cancel]
+> The runtime must expose a way for operators to cancel an in-progress lifecycle operation.
+>
+> When cancellation is requested, the runtime must wake any currently-suspended barrier — including deadline-less barriers such as [`.terminated_eventually()`](#l--rt.started.terminated-eventually) — so that the cancel takes effect within the same observation cycle rather than waiting for the next poll or deadline.
+>
+> A cancelled operation reaches a terminal state distinct from success and from failure. Cleanup (dynamic resource teardown, current-operation clearing) must run as for a failed operation, and the outcome must be recorded so operators can tell a cancel apart from an ordinary failure after the fact.
+
 > r[operation.params]
 > When a lifecycle operation is dispatched with params, the params must be persisted alongside the operation record. On replay, the persisted params must be restored and passed to the action closure.
 > Params may contain secret values, so the persisted form must be encrypted with the same cipher used for stored secret params.
@@ -542,7 +549,7 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 # Action Closure Suspension
 
 > r[barrier.suspension]
-> When an action closure calls a barrier method (`.scheduled()`, `.running()`, `.ready()`, `.terminated()`) on a `Started` value, the closure must be suspended.
+> When an action closure calls a barrier method (`.scheduled()`, `.running()`, `.ready()`, `.ready_eventually()`, `.terminated()`, `.terminated_eventually()`) on a `Started` value, the closure must be suspended.
 > Execution appears to block from the script's perspective.
 
 > r[barrier.condition]
@@ -550,8 +557,14 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > The barrier is satisfied when all specified resources have reached (or passed) the required state, as determined by the [world observation history](#r--history.world.state-derivation).
 
 > r[barrier.deadline]
-> Each barrier has a deadline.
-> If the barrier condition is not satisfied within the deadline, the barrier must throw an exception within the action closure.
+> Each barrier has an optional deadline.
+> When a deadline is set and the barrier condition is not satisfied within it, the barrier must throw an exception within the action closure.
+> When the deadline is absent (as it is for `.terminated_eventually()` and `.ready_eventually()`), the barrier waits indefinitely; it resumes only when the condition becomes satisfied or when the operation is [cancelled](#r--operation.cancel).
+
+> r[barrier.suspension.poll-backoff]
+> The cadence at which the runtime re-evaluates a suspended barrier (replaying the action closure up to the suspend point) may vary with how long the barrier has been waiting.
+> Short initial cadence keeps quick barriers responsive; longer cadence for protracted waits bounds the aggregate replay cost of multi-hour operations.
+> The exact schedule is not prescribed by this spec.
 
 > r[barrier.resume]
 > When a barrier condition is satisfied, the runtime must resume the suspended action closure.

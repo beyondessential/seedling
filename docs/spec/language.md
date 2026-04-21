@@ -111,9 +111,14 @@ These are not guaranteed to be constant forever, only for the duration of one sc
 > It may be thought of as the number of cores available on the node, but the exact value is a concern for the control plane.
 
 > l[const.default-deadline]
-> `DEFAULT_DEADLINE` is a positive non-zero number.
-> It is the default deadline in seconds.
-> The value is set by the control plane, and is not specified here.
+> The default deadlines for `started.<state>()` barriers with no explicit `deadline` argument are:
+>
+> - `scheduled`, `running`, `ready`: short (on the order of tens of seconds), because these barriers guard correctness signals — a resource that has not reached these states in that window usually indicates a cluster-level problem rather than a slow workload.
+> - `terminated`: long (on the order of hours), because `terminated` is routinely called on Jobs that run for extended periods.
+>
+> Every default deadline is a positive non-zero number of seconds. The exact values are set by the control plane and are not specified here.
+>
+> Callers with an unbounded wait requirement use [`started.terminated_eventually()`](#l--rt.started.terminated-eventually) or [`started.ready_eventually()`](#l--rt.started.ready-eventually) instead of passing a very large deadline.
 
 ## OnUpdate
 
@@ -817,12 +822,22 @@ This spec defines the semantics of the Runtime Instance as far as BSL is concern
 > l[rt.started.state-methods]
 > `Started` has a number of methods of the form `started.<state>(deadline?: number)` which block until all resources have entered the state `<state>` (one of `scheduled`, `running`, `ready`, `terminated`).
 >
-> The argument `deadline` must be a positive integer number of seconds; if it's zero or absent, the default deadline [`DEFAULT_DEADLINE`](#l--const.default-deadline) is used.
+> The argument `deadline` must be a positive integer number of seconds; if it's zero or absent, the default deadline for that state is used (see [`DEFAULT_DEADLINE`](#l--const.default-deadline)).
 >
 > If the deadline is reached before the method returns, an exception is thrown.
 
 > l[rt.started.terminated]
 > The `started.terminated()` state method returns a [Termination](#l--rt.termination.type).
+
+> l[rt.started.terminated-eventually]
+> `started.terminated_eventually()` behaves like [`started.terminated()`](#l--rt.started.terminated), but has no deadline: it blocks until all resources reach `terminated` or the operation is [cancelled](#r--operation.cancel).
+>
+> Use this for jobs with genuinely unbounded duration (e.g. large backups, bulk restores) where any finite deadline is either too short to be safe or too long to be useful as a failure signal.
+
+> l[rt.started.ready-eventually]
+> `started.ready_eventually()` behaves like `started.ready()`, but has no deadline: it blocks until all resources reach `ready` or the operation is cancelled.
+>
+> Typical use: ingress cert provisioning via an external CA (e.g. Let's Encrypt) whose completion time is bounded only by the CA's rate limiting.
 
 > l[rt.termination.type]
 > `Termination` is an opaque type representing the termination state of a resource.
