@@ -795,3 +795,91 @@ fn dynamic_poll_interval_follows_piecewise_schedule() {
     assert_eq!(dynamic_poll_interval(6 * 3600), Duration::from_secs(300));
     assert_eq!(dynamic_poll_interval(24 * 3600), Duration::from_secs(300));
 }
+
+// r[verify barrier.deadline]
+// r[verify barrier.replay.rt-stop]
+#[test]
+fn rt_stop_deadline_is_enforced() {
+    // Previously rt.stop() stored the deadline in the BarrierRecord but
+    // never actually read it; a resource that refused to terminate left the
+    // closure suspended indefinitely. Passing deadline=0 makes the second
+    // pass fail immediately after the first pass records started_at, which
+    // is the same shape as `barrier_deadline_zero_expires_on_second_pass`
+    // uses for .ready().
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let old = app.deployment("old").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            rt.stop(app.deployment("old"), 0);
+        });
+    "#,
+    );
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    let log = InMemoryActionLog::new();
+    let op = OperationId::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
+
+    // Pass 1: the deployment is Pending → suspend, recording started_at.
+    let r = run_operation(
+        OperationContext {
+            engine: &engine,
+            script_ast: &ast,
+            operation_id: op.clone(),
+            app: &app,
+            action_name: "start",
+            log: &log,
+            world: Arc::clone(&oracle),
+            registry: Arc::clone(&reg),
+            active_progress: None,
+            tick_notify: None,
+            params: serde_json::Map::new(),
+            is_shell: false,
+            db: None,
+            source_generation: 0,
+            target_generation: 0,
+            script_limits: None,
+            cipher: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+        },
+        &mut scope,
+    );
+    assert!(matches!(r, OperationResult::Suspended(_)));
+
+    // Pass 2: deadline=0 is exceeded immediately → Failed.
+    let r = run_operation(
+        OperationContext {
+            engine: &engine,
+            script_ast: &ast,
+            operation_id: op,
+            app: &app,
+            action_name: "start",
+            log: &log,
+            world: Arc::clone(&oracle),
+            registry: Arc::clone(&reg),
+            active_progress: None,
+            tick_notify: None,
+            params: serde_json::Map::new(),
+            is_shell: false,
+            db: None,
+            source_generation: 0,
+            target_generation: 0,
+            script_limits: None,
+            cipher: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+        },
+        &mut scope,
+    );
+    match r {
+        OperationResult::Failed(e) => {
+            let msg = e.to_string();
+            assert!(
+                msg.contains("deadline") && msg.to_lowercase().contains("terminated"),
+                "expected deadline-exceeded error, got: {msg}"
+            );
+        }
+        other => panic!("expected Failed with deadline message, got {other:?}"),
+    }
+}

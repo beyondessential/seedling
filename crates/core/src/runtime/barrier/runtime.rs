@@ -628,6 +628,35 @@ impl RuntimeInstance {
         }
 
         let now = (g.now_secs)();
+
+        // r[impl barrier.deadline]
+        // r[impl barrier.replay.rt-stop]
+        // Enforce the stop deadline against the earliest unsatisfied record
+        // for these resources. Mirrors the check in check_barrier so
+        // rt.stop() participates in the same suspension semantics as the
+        // Started barrier methods; before this, the deadline was stored but
+        // never read.
+        let started_at = g
+            .committed
+            .iter()
+            .chain(g.pending.iter())
+            .find(|e| {
+                e.resources == resources
+                    && e.barrier.as_ref().is_some_and(|b| {
+                        b.required_state == LifecycleState::Terminated && !b.satisfied
+                    })
+            })
+            .and_then(|e| e.barrier.as_ref()?.started_at_secs);
+        if let (Some(d), Some(started_at)) = (deadline_secs, started_at)
+            && now.saturating_sub(started_at) >= d
+        {
+            return Err(Box::new(EvalAltResult::ErrorRuntime(
+                format!("Barrier deadline of {d}s exceeded waiting for Terminated (rt.stop)")
+                    .into(),
+                rhai::Position::NONE,
+            )));
+        }
+
         let all_terminated = resources.iter().all(|r| {
             g.world
                 .lifecycle_state(r)
