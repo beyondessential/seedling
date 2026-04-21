@@ -60,6 +60,45 @@ fn clear_current_operation_removes_record() {
     assert!(load_current_operation(&db).unwrap().is_none());
 }
 
+// r[verify operation.cancel.persistence]
+#[test]
+fn cancel_requested_round_trips_through_db() {
+    use crate::runtime::secrets::Cipher;
+
+    let db = Db::open_in_memory().unwrap();
+    let cipher = Cipher::for_tests();
+    let op = CurrentOperation {
+        operation_id: OperationId("op-c1".into()),
+        app: "app".into(),
+        action_name: "save-snapshot".into(),
+        source_generation: 1,
+        target_generation: 1,
+    };
+    save_current_operation(&db, &cipher, &op, &serde_json::Map::new()).unwrap();
+
+    // Fresh rows default to cancel_requested = false.
+    assert!(!load_cancel_requested(&db).unwrap());
+
+    // Matching op_id: flag flips and persists.
+    let flipped = set_cancel_requested(&db, &OperationId("op-c1".into())).unwrap();
+    assert!(flipped);
+    assert!(load_cancel_requested(&db).unwrap());
+
+    // Non-matching op_id: no-op (a later op with a different id must not
+    // inherit the cancel from a stale row).
+    clear_current_operation(&db).unwrap();
+    save_current_operation(&db, &cipher, &op, &serde_json::Map::new()).unwrap();
+    let flipped = set_cancel_requested(&db, &OperationId("other-op".into())).unwrap();
+    assert!(!flipped);
+    assert!(!load_cancel_requested(&db).unwrap());
+
+    // No current_operation row at all: load returns false; set returns false.
+    clear_current_operation(&db).unwrap();
+    assert!(!load_cancel_requested(&db).unwrap());
+    let flipped = set_cancel_requested(&db, &OperationId("op-c1".into())).unwrap();
+    assert!(!flipped);
+}
+
 // r[verify operation.params] i[verify action.invoke.install.validation]
 #[test]
 fn install_params_round_trip_through_cipher() {

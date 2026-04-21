@@ -391,6 +391,11 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > A cancelled operation reaches a terminal state distinct from success and from failure. Cleanup (dynamic resource teardown, current-operation clearing) must run as for a failed operation, and the outcome must be recorded so operators can tell a cancel apart from an ordinary failure after the fact.
 
+> r[operation.cancel.persistence]
+> A cancel request must persist across a runtime restart. When the daemon crashes after the cancel was accepted but before the operation observed it, the replay must resume into a pre-cancelled state so the operation terminates at its next barrier rather than re-executing work the operator has already asked to abandon.
+>
+> The persisted cancel flag is scoped to a single `operation_id`. A later operation — whether resumed after completion of the current one or spawned fresh — must not inherit a cancel from a stale row.
+
 > r[operation.params]
 > When a lifecycle operation is dispatched with params, the params must be persisted alongside the operation record. On replay, the persisted params must be restored and passed to the action closure.
 > Params may contain secret values, so the persisted form must be encrypted with the same cipher used for stored secret params.

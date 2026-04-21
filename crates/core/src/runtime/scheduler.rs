@@ -63,14 +63,17 @@ pub enum ScheduleResult {
 }
 
 // r[impl operation.cancel]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CancelOutcome {
     /// The token was flipped; the action runtime will observe the cancel at
-    /// its next barrier or while waiting between replay cycles.
-    Cancelled,
+    /// its next barrier or while waiting between replay cycles. Carries the
+    /// operation_id so the caller can persist the cancel flag against the
+    /// right row.
+    Cancelled(OperationId),
     /// A cancel has already been requested for this operation; the call is a
-    /// no-op but not an error.
-    AlreadyCancelled,
+    /// no-op but not an error. Carries the operation_id so the caller can
+    /// re-persist the flag idempotently if a prior persist failed.
+    AlreadyCancelled(OperationId),
     /// No operation is currently active for the named app.
     NoActiveOp,
 }
@@ -256,10 +259,10 @@ impl Scheduler {
             return CancelOutcome::NoActiveOp;
         }
         if active.cancel_token.is_cancelled() {
-            return CancelOutcome::AlreadyCancelled;
+            return CancelOutcome::AlreadyCancelled(active.operation_id.clone());
         }
         active.cancel_token.request();
-        CancelOutcome::Cancelled
+        CancelOutcome::Cancelled(active.operation_id.clone())
     }
 
     /// Push an action name onto the composition call stack.

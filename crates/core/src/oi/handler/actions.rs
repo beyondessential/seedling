@@ -40,13 +40,28 @@ pub(crate) struct CancelActionParams {
 // i[action.cancel]
 pub(crate) fn cancel_action(state: &Arc<OiState>, params: CancelActionParams) -> HandlerResult {
     let app_name = params.app.as_str();
-    match state.scheduler.lock().request_cancel(app_name) {
-        CancelOutcome::Cancelled => {
-            tracing::info!(app = %app_name, "operation cancel requested");
-            Ok(json!({ "cancelled": true }))
-        }
-        CancelOutcome::AlreadyCancelled => {
-            tracing::debug!(app = %app_name, "cancel no-op: already cancelled");
+    let outcome = state.scheduler.lock().request_cancel(app_name);
+    match outcome {
+        CancelOutcome::Cancelled(op_id) | CancelOutcome::AlreadyCancelled(op_id) => {
+            // r[impl operation.cancel.persistence]
+            // Persist the flag so a daemon crash between the in-memory flip
+            // and cancel observation leaves the op in a pre-cancelled state
+            // on the next start-up. Do this on AlreadyCancelled too so a
+            // prior persist failure heals on retry.
+            let op_id_for_persist = op_id.clone();
+            let app_for_log = app_name.to_owned();
+            state.db.call(move |db| {
+                if let Err(e) =
+                    crate::runtime::history::set_cancel_requested(db, &op_id_for_persist)
+                {
+                    tracing::warn!(
+                        app = %app_for_log,
+                        operation_id = %op_id_for_persist.0,
+                        "failed to persist cancel_requested: {e}"
+                    );
+                }
+            });
+            tracing::info!(app = %app_name, operation_id = %op_id.0, "operation cancel requested");
             Ok(json!({ "cancelled": true }))
         }
         CancelOutcome::NoActiveOp => Err(OiError::not_found(format!(

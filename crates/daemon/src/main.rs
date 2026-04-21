@@ -1131,6 +1131,24 @@ fn replay_interrupted_operation(
         return;
     }
 
+    // r[impl operation.cancel.persistence]
+    // A cancel request issued before the crash has been persisted to
+    // current_operation.cancel_requested; flip the newly-minted token so
+    // the replay unwinds cleanly at the first barrier instead of re-doing
+    // the whole operation the operator just cancelled.
+    let cancel_was_requested = state
+        .db
+        .call(|db| seedling_core::runtime::history::load_cancel_requested(db).unwrap_or(false));
+    if cancel_was_requested {
+        let outcome = state.scheduler.lock().request_cancel(&app_name);
+        tracing::info!(
+            app = %app_name,
+            operation_id = %op.operation_id.0,
+            ?outcome,
+            "resuming into pre-cancelled state",
+        );
+    }
+
     tracing::info!(
         app = %app_name,
         action = %action_name,

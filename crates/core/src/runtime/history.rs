@@ -594,6 +594,37 @@ pub fn clear_current_operation(db: &Db) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Mark the currently-persisted operation row as cancel-requested, provided
+/// its operation_id matches. Returns `Ok(true)` when a row was updated and
+/// `Ok(false)` when no matching row was found (op already completed, or a
+/// different op is now active).
+// r[impl operation.cancel.persistence]
+pub fn set_cancel_requested(db: &Db, operation_id: &OperationId) -> rusqlite::Result<bool> {
+    let n = db.conn.execute(
+        "UPDATE current_operation \
+             SET cancel_requested = 1 \
+             WHERE singleton = 1 AND operation_id = ?1",
+        params![operation_id.0],
+    )?;
+    Ok(n > 0)
+}
+
+/// Read the persisted cancel flag for the in-flight operation. Returns
+/// `false` if no row exists.
+// r[impl operation.cancel.persistence]
+pub fn load_cancel_requested(db: &Db) -> rusqlite::Result<bool> {
+    db.conn
+        .query_row(
+            "SELECT cancel_requested FROM current_operation WHERE singleton = 1",
+            [],
+            |row| row.get::<_, i64>(0).map(|v| v != 0),
+        )
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(false),
+            other => Err(other),
+        })
+}
+
 fn parse_lifecycle_state(s: &str) -> Result<LifecycleState, rusqlite::Error> {
     match s {
         "Pending" => Ok(LifecycleState::Pending),
