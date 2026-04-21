@@ -14,10 +14,6 @@
 // Run the "connect" action after rotating credentials or changing
 // bucket/prefix/endpoint/region.
 
-const AN_HOUR = 3600;
-const TWENTY_MINUTES = 1200;
-const TWO_MINUTES = 120;
-
 // ── Image ─────────────────────────────────────────────────────────────────────
 
 let version = app.param("version")
@@ -171,7 +167,7 @@ app.on_install(|rt, _param| {
             " || kopia repository create s3" + s3_args_sh.call() +
             "; } && " + policy_sh.call()
         ])
-    ).terminated(TWO_MINUTES).ensure_success();
+    ).terminated(300).ensure_success();
 }, #{});
 
 // ── Connection management ─────────────────────────────────────────────────────
@@ -185,7 +181,7 @@ app.on_action("connect", |rt, _param| {
             "rm -f /app/config/repository.config && " +
             "kopia repository connect s3" + s3_args_sh.call()
         ])
-    ).terminated(TWO_MINUTES).ensure_success();
+    ).terminated(120).ensure_success();
 }, #{ description: "Re-connect to the Kopia repository using current params" });
 
 // ── Required backup actions ───────────────────────────────────────────────────
@@ -211,7 +207,7 @@ app.on_action("save-snapshot", |rt, param| {
             " --tags 'volume:" + backup["volume"] + "'" +
             " /source"
         ])
-    ).terminated(AN_HOUR).ensure_success();
+    ).terminated().ensure_success();
 }, #{ description: "Upload a volume snapshot to the Kopia repository" });
 
 app.on_action("list-snapshots", |rt, param| {
@@ -228,7 +224,7 @@ app.on_action("list-snapshots", |rt, param| {
             " --tags 'volume:" + backup["volume"] + "'" +
             " > /output/kopia.json"
         ])
-    ).terminated(TWENTY_MINUTES).ensure_success();
+    ).terminated(300).ensure_success();
     rt.start(app.job()
         .image("docker.io/library/alpine:latest")
         .writable_rootfs()
@@ -239,7 +235,7 @@ app.on_action("list-snapshots", |rt, param| {
             " /output/kopia.json" +
             " > /output/" + output_file
         ])
-    ).terminated().ensure_success();
+    ).terminated(20).ensure_success();
 }, #{ description: "List snapshots in the Kopia repository" });
 
 app.on_action("restore-snapshot", |rt, param| {
@@ -250,7 +246,7 @@ app.on_action("restore-snapshot", |rt, param| {
         .command([
              "kopia", "snapshot", "restore", param["snapshot"], "/destination"
         ])
-    ).terminated(AN_HOUR).ensure_success();
+    ).terminated().ensure_success();
 }, #{ description: "Restore a Kopia snapshot to a new volume" });
 
 // ── Maintenance actions ───────────────────────────────────────────────────────
@@ -260,7 +256,7 @@ app.on_action("restore-snapshot", |rt, param| {
 app.on_action("maintenance", |rt, _param| {
     rt.start(kopia_job.call()
         .command(["kopia", "maintenance", "run"])
-    ).terminated(TWENTY_MINUTES);
+    ).terminated();
 }, #{ description: "Run quick maintenance (expire snapshots, compact indexes)" })
     .on_schedule("H 3 * * *");
 
@@ -269,7 +265,7 @@ app.on_action("maintenance", |rt, _param| {
 app.on_action("maintenance-full", |rt, _param| {
     rt.start(kopia_job.call()
         .command(["kopia", "maintenance", "run", "--full"])
-    ).terminated(TWENTY_MINUTES);
+    ).terminated();
 }, #{ description: "Run full maintenance including garbage collection" })
     .on_schedule("H 4 * * 0");
 
@@ -278,7 +274,7 @@ app.on_action("maintenance-full", |rt, _param| {
 app.on_action("apply-policy", |rt, _param| {
     rt.start(kopia_job.call()
         .command(["sh", "-c", policy_sh.call()])
-    ).terminated(TWO_MINUTES).ensure_success();
+    ).terminated().ensure_success();
 }, #{ description: "Apply current compression and retention settings to the global policy" });
 
 // ── Shell ─────────────────────────────────────────────────────────────────────
