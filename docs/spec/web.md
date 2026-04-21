@@ -146,6 +146,12 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > w[routes.volumes]
 > The web interface exposes volume management: listing, creating, and deleting site volumes (managed, bind-mount, and snapshot kinds); listing volumes exported by apps; listing, adding, remapping, and removing external volume mappings; and listing and confirming deletion of held volumes.
 
+> w[routes.volumes.delete-confirm]
+> Destructive volume actions — confirming permanent deletion of a held volume, and deleting a managed, snapshot, or bind site volume — must present a confirmation dialog before the request is issued. The dialog must state the concrete consequence: that held volume deletion removes the underlying data permanently, that managed and snapshot site volume deletion places the data in the held state awaiting operator confirmation, and that bind site volume deletion only drops the reference and leaves the host path untouched.
+
+> w[routes.volumes.held-count]
+> The navbar's held-volumes badge must reflect the current count of held volumes without requiring a page reload, both when new held volumes are created and when the operator confirms their deletion.
+
 > w[sessions.events]
 > The web interface must emit `WebSessionStarted` and `WebSessionStopped` events on the event feed when a WebTransport session is established or closed. Clients must use these events, together with the OI events `ShellStarted`, `ShellExited`, `ForwardStarted`, and `ForwardStopped`, to keep the connected-clients count up to date without polling.
 
