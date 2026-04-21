@@ -33,10 +33,11 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Link } from "react-router-dom";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useGuard } from "../components/SafetyModeProvider";
+import { useEventRefresh } from "../hooks/useEventRefresh";
 import { useOiQuery } from "../hooks/useOi";
 import { useOiAction } from "../hooks/useOiAction";
 import type {
@@ -45,9 +46,14 @@ import type {
   BackupRunResult,
   BackupStrategy,
   ExportedVolume,
+  SeedlingEvent,
   SiteVolume,
 } from "../lib/types";
 import { BACKUP_SCHEDULES } from "../lib/types";
+
+const BACKUP_STRATEGY_EVENTS: Set<string> = new Set([
+  "OperationStarted", "OperationCompleted", "OperationFailed",
+]);
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -431,6 +437,12 @@ export default function Backups() {
 
   const refreshAll = () => { refetchStrat(); refetchApps(); };
 
+  const matchStrategy = useCallback(
+    (ev: SeedlingEvent) => BACKUP_STRATEGY_EVENTS.has(ev.type) && ev.action_name === "save-snapshot",
+    [],
+  );
+  useEventRefresh(refetchStrat, matchStrategy);
+
   const handleRun = async (strategyName: string) => {
     const res = await doRun("/backups/run", { strategy: strategyName }) as BackupRunResult[] | null;
     if (res) setRunResults({ strategy: strategyName, results: res });
@@ -511,6 +523,7 @@ export default function Backups() {
                     <TableCell>Name</TableCell>
                     <TableCell>Via</TableCell>
                     <TableCell>Schedule</TableCell>
+                    <TableCell>Last fired</TableCell>
                     <TableCell>Volumes</TableCell>
                     <TableCell width={100} />
                   </TableRow>
@@ -521,6 +534,9 @@ export default function Backups() {
                       <TableCell sx={{ fontFamily: "monospace", fontWeight: 500 }}>{s.name}</TableCell>
                       <TableCell sx={{ fontFamily: "monospace" }}>{s.via}</TableCell>
                       <TableCell>{s.schedule}</TableCell>
+                      <TableCell sx={{ color: s.last_fired_at ? undefined : "text.disabled" }}>
+                        {s.last_fired_at ? new Date(s.last_fired_at).toLocaleString() : "never"}
+                      </TableCell>
                       <TableCell>
                         <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
                           {s.volumes.map((v) => (

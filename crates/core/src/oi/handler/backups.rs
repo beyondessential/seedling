@@ -924,5 +924,6 @@ fn strategy_to_json(s: &backup_strategies::BackupStrategy) -> serde_json::Value 
         "via": s.via,
         "schedule": s.schedule,
         "volumes": s.volumes,
+        "last_fired_at": s.last_fired_at,
     })
 }
