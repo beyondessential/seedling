@@ -264,6 +264,31 @@ rule allowing all forwarded traffic within the seedling ULA range. The
 postrouting chain carries masquerade rules for loopback-sourced traffic
 (see [Loopback hairpin NAT](#loopback-hairpin-nat) above).
 
+## Host service interactions
+
+### avahi-daemon
+
+By default `avahi-daemon` binds to every interface on the host, including
+the transient Podman bridges that seedling creates for each pod. When a
+pod bridge comes up or goes down, avahi tries to discover clients on the
+new network and logs noisy warnings about "Got SIGTERM, quitting" /
+"interface going down" churn, and it can also leak mDNS responses onto
+networks that have no business participating in service discovery.
+
+The fix is to constrain avahi to the host's uplink interface(s) in
+`/etc/avahi/avahi-daemon.conf`:
+
+    [server]
+    allow-interfaces=eth0
+
+(`deny-interfaces=` also works, but seedling bridge names are picked by
+netavark at creation time — typically `podman0`, `podman1`, ... — and
+`avahi-daemon.conf` supports neither wildcards nor drop-in snippets, so
+an allow-list scoped to the real uplink is much easier to maintain than
+a deny-list that grows with every pod.)
+
+Reload avahi after editing: `systemctl reload avahi-daemon`.
+
 ## Reconciliation order
 
 The reconciler runs these phases sequentially each tick:
