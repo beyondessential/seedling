@@ -1,5 +1,9 @@
 # Deadline-less barrier blocking for long-running actions
 
+## Original prompt
+
+Some jobs in actions truly take a long time, in a way that is unpredictable (for example, backups). We want a way to have barrier-deadline-less blocking for terminated() &co in actions. Investigate what that would take, and the tradeoffs involved.
+
 ## Context
 
 Some actions legitimately run for hours with unpredictable duration — backups, bulk restores, maintenance jobs. Today every barrier call (`.terminated()`, `.ready()`, etc.) requires a finite deadline. Users work around this by guessing a large number (`apps/kopia-s3.seed.rhai` passes `AN_HOUR`), which is a lose-lose: guess too low and the action spuriously fails when a backup genuinely takes 90 minutes; guess too high and real hangs take ages to surface.
