@@ -265,6 +265,13 @@ export interface ExportedVolume {
   description?: string;
 }
 
+export interface AppVolume {
+  app: string;
+  volume_name: string;
+  exported: boolean;
+  description?: string;
+}
+
 export interface DeclaredExternalVolume {
   app: string;
   name: string;

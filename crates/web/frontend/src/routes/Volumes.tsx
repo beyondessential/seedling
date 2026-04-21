@@ -55,6 +55,7 @@ import { SnapshotVolumeDialog } from "../components/SnapshotVolumeDialog";
 import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
 import type {
+  AppVolume,
   DeclaredExternalVolume,
   ExportedVolume,
   ExternalMapping,
@@ -354,14 +355,14 @@ function MultiVolumeShellDialog({
   open,
   onClose,
   siteVols,
-  exportedVols,
+  appVols,
   heldVols,
   onOpen,
 }: {
   open: boolean;
   onClose: () => void;
   siteVols: SiteVolume[];
-  exportedVols: ExportedVolume[];
+  appVols: AppVolume[];
   heldVols: HeldVolume[];
   onOpen: (volumes: VolumeRef[], label: string) => void;
 }) {
@@ -389,7 +390,7 @@ function MultiVolumeShellDialog({
         labels.push(v.name);
       }
     }
-    for (const v of exportedVols) {
+    for (const v of appVols) {
       const key = `app:${v.app}/${v.volume_name}`;
       if (selected.has(key)) {
         refs.push({ kind: "app", app: v.app, volume: v.volume_name });
@@ -410,7 +411,7 @@ function MultiVolumeShellDialog({
           ? labels[0]
           : `${labels.length} volumes`;
     return { refs, label };
-  }, [selected, siteVols, exportedVols, heldVols]);
+  }, [selected, siteVols, appVols, heldVols]);
 
   const handleOpen = () => {
     if (refs.length === 0) return;
@@ -470,11 +471,14 @@ function MultiVolumeShellDialog({
 
         <Box sx={{ mb: 2 }}>
           <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
-            {sectionLabel("Exported app volumes", exportedVols.length)}
+            {sectionLabel("App volumes", appVols.length)}
           </Typography>
           <List dense disablePadding>
-            {exportedVols.map((v) => {
+            {appVols.map((v) => {
               const key = `app:${v.app}/${v.volume_name}`;
+              const secondary = v.exported
+                ? (v.description ?? "exported")
+                : "internal";
               return (
                 <ListItem key={key} disablePadding>
                   <ListItemButton onClick={() => toggle(key)} dense>
@@ -490,7 +494,7 @@ function MultiVolumeShellDialog({
                     <ListItemText
                       primary={`${v.app}/${v.volume_name}`}
                       primaryTypographyProps={{ sx: { fontFamily: "monospace" } }}
-                      secondary={v.description ?? undefined}
+                      secondary={secondary}
                     />
                   </ListItemButton>
                 </ListItem>
@@ -565,6 +569,10 @@ export default function Volumes() {
     refetch: refetchExported,
   } = useOiQuery<ExportedVolume[]>("/volumes/exported/list", {});
   const {
+    data: appVols,
+    refetch: refetchAppVols,
+  } = useOiQuery<AppVolume[]>("/volumes/app/list", {});
+  const {
     data: mappings,
     loading: mappingsLoading,
     error: mappingsError,
@@ -604,6 +612,7 @@ export default function Volumes() {
   const refreshAll = () => {
     refetchSite();
     refetchExported();
+    refetchAppVols();
     refetchMappings();
     refetchDeclared();
     refetchHeld();
@@ -1092,7 +1101,7 @@ export default function Volumes() {
         open={shellPickerOpen}
         onClose={() => setShellPickerOpen(false)}
         siteVols={siteVols ?? []}
-        exportedVols={exportedVols ?? []}
+        appVols={appVols ?? []}
         heldVols={heldVols ?? []}
         onOpen={(volumes, label) => openVolumeShell(volumes, label)}
       />

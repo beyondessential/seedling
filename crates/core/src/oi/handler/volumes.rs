@@ -94,6 +94,44 @@ pub(crate) fn list_exported(state: &OiState) -> HandlerResult {
     Ok(json!(exported))
 }
 
+/// Every named, persistent (non-tmpfs) app volume, whether or not it is
+/// exported. Used by the multi-volume shell picker so operators can pull
+/// internal-only volumes into a recovery session alongside exported ones.
+pub(crate) fn list_app_volumes(state: &OiState) -> HandlerResult {
+    let registry = state.registry.read();
+    let mut volumes = Vec::new();
+
+    for (app_name, _status) in registry.list() {
+        let Some(entry) = registry.get(&app_name) else {
+            continue;
+        };
+        let def = entry.app.def.load();
+        for (id, resource) in &def.resources {
+            if let crate::defs::resource::Resource::Volume(vol) = resource {
+                let vol_def = vol.def.lock();
+                if vol_def.tmpfs {
+                    continue;
+                }
+                let mut item = json!({
+                    "app": app_name,
+                    "volume_name": id.name.as_str(),
+                    "exported": vol_def.exported.is_some(),
+                });
+                if let Some(desc) = vol_def
+                    .exported
+                    .as_ref()
+                    .and_then(|e| e.description.as_ref())
+                {
+                    item["description"] = json!(desc);
+                }
+                volumes.push(item);
+            }
+        }
+    }
+
+    Ok(json!(volumes))
+}
+
 #[derive(Deserialize)]
 pub(crate) struct CreateSiteVolumeParams {
     pub name: String,

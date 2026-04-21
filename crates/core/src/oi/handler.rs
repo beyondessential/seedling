@@ -136,6 +136,7 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/volumes/held/list" => volumes::list_held(state),
         "/volumes/held/delete" => volumes::delete_held(state, parse_params(req.params)?, ctx),
         "/volumes/exported/list" => volumes::list_exported(state),
+        "/volumes/app/list" => volumes::list_app_volumes(state),
         "/volumes/site/create" => {
             volumes::create_site_volume(state, parse_params(req.params)?, ctx)
         }
