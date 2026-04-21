@@ -54,6 +54,7 @@ fn param_is_secret(state: &OiState, app: &str, name: &str) -> bool {
 }
 
 // i[impl param.set] i[impl param.unset]
+// r[impl operation.lifecycle.param-change]
 // Params cannot be mutated while an operation is in flight for the app:
 // captured-closure state inside the operation would become inconsistent with
 // the new param value. The scheduler is the primary source of truth; the
@@ -218,7 +219,6 @@ fn schedule_on_change(
 // i[impl param.store.secret]
 // l[impl param.on-change.transitions]
 // l[impl param.on-change.not-on-install]
-// r[impl operation.lifecycle.param-change]
 pub(crate) fn set_param(
     state: &OiState,
     params: SetParamParams,
@@ -323,7 +323,6 @@ pub(crate) fn set_param(
 // i[param.unset]
 // l[impl param.on-change.transitions]
 // l[impl param.on-change.not-on-install]
-// r[impl operation.lifecycle.param-change]
 pub(crate) fn unset_param(
     state: &OiState,
     params: UnsetParamParams,

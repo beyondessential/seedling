@@ -1,12 +1,3 @@
-// r[impl generation.definition]
-// r[impl generation.bumps]
-// r[impl generation.monotonic]
-// r[impl generation.history]
-// r[impl generation.script-storage]
-// r[impl generation.reconstruction]
-// r[impl generation.previous]
-// r[impl generation.deregister]
-
 use std::{collections::BTreeMap, fmt::Write as FmtWrite};
 
 use secrecy::{ExposeSecret, SecretString};
@@ -17,6 +8,7 @@ use crate::{
     runtime::{apps, db::Db, secrets::Cipher},
 };
 
+// r[impl generation.definition]
 pub type Generation = u64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,6 +67,7 @@ impl Outcome {
 }
 
 #[derive(Debug, Clone)]
+// r[impl generation.history]
 pub struct HistoryEntry {
     pub generation: Generation,
     pub created_at: String,
@@ -149,6 +142,7 @@ fn hash_script(script: &str) -> String {
     hex_of(&Sha256::digest(script.as_bytes()))
 }
 
+// r[impl generation.script-storage]
 fn store_script(db: &Db, script: &str) -> rusqlite::Result<String> {
     let hash = hash_script(script);
     db.conn.execute(
@@ -158,6 +152,7 @@ fn store_script(db: &Db, script: &str) -> rusqlite::Result<String> {
     Ok(hash)
 }
 
+// r[impl generation.script-storage]
 pub fn script_body(db: &Db, hash: &str) -> rusqlite::Result<Option<String>> {
     let mut stmt = db
         .conn
@@ -181,6 +176,7 @@ pub fn current(db: &Db, app: &str) -> rusqlite::Result<Option<Generation>> {
     }
 }
 
+// r[impl generation.monotonic]
 fn next_generation_for(db: &Db, app: &str) -> rusqlite::Result<Generation> {
     let mut stmt = db
         .conn
@@ -193,6 +189,7 @@ fn now() -> String {
     jiff::Timestamp::now().to_string()
 }
 
+// r[impl generation.bumps]
 fn insert_register_or_update(
     db: &Db,
     app: &str,
@@ -495,6 +492,7 @@ pub fn param_map_at(
 
 /// Look up the script hash active at a specific generation: the script_hash
 /// of the most recent Register/ScriptUpdate at or before that generation.
+// r[impl generation.previous]
 pub fn script_hash_at(db: &Db, app: &str, generation: Generation) -> Result<String, Error> {
     let mut stmt = db.conn.prepare(
         "SELECT script_hash
@@ -518,6 +516,7 @@ pub fn script_hash_at(db: &Db, app: &str, generation: Generation) -> Result<Stri
 /// Reconstruct the AppDef as it was at a specific generation by loading the
 /// script body active at that generation and evaluating it with the parameter
 /// map at that generation.
+// r[impl generation.reconstruction]
 pub fn reconstruct_app_def(
     db: &Db,
     app: &str,

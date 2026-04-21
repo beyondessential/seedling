@@ -156,7 +156,6 @@ pub(crate) async fn open_shell_session(
         };
 
     // i[impl stream.shell]
-    // i[impl shell.streams]
     let (mut stdout_send, stdout_stream_id) = match conn.open_uni().await {
         Ok(s) => {
             let id = s.id().index();
@@ -184,6 +183,7 @@ pub(crate) async fn open_shell_session(
 
     {
         // i[impl shell.open]
+        // i[impl shell.streams]
         // i[impl stream.shell.framing]
         let mut resp = serde_json::to_vec(&serde_json::json!({
             "result": {
