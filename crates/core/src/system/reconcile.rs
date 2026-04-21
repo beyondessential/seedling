@@ -205,6 +205,7 @@ impl Reconciler {
             Arc::clone(&registry),
             dns_servers,
             db.clone(),
+            event_tx.clone(),
         );
         Self {
             driver,

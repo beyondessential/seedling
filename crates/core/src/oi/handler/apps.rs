@@ -1536,6 +1536,13 @@ pub(crate) fn update_app(
                                 held_id = %meta.id,
                                 "held volume removed from app definition"
                             );
+                            // r[impl actuate.volume.hold.events]
+                            ctx.events.held_volume_created(
+                                &meta.id,
+                                &meta.app,
+                                &meta.volume_name,
+                                &meta.reason,
+                            );
                         }
                         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                             // Volume declared but never created on disk

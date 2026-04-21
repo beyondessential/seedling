@@ -7,6 +7,7 @@ use std::{
 
 use ipnet::Ipv6Net;
 use parking_lot::Mutex as ParkingMutex;
+use seedling_protocol::events::EventSender;
 use snafu::{IntoError, ResultExt, Snafu};
 
 use crate::{
@@ -127,6 +128,7 @@ pub struct Actuator {
     /// Images currently being pulled or that have exhausted retries.
     pulling: Arc<ParkingMutex<HashMap<String, PullState>>>,
     db: DbHandle,
+    event_tx: EventSender,
 }
 
 impl Actuator {
@@ -136,6 +138,7 @@ impl Actuator {
         registry: Arc<dyn InstanceRegistry>,
         dns_servers: Vec<Ipv6Addr>,
         db: DbHandle,
+        event_tx: EventSender,
     ) -> Self {
         Self {
             driver,
@@ -144,6 +147,7 @@ impl Actuator {
             dns_servers,
             pulling: Arc::new(ParkingMutex::new(HashMap::new())),
             db,
+            event_tx,
         }
     }
 
@@ -427,7 +431,7 @@ impl Actuator {
                     // r[impl actuate.volume.hold]
                     let vol_store = &self.driver.volume_store;
                     if vol_store.exists(&name) {
-                        vol_store
+                        let meta = vol_store
                             .hold(&name, &instance.app, "removed from app definition")
                             .await
                             .map_err(|e| {
@@ -436,6 +440,14 @@ impl Actuator {
                                 }
                                 .into_error(e)
                             })?;
+                        // r[impl actuate.volume.hold.events]
+                        self.event_tx.held_volume_created(
+                            &meta.id,
+                            &meta.app,
+                            &meta.volume_name,
+                            &meta.reason,
+                            None,
+                        );
                     }
                 }
                 Ok(())
@@ -464,7 +476,7 @@ impl Actuator {
             if !tmpfs {
                 let vol_store = &self.driver.volume_store;
                 if vol_store.exists(&name) {
-                    vol_store
+                    let meta = vol_store
                         .hold(&name, &instance.app, reason)
                         .await
                         .map_err(|e| {
@@ -473,6 +485,14 @@ impl Actuator {
                             }
                             .into_error(e)
                         })?;
+                    // r[impl actuate.volume.hold.events]
+                    self.event_tx.held_volume_created(
+                        &meta.id,
+                        &meta.app,
+                        &meta.volume_name,
+                        &meta.reason,
+                        None,
+                    );
                 }
             }
         }
