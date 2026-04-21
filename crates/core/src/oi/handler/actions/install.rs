@@ -1,10 +1,11 @@
 use std::{collections::BTreeMap, sync::Arc};
 
+use seedling_protocol::error::{ErrorCode, OiError};
+use seedling_protocol::names::AppName;
 use serde::Deserialize;
 use serde_json::json;
 
-use seedling_protocol::error::{ErrorCode, OiError};
-
+use super::lifecycle::spawn_accepted_operation;
 use crate::{
     defs::install::{ParamDef, ParamKind},
     oi::{
@@ -17,11 +18,9 @@ use crate::{
     },
 };
 
-use super::lifecycle::spawn_accepted_operation;
-
 #[derive(Deserialize)]
 pub(crate) struct InvokeInstallParams {
-    pub app: String,
+    pub app: AppName,
     #[serde(default)]
     pub params: Option<BTreeMap<String, String>>,
 }
@@ -96,11 +95,11 @@ pub(in crate::oi) fn validate_requirements(
 // i[action.invoke.install.validation]
 fn validate_install_params(
     state: &OiState,
-    app_name: &str,
+    app_name: &AppName,
     submitted: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, String>, OiError> {
     let reg = state.registry.read();
-    let entry = reg.get(app_name).expect("caller confirmed exists");
+    let entry = reg.get(app_name.as_str()).expect("caller confirmed exists");
     let def = entry.app.def.load();
     match &def.install {
         None => {
@@ -132,7 +131,7 @@ pub(crate) fn invoke_install(
     let has_install_action = {
         let reg = state.registry.read();
         let entry = reg
-            .get(app_name)
+            .get(app_name.as_str())
             .ok_or_else(|| OiError::not_found(format!("app not found: {app_name}")))?;
 
         // i[action.invoke.install] - only NotInstalled apps may start an install.
@@ -169,13 +168,13 @@ pub(crate) fn invoke_install(
     if !has_install_action {
         {
             let mut reg = state.registry.write();
-            if let Some(entry) = reg.get_mut(app_name) {
+            if let Some(entry) = reg.get_mut(app_name.as_str()) {
                 *entry.phase.lock() = AppPhase::Installed;
             }
         }
         {
             let reg = state.registry.read();
-            if let Some(entry) = reg.get(app_name) {
+            if let Some(entry) = reg.get(app_name.as_str()) {
                 use crate::oi::handler::apps::{extract_persist_fields, persist_app_fields};
                 let (app_name_owned, generation_n, installed, uninstalling, installing) =
                     extract_persist_fields(entry);
@@ -212,7 +211,9 @@ pub(crate) fn invoke_install(
     // current generation (install does not produce a new generation).
     let current_generation = {
         let reg = state.registry.read();
-        reg.get(app_name).map(|e| e.current_generation).unwrap_or(0)
+        reg.get(app_name.as_str())
+            .map(|e| e.current_generation)
+            .unwrap_or(0)
     };
     let (result, op_id_str) = {
         let mut sched = state.scheduler.lock();
@@ -240,7 +241,7 @@ pub(crate) fn invoke_install(
             let op_id = crate::runtime::barrier::OperationId(op_id_str.clone());
             spawn_accepted_operation(
                 Arc::clone(state),
-                app_name.to_owned(),
+                app_name.clone(),
                 "install".to_owned(),
                 op_id,
                 op_params,

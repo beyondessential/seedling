@@ -1,10 +1,13 @@
 use std::sync::Arc;
 
+use seedling_protocol::error::{ErrorCode, OiError};
+use seedling_protocol::names::AppName;
 use serde::Deserialize;
 use serde_json::json;
 
-use seedling_protocol::error::{ErrorCode, OiError};
-
+use self::install::validate_requirements;
+use self::lifecycle::spawn_accepted_operation;
+use super::HandlerResult;
 use crate::{
     oi::{handler::RequestCtx, state::OiState},
     runtime::{
@@ -13,17 +16,12 @@ use crate::{
     },
 };
 
-use super::HandlerResult;
-
 pub(crate) mod install;
 pub mod lifecycle;
 
-use install::validate_requirements;
-use lifecycle::spawn_accepted_operation;
-
 #[derive(Deserialize)]
 pub(crate) struct InvokeActionParams {
-    pub app: String,
+    pub app: AppName,
     pub name: String,
     #[serde(default)]
     pub params: Option<serde_json::Map<String, serde_json::Value>>,
@@ -32,14 +30,14 @@ pub(crate) struct InvokeActionParams {
 // i[action.cancel]
 #[derive(Deserialize)]
 pub(crate) struct CancelActionParams {
-    pub app: String,
+    pub app: AppName,
 }
 
 /// Request cancellation of the currently-active operation for `app`.
 // r[impl operation.cancel]
 // i[action.cancel]
 pub(crate) fn cancel_action(state: &Arc<OiState>, params: CancelActionParams) -> HandlerResult {
-    let app_name = params.app.as_str();
+    let app_name = &params.app;
     let outcome = state.scheduler.lock().request_cancel(app_name);
     match outcome {
         CancelOutcome::Cancelled(op_id) | CancelOutcome::AlreadyCancelled(op_id) => {
@@ -49,7 +47,7 @@ pub(crate) fn cancel_action(state: &Arc<OiState>, params: CancelActionParams) ->
             // on the next start-up. Do this on AlreadyCancelled too so a
             // prior persist failure heals on retry.
             let op_id_for_persist = op_id.clone();
-            let app_for_log = app_name.to_owned();
+            let app_for_log = app_name.clone();
             state.db.call(move |db| {
                 if let Err(e) =
                     crate::runtime::history::set_cancel_requested(db, &op_id_for_persist)
@@ -131,7 +129,7 @@ pub(crate) fn invoke_action(
     {
         let reg = state.registry.read();
         let entry = reg
-            .get(app_name)
+            .get(app_name.as_str())
             .ok_or_else(|| OiError::not_found(format!("app not found: {app_name}")))?;
 
         // i[action.not-installed-gate]
@@ -174,7 +172,9 @@ pub(crate) fn invoke_action(
     // app's current generation at dispatch.
     let current_generation = {
         let reg = state.registry.read();
-        reg.get(app_name).map(|e| e.current_generation).unwrap_or(0)
+        reg.get(app_name.as_str())
+            .map(|e| e.current_generation)
+            .unwrap_or(0)
     };
     let (result, op_id_str) = {
         let mut sched = state.scheduler.lock();
@@ -202,7 +202,7 @@ pub(crate) fn invoke_action(
             let op_id = crate::runtime::barrier::OperationId(op_id_str.clone());
             spawn_accepted_operation(
                 Arc::clone(state),
-                app_name.to_owned(),
+                app_name.clone(),
                 action_name.to_owned(),
                 op_id,
                 action_params,

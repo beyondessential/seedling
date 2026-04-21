@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
+use seedling_protocol::error::{ErrorCode, OiError};
+use seedling_protocol::names::AppName;
 use serde::Deserialize;
 use serde_json::{Value, json};
-
-use seedling_protocol::error::{ErrorCode, OiError};
 
 use crate::{
     defs::{
@@ -36,24 +36,24 @@ use super::{
 
 #[derive(Deserialize)]
 pub(crate) struct AppParams {
-    pub app: String,
+    pub app: AppName,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct AppScriptParams {
-    pub app: String,
+    pub app: AppName,
     pub script: String,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct GetScriptParams {
-    pub app: String,
+    pub app: AppName,
     pub generation: Option<u64>,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct ListGenerationsParams {
-    pub app: String,
+    pub app: AppName,
     #[serde(default)]
     pub limit: Option<usize>,
     #[serde(default)]
@@ -69,7 +69,7 @@ pub(crate) struct ProposedParam {
 
 #[derive(Deserialize)]
 pub(crate) struct PlanParams {
-    pub app: String,
+    pub app: AppName,
     #[serde(default)]
     pub proposed_script: Option<String>,
     #[serde(default)]
@@ -78,20 +78,20 @@ pub(crate) struct PlanParams {
 
 #[derive(Deserialize)]
 pub(crate) struct ScaleParams {
-    pub app: String,
+    pub app: AppName,
     pub deployment: String,
     pub scale: u16,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct RestartParams {
-    pub app: String,
+    pub app: AppName,
     pub deployment: String,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct ResourceStopParams {
-    pub app: String,
+    pub app: AppName,
     pub kind: String,
     pub name: String,
 }
@@ -99,7 +99,7 @@ pub(crate) struct ResourceStopParams {
 /// Extract the fields needed to persist an app entry without holding `&AppEntry`.
 pub(crate) fn extract_persist_fields(
     entry: &crate::runtime::apps::AppEntry,
-) -> (String, u64, bool, bool, bool) {
+) -> (AppName, u64, bool, bool, bool) {
     use crate::runtime::apps::AppPhase;
     let phase = entry.phase.lock();
     let installed = matches!(*phase, AppPhase::Installed | AppPhase::Uninstalling);
@@ -117,7 +117,7 @@ pub(crate) fn extract_persist_fields(
 /// Persist app row fields to the DB.
 pub(crate) fn persist_app_fields(
     db: &crate::runtime::db::Db,
-    name: &str,
+    name: &AppName,
     generation_n: u64,
     installed: bool,
     uninstalling: bool,
@@ -246,10 +246,10 @@ pub(crate) fn sync_fault_state(
 }
 
 // r[impl schedule.prune]
-fn sync_action_schedules(state: &OiState, app_name: &str) {
+fn sync_action_schedules(state: &OiState, app_name: &AppName) {
     let valid_pairs: Vec<(String, String)> = {
         let reg = state.registry.read();
-        let Some(entry) = reg.get(app_name) else {
+        let Some(entry) = reg.get(app_name.as_str()) else {
             return;
         };
         let def = entry.app.def.load();
@@ -263,7 +263,7 @@ fn sync_action_schedules(state: &OiState, app_name: &str) {
             .collect()
     };
 
-    let app_name_owned = app_name.to_owned();
+    let app_name_owned = app_name.clone();
     let valid_pairs_owned = valid_pairs.clone();
     state.db.call(move |db| {
         if let Err(e) = crate::runtime::db::prune_schedules(db, &app_name_owned, &valid_pairs_owned)
@@ -340,7 +340,7 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
     let result: Vec<Value> = apps
         .into_iter()
         .map(|(name, base_status)| {
-            let status = match reg.get(&name) {
+            let status = match reg.get(name.as_str()) {
                 Some(entry) => effective_app_status(base_status, entry, &state.db),
                 None => base_status,
             };
@@ -445,14 +445,14 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     // Load stored param values from DB (both plaintext and secret tables).
     // Names come from AppDef; values come from the params/secret_params tables.
     // Params declared by the script but never set by the operator are shown as null.
-    let name_owned = name.to_owned();
+    let name_owned = params.app.clone();
     let cipher = std::sync::Arc::clone(&state.cipher);
     let stored_params = state
         .db
         .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned));
 
     // Fetch all active faults for this app once, then split by level.
-    let name_owned = name.to_owned();
+    let name_owned = params.app.clone();
     let all_faults_for_app = state
         .db
         .call(move |db| faults::list_active_faults(db, Some(&name_owned)).unwrap_or_default());
@@ -477,7 +477,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
 
     // i[impl resource.stop.status]
     let stopped_set = {
-        let name_owned = name.to_owned();
+        let name_owned = params.app.clone();
         state
             .db
             .call(move |db| stopped::load_stopped(db, &name_owned).unwrap_or_default())
@@ -556,7 +556,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         })
         .collect();
 
-    let name_owned = name.to_owned();
+    let name_owned = params.app.clone();
     let all_faults_clone = all_faults_for_app.clone();
     let stopped_set_clone = stopped_set.clone();
     let mut resources_json: Vec<Value> = state.db.call(move |db| {
@@ -632,7 +632,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
 
     // Append dynamic resources (started inside action closures, not in AppDef).
     if query_instances {
-        let name_owned = name.to_owned();
+        let name_owned = params.app.clone();
         let all_faults_clone2 = all_faults_for_app.clone();
         let dyn_entries: Vec<Value> = state.db.call(move |db| {
             let dyn_records = list_dynamic_resources_for_app(db, &name_owned).unwrap_or_default();
@@ -794,7 +794,7 @@ pub(crate) fn get_app_script(state: &OiState, params: GetScriptParams) -> Handle
         }
     }
 
-    let name_owned = name.to_owned();
+    let name_owned = params.app.clone();
     let (generation, script) = match params.generation {
         Some(gen_n) => {
             let script = state
@@ -809,7 +809,7 @@ pub(crate) fn get_app_script(state: &OiState, params: GetScriptParams) -> Handle
             (gen_n, script)
         }
         None => {
-            let name_owned2 = name.to_owned();
+            let name_owned2 = params.app.clone();
             let (gen_n, script) = state
                 .db
                 .call(move |db| crate::runtime::apps::get_current_script(db, &name_owned2))
@@ -841,7 +841,7 @@ pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -
     };
 
     let limit = params.limit.unwrap_or(50).clamp(1, 200);
-    let name_owned = name.to_owned();
+    let name_owned = params.app.clone();
     let before = params.before;
     let (entries, script_changed_for) = state
         .db
@@ -967,7 +967,7 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams) -> HandlerResult
         let entry = reg.get(name).expect("confirmed registered");
         entry.script.clone()
     };
-    let name_owned = name.to_owned();
+    let name_owned = params.app.clone();
     let cipher = std::sync::Arc::clone(&state.cipher);
     let current_params = state
         .db
@@ -991,7 +991,7 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams) -> HandlerResult
     let proposed_script = params.proposed_script.as_deref().unwrap_or(&current_script);
 
     let (proposed_app, proposed_err) = crate::runtime::apps::evaluate_script(
-        name,
+        &params.app,
         proposed_script,
         &proposed_param_map,
         &state.script_limits,
@@ -1063,7 +1063,7 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams) -> HandlerResult
     // actions as errors in the plan output.
     let mut errors: Vec<String> = Vec::new();
     {
-        let name_owned = name.to_owned();
+        let name_owned = params.app.clone();
         let is_backup_app = state
             .db
             .call(move |db| crate::runtime::backup_apps::is_registered(db, &name_owned))
@@ -1116,7 +1116,7 @@ pub(crate) fn register_app(
     {
         let mut reg = state.registry.write();
         reg.register(
-            name.to_owned(),
+            params.app.clone(),
             script.to_owned(),
             Arc::clone(&state.tick_notify),
             &state.script_limits,
@@ -1146,7 +1146,7 @@ pub(crate) fn register_app(
     }
 
     // r[impl generation.bumps] — initial registration creates generation 1.
-    let name_owned = name.to_owned();
+    let name_owned = params.app.clone();
     let script_owned = script.to_owned();
     let generation = state
         .db
@@ -1187,10 +1187,10 @@ pub(crate) fn register_app(
     }
 
     // r[impl schedule.prune]
-    sync_action_schedules(state, name);
+    sync_action_schedules(state, &params.app);
 
     tracing::info!(app = %name, generation, "registered app");
-    ctx.events.app_registered(name, generation);
+    ctx.events.app_registered(&params.app, generation);
     Ok(json!({ "generation": generation }))
 }
 
@@ -1210,7 +1210,7 @@ pub(crate) fn deregister_app(
     }
 
     // Reject if an operation is active or queued for this app.
-    if state.scheduler.lock().has_operation_for(name) {
+    if state.scheduler.lock().has_operation_for(&params.app) {
         return Err(OiError::new(
             ErrorCode::OperationInProgress,
             format!("operation in progress for app: {name}"),
@@ -1251,7 +1251,7 @@ pub(crate) fn deregister_app(
     }
 
     // Remove from DB.
-    let name_owned = name.to_owned();
+    let name_owned = params.app.clone();
     state
         .db
         .call(move |db| {
@@ -1285,7 +1285,7 @@ pub(crate) fn deregister_app(
     state.registry.write().deregister(name);
 
     tracing::info!(app = %name, "deregistered app");
-    ctx.events.app_deregistered(name);
+    ctx.events.app_deregistered(&params.app);
     Ok(json!({}))
 }
 
@@ -1316,7 +1316,7 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
     };
 
     // Persist the transition before waking the reconciler.
-    let name_owned = name.to_owned();
+    let name_owned = params.app.clone();
     state.db.call(move |db| {
         transition_phase(&phase_arc, AppPhase::Uninstalling, db, &name_owned, "");
         // i[impl scale.reset-on-uninstall]
@@ -1334,7 +1334,9 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
     // i[impl event.types]
     // Notify clients the app entered Uninstalling. The reconciler will emit a
     // second AppPhaseChanged(not_installed) once teardown completes.
-    state.event_tx.app_phase_changed(name, "uninstalling", None);
+    state
+        .event_tx
+        .app_phase_changed(&params.app, "uninstalling", None);
 
     // Wake the reconciler so it starts cleanup immediately.
     {
@@ -1365,7 +1367,7 @@ pub(crate) fn update_app(
     }
 
     // Reject if an operation is active or queued for this app.
-    if state.scheduler.lock().has_operation_for(name) {
+    if state.scheduler.lock().has_operation_for(&params.app) {
         return Err(OiError::new(
             ErrorCode::OperationInProgress,
             format!("operation in progress for app: {name}"),
@@ -1382,14 +1384,14 @@ pub(crate) fn update_app(
     // declares all required backup actions before applying the update.
     // i[impl backup.app.validation]
     {
-        let name_owned = name.to_owned();
+        let name_owned = params.app.clone();
         let is_backup_app = state
             .db
             .call(move |db| crate::runtime::backup_apps::is_registered(db, &name_owned))
             .map_err(|e| OiError::new(ErrorCode::Internal, format!("db backup apps: {e}")))?;
         if is_backup_app {
             let (proposed, proposed_err) = crate::runtime::apps::evaluate_script(
-                name,
+                &params.app,
                 script,
                 &std::collections::BTreeMap::new(),
                 &state.script_limits,
@@ -1438,13 +1440,13 @@ pub(crate) fn update_app(
     };
 
     // Reload script and apply to in-memory AppDef immediately.
-    let name_owned = name.to_owned();
+    let name_owned = params.app.clone();
     let cipher = std::sync::Arc::clone(&state.cipher);
     let loaded_params = state
         .db
         .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned));
     state.registry.write().reload(
-        name,
+        &params.app,
         script.to_owned(),
         &loaded_params,
         &state.script_limits,
@@ -1487,7 +1489,7 @@ pub(crate) fn update_app(
                 // use) — hardcoding a format here would miss future
                 // identity-scheme changes and trip on legacy rows with a
                 // different slug.
-                let name_owned = name.to_owned();
+                let name_owned = params.app.clone();
                 let vol_name_owned = vol_name.clone();
                 let instances = state.db.call(move |db| {
                     crate::runtime::history::find_instances_for_group(
@@ -1518,7 +1520,7 @@ pub(crate) fn update_app(
                             // r[impl actuate.volume.hold.events]
                             ctx.events.held_volume_created(
                                 &meta.id,
-                                &meta.app,
+                                &params.app,
                                 &meta.volume_name,
                                 &meta.reason,
                             );
@@ -1542,7 +1544,7 @@ pub(crate) fn update_app(
                 // Drop the instance rows so the registry matches the new
                 // AppDef. Done after the hold so on failure the rows
                 // remain and the next /apps/update retry can try again.
-                let name_owned = name.to_owned();
+                let name_owned = params.app.clone();
                 let inst_ids: Vec<_> = instances.iter().map(|i| i.id).collect();
                 let inst_displays: Vec<_> =
                     instances.iter().map(|i| i.display_name.clone()).collect();
@@ -1587,7 +1589,7 @@ pub(crate) fn update_app(
                 })
                 .collect();
             drop(def);
-            let name_owned = name.to_owned();
+            let name_owned = params.app.clone();
             state.db.call(move |db| {
                 if let Err(e) = scaling::clamp_scaling_decisions(db, &name_owned, &deployment_bounds) {
                     tracing::error!(app = %name_owned, error = %e, "failed to clamp scaling decisions");
@@ -1601,7 +1603,7 @@ pub(crate) fn update_app(
     }
 
     // r[impl generation.bumps] — script update bumps the generation.
-    let name_owned = name.to_owned();
+    let name_owned = params.app.clone();
     let script_owned = script.to_owned();
     let generation = state
         .db
@@ -1663,11 +1665,11 @@ pub(crate) fn update_app(
     }
 
     // r[impl schedule.prune]
-    sync_action_schedules(state, name);
+    sync_action_schedules(state, &params.app);
 
     tracing::info!(app = %name, generation, "updated app");
     ctx.events.app_updated(
-        name,
+        &params.app,
         generation,
         if previous_generation == 0 {
             None
@@ -1706,7 +1708,7 @@ pub(crate) fn restart_deployment(
 
     let operation_id = uuid::Uuid::new_v4().to_string();
 
-    let name_owned = name.to_owned();
+    let name_owned = params.app.clone();
     let deployment_name_owned = deployment_name.to_owned();
     state
         .db
@@ -1716,7 +1718,7 @@ pub(crate) fn restart_deployment(
     entry.tick_notify.notify_one();
 
     ctx.events
-        .deployment_restarted(name, deployment_name, &operation_id);
+        .deployment_restarted(&params.app, deployment_name, &operation_id);
 
     Ok(json!({ "operation_id": operation_id }))
 }
@@ -1748,7 +1750,7 @@ pub(crate) fn scale_app(state: &OiState, params: ScaleParams, ctx: &RequestCtx) 
     };
     drop(def);
 
-    let name_owned = name.to_owned();
+    let name_owned = params.app.clone();
     let deployment_name_owned = deployment_name.to_owned();
     let new_scale_clamped = params.scale.clamp(low, high);
     let (previous_scale, new_scale) = state.db.call(move |db| -> Result<_, OiError> {
@@ -1763,7 +1765,7 @@ pub(crate) fn scale_app(state: &OiState, params: ScaleParams, ctx: &RequestCtx) 
     entry.tick_notify.notify_one();
 
     ctx.events
-        .scale(name, deployment_name, low, high)
+        .scale(params.app.clone(), deployment_name, low, high)
         .changed(new_scale, previous_scale);
 
     Ok(json!({
@@ -1814,7 +1816,7 @@ pub(crate) fn stop_resource(
     // action whose resource is about to vanish has no sensible continuation.
     // Operators cancel the active op first (via /apps/action/cancel), then
     // stop resources.
-    if state.scheduler.lock().has_operation_for(app) {
+    if state.scheduler.lock().has_operation_for(&params.app) {
         return Err(OiError::new(
             ErrorCode::OperationInProgress,
             format!(
@@ -1842,7 +1844,7 @@ pub(crate) fn stop_resource(
         }
     }
 
-    let app_owned = app.to_owned();
+    let app_owned = params.app.clone();
     let resource_name_owned = resource_name.to_owned();
     state
         .db
@@ -1853,7 +1855,7 @@ pub(crate) fn stop_resource(
 
     let ks = kind_str(kind);
     tracing::info!(app = %app, kind = %ks, name = %resource_name, "resource stopped");
-    ctx.events.resource_stopped(app, ks, resource_name);
+    ctx.events.resource_stopped(&params.app, ks, resource_name);
 
     Ok(json!({}))
 }
@@ -1882,7 +1884,7 @@ pub(crate) fn unstop_resource(
     }
 
     // i[impl resource.stop.no-active-op]
-    if state.scheduler.lock().has_operation_for(app) {
+    if state.scheduler.lock().has_operation_for(&params.app) {
         return Err(OiError::new(
             ErrorCode::OperationInProgress,
             format!(
@@ -1891,7 +1893,7 @@ pub(crate) fn unstop_resource(
         ));
     }
 
-    let app_owned = app.to_owned();
+    let app_owned = params.app.clone();
     let resource_name_owned = resource_name.to_owned();
     state
         .db
@@ -1900,7 +1902,7 @@ pub(crate) fn unstop_resource(
 
     let ks = kind_str(kind);
     tracing::info!(app = %app, kind = %ks, name = %resource_name, "resource unstopped");
-    ctx.events.resource_unstopped(app, ks, resource_name);
+    ctx.events.resource_unstopped(&params.app, ks, resource_name);
 
     let reg = state.registry.read();
     if let Some(entry) = reg.get(app) {
@@ -1926,7 +1928,7 @@ pub(crate) fn unstop_all_resources(
     }
 
     // i[impl resource.stop.no-active-op]
-    if state.scheduler.lock().has_operation_for(app) {
+    if state.scheduler.lock().has_operation_for(&params.app) {
         return Err(OiError::new(
             ErrorCode::OperationInProgress,
             format!(
@@ -1935,7 +1937,7 @@ pub(crate) fn unstop_all_resources(
         ));
     }
 
-    let app_owned = app.to_owned();
+    let app_owned = params.app.clone();
     let stopped_list = state.db.call(move |db| -> Result<_, OiError> {
         let set = stopped::load_stopped(db, &app_owned)
             .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
@@ -1947,7 +1949,7 @@ pub(crate) fn unstop_all_resources(
     for (kind, name) in &stopped_list {
         let ks = kind_str(*kind);
         tracing::info!(app = %app, kind = %ks, name = %name, "resource unstopped (unstop-all)");
-        ctx.events.resource_unstopped(app, ks, name);
+        ctx.events.resource_unstopped(&params.app, ks, name);
     }
 
     let reg = state.registry.read();

@@ -2,6 +2,7 @@ use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
 
 use parking_lot::RwLock;
 use seedling_protocol::events::OperationEventCtx;
+use seedling_protocol::names::AppName;
 use tokio::sync::Notify;
 
 use crate::{
@@ -22,7 +23,7 @@ use crate::{
     },
 };
 
-fn open_operation_dbs(db_path: &Path, app_name: &str) -> Option<DbHandle> {
+fn open_operation_dbs(db_path: &Path, app_name: &AppName) -> Option<DbHandle> {
     match DbHandle::open(db_path) {
         Ok(db) => Some(db),
         Err(e) => {
@@ -51,7 +52,7 @@ fn run_operation_loop(
     persist_for_replay: bool,
     cancel_token: Arc<CancelToken>,
 ) -> bool {
-    let app_name = op_ctx.app.as_str();
+    let app_name = &op_ctx.app;
     let action_name = op_ctx.action_name.as_str();
     let operation_id = OperationId(op_ctx.operation_id.clone());
 
@@ -60,7 +61,7 @@ fn run_operation_loop(
         Ok(a) => a,
         Err(e) => {
             tracing::error!(app = %app_name, action = %action_name, "script compile error: {e}");
-            let app_name_owned = app_name.to_owned();
+            let app_name_owned = app_name.clone();
             let desc = format!("script compile error in {action_name}: {e}");
             db.call(move |db| {
                 let _ = faults::file_fault(
@@ -77,7 +78,12 @@ fn run_operation_loop(
         }
     };
 
-    let log = DbActionLog::new(db.clone(), operation_id.clone(), app_name, action_name);
+    let log = DbActionLog::new(
+        db.clone(),
+        operation_id.clone(),
+        app_name.clone(),
+        action_name,
+    );
     let world = Arc::new(DbWorldOracle::new(db.clone()));
     let registry: Arc<dyn InstanceRegistry> = Arc::new(DbInstanceRegistry::new(db.clone()));
 
@@ -90,7 +96,7 @@ fn run_operation_loop(
     if persist_for_replay {
         let record = CurrentOperation {
             operation_id: operation_id.clone(),
-            app: app_name.to_owned(),
+            app: app_name.clone(),
             action_name: action_name.to_owned(),
             source_generation: op_ctx.source_generation,
             target_generation: op_ctx.target_generation,
@@ -135,7 +141,7 @@ fn run_operation_loop(
         );
         match result {
             OperationResult::Completed => {
-                let app_name_owned = app_name.to_owned();
+                let app_name_owned = app_name.clone();
                 db.call(move |db| {
                     faults::clear_faults_by_kind(db, &app_name_owned, "operation_failed").ok();
                     let _ = clear_current_operation(db);
@@ -145,7 +151,7 @@ fn run_operation_loop(
             }
             OperationResult::Failed(e) => {
                 tracing::error!(app = %app_name, action = %action_name, "operation failed: {e}");
-                let app_name_owned = app_name.to_owned();
+                let app_name_owned = app_name.clone();
                 let desc = format!("{action_name} failed: {e}");
                 db.call(move |db| {
                     let _ = faults::file_fault(
@@ -165,7 +171,7 @@ fn run_operation_loop(
             // r[impl operation.cancel]
             OperationResult::Cancelled => {
                 tracing::warn!(app = %app_name, action = %action_name, "operation cancelled");
-                let app_name_owned = app_name.to_owned();
+                let app_name_owned = app_name.clone();
                 let desc = format!("{action_name} cancelled by operator");
                 let desc_for_fault = desc.clone();
                 db.call(move |db| {
@@ -410,7 +416,7 @@ async fn cleanup_dynamic_resources(
     // tore down. Without this, faults filed against short-lived Job
     // instances (image_pull_failed, container_start_failed, …) persist
     // forever because the instance id they reference has gone away.
-    let instance_ids_to_clear: Vec<(String, String)> = dynamic_records
+    let instance_ids_to_clear: Vec<(AppName, String)> = dynamic_records
         .iter()
         .map(|r| (r.app.clone(), r.instance_id.clone()))
         .collect();
@@ -439,18 +445,18 @@ async fn cleanup_dynamic_resources(
 /// acquires registry.read(), so registry.write() + db.lock() in either order
 /// deadlocks with it.
 // i[impl event.types]
-fn set_phase_and_persist(state: &OiState, app_name: &str, new_phase: AppPhase) {
+fn set_phase_and_persist(state: &OiState, app_name: &AppName, new_phase: AppPhase) {
     use crate::oi::handler::apps::{extract_persist_fields, persist_app_fields};
     let phase_str = phase_event_name(&new_phase);
     {
         let mut reg = state.registry.write();
-        if let Some(entry) = reg.get_mut(app_name) {
+        if let Some(entry) = reg.get_mut(app_name.as_str()) {
             *entry.phase.lock() = new_phase;
         }
     }
     {
         let reg = state.registry.read();
-        if let Some(entry) = reg.get(app_name) {
+        if let Some(entry) = reg.get(app_name.as_str()) {
             let (app_n, generation_n, installed, uninstalling, installing) =
                 extract_persist_fields(entry);
             if let Err(e) = state.db.call(move |db| {
@@ -481,19 +487,19 @@ fn phase_event_name(phase: &AppPhase) -> &'static str {
 }
 
 // i[impl action.invoke.install]
-fn enter_installing_phase(state: &OiState, app_name: &str) {
+fn enter_installing_phase(state: &OiState, app_name: &AppName) {
     set_phase_and_persist(state, app_name, AppPhase::Installing);
     tracing::info!(app = %app_name, "install started; entering Installing phase");
 }
 
 // i[impl action.invoke.install.completion]
-fn finalize_install(state: &OiState, app_name: &str) {
+fn finalize_install(state: &OiState, app_name: &AppName) {
     set_phase_and_persist(state, app_name, AppPhase::Installed);
     tracing::info!(app = %app_name, "install completed; app is now installed");
 }
 
 // i[impl action.invoke.install.completion]
-fn revert_install_phase(state: &OiState, app_name: &str) {
+fn revert_install_phase(state: &OiState, app_name: &AppName) {
     set_phase_and_persist(state, app_name, AppPhase::NotInstalled);
     tracing::info!(app = %app_name, "install failed; reverted to NotInstalled");
 }
@@ -504,7 +510,7 @@ fn revert_install_phase(state: &OiState, app_name: &str) {
 )]
 pub fn spawn_accepted_operation(
     state: Arc<OiState>,
-    app_name: String,
+    app_name: AppName,
     action_name: String,
     operation_id: OperationId,
     params: serde_json::Map<String, serde_json::Value>,
@@ -515,7 +521,7 @@ pub fn spawn_accepted_operation(
 ) {
     let (app, active_progress, tick_notify, script) = {
         let reg = state.registry.read();
-        match reg.get(&app_name) {
+        match reg.get(app_name.as_str()) {
             Some(e) => (
                 e.app.clone(),
                 Arc::clone(&e.active_progress),
@@ -537,7 +543,7 @@ pub fn spawn_accepted_operation(
     tokio::spawn(async move {
         // i[wire.actor]
         let op_ctx = event_tx.operation(
-            &app_name,
+            app_name.clone(),
             &action_name,
             &operation_id.0,
             source_generation,
