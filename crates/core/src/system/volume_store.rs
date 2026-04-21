@@ -74,11 +74,34 @@ impl VolumeStore {
         app: &str,
         reason: &str,
     ) -> std::io::Result<HeldVolumeMeta> {
-        let src = self.path(name);
+        self.hold_inner(&self.path(name), name, name, app, reason)
+            .await
+    }
+
+    /// Hold a managed or snapshot site volume for operator review.
+    ///
+    /// The on-disk path `site-{name}` is moved into the held volumes
+    /// directory; the resulting record carries the literal app name `_site`
+    /// so UIs can distinguish site-origin holds from app-origin ones.
+    // r[impl actuate.volume.hold]
+    pub async fn hold_site(&self, name: &str, reason: &str) -> std::io::Result<HeldVolumeMeta> {
+        let src = self.site_path(name);
+        let display = format!("site-{name}");
+        self.hold_inner(&src, &display, name, "_site", reason).await
+    }
+
+    async fn hold_inner(
+        &self,
+        src: &Path,
+        display_name: &str,
+        volume_name: &str,
+        app: &str,
+        reason: &str,
+    ) -> std::io::Result<HeldVolumeMeta> {
         if !src.exists() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                format!("volume {name} does not exist"),
+                format!("volume {display_name} does not exist"),
             ));
         }
 
@@ -92,8 +115,8 @@ impl VolumeStore {
         let meta = HeldVolumeMeta {
             id: id.clone(),
             app: app.to_owned(),
-            volume_name: name.to_owned(),
-            display_name: name.to_owned(),
+            volume_name: volume_name.to_owned(),
+            display_name: display_name.to_owned(),
             reason: reason.to_owned(),
             held_at: jiff::Timestamp::now().to_string(),
             path: dest,
@@ -105,7 +128,7 @@ impl VolumeStore {
 
         tracing::info!(
             app = app,
-            volume = name,
+            volume = volume_name,
             held_id = %id,
             reason = reason,
             "volume held for operator review"
