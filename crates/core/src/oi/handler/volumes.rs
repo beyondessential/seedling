@@ -282,9 +282,8 @@ pub(crate) fn snapshot_site_volume(
 ) -> HandlerResult {
     use crate::runtime::site_volumes::{SiteVolumeDef, SiteVolumeKind};
 
-    let (source_app, source_volume, source_path) =
-        parse_source_vol_id(&params.source, state)
-            .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e))?;
+    let (source_app, source_volume, source_path) = parse_source_vol_id(&params.source, state)
+        .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e))?;
 
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
@@ -441,9 +440,10 @@ fn parse_source_vol_id(
                 .unwrap_or_default()
             })
         };
-        let inst = instances.into_iter().next().ok_or_else(|| {
-            format!("no volume {prefix}/{vol} known to the registry")
-        })?;
+        let inst = instances
+            .into_iter()
+            .next()
+            .ok_or_else(|| format!("no volume {prefix}/{vol} known to the registry"))?;
         let path = state.driver.volume_store.path(&inst.display_name);
         Ok((Some(app), vol_name, path))
     }

@@ -177,10 +177,7 @@ pub(crate) async fn open_volume_shell_session(
                 });
                 let inst = match instances.into_iter().next() {
                     Some(i) => i,
-                    None => err!(
-                        "not_found",
-                        format!("app volume not found: {app}/{volume}")
-                    ),
+                    None => err!("not_found", format!("app volume not found: {app}/{volume}")),
                 };
                 let path = vol_store.path(&inst.display_name);
                 if !path.exists() {

@@ -3,7 +3,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use super::*;
 use crate::defs::resource::ResourceKind;
 use crate::runtime::db::{Db, DbHandle};
-use crate::runtime::history::{insert_observation, query_observations, WorldObservation};
+use crate::runtime::history::{WorldObservation, insert_observation, query_observations};
 
 fn dep(app: &str, name: &str) -> ResourceInstance {
     ResourceInstance::new_singleton(app, ResourceKind::Deployment, name)

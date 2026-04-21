@@ -229,11 +229,7 @@ impl WorldStateOracle for DbWorldOracle {
                         "container_exited" | "container_removed"
                     )
                 });
-                if terminal_seen {
-                    Some(true)
-                } else {
-                    None
-                }
+                if terminal_seen { Some(true) } else { None }
             }),
             ResourceKind::Service
             | ResourceKind::HttpService

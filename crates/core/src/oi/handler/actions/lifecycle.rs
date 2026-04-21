@@ -268,8 +268,7 @@ async fn cleanup_dynamic_resources(
                     let inst = inst.clone();
                     state.db.call(move |db| {
                         let obs = query_observations(db, &inst).unwrap_or_default();
-                        derive_lifecycle_state(&inst, &obs)
-                            .has_reached(LifecycleState::Terminated)
+                        derive_lifecycle_state(&inst, &obs).has_reached(LifecycleState::Terminated)
                     })
                 });
 

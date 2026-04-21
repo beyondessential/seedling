@@ -8,7 +8,8 @@ use tracing::{debug, error};
 use crate::{
     defs::{enums::OnUpdate, resource::Resource},
     runtime::{
-        autonomous_ops, db::DbHandle,
+        autonomous_ops,
+        db::DbHandle,
         desired::{DesiredResource, DesiredState},
         identity::{InstanceId, ResourceInstance},
         lifecycle::LifecycleState,

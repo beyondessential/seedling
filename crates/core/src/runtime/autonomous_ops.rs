@@ -71,10 +71,7 @@ pub fn record(
             })
             .ok()
     });
-    AutonomousOpHandle {
-        db: db.clone(),
-        id,
-    }
+    AutonomousOpHandle { db: db.clone(), id }
 }
 
 #[cfg(test)]

@@ -59,8 +59,7 @@ pub(super) async fn run_volumes_phase(
         .iter()
         .filter(|app| app.phase != AppPhase::Uninstalling)
         .map(|app| async move {
-            let update =
-                volumes::observe_and_actuate(observer, actuator, db, &app.desired).await;
+            let update = volumes::observe_and_actuate(observer, actuator, db, &app.desired).await;
             (app.name.clone(), update)
         })
         .collect();

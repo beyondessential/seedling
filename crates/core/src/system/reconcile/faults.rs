@@ -331,8 +331,7 @@ impl Reconciler {
         update: &pods::PodActuationUpdate,
     ) {
         let app = app.to_owned();
-        let registry_failures: Vec<ResourceInstance> =
-            update.registry_failures.to_vec();
+        let registry_failures: Vec<ResourceInstance> = update.registry_failures.to_vec();
         let image_pull_successes: Vec<ResourceInstance> = update
             .image_pull_successes
             .iter()

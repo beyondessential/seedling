@@ -5,7 +5,8 @@ use tracing::error;
 use crate::{
     defs::resource::Resource,
     runtime::{
-        autonomous_ops, db::DbHandle,
+        autonomous_ops,
+        db::DbHandle,
         desired::{DesiredResource, DesiredState},
         identity::ResourceInstance,
         lifecycle::LifecycleState,

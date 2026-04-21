@@ -133,10 +133,7 @@ pub(super) async fn dispatch(client: &OiClient, cmd: BackupsCommand) {
             BackupAppsCommand::Register { app } => {
                 print_result(
                     client
-                        .request(
-                            "/backups/apps/register",
-                            serde_json::json!({ "app": app }),
-                        )
+                        .request("/backups/apps/register", serde_json::json!({ "app": app }))
                         .await,
                 );
             }
