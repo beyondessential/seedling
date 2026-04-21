@@ -199,7 +199,7 @@ app.on_action("connect", |rt, _param| {
 // list-snapshots then filters on `hostname:path`, and restore-snapshot
 // double-checks the filter before writing.
 app.on_action("save-snapshot", |rt, param| {
-    let source = app.external_volume("source");
+    let source = app.external_volume(param["source_volume"]);
     let backup = param["backup"];
     rt.start(kopia_job.call()
         .mount("/source", source)
@@ -215,7 +215,8 @@ app.on_action("save-snapshot", |rt, param| {
 }, #{ description: "Upload a volume snapshot to the Kopia repository" });
 
 app.on_action("list-snapshots", |rt, param| {
-    let output = app.external_volume("output");
+    let output = app.external_volume(param["output_volume"]);
+    let output_file = param["output_filename"];
     let backup = param["backup"];
     rt.start(kopia_job.call()
         .mount("/output", output)
@@ -236,13 +237,13 @@ app.on_action("list-snapshots", |rt, param| {
             "apk add jq && " +
             "jq '[.[] | {id: .id, tags: ((.tags // {}) | tojson), size: .stats.totalSize, started: .startTime, ended: .endTime, description: .description}]'" +
             " /output/kopia.json" +
-            " > /output/snapshots.json"
+            " > /output/" + output_file
         ])
     ).terminated().ensure_success();
 }, #{ description: "List snapshots in the Kopia repository" });
 
 app.on_action("restore-snapshot", |rt, param| {
-    let dest = app.external_volume("destination");
+    let dest = app.external_volume(param["destination_volume"]);
     let backup = param["backup"];
     rt.start(kopia_job.call()
         .mount("/destination", dest)
