@@ -216,6 +216,11 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[history.storage]
 > The storage mechanism must support transactional writes and efficient queries by resource identity and time range.
 
+> r[template.persist]
+> Stored templates (see [template.definition](interface.md#i--template.definition)) must be persisted durably and must survive runtime restarts.
+> Template removal must be durable: a removed template must not reappear after restart.
+> Templates are independent of app persistence: removing a template has no effect on apps previously instantiated from it.
+
 ## World Observation History
 
 > r[history.world]
@@ -300,6 +305,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - Resource state transitions.
 > - Site volume creation, deletion, snapshotting, and promotion.
 > - External volume mapping creation, deletion, and retargeting.
+> - Template creation, removal, and instantiation.
 
 > r[audit.log.generations]
 > Audit entries that record changes to an app's defined state — including registration, script update, parameter set, and parameter unset — must include the [generation](#r--generation.definition) of the change.

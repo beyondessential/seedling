@@ -789,6 +789,54 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > Returns `{ "site_volume": "<name>" }` — the name of the newly created site volume containing the restored data.
 
+# Templates
+
+> i[template.definition]
+> A template is a stored, named BSL script body that is held for reuse.
+> Templates are not themselves evaluated by the reconciler: they do not have a generation, phase, resources, parameter values, faults, or any other runtime state.
+> A template exists solely as a script body that can be inspected (previewed) and copied wholesale into a new app via `/templates/instantiate`.
+
+> i[template.name]
+> Template names follow the same rules as app names — see [bsl.name](language.md#l--bsl.name) — and must not start with an underscore.
+> Template names share no namespace with app names; a template and an app may have the same name.
+
+> i[template.create]
+> `/templates/create { name, body, description? }` stores a new template.
+> The script body is not evaluated at create time; syntactically invalid bodies are accepted and will surface as errors on `/templates/preview` or `/templates/instantiate`.
+> If a template with the given name already exists the request is rejected with `requirements_invalid`.
+> On success a `TemplateCreated` event is emitted.
+
+> i[template.list]
+> `/templates/list {}` returns an array of objects with fields `name`, `description` (string or `null`), and `created_at` (RFC 3339 timestamp).
+> The array is ordered by name.
+
+> i[template.show]
+> `/templates/show { name }` returns a single object with fields `name`, `body`, `description`, and `created_at`.
+> Returns `not_found` if no such template exists.
+
+> i[template.remove]
+> `/templates/remove { name }` deletes a template.
+> Instantiated apps derived from the template are unaffected — their script body was copied at instantiation time.
+> Returns `not_found` if no such template exists.
+> On success a `TemplateRemoved` event is emitted.
+
+> i[template.preview]
+> `/templates/preview { name?, body? }` evaluates a template body and returns a read-only summary of what it declares, without storing or instantiating anything.
+> Exactly one of `name` (an existing template) or `body` (raw script text) must be supplied.
+> The response contains:
+>
+> - `resources`: array of objects with fields `name`, `type`, and `def` — the same shapes defined in [app.describe](#i--app.describe). Instance state and faults are not included because a template has none.
+> - `params`: array of objects with fields `name`, `kind`, `required`, `description`, `default_value`, and `secret`, matching the param schema defined in [app.describe](#i--app.describe).
+> - `actions`: array of objects with fields `name`, `description`, `kind`, and `params`, matching the shape defined in [app.describe](#i--app.describe).
+> - `script_error`: a string describing a script evaluation failure, or `null` when evaluation succeeded. When `script_error` is non-null the other fields reflect whatever partial state the engine produced before the error.
+
+> i[template.instantiate]
+> `/templates/instantiate { template, app }` creates a new app whose script body is a verbatim copy of the named template's body.
+> The behaviour is equivalent to calling [app.register](#i--app.register) with the template body and `app` as the name: the app starts in the `NotInstalled` state and an `AppRegistered` event is emitted.
+> In addition a `TemplateInstantiated` event is emitted referencing both the template name and the new app name.
+> After instantiation the app's script is independent of the template — subsequent `/templates/remove` or any future template editing has no effect on the app.
+> Returns `not_found` if the template does not exist; `requirements_invalid` if the app name is invalid or already in use; `script_error` if the template body fails to evaluate.
+
 # Client Behaviour
 
 > i[ctl.graceful-shutdown]
