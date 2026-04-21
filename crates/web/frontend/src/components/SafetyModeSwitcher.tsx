@@ -109,7 +109,11 @@ export function SafetyModeSwitcher() {
           onClick={openMenu}
           clickable
           variant={mode === "read" ? "outlined" : "filled"}
-          sx={{ mr: 1, fontFamily: "monospace" }}
+          sx={{
+            mr: 1,
+            fontFamily: "monospace",
+            "& .MuiChip-icon": { ml: "0.5em" },
+          }}
         />
       </Tooltip>
       <Menu anchorEl={anchorEl} open={!!anchorEl} onClose={closeMenu}>
