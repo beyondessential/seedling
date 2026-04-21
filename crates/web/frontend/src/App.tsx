@@ -9,8 +9,10 @@ import CreateApp from "./routes/CreateApp";
 import EditScript from "./routes/EditScript";
 import Faults from "./routes/Faults";
 import InfraLogs from "./routes/InfraLogs";
+import Keys from "./routes/Keys";
 import Login from "./routes/Login";
 import Logs from "./routes/Logs";
+import Registries from "./routes/Registries";
 import Shell from "./routes/Shell";
 import Volumes from "./routes/Volumes";
 
@@ -27,6 +29,8 @@ const router = createBrowserRouter([
       { path: "faults", element: <Faults /> },
       { path: "volumes", element: <Volumes /> },
       { path: "backups", element: <Backups /> },
+      { path: "keys", element: <Keys /> },
+      { path: "registries", element: <Registries /> },
       { path: "apps/:name/logs", element: <Logs /> },
       { path: "apps/:name/shell/:shellName", element: <Shell /> },
       { path: "infra/:component/logs", element: <InfraLogs /> },

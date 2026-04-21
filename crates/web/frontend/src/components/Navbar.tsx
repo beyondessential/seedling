@@ -1,5 +1,7 @@
 import BackupIcon from "@mui/icons-material/Backup";
+import CloudQueueIcon from "@mui/icons-material/CloudQueue";
 import EventNoteIcon from "@mui/icons-material/EventNote";
+import KeyIcon from "@mui/icons-material/Key";
 import PeopleAltIcon from "@mui/icons-material/PeopleAlt";
 import StorageIcon from "@mui/icons-material/Storage";
 import { AppBar, Badge, Box, Chip, IconButton, Toolbar, Tooltip, Typography } from "@mui/material";
@@ -138,6 +140,26 @@ export function Navbar() {
             sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
           >
             <BackupIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Container registry allowlist">
+          <IconButton
+            size="small"
+            component={Link}
+            to="/registries"
+            sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
+          >
+            <CloudQueueIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Authorised OI keys">
+          <IconButton
+            size="small"
+            component={Link}
+            to="/keys"
+            sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
+          >
+            <KeyIcon fontSize="small" />
           </IconButton>
         </Tooltip>
         <Tooltip title={`${sessionCount} connected client${sessionCount === 1 ? "" : "s"}`}>

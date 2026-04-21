@@ -242,6 +242,12 @@ export interface ConnectedClients {
   forwards: ForwardSession[];
 }
 
+export interface AuthorizedKey {
+  fingerprint: string;
+  label: string;
+  added_at: string;
+}
+
 export interface SiteVolume {
   name: string;
   kind: "managed" | "bind" | "snapshot";
