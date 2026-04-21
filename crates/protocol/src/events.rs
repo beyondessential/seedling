@@ -4,7 +4,10 @@ use jiff::Timestamp;
 use serde::Serialize;
 use tokio::sync::broadcast;
 
-use crate::{actor::Actor, names::AppName};
+use crate::{
+    actor::Actor,
+    names::{ActionName, AppName},
+};
 
 // i[event.types]
 #[derive(Debug, Clone, Serialize)]
@@ -83,7 +86,7 @@ pub enum OiEvent {
     OperationStarted {
         timestamp: Timestamp,
         app: AppName,
-        action_name: String,
+        action_name: ActionName,
         operation_id: String,
         source_generation: u64,
         target_generation: u64,
@@ -95,7 +98,7 @@ pub enum OiEvent {
     OperationCompleted {
         timestamp: Timestamp,
         app: AppName,
-        action_name: String,
+        action_name: ActionName,
         operation_id: String,
         source_generation: u64,
         target_generation: u64,
@@ -106,7 +109,7 @@ pub enum OiEvent {
     OperationFailed {
         timestamp: Timestamp,
         app: AppName,
-        action_name: String,
+        action_name: ActionName,
         operation_id: String,
         source_generation: u64,
         target_generation: u64,
@@ -767,7 +770,7 @@ impl EventSender {
     pub fn operation(
         &self,
         app: AppName,
-        action_name: impl Into<String>,
+        action_name: ActionName,
         operation_id: impl Into<String>,
         source_generation: u64,
         target_generation: u64,
@@ -776,7 +779,7 @@ impl EventSender {
         OperationEventCtx {
             tx: self.clone(),
             app,
-            action_name: action_name.into(),
+            action_name,
             operation_id: operation_id.into(),
             source_generation,
             target_generation,
@@ -887,7 +890,7 @@ impl EventSenderWithActor {
     pub fn operation(
         &self,
         app: AppName,
-        action_name: impl Into<String>,
+        action_name: ActionName,
         operation_id: impl Into<String>,
         source_generation: u64,
         target_generation: u64,
@@ -1063,7 +1066,7 @@ impl EventSenderWithActor {
 pub struct OperationEventCtx {
     tx: EventSender,
     pub app: AppName,
-    pub action_name: String,
+    pub action_name: ActionName,
     pub operation_id: String,
     pub source_generation: u64,
     pub target_generation: u64,
