@@ -251,8 +251,17 @@ Absent specification bugs, anything that is not defined here is either defined i
 >   `params` is an object map of param key to `{ kind, required, description, default_value }`, as defined in the language spec. Empty for actions with no declared param schema.
 > - `current_operation`: present only when status is `Operating`.
 >   Has fields `action_name`, `barrier`, `source_generation`, and `target_generation`.
->   `barrier` is either `null` (operation is running but not yet at a barrier) or an object with fields `resources`, `required_state`, `deadline_secs`, and `elapsed_secs`.
+>   `barrier` is either `null` (operation is running but not yet at a barrier, or the barrier has already been satisfied and the closure is about to resume) or an object with fields `resources`, `required_state`, `deadline_secs`, and `elapsed_secs`.
+>   `resources` is an array of resource display names the barrier is awaiting.
+>   `required_state` is the awaited lifecycle state (e.g. `"Ready"`, `"Terminated"`).
+>   `deadline_secs` is the deadline in seconds, or `null` for a deadline-less barrier (see [rt.started.terminated-eventually](language.md#l--rt.started.terminated-eventually) and [rt.started.ready-eventually](language.md#l--rt.started.ready-eventually)).
+>   `elapsed_secs` is how many seconds have passed since the barrier first suspended.
 > - `generation`: the current generation of the app.
+
+> i[action.describe.barrier]
+> The `current_operation.barrier` field of `/apps/show` reflects the earliest unsatisfied barrier recorded in the action log for the active operation.
+> When the operation's closure is between barriers — actively running, or has had all prior barriers satisfied with no new one queued — the field is `null`.
+> `elapsed_secs` is computed as `now - started_at_secs`; it persists across runtime restarts because the barrier record survives in the action log.
 
 # Scaling
 

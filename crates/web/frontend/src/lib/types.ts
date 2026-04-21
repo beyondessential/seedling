@@ -111,7 +111,8 @@ export interface CurrentOperation {
   barrier: {
     resources: string[];
     required_state: string;
-    deadline_secs: number;
+    /** `null` when the barrier has no deadline (e.g. `.terminated_eventually()`). */
+    deadline_secs: number | null;
     elapsed_secs: number;
   } | null;
 }

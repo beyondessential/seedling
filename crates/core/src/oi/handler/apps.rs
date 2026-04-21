@@ -714,16 +714,67 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     });
 
     if let AppStatus::Operating { .. } = &status {
-        let (action_name, source_generation, target_generation) = state
+        let (action_name, source_generation, target_generation, op_id) = state
             .scheduler
             .lock()
             .active()
             .filter(|a| a.app == name)
-            .map(|a| (a.action.clone(), a.source_generation, a.target_generation))
-            .unwrap_or_else(|| (String::new(), 0, 0));
+            .map(|a| {
+                (
+                    a.action.clone(),
+                    a.source_generation,
+                    a.target_generation,
+                    Some(a.operation_id.clone()),
+                )
+            })
+            .unwrap_or_else(|| (String::new(), 0, 0, None));
+
+        // i[impl action.describe.barrier]
+        // Surface the currently-blocking barrier (if any) so operators can
+        // see elapsed time / deadline without tailing logs. Between replay
+        // passes the unsatisfied barrier record sits in the action log
+        // alongside its started_at_secs timestamp.
+        let barrier_json = if let Some(op_id) = op_id {
+            let op_id_for_load = op_id.clone();
+            let entries = state.db.call(move |db| {
+                crate::runtime::history::load_action_log(db, &op_id_for_load).unwrap_or_default()
+            });
+            entries
+                .into_iter()
+                .filter_map(|e| {
+                    let b = e.barrier?;
+                    if b.satisfied {
+                        return None;
+                    }
+                    let started_at = b.started_at_secs?;
+                    Some((e.resources, b.required_state, b.deadline_secs, started_at))
+                })
+                .next()
+                .map(|(resources, required_state, deadline_secs, started_at)| {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let elapsed_secs = now.saturating_sub(started_at);
+                    let resources_json: Vec<Value> = resources
+                        .iter()
+                        .map(|r| Value::String(r.display_name.clone()))
+                        .collect();
+                    json!({
+                        "resources": resources_json,
+                        "required_state": format!("{required_state:?}"),
+                        "deadline_secs": deadline_secs,
+                        "elapsed_secs": elapsed_secs,
+                    })
+                })
+                .unwrap_or(Value::Null)
+        } else {
+            Value::Null
+        };
+
         desc["current_operation"] = json!({
             "action_name": action_name,
-            "barrier": null,
+            "barrier": barrier_json,
             "source_generation": source_generation,
             "target_generation": target_generation,
         });

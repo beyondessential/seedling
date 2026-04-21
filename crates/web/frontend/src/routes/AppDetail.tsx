@@ -1609,8 +1609,10 @@ export default function AppDetail() {
               {data.current_operation.barrier && (
                 <>
                   {" "}· barrier: {data.current_operation.barrier.required_state}{" "}
-                  ({Math.round(data.current_operation.barrier.elapsed_secs)}s /{" "}
-                  {data.current_operation.barrier.deadline_secs}s)
+                  ({Math.round(data.current_operation.barrier.elapsed_secs)}s
+                  {data.current_operation.barrier.deadline_secs !== null
+                    ? ` / ${data.current_operation.barrier.deadline_secs}s`
+                    : " / ∞"})
                 </>
               )}
             </Alert>
