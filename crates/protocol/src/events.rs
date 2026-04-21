@@ -221,6 +221,21 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
+    HeldVolumeCreated {
+        timestamp: Timestamp,
+        held_id: String,
+        app: String,
+        volume_name: String,
+        reason: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
+    HeldVolumeDeleted {
+        timestamp: Timestamp,
+        held_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
 }
 
 /// Newtype over `broadcast::Sender<OiEvent>` that carries event-emission methods.
@@ -422,6 +437,34 @@ impl EventSender {
         });
     }
 
+    // r[impl actuate.volume.hold.events]
+    pub fn held_volume_created(
+        &self,
+        held_id: &str,
+        app: &str,
+        volume_name: &str,
+        reason: &str,
+        actor: Option<Arc<Actor>>,
+    ) {
+        self.emit(OiEvent::HeldVolumeCreated {
+            timestamp: now(),
+            held_id: held_id.to_owned(),
+            app: app.to_owned(),
+            volume_name: volume_name.to_owned(),
+            reason: reason.to_owned(),
+            actor,
+        });
+    }
+
+    // r[impl actuate.volume.hold.events]
+    pub fn held_volume_deleted(&self, held_id: &str, actor: Option<Arc<Actor>>) {
+        self.emit(OiEvent::HeldVolumeDeleted {
+            timestamp: now(),
+            held_id: held_id.to_owned(),
+            actor,
+        });
+    }
+
     // i[impl deployment.restart]
     pub fn deployment_restarted(
         &self,
@@ -608,6 +651,23 @@ impl EventSenderWithActor {
     pub fn resource_unstopped(&self, app: &str, kind: &str, name: &str) {
         self.inner
             .resource_unstopped(app, kind, name, Some(Arc::clone(&self.actor)));
+    }
+
+    // r[impl actuate.volume.hold.events]
+    pub fn held_volume_created(&self, held_id: &str, app: &str, volume_name: &str, reason: &str) {
+        self.inner.held_volume_created(
+            held_id,
+            app,
+            volume_name,
+            reason,
+            Some(Arc::clone(&self.actor)),
+        );
+    }
+
+    // r[impl actuate.volume.hold.events]
+    pub fn held_volume_deleted(&self, held_id: &str) {
+        self.inner
+            .held_volume_deleted(held_id, Some(Arc::clone(&self.actor)));
     }
 }
 
