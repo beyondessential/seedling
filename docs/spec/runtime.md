@@ -570,7 +570,7 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > A Job instance that has naturally reached the Terminated lifecycle state must not be restarted by the reconciler.
 > The reconciler must clean up any lingering container or unit state for such an instance but must not start a replacement.
 > This applies both while a lifecycle operation is in progress (the job completed during the operation) and in steady state.
->
+
 > r[autonomous.job-terminal.defense]
 > The reconciler must remember which Job instances have completed within the current process lifetime.
 > If a remembered completed Job instance is subsequently observed running again (e.g. restarted externally), the reconciler must stop it.
