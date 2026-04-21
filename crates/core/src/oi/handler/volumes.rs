@@ -552,7 +552,8 @@ fn parse_source_vol_id(
             .into_iter()
             .next()
             .ok_or_else(|| format!("no volume {prefix}/{vol} known to the registry"))?;
-        let path = state.driver.volume_store.path(&inst.display_name);
+        let vol_name_canonical = crate::runtime::identity::VolumeName::of_instance(&inst);
+        let path = state.driver.volume_store.path(&vol_name_canonical);
         Ok((Some(app), vol_name, path))
     }
 }

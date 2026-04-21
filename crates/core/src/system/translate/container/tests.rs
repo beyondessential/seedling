@@ -268,15 +268,17 @@ fn volume_mount_uses_app_prefixed_display_name() {
         0,
     );
 
-    // The volume mount source must be the app-prefixed display name, not the raw BSL name.
+    // The volume mount source must be the canonical Volume-resource display
+    // name so the bind-mount resolves to the same on-disk path the Volume
+    // actuator creates.
     let vol_mount = spec
         .mounts
         .iter()
         .find(|m| m.target == "/mnt/data")
         .expect("mount at /mnt/data present");
     assert!(
-        matches!(&vol_mount.source, MountSource::Volume(n) if n == "myapp-data"),
-        "expected myapp-data, got {:?}",
+        matches!(&vol_mount.source, MountSource::Volume(n) if n == "myapp-volume-data"),
+        "expected myapp-volume-data, got {:?}",
         vol_mount.source,
     );
 }

@@ -8,7 +8,10 @@ use crate::{
         container::VolumeMount, enums::OnExit, resource::ResourceKind, service::ServicePort,
         volume::VolumeDef,
     },
-    runtime::{identity::ResourceInstance, registry::RegistryError},
+    runtime::{
+        identity::{ResourceInstance, VolumeName},
+        registry::RegistryError,
+    },
     system::{
         System,
         translate::proxy::{instance_ipv6, pod_network_prefix},
@@ -38,8 +41,14 @@ pub(super) fn map_on_exit(on_exit: OnExit) -> TransientRestart {
 /// These are volumes declared in the BSL without a name that need to be
 /// created and seeded before the container starts.
 pub(crate) struct ContainerVolume {
-    /// Podman volume name.
+    /// Podman volume name. For named bind-mounted volumes this equals
+    /// `bind_name.as_str()`; for anonymous / podman-managed volumes it is the
+    /// raw anon id or other podman-level name.
     pub(super) name: String,
+    /// The canonical `VolumeName` when this is a named app volume bind-mounted
+    /// through the `VolumeStore`. `None` for anonymous / podman-managed
+    /// volumes.
+    pub(super) bind_name: Option<VolumeName>,
     pub(super) def: VolumeDef,
     /// Whether to remove this volume when the container stops.
     /// True for anonymous volumes (ephemeral per-container), false for named
@@ -68,27 +77,33 @@ pub(super) fn collect_container_volumes(
         .values()
         .filter_map(|vm| match vm {
             VolumeMount::Volume(v) => {
-                let (name, remove_on_stop, host_path) = match &v.name {
+                let (name, bind_name, remove_on_stop, host_path) = match &v.name {
                     None => {
                         let vol_name = v
                             .anon_id
                             .clone()
                             .expect("anonymous volume must have an anon_id");
-                        (vol_name, true, None)
+                        (vol_name, None, true, None)
                     }
                     Some(n) => {
-                        let vol_name = format!("{}-{}", instance.app, n.as_str());
+                        let vol_name = VolumeName::for_app(&instance.app, n.as_str());
                         let tmpfs = v.def.lock().tmpfs;
                         let host_path = if !tmpfs {
-                            volumes_dir.map(|dir| dir.join(&vol_name))
+                            volumes_dir.map(|dir| dir.join(vol_name.as_str()))
                         } else {
                             None
                         };
-                        (vol_name, false, host_path)
+                        (
+                            vol_name.as_str().to_owned(),
+                            Some(vol_name),
+                            false,
+                            host_path,
+                        )
                     }
                 };
                 Some(ContainerVolume {
                     name,
+                    bind_name,
                     def: v.def.lock().clone(),
                     remove_on_stop,
                     host_path,
@@ -110,7 +125,11 @@ async fn ensure_volumes(driver: &System, volumes: &[ContainerVolume]) -> Result<
             // Named non-tmpfs volume managed by VolumeStore; ensure the
             // host directory/subvolume exists.
             if !host_path.exists() {
-                driver.volume_store.create(&vol.name).await.map_err(|e| {
+                let bind_name = vol
+                    .bind_name
+                    .as_ref()
+                    .expect("named bind volume must carry a VolumeName");
+                driver.volume_store.create(bind_name).await.map_err(|e| {
                     super::VolumeWriteSnafu {
                         path: host_path.clone(),
                     }

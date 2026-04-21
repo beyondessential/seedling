@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::runtime::identity::VolumeName;
+
 /// Manages host-backed storage for named volumes.
 ///
 /// Named non-tmpfs volumes are stored as directories (or BTRFS subvolumes)
@@ -26,16 +28,16 @@ impl VolumeStore {
         &self.volumes_dir
     }
 
-    pub fn path(&self, name: &str) -> PathBuf {
-        self.volumes_dir.join(name)
+    pub fn path(&self, name: &VolumeName) -> PathBuf {
+        self.volumes_dir.join(name.as_str())
     }
 
-    pub fn exists(&self, name: &str) -> bool {
+    pub fn exists(&self, name: &VolumeName) -> bool {
         self.path(name).exists()
     }
 
     // r[impl actuate.volume.btrfs]
-    pub async fn create(&self, name: &str) -> std::io::Result<()> {
+    pub async fn create(&self, name: &VolumeName) -> std::io::Result<()> {
         let path = self.path(name);
         if self.use_btrfs {
             btrfs_create_subvolume(&path).await
@@ -44,7 +46,61 @@ impl VolumeStore {
         }
     }
 
-    pub async fn remove(&self, name: &str) -> std::io::Result<()> {
+    /// Rename a named app volume's on-disk path from `legacy` to `canonical`.
+    ///
+    /// Earlier builds created the persistent bind-mount directory at
+    /// `<app>-<name>` while the Volume actuator and registry recorded the
+    /// canonical display name as `<app>-volume-<name>`. Unifying the two
+    /// requires rehoming data that containers wrote to the legacy path.
+    ///
+    /// Returns `Ok(true)` if a rename happened, `Ok(false)` if there was
+    /// nothing to migrate. If the canonical path already exists, it is
+    /// removed (when empty) or held (when not) before the legacy path is
+    /// renamed in place so nothing is silently dropped.
+    pub async fn migrate_legacy(
+        &self,
+        legacy: &str,
+        canonical: &VolumeName,
+        app: &str,
+    ) -> std::io::Result<bool> {
+        let legacy_path = self.volumes_dir.join(legacy);
+        if !legacy_path.exists() {
+            return Ok(false);
+        }
+        let canonical_path = self.path(canonical);
+        if legacy_path == canonical_path {
+            return Ok(false);
+        }
+
+        if canonical_path.exists() {
+            let is_empty = match tokio::fs::read_dir(&canonical_path).await {
+                Ok(mut rd) => rd.next_entry().await?.is_none(),
+                Err(e) => return Err(e),
+            };
+            if is_empty {
+                self.remove(canonical).await?;
+            } else {
+                self.hold_inner(
+                    &canonical_path,
+                    canonical.as_str(),
+                    canonical.as_str(),
+                    app,
+                    "canonical volume path pre-existed during legacy-path migration",
+                )
+                .await?;
+            }
+        }
+
+        tokio::fs::rename(&legacy_path, &canonical_path).await?;
+        tracing::info!(
+            from = %legacy,
+            to = %canonical,
+            "migrated legacy app volume path"
+        );
+        Ok(true)
+    }
+
+    pub async fn remove(&self, name: &VolumeName) -> std::io::Result<()> {
         let path = self.path(name);
         if !path.exists() {
             return Ok(());
@@ -70,12 +126,12 @@ impl VolumeStore {
     // r[impl actuate.volume.hold]
     pub async fn hold(
         &self,
-        name: &str,
+        name: &VolumeName,
         app: &str,
         reason: &str,
     ) -> std::io::Result<HeldVolumeMeta> {
-        self.hold_inner(&self.path(name), name, name, app, reason)
-            .await
+        let s = name.as_str();
+        self.hold_inner(&self.path(name), s, s, app, reason).await
     }
 
     /// Hold a managed or snapshot site volume for operator review.
@@ -200,7 +256,7 @@ impl VolumeStore {
         Ok(())
     }
 
-    pub async fn is_backend_match(&self, name: &str) -> bool {
+    pub async fn is_backend_match(&self, name: &VolumeName) -> bool {
         let path = self.path(name);
         if !path.exists() {
             return true;

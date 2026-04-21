@@ -1448,9 +1448,10 @@ pub(crate) fn update_app(
                     .unwrap_or_default()
                 });
                 for inst in &instances {
+                    let vol_name = crate::runtime::identity::VolumeName::of_instance(inst);
                     match tokio::task::block_in_place(|| {
                         tokio::runtime::Handle::current().block_on(vol_store.hold(
-                            &inst.display_name,
+                            &vol_name,
                             name,
                             "removed from app definition",
                         ))

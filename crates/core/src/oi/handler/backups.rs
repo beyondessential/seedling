@@ -899,7 +899,7 @@ fn parse_vol_id_to_path(
     if prefix == "_site" {
         Ok(vol_store.site_path(vol))
     } else {
-        Ok(vol_store.path(&format!("{prefix}-{vol}")))
+        Ok(vol_store.path(&crate::runtime::identity::VolumeName::for_app(prefix, vol)))
     }
 }
 

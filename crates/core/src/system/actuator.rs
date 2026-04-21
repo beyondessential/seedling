@@ -17,8 +17,11 @@ use crate::{
         resource::{Resource, ResourceKind},
     },
     runtime::{
-        db::DbHandle, external_volume_mappings, identity::ResourceInstance,
-        registry::InstanceRegistry, restart_gens, site_volumes,
+        db::DbHandle,
+        external_volume_mappings,
+        identity::{ResourceInstance, VolumeName},
+        registry::InstanceRegistry,
+        restart_gens, site_volumes,
     },
     system::{
         System,
@@ -306,7 +309,6 @@ impl Actuator {
             }
             // r[impl actuate.volume.start]
             Resource::Volume(vol) => {
-                let name = instance.display_name.clone();
                 let (tmpfs, writes) = {
                     let def = vol.def.lock();
                     (def.tmpfs, def.writes.clone())
@@ -314,16 +316,17 @@ impl Actuator {
                 if tmpfs {
                     // Tmpfs volumes are managed by podman with the tmpfs driver.
                     // r[impl actuate.volume.tmpfs]
+                    let podman_name = &instance.display_name;
                     if !self
                         .driver
                         .container
-                        .volume_exists(&name)
+                        .volume_exists(podman_name)
                         .await
                         .context(ContainerSnafu)?
                     {
                         self.driver
                             .container
-                            .create_volume(&name, true)
+                            .create_volume(podman_name, true)
                             .await
                             .context(ContainerSnafu)?;
                     }
@@ -332,7 +335,7 @@ impl Actuator {
                         let mountpoint = self
                             .driver
                             .container
-                            .volume_mountpoint(&name)
+                            .volume_mountpoint(podman_name)
                             .await
                             .context(ContainerSnafu)?;
                         for (path, contents) in &writes {
@@ -342,6 +345,19 @@ impl Actuator {
                 } else {
                     // r[impl actuate.volume.storage]
                     let vol_store = &self.driver.volume_store;
+                    let name = VolumeName::of_instance(instance);
+                    if let Some(bsl_name) = instance.name.as_deref() {
+                        let legacy = format!("{}-{}", instance.app, bsl_name);
+                        vol_store
+                            .migrate_legacy(&legacy, &name, &instance.app)
+                            .await
+                            .map_err(|e| {
+                                VolumeWriteSnafu {
+                                    path: vol_store.path(&name),
+                                }
+                                .into_error(e)
+                            })?;
+                    }
                     let just_created = if !vol_store.exists(&name) {
                         vol_store.create(&name).await.map_err(|e| {
                             VolumeWriteSnafu {
@@ -411,25 +427,26 @@ impl Actuator {
                 self.stop_pod_instance(instance, &anon_names).await
             }
             Resource::Volume(vol) => {
-                let name = instance.display_name.clone();
                 let tmpfs = vol.def.lock().tmpfs;
                 if tmpfs {
+                    let podman_name = &instance.display_name;
                     if self
                         .driver
                         .container
-                        .volume_exists(&name)
+                        .volume_exists(podman_name)
                         .await
                         .context(ContainerSnafu)?
                     {
                         self.driver
                             .container
-                            .remove_volume(&name)
+                            .remove_volume(podman_name)
                             .await
                             .context(ContainerSnafu)?;
                     }
                 } else {
                     // r[impl actuate.volume.hold]
                     let vol_store = &self.driver.volume_store;
+                    let name = VolumeName::of_instance(instance);
                     if vol_store.exists(&name) {
                         let meta = vol_store
                             .hold(&name, &instance.app, "removed from app definition")
@@ -471,10 +488,10 @@ impl Actuator {
         reason: &str,
     ) -> Result<(), ActuateError> {
         if let Resource::Volume(vol) = resource {
-            let name = instance.display_name.clone();
             let tmpfs = vol.def.lock().tmpfs;
             if !tmpfs {
                 let vol_store = &self.driver.volume_store;
+                let name = crate::runtime::identity::VolumeName::of_instance(instance);
                 if vol_store.exists(&name) {
                     let meta = vol_store
                         .hold(&name, &instance.app, reason)
@@ -634,7 +651,7 @@ pub fn resolve_external_volumes(
                 target_app,
                 target_volume,
             } => {
-                let vol_name = format!("{target_app}-{target_volume}");
+                let vol_name = VolumeName::for_app(target_app, target_volume);
                 let path = vol_store.path(&vol_name);
                 ResolvedExternalMount {
                     source: MountSource::Bind(path),

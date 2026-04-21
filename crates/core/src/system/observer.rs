@@ -106,9 +106,10 @@ impl Observer {
                     ));
                 } else {
                     let vol_store = &self.driver.volume_store;
-                    if vol_store.exists(name) {
+                    let vol_name = crate::runtime::identity::VolumeName::of_instance(instance);
+                    if vol_store.exists(&vol_name) {
                         // r[impl observe.volume.backend-mismatch]
-                        if vol_store.is_backend_match(name).await {
+                        if vol_store.is_backend_match(&vol_name).await {
                             facts.push((ObservationFact::VolumePresent, now));
                         } else {
                             facts.push((ObservationFact::VolumeBackendMismatch, now));

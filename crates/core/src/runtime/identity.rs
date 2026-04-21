@@ -142,6 +142,47 @@ impl ResourceInstance {
     }
 }
 
+/// The canonical on-disk / podman name of a named app volume.
+///
+/// All consumers must address a named volume through this newtype so the
+/// exact string format has a single point of truth. Direct construction
+/// is deliberately unavailable; use [`VolumeName::for_app`] when you
+/// know the app and BSL volume name, or [`VolumeName::of_instance`] when
+/// you already hold the `ResourceInstance` the registry stored.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct VolumeName(String);
+
+impl VolumeName {
+    /// The canonical form: `<app>-volume-<name>`, matching the
+    /// `display_name` that `ResourceInstance::new_singleton` produces for a
+    /// `ResourceKind::Volume`.
+    pub fn for_app(app: &str, name: &str) -> Self {
+        Self(format!(
+            "{}-{}-{}",
+            app,
+            kind_slug(ResourceKind::Volume),
+            name
+        ))
+    }
+
+    /// The canonical form of the given Volume resource instance. The caller
+    /// is responsible for ensuring `instance.kind == ResourceKind::Volume`.
+    pub fn of_instance(instance: &ResourceInstance) -> Self {
+        debug_assert_eq!(instance.kind, ResourceKind::Volume);
+        Self(instance.display_name.clone())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for VolumeName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 fn kind_slug(kind: ResourceKind) -> &'static str {
     match kind {
         ResourceKind::Parameter => "parameter",

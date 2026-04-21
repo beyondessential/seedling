@@ -8,7 +8,7 @@ use ipnet::Ipv6Net;
 
 use crate::{
     defs::{container::VolumeMount, deployment::DeploymentDef, job::JobDef, pod::PodDef},
-    runtime::identity::ResourceInstance,
+    runtime::identity::{ResourceInstance, VolumeName},
     system::{
         translate::proxy::node_mount_addr,
         types::{ContainerSpec, Mount, MountSource, ResolvedExternalMount},
@@ -280,7 +280,12 @@ fn spec_from_pod(
             let source = match vm {
                 VolumeMount::Volume(v) => {
                     let name = match &v.name {
-                        Some(n) => format!("{}-{}", instance.app, n.as_str()),
+                        // Named volumes use the canonical Volume-resource
+                        // display name so the bind-mount source matches the
+                        // path the Volume actuator creates.
+                        Some(n) => VolumeName::for_app(&instance.app, n.as_str())
+                            .as_str()
+                            .to_owned(),
                         None => v
                             .anon_id
                             .clone()
