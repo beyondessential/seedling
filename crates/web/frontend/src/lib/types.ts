@@ -201,6 +201,9 @@ export interface SeedlingEvent {
   // WebSessionStarted / WebSessionStopped (web-layer events)
   // ServerBusy
   reason?: string;
+  // HeldVolumeCreated / HeldVolumeDeleted
+  held_id?: string;
+  volume_name?: string;
 }
 
 export interface Actor {

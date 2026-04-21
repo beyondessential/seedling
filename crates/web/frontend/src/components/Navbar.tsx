@@ -28,12 +28,16 @@ const isSessionEvent = (ev: SeedlingEvent) =>
   ev.type === "ForwardStarted" ||
   ev.type === "ForwardStopped";
 
-// Volumes are held when an /apps/update strips a named volume from the
-// script; AppUpdated is the only event that can cause the count to change.
-// Deregister can also drop an app, but any strategies/apps that referenced
-// the held volume's source app stay intact — the count doesn't drop on
-// deregister either.
-const isHeldVolumeEvent = (ev: SeedlingEvent) => ev.type === "AppUpdated";
+// w[impl routes.volumes.held-count]
+// The backend emits HeldVolumeCreated whenever a volume is placed into the
+// held state (app-script updates, backend-migration, operator-triggered site
+// volume deletion) and HeldVolumeDeleted when an operator confirms final
+// removal. AppUpdated is kept as a belt-and-braces trigger for legacy
+// clients/servers that predate the held-volume events.
+const isHeldVolumeEvent = (ev: SeedlingEvent) =>
+  ev.type === "HeldVolumeCreated" ||
+  ev.type === "HeldVolumeDeleted" ||
+  ev.type === "AppUpdated";
 
 export function Navbar() {
   const { data } = useOiQuery<StatusSummary>("/server/status", {});
