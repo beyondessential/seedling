@@ -38,6 +38,7 @@ pub fn random_delay_secs(schedule: &str) -> u64 {
 }
 
 // r[impl backup.execution]
+// r[impl backup.schedule.catch-up]
 pub fn check_due_strategies(db: &Db, now: Timestamp) -> Vec<DueStrategy> {
     let strategies = match backup_strategies::list_all(db) {
         Ok(s) => s,
@@ -46,10 +47,6 @@ pub fn check_due_strategies(db: &Db, now: Timestamp) -> Vec<DueStrategy> {
             return Vec::new();
         }
     };
-
-    let window_start = now
-        .checked_sub(SignedDuration::from_secs(59))
-        .unwrap_or(now);
 
     let mut due = Vec::new();
 
@@ -86,7 +83,12 @@ pub fn check_due_strategies(db: &Db, now: Timestamp) -> Vec<DueStrategy> {
             }
         };
 
-        if next_fire > window_start && next_fire <= now {
+        // Fire whenever the next scheduled boundary is at or before now. No
+        // lower bound: if the daemon missed the boundary window, we still
+        // fire once to catch up. Because last_fired_at is updated to `now`
+        // on fire, the next find_next() call returns the next future
+        // boundary, so we do not fire repeatedly for older missed windows.
+        if next_fire <= now {
             let fired_at = now.to_string();
             if let Err(e) = backup_strategies::update_last_fired_at(db, &strategy.name, &fired_at) {
                 tracing::error!(
@@ -139,5 +141,80 @@ impl BackupTicker {
         }
         self.last_check = Some(now);
         Some(now)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::{backup_strategies, db::Db};
+
+    fn create_strategy(db: &Db, schedule: &str) {
+        backup_strategies::create(
+            db,
+            &backup_strategies::BackupStrategy {
+                name: "nightly".to_owned(),
+                via: "backup-kopia-s3".to_owned(),
+                schedule: schedule.to_owned(),
+                volumes: vec!["myapp/data".to_owned()],
+                last_fired_at: None,
+            },
+        )
+        .expect("create strategy");
+    }
+
+    // r[impl backup.schedule.catch-up]
+    // If the daemon was down through a scheduled fire time, the strategy fires
+    // once to catch up instead of staying stuck on a past boundary forever.
+    #[test]
+    fn missed_fire_catches_up() {
+        let db = Db::open_in_memory().expect("open in-memory db");
+        create_strategy(&db, "every hour");
+
+        // Simulate a strategy that last fired 25 hours ago — the daemon has
+        // been down through many hourly boundaries.
+        let long_ago = "2026-04-20T12:34:56Z";
+        backup_strategies::update_last_fired_at(&db, "nightly", long_ago).unwrap();
+
+        let now: Timestamp = "2026-04-21T13:47:22Z".parse().unwrap();
+        let due = check_due_strategies(&db, now);
+        assert_eq!(due.len(), 1, "missed hourly fire should catch up once");
+        assert_eq!(due[0].name, "nightly");
+
+        // The catch-up pass must update last_fired_at to now, so a second
+        // tick a few seconds later does not re-fire.
+        let still = check_due_strategies(&db, now);
+        assert!(
+            still.is_empty(),
+            "second check at same instant must not refire"
+        );
+    }
+
+    #[test]
+    fn fires_at_scheduled_boundary() {
+        let db = Db::open_in_memory().expect("open in-memory db");
+        create_strategy(&db, "every hour");
+        backup_strategies::update_last_fired_at(&db, "nightly", "2026-04-21T12:00:12Z").unwrap();
+
+        // Just before 13:00: nothing due.
+        let before: Timestamp = "2026-04-21T12:59:45Z".parse().unwrap();
+        assert!(check_due_strategies(&db, before).is_empty());
+
+        // A moment after 13:00: fire.
+        let after: Timestamp = "2026-04-21T13:00:30Z".parse().unwrap();
+        assert_eq!(check_due_strategies(&db, after).len(), 1);
+    }
+
+    #[test]
+    fn no_refire_within_same_window() {
+        let db = Db::open_in_memory().expect("open in-memory db");
+        create_strategy(&db, "every hour");
+        // Just after the top of the hour.
+        let fire_time: Timestamp = "2026-04-21T13:00:12Z".parse().unwrap();
+        assert_eq!(check_due_strategies(&db, fire_time).len(), 1);
+
+        // Another tick 40s later: must not re-fire for the same 13:00 boundary.
+        let later: Timestamp = "2026-04-21T13:00:52Z".parse().unwrap();
+        assert!(check_due_strategies(&db, later).is_empty());
     }
 }

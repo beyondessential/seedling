@@ -476,6 +476,14 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 >
 > For manually triggered backups (`/backups/run`), no delay is applied.
 
+> r[backup.schedule.catch-up]
+> If the runtime detects that one or more scheduled fire times for a strategy have
+> already passed (for example because the daemon was not running at the moment of
+> the scheduled fire), the strategy fires exactly once to catch up, regardless of
+> how many scheduled boundaries were missed. The strategy's last-fired timestamp
+> is then set to the catch-up fire time, so subsequent cron boundaries are
+> evaluated from there.
+
 > r[backup.validation.fire-time]
 > Before executing a backup strategy, the runtime must verify:
 >
