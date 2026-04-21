@@ -162,7 +162,7 @@ pub fn col(val: Dynamic) -> Collection {
     if let Some(action) = val.clone().try_cast::<Action>() {
         let id = ResourceId {
             kind: ResourceKind::Action,
-            name: Arc::new(action.name.clone()),
+            name: Arc::new(action.name.as_str().to_owned()),
         };
         return Collection::from_bag(Rc::new(ItemBag {
             id,

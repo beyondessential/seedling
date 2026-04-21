@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use rhai::{CustomType, FnPtr, Map, TypeBuilder};
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{ActionName, AppName};
 
 use super::{
     Holder,
@@ -31,7 +31,7 @@ mod volume;
 /// immediately after the re-run, then discarded.
 #[derive(Default)]
 pub(crate) struct ClosureCapture {
-    pub actions: BTreeMap<String, FnPtr>,
+    pub actions: BTreeMap<ActionName, FnPtr>,
     pub shells: BTreeMap<String, FnPtr>,
     pub install: Option<FnPtr>,
     pub param_changes: BTreeMap<String, FnPtr>,
@@ -65,7 +65,7 @@ pub(crate) fn capture_param_change(name: String, fnptr: FnPtr) {
     });
 }
 
-fn capture_action(name: String, fnptr: FnPtr) {
+fn capture_action(name: ActionName, fnptr: FnPtr) {
     CLOSURE_CAPTURE.with(|c| {
         if let Some(ref mut store) = *c.borrow_mut() {
             store.actions.insert(name, fnptr);
@@ -102,12 +102,12 @@ pub(crate) fn clear_appdef_holder() {
 }
 
 // l[impl action.schedule]
-pub(crate) fn append_action_schedule(action_name: &str, expr: &str) {
+pub(crate) fn append_action_schedule(action_name: &ActionName, expr: &str) {
     APPDEF_HOLDER.with(|h| {
         if let Some(ref holder) = *h.borrow() {
             holder.rcu(|d| {
                 let mut d = (**d).clone();
-                if let Some(action_def) = d.actions.get_mut(action_name) {
+                if let Some(action_def) = d.actions.get_mut(action_name.as_str()) {
                     action_def.schedules.push(expr.to_owned());
                 }
                 d
@@ -130,7 +130,7 @@ pub struct AppDef {
     pub resources: BTreeMap<ResourceId, Resource>,
     /// Action metadata (name, description). No FnPtrs — closures are
     /// recovered on demand via the thread-local capture buffer.
-    pub actions: BTreeMap<String, ActionDef>,
+    pub actions: BTreeMap<ActionName, ActionDef>,
     pub shells: BTreeMap<String, ShellDef>,
     pub install: Option<InstallDef>,
     /// Names of parameters that have an `on_change` handler registered.

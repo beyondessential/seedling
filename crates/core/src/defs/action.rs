@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 
 use rhai::{CustomType, Dynamic, EvalAltResult, Map, TypeBuilder};
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{ActionName, AppName};
 
 use super::collection::{Collection, col};
 use super::install::ParamDef;
@@ -10,7 +10,7 @@ use super::install::ParamDef;
 // l[impl action.option-params]
 #[derive(Debug, Clone)]
 pub struct ActionDef {
-    pub name: String,
+    pub name: ActionName,
     pub description: Option<String>,
     // l[impl action.schedule]
     pub schedules: Vec<String>,
@@ -19,17 +19,21 @@ pub struct ActionDef {
 
 /// Compute a stable hash from `(app_name, action_name)` for use with cronexpr's
 /// `H` extension.
-pub fn schedule_hash(app_name: &AppName, action_name: &str) -> u64 {
+pub fn schedule_hash(app_name: &AppName, action_name: &ActionName) -> u64 {
     let mut hasher = DefaultHasher::new();
     app_name.as_str().hash(&mut hasher);
-    action_name.hash(&mut hasher);
+    action_name.as_str().hash(&mut hasher);
     hasher.finish()
 }
 
 /// Validate and parse a 5-field cron expression. The `H` extension is supported
 /// using the hash derived from the given app and action names. The timezone
 /// defaults to UTC when omitted.
-pub fn validate_cron_expr(expr: &str, app_name: &AppName, action_name: &str) -> Result<(), String> {
+pub fn validate_cron_expr(
+    expr: &str,
+    app_name: &AppName,
+    action_name: &ActionName,
+) -> Result<(), String> {
     let opts = cron_parse_options(app_name, action_name);
     cronexpr::parse_crontab_with(expr, opts)
         .map(|_| ())
@@ -41,13 +45,13 @@ pub fn validate_cron_expr(expr: &str, app_name: &AppName, action_name: &str) -> 
 pub fn parse_cron_expr(
     expr: &str,
     app_name: &AppName,
-    action_name: &str,
+    action_name: &ActionName,
 ) -> Result<cronexpr::Crontab, cronexpr::Error> {
     let opts = cron_parse_options(app_name, action_name);
     cronexpr::parse_crontab_with(expr, opts)
 }
 
-fn cron_parse_options(app_name: &AppName, action_name: &str) -> cronexpr::ParseOptions {
+fn cron_parse_options(app_name: &AppName, action_name: &ActionName) -> cronexpr::ParseOptions {
     let mut opts = cronexpr::ParseOptions::default();
     opts.fallback_timezone_option = cronexpr::FallbackTimezoneOption::UTC;
     opts.hashed_value = Some(schedule_hash(app_name, action_name));
@@ -57,12 +61,12 @@ fn cron_parse_options(app_name: &AppName, action_name: &str) -> cronexpr::ParseO
 // l[impl action.type]
 #[derive(Debug, Clone)]
 pub struct Action {
-    pub name: String,
+    pub name: ActionName,
     app_name: AppName,
 }
 
 impl Action {
-    pub fn new(name: String, app_name: AppName) -> Self {
+    pub fn new(name: ActionName, app_name: AppName) -> Self {
         Self { name, app_name }
     }
 }
