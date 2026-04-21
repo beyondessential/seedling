@@ -1024,7 +1024,7 @@ fn replay_interrupted_operation(
 ) {
     use seedling_core::runtime::{
         apps::AppPhase,
-        history::{clear_current_operation, load_current_install_params},
+        history::{clear_current_operation, load_current_operation_params},
         scheduler::ScheduleResult,
     };
 
@@ -1051,33 +1051,50 @@ fn replay_interrupted_operation(
         return;
     };
 
-    // For install, load and decrypt the persisted params.
-    let params = if is_install {
+    // r[impl operation.params]
+    // Restore the encrypted params that were persisted when the operation
+    // began. Every persisted lifecycle operation has params (empty map for
+    // actions that take none), so a None here is an install-specific
+    // failure mode that pre-dates the generalised persistence.
+    let params = {
         let cipher = Arc::clone(&state.cipher);
         let loaded = state
             .db
-            .call(move |db| load_current_install_params(db, &cipher));
+            .call(move |db| load_current_operation_params(db, &cipher));
         match loaded {
             Ok(Some(params)) => params,
             Ok(None) => {
-                tracing::error!(
+                if is_install {
+                    tracing::error!(
+                        app = %app_name,
+                        "interrupted install has no persisted params; reverting to NotInstalled"
+                    );
+                    revert_install_and_fault(&state, &app_name);
+                    return;
+                }
+                tracing::warn!(
                     app = %app_name,
-                    "interrupted install has no persisted params; reverting to NotInstalled"
+                    action = %action_name,
+                    "interrupted operation has no persisted params (legacy row); replaying with empty map"
                 );
-                revert_install_and_fault(&state, &app_name);
-                return;
+                serde_json::Map::new()
             }
             Err(e) => {
                 tracing::error!(
                     app = %app_name,
-                    "failed to decrypt interrupted install params: {e}; reverting to NotInstalled"
+                    action = %action_name,
+                    "failed to decrypt interrupted operation params: {e}"
                 );
-                revert_install_and_fault(&state, &app_name);
+                if is_install {
+                    revert_install_and_fault(&state, &app_name);
+                } else {
+                    state.db.call(|db| {
+                        let _ = clear_current_operation(db);
+                    });
+                }
                 return;
             }
         }
-    } else {
-        serde_json::Map::new()
     };
 
     // Sanity-check phase vs action. An install must find its app in

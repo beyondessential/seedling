@@ -377,9 +377,11 @@ Absent specification bugs, anything that is not defined here is either defined i
 > The operation's outcome is recorded in the [generation history](#r--generation.history) entry that triggered it (when applicable).
 
 > r[operation.params]
-> When a lifecycle operation is dispatched with params, the params must be persisted alongside the operation record in the action execution log. On replay, the persisted params must be restored and passed to the action closure.
+> When a lifecycle operation is dispatched with params, the params must be persisted alongside the operation record. On replay, the persisted params must be restored and passed to the action closure.
+> Params may contain secret values, so the persisted form must be encrypted with the same cipher used for stored secret params.
 >
 > Shell sessions do not persist params; shells are not replayable.
+> Backup operations do not persist params; they bind per-process snapshot paths that cannot survive a runtime restart, so interrupted backups are dropped and the next scheduled fire takes over.
 
 ## Action Composition
 

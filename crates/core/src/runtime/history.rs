@@ -472,46 +472,29 @@ pub struct CurrentOperation {
     pub target_generation: u64,
 }
 
-pub fn save_current_operation(db: &Db, op: &CurrentOperation) -> rusqlite::Result<()> {
-    db.conn.execute(
-        "INSERT OR REPLACE INTO current_operation
-            (singleton, operation_id, app, action_name,
-             source_generation, target_generation, install_params_ciphertext)
-         VALUES (1, ?1, ?2, ?3, ?4, ?5, NULL)",
-        params![
-            op.operation_id.0,
-            op.app,
-            op.action_name,
-            op.source_generation as i64,
-            op.target_generation as i64,
-        ],
-    )?;
-    Ok(())
-}
-
 // r[impl operation.params] r[impl barrier.replay]
-// i[impl action.invoke.install.validation]
-/// Persist the current install operation alongside its params, encrypted with
-/// the site cipher. Install params may carry secret values; they are never
-/// stored in the action log, but must survive a restart so the operation can
-/// be replayed.
+/// Persist the current lifecycle operation alongside its params, encrypted
+/// with the site cipher. Params may carry secret values (install action
+/// passwords, action params containing tokens, etc.); they are never stored
+/// in the action log, but must survive a restart so the operation can be
+/// replayed. Called with an empty map for operations that take no params.
 ///
 /// The params are serialised as JSON and then encrypted as a single blob.
-pub fn save_current_install_operation(
+pub fn save_current_operation(
     db: &Db,
     cipher: &crate::runtime::secrets::Cipher,
     op: &CurrentOperation,
     params: &serde_json::Map<String, serde_json::Value>,
-) -> Result<(), InstallOperationError> {
-    let plaintext = serde_json::to_string(params).map_err(InstallOperationError::Json)?;
+) -> Result<(), OperationPersistError> {
+    let plaintext = serde_json::to_string(params).map_err(OperationPersistError::Json)?;
     let ciphertext = cipher
         .encrypt(&secrecy::SecretString::new(plaintext.into()))
-        .map_err(InstallOperationError::Cipher)?;
+        .map_err(OperationPersistError::Cipher)?;
     db.conn
         .execute(
             "INSERT OR REPLACE INTO current_operation
                 (singleton, operation_id, app, action_name,
-                 source_generation, target_generation, install_params_ciphertext)
+                 source_generation, target_generation, params_ciphertext)
              VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 op.operation_id.0,
@@ -522,49 +505,50 @@ pub fn save_current_install_operation(
                 ciphertext,
             ],
         )
-        .map_err(InstallOperationError::Db)?;
+        .map_err(OperationPersistError::Db)?;
     Ok(())
 }
 
-/// Decrypt the persisted install params for the current in-flight operation,
-/// if any. Returns `Ok(None)` when no row is persisted or the row has no
-/// ciphertext (non-install operations).
-// r[impl barrier.replay] i[impl action.invoke.install.validation]
-pub fn load_current_install_params(
+/// Decrypt the persisted params for the current in-flight operation, if
+/// any. Returns `Ok(None)` when no row is persisted, and an empty map when
+/// the row exists but carries no params (i.e. the operation was dispatched
+/// with no params).
+// r[impl operation.params] r[impl barrier.replay]
+pub fn load_current_operation_params(
     db: &Db,
     cipher: &crate::runtime::secrets::Cipher,
-) -> Result<Option<serde_json::Map<String, serde_json::Value>>, InstallOperationError> {
+) -> Result<Option<serde_json::Map<String, serde_json::Value>>, OperationPersistError> {
     let ciphertext = db
         .conn
         .query_row(
-            "SELECT install_params_ciphertext FROM current_operation WHERE singleton = 1",
+            "SELECT params_ciphertext FROM current_operation WHERE singleton = 1",
             [],
             |row| row.get::<_, Option<Vec<u8>>>(0),
         )
         .or_else(|e| match e {
             rusqlite::Error::QueryReturnedNoRows => Ok(None),
-            other => Err(InstallOperationError::Db(other)),
+            other => Err(OperationPersistError::Db(other)),
         })?;
     let Some(ciphertext) = ciphertext else {
         return Ok(None);
     };
     let plaintext = cipher
         .decrypt(&ciphertext)
-        .map_err(InstallOperationError::Cipher)?;
+        .map_err(OperationPersistError::Cipher)?;
     use secrecy::ExposeSecret;
     let map: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_str(plaintext.expose_secret()).map_err(InstallOperationError::Json)?;
+        serde_json::from_str(plaintext.expose_secret()).map_err(OperationPersistError::Json)?;
     Ok(Some(map))
 }
 
 #[derive(Debug)]
-pub enum InstallOperationError {
+pub enum OperationPersistError {
     Db(rusqlite::Error),
     Cipher(crate::runtime::secrets::Error),
     Json(serde_json::Error),
 }
 
-impl std::fmt::Display for InstallOperationError {
+impl std::fmt::Display for OperationPersistError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Db(e) => write!(f, "{e}"),
@@ -574,9 +558,9 @@ impl std::fmt::Display for InstallOperationError {
     }
 }
 
-impl std::error::Error for InstallOperationError {}
+impl std::error::Error for OperationPersistError {}
 
-impl From<rusqlite::Error> for InstallOperationError {
+impl From<rusqlite::Error> for OperationPersistError {
     fn from(e: rusqlite::Error) -> Self {
         Self::Db(e)
     }

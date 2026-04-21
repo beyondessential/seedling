@@ -16,7 +16,10 @@ fn dep(app: &str, name: &str) -> ResourceInstance {
 // r[verify history.persistence]
 #[test]
 fn save_and_load_current_operation() {
+    use crate::runtime::secrets::Cipher;
+
     let db = Db::open_in_memory().unwrap();
+    let cipher = Cipher::for_tests();
     let op = CurrentOperation {
         operation_id: OperationId("test-op-id".into()),
         app: "myapp".into(),
@@ -24,7 +27,7 @@ fn save_and_load_current_operation() {
         source_generation: 3,
         target_generation: 4,
     };
-    save_current_operation(&db, &op).unwrap();
+    save_current_operation(&db, &cipher, &op, &serde_json::Map::new()).unwrap();
     let loaded = load_current_operation(&db).unwrap().unwrap();
     assert_eq!(loaded.operation_id.0, "test-op-id");
     assert_eq!(loaded.app, "myapp");
@@ -41,7 +44,10 @@ fn load_current_operation_returns_none_when_empty() {
 
 #[test]
 fn clear_current_operation_removes_record() {
+    use crate::runtime::secrets::Cipher;
+
     let db = Db::open_in_memory().unwrap();
+    let cipher = Cipher::for_tests();
     let op = CurrentOperation {
         operation_id: OperationId("op-1".into()),
         app: "app".into(),
@@ -49,7 +55,7 @@ fn clear_current_operation_removes_record() {
         source_generation: 1,
         target_generation: 1,
     };
-    save_current_operation(&db, &op).unwrap();
+    save_current_operation(&db, &cipher, &op, &serde_json::Map::new()).unwrap();
     clear_current_operation(&db).unwrap();
     assert!(load_current_operation(&db).unwrap().is_none());
 }
@@ -72,24 +78,58 @@ fn install_params_round_trip_through_cipher() {
     params.insert("passphrase".into(), serde_json::json!("hunter2"));
     params.insert("bucket".into(), serde_json::json!("my-backups"));
 
-    save_current_install_operation(&db, &cipher, &op, &params).unwrap();
+    save_current_operation(&db, &cipher, &op, &params).unwrap();
 
     // Metadata loads via the normal path.
     let meta = load_current_operation(&db).unwrap().unwrap();
     assert_eq!(meta.action_name, "install");
 
     // Params decrypt back to the original map.
-    let restored = load_current_install_params(&db, &cipher).unwrap().unwrap();
+    let restored = load_current_operation_params(&db, &cipher)
+        .unwrap()
+        .unwrap();
     assert_eq!(restored, params);
 
     // Clearing the row clears the ciphertext too.
     clear_current_operation(&db).unwrap();
-    assert!(load_current_install_params(&db, &cipher).unwrap().is_none());
+    assert!(
+        load_current_operation_params(&db, &cipher)
+            .unwrap()
+            .is_none()
+    );
 }
 
 // r[verify operation.params]
 #[test]
-fn non_install_operation_has_no_install_params() {
+fn non_install_operation_params_round_trip() {
+    use crate::runtime::secrets::Cipher;
+
+    let db = Db::open_in_memory().unwrap();
+    let cipher = Cipher::for_tests();
+    let op = CurrentOperation {
+        operation_id: OperationId("invoke-op".into()),
+        app: "myapp".into(),
+        action_name: "rotate_secret".into(),
+        source_generation: 5,
+        target_generation: 5,
+    };
+    // Operator-invoked actions may pass params that include secret-ish
+    // values. On replay those params must be restored.
+    let mut params = serde_json::Map::new();
+    params.insert("target_host".into(), serde_json::json!("db-1.internal"));
+    params.insert("auth_token".into(), serde_json::json!("s3cr3t"));
+
+    save_current_operation(&db, &cipher, &op, &params).unwrap();
+
+    let restored = load_current_operation_params(&db, &cipher)
+        .unwrap()
+        .unwrap();
+    assert_eq!(restored, params);
+}
+
+// r[verify operation.params]
+#[test]
+fn empty_params_round_trip() {
     use crate::runtime::secrets::Cipher;
 
     let db = Db::open_in_memory().unwrap();
@@ -101,15 +141,22 @@ fn non_install_operation_has_no_install_params() {
         source_generation: 1,
         target_generation: 1,
     };
-    save_current_operation(&db, &op).unwrap();
+    save_current_operation(&db, &cipher, &op, &serde_json::Map::new()).unwrap();
 
-    // A start operation has no install params to decrypt.
-    assert!(load_current_install_params(&db, &cipher).unwrap().is_none());
+    // Empty params map round-trips through the cipher without losing
+    // identity; replay restores it as an empty map, not as None.
+    let restored = load_current_operation_params(&db, &cipher)
+        .unwrap()
+        .unwrap();
+    assert!(restored.is_empty());
 }
 
 #[test]
 fn save_overwrites_previous_current_operation() {
+    use crate::runtime::secrets::Cipher;
+
     let db = Db::open_in_memory().unwrap();
+    let cipher = Cipher::for_tests();
     let op1 = CurrentOperation {
         operation_id: OperationId("op-1".into()),
         app: "app".into(),
@@ -124,8 +171,8 @@ fn save_overwrites_previous_current_operation() {
         source_generation: 1,
         target_generation: 1,
     };
-    save_current_operation(&db, &op1).unwrap();
-    save_current_operation(&db, &op2).unwrap();
+    save_current_operation(&db, &cipher, &op1, &serde_json::Map::new()).unwrap();
+    save_current_operation(&db, &cipher, &op2, &serde_json::Map::new()).unwrap();
     let loaded = load_current_operation(&db).unwrap().unwrap();
     assert_eq!(loaded.operation_id.0, "op-2");
     assert_eq!(loaded.action_name, "stop");

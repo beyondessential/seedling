@@ -240,8 +240,10 @@ mod tests {
             history::insert_action_log_entry(&db, &old_op, "app", "start", &make_entry(i)).unwrap();
         }
 
+        let cipher = crate::runtime::secrets::Cipher::for_tests();
         history::save_current_operation(
             &db,
+            &cipher,
             &CurrentOperation {
                 operation_id: current_op.clone(),
                 app: "app".into(),
@@ -249,6 +251,7 @@ mod tests {
                 source_generation: 1,
                 target_generation: 1,
             },
+            &serde_json::Map::new(),
         )
         .unwrap();
 

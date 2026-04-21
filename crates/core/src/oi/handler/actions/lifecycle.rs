@@ -17,10 +17,7 @@ use crate::{
         db::DbHandle,
         desired::OperationProgress,
         faults,
-        history::{
-            CurrentOperation, clear_current_operation, save_current_install_operation,
-            save_current_operation,
-        },
+        history::{CurrentOperation, clear_current_operation, save_current_operation},
         registry::DbInstanceRegistry,
     },
 };
@@ -51,6 +48,7 @@ fn run_operation_loop(
     script_limits: &crate::ScriptLimits,
     cipher: Arc<crate::runtime::secrets::Cipher>,
     operation_volume_bindings: HashMap<String, OperationVolumeBinding>,
+    persist_for_replay: bool,
 ) -> bool {
     let app_name = op_ctx.app.as_str();
     let action_name = op_ctx.action_name.as_str();
@@ -82,11 +80,13 @@ fn run_operation_loop(
     let world = Arc::new(DbWorldOracle::new(db.clone()));
     let registry: Arc<dyn InstanceRegistry> = Arc::new(DbInstanceRegistry::new(db.clone()));
 
-    // r[impl operation.lifecycle.events] r[impl barrier.replay]
+    // r[impl operation.lifecycle.events] r[impl barrier.replay] r[impl operation.params]
     // Persist the current operation so a runtime restart can resume it.
-    // For install, also persist the encrypted params — the action log does not
-    // carry operator-supplied params, and install params are needed on replay.
-    {
+    // Params are encrypted because they may carry secret values.
+    // Callers that are inherently not replayable (backup actions, which hold
+    // a per-process snapshot binding in operation_volume_bindings) pass
+    // persist_for_replay=false and skip this step.
+    if persist_for_replay {
         let record = CurrentOperation {
             operation_id: operation_id.clone(),
             app: app_name.to_owned(),
@@ -94,21 +94,10 @@ fn run_operation_loop(
             source_generation: op_ctx.source_generation,
             target_generation: op_ctx.target_generation,
         };
-        let is_install = action_name == "install";
         let params_for_persist = params.clone();
         let cipher_for_persist = Arc::clone(&cipher);
         if let Err(e) = db.call(move |db| {
-            if is_install {
-                save_current_install_operation(
-                    db,
-                    &cipher_for_persist,
-                    &record,
-                    &params_for_persist,
-                )
-                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
-            } else {
-                save_current_operation(db, &record)
-            }
+            save_current_operation(db, &cipher_for_persist, &record, &params_for_persist)
         }) {
             tracing::warn!(
                 app = %app_name,
@@ -495,6 +484,7 @@ pub fn spawn_accepted_operation(
                     &script_limits,
                     cipher,
                     HashMap::new(),
+                    true,
                 )
             })
             .await
@@ -604,6 +594,10 @@ pub(crate) async fn run_operation_for_backup(
                 &script_limits,
                 cipher,
                 operation_volume_bindings,
+                // Backup ops carry a per-process snapshot binding in
+                // operation_volume_bindings that cannot survive a restart;
+                // the spec exempts them from replay.
+                false,
             )
         })
         .await
