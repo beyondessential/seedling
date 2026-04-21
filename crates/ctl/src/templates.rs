@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use clap::Subcommand;
 use seedling_protocol::client::OiClient;
+use seedling_protocol::names::AppName;
 
 use super::print_result;
 
@@ -45,7 +46,7 @@ pub(super) enum TemplatesCommand {
         /// Template name
         template: String,
         /// Name for the new app
-        app: String,
+        app: AppName,
     },
 }
 

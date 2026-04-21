@@ -1,5 +1,6 @@
 use clap::Subcommand;
 use seedling_protocol::client::OiClient;
+use seedling_protocol::names::AppName;
 
 use super::print_result;
 
@@ -47,13 +48,13 @@ pub(super) enum BackupAppsCommand {
     Register {
         /// App name
         #[arg(long)]
-        app: String,
+        app: AppName,
     },
     /// Remove an app from the backup role
     Deregister {
         /// App name
         #[arg(long)]
-        app: String,
+        app: AppName,
     },
     /// List registered backup apps
     List,

@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use seedling_protocol::client::OiClient;
+use seedling_protocol::names::AppName;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 // i[impl ctl.forward.stats]
@@ -92,7 +93,7 @@ fn drain_status_messages(line_buf: &mut Vec<u8>) {
 
 pub async fn forward_port(
     client: &OiClient,
-    app: String,
+    app: AppName,
     service: String,
     port: u16,
     proto: String,

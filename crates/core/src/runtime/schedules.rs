@@ -198,8 +198,14 @@ mod tests {
         let rows = db::list_schedules(&db, &app_name("myapp")).unwrap();
         assert_eq!(rows.len(), 2);
 
-        db::upsert_schedule_fired(&db, &app_name("myapp"), "backup", "0 2 * * *", "2026-01-01T02:00:00Z")
-            .unwrap();
+        db::upsert_schedule_fired(
+            &db,
+            &app_name("myapp"),
+            "backup",
+            "0 2 * * *",
+            "2026-01-01T02:00:00Z",
+        )
+        .unwrap();
 
         let rows = db::list_schedules(&db, &app_name("myapp")).unwrap();
         let backup_row = rows.iter().find(|r| r.action == "backup").unwrap();
@@ -236,8 +242,14 @@ mod tests {
         db::ensure_schedules(&db, &app_name("myapp"), &pairs).unwrap();
 
         let now: Timestamp = "2026-04-18T12:01:00Z".parse().unwrap();
-        db::upsert_schedule_fired(&db, &app_name("myapp"), "backup", "* * * * *", "2026-04-18T12:00:00Z")
-            .unwrap();
+        db::upsert_schedule_fired(
+            &db,
+            &app_name("myapp"),
+            "backup",
+            "* * * * *",
+            "2026-04-18T12:00:00Z",
+        )
+        .unwrap();
 
         let mut scheduler = Scheduler::new();
         let fired = check_due_schedules(&db, &mut scheduler, now, &|_| Some(1));
@@ -262,8 +274,14 @@ mod tests {
         // Last fired ~25 hours ago; next cron boundary from that point is
         // yesterday's 18:00, which is well outside any 59 s or 5-minute
         // window centred on `now`.
-        db::upsert_schedule_fired(&db, &app_name("myapp"), "backup", "0 * * * *", "2026-04-20T17:05:00Z")
-            .unwrap();
+        db::upsert_schedule_fired(
+            &db,
+            &app_name("myapp"),
+            "backup",
+            "0 * * * *",
+            "2026-04-20T17:05:00Z",
+        )
+        .unwrap();
 
         let now: Timestamp = "2026-04-21T18:37:22Z".parse().unwrap();
         let mut scheduler = Scheduler::new();

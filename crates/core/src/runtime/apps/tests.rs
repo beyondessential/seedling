@@ -264,8 +264,12 @@ fn reload_after_secret_param_set_populates_stored() {
     .expect("upsert secret");
 
     let loaded = load_all_params_for_app(&db, &cipher, &app("myapp"));
-    let (app_def, err) =
-        evaluate_script(&app("myapp"), script, &loaded, &crate::ScriptLimits::default());
+    let (app_def, err) = evaluate_script(
+        &app("myapp"),
+        script,
+        &loaded,
+        &crate::ScriptLimits::default(),
+    );
     assert!(err.is_none(), "script error: {err:?}");
 
     assert_eq!(

@@ -237,12 +237,24 @@ mod tests {
         let old_op = OperationId("old-op".into());
 
         for i in 0..3 {
-            history::insert_action_log_entry(&db, &current_op, &app_name("app"), "start", &make_entry(i))
-                .unwrap();
+            history::insert_action_log_entry(
+                &db,
+                &current_op,
+                &app_name("app"),
+                "start",
+                &make_entry(i),
+            )
+            .unwrap();
         }
         for i in 0..2 {
-            history::insert_action_log_entry(&db, &old_op, &app_name("app"), "start", &make_entry(i))
-                .unwrap();
+            history::insert_action_log_entry(
+                &db,
+                &old_op,
+                &app_name("app"),
+                "start",
+                &make_entry(i),
+            )
+            .unwrap();
         }
 
         let cipher = crate::runtime::secrets::Cipher::for_tests();
@@ -298,7 +310,8 @@ mod tests {
 
         let op = OperationId("recent-op".into());
         for i in 0..3 {
-            history::insert_action_log_entry(&db, &op, &app_name("app"), "start", &make_entry(i)).unwrap();
+            history::insert_action_log_entry(&db, &op, &app_name("app"), "start", &make_entry(i))
+                .unwrap();
         }
 
         let deleted = gc_action_log(&db, Duration::from_secs(24 * 60 * 60)).unwrap();

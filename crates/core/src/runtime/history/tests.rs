@@ -265,8 +265,13 @@ fn insert_instance_is_idempotent() {
 #[test]
 fn get_or_create_singleton_creates_on_first_call() {
     let db = Db::open_in_memory().unwrap();
-    let instance =
-        get_or_create_singleton(&db, &app_name("myapp"), ResourceKind::Deployment, Some("web")).unwrap();
+    let instance = get_or_create_singleton(
+        &db,
+        &app_name("myapp"),
+        ResourceKind::Deployment,
+        Some("web"),
+    )
+    .unwrap();
     assert_eq!(instance.app, "myapp");
     assert_eq!(instance.name.as_deref(), Some("web"));
     assert_eq!(instance.variant, InstanceVariant::Singleton);
@@ -276,8 +281,20 @@ fn get_or_create_singleton_creates_on_first_call() {
 #[test]
 fn get_or_create_singleton_returns_same_id_on_second_call() {
     let db = Db::open_in_memory().unwrap();
-    let a = get_or_create_singleton(&db, &app_name("myapp"), ResourceKind::Deployment, Some("web")).unwrap();
-    let b = get_or_create_singleton(&db, &app_name("myapp"), ResourceKind::Deployment, Some("web")).unwrap();
+    let a = get_or_create_singleton(
+        &db,
+        &app_name("myapp"),
+        ResourceKind::Deployment,
+        Some("web"),
+    )
+    .unwrap();
+    let b = get_or_create_singleton(
+        &db,
+        &app_name("myapp"),
+        ResourceKind::Deployment,
+        Some("web"),
+    )
+    .unwrap();
     assert_eq!(a.id, b.id);
     assert_eq!(a.display_name, b.display_name);
 }
@@ -291,9 +308,13 @@ fn find_instances_for_group_returns_all_scaled() {
     insert_instance(&db, &a).unwrap();
     insert_instance(&db, &b).unwrap();
 
-    let found =
-        find_instances_for_group(&db, &app_name("myapp"), ResourceKind::Deployment, Some("web"))
-            .unwrap();
+    let found = find_instances_for_group(
+        &db,
+        &app_name("myapp"),
+        ResourceKind::Deployment,
+        Some("web"),
+    )
+    .unwrap();
     assert_eq!(found.len(), 2);
     let ids: std::collections::HashSet<_> = found.iter().map(|i| i.id).collect();
     assert!(ids.contains(&a.id));

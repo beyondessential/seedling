@@ -995,10 +995,6 @@ impl EventSenderWithActor {
     }
 
     // r[impl volume.external.mapping.events]
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "mapping events capture the full target tuple and read_only flag; collapsing them would obscure the audit payload"
-    )]
     pub fn external_volume_mapped(
         &self,
         app: &AppName,

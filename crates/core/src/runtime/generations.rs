@@ -91,7 +91,10 @@ pub enum Error {
     Db(rusqlite::Error),
     Script(apps::ScriptError),
     NoCurrentGeneration(String),
-    NotFound { app: AppName, generation: Generation },
+    NotFound {
+        app: AppName,
+        generation: Generation,
+    },
     MissingScript(String),
 }
 
@@ -428,7 +431,11 @@ fn rows_to_entries(mut rows: rusqlite::Rows<'_>) -> rusqlite::Result<Vec<History
 }
 
 /// Look up a single generation entry.
-pub fn get(db: &Db, app: &AppName, generation: Generation) -> rusqlite::Result<Option<HistoryEntry>> {
+pub fn get(
+    db: &Db,
+    app: &AppName,
+    generation: Generation,
+) -> rusqlite::Result<Option<HistoryEntry>> {
     let mut stmt = db.conn.prepare(
         "SELECT generation, created_at, kind, param_name, previous_value,
                 new_value, script_hash, operation_id, outcome, outcome_error,

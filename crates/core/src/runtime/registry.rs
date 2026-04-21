@@ -241,11 +241,8 @@ impl InstanceRegistry for DbInstanceRegistry {
 
             let count = usize::from(count);
             while scaled.len() < count {
-                let instance = ResourceInstance::new_scaled(
-                    app.clone(),
-                    kind,
-                    name.as_deref().unwrap_or(""),
-                );
+                let instance =
+                    ResourceInstance::new_scaled(app.clone(), kind, name.as_deref().unwrap_or(""));
                 history::insert_instance(db, &instance)?;
                 scaled.push(instance);
             }

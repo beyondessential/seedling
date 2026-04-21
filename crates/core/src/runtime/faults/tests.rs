@@ -66,7 +66,8 @@ fn file_fault_with_resource_fields() {
 fn clear_fault_sets_cleared_at() {
     let db = Db::open_in_memory().expect("open");
     init_test_events();
-    let id = file_fault(&db, &app("myapp"), None, None, None, "script_error", "err").expect("file_fault");
+    let id = file_fault(&db, &app("myapp"), None, None, None, "script_error", "err")
+        .expect("file_fault");
 
     clear_fault(&db, &id, &app("myapp")).expect("clear");
 
@@ -105,8 +106,26 @@ fn clear_faults_by_kind_clears_matching() {
 fn list_active_faults_filters_by_app() {
     let db = Db::open_in_memory().expect("open");
     init_test_events();
-    file_fault(&db, &app("app-a"), None, None, None, "script_error", "a err").expect("file a");
-    file_fault(&db, &app("app-b"), None, None, None, "script_error", "b err").expect("file b");
+    file_fault(
+        &db,
+        &app("app-a"),
+        None,
+        None,
+        None,
+        "script_error",
+        "a err",
+    )
+    .expect("file a");
+    file_fault(
+        &db,
+        &app("app-b"),
+        None,
+        None,
+        None,
+        "script_error",
+        "b err",
+    )
+    .expect("file b");
 
     let a_faults = list_active_faults(&db, Some(&app("app-a"))).expect("list a");
     assert_eq!(a_faults.len(), 1);
@@ -121,8 +140,18 @@ fn list_active_faults_filters_by_app() {
 fn list_active_faults_excludes_cleared() {
     let db = Db::open_in_memory().expect("open");
     init_test_events();
-    let id = file_fault(&db, &app("myapp"), None, None, None, "script_error", "err").expect("file_fault");
-    file_fault(&db, &app("myapp"), None, None, None, "other", "still active").expect("file2");
+    let id = file_fault(&db, &app("myapp"), None, None, None, "script_error", "err")
+        .expect("file_fault");
+    file_fault(
+        &db,
+        &app("myapp"),
+        None,
+        None,
+        None,
+        "other",
+        "still active",
+    )
+    .expect("file2");
 
     clear_fault(&db, &id, &app("myapp")).expect("clear");
 
@@ -135,7 +164,16 @@ fn list_active_faults_excludes_cleared() {
 fn clear_all_faults_for_app_clears_only_that_app() {
     let db = Db::open_in_memory().expect("open");
     init_test_events();
-    file_fault(&db, &app("app-a"), None, None, None, "script_error", "a err").expect("a");
+    file_fault(
+        &db,
+        &app("app-a"),
+        None,
+        None,
+        None,
+        "script_error",
+        "a err",
+    )
+    .expect("a");
     file_fault(
         &db,
         &app("app-a"),
@@ -146,7 +184,16 @@ fn clear_all_faults_for_app_clears_only_that_app() {
         "a crash",
     )
     .expect("a2");
-    file_fault(&db, &app("app-b"), None, None, None, "script_error", "b err").expect("b");
+    file_fault(
+        &db,
+        &app("app-b"),
+        None,
+        None,
+        None,
+        "script_error",
+        "b err",
+    )
+    .expect("b");
 
     clear_all_faults_for_app(&db, &app("app-a")).expect("clear");
 
@@ -223,7 +270,8 @@ fn clear_fault_emits_fault_cleared_event() {
     init_test_events();
     let mut rx = EVENT_TX.get().unwrap().subscribe();
 
-    let id = file_fault(&db, &app("myapp"), None, None, None, "script_error", "boom").expect("file");
+    let id =
+        file_fault(&db, &app("myapp"), None, None, None, "script_error", "boom").expect("file");
 
     // Drain all pending events — parallel tests share the global sender,
     // so there may be stray events ahead of the ones we care about.

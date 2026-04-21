@@ -129,9 +129,7 @@ impl rusqlite::ToSql for AppName {
 
 #[cfg(feature = "rusqlite")]
 impl rusqlite::types::FromSql for AppName {
-    fn column_result(
-        value: rusqlite::types::ValueRef<'_>,
-    ) -> rusqlite::types::FromSqlResult<Self> {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
         // Values in SQLite were written after validation on the way in, so
         // bypass re-validation here (matches the contract of `new_unchecked`).
         String::column_result(value).map(Self)

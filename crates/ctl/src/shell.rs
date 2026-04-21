@@ -1,10 +1,10 @@
 use std::time::Duration;
 
+use seedling_protocol::client::OiClient;
+use seedling_protocol::names::AppName;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::signal::unix::SignalKind;
 use tokio::time::Instant;
-
-use seedling_protocol::client::OiClient;
 
 /// Drop guard that restores the terminal from raw mode.
 struct RawModeGuard;
@@ -35,7 +35,7 @@ pub async fn read_shell_line(recv: &mut quinn::RecvStream) -> Result<Vec<u8>, St
 
 pub async fn open_shell(
     client: &OiClient,
-    app: String,
+    app: AppName,
     name: String,
     params: serde_json::Map<String, serde_json::Value>,
 ) -> i32 {

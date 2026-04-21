@@ -1902,7 +1902,8 @@ pub(crate) fn unstop_resource(
 
     let ks = kind_str(kind);
     tracing::info!(app = %app, kind = %ks, name = %resource_name, "resource unstopped");
-    ctx.events.resource_unstopped(&params.app, ks, resource_name);
+    ctx.events
+        .resource_unstopped(&params.app, ks, resource_name);
 
     let reg = state.registry.read();
     if let Some(entry) = reg.get(app) {

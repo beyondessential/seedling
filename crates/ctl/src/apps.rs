@@ -2,6 +2,7 @@ use std::{collections::HashMap, path::PathBuf};
 
 use clap::Subcommand;
 use seedling_protocol::client::OiClient;
+use seedling_protocol::names::AppName;
 
 use super::print_result;
 
@@ -29,15 +30,15 @@ pub(super) enum AppsCommand {
     /// List registered apps
     List,
     /// Describe an app
-    Show { app: String },
+    Show { app: AppName },
     /// Register an app from a script file
-    Create { app: String, script_file: PathBuf },
+    Create { app: AppName, script_file: PathBuf },
     /// Deregister an app
-    Remove { app: String },
+    Remove { app: AppName },
     /// Uninstall an app (stop all resources). The app can be deregistered once done.
-    Uninstall { app: String },
+    Uninstall { app: AppName },
     /// Update an app's script
-    Update { app: String, script_file: PathBuf },
+    Update { app: AppName, script_file: PathBuf },
     /// Manage app parameters
     Param {
         #[command(subcommand)]
@@ -45,7 +46,7 @@ pub(super) enum AppsCommand {
     },
     /// Invoke a lifecycle action
     Action {
-        app: String,
+        app: AppName,
         name: String,
         /// Params as key[=value] (bare key maps to true)
         #[arg(trailing_var_arg = true)]
@@ -53,17 +54,17 @@ pub(super) enum AppsCommand {
     },
     /// Cancel the in-flight lifecycle operation for an app
     // i[impl ctl.action.cancel]
-    CancelAction { app: String },
+    CancelAction { app: AppName },
     /// Invoke the install action
     Install {
-        app: String,
+        app: AppName,
         /// Params as key=value (trailing positional args)
         #[arg(trailing_var_arg = true)]
         params: Vec<String>,
     },
     /// Open an interactive shell session
     Shell {
-        app: String,
+        app: AppName,
         name: String,
         /// Params as key[=value] (bare key maps to true)
         #[arg(trailing_var_arg = true)]
@@ -72,7 +73,7 @@ pub(super) enum AppsCommand {
     /// Stream container logs
     Logs {
         /// App name
-        app: String,
+        app: AppName,
         /// Resource name (optional filter)
         resource: Option<String>,
         /// Instance display-name suffix (requires resource)
@@ -90,16 +91,16 @@ pub(super) enum AppsCommand {
     },
     /// Adjust deployment scale
     Scale {
-        app: String,
+        app: AppName,
         deployment: String,
         #[command(subcommand)]
         direction: ScaleDirection,
     },
     /// Restart a deployment (follows its update strategy without changing config)
-    Restart { app: String, deployment: String },
+    Restart { app: AppName, deployment: String },
     /// Stop a resource (scale deployments to zero, unschedule jobs/ingresses)
     StopResource {
-        app: String,
+        app: AppName,
         /// Resource kind: deployment, job, or ingress
         kind: String,
         /// Resource name
@@ -107,15 +108,15 @@ pub(super) enum AppsCommand {
     },
     /// Unstop a previously stopped resource
     UnstopResource {
-        app: String,
+        app: AppName,
         kind: String,
         name: String,
     },
     /// Unstop all stopped resources for an app
-    Unstop { app: String },
+    Unstop { app: AppName },
     /// Forward a local port to a service
     Forward {
-        app: String,
+        app: AppName,
         service: String,
         port: u16,
         #[arg(long, default_value = "tcp")]
@@ -125,14 +126,14 @@ pub(super) enum AppsCommand {
     },
     /// Get the script for an app (current generation by default)
     Script {
-        app: String,
+        app: AppName,
         /// Specific generation to fetch
         #[arg(long)]
         generation: Option<u64>,
     },
     /// List the generation history for an app
     Generations {
-        app: String,
+        app: AppName,
         /// Maximum number of entries to return (1-200, default 50)
         #[arg(long)]
         limit: Option<usize>,
@@ -142,7 +143,7 @@ pub(super) enum AppsCommand {
     },
     /// Dry-run a hypothetical change against the current generation
     Plan {
-        app: String,
+        app: AppName,
         /// Path to a proposed script file
         #[arg(long = "script")]
         proposed_script_file: Option<PathBuf>,
@@ -156,11 +157,11 @@ pub(super) enum AppsCommand {
 #[derive(Subcommand)]
 pub(super) enum VolumesCommand {
     /// List exported volumes and external volume mappings for an app
-    List { app: String },
+    List { app: AppName },
     /// Attach an external volume to a target (_site/name or app/name)
     Attach {
         /// App declaring the external volume
-        app: String,
+        app: AppName,
         /// External volume name (as declared in BSL with app.external_volume())
         external_volume: String,
         /// Target volume ID: _site/<name> or <app>/<volume>
@@ -175,7 +176,7 @@ pub(super) enum VolumesCommand {
     /// Detach an external volume mapping
     Detach {
         /// App declaring the external volume
-        app: String,
+        app: AppName,
         /// External volume name
         external_volume: String,
     },
@@ -197,12 +198,12 @@ pub(super) enum ScaleDirection {
 pub(super) enum ParamCommand {
     /// Set a param value
     Set {
-        app: String,
+        app: AppName,
         name: String,
         value: String,
     },
     /// Unset a param value
-    Unset { app: String, name: String },
+    Unset { app: AppName, name: String },
 }
 
 fn parse_vol_id(vol_id: &str) -> Result<(&str, &str), String> {
