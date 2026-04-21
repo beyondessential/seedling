@@ -51,6 +51,9 @@ pub(super) enum AppsCommand {
         #[arg(trailing_var_arg = true)]
         params: Vec<String>,
     },
+    /// Cancel the in-flight lifecycle operation for an app
+    // i[impl ctl.action.cancel]
+    CancelAction { app: String },
     /// Invoke the install action
     Install {
         app: String,
@@ -372,6 +375,14 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                 req["params"] = serde_json::Value::Object(action_params);
             }
             print_result(client.request("/apps/action/invoke", req).await);
+        }
+        // i[impl ctl.action.cancel]
+        AppsCommand::CancelAction { app } => {
+            print_result(
+                client
+                    .request("/apps/action/cancel", serde_json::json!({ "app": app }))
+                    .await,
+            );
         }
         AppsCommand::Install { app, params } => {
             let submitted: HashMap<String, String> = params

@@ -9,7 +9,7 @@ use crate::{
     oi::{handler::RequestCtx, state::OiState},
     runtime::{
         AppPhase,
-        scheduler::{RejectReason, ScheduleResult},
+        scheduler::{CancelOutcome, RejectReason, ScheduleResult},
     },
 };
 
@@ -36,19 +36,23 @@ pub(crate) struct CancelActionParams {
 }
 
 /// Request cancellation of the currently-active operation for `app`.
-/// No-op (returns not-found) if no operation is active for that app.
 // r[impl operation.cancel]
 // i[action.cancel]
 pub(crate) fn cancel_action(state: &Arc<OiState>, params: CancelActionParams) -> HandlerResult {
     let app_name = params.app.as_str();
-    let flipped = state.scheduler.lock().request_cancel(app_name);
-    if !flipped {
-        return Err(OiError::not_found(format!(
+    match state.scheduler.lock().request_cancel(app_name) {
+        CancelOutcome::Cancelled => {
+            tracing::info!(app = %app_name, "operation cancel requested");
+            Ok(json!({ "cancelled": true }))
+        }
+        CancelOutcome::AlreadyCancelled => {
+            tracing::debug!(app = %app_name, "cancel no-op: already cancelled");
+            Ok(json!({ "cancelled": true }))
+        }
+        CancelOutcome::NoActiveOp => Err(OiError::not_found(format!(
             "no active operation to cancel for app: {app_name}"
-        )));
+        ))),
     }
-    tracing::info!(app = %app_name, "operation cancel requested");
-    Ok(json!({ "cancelled": true }))
 }
 
 // l[impl action.params]

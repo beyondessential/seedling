@@ -62,6 +62,19 @@ pub enum ScheduleResult {
     Rejected(RejectReason),
 }
 
+// r[impl operation.cancel]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelOutcome {
+    /// The token was flipped; the action runtime will observe the cancel at
+    /// its next barrier or while waiting between replay cycles.
+    Cancelled,
+    /// A cancel has already been requested for this operation; the call is a
+    /// no-op but not an error.
+    AlreadyCancelled,
+    /// No operation is currently active for the named app.
+    NoActiveOp,
+}
+
 // r[impl operation.lifecycle.single.intra-app]
 // r[impl operation.lifecycle.single.inter-app]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -234,21 +247,19 @@ impl Scheduler {
     }
 
     /// Request cancellation of the active operation if it belongs to `app`.
-    /// Returns `true` if a token was flipped, `false` if there is no matching
-    /// active operation or if it has already been cancelled.
     // r[impl operation.cancel]
-    pub fn request_cancel(&self, app: &str) -> bool {
+    pub fn request_cancel(&self, app: &str) -> CancelOutcome {
         let Some(active) = self.active.as_ref() else {
-            return false;
+            return CancelOutcome::NoActiveOp;
         };
         if active.app != app {
-            return false;
+            return CancelOutcome::NoActiveOp;
         }
         if active.cancel_token.is_cancelled() {
-            return false;
+            return CancelOutcome::AlreadyCancelled;
         }
         active.cancel_token.request();
-        true
+        CancelOutcome::Cancelled
     }
 
     /// Push an action name onto the composition call stack.

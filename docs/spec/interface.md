@@ -304,6 +304,10 @@ Absent specification bugs, anything that is not defined here is either defined i
 > If no resources are stopped, this is a no-op and returns `{}`.
 > On success, the response is `{}`.
 
+> i[resource.stop.no-active-op]
+> All three stop/unstop endpoints (`/apps/resource/stop`, `/apps/resource/unstop`, `/apps/unstop`) reject with `operation_in_progress` when a lifecycle operation is active or queued for the target app.
+> The operator is expected to cancel the active operation first via [action.cancel](#i--action.cancel); desired-state mutations must not race with a running action closure.
+
 > i[resource.stop.status]
 > `/apps/show` includes a `stopped` boolean field on each resource that has been stopped via `/apps/resource/stop`.
 > The top-level response includes a `stopped_resources` array of `{ kind, name }` objects listing every resource currently stopped for the app.
@@ -407,6 +411,13 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Shell actions must not be invoked via this method; `not_found` is returned if a shell name is provided.
 > The Start Action (`name` = `"start"`) must not be invoked via this method; `not_found` is returned.
 > Returns `{ "schedule": "accepted", "operation_id": "<string>" }` or `{ "schedule": "queued", "operation_id": "<string>" }` on success, or an error. The `operation_id` is always present and uniquely identifies this operation.
+
+> i[action.cancel]
+> `/apps/action/cancel { app }` requests cancellation of the currently-active lifecycle operation for the named app.
+> The semantics of cancellation are defined by [operation.cancel](runtime.md#r--operation.cancel): the runtime wakes any suspended barrier and drives the operation to a terminal cancelled state.
+> If no operation is active for the app, the request is rejected with `not_found`.
+> If a cancel is already pending for the active operation, the request is still accepted and is a no-op.
+> On success, the response is `{ "cancelled": true }`.
 
 > i[action.invoke.install]
 > `/apps/install/invoke { app, params? }` schedules the install action.
@@ -872,6 +883,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[ctl.action.params]
 > The CLI accepts action params as positional arguments after the action name: `ctl apps action <app> <name> [key[=value]]...`.
 > A bare key (no `=`) maps to `key: true`. A `key=value` pair maps to `key: "value"`.
+
+> i[ctl.action.cancel]
+> The CLI exposes `ctl apps cancel-action <app>` as a thin wrapper over [action.cancel](#i--action.cancel).
 
 > i[ctl.shell.params]
 > The CLI accepts shell params with the same syntax: `ctl apps shell <app> <name> [key[=value]]...`.

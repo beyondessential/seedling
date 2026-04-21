@@ -1449,6 +1449,8 @@ export default function AppDetail() {
   const navigate = useNavigate();
   const [removalOpen, setRemovalOpen] = useState(false);
   const { execute: executeUnstopAll, loading: unstoppingAll } = useOiAction();
+  // i[impl action.cancel]
+  const { execute: executeCancelAction, loading: cancellingAction } = useOiAction();
   const writeGuard = useGuard("write");
   const dangerGuard = useGuard("dangerous");
   const { data, loading, error, refetch } = useOiQuery<AppDetail>(
@@ -1576,7 +1578,30 @@ export default function AppDetail() {
           </Box>
 
           {data.current_operation && (
-            <Alert severity="info">
+            <Alert
+              severity="info"
+              action={
+                <Tooltip title={writeGuard.reason ?? ""}>
+                  <span>
+                    <Button
+                      color="inherit"
+                      size="small"
+                      disabled={cancellingAction || !writeGuard.allowed}
+                      onClick={async () => {
+                        try {
+                          await executeCancelAction("/apps/action/cancel", { app: name });
+                          refetch();
+                        } catch {
+                          // surfaced by useOiAction globally
+                        }
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  </span>
+                </Tooltip>
+              }
+            >
               Operation in progress:{" "}
               <strong>{data.current_operation.action_name}</strong>{" "}
               (gen {data.current_operation.source_generation} →{" "}

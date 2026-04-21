@@ -1758,6 +1758,20 @@ pub(crate) fn stop_resource(
         )
     })?;
 
+    // i[impl resource.stop.no-active-op]
+    // Desired-state mutations must not race with a running action, and an
+    // action whose resource is about to vanish has no sensible continuation.
+    // Operators cancel the active op first (via /apps/action/cancel), then
+    // stop resources.
+    if state.scheduler.lock().has_operation_for(app) {
+        return Err(OiError::new(
+            ErrorCode::OperationInProgress,
+            format!(
+                "operation in progress for app: {app}; cancel it first via /apps/action/cancel"
+            ),
+        ));
+    }
+
     let reg = state.registry.read();
     let entry = reg
         .get(app)
@@ -1816,6 +1830,16 @@ pub(crate) fn unstop_resource(
         }
     }
 
+    // i[impl resource.stop.no-active-op]
+    if state.scheduler.lock().has_operation_for(app) {
+        return Err(OiError::new(
+            ErrorCode::OperationInProgress,
+            format!(
+                "operation in progress for app: {app}; cancel it first via /apps/action/cancel"
+            ),
+        ));
+    }
+
     let app_owned = app.to_owned();
     let resource_name_owned = resource_name.to_owned();
     state
@@ -1848,6 +1872,16 @@ pub(crate) fn unstop_all_resources(
         if !reg.is_registered(app) {
             return Err(OiError::not_found(format!("app not found: {app}")));
         }
+    }
+
+    // i[impl resource.stop.no-active-op]
+    if state.scheduler.lock().has_operation_for(app) {
+        return Err(OiError::new(
+            ErrorCode::OperationInProgress,
+            format!(
+                "operation in progress for app: {app}; cancel it first via /apps/action/cancel"
+            ),
+        ));
     }
 
     let app_owned = app.to_owned();
