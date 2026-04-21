@@ -9,7 +9,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > BSL is written in [Rhai](https://rhai.rs).
 
 > l[bsl.script]
-> A BSL script is one or more code listings ("files") which share a [scope](#l--bsl.scope), and come together to define a Seedling Application.
+> A BSL script is a single code listing that defines a Seedling Application.
 
 > l[bsl.scope]
 > The runtime must use a distinct [Rhai Scope](https://rhai.rs/book/engine/scope.html) for each BSL script.
