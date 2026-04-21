@@ -298,6 +298,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - Lifecycle operation start, completion, and failure.
 > - Faults filed and cleared.
 > - Resource state transitions.
+> - Site volume creation, deletion, snapshotting, and promotion.
+> - External volume mapping creation, deletion, and retargeting.
 
 > r[audit.log.generations]
 > Audit entries that record changes to an app's defined state — including registration, script update, parameter set, and parameter unset — must include the [generation](#r--generation.definition) of the change.
@@ -702,11 +704,23 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > r[volume.site.lifecycle]
 > Site volumes are created and deleted exclusively through operator commands. The runtime must create the backing storage for managed site volumes at creation time. When a managed or snapshot site volume is deleted, its backing storage must be routed through the [held volume](#r--actuate.volume.hold) mechanism so that an operator must explicitly confirm final removal. Deleting a bind site volume must only drop the runtime's reference and must not affect the operator-provided host path.
 
+> r[volume.site.lifecycle.events]
+> Site volume creation and deletion must emit events on the event feed and be recorded in the [audit log](#r--audit.log). Deletion events must identify the site volume's kind and, when the deletion routed through the held-volume mechanism, the resulting held volume identifier.
+
 > r[volume.site.snapshot]
 > A snapshot site volume is a read-only point-in-time snapshot of a named volume (app volume or managed site volume) that supports snapshotting. Only BTRFS-backed volumes support snapshotting. Snapshot site volumes carry metadata identifying their source. They are inherently read-only: even when mapped without the read-only flag, mounts of snapshot site volumes are always read-only.
 
+> r[volume.site.snapshot.events]
+> Creating a snapshot site volume must emit an event identifying the new snapshot and the source volume (app-scoped or site-scoped).
+
 > r[volume.site.promote]
 > An operator may promote a snapshot site volume to a fresh managed site volume with an operator-chosen name. The runtime must materialise the new volume as a writable copy seeded from the snapshot's contents and record it as a managed site volume. The source snapshot is not modified and remains available; operators may independently delete it afterwards if they wish. Promotion is only supported on BTRFS-backed installations because it relies on the same snapshotting primitive as `volume.site.snapshot`.
+
+> r[volume.site.promote.events]
+> Promoting a snapshot site volume must emit an event identifying the new managed site volume and the source snapshot. The promoted volume is treated as a new managed site volume for audit purposes, distinct from the source snapshot which remains intact.
+
+> r[volume.external.mapping.events]
+> Creating, removing, or retargeting an operator-configured external volume mapping must emit an event identifying the app and external volume name, the new mapping target (or absence of one for removal), and — for retargeting — the previous target. These events feed both the event feed and the [audit log](#r--audit.log).
 
 > r[actuate.volume.stop]
 > Stopping a Volume instance must remove the named volume.
