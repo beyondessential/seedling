@@ -6,7 +6,7 @@ use tokio::sync::broadcast;
 
 use crate::{
     actor::Actor,
-    names::{ActionName, AppName, ForwardId, SessionId},
+    names::{ActionName, AppName, ExternalVolumeName, ForwardId, HeldVolumeId, SessionId},
 };
 
 // i[event.types]
@@ -226,7 +226,7 @@ pub enum OiEvent {
     },
     HeldVolumeCreated {
         timestamp: Timestamp,
-        held_id: String,
+        held_id: HeldVolumeId,
         app: AppName,
         volume_name: String,
         reason: String,
@@ -235,7 +235,7 @@ pub enum OiEvent {
     },
     HeldVolumeDeleted {
         timestamp: Timestamp,
-        held_id: String,
+        held_id: HeldVolumeId,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
@@ -259,7 +259,7 @@ pub enum OiEvent {
         /// Set when the deletion routed through the held-volume mechanism;
         /// absent for bind site volumes whose host path is left untouched.
         #[serde(skip_serializing_if = "Option::is_none")]
-        held_id: Option<String>,
+        held_id: Option<HeldVolumeId>,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
@@ -286,7 +286,7 @@ pub enum OiEvent {
     ExternalVolumeMapped {
         timestamp: Timestamp,
         app: AppName,
-        external_name: String,
+        external_name: ExternalVolumeName,
         /// "exported" or "site".
         target_kind: String,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -300,7 +300,7 @@ pub enum OiEvent {
     ExternalVolumeUnmapped {
         timestamp: Timestamp,
         app: AppName,
-        external_name: String,
+        external_name: ExternalVolumeName,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
@@ -308,7 +308,7 @@ pub enum OiEvent {
     ExternalVolumeRemapped {
         timestamp: Timestamp,
         app: AppName,
-        external_name: String,
+        external_name: ExternalVolumeName,
         target_kind: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         target_app: Option<AppName>,
@@ -560,7 +560,7 @@ impl EventSender {
     // r[impl actuate.volume.hold.events]
     pub fn held_volume_created(
         &self,
-        held_id: &str,
+        held_id: HeldVolumeId,
         app: &AppName,
         volume_name: &str,
         reason: &str,
@@ -568,7 +568,7 @@ impl EventSender {
     ) {
         self.emit(OiEvent::HeldVolumeCreated {
             timestamp: now(),
-            held_id: held_id.to_owned(),
+            held_id,
             app: app.clone(),
             volume_name: volume_name.to_owned(),
             reason: reason.to_owned(),
@@ -577,10 +577,10 @@ impl EventSender {
     }
 
     // r[impl actuate.volume.hold.events]
-    pub fn held_volume_deleted(&self, held_id: &str, actor: Option<Arc<Actor>>) {
+    pub fn held_volume_deleted(&self, held_id: HeldVolumeId, actor: Option<Arc<Actor>>) {
         self.emit(OiEvent::HeldVolumeDeleted {
             timestamp: now(),
-            held_id: held_id.to_owned(),
+            held_id,
             actor,
         });
     }
@@ -607,14 +607,14 @@ impl EventSender {
         &self,
         name: &str,
         kind: &str,
-        held_id: Option<&str>,
+        held_id: Option<HeldVolumeId>,
         actor: Option<Arc<Actor>>,
     ) {
         self.emit(OiEvent::SiteVolumeDeleted {
             timestamp: now(),
             name: name.to_owned(),
             kind: kind.to_owned(),
-            held_id: held_id.map(str::to_owned),
+            held_id,
             actor,
         });
     }
@@ -654,7 +654,7 @@ impl EventSender {
     pub fn external_volume_mapped(
         &self,
         app: &AppName,
-        external_name: &str,
+        external_name: &ExternalVolumeName,
         target_kind: &str,
         target_app: Option<&AppName>,
         target_volume: &str,
@@ -664,7 +664,7 @@ impl EventSender {
         self.emit(OiEvent::ExternalVolumeMapped {
             timestamp: now(),
             app: app.clone(),
-            external_name: external_name.to_owned(),
+            external_name: external_name.clone(),
             target_kind: target_kind.to_owned(),
             target_app: target_app.cloned(),
             target_volume: target_volume.to_owned(),
@@ -677,13 +677,13 @@ impl EventSender {
     pub fn external_volume_unmapped(
         &self,
         app: &AppName,
-        external_name: &str,
+        external_name: &ExternalVolumeName,
         actor: Option<Arc<Actor>>,
     ) {
         self.emit(OiEvent::ExternalVolumeUnmapped {
             timestamp: now(),
             app: app.clone(),
-            external_name: external_name.to_owned(),
+            external_name: external_name.clone(),
             actor,
         });
     }
@@ -692,7 +692,7 @@ impl EventSender {
     pub fn external_volume_remapped(
         &self,
         app: &AppName,
-        external_name: &str,
+        external_name: &ExternalVolumeName,
         new: ExternalMappingSnapshot<'_>,
         previous: ExternalMappingSnapshot<'_>,
         actor: Option<Arc<Actor>>,
@@ -700,7 +700,7 @@ impl EventSender {
         self.emit(OiEvent::ExternalVolumeRemapped {
             timestamp: now(),
             app: app.clone(),
-            external_name: external_name.to_owned(),
+            external_name: external_name.clone(),
             target_kind: new.kind.to_owned(),
             target_app: new.app.cloned(),
             target_volume: new.volume.to_owned(),
@@ -944,7 +944,7 @@ impl EventSenderWithActor {
     // r[impl actuate.volume.hold.events]
     pub fn held_volume_created(
         &self,
-        held_id: &str,
+        held_id: HeldVolumeId,
         app: &AppName,
         volume_name: &str,
         reason: &str,
@@ -959,7 +959,7 @@ impl EventSenderWithActor {
     }
 
     // r[impl actuate.volume.hold.events]
-    pub fn held_volume_deleted(&self, held_id: &str) {
+    pub fn held_volume_deleted(&self, held_id: HeldVolumeId) {
         self.inner
             .held_volume_deleted(held_id, Some(Arc::clone(&self.actor)));
     }
@@ -971,7 +971,7 @@ impl EventSenderWithActor {
     }
 
     // r[impl volume.site.lifecycle.events]
-    pub fn site_volume_deleted(&self, name: &str, kind: &str, held_id: Option<&str>) {
+    pub fn site_volume_deleted(&self, name: &str, kind: &str, held_id: Option<HeldVolumeId>) {
         self.inner
             .site_volume_deleted(name, kind, held_id, Some(Arc::clone(&self.actor)));
     }
@@ -998,10 +998,14 @@ impl EventSenderWithActor {
     }
 
     // r[impl volume.external.mapping.events]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mapping events capture the full target tuple and read_only flag; collapsing them would obscure the audit payload"
+    )]
     pub fn external_volume_mapped(
         &self,
         app: &AppName,
-        external_name: &str,
+        external_name: &ExternalVolumeName,
         target_kind: &str,
         target_app: Option<&AppName>,
         target_volume: &str,
@@ -1019,7 +1023,7 @@ impl EventSenderWithActor {
     }
 
     // r[impl volume.external.mapping.events]
-    pub fn external_volume_unmapped(&self, app: &AppName, external_name: &str) {
+    pub fn external_volume_unmapped(&self, app: &AppName, external_name: &ExternalVolumeName) {
         self.inner
             .external_volume_unmapped(app, external_name, Some(Arc::clone(&self.actor)));
     }
@@ -1028,7 +1032,7 @@ impl EventSenderWithActor {
     pub fn external_volume_remapped(
         &self,
         app: &AppName,
-        external_name: &str,
+        external_name: &ExternalVolumeName,
         new: ExternalMappingSnapshot<'_>,
         previous: ExternalMappingSnapshot<'_>,
     ) {
