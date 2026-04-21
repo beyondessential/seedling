@@ -11,8 +11,12 @@ use serde::{Deserialize, Serialize};
 /// Construct with [`AppName::new`] to validate. Use [`AppName::new_unchecked`]
 /// only when reading from a trusted source (e.g. a SQLite row written after a
 /// prior validation).
+///
+/// [`AppName::default`] yields an empty placeholder used only as a pre-script
+/// seed for [`AppDef::default`]; it is invalid by the name rules and must be
+/// overwritten by the BSL `app.name(...)` call before anything inspects it.
 // l[impl bsl.name]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(transparent)]
 pub struct AppName(String);
 
@@ -113,6 +117,24 @@ impl<'de> Deserialize<'de> for AppName {
     {
         let s = String::deserialize(d)?;
         Self::new(s).map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(feature = "rusqlite")]
+impl rusqlite::ToSql for AppName {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        self.0.to_sql()
+    }
+}
+
+#[cfg(feature = "rusqlite")]
+impl rusqlite::types::FromSql for AppName {
+    fn column_result(
+        value: rusqlite::types::ValueRef<'_>,
+    ) -> rusqlite::types::FromSqlResult<Self> {
+        // Values in SQLite were written after validation on the way in, so
+        // bypass re-validation here (matches the contract of `new_unchecked`).
+        String::column_result(value).map(Self)
     }
 }
 

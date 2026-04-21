@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use rhai::{CustomType, FnPtr, Map, TypeBuilder};
+use seedling_protocol::names::AppName;
 
 use super::{
     Holder,
@@ -123,7 +124,7 @@ pub(crate) fn append_action_schedule(action_name: &str, expr: &str) {
 // l[impl app.resources.names]
 #[derive(Debug, Default, Clone)]
 pub struct AppDef {
-    pub name: String,
+    pub name: AppName,
     /// Parameters declared by the BSL script via `app.param()`, with optional schema metadata.
     pub params: BTreeMap<String, ParamDef>,
     pub resources: BTreeMap<ResourceId, Resource>,

@@ -5,7 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
-seedling-protocol = { path = "../protocol" }
+seedling-protocol = { path = "../protocol", features = ["rusqlite"] }
 
 arc-swap = "1.7.1"
 clap.workspace = true

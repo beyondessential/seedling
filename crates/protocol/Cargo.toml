@@ -11,6 +11,7 @@ futures-util.workspace = true
 jiff.workspace = true
 quinn.workspace = true
 rand_core.workspace = true
+rusqlite = { version = "0.39.0", features = ["bundled"], optional = true }
 rustls.workspace = true
 rustls-pki-types.workspace = true
 serde.workspace = true
@@ -19,3 +20,6 @@ sha2.workspace = true
 subtle.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+
+[features]
+rusqlite = ["dep:rusqlite"]

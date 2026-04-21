@@ -1,3 +1,4 @@
+use seedling_protocol::names::AppName;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -56,7 +57,7 @@ pub enum InstanceVariant {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ResourceInstance {
     pub id: InstanceId,
-    pub app: String,
+    pub app: AppName,
     pub kind: ResourceKind,
     /// The BSL-level resource name.  `None` for anonymous resources.
     pub name: Option<String>,
@@ -69,12 +70,7 @@ pub struct ResourceInstance {
 impl ResourceInstance {
     // r[impl identity.components]
     // r[impl identity.job]
-    pub fn new_singleton(
-        app: impl Into<String>,
-        kind: ResourceKind,
-        name: impl Into<String>,
-    ) -> Self {
-        let app = app.into();
+    pub fn new_singleton(app: AppName, kind: ResourceKind, name: impl Into<String>) -> Self {
         let name = name.into();
         // Jobs use a fixed all-zero instance ID so that their identity is
         // fully deterministic without persisting state.  Their display name
@@ -111,9 +107,8 @@ impl ResourceInstance {
     }
 
     // r[impl identity.scaled]
-    pub fn new_scaled(app: impl Into<String>, kind: ResourceKind, name: impl Into<String>) -> Self {
+    pub fn new_scaled(app: AppName, kind: ResourceKind, name: impl Into<String>) -> Self {
         let id = InstanceId::generate();
-        let app = app.into();
         let name = name.into();
         let display_name = format!("{}-{}-{}", app, name, id.display_suffix());
         Self {
@@ -127,9 +122,8 @@ impl ResourceInstance {
     }
 
     // r[impl identity.anonymous]
-    pub fn new_anonymous(app: impl Into<String>, kind: ResourceKind) -> Self {
+    pub fn new_anonymous(app: AppName, kind: ResourceKind) -> Self {
         let id = InstanceId::generate();
-        let app = app.into();
         let display_name = format!("{}-{}", app, kind_slug(kind));
         Self {
             id,
@@ -202,10 +196,14 @@ mod tests {
     use super::*;
     use crate::defs::resource::ResourceKind;
 
+    fn name(s: &str) -> AppName {
+        AppName::new(s).unwrap()
+    }
+
     // r[verify identity.stable]
     #[test]
     fn clone_equals_original() {
-        let a = ResourceInstance::new_singleton("app", ResourceKind::Deployment, "web");
+        let a = ResourceInstance::new_singleton(name("app"), ResourceKind::Deployment, "web");
         let b = a.clone();
         assert_eq!(a, b);
         assert_eq!(a.id, b.id);
@@ -214,8 +212,8 @@ mod tests {
     // r[verify identity.components]
     #[test]
     fn separately_constructed_instances_differ() {
-        let a = ResourceInstance::new_singleton("app", ResourceKind::Deployment, "web");
-        let b = ResourceInstance::new_singleton("app", ResourceKind::Deployment, "web");
+        let a = ResourceInstance::new_singleton(name("app"), ResourceKind::Deployment, "web");
+        let b = ResourceInstance::new_singleton(name("app"), ResourceKind::Deployment, "web");
         assert_ne!(a.id, b.id);
         assert_ne!(a, b);
     }
@@ -223,7 +221,7 @@ mod tests {
     // r[verify identity.scaled]
     #[test]
     fn scaled_display_name_includes_suffix() {
-        let a = ResourceInstance::new_scaled("myapp", ResourceKind::Deployment, "web");
+        let a = ResourceInstance::new_scaled(name("myapp"), ResourceKind::Deployment, "web");
         assert!(
             a.display_name.starts_with("myapp-web-"),
             "display_name was: {}",
@@ -238,8 +236,8 @@ mod tests {
     // r[verify identity.scaled]
     #[test]
     fn two_scaled_instances_have_different_ids_and_display_names() {
-        let a = ResourceInstance::new_scaled("myapp", ResourceKind::Deployment, "web");
-        let b = ResourceInstance::new_scaled("myapp", ResourceKind::Deployment, "web");
+        let a = ResourceInstance::new_scaled(name("myapp"), ResourceKind::Deployment, "web");
+        let b = ResourceInstance::new_scaled(name("myapp"), ResourceKind::Deployment, "web");
         assert_ne!(a.id, b.id);
         assert_ne!(a.display_name, b.display_name);
     }
@@ -247,14 +245,14 @@ mod tests {
     // r[verify identity.components]
     #[test]
     fn singleton_display_name_has_no_suffix() {
-        let a = ResourceInstance::new_singleton("myapp", ResourceKind::Deployment, "web");
+        let a = ResourceInstance::new_singleton(name("myapp"), ResourceKind::Deployment, "web");
         assert_eq!(a.display_name, "myapp-web");
     }
 
     // r[verify identity.anonymous]
     #[test]
     fn anonymous_has_no_name() {
-        let a = ResourceInstance::new_anonymous("myapp", ResourceKind::Deployment);
+        let a = ResourceInstance::new_anonymous(name("myapp"), ResourceKind::Deployment);
         assert!(a.name.is_none());
         assert_eq!(a.display_name, "myapp-deployment");
     }
@@ -262,7 +260,7 @@ mod tests {
     // r[verify identity.stable]
     #[test]
     fn serde_roundtrip_preserves_id() {
-        let r = ResourceInstance::new_singleton("app", ResourceKind::Deployment, "web");
+        let r = ResourceInstance::new_singleton(name("app"), ResourceKind::Deployment, "web");
         let json = serde_json::to_string(&r).unwrap();
         let r2: ResourceInstance = serde_json::from_str(&json).unwrap();
         assert_eq!(r, r2);
