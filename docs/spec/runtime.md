@@ -446,8 +446,8 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > r[schedule.state]
 > The runtime stores `(app_name, action_name, cronexpr, last_fired_at)` tuples durably. `last_fired_at` is updated on each successful fire.
 
-> r[schedule.startup-grace]
-> On startup, for schedule entries whose cron expression interval is 10 minutes or greater, the fire window is extended from 59 seconds to 5 minutes. This covers short runtime restarts without causing a storm of catch-up fires for frequent schedules.
+> r[schedule.catch-up]
+> If the runtime detects that a scheduled fire time has already passed (for example because the daemon was not running at the moment of the scheduled fire), the schedule fires exactly once to catch up, regardless of how many scheduled boundaries were missed. The schedule's `last_fired_at` is then set to the catch-up fire time, so subsequent cron boundaries are evaluated from there.
 
 > r[schedule.prune]
 > When a BSL script is evaluated, the runtime must prune schedule state rows that no longer match any `(action, cronexpr)` pair declared in the script.

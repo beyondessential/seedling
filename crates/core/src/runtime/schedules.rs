@@ -15,12 +15,11 @@ pub struct FiredSchedule {
 
 // r[impl schedule.tick]
 // r[impl schedule.fire]
-// r[impl schedule.startup-grace]
+// r[impl schedule.catch-up]
 pub fn check_due_schedules(
     db: &Db,
     scheduler: &mut Scheduler,
     now: Timestamp,
-    is_startup: bool,
     app_generations: &dyn Fn(&str) -> Option<u64>,
 ) -> Vec<FiredSchedule> {
     let rows = match db::list_all_schedules(db) {
@@ -70,20 +69,12 @@ pub fn check_due_schedules(
             }
         };
 
-        // r[impl schedule.fire]
-        let window_secs = if is_startup && is_infrequent_schedule(&crontab, now) {
-            // r[impl schedule.startup-grace]
-            300
-        } else {
-            59
-        };
-
-        let deadline = now;
-        let window_start = deadline
-            .checked_sub(SignedDuration::from_secs(window_secs))
-            .unwrap_or(deadline);
-
-        if next_fire > window_start && next_fire <= deadline {
+        // Fire whenever the next scheduled boundary is at or before now. No
+        // lower bound: if the daemon missed the boundary window, we still
+        // fire once to catch up. Because last_fired_at is updated to `now`
+        // on fire, find_next() on the next tick returns the next future
+        // boundary, so we do not fire repeatedly for older missed windows.
+        if next_fire <= now {
             let generation = app_generations(&row.app).unwrap_or(0);
             let result = scheduler.request(
                 &row.app,
@@ -148,31 +139,10 @@ pub fn check_due_schedules(
     fired
 }
 
-/// Heuristic: a schedule is "infrequent" if the gap between the two next fire
-/// times from `now` is >= 10 minutes. This avoids computing the full period
-/// from the cron expression.
-fn is_infrequent_schedule(crontab: &cronexpr::Crontab, now: Timestamp) -> bool {
-    let first = match crontab.find_next(now) {
-        Ok(z) => z,
-        Err(_) => return false,
-    };
-    let first_ts = Timestamp::from(first);
-    let second = match crontab.find_next(first_ts) {
-        Ok(z) => z,
-        Err(_) => return false,
-    };
-    let second_ts = Timestamp::from(second);
-    let ten_minutes_later = first_ts
-        .checked_add(SignedDuration::from_mins(10))
-        .unwrap_or(first_ts);
-    second_ts >= ten_minutes_later
-}
-
 /// Wrapper for the main loop to call periodically. Tracks its own last-check
 /// timestamp so it runs at most once per minute.
 pub struct ScheduleTicker {
     last_check: Option<Timestamp>,
-    is_startup: bool,
 }
 
 impl Default for ScheduleTicker {
@@ -183,17 +153,14 @@ impl Default for ScheduleTicker {
 
 impl ScheduleTicker {
     pub fn new() -> Self {
-        Self {
-            last_check: None,
-            is_startup: true,
-        }
+        Self { last_check: None }
     }
 
     // r[impl schedule.tick]
-    /// Returns `Some((now, is_startup))` if it is time to run a schedule tick,
-    /// updating internal state. The caller should then pass those parameters to
+    /// Returns `Some(now)` if it is time to run a schedule tick, updating
+    /// internal state. The caller should then pass `now` to
     /// `check_due_schedules`. Returns `None` if the interval has not elapsed.
-    pub fn maybe_tick(&mut self) -> Option<(Timestamp, bool)> {
+    pub fn maybe_tick(&mut self) -> Option<Timestamp> {
         let now = Timestamp::now();
         if let Some(last) = self.last_check {
             let threshold = last
@@ -203,10 +170,8 @@ impl ScheduleTicker {
                 return None;
             }
         }
-        let is_startup = self.is_startup;
         self.last_check = Some(now);
-        self.is_startup = false;
-        Some((now, is_startup))
+        Some(now)
     }
 }
 
@@ -270,11 +235,43 @@ mod tests {
             .unwrap();
 
         let mut scheduler = Scheduler::new();
-        let fired = check_due_schedules(&db, &mut scheduler, now, false, &|_| Some(1));
+        let fired = check_due_schedules(&db, &mut scheduler, now, &|_| Some(1));
         assert_eq!(fired.len(), 1);
         assert_eq!(fired[0].app, "myapp");
         assert_eq!(fired[0].action, "backup");
         assert!(fired[0].accepted);
+    }
+
+    // r[verify schedule.catch-up]
+    // A schedule whose next fire time sits well in the past (because the
+    // daemon was offline through the cron boundary) must fire once on the
+    // next tick, rather than staying stuck forever because the old 59 s
+    // fire-window excluded it.
+    #[test]
+    fn check_due_catches_up_long_missed_schedule() {
+        let db = Db::open_in_memory().unwrap();
+
+        let pairs = vec![("backup".to_owned(), "0 * * * *".to_owned())];
+        db::ensure_schedules(&db, "myapp", &pairs).unwrap();
+
+        // Last fired ~25 hours ago; next cron boundary from that point is
+        // yesterday's 18:00, which is well outside any 59 s or 5-minute
+        // window centred on `now`.
+        db::upsert_schedule_fired(&db, "myapp", "backup", "0 * * * *", "2026-04-20T17:05:00Z")
+            .unwrap();
+
+        let now: Timestamp = "2026-04-21T18:37:22Z".parse().unwrap();
+        let mut scheduler = Scheduler::new();
+        let fired = check_due_schedules(&db, &mut scheduler, now, &|_| Some(1));
+        assert_eq!(fired.len(), 1, "missed hourly schedule must catch up");
+
+        // After firing we record last_fired_at = now, so the immediate next
+        // check sees the next boundary still in the future.
+        let fired_again = check_due_schedules(&db, &mut scheduler, now, &|_| Some(1));
+        assert!(
+            fired_again.is_empty(),
+            "second check at same instant must not refire"
+        );
     }
 
     // r[verify schedule.start-reject]

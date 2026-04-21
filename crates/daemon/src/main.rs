@@ -875,7 +875,7 @@ async fn main() {
                 // r[impl schedule.tick]
                 // Snapshot generations before acquiring the DB to maintain
                 // consistent lock order (registry → db) across the codebase.
-                if let Some((now, is_startup)) = schedule_ticker.maybe_tick() {
+                if let Some(now) = schedule_ticker.maybe_tick() {
                     let app_generations: std::collections::HashMap<String, u64> = {
                         let reg = schedule_registry.read();
                         reg.list()
@@ -892,7 +892,6 @@ async fn main() {
                             db,
                             &mut sched,
                             now,
-                            is_startup,
                             &|app_name| app_generations.get(app_name).copied(),
                         );
                         drop(sched);
