@@ -1,7 +1,7 @@
 use std::{os::unix::fs::PermissionsExt, path::Path, time::Duration};
 
 use rusqlite::{Connection, Result as SqlResult};
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{ActionName, AppName};
 use sha2::{Digest, Sha256};
 
 mod migrations {
@@ -415,7 +415,7 @@ impl Db {
 
 pub struct ScheduleRow {
     pub app: AppName,
-    pub action: String,
+    pub action: ActionName,
     pub cronexpr: String,
     pub last_fired_at: Option<String>,
 }
@@ -424,7 +424,7 @@ pub struct ScheduleRow {
 pub fn upsert_schedule_fired(
     db: &Db,
     app: &AppName,
-    action: &str,
+    action: &ActionName,
     cronexpr: &str,
     fired_at: &str,
 ) -> rusqlite::Result<()> {
@@ -473,7 +473,7 @@ pub fn list_all_schedules(db: &Db) -> rusqlite::Result<Vec<ScheduleRow>> {
 pub fn prune_schedules(
     db: &Db,
     app: &AppName,
-    valid_pairs: &[(String, String)],
+    valid_pairs: &[(ActionName, String)],
 ) -> rusqlite::Result<()> {
     let current = list_schedules(db, app)?;
     for row in current {
@@ -494,7 +494,7 @@ pub fn prune_schedules(
 pub fn ensure_schedules(
     db: &Db,
     app: &AppName,
-    pairs: &[(String, String)],
+    pairs: &[(ActionName, String)],
 ) -> rusqlite::Result<()> {
     for (action, cronexpr) in pairs {
         db.conn.execute(

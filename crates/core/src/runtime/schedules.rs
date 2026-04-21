@@ -1,5 +1,5 @@
 use jiff::{SignedDuration, Timestamp};
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{ActionName, AppName};
 
 use crate::defs::action::parse_cron_expr;
 use crate::runtime::barrier::OperationId;
@@ -8,7 +8,7 @@ use crate::runtime::scheduler::{ScheduleResult, Scheduler};
 
 pub struct FiredSchedule {
     pub app: AppName,
-    pub action: String,
+    pub action: ActionName,
     pub accepted: bool,
     pub operation_id: Option<OperationId>,
     pub generation: u64,
@@ -185,13 +185,17 @@ mod tests {
         AppName::new(s).unwrap()
     }
 
+    fn action_name(s: &str) -> ActionName {
+        ActionName::new(s).unwrap()
+    }
+
     // r[verify schedule.state]
     #[test]
     fn schedule_table_roundtrip() {
         let db = Db::open_in_memory().unwrap();
         let pairs = vec![
-            ("backup".to_owned(), "0 2 * * *".to_owned()),
-            ("cleanup".to_owned(), "*/15 * * * *".to_owned()),
+            (action_name("backup"), "0 2 * * *".to_owned()),
+            (action_name("cleanup"), "*/15 * * * *".to_owned()),
         ];
         db::ensure_schedules(&db, &app_name("myapp"), &pairs).unwrap();
 
@@ -201,7 +205,7 @@ mod tests {
         db::upsert_schedule_fired(
             &db,
             &app_name("myapp"),
-            "backup",
+            &action_name("backup"),
             "0 2 * * *",
             "2026-01-01T02:00:00Z",
         )
@@ -220,12 +224,12 @@ mod tests {
     fn prune_removes_stale_schedules() {
         let db = Db::open_in_memory().unwrap();
         let pairs = vec![
-            ("backup".to_owned(), "0 2 * * *".to_owned()),
-            ("cleanup".to_owned(), "*/15 * * * *".to_owned()),
+            (action_name("backup"), "0 2 * * *".to_owned()),
+            (action_name("cleanup"), "*/15 * * * *".to_owned()),
         ];
         db::ensure_schedules(&db, &app_name("myapp"), &pairs).unwrap();
 
-        let valid = vec![("backup".to_owned(), "0 2 * * *".to_owned())];
+        let valid = vec![(action_name("backup"), "0 2 * * *".to_owned())];
         db::prune_schedules(&db, &app_name("myapp"), &valid).unwrap();
 
         let rows = db::list_schedules(&db, &app_name("myapp")).unwrap();
@@ -238,14 +242,14 @@ mod tests {
     fn check_due_fires_overdue_schedule() {
         let db = Db::open_in_memory().unwrap();
 
-        let pairs = vec![("backup".to_owned(), "* * * * *".to_owned())];
+        let pairs = vec![(action_name("backup"), "* * * * *".to_owned())];
         db::ensure_schedules(&db, &app_name("myapp"), &pairs).unwrap();
 
         let now: Timestamp = "2026-04-18T12:01:00Z".parse().unwrap();
         db::upsert_schedule_fired(
             &db,
             &app_name("myapp"),
-            "backup",
+            &action_name("backup"),
             "* * * * *",
             "2026-04-18T12:00:00Z",
         )
@@ -268,7 +272,7 @@ mod tests {
     fn check_due_catches_up_long_missed_schedule() {
         let db = Db::open_in_memory().unwrap();
 
-        let pairs = vec![("backup".to_owned(), "0 * * * *".to_owned())];
+        let pairs = vec![(action_name("backup"), "0 * * * *".to_owned())];
         db::ensure_schedules(&db, &app_name("myapp"), &pairs).unwrap();
 
         // Last fired ~25 hours ago; next cron boundary from that point is
@@ -277,7 +281,7 @@ mod tests {
         db::upsert_schedule_fired(
             &db,
             &app_name("myapp"),
-            "backup",
+            &action_name("backup"),
             "0 * * * *",
             "2026-04-20T17:05:00Z",
         )
@@ -306,7 +310,7 @@ mod tests {
         let mut engine = Engine::new();
         engine.build_type::<Action>();
 
-        let action = Action::new("start".to_owned(), app_name("testapp"));
+        let action = Action::new(action_name("start"), app_name("testapp"));
         let mut scope = rhai::Scope::new();
         scope.push("action", action);
 

@@ -1,7 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::params;
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{ActionName, AppName};
 
 use crate::defs::resource::ResourceKind;
 use crate::runtime::barrier::{ActionLogEntry, BarrierRecord, CallKind, OperationId};
@@ -350,7 +350,7 @@ pub fn insert_action_log_entry(
     db: &Db,
     operation_id: &OperationId,
     app: &AppName,
-    action_name: &str,
+    action_name: &ActionName,
     entry: &ActionLogEntry,
 ) -> rusqlite::Result<()> {
     let resources_json = serde_json::to_string(&entry.resources).unwrap_or_default();
@@ -469,7 +469,7 @@ pub fn load_action_log(
 pub struct CurrentOperation {
     pub operation_id: OperationId,
     pub app: AppName,
-    pub action_name: String,
+    pub action_name: ActionName,
     pub source_generation: u64,
     pub target_generation: u64,
 }

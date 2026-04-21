@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use parking_lot::{Mutex, RwLock};
 use rhai::{AST, Dynamic, Engine, EvalAltResult, Scope};
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{ActionName, AppName};
 use tokio::sync::Notify;
 
 use crate::defs::app::{App, AppDef, begin_closure_capture, end_closure_capture};
@@ -90,7 +90,7 @@ pub struct DbActionLog {
     db: crate::runtime::db::DbHandle,
     operation_id: super::OperationId,
     app: AppName,
-    action_name: String,
+    action_name: ActionName,
 }
 
 impl DbActionLog {
@@ -98,13 +98,13 @@ impl DbActionLog {
         db: crate::runtime::db::DbHandle,
         operation_id: super::OperationId,
         app: AppName,
-        action_name: impl Into<String>,
+        action_name: ActionName,
     ) -> Self {
         Self {
             db,
             operation_id,
             app,
-            action_name: action_name.into(),
+            action_name,
         }
     }
 }

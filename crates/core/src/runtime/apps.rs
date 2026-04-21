@@ -5,7 +5,7 @@ use std::{
 
 use jiff::Timestamp;
 use parking_lot::{Mutex, RwLock};
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{ActionName, AppName};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 
@@ -51,7 +51,7 @@ pub enum AppStatus {
     NotInstalled,
     Installing,
     Uninstalling,
-    Operating { action_name: String },
+    Operating { action_name: ActionName },
     Running,
     Degraded,
     Faulted,
@@ -346,7 +346,7 @@ fn derive_status(entry: &AppEntry) -> AppStatus {
         AppPhase::Installed => {
             if entry.active_progress.read().is_some() {
                 AppStatus::Operating {
-                    action_name: String::new(),
+                    action_name: ActionName::default(),
                 }
             } else {
                 AppStatus::Running

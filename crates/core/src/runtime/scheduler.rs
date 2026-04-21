@@ -3,7 +3,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{ActionName, AppName};
 
 use crate::runtime::barrier::{CancelToken, OperationId};
 use crate::runtime::history::AutonomousOperation;
@@ -17,7 +17,7 @@ use crate::runtime::identity::InstanceId;
 #[derive(Debug, Clone)]
 pub struct ActiveOperation {
     pub app: AppName,
-    pub action: String,
+    pub action: ActionName,
     pub operation_id: OperationId,
     /// Generation that was current immediately before the change that
     /// triggered this operation. Equal to target for operations not
@@ -39,7 +39,7 @@ pub struct ActiveOperation {
 #[derive(Debug, Clone)]
 pub struct QueuedOperation {
     pub app: AppName,
-    pub action: String,
+    pub action: ActionName,
     pub operation_id: OperationId,
     /// Action params passed by the invoker. For install actions, contains the
     /// validated requirements. Empty map for actions with no params.
@@ -160,7 +160,7 @@ impl Scheduler {
     pub fn request(
         &mut self,
         app: &AppName,
-        action: &str,
+        action: &ActionName,
         params: serde_json::Map<String, serde_json::Value>,
         source_generation: u64,
         target_generation: u64,
@@ -187,7 +187,7 @@ impl Scheduler {
     pub fn request_with_id(
         &mut self,
         app: &AppName,
-        action: &str,
+        action: &ActionName,
         params: serde_json::Map<String, serde_json::Value>,
         source_generation: u64,
         target_generation: u64,
@@ -200,7 +200,7 @@ impl Scheduler {
                 self.call_stack.clear();
                 self.active = Some(ActiveOperation {
                     app: app.clone(),
-                    action: action.to_owned(),
+                    action: action.clone(),
                     operation_id,
                     source_generation,
                     target_generation,
@@ -219,7 +219,7 @@ impl Scheduler {
                 }
                 self.queue.push_back(QueuedOperation {
                     app: app.clone(),
-                    action: action.to_owned(),
+                    action: action.clone(),
                     operation_id,
                     params,
                     source_generation,
@@ -272,15 +272,15 @@ impl Scheduler {
     /// Returns `Err(CycleError)` if `action_name` is already on the stack,
     /// which means this invocation would form a direct or transitive cycle.
     // r[impl operation.composition]
-    pub fn push_call(&mut self, action_name: &str) -> Result<(), CycleError> {
+    pub fn push_call(&mut self, action_name: &ActionName) -> Result<(), CycleError> {
         // r[impl operation.composition.cycles]
-        if self.call_stack.iter().any(|a| a == action_name) {
+        if self.call_stack.iter().any(|a| a == action_name.as_str()) {
             return Err(CycleError {
-                action: action_name.to_owned(),
+                action: action_name.as_str().to_owned(),
                 stack: self.call_stack.clone(),
             });
         }
-        self.call_stack.push(action_name.to_owned());
+        self.call_stack.push(action_name.as_str().to_owned());
         Ok(())
     }
 

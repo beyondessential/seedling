@@ -1,5 +1,5 @@
 use jiff::{SignedDuration, Timestamp};
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{ActionName, AppName};
 
 use crate::defs::action::parse_cron_expr;
 use crate::runtime::backup_strategies;
@@ -57,7 +57,8 @@ pub fn check_due_strategies(db: &Db, now: Timestamp) -> Vec<DueStrategy> {
         };
 
         let backup_app = AppName::new_unchecked("backup");
-        let crontab = match parse_cron_expr(cronexpr_str, &backup_app, &strategy.name) {
+        let strategy_action = ActionName::new_unchecked(&strategy.name);
+        let crontab = match parse_cron_expr(cronexpr_str, &backup_app, &strategy_action) {
             Ok(c) => c,
             Err(e) => {
                 tracing::warn!(strategy = %strategy.name, "invalid cron for backup schedule: {e}");
