@@ -1,0 +1,28 @@
+name: Frontend
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+defaults:
+  run:
+    working-directory: crates/web/frontend
+
+jobs:
+  build:
+    name: Typecheck & build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: crates/web/frontend/package-lock.json
+      - name: npm ci
+        run: npm ci
+      - name: Typecheck
+        run: npx --no-install tsc -b
+      - name: Vite build
+        run: npx --no-install vite build

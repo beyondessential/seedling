@@ -1,0 +1,72 @@
+name: Tracey Spec Validation
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  tracey:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install tracey
+        run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bearcove/tracey/releases/download/v1.3.0/tracey-installer.sh | sh
+
+      - name: Start tracey web server
+        run: |
+          tracey web --port 3199 &
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3199/api/status >/dev/null 2>&1; then
+              echo "tracey web server ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::tracey web server failed to start within 30s"
+          exit 1
+
+      - name: Validate spec
+        run: |
+          RESULT="$(curl -sf http://localhost:3199/api/validate)"
+          echo "$RESULT" | jq .
+          ERRORS="$(echo "$RESULT" | jq '.errorCount')"
+          if [ "$ERRORS" -ne 0 ]; then
+            echo "::error::tracey validate found $ERRORS error(s)"
+            exit 1
+          fi
+
+      - name: Check coverage status
+        run: |
+          STATUS="$(curl -sf http://localhost:3199/api/status)"
+          echo "$STATUS" | jq .
+          FAILED=0
+          while IFS=$'\t' read -r NAME TOTAL COVERED VERIFIED STALE; do
+            echo "[$NAME] $COVERED/$TOTAL implemented, $VERIFIED/$TOTAL verified, $STALE stale"
+            if [ "$STALE" -ne 0 ]; then
+              echo "::error::[$NAME] has $STALE stale reference(s)"
+              FAILED=1
+            fi
+            if [ "$COVERED" -ne "$TOTAL" ]; then
+              echo "::error::[$NAME] only $COVERED/$TOTAL rules have implementation references"
+              FAILED=1
+            fi
+          done < <(echo "$STATUS" | jq -r '.impls[] | [((.spec // "?") + "/" + (.name // "?")), .totalRules, .coveredRules, .verifiedRules, .staleRules] | @tsv')
+          if [ "$FAILED" -ne 0 ]; then
+            echo "--- uncovered rules ---"
+            curl -sf http://localhost:3199/api/uncovered | jq '.bySection[] | .section as $s | .rules[] | "\($s): \(.id.base)"'
+            exit 1
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          STATUS="$(curl -sf http://localhost:3199/api/status 2>/dev/null || echo '{"impls":[]}')"
+          {
+            echo "## Tracey Spec Coverage"
+            echo ""
+            echo "| Spec/Impl | Total | Implemented | Verified | Stale |"
+            echo "|-----------|------:|------------:|---------:|------:|"
+            echo "$STATUS" | jq -r '.impls[] | "| \((.spec // "?"))/\((.name // "?")) | \(.totalRules) | \(.coveredRules) | \(.verifiedRules) | \(.staleRules) |"'
+          } >> "$GITHUB_STEP_SUMMARY"

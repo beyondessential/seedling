@@ -1,0 +1,23 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  SKIP_FRONTEND_BUILD: "1"
+
+jobs:
+  cargo-test:
+    name: cargo test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Create frontend/dist placeholder
+        run: mkdir -p crates/web/frontend/dist
+      - name: cargo test
+        run: cargo test --workspace --all-targets --locked
