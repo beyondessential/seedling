@@ -356,7 +356,7 @@ pub fn insert_action_log_entry(
         match &entry.barrier {
             Some(b) => (
                 Some(format!("{:?}", b.required_state)),
-                Some(b.deadline_secs as i64),
+                b.deadline_secs.map(|d| d as i64),
                 Some(b.satisfied as i32),
                 b.started_at_secs.map(|s| s as i64),
             ),
@@ -431,12 +431,12 @@ pub fn load_action_log(
                 )
             })?;
 
-        let barrier = match (barrier_state, barrier_deadline, barrier_satisfied) {
-            (Some(state_str), Some(deadline), Some(satisfied)) => {
+        let barrier = match (barrier_state, barrier_satisfied) {
+            (Some(state_str), Some(satisfied)) => {
                 let required_state = parse_lifecycle_state(&state_str)?;
                 Some(BarrierRecord {
                     required_state,
-                    deadline_secs: deadline as u64,
+                    deadline_secs: barrier_deadline.map(|d| d as u64),
                     satisfied: satisfied != 0,
                     started_at_secs: barrier_started_at.map(|s| s as u64),
                 })

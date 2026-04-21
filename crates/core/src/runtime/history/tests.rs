@@ -429,7 +429,7 @@ fn insert_and_load_action_log_entry_with_barrier() {
     let op = OperationId("op-1".into());
     let barrier = BarrierRecord {
         required_state: LifecycleState::Ready,
-        deadline_secs: 30,
+        deadline_secs: Some(30),
         satisfied: false,
         started_at_secs: Some(1000),
     };
@@ -439,7 +439,7 @@ fn insert_and_load_action_log_entry_with_barrier() {
     let loaded = load_action_log(&db, &op).unwrap();
     let b = loaded[0].barrier.as_ref().unwrap();
     assert_eq!(b.required_state, LifecycleState::Ready);
-    assert_eq!(b.deadline_secs, 30);
+    assert_eq!(b.deadline_secs, Some(30));
     assert!(!b.satisfied);
     assert_eq!(b.started_at_secs, Some(1000));
 }
@@ -451,7 +451,7 @@ fn barrier_satisfaction_update_via_replace() {
     let op = OperationId("op-1".into());
     let barrier = BarrierRecord {
         required_state: LifecycleState::Ready,
-        deadline_secs: 30,
+        deadline_secs: Some(30),
         satisfied: false,
         started_at_secs: Some(1000),
     };
@@ -464,7 +464,7 @@ fn barrier_satisfaction_update_via_replace() {
         resources: vec![dep("app", "web")],
         barrier: Some(BarrierRecord {
             required_state: LifecycleState::Ready,
-            deadline_secs: 30,
+            deadline_secs: Some(30),
             satisfied: true,
             started_at_secs: Some(1000),
         }),

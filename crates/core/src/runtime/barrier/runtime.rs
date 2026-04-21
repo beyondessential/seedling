@@ -11,6 +11,36 @@ use crate::runtime::registry::{InstanceRegistry, RegistryError};
 use crate::runtime::{LifecycleState, ResourceInstance, restart_gens};
 
 // ---------------------------------------------------------------------------
+// Default barrier deadlines (seconds).
+// ---------------------------------------------------------------------------
+
+/// Default deadline for `.scheduled()` — a pod not scheduled inside this
+/// window almost always indicates a cluster-level problem, not a slow workload.
+// l[impl const.default-deadline]
+pub const DEFAULT_SCHEDULED_DEADLINE_SECS: u64 = 30;
+
+/// Default deadline for `.running()` — same reasoning as `.scheduled()`.
+// l[impl const.default-deadline]
+pub const DEFAULT_RUNNING_DEADLINE_SECS: u64 = 30;
+
+/// Default deadline for `.ready()`. Bounded by default because an unready
+/// resource is usually a deployment bug; callers that legitimately need to
+/// wait indefinitely (e.g. Let's Encrypt cert provisioning under rate limit)
+/// opt in to `.ready_eventually()`.
+// l[impl const.default-deadline]
+pub const DEFAULT_READY_DEADLINE_SECS: u64 = 30;
+
+/// Default deadline for `.terminated()`. Sized for long-running jobs (the
+/// common caller): 6 hours covers almost every realistic batch workload.
+/// Callers that truly have no bound on duration use `.terminated_eventually()`.
+// l[impl const.default-deadline]
+pub const DEFAULT_TERMINATED_DEADLINE_SECS: u64 = 6 * 3600;
+
+/// Default deadline for `rt.stop()` — stops should settle quickly.
+// l[impl const.default-deadline]
+pub const DEFAULT_STOP_DEADLINE_SECS: u64 = 30;
+
+// ---------------------------------------------------------------------------
 // Thread-local flag: set when a BarrierHit is thrown so that subsequent
 // rt.* calls inside a BSL try/catch block re-throw it instead of proceeding.
 // ---------------------------------------------------------------------------
@@ -540,7 +570,7 @@ impl RuntimeInstance {
     fn do_stop(
         &mut self,
         resources: Vec<ResourceInstance>,
-        deadline_secs: u64,
+        deadline_secs: Option<u64>,
     ) -> Result<(), Box<EvalAltResult>> {
         if is_barrier_hit_pending()
             && let Some(ctx) = &self.ctx
@@ -680,7 +710,7 @@ impl CustomType for RuntimeInstance {
                         .into_iter()
                         .map(|(r, _)| r)
                         .collect();
-                    this.do_stop(instances, 30)
+                    this.do_stop(instances, Some(DEFAULT_STOP_DEADLINE_SECS))
                 },
             )
             .with_fn(
@@ -700,7 +730,7 @@ impl CustomType for RuntimeInstance {
                         .into_iter()
                         .map(|(r, _)| r)
                         .collect();
-                    this.do_stop(instances, deadline.max(0) as u64)
+                    this.do_stop(instances, Some(deadline.max(0) as u64))
                 },
             )
             // l[impl rt.query]
@@ -754,7 +784,7 @@ impl Started {
     fn check_barrier(
         &mut self,
         required: LifecycleState,
-        deadline_secs: u64,
+        deadline_secs: Option<u64>,
     ) -> Result<Self, Box<EvalAltResult>> {
         if is_barrier_hit_pending()
             && let Some(ctx) = &self.ctx
@@ -797,13 +827,12 @@ impl Started {
             .and_then(|e| e.barrier.as_ref()?.started_at_secs);
 
         // r[impl barrier.deadline]
-        if let Some(started_at) = started_at
-            && now.saturating_sub(started_at) >= deadline_secs
+        if let (Some(d), Some(started_at)) = (deadline_secs, started_at)
+            && now.saturating_sub(started_at) >= d
         {
             return Err(Box::new(EvalAltResult::ErrorRuntime(
                 format!(
-                    "Barrier deadline of {}s exceeded waiting for {:?}",
-                    deadline_secs, required
+                    "Barrier deadline of {d}s exceeded waiting for {required:?}"
                 )
                 .into(),
                 rhai::Position::NONE,
@@ -913,51 +942,66 @@ impl CustomType for Started {
             .with_fn(
                 "scheduled",
                 |this: &mut Self| -> Result<Started, Box<EvalAltResult>> {
-                    this.check_barrier(LifecycleState::Scheduled, 30)
+                    this.check_barrier(LifecycleState::Scheduled, Some(DEFAULT_SCHEDULED_DEADLINE_SECS))
                 },
             )
             .with_fn(
                 "scheduled",
                 |this: &mut Self, d: i64| -> Result<Started, Box<EvalAltResult>> {
-                    this.check_barrier(LifecycleState::Scheduled, d.max(0) as u64)
+                    this.check_barrier(LifecycleState::Scheduled, Some(d.max(0) as u64))
                 },
             )
             .with_fn(
                 "running",
                 |this: &mut Self| -> Result<Started, Box<EvalAltResult>> {
-                    this.check_barrier(LifecycleState::Running, 30)
+                    this.check_barrier(LifecycleState::Running, Some(DEFAULT_RUNNING_DEADLINE_SECS))
                 },
             )
             .with_fn(
                 "running",
                 |this: &mut Self, d: i64| -> Result<Started, Box<EvalAltResult>> {
-                    this.check_barrier(LifecycleState::Running, d.max(0) as u64)
+                    this.check_barrier(LifecycleState::Running, Some(d.max(0) as u64))
                 },
             )
             .with_fn(
                 "ready",
                 |this: &mut Self| -> Result<Started, Box<EvalAltResult>> {
-                    this.check_barrier(LifecycleState::Ready, 30)
+                    this.check_barrier(LifecycleState::Ready, Some(DEFAULT_READY_DEADLINE_SECS))
                 },
             )
             .with_fn(
                 "ready",
                 |this: &mut Self, d: i64| -> Result<Started, Box<EvalAltResult>> {
-                    this.check_barrier(LifecycleState::Ready, d.max(0) as u64)
+                    this.check_barrier(LifecycleState::Ready, Some(d.max(0) as u64))
+                },
+            )
+            // l[impl rt.started.ready-eventually]
+            .with_fn(
+                "ready_eventually",
+                |this: &mut Self| -> Result<Started, Box<EvalAltResult>> {
+                    this.check_barrier(LifecycleState::Ready, None)
                 },
             )
             // l[impl rt.started.terminated]
             .with_fn(
                 "terminated",
                 |this: &mut Self| -> Result<Termination, Box<EvalAltResult>> {
-                    this.check_barrier(LifecycleState::Terminated, 30)?;
+                    this.check_barrier(LifecycleState::Terminated, Some(DEFAULT_TERMINATED_DEADLINE_SECS))?;
                     Ok(this.compute_termination())
                 },
             )
             .with_fn(
                 "terminated",
                 |this: &mut Self, d: i64| -> Result<Termination, Box<EvalAltResult>> {
-                    this.check_barrier(LifecycleState::Terminated, d.max(0) as u64)?;
+                    this.check_barrier(LifecycleState::Terminated, Some(d.max(0) as u64))?;
+                    Ok(this.compute_termination())
+                },
+            )
+            // l[impl rt.started.terminated-eventually]
+            .with_fn(
+                "terminated_eventually",
+                |this: &mut Self| -> Result<Termination, Box<EvalAltResult>> {
+                    this.check_barrier(LifecycleState::Terminated, None)?;
                     Ok(this.compute_termination())
                 },
             )

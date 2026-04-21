@@ -30,7 +30,11 @@ impl Default for OperationId {
 pub struct BarrierCondition {
     pub resources: Vec<ResourceInstance>,
     pub required_state: LifecycleState,
-    pub deadline_secs: u64,
+    /// `None` means the barrier has no deadline (waits indefinitely, resumed
+    /// only when the condition is satisfied or the operation is cancelled).
+    // r[impl barrier.deadline]
+    #[serde(default)]
+    pub deadline_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,7 +61,9 @@ pub struct ActionLogEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BarrierRecord {
     pub required_state: LifecycleState,
-    pub deadline_secs: u64,
+    /// `None` means the barrier has no deadline.
+    #[serde(default)]
+    pub deadline_secs: Option<u64>,
     pub satisfied: bool,
     pub started_at_secs: Option<u64>,
 }
