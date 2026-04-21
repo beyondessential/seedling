@@ -385,12 +385,13 @@ impl Reconciler {
                 &self.observer,
                 &self.actuator,
                 &self.driver,
+                &self.db,
                 &apps,
                 &self.node_prefix,
                 &self.written_obs,
                 &self.completed_jobs,
             ),
-            phases::run_volumes_phase(&self.observer, &self.actuator, &apps),
+            phases::run_volumes_phase(&self.observer, &self.actuator, &self.db, &apps),
             tokio::time::timeout(
                 Duration::from_secs(10),
                 caddy::ensure_caddy_running(

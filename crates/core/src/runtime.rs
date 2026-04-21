@@ -4,6 +4,7 @@
 
 pub mod apps;
 pub mod audit;
+pub mod autonomous_ops;
 pub mod backup_apps;
 pub mod backup_execution;
 pub mod backup_strategies;

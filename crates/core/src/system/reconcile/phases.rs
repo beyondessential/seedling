@@ -6,7 +6,7 @@ use std::{
 use ipnet::Ipv6Net;
 
 use crate::{
-    runtime::{AppPhase, InstanceRegistry, identity::InstanceId},
+    runtime::{AppPhase, InstanceRegistry, db::DbHandle, identity::InstanceId},
     system::{
         System, actuator::Actuator, observer::Observer, translate::proxy::build_proxy_config,
         types::DataPlaneRules,
@@ -15,10 +15,15 @@ use crate::{
 
 use super::{AppSnapshot, RunningPod, pods, proxy, routes, rules, volumes};
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "phase function fans tick state out to per-app concurrent futures"
+)]
 pub(super) async fn run_pods_phase(
     observer: &Observer,
     actuator: &Actuator,
     driver: &std::sync::Arc<System>,
+    db: &DbHandle,
     apps: &[AppSnapshot],
     node_prefix: &Ipv6Net,
     written_obs: &HashSet<(InstanceId, &'static str)>,
@@ -31,6 +36,7 @@ pub(super) async fn run_pods_phase(
                 observer,
                 actuator,
                 driver,
+                db,
                 &app.desired,
                 node_prefix,
                 written_obs,
@@ -46,13 +52,15 @@ pub(super) async fn run_pods_phase(
 pub(super) async fn run_volumes_phase(
     observer: &Observer,
     actuator: &Actuator,
+    db: &DbHandle,
     apps: &[AppSnapshot],
 ) -> Vec<(String, volumes::VolumeActuationUpdate)> {
     let futures: Vec<_> = apps
         .iter()
         .filter(|app| app.phase != AppPhase::Uninstalling)
         .map(|app| async move {
-            let update = volumes::observe_and_actuate(observer, actuator, &app.desired).await;
+            let update =
+                volumes::observe_and_actuate(observer, actuator, db, &app.desired).await;
             (app.name.clone(), update)
         })
         .collect();

@@ -8,6 +8,7 @@ use tracing::{debug, error};
 use crate::{
     defs::{enums::OnUpdate, resource::Resource},
     runtime::{
+        autonomous_ops, db::DbHandle,
         desired::{DesiredResource, DesiredState},
         identity::{InstanceId, ResourceInstance},
         lifecycle::LifecycleState,
@@ -241,6 +242,7 @@ async fn observe_one_pod<'a>(
 // r[impl autonomous.job-terminal]
 async fn actuate_one_pod(
     actuator: &Actuator,
+    db: &DbHandle,
     mut obs: ObservedInstance<'_>,
     inhibit_stop: bool,
     written_obs: &HashSet<(InstanceId, &'static str)>,
@@ -267,17 +269,33 @@ async fn actuate_one_pod(
             // and the unit is merely Inactive, the pod network must be removed.
             // stop_pod_instance tolerates missing containers; the network
             // removal is the critical side-effect here.
-            match actuator.stop(&dr.instance, &dr.definition).await {
-                Ok(()) => {}
+            let rule = if obs.has_exited {
+                "Job container exited; r[autonomous.job-terminal] requires no restart, only cleanup"
+            } else if previously_ran {
+                "Job container previously ran and is now gone; r[autonomous.job-terminal] requires cleanup of pod network"
+            } else {
+                "Job instance previously recorded as completed but found running; r[autonomous.job-terminal.defense] requires stop"
+            };
+            let op_kind = if already_completed {
+                "job_terminal_defense"
+            } else {
+                "job_terminal_stop"
+            };
+            let op = autonomous_ops::record(db, &dr.instance, op_kind, rule);
+            let outcome = match actuator.stop(&dr.instance, &dr.definition).await {
+                Ok(()) => "ok".to_owned(),
                 Err(e) => {
                     error!(
                         instance = %dr.instance.display_name,
                         error = %e,
                         "pods: stop completed job failed"
                     );
-                    result.stop_failure = Some((dr.instance.clone(), e.to_string()));
+                    let msg = e.to_string();
+                    result.stop_failure = Some((dr.instance.clone(), msg.clone()));
+                    format!("error: {msg}")
                 }
-            }
+            };
+            op.complete(&outcome);
             result.completed_job = Some(dr.instance.id);
             return Some(obs.result);
         }
@@ -324,27 +342,43 @@ async fn actuate_one_pod(
             // unit with the current AppDef config.
             if obs.unit_failed || obs.unit_active || obs.spec_stale {
                 result.running = None;
-                match actuator.stop(&dr.instance, &dr.definition).await {
-                    Ok(()) => {}
+                let rule = if obs.spec_stale {
+                    "Running container's spec is stale; tearing down for restart with current AppDef"
+                } else if obs.unit_failed {
+                    "systemd unit observed in failed state while desired=Ready; tearing down for restart"
+                } else {
+                    "systemd unit active but container not running; tearing down for restart"
+                };
+                let op = autonomous_ops::record(db, &dr.instance, "stop_broken_unit", rule);
+                let outcome = match actuator.stop(&dr.instance, &dr.definition).await {
+                    Ok(()) => "ok".to_owned(),
                     Err(e) => {
                         error!(
                             instance = %dr.instance.display_name,
                             error = %e,
                             "pods: stop broken unit failed"
                         );
-                        result.stop_failure = Some((dr.instance.clone(), e.to_string()));
+                        let msg = e.to_string();
+                        result.stop_failure = Some((dr.instance.clone(), msg.clone()));
+                        format!("error: {msg}")
                     }
-                }
+                };
+                op.complete(&outcome);
                 return Some(obs.result);
             }
 
             let image_ref = image_ref_for_instance(&dr.definition);
-            match actuator.start(&dr.instance, &dr.definition).await {
+            // r[impl autonomous.restart]
+            // r[impl autonomous.scale]
+            let rule = "instance in desired state but not running; r[autonomous.restart] / r[autonomous.scale] requires (re)start";
+            let op = autonomous_ops::record(db, &dr.instance, "start", rule);
+            let outcome = match actuator.start(&dr.instance, &dr.definition).await {
                 Ok(Some(_)) | Ok(None) => {
                     if let Some(img) = image_ref {
                         result.image_pull_success = Some((dr.instance.clone(), img));
                     }
                     result.started_instance = Some(dr.instance.clone());
+                    "ok".to_owned()
                 }
                 Err(crate::system::actuator::ActuateError::ImageUnavailable {
                     ref reference,
@@ -356,6 +390,7 @@ async fn actuate_one_pod(
                         "pods: image pull failed"
                     );
                     result.image_pull_failure = Some((dr.instance.clone(), reference.clone()));
+                    format!("error: image_unavailable {reference}")
                 }
                 Err(ref e @ crate::system::actuator::ActuateError::Registry { .. }) => {
                     error!(
@@ -364,6 +399,7 @@ async fn actuate_one_pod(
                         "pods: registry lookup failed during start"
                     );
                     result.registry_failure = Some(dr.instance.clone());
+                    format!("error: registry_lookup {e}")
                 }
                 // r[impl fault.external-volume-unmapped]
                 Err(crate::system::actuator::ActuateError::ExternalVolumeNotMapped {
@@ -376,6 +412,7 @@ async fn actuate_one_pod(
                         "pods: external volume not mapped"
                     );
                     result.external_volume_failure = Some((dr.instance.clone(), name.clone()));
+                    format!("error: external_volume_unmapped {name}")
                 }
                 Err(e) => {
                     error!(
@@ -383,9 +420,12 @@ async fn actuate_one_pod(
                         error = %e,
                         "pods: start failed"
                     );
-                    result.start_failure = Some((dr.instance.clone(), e.to_string()));
+                    let msg = e.to_string();
+                    result.start_failure = Some((dr.instance.clone(), msg.clone()));
+                    format!("error: {msg}")
                 }
-            }
+            };
+            op.complete(&outcome);
         }
         // r[actuate.deployment.stop]
         // A pod network can outlive its container: when podman --rm removes
@@ -403,17 +443,23 @@ async fn actuate_one_pod(
             result
                 .observations
                 .push((dr.instance.clone(), "stop_sent", json!({})));
-            match actuator.stop(&dr.instance, &dr.definition).await {
-                Ok(()) => {}
+            // r[impl autonomous.scale]
+            let rule = "instance has desired=Unscheduled but pod resources still present (running/container/network); r[autonomous.scale] / scale-down requires stop";
+            let op = autonomous_ops::record(db, &dr.instance, "scale_down_stop", rule);
+            let outcome = match actuator.stop(&dr.instance, &dr.definition).await {
+                Ok(()) => "ok".to_owned(),
                 Err(e) => {
                     error!(
                         instance = %dr.instance.display_name,
                         error = %e,
                         "pods: stop failed"
                     );
-                    result.stop_failure = Some((dr.instance.clone(), e.to_string()));
+                    let msg = e.to_string();
+                    result.stop_failure = Some((dr.instance.clone(), msg.clone()));
+                    format!("error: {msg}")
                 }
-            }
+            };
+            op.complete(&outcome);
         }
         _ => {}
     }
@@ -528,10 +574,15 @@ fn compute_stop_inhibitions(
 // r[impl reconciliation.liveness]
 // r[impl update.rolling.restart-resume]
 // r[impl update.rolling.reboot-resume]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "pod phase observes, decides, and actuates with shared tick state"
+)]
 pub(super) async fn observe_and_actuate(
     observer: &Observer,
     actuator: &Actuator,
     driver: &Arc<System>,
+    db: &DbHandle,
     desired: &DesiredState,
     node_prefix: &Ipv6Net,
     written_obs: &HashSet<(InstanceId, &'static str)>,
@@ -603,6 +654,7 @@ pub(super) async fn observe_and_actuate(
         let inhibit = inhibited_instances.contains(&obs.dr.instance.display_name);
         actuate_futures.push(actuate_one_pod(
             actuator,
+            db,
             obs,
             inhibit,
             written_obs,

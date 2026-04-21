@@ -5,6 +5,7 @@ use tracing::error;
 use crate::{
     defs::resource::Resource,
     runtime::{
+        autonomous_ops, db::DbHandle,
         desired::{DesiredResource, DesiredState},
         identity::ResourceInstance,
         lifecycle::LifecycleState,
@@ -29,6 +30,7 @@ pub(super) struct VolumeActuationUpdate {
 async fn process_one_volume(
     observer: &Observer,
     actuator: &Actuator,
+    db: &DbHandle,
     dr: &DesiredResource,
 ) -> VolumeInstanceResult {
     let mut result = VolumeInstanceResult {
@@ -72,52 +74,100 @@ async fn process_one_volume(
         // r[impl actuate.volume.hold]
         LifecycleState::Ready if backend_mismatch => {
             // Storage backend changed; hold old volume and recreate.
-            if let Err(e) = actuator
+            let hold_op = autonomous_ops::record(
+                db,
+                &dr.instance,
+                "volume_hold_for_migration",
+                "Volume backend mismatch observed; holding existing volume before recreating with current storage backend",
+            );
+            let hold_outcome = match actuator
                 .hold_volume(&dr.instance, &dr.definition, "storage backend changed")
                 .await
             {
-                error!(
-                    instance = %dr.instance.display_name,
-                    error = %e,
-                    "volumes: hold for migration failed"
-                );
-                result.remove_failure = Some((dr.instance.clone(), e.to_string()));
-                return result;
-            }
+                Ok(()) => "ok".to_owned(),
+                Err(e) => {
+                    error!(
+                        instance = %dr.instance.display_name,
+                        error = %e,
+                        "volumes: hold for migration failed"
+                    );
+                    let msg = e.to_string();
+                    result.remove_failure = Some((dr.instance.clone(), msg.clone()));
+                    hold_op.complete(&format!("error: {msg}"));
+                    return result;
+                }
+            };
+            hold_op.complete(&hold_outcome);
             // Now create a fresh volume with the current backend.
-            if let Err(e) = actuator.start(&dr.instance, &dr.definition).await {
-                error!(
-                    instance = %dr.instance.display_name,
-                    error = %e,
-                    "volumes: recreate after migration failed"
-                );
-                result.create_failure = Some((dr.instance.clone(), e.to_string()));
-            }
+            let create_op = autonomous_ops::record(
+                db,
+                &dr.instance,
+                "volume_recreate_after_migration",
+                "After holding mismatched volume, creating replacement with current backend",
+            );
+            let create_outcome = match actuator.start(&dr.instance, &dr.definition).await {
+                Ok(_) => "ok".to_owned(),
+                Err(e) => {
+                    error!(
+                        instance = %dr.instance.display_name,
+                        error = %e,
+                        "volumes: recreate after migration failed"
+                    );
+                    let msg = e.to_string();
+                    result.create_failure = Some((dr.instance.clone(), msg.clone()));
+                    format!("error: {msg}")
+                }
+            };
+            create_op.complete(&create_outcome);
         }
         LifecycleState::Ready if !volume_present => {
             // r[actuate.volume.start]
-            if let Err(e) = actuator.start(&dr.instance, &dr.definition).await {
-                error!(
-                    instance = %dr.instance.display_name,
-                    error = %e,
-                    "volumes: create failed"
-                );
-                result.create_failure = Some((dr.instance.clone(), e.to_string()));
-            }
+            let op = autonomous_ops::record(
+                db,
+                &dr.instance,
+                "volume_create",
+                "Volume desired=Ready but absent on disk; creating",
+            );
+            let outcome = match actuator.start(&dr.instance, &dr.definition).await {
+                Ok(_) => "ok".to_owned(),
+                Err(e) => {
+                    error!(
+                        instance = %dr.instance.display_name,
+                        error = %e,
+                        "volumes: create failed"
+                    );
+                    let msg = e.to_string();
+                    result.create_failure = Some((dr.instance.clone(), msg.clone()));
+                    format!("error: {msg}")
+                }
+            };
+            op.complete(&outcome);
         }
         LifecycleState::Unscheduled if volume_present || backend_mismatch => {
             result
                 .observations
                 .push((dr.instance.clone(), "stop_sent", json!({})));
             // r[actuate.volume.stop]
-            if let Err(e) = actuator.stop(&dr.instance, &dr.definition).await {
-                error!(
-                    instance = %dr.instance.display_name,
-                    error = %e,
-                    "volumes: remove failed"
-                );
-                result.remove_failure = Some((dr.instance.clone(), e.to_string()));
-            }
+            let op = autonomous_ops::record(
+                db,
+                &dr.instance,
+                "volume_remove",
+                "Volume desired=Unscheduled but still present; removing",
+            );
+            let outcome = match actuator.stop(&dr.instance, &dr.definition).await {
+                Ok(()) => "ok".to_owned(),
+                Err(e) => {
+                    error!(
+                        instance = %dr.instance.display_name,
+                        error = %e,
+                        "volumes: remove failed"
+                    );
+                    let msg = e.to_string();
+                    result.remove_failure = Some((dr.instance.clone(), msg.clone()));
+                    format!("error: {msg}")
+                }
+            };
+            op.complete(&outcome);
         }
         _ => {}
     }
@@ -128,13 +178,14 @@ async fn process_one_volume(
 pub(super) async fn observe_and_actuate(
     observer: &Observer,
     actuator: &Actuator,
+    db: &DbHandle,
     desired: &DesiredState,
 ) -> VolumeActuationUpdate {
     let futures: Vec<_> = desired
         .resources
         .iter()
         .filter(|dr| matches!(&dr.definition, Resource::Volume(_)))
-        .map(|dr| process_one_volume(observer, actuator, dr))
+        .map(|dr| process_one_volume(observer, actuator, db, dr))
         .collect();
 
     let results = join_all(futures).await;
