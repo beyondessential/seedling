@@ -2,7 +2,7 @@ use std::{collections::HashMap, path::PathBuf};
 
 use clap::Subcommand;
 use seedling_protocol::client::OiClient;
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{ActionName, AppName};
 
 use super::print_result;
 
@@ -47,7 +47,7 @@ pub(super) enum AppsCommand {
     /// Invoke a lifecycle action
     Action {
         app: AppName,
-        name: String,
+        name: ActionName,
         /// Params as key[=value] (bare key maps to true)
         #[arg(trailing_var_arg = true)]
         params: Vec<String>,
