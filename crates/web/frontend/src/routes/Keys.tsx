@@ -25,6 +25,7 @@ import {
 } from "@mui/material";
 import { useState } from "react";
 import { OiErrorAlert } from "../components/OiErrorAlert";
+import { useGuard } from "../components/SafetyModeProvider";
 import { useOiQuery } from "../hooks/useOi";
 import { useOiAction } from "../hooks/useOiAction";
 import type { AuthorizedKey } from "../lib/types";
@@ -35,6 +36,7 @@ export default function Keys() {
     useOiQuery<AuthorizedKey[]>("/keys/list", {});
   const { execute, loading: mutating, error: mutateError, clearError } =
     useOiAction();
+  const dangerGuard = useGuard("dangerous");
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [fingerprint, setFingerprint] = useState("");
@@ -88,14 +90,19 @@ export default function Keys() {
             </IconButton>
           </span>
         </Tooltip>
-        <Button
-          variant="contained"
-          size="small"
-          startIcon={<AddIcon />}
-          onClick={openAdd}
-        >
-          Authorise key
-        </Button>
+        <Tooltip title={dangerGuard.reason ?? ""}>
+          <span>
+            <Button
+              variant="contained"
+              size="small"
+              startIcon={<AddIcon />}
+              onClick={openAdd}
+              disabled={!dangerGuard.allowed}
+            >
+              Authorise key
+            </Button>
+          </span>
+        </Tooltip>
       </Box>
 
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
@@ -141,16 +148,19 @@ export default function Keys() {
                     {k.added_at ? new Date(k.added_at).toLocaleString() : "—"}
                   </TableCell>
                   <TableCell align="right">
-                    <Tooltip title="Revoke">
-                      <IconButton
-                        size="small"
-                        onClick={() => {
-                          clearError();
-                          setRevoking(k);
-                        }}
-                      >
-                        <DeleteOutlineIcon fontSize="small" />
-                      </IconButton>
+                    <Tooltip title={dangerGuard.reason ?? "Revoke"}>
+                      <span>
+                        <IconButton
+                          size="small"
+                          onClick={() => {
+                            clearError();
+                            setRevoking(k);
+                          }}
+                          disabled={!dangerGuard.allowed}
+                        >
+                          <DeleteOutlineIcon fontSize="small" />
+                        </IconButton>
+                      </span>
                     </Tooltip>
                   </TableCell>
                 </TableRow>
@@ -193,13 +203,17 @@ export default function Keys() {
           <Button onClick={() => setDialogOpen(false)} disabled={mutating}>
             Cancel
           </Button>
-          <Button
-            onClick={submitAdd}
-            variant="contained"
-            disabled={!fingerprintValid || mutating}
-          >
-            Authorise
-          </Button>
+          <Tooltip title={dangerGuard.reason ?? ""}>
+            <span>
+              <Button
+                onClick={submitAdd}
+                variant="contained"
+                disabled={!fingerprintValid || mutating || !dangerGuard.allowed}
+              >
+                Authorise
+              </Button>
+            </span>
+          </Tooltip>
         </DialogActions>
       </Dialog>
 
@@ -223,14 +237,18 @@ export default function Keys() {
           <Button onClick={() => setRevoking(null)} disabled={mutating}>
             Cancel
           </Button>
-          <Button
-            onClick={submitRevoke}
-            variant="contained"
-            color="error"
-            disabled={mutating}
-          >
-            Revoke
-          </Button>
+          <Tooltip title={dangerGuard.reason ?? ""}>
+            <span>
+              <Button
+                onClick={submitRevoke}
+                variant="contained"
+                color="error"
+                disabled={mutating || !dangerGuard.allowed}
+              >
+                Revoke
+              </Button>
+            </span>
+          </Tooltip>
         </DialogActions>
       </Dialog>
     </Box>

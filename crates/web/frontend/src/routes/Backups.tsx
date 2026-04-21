@@ -36,6 +36,7 @@ import {
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { OiErrorAlert } from "../components/OiErrorAlert";
+import { useGuard } from "../components/SafetyModeProvider";
 import { useOiQuery } from "../hooks/useOi";
 import { useOiAction } from "../hooks/useOiAction";
 import type {
@@ -88,6 +89,7 @@ function SnapshotsDialog({
   );
 
   const { execute: doRestore, loading: restoring, error: restoreError } = useOiAction();
+  const writeGuard = useGuard("write");
 
   const reload = () => { refetch(); };
 
@@ -173,11 +175,11 @@ function SnapshotsDialog({
                           <TableRow key={i}>
                             <TableCell sx={{ px: 0.5 }}>
                               {id ? (
-                                <Tooltip title={`Restore snapshot "${id}"`}>
+                                <Tooltip title={writeGuard.reason ?? `Restore snapshot "${id}"`}>
                                   <span>
                                     <IconButton
                                       size="small"
-                                      disabled={restoring}
+                                      disabled={restoring || !writeGuard.allowed}
                                       onClick={() => void handleRestore(id)}
                                     >
                                       <RestoreIcon sx={{ fontSize: 16 }} />
@@ -253,6 +255,7 @@ function CreateStrategyDialog({
   const [volumes, setVolumes] = useState<string[]>([]);
 
   const { execute, loading, error, clearError } = useOiAction();
+  const writeGuard = useGuard("write");
 
   const opts = volumeOptions(siteVols, exportedVols);
 
@@ -321,9 +324,17 @@ function CreateStrategyDialog({
       </DialogContent>
       <DialogActions>
         <Button onClick={handleClose} disabled={loading}>Cancel</Button>
-        <Button variant="contained" onClick={() => void handleSubmit()} disabled={loading || !canSubmit}>
-          {loading ? "Creating…" : "Create"}
-        </Button>
+        <Tooltip title={writeGuard.reason ?? ""}>
+          <span>
+            <Button
+              variant="contained"
+              onClick={() => void handleSubmit()}
+              disabled={loading || !canSubmit || !writeGuard.allowed}
+            >
+              {loading ? "Creating…" : "Create"}
+            </Button>
+          </span>
+        </Tooltip>
       </DialogActions>
     </Dialog>
   );
@@ -343,6 +354,7 @@ function RegisterBackupAppDialog({
   const [app, setApp] = useState(apps[0]?.name ?? "");
 
   const { execute, loading, error, clearError } = useOiAction();
+  const writeGuard = useGuard("write");
 
   const handleClose = () => { clearError(); onClose(); };
 
@@ -379,9 +391,17 @@ function RegisterBackupAppDialog({
       </DialogContent>
       <DialogActions>
         <Button onClick={handleClose} disabled={loading}>Cancel</Button>
-        <Button variant="contained" onClick={() => void handleSubmit()} disabled={loading || !app}>
-          {loading ? "Registering…" : "Register"}
-        </Button>
+        <Tooltip title={writeGuard.reason ?? ""}>
+          <span>
+            <Button
+              variant="contained"
+              onClick={() => void handleSubmit()}
+              disabled={loading || !app || !writeGuard.allowed}
+            >
+              {loading ? "Registering…" : "Register"}
+            </Button>
+          </span>
+        </Tooltip>
       </DialogActions>
     </Dialog>
   );
@@ -402,6 +422,7 @@ export default function Backups() {
   const { execute: doRun, loading: running } = useOiAction();
   const { execute: doDelete } = useOiAction();
   const { execute: doDeregister } = useOiAction();
+  const writeGuard = useGuard("write");
 
   const [createStratOpen, setCreateStratOpen] = useState(false);
   const [registerAppOpen, setRegisterAppOpen] = useState(false);
@@ -456,14 +477,18 @@ export default function Backups() {
         <Box>
           <Box sx={{ display: "flex", alignItems: "center", mb: 1, gap: 1 }}>
             <Typography variant="subtitle1" sx={{ fontWeight: 600, flexGrow: 1 }}>Strategies</Typography>
-            <Button
-              size="small"
-              startIcon={<AddIcon />}
-              onClick={() => setCreateStratOpen(true)}
-              disabled={!backupApps || backupApps.length === 0}
-            >
-              New
-            </Button>
+            <Tooltip title={writeGuard.reason ?? ""}>
+              <span>
+                <Button
+                  size="small"
+                  startIcon={<AddIcon />}
+                  onClick={() => setCreateStratOpen(true)}
+                  disabled={!writeGuard.allowed || !backupApps || backupApps.length === 0}
+                >
+                  New
+                </Button>
+              </span>
+            </Tooltip>
           </Box>
 
           {stratError && <OiErrorAlert error={stratError} />}
@@ -509,17 +534,27 @@ export default function Backups() {
                             <HistoryIcon sx={{ fontSize: 16 }} />
                           </IconButton>
                         </Tooltip>
-                        <Tooltip title="Run backup now">
+                        <Tooltip title={writeGuard.reason ?? "Run backup now"}>
                           <span>
-                            <IconButton size="small" onClick={() => void handleRun(s.name)} disabled={running}>
+                            <IconButton
+                              size="small"
+                              onClick={() => void handleRun(s.name)}
+                              disabled={running || !writeGuard.allowed}
+                            >
                               <PlayArrowIcon sx={{ fontSize: 16 }} />
                             </IconButton>
                           </span>
                         </Tooltip>
-                        <Tooltip title="Delete strategy">
-                          <IconButton size="small" onClick={() => void handleDeleteStrategy(s.name)}>
-                            <DeleteOutlineIcon sx={{ fontSize: 16 }} />
-                          </IconButton>
+                        <Tooltip title={writeGuard.reason ?? "Delete strategy"}>
+                          <span>
+                            <IconButton
+                              size="small"
+                              onClick={() => void handleDeleteStrategy(s.name)}
+                              disabled={!writeGuard.allowed}
+                            >
+                              <DeleteOutlineIcon sx={{ fontSize: 16 }} />
+                            </IconButton>
+                          </span>
                         </Tooltip>
                       </TableCell>
                     </TableRow>
@@ -536,9 +571,18 @@ export default function Backups() {
         <Box>
           <Box sx={{ display: "flex", alignItems: "center", mb: 1, gap: 1 }}>
             <Typography variant="subtitle1" sx={{ fontWeight: 600, flexGrow: 1 }}>Backup Apps</Typography>
-            <Button size="small" startIcon={<AddIcon />} onClick={() => setRegisterAppOpen(true)}>
-              Register
-            </Button>
+            <Tooltip title={writeGuard.reason ?? ""}>
+              <span>
+                <Button
+                  size="small"
+                  startIcon={<AddIcon />}
+                  onClick={() => setRegisterAppOpen(true)}
+                  disabled={!writeGuard.allowed}
+                >
+                  Register
+                </Button>
+              </span>
+            </Tooltip>
           </Box>
 
           {appsError && <OiErrorAlert error={appsError} />}
@@ -569,10 +613,16 @@ export default function Backups() {
                         <Link to={`/apps/${a.app}`}>{a.app}</Link>
                       </TableCell>
                       <TableCell align="right" sx={{ px: 0.5 }}>
-                        <Tooltip title="Deregister">
-                          <IconButton size="small" onClick={() => void handleDeregisterApp(a.app)}>
-                            <DeleteOutlineIcon sx={{ fontSize: 16 }} />
-                          </IconButton>
+                        <Tooltip title={writeGuard.reason ?? "Deregister"}>
+                          <span>
+                            <IconButton
+                              size="small"
+                              onClick={() => void handleDeregisterApp(a.app)}
+                              disabled={!writeGuard.allowed}
+                            >
+                              <DeleteOutlineIcon sx={{ fontSize: 16 }} />
+                            </IconButton>
+                          </span>
                         </Tooltip>
                       </TableCell>
                     </TableRow>

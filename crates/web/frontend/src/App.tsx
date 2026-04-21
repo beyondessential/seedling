@@ -1,6 +1,7 @@
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import ErrorPage from "./components/ErrorPage";
 import { ProtectedRoute } from "./components/ProtectedRoute";
+import { SafetyModeProvider } from "./components/SafetyModeProvider";
 import { SessionProvider } from "./components/SessionProvider";
 import AppDetail from "./routes/AppDetail";
 import Apps from "./routes/Apps";
@@ -45,7 +46,9 @@ const router = createBrowserRouter([
 export default function App() {
   return (
     <SessionProvider>
-      <RouterProvider router={router} />
+      <SafetyModeProvider>
+        <RouterProvider router={router} />
+      </SafetyModeProvider>
     </SessionProvider>
   );
 }

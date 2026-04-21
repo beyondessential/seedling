@@ -25,6 +25,7 @@ import {
 import { useCallback, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { OiErrorAlert } from "../components/OiErrorAlert";
+import { useGuard } from "../components/SafetyModeProvider";
 import { ScriptEditor } from "../components/ScriptEditor";
 import { useEventRefresh } from "../hooks/useEventRefresh";
 import { useOiQuery } from "../hooks/useOi";
@@ -58,6 +59,7 @@ export default function Templates() {
   } = useOiQuery<TemplateSummary[]>("/templates/list", {});
   const { execute, loading: acting, error: actionError } = useOiAction();
   const { execute: removeExec, error: removeError } = useOiAction();
+  const writeGuard = useGuard("write");
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [name, setName] = useState("");
@@ -130,14 +132,19 @@ export default function Templates() {
         <Typography variant="h5" sx={{ flexGrow: 1 }}>
           Templates
         </Typography>
-        <Button
-          size="small"
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => setDialogOpen(true)}
-        >
-          Upload template
-        </Button>
+        <Tooltip title={writeGuard.reason ?? ""}>
+          <span>
+            <Button
+              size="small"
+              variant="contained"
+              startIcon={<AddIcon />}
+              onClick={() => setDialogOpen(true)}
+              disabled={!writeGuard.allowed}
+            >
+              Upload template
+            </Button>
+          </span>
+        </Tooltip>
         <Tooltip title="Refresh">
           <span>
             <IconButton onClick={refetch} disabled={loading} size="small">
@@ -196,17 +203,20 @@ export default function Templates() {
                     {new Date(t.created_at).toLocaleString()}
                   </TableCell>
                   <TableCell align="right" sx={{ px: 0.5 }}>
-                    <Tooltip title="Remove template">
-                      <IconButton
-                        size="small"
-                        color="error"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setConfirmRemove(t.name);
-                        }}
-                      >
-                        <DeleteIcon sx={{ fontSize: 16 }} />
-                      </IconButton>
+                    <Tooltip title={writeGuard.reason ?? "Remove template"}>
+                      <span>
+                        <IconButton
+                          size="small"
+                          color="error"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setConfirmRemove(t.name);
+                          }}
+                          disabled={!writeGuard.allowed}
+                        >
+                          <DeleteIcon sx={{ fontSize: 16 }} />
+                        </IconButton>
+                      </span>
                     </Tooltip>
                   </TableCell>
                 </TableRow>
@@ -263,13 +273,17 @@ export default function Templates() {
           >
             Cancel
           </Button>
-          <Button
-            variant="contained"
-            onClick={handleCreate}
-            disabled={!canSubmit}
-          >
-            {acting ? "Uploading…" : "Upload"}
-          </Button>
+          <Tooltip title={writeGuard.reason ?? ""}>
+            <span>
+              <Button
+                variant="contained"
+                onClick={handleCreate}
+                disabled={!canSubmit || !writeGuard.allowed}
+              >
+                {acting ? "Uploading…" : "Upload"}
+              </Button>
+            </span>
+          </Tooltip>
         </DialogActions>
       </Dialog>
 
@@ -292,13 +306,18 @@ export default function Templates() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setConfirmRemove(null)}>Cancel</Button>
-          <Button
-            color="error"
-            variant="contained"
-            onClick={() => confirmRemove && void handleRemove(confirmRemove)}
-          >
-            Remove
-          </Button>
+          <Tooltip title={writeGuard.reason ?? ""}>
+            <span>
+              <Button
+                color="error"
+                variant="contained"
+                onClick={() => confirmRemove && void handleRemove(confirmRemove)}
+                disabled={!writeGuard.allowed}
+              >
+                Remove
+              </Button>
+            </span>
+          </Tooltip>
         </DialogActions>
       </Dialog>
     </Box>

@@ -25,6 +25,7 @@ import {
 } from "@mui/material";
 import { useState } from "react";
 import { OiErrorAlert } from "../components/OiErrorAlert";
+import { useGuard } from "../components/SafetyModeProvider";
 import { useOiQuery } from "../hooks/useOi";
 import { useOiAction } from "../hooks/useOiAction";
 
@@ -42,6 +43,8 @@ export default function Registries() {
     useOiQuery<RegistriesResponse>("/registries/list", {});
   const { execute, loading: mutating, error: mutateError, clearError } =
     useOiAction();
+  const writeGuard = useGuard("write");
+  const dangerGuard = useGuard("dangerous");
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [registry, setRegistry] = useState("");
@@ -91,14 +94,19 @@ export default function Registries() {
             </IconButton>
           </span>
         </Tooltip>
-        <Button
-          variant="contained"
-          size="small"
-          startIcon={<AddIcon />}
-          onClick={openAdd}
-        >
-          Add registry
-        </Button>
+        <Tooltip title={writeGuard.reason ?? ""}>
+          <span>
+            <Button
+              variant="contained"
+              size="small"
+              startIcon={<AddIcon />}
+              onClick={openAdd}
+              disabled={!writeGuard.allowed}
+            >
+              Add registry
+            </Button>
+          </span>
+        </Tooltip>
       </Box>
 
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
@@ -136,16 +144,19 @@ export default function Registries() {
                 <TableRow key={r} hover>
                   <TableCell sx={{ fontFamily: "monospace" }}>{r}</TableCell>
                   <TableCell align="right">
-                    <Tooltip title="Remove">
-                      <IconButton
-                        size="small"
-                        onClick={() => {
-                          clearError();
-                          setRemoving(r);
-                        }}
-                      >
-                        <DeleteOutlineIcon fontSize="small" />
-                      </IconButton>
+                    <Tooltip title={dangerGuard.reason ?? "Remove"}>
+                      <span>
+                        <IconButton
+                          size="small"
+                          onClick={() => {
+                            clearError();
+                            setRemoving(r);
+                          }}
+                          disabled={!dangerGuard.allowed}
+                        >
+                          <DeleteOutlineIcon fontSize="small" />
+                        </IconButton>
+                      </span>
                     </Tooltip>
                   </TableCell>
                 </TableRow>
@@ -180,13 +191,17 @@ export default function Registries() {
           <Button onClick={() => setDialogOpen(false)} disabled={mutating}>
             Cancel
           </Button>
-          <Button
-            onClick={submitAdd}
-            variant="contained"
-            disabled={!registryValid || mutating}
-          >
-            Add
-          </Button>
+          <Tooltip title={writeGuard.reason ?? ""}>
+            <span>
+              <Button
+                onClick={submitAdd}
+                variant="contained"
+                disabled={!registryValid || mutating || !writeGuard.allowed}
+              >
+                Add
+              </Button>
+            </span>
+          </Tooltip>
         </DialogActions>
       </Dialog>
 
@@ -207,14 +222,18 @@ export default function Registries() {
           <Button onClick={() => setRemoving(null)} disabled={mutating}>
             Cancel
           </Button>
-          <Button
-            onClick={submitRemove}
-            variant="contained"
-            color="error"
-            disabled={mutating}
-          >
-            Remove
-          </Button>
+          <Tooltip title={dangerGuard.reason ?? ""}>
+            <span>
+              <Button
+                onClick={submitRemove}
+                variant="contained"
+                color="error"
+                disabled={mutating || !dangerGuard.allowed}
+              >
+                Remove
+              </Button>
+            </span>
+          </Tooltip>
         </DialogActions>
       </Dialog>
     </Box>

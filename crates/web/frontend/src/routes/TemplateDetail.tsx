@@ -11,12 +11,14 @@ import {
   Divider,
   Stack,
   TextField,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import CodeMirror from "@uiw/react-codemirror";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { OiErrorAlert } from "../components/OiErrorAlert";
+import { useGuard } from "../components/SafetyModeProvider";
 import { ScriptInventory } from "../components/ScriptInventory";
 import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
@@ -48,6 +50,7 @@ export default function TemplateDetail() {
   );
   const { execute, loading: acting, error: actionError } = useOiAction();
   const { execute: removeExec, error: removeError } = useOiAction();
+  const writeGuard = useGuard("write");
 
   const [instantiateOpen, setInstantiateOpen] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
@@ -121,22 +124,32 @@ export default function TemplateDetail() {
         <Typography variant="h5" sx={{ flexGrow: 1, fontFamily: "monospace" }}>
           {template.name}
         </Typography>
-        <Button
-          size="small"
-          variant="contained"
-          startIcon={<PlayArrowIcon />}
-          onClick={() => setInstantiateOpen(true)}
-        >
-          Create app from template
-        </Button>
-        <Button
-          size="small"
-          color="error"
-          startIcon={<DeleteIcon />}
-          onClick={() => setConfirmRemove(true)}
-        >
-          Remove
-        </Button>
+        <Tooltip title={writeGuard.reason ?? ""}>
+          <span>
+            <Button
+              size="small"
+              variant="contained"
+              startIcon={<PlayArrowIcon />}
+              onClick={() => setInstantiateOpen(true)}
+              disabled={!writeGuard.allowed}
+            >
+              Create app from template
+            </Button>
+          </span>
+        </Tooltip>
+        <Tooltip title={writeGuard.reason ?? ""}>
+          <span>
+            <Button
+              size="small"
+              color="error"
+              startIcon={<DeleteIcon />}
+              onClick={() => setConfirmRemove(true)}
+              disabled={!writeGuard.allowed}
+            >
+              Remove
+            </Button>
+          </span>
+        </Tooltip>
       </Box>
 
       {removeError && <OiErrorAlert error={removeError} />}
@@ -231,13 +244,17 @@ export default function TemplateDetail() {
           >
             Cancel
           </Button>
-          <Button
-            variant="contained"
-            onClick={handleInstantiate}
-            disabled={!canInstantiate}
-          >
-            {acting ? "Creating…" : "Create app"}
-          </Button>
+          <Tooltip title={writeGuard.reason ?? ""}>
+            <span>
+              <Button
+                variant="contained"
+                onClick={handleInstantiate}
+                disabled={!canInstantiate || !writeGuard.allowed}
+              >
+                {acting ? "Creating…" : "Create app"}
+              </Button>
+            </span>
+          </Tooltip>
         </DialogActions>
       </Dialog>
 
@@ -260,13 +277,18 @@ export default function TemplateDetail() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setConfirmRemove(false)}>Cancel</Button>
-          <Button
-            color="error"
-            variant="contained"
-            onClick={() => void handleRemove()}
-          >
-            Remove
-          </Button>
+          <Tooltip title={writeGuard.reason ?? ""}>
+            <span>
+              <Button
+                color="error"
+                variant="contained"
+                onClick={() => void handleRemove()}
+                disabled={!writeGuard.allowed}
+              >
+                Remove
+              </Button>
+            </span>
+          </Tooltip>
         </DialogActions>
       </Dialog>
     </Box>

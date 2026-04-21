@@ -15,10 +15,12 @@ import {
   Select,
   Stack,
   TextField,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import { useState } from "react";
 import { OiErrorAlert } from "./OiErrorAlert";
+import { useGuard } from "./SafetyModeProvider";
 import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
 import type {
@@ -40,6 +42,7 @@ interface Props {
 
 export function MapVolumeDialog({ open, onClose, onSuccess, existing, prefill }: Props) {
   const { execute, loading, error, clearError } = useOiAction();
+  const writeGuard = useGuard("write");
 
   const isRemap = !!existing;
   const isFixed = isRemap || !!prefill;
@@ -252,15 +255,19 @@ export function MapVolumeDialog({ open, onClose, onSuccess, existing, prefill }:
       </DialogContent>
       <DialogActions>
         <Button onClick={handleClose} disabled={loading}>Cancel</Button>
-        <Button
-          variant="contained"
-          onClick={() => void handleSubmit()}
-          disabled={loading || !canSubmit}
-        >
-          {loading
-            ? isRemap ? "Remapping…" : "Mapping…"
-            : isRemap ? "Remap" : "Map"}
-        </Button>
+        <Tooltip title={writeGuard.reason ?? ""}>
+          <span>
+            <Button
+              variant="contained"
+              onClick={() => void handleSubmit()}
+              disabled={loading || !canSubmit || !writeGuard.allowed}
+            >
+              {loading
+                ? isRemap ? "Remapping…" : "Mapping…"
+                : isRemap ? "Remap" : "Map"}
+            </Button>
+          </span>
+        </Tooltip>
       </DialogActions>
     </Dialog>
   );

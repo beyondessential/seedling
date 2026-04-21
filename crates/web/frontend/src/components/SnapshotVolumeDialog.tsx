@@ -8,11 +8,13 @@ import {
   DialogTitle,
   Stack,
   TextField,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import { useState } from "react";
 import { useOiAction } from "../hooks/useOiAction";
 import { OiErrorAlert } from "./OiErrorAlert";
+import { useGuard } from "./SafetyModeProvider";
 
 /// Take a point-in-time snapshot of a volume, landing it as a new managed
 /// site volume of kind=Snapshot (read-only at the filesystem level on
@@ -37,6 +39,7 @@ export function SnapshotVolumeDialog({
   onSuccess: () => void;
 }) {
   const { execute, loading, error, clearError } = useOiAction();
+  const writeGuard = useGuard("write");
   const [name, setName] = useState(() => defaultSnapshotName(source));
 
   const handleClose = () => {
@@ -84,14 +87,18 @@ export function SnapshotVolumeDialog({
         <Button onClick={handleClose} disabled={loading}>
           Cancel
         </Button>
-        <Button
-          variant="contained"
-          startIcon={<CameraAltIcon />}
-          onClick={() => void handleSubmit()}
-          disabled={loading || !name.trim()}
-        >
-          {loading ? "Snapshotting…" : "Snapshot"}
-        </Button>
+        <Tooltip title={writeGuard.reason ?? ""}>
+          <span>
+            <Button
+              variant="contained"
+              startIcon={<CameraAltIcon />}
+              onClick={() => void handleSubmit()}
+              disabled={loading || !name.trim() || !writeGuard.allowed}
+            >
+              {loading ? "Snapshotting…" : "Snapshot"}
+            </Button>
+          </span>
+        </Tooltip>
       </DialogActions>
     </Dialog>
   );

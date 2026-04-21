@@ -10,6 +10,7 @@ import { useCallback } from "react";
 import { Link } from "react-router-dom";
 import { useEventRefresh } from "../hooks/useEventRefresh";
 import { useOiQuery } from "../hooks/useOi";
+import { SafetyModeSwitcher } from "./SafetyModeSwitcher";
 import { useSessionContext } from "./SessionProvider";
 import type { ConnectedClients, FaultRecord, HeldVolume, SeedlingEvent } from "../lib/types";
 
@@ -195,6 +196,7 @@ export function Navbar() {
             sx={{ mr: 1, fontFamily: "monospace" }}
           />
         )}
+        <SafetyModeSwitcher />
         {data?.hostname && (
           <Typography variant="body2" sx={{ opacity: 0.85, mr: 1, fontFamily: "monospace" }}>
             {data.hostname}

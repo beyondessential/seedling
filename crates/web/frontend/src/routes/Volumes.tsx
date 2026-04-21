@@ -49,6 +49,7 @@ import { Link } from "react-router-dom";
 import { MapVolumeDialog } from "../components/MapVolumeDialog";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { PromoteSnapshotDialog } from "../components/PromoteSnapshotDialog";
+import { useGuard } from "../components/SafetyModeProvider";
 import { useSessionContext } from "../components/SessionProvider";
 import { SnapshotVolumeDialog } from "../components/SnapshotVolumeDialog";
 import { useOiAction } from "../hooks/useOiAction";
@@ -74,6 +75,7 @@ function ConfirmDeleteHeldDialog({
   onConfirm: () => void;
   loading: boolean;
 }) {
+  const dangerGuard = useGuard("dangerous");
   return (
     <Dialog open onClose={loading ? undefined : onCancel} maxWidth="xs" fullWidth>
       <DialogTitle>Permanently delete held volume?</DialogTitle>
@@ -100,14 +102,18 @@ function ConfirmDeleteHeldDialog({
         <Button onClick={onCancel} disabled={loading}>
           Cancel
         </Button>
-        <Button
-          variant="contained"
-          color="error"
-          onClick={onConfirm}
-          disabled={loading}
-        >
-          {loading ? "Deleting…" : "Delete permanently"}
-        </Button>
+        <Tooltip title={dangerGuard.reason ?? ""}>
+          <span>
+            <Button
+              variant="contained"
+              color="error"
+              onClick={onConfirm}
+              disabled={loading || !dangerGuard.allowed}
+            >
+              {loading ? "Deleting…" : "Delete permanently"}
+            </Button>
+          </span>
+        </Tooltip>
       </DialogActions>
     </Dialog>
   );
@@ -125,6 +131,7 @@ function ConfirmDeleteSiteDialog({
   onConfirm: () => void;
   loading: boolean;
 }) {
+  const dangerGuard = useGuard("dangerous");
   const isBind = volume.kind === "bind";
   return (
     <Dialog open onClose={loading ? undefined : onCancel} maxWidth="xs" fullWidth>
@@ -155,14 +162,18 @@ function ConfirmDeleteSiteDialog({
         <Button onClick={onCancel} disabled={loading}>
           Cancel
         </Button>
-        <Button
-          variant="contained"
-          color={isBind ? "primary" : "warning"}
-          onClick={onConfirm}
-          disabled={loading}
-        >
-          {loading ? "Deleting…" : isBind ? "Delete reference" : "Move to held"}
-        </Button>
+        <Tooltip title={dangerGuard.reason ?? ""}>
+          <span>
+            <Button
+              variant="contained"
+              color={isBind ? "primary" : "warning"}
+              onClick={onConfirm}
+              disabled={loading || !dangerGuard.allowed}
+            >
+              {loading ? "Deleting…" : isBind ? "Delete reference" : "Move to held"}
+            </Button>
+          </span>
+        </Tooltip>
       </DialogActions>
     </Dialog>
   );
@@ -183,6 +194,7 @@ function CreateSiteVolumeDialog({
   exportedVolumes: ExportedVolume[];
 }) {
   const { execute, loading, error, clearError } = useOiAction();
+  const writeGuard = useGuard("write");
   const [name, setName] = useState("");
   const [kind, setKind] = useState<"managed" | "bind" | "snapshot">("managed");
   const [hostPath, setHostPath] = useState("");
@@ -318,13 +330,17 @@ function CreateSiteVolumeDialog({
         <Button onClick={handleClose} disabled={loading}>
           Cancel
         </Button>
-        <Button
-          variant="contained"
-          onClick={() => void handleSubmit()}
-          disabled={loading || !canSubmit}
-        >
-          {loading ? "Creating…" : "Create"}
-        </Button>
+        <Tooltip title={writeGuard.reason ?? ""}>
+          <span>
+            <Button
+              variant="contained"
+              onClick={() => void handleSubmit()}
+              disabled={loading || !canSubmit || !writeGuard.allowed}
+            >
+              {loading ? "Creating…" : "Create"}
+            </Button>
+          </span>
+        </Tooltip>
       </DialogActions>
     </Dialog>
   );
@@ -349,6 +365,7 @@ function MultiVolumeShellDialog({
   heldVols: HeldVolume[];
   onOpen: (volumes: VolumeRef[], label: string) => void;
 }) {
+  const writeGuard = useGuard("write");
   // Selection is keyed by a stable identifier string — "site:<name>",
   // "app:<app>/<vol>", "held:<id>" — so a selected entry survives a
   // re-render that reorders the lists.
@@ -515,14 +532,18 @@ function MultiVolumeShellDialog({
       </DialogContent>
       <DialogActions>
         <Button onClick={handleClose}>Cancel</Button>
-        <Button
-          variant="contained"
-          startIcon={<TerminalIcon />}
-          onClick={handleOpen}
-          disabled={refs.length === 0}
-        >
-          Open shell {refs.length > 0 ? `(${refs.length})` : ""}
-        </Button>
+        <Tooltip title={writeGuard.reason ?? ""}>
+          <span>
+            <Button
+              variant="contained"
+              startIcon={<TerminalIcon />}
+              onClick={handleOpen}
+              disabled={refs.length === 0 || !writeGuard.allowed}
+            >
+              Open shell {refs.length > 0 ? `(${refs.length})` : ""}
+            </Button>
+          </span>
+        </Tooltip>
       </DialogActions>
     </Dialog>
   );
@@ -564,6 +585,8 @@ export default function Volumes() {
 
   const { execute, error: actionError } = useOiAction();
   const { openVolumeShell } = useSessionContext();
+  const writeGuard = useGuard("write");
+  const dangerGuard = useGuard("dangerous");
 
   const [createOpen, setCreateOpen] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
@@ -625,18 +648,23 @@ export default function Volumes() {
         <Typography variant="h5" sx={{ flexGrow: 1 }}>
           Volumes
         </Typography>
-        <Button
-          size="small"
-          startIcon={<TerminalIcon />}
-          onClick={() => setShellPickerOpen(true)}
-          disabled={
-            (siteVols?.length ?? 0) === 0 &&
-            (exportedVols?.length ?? 0) === 0 &&
-            (heldVols?.length ?? 0) === 0
-          }
-        >
-          Open shell…
-        </Button>
+        <Tooltip title={writeGuard.reason ?? ""}>
+          <span>
+            <Button
+              size="small"
+              startIcon={<TerminalIcon />}
+              onClick={() => setShellPickerOpen(true)}
+              disabled={
+                !writeGuard.allowed ||
+                ((siteVols?.length ?? 0) === 0 &&
+                  (exportedVols?.length ?? 0) === 0 &&
+                  (heldVols?.length ?? 0) === 0)
+              }
+            >
+              Open shell…
+            </Button>
+          </span>
+        </Tooltip>
         <Tooltip title="Refresh">
           <span>
             <IconButton onClick={refreshAll} disabled={anyLoading} size="small">
@@ -659,13 +687,18 @@ export default function Volumes() {
             <Typography variant="subtitle1" sx={{ fontWeight: 600, flexGrow: 1 }}>
               Site Volumes
             </Typography>
-            <Button
-              size="small"
-              startIcon={<AddIcon />}
-              onClick={() => setCreateOpen(true)}
-            >
-              New
-            </Button>
+            <Tooltip title={writeGuard.reason ?? ""}>
+              <span>
+                <Button
+                  size="small"
+                  startIcon={<AddIcon />}
+                  onClick={() => setCreateOpen(true)}
+                  disabled={!writeGuard.allowed}
+                >
+                  New
+                </Button>
+              </span>
+            </Tooltip>
           </Box>
           {siteError && <OiErrorAlert error={siteError} />}
           {siteLoading && !siteVols && <CircularProgress size={20} />}
@@ -705,44 +738,56 @@ export default function Volumes() {
                         </TableCell>
                         {/* w[volumes.shell-ui] */}
                         <TableCell align="right" sx={{ px: 0.5, whiteSpace: "nowrap" }}>
-                          <Tooltip title="Open shell">
-                            <IconButton
-                              size="small"
-                              onClick={() => openVolumeShell([{ kind: "site", name: v.name }], v.name)}
-                            >
-                              <TerminalIcon sx={{ fontSize: 16 }} />
-                            </IconButton>
-                          </Tooltip>
-                          <Tooltip title="Snapshot">
-                            <IconButton
-                              size="small"
-                              onClick={() =>
-                                setSnapshotTarget({
-                                  source: `_site/${v.name}`,
-                                  label: v.name,
-                                })
-                              }
-                            >
-                              <CameraAltIcon sx={{ fontSize: 16 }} />
-                            </IconButton>
-                          </Tooltip>
-                          {v.kind === "snapshot" && (
-                            <Tooltip title="Promote to read-write volume">
+                          <Tooltip title={writeGuard.reason ?? "Open shell"}>
+                            <span>
                               <IconButton
                                 size="small"
-                                onClick={() => setPromoteTarget(v.name)}
+                                onClick={() => openVolumeShell([{ kind: "site", name: v.name }], v.name)}
+                                disabled={!writeGuard.allowed}
                               >
-                                <UpgradeIcon sx={{ fontSize: 16 }} />
+                                <TerminalIcon sx={{ fontSize: 16 }} />
                               </IconButton>
+                            </span>
+                          </Tooltip>
+                          <Tooltip title={writeGuard.reason ?? "Snapshot"}>
+                            <span>
+                              <IconButton
+                                size="small"
+                                onClick={() =>
+                                  setSnapshotTarget({
+                                    source: `_site/${v.name}`,
+                                    label: v.name,
+                                  })
+                                }
+                                disabled={!writeGuard.allowed}
+                              >
+                                <CameraAltIcon sx={{ fontSize: 16 }} />
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                          {v.kind === "snapshot" && (
+                            <Tooltip title={writeGuard.reason ?? "Promote to read-write volume"}>
+                              <span>
+                                <IconButton
+                                  size="small"
+                                  onClick={() => setPromoteTarget(v.name)}
+                                  disabled={!writeGuard.allowed}
+                                >
+                                  <UpgradeIcon sx={{ fontSize: 16 }} />
+                                </IconButton>
+                              </span>
                             </Tooltip>
                           )}
-                          <Tooltip title="Delete">
-                            <IconButton
-                              size="small"
-                              onClick={() => setSiteDeleteTarget(v)}
-                            >
-                              <DeleteOutlineIcon sx={{ fontSize: 16 }} />
-                            </IconButton>
+                          <Tooltip title={dangerGuard.reason ?? "Delete"}>
+                            <span>
+                              <IconButton
+                                size="small"
+                                onClick={() => setSiteDeleteTarget(v)}
+                                disabled={!dangerGuard.allowed}
+                              >
+                                <DeleteOutlineIcon sx={{ fontSize: 16 }} />
+                              </IconButton>
+                            </span>
                           </Tooltip>
                         </TableCell>
                       </TableRow>
@@ -791,31 +836,37 @@ export default function Volumes() {
                           {v.description ?? "—"}
                         </TableCell>
                         <TableCell align="right" sx={{ px: 0.5, whiteSpace: "nowrap" }}>
-                          <Tooltip title="Open shell">
-                            <IconButton
-                              size="small"
-                              onClick={() =>
-                                openVolumeShell(
-                                  [{ kind: "app", app: v.app, volume: v.volume_name }],
-                                  `${v.app}/${v.volume_name}`,
-                                )
-                              }
-                            >
-                              <TerminalIcon sx={{ fontSize: 16 }} />
-                            </IconButton>
+                          <Tooltip title={writeGuard.reason ?? "Open shell"}>
+                            <span>
+                              <IconButton
+                                size="small"
+                                onClick={() =>
+                                  openVolumeShell(
+                                    [{ kind: "app", app: v.app, volume: v.volume_name }],
+                                    `${v.app}/${v.volume_name}`,
+                                  )
+                                }
+                                disabled={!writeGuard.allowed}
+                              >
+                                <TerminalIcon sx={{ fontSize: 16 }} />
+                              </IconButton>
+                            </span>
                           </Tooltip>
-                          <Tooltip title="Snapshot">
-                            <IconButton
-                              size="small"
-                              onClick={() =>
-                                setSnapshotTarget({
-                                  source: `${v.app}/${v.volume_name}`,
-                                  label: `${v.app}/${v.volume_name}`,
-                                })
-                              }
-                            >
-                              <CameraAltIcon sx={{ fontSize: 16 }} />
-                            </IconButton>
+                          <Tooltip title={writeGuard.reason ?? "Snapshot"}>
+                            <span>
+                              <IconButton
+                                size="small"
+                                onClick={() =>
+                                  setSnapshotTarget({
+                                    source: `${v.app}/${v.volume_name}`,
+                                    label: `${v.app}/${v.volume_name}`,
+                                  })
+                                }
+                                disabled={!writeGuard.allowed}
+                              >
+                                <CameraAltIcon sx={{ fontSize: 16 }} />
+                              </IconButton>
+                            </span>
                           </Tooltip>
                         </TableCell>
                       </TableRow>
@@ -834,9 +885,18 @@ export default function Volumes() {
             <Typography variant="subtitle1" sx={{ fontWeight: 600, flexGrow: 1 }}>
               External Volume Requests
             </Typography>
-            <Button size="small" startIcon={<AddIcon />} onClick={() => setMapOpen(true)}>
-              Map
-            </Button>
+            <Tooltip title={writeGuard.reason ?? ""}>
+              <span>
+                <Button
+                  size="small"
+                  startIcon={<AddIcon />}
+                  onClick={() => setMapOpen(true)}
+                  disabled={!writeGuard.allowed}
+                >
+                  Map
+                </Button>
+              </span>
+            </Tooltip>
           </Box>
           {declaredError && <OiErrorAlert error={declaredError} />}
           {mappingsError && <OiErrorAlert error={mappingsError} />}
@@ -885,24 +945,41 @@ export default function Volumes() {
                           <TableCell align="right" sx={{ px: 0.5, whiteSpace: "nowrap" }}>
                             {mapping ? (
                               <>
-                                <Tooltip title="Remap">
-                                  <IconButton size="small" onClick={() => setRemapTarget(mapping)}>
-                                    <EditIcon sx={{ fontSize: 16 }} />
-                                  </IconButton>
+                                <Tooltip title={writeGuard.reason ?? "Remap"}>
+                                  <span>
+                                    <IconButton
+                                      size="small"
+                                      onClick={() => setRemapTarget(mapping)}
+                                      disabled={!writeGuard.allowed}
+                                    >
+                                      <EditIcon sx={{ fontSize: 16 }} />
+                                    </IconButton>
+                                  </span>
                                 </Tooltip>
-                                <Tooltip title="Unmap">
-                                  <IconButton size="small" onClick={() => void unmapVolume(d.app, d.name)}>
-                                    <LinkOffIcon sx={{ fontSize: 16 }} />
-                                  </IconButton>
+                                <Tooltip title={writeGuard.reason ?? "Unmap"}>
+                                  <span>
+                                    <IconButton
+                                      size="small"
+                                      onClick={() => void unmapVolume(d.app, d.name)}
+                                      disabled={!writeGuard.allowed}
+                                    >
+                                      <LinkOffIcon sx={{ fontSize: 16 }} />
+                                    </IconButton>
+                                  </span>
                                 </Tooltip>
                               </>
                             ) : (
-                              <Button
-                                size="small"
-                                onClick={() => setPrefillTarget({ app: d.app, name: d.name })}
-                              >
-                                Map
-                              </Button>
+                              <Tooltip title={writeGuard.reason ?? ""}>
+                                <span>
+                                  <Button
+                                    size="small"
+                                    onClick={() => setPrefillTarget({ app: d.app, name: d.name })}
+                                    disabled={!writeGuard.allowed}
+                                  >
+                                    Map
+                                  </Button>
+                                </span>
+                              </Tooltip>
                             )}
                           </TableCell>
                         </TableRow>
@@ -962,26 +1039,32 @@ export default function Volumes() {
                           {new Date(h.held_at).toLocaleString()}
                         </TableCell>
                         <TableCell align="right" sx={{ px: 0.5, whiteSpace: "nowrap" }}>
-                          <Tooltip title="Open shell">
-                            <IconButton
-                              size="small"
-                              onClick={() =>
-                                openVolumeShell(
-                                  [{ kind: "held", id: h.id }],
-                                  `held: ${h.app}/${h.display_name}`,
-                                )
-                              }
-                            >
-                              <TerminalIcon sx={{ fontSize: 16 }} />
-                            </IconButton>
+                          <Tooltip title={writeGuard.reason ?? "Open shell"}>
+                            <span>
+                              <IconButton
+                                size="small"
+                                onClick={() =>
+                                  openVolumeShell(
+                                    [{ kind: "held", id: h.id }],
+                                    `held: ${h.app}/${h.display_name}`,
+                                  )
+                                }
+                                disabled={!writeGuard.allowed}
+                              >
+                                <TerminalIcon sx={{ fontSize: 16 }} />
+                              </IconButton>
+                            </span>
                           </Tooltip>
-                          <Tooltip title="Confirm delete">
-                            <IconButton
-                              size="small"
-                              onClick={() => setHeldDeleteTarget(h)}
-                            >
-                              <DeleteOutlineIcon sx={{ fontSize: 16 }} />
-                            </IconButton>
+                          <Tooltip title={dangerGuard.reason ?? "Confirm delete"}>
+                            <span>
+                              <IconButton
+                                size="small"
+                                onClick={() => setHeldDeleteTarget(h)}
+                                disabled={!dangerGuard.allowed}
+                              >
+                                <DeleteOutlineIcon sx={{ fontSize: 16 }} />
+                              </IconButton>
+                            </span>
                           </Tooltip>
                         </TableCell>
                       </TableRow>
