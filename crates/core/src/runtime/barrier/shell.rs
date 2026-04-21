@@ -2,6 +2,7 @@ use std::{cell::RefCell, sync::Arc};
 
 use parking_lot::Mutex;
 use rhai::{CustomType, Dynamic, EvalAltResult, TypeBuilder};
+use seedling_protocol::names::AppName;
 
 /// The exec target resolved by `ShellControl::attach` from a Job.
 /// Passed back to the OI layer which translates it to a `ContainerSpec`
@@ -11,7 +12,7 @@ pub struct ShellExecTarget {
     /// BSL-level name of the Job (from `app.job("name")`), used to derive
     /// the container display name.
     pub job_name: String,
-    pub app_name: String,
+    pub app_name: AppName,
     // r[impl identity.job.shell]
     /// Fresh randomly-generated instance ID chosen at `attach()` call time.
     /// Each shell session gets a distinct ID so concurrent sessions against
@@ -28,7 +29,7 @@ pub enum ShellOutcome {
 /// Context installed in the thread-local before running a shell closure.
 /// Provides a slot for `ShellControl` methods to write results into.
 pub struct ShellAttachCtx {
-    pub app_name: String,
+    pub app_name: AppName,
     pub result: Arc<Mutex<Option<ShellOutcome>>>,
 }
 

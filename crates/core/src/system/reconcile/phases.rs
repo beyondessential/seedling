@@ -4,7 +4,9 @@ use std::{
 };
 
 use ipnet::Ipv6Net;
+use seedling_protocol::names::AppName;
 
+use super::{AppSnapshot, RunningPod, pods, proxy, routes, rules, volumes};
 use crate::{
     runtime::{AppPhase, InstanceRegistry, db::DbHandle, identity::InstanceId},
     system::{
@@ -12,8 +14,6 @@ use crate::{
         types::DataPlaneRules,
     },
 };
-
-use super::{AppSnapshot, RunningPod, pods, proxy, routes, rules, volumes};
 
 #[expect(
     clippy::too_many_arguments,
@@ -28,7 +28,7 @@ pub(super) async fn run_pods_phase(
     node_prefix: &Ipv6Net,
     written_obs: &HashSet<(InstanceId, &'static str)>,
     completed_jobs: &HashSet<InstanceId>,
-) -> Vec<(String, pods::PodActuationUpdate)> {
+) -> Vec<(AppName, pods::PodActuationUpdate)> {
     let futures: Vec<_> = apps
         .iter()
         .map(|app| async move {
@@ -54,7 +54,7 @@ pub(super) async fn run_volumes_phase(
     actuator: &Actuator,
     db: &DbHandle,
     apps: &[AppSnapshot],
-) -> Vec<(String, volumes::VolumeActuationUpdate)> {
+) -> Vec<(AppName, volumes::VolumeActuationUpdate)> {
     let futures: Vec<_> = apps
         .iter()
         .filter(|app| app.phase != AppPhase::Uninstalling)
@@ -68,7 +68,7 @@ pub(super) async fn run_volumes_phase(
 
 pub(super) fn compute_routes(
     apps: &[AppSnapshot],
-    running_pods_by_app: &HashMap<String, Vec<RunningPod>>,
+    running_pods_by_app: &HashMap<AppName, Vec<RunningPod>>,
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
 ) -> (
@@ -111,7 +111,7 @@ pub(super) fn compute_routes(
 
 pub(super) fn compute_nftables_rules(
     apps: &[AppSnapshot],
-    running_pods_by_app: &HashMap<String, Vec<RunningPod>>,
+    running_pods_by_app: &HashMap<AppName, Vec<RunningPod>>,
     caddy_ip: std::net::Ipv6Addr,
     caddy_v4_addr: Option<Ipv4Addr>,
     node_prefix: &Ipv6Net,

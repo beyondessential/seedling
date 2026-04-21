@@ -2,11 +2,8 @@ use std::{collections::HashMap, sync::Arc};
 
 use parking_lot::{Mutex, RwLock};
 use rhai::{AST, Dynamic, Engine, EvalAltResult, Scope};
+use seedling_protocol::names::AppName;
 use tokio::sync::Notify;
-
-use crate::runtime::desired::OperationProgress;
-use crate::runtime::generations;
-use crate::runtime::history;
 
 use crate::defs::app::{App, AppDef, begin_closure_capture, end_closure_capture};
 use crate::defs::volume::OperationVolumeBinding;
@@ -17,6 +14,9 @@ use crate::runtime::barrier::runtime::{
 use crate::runtime::barrier::{
     ActionLogEntry, BarrierCondition, CancelToken, OperationId, ReplayContext,
 };
+use crate::runtime::desired::OperationProgress;
+use crate::runtime::generations;
+use crate::runtime::history;
 use crate::runtime::registry::InstanceRegistry;
 
 // ---------------------------------------------------------------------------
@@ -89,7 +89,7 @@ impl ActionLog for InMemoryActionLog {
 pub struct DbActionLog {
     db: crate::runtime::db::DbHandle,
     operation_id: super::OperationId,
-    app: String,
+    app: AppName,
     action_name: String,
 }
 
@@ -97,13 +97,13 @@ impl DbActionLog {
     pub fn new(
         db: crate::runtime::db::DbHandle,
         operation_id: super::OperationId,
-        app: impl Into<String>,
+        app: AppName,
         action_name: impl Into<String>,
     ) -> Self {
         Self {
             db,
             operation_id,
-            app: app.into(),
+            app,
             action_name: action_name.into(),
         }
     }

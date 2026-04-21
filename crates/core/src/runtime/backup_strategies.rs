@@ -1,4 +1,5 @@
 use rusqlite::params;
+use seedling_protocol::names::AppName;
 
 use crate::runtime::db::Db;
 
@@ -7,7 +8,7 @@ pub const VALID_SCHEDULES: &[&str] = &["every hour", "twice a day", "every day"]
 #[derive(Debug, Clone)]
 pub struct BackupStrategy {
     pub name: String,
-    pub via: String,
+    pub via: AppName,
     pub schedule: String,
     pub volumes: Vec<String>,
     pub last_fired_at: Option<String>,
@@ -48,7 +49,7 @@ pub fn list_all(db: &Db) -> rusqlite::Result<Vec<BackupStrategy>> {
 pub fn update(
     db: &Db,
     name: &str,
-    via: Option<&str>,
+    via: Option<&AppName>,
     schedule: Option<&str>,
     volumes: Option<&[String]>,
 ) -> rusqlite::Result<bool> {
@@ -76,7 +77,7 @@ pub fn delete(db: &Db, name: &str) -> rusqlite::Result<bool> {
     Ok(count > 0)
 }
 
-pub fn references_backup_app(db: &Db, backup_app_name: &str) -> rusqlite::Result<bool> {
+pub fn references_backup_app(db: &Db, backup_app_name: &AppName) -> rusqlite::Result<bool> {
     let count: i64 = db.conn.query_row(
         "SELECT COUNT(*) FROM backup_strategies WHERE via = ?1",
         params![backup_app_name],
@@ -96,7 +97,7 @@ pub fn update_last_fired_at(db: &Db, name: &str, fired_at: &str) -> rusqlite::Re
 
 fn row_to_strategy(row: &rusqlite::Row<'_>) -> rusqlite::Result<BackupStrategy> {
     let name: String = row.get(0)?;
-    let via: String = row.get(1)?;
+    let via: AppName = row.get(1)?;
     let schedule: String = row.get(2)?;
     let volumes_json: String = row.get(3)?;
     let volumes: Vec<String> = serde_json::from_str(&volumes_json).unwrap_or_default();

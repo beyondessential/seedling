@@ -3,6 +3,8 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use seedling_protocol::names::AppName;
+
 use crate::runtime::barrier::{CancelToken, OperationId};
 use crate::runtime::history::AutonomousOperation;
 use crate::runtime::identity::InstanceId;
@@ -14,7 +16,7 @@ use crate::runtime::identity::InstanceId;
 // r[impl operation.lifecycle]
 #[derive(Debug, Clone)]
 pub struct ActiveOperation {
-    pub app: String,
+    pub app: AppName,
     pub action: String,
     pub operation_id: OperationId,
     /// Generation that was current immediately before the change that
@@ -36,7 +38,7 @@ pub struct ActiveOperation {
 // r[impl operation.lifecycle]
 #[derive(Debug, Clone)]
 pub struct QueuedOperation {
-    pub app: String,
+    pub app: AppName,
     pub action: String,
     pub operation_id: OperationId,
     /// Action params passed by the invoker. For install actions, contains the
@@ -142,9 +144,9 @@ impl Scheduler {
     }
 
     /// Returns true if there is an active or queued operation for the given app.
-    pub fn has_operation_for(&self, app: &str) -> bool {
-        self.active.as_ref().is_some_and(|a| a.app == app)
-            || self.queue.iter().any(|q| q.app == app)
+    pub fn has_operation_for(&self, app: &AppName) -> bool {
+        self.active.as_ref().is_some_and(|a| a.app == *app)
+            || self.queue.iter().any(|q| q.app == *app)
     }
 
     /// Request a lifecycle operation for `app` / `action`.
@@ -157,7 +159,7 @@ impl Scheduler {
     // r[impl operation.lifecycle.single.inter-app]
     pub fn request(
         &mut self,
-        app: &str,
+        app: &AppName,
         action: &str,
         params: serde_json::Map<String, serde_json::Value>,
         source_generation: u64,
@@ -184,7 +186,7 @@ impl Scheduler {
     )]
     pub fn request_with_id(
         &mut self,
-        app: &str,
+        app: &AppName,
         action: &str,
         params: serde_json::Map<String, serde_json::Value>,
         source_generation: u64,
@@ -197,7 +199,7 @@ impl Scheduler {
                 // No active operation — start immediately.
                 self.call_stack.clear();
                 self.active = Some(ActiveOperation {
-                    app: app.to_owned(),
+                    app: app.clone(),
                     action: action.to_owned(),
                     operation_id,
                     source_generation,
@@ -206,17 +208,17 @@ impl Scheduler {
                 });
                 ScheduleResult::Accepted
             }
-            Some(active) if active.app == app => {
+            Some(active) if active.app == *app => {
                 // r[impl operation.lifecycle.single.intra-app]
                 ScheduleResult::Rejected(RejectReason::SameAppOperationInProgress)
             }
             Some(_) => {
                 // r[impl operation.lifecycle.single.inter-app]
-                if self.queue.iter().any(|q| q.app == app) {
+                if self.queue.iter().any(|q| q.app == *app) {
                     return ScheduleResult::Rejected(RejectReason::SameAppAlreadyQueued);
                 }
                 self.queue.push_back(QueuedOperation {
-                    app: app.to_owned(),
+                    app: app.clone(),
                     action: action.to_owned(),
                     operation_id,
                     params,
@@ -251,11 +253,11 @@ impl Scheduler {
 
     /// Request cancellation of the active operation if it belongs to `app`.
     // r[impl operation.cancel]
-    pub fn request_cancel(&self, app: &str) -> CancelOutcome {
+    pub fn request_cancel(&self, app: &AppName) -> CancelOutcome {
         let Some(active) = self.active.as_ref() else {
             return CancelOutcome::NoActiveOp;
         };
-        if active.app != app {
+        if active.app != *app {
             return CancelOutcome::NoActiveOp;
         }
         if active.cancel_token.is_cancelled() {

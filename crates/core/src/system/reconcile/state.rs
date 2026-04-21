@@ -1,7 +1,9 @@
 use std::{collections::BTreeMap, time::Duration};
 
+use seedling_protocol::names::AppName;
 use tracing::{error, warn};
 
+use super::{AppSnapshot, Reconciler};
 use crate::{
     defs::resource::ResourceKind,
     runtime::{
@@ -15,8 +17,6 @@ use crate::{
     },
 };
 
-use super::{AppSnapshot, Reconciler};
-
 /// Threshold after which we file a `cert_acquisition_failed` fault if a warm
 /// cert hasn't been observed valid. Caddy's internal CA issues immediately;
 /// public ACME issuance can take seconds to a minute. Three minutes leaves
@@ -27,7 +27,7 @@ const CERT_ACQUISITION_DEADLINE: Duration = Duration::from_secs(180);
 /// Input to the DB lookup performed in emit_state_changes.
 #[derive(Clone)]
 struct DesiredGroup {
-    app: String,
+    app: AppName,
     kind: ResourceKind,
     res_name: Option<String>,
     kind_str: String,
@@ -36,7 +36,7 @@ struct DesiredGroup {
 /// Result returned from the DB lookup.
 #[derive(Clone)]
 struct StateEntry {
-    app: String,
+    app: AppName,
     kind_str: String,
     res_name: String,
     hex: String,

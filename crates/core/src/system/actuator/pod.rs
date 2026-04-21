@@ -86,7 +86,7 @@ pub(super) fn collect_container_volumes(
                         (vol_name, None, true, None)
                     }
                     Some(n) => {
-                        let vol_name = VolumeName::for_app(&instance.app, n.as_str());
+                        let vol_name = VolumeName::for_app(instance.app.as_str(), n.as_str());
                         let tmpfs = v.def.lock().tmpfs;
                         let host_path = if !tmpfs {
                             volumes_dir.map(|dir| dir.join(vol_name.as_str()))
@@ -300,7 +300,7 @@ impl Actuator {
                 exec_start: argv,
                 restart,
                 log_extra_fields: vec![
-                    ("SEEDLING_APP".to_owned(), instance.app.clone()),
+                    ("SEEDLING_APP".to_owned(), instance.app.as_str().to_owned()),
                     (
                         "SEEDLING_RESOURCE_KIND".to_owned(),
                         resource_kind_str.to_owned(),

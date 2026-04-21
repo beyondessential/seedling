@@ -1,4 +1,5 @@
 use ipnet::Ipv6Net;
+use seedling_protocol::names::AppName;
 
 use crate::{
     defs::{
@@ -33,7 +34,7 @@ pub(super) fn collect(
     desired: &DesiredState,
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
-    app_name: &str,
+    app_name: &AppName,
 ) -> Result<ProxyBuildOutput, RegistryError> {
     let mut observations: Vec<(ResourceInstance, &'static str, serde_json::Value)> = Vec::new();
     let mut ready_observations: Vec<(ResourceInstance, &'static str, serde_json::Value)> =

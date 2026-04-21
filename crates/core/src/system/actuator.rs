@@ -8,6 +8,7 @@ use std::{
 use ipnet::Ipv6Net;
 use parking_lot::Mutex as ParkingMutex;
 use seedling_protocol::events::EventSender;
+use seedling_protocol::names::AppName;
 use snafu::{IntoError, ResultExt, Snafu};
 
 use crate::{
@@ -156,7 +157,7 @@ impl Actuator {
 
     fn resolve_external_volumes(
         &self,
-        app: &str,
+        app: &AppName,
     ) -> HashMap<String, crate::system::types::ResolvedExternalMount> {
         resolve_external_volumes(&self.db, &self.driver.volume_store, app)
     }
@@ -349,7 +350,7 @@ impl Actuator {
                     if let Some(bsl_name) = instance.name.as_deref() {
                         let legacy = format!("{}-{}", instance.app, bsl_name);
                         vol_store
-                            .migrate_legacy(&legacy, &name, &instance.app)
+                            .migrate_legacy(&legacy, &name, instance.app.as_str())
                             .await
                             .map_err(|e| {
                                 VolumeWriteSnafu {
@@ -449,7 +450,7 @@ impl Actuator {
                     let name = VolumeName::of_instance(instance);
                     if vol_store.exists(&name) {
                         let meta = vol_store
-                            .hold(&name, &instance.app, "removed from app definition")
+                            .hold(&name, instance.app.as_str(), "removed from app definition")
                             .await
                             .map_err(|e| {
                                 VolumeWriteSnafu {
@@ -460,7 +461,7 @@ impl Actuator {
                         // r[impl actuate.volume.hold.events]
                         self.event_tx.held_volume_created(
                             &meta.id,
-                            &meta.app,
+                            &instance.app,
                             &meta.volume_name,
                             &meta.reason,
                             None,
@@ -494,7 +495,7 @@ impl Actuator {
                 let name = crate::runtime::identity::VolumeName::of_instance(instance);
                 if vol_store.exists(&name) {
                     let meta = vol_store
-                        .hold(&name, &instance.app, reason)
+                        .hold(&name, instance.app.as_str(), reason)
                         .await
                         .map_err(|e| {
                             VolumeWriteSnafu {
@@ -505,7 +506,7 @@ impl Actuator {
                     // r[impl actuate.volume.hold.events]
                     self.event_tx.held_volume_created(
                         &meta.id,
-                        &meta.app,
+                        &instance.app,
                         &meta.volume_name,
                         &meta.reason,
                         None,
@@ -598,11 +599,11 @@ impl Actuator {
 pub fn resolve_external_volumes(
     db: &DbHandle,
     vol_store: &crate::system::volume_store::VolumeStore,
-    app: &str,
+    app: &AppName,
 ) -> HashMap<String, crate::system::types::ResolvedExternalMount> {
     use crate::system::types::{MountSource, ResolvedExternalMount};
 
-    let app_owned = app.to_owned();
+    let app_owned = app.clone();
     let (mappings, site_vols) = db.call(move |db| {
         let mappings = external_volume_mappings::list_for_app(db, &app_owned).unwrap_or_else(|e| {
             tracing::warn!(app = %app_owned, error = %e, "failed to load external volume mappings");

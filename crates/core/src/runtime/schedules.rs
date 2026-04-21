@@ -1,4 +1,5 @@
 use jiff::{SignedDuration, Timestamp};
+use seedling_protocol::names::AppName;
 
 use crate::defs::action::parse_cron_expr;
 use crate::runtime::barrier::OperationId;
@@ -6,7 +7,7 @@ use crate::runtime::db::{self, Db};
 use crate::runtime::scheduler::{ScheduleResult, Scheduler};
 
 pub struct FiredSchedule {
-    pub app: String,
+    pub app: AppName,
     pub action: String,
     pub accepted: bool,
     pub operation_id: Option<OperationId>,
@@ -20,7 +21,7 @@ pub fn check_due_schedules(
     db: &Db,
     scheduler: &mut Scheduler,
     now: Timestamp,
-    app_generations: &dyn Fn(&str) -> Option<u64>,
+    app_generations: &dyn Fn(&AppName) -> Option<u64>,
 ) -> Vec<FiredSchedule> {
     let rows = match db::list_all_schedules(db) {
         Ok(r) => r,

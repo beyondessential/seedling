@@ -1,4 +1,5 @@
 use rusqlite::params;
+use seedling_protocol::names::AppName;
 
 use crate::runtime::db::Db;
 
@@ -7,7 +8,7 @@ use crate::runtime::db::Db;
 /// Returns `None` if no decision has been stored.
 pub fn load_scaling_decision(
     db: &Db,
-    app: &str,
+    app: &AppName,
     deployment: &str,
 ) -> rusqlite::Result<Option<u16>> {
     let mut stmt = db
@@ -27,7 +28,7 @@ pub fn load_scaling_decision(
 /// Store a scaling decision for a deployment.
 pub fn save_scaling_decision(
     db: &Db,
-    app: &str,
+    app: &AppName,
     deployment: &str,
     scale: u16,
 ) -> rusqlite::Result<()> {
@@ -41,7 +42,7 @@ pub fn save_scaling_decision(
 }
 
 /// Delete all scaling decisions for an app (e.g. on deregister).
-pub fn delete_scaling_decisions_for_app(db: &Db, app: &str) -> rusqlite::Result<()> {
+pub fn delete_scaling_decisions_for_app(db: &Db, app: &AppName) -> rusqlite::Result<()> {
     db.conn
         .execute("DELETE FROM scaling_decisions WHERE app = ?1", params![app])?;
     Ok(())
@@ -55,7 +56,7 @@ pub fn delete_scaling_decisions_for_app(db: &Db, app: &str) -> rusqlite::Result<
 /// `deployments` maps deployment name -> (low, high) bounds.
 pub fn clamp_scaling_decisions(
     db: &Db,
-    app: &str,
+    app: &AppName,
     deployments: &std::collections::BTreeMap<String, (u16, u16)>,
 ) -> rusqlite::Result<()> {
     let mut stmt = db
@@ -90,7 +91,7 @@ pub fn clamp_scaling_decisions(
 /// clamped to bounds, or the lower bound if no decision exists.
 pub fn effective_scale(
     db: &Db,
-    app: &str,
+    app: &AppName,
     deployment: &str,
     low: u16,
     high: u16,

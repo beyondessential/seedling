@@ -283,7 +283,7 @@ fn spec_from_pod(
                         // Named volumes use the canonical Volume-resource
                         // display name so the bind-mount source matches the
                         // path the Volume actuator creates.
-                        Some(n) => VolumeName::for_app(&instance.app, n.as_str())
+                        Some(n) => VolumeName::for_app(instance.app.as_str(), n.as_str())
                             .as_str()
                             .to_owned(),
                         None => v
@@ -321,7 +321,7 @@ fn spec_from_pod(
         .collect();
 
     let mut labels = BTreeMap::new();
-    labels.insert("seedling.app".to_string(), instance.app.clone());
+    labels.insert("seedling.app".to_string(), instance.app.as_str().to_owned());
     labels.insert("seedling.instance".to_string(), instance.id.to_hex());
     labels.insert("seedling.kind".to_string(), format!("{:?}", instance.kind));
     labels.insert(

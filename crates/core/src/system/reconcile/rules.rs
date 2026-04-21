@@ -4,7 +4,9 @@ use std::{
 };
 
 use ipnet::Ipv6Net;
+use seedling_protocol::names::AppName;
 
+use super::RunningPod;
 use crate::{
     defs::{
         app::AppDef,
@@ -16,8 +18,6 @@ use crate::{
         types::{ForwardProto, IngressRule, MountRule, ServiceDnatRule},
     },
 };
-
-use super::RunningPod;
 
 /// Collects backends from running pods' bindings.
 /// Returns a map from `(service_name, service_port, proto)` to `Vec<(pod_ip, pod_port)>`.
@@ -130,7 +130,7 @@ pub(super) fn build_service_dnat_rules(
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
     running_pods: &[RunningPod],
-    app_name: &str,
+    app_name: &AppName,
 ) -> Result<Vec<ServiceDnatRule>, RegistryError> {
     let backends = collect_service_backends(running_pods);
     let mut rules = Vec::new();

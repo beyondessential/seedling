@@ -1,6 +1,7 @@
 use std::{os::unix::fs::PermissionsExt, path::Path, time::Duration};
 
 use rusqlite::{Connection, Result as SqlResult};
+use seedling_protocol::names::AppName;
 use sha2::{Digest, Sha256};
 
 mod migrations {
@@ -413,7 +414,7 @@ impl Db {
 // ---------------------------------------------------------------------------
 
 pub struct ScheduleRow {
-    pub app: String,
+    pub app: AppName,
     pub action: String,
     pub cronexpr: String,
     pub last_fired_at: Option<String>,
@@ -422,7 +423,7 @@ pub struct ScheduleRow {
 // r[impl schedule.state]
 pub fn upsert_schedule_fired(
     db: &Db,
-    app: &str,
+    app: &AppName,
     action: &str,
     cronexpr: &str,
     fired_at: &str,
@@ -437,7 +438,7 @@ pub fn upsert_schedule_fired(
     Ok(())
 }
 
-pub fn list_schedules(db: &Db, app: &str) -> rusqlite::Result<Vec<ScheduleRow>> {
+pub fn list_schedules(db: &Db, app: &AppName) -> rusqlite::Result<Vec<ScheduleRow>> {
     let mut stmt = db.conn.prepare(
         "SELECT app, action, cronexpr, last_fired_at
          FROM action_schedules WHERE app = ?1",
@@ -471,7 +472,7 @@ pub fn list_all_schedules(db: &Db) -> rusqlite::Result<Vec<ScheduleRow>> {
 // r[impl schedule.prune]
 pub fn prune_schedules(
     db: &Db,
-    app: &str,
+    app: &AppName,
     valid_pairs: &[(String, String)],
 ) -> rusqlite::Result<()> {
     let current = list_schedules(db, app)?;
@@ -490,7 +491,11 @@ pub fn prune_schedules(
 
 /// Ensure all declared schedules have rows (inserts missing ones without
 /// overwriting existing `last_fired_at`).
-pub fn ensure_schedules(db: &Db, app: &str, pairs: &[(String, String)]) -> rusqlite::Result<()> {
+pub fn ensure_schedules(
+    db: &Db,
+    app: &AppName,
+    pairs: &[(String, String)],
+) -> rusqlite::Result<()> {
     for (action, cronexpr) in pairs {
         db.conn.execute(
             "INSERT OR IGNORE INTO action_schedules (app, action, cronexpr)
@@ -501,7 +506,7 @@ pub fn ensure_schedules(db: &Db, app: &str, pairs: &[(String, String)]) -> rusql
     Ok(())
 }
 
-pub fn delete_schedules_for_app(db: &Db, app: &str) -> rusqlite::Result<()> {
+pub fn delete_schedules_for_app(db: &Db, app: &AppName) -> rusqlite::Result<()> {
     db.conn.execute(
         "DELETE FROM action_schedules WHERE app = ?1",
         rusqlite::params![app],

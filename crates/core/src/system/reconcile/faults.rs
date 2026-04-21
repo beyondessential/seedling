@@ -1,6 +1,7 @@
-use crate::runtime::{faults, identity::ResourceInstance};
+use seedling_protocol::names::AppName;
 
 use super::{Reconciler, pods, volumes};
+use crate::runtime::{faults, identity::ResourceInstance};
 
 impl Reconciler {
     /// File a fault scoped to a specific resource instance, if no active fault
@@ -66,8 +67,8 @@ impl Reconciler {
     // and anyone observing that image present on the system resolves it. We
     // therefore deduplicate on image ref at file time and clear on image ref
     // whenever any instance in the app successfully pulls the same image.
-    pub(super) fn file_image_pull_faults(&self, app: &str, update: &pods::PodActuationUpdate) {
-        let app = app.to_owned();
+    pub(super) fn file_image_pull_faults(&self, app: &AppName, update: &pods::PodActuationUpdate) {
+        let app = app.clone();
         let image_pull_failures: Vec<(ResourceInstance, String)> = update
             .image_pull_failures
             .iter()
@@ -121,8 +122,12 @@ impl Reconciler {
     }
 
     // r[fault.container-start]
-    pub(super) fn file_unit_failure_faults(&self, app: &str, update: &pods::PodActuationUpdate) {
-        let app = app.to_owned();
+    pub(super) fn file_unit_failure_faults(
+        &self,
+        app: &AppName,
+        update: &pods::PodActuationUpdate,
+    ) {
+        let app = app.clone();
         let unit_failures: Vec<ResourceInstance> = update.unit_failures.to_vec();
         let unit_healthy: Vec<ResourceInstance> = update.unit_healthy.to_vec();
         self.db.call(move |db| {
@@ -182,8 +187,12 @@ impl Reconciler {
     }
 
     // r[impl fault.external-volume-unmapped]
-    pub(super) fn file_external_volume_faults(&self, app: &str, update: &pods::PodActuationUpdate) {
-        let app = app.to_owned();
+    pub(super) fn file_external_volume_faults(
+        &self,
+        app: &AppName,
+        update: &pods::PodActuationUpdate,
+    ) {
+        let app = app.clone();
         let external_volume_failures: Vec<(ResourceInstance, String)> = update
             .external_volume_failures
             .iter()
@@ -236,8 +245,12 @@ impl Reconciler {
         });
     }
 
-    pub(super) fn file_pod_actuation_faults(&self, app: &str, update: &pods::PodActuationUpdate) {
-        let app = app.to_owned();
+    pub(super) fn file_pod_actuation_faults(
+        &self,
+        app: &AppName,
+        update: &pods::PodActuationUpdate,
+    ) {
+        let app = app.clone();
         let start_failures: Vec<(ResourceInstance, String)> = update
             .start_failures
             .iter()
@@ -282,10 +295,10 @@ impl Reconciler {
 
     pub(super) fn file_volume_actuation_faults(
         &self,
-        app: &str,
+        app: &AppName,
         update: &volumes::VolumeActuationUpdate,
     ) {
-        let app = app.to_owned();
+        let app = app.clone();
         let observe_failures: Vec<(ResourceInstance, String)> = update
             .observe_failures
             .iter()
@@ -308,8 +321,8 @@ impl Reconciler {
         });
     }
 
-    pub(super) fn file_registry_fault(&self, app: &str, description: &str) {
-        let app = app.to_owned();
+    pub(super) fn file_registry_fault(&self, app: &AppName, description: &str) {
+        let app = app.clone();
         let description = description.to_owned();
         self.db.call(move |db| {
             let already_filed = faults::list_active_faults(db, Some(&app))
@@ -327,10 +340,10 @@ impl Reconciler {
 
     pub(super) fn file_instance_registry_faults(
         &self,
-        app: &str,
+        app: &AppName,
         update: &pods::PodActuationUpdate,
     ) {
-        let app = app.to_owned();
+        let app = app.clone();
         let registry_failures: Vec<ResourceInstance> = update.registry_failures.to_vec();
         let image_pull_successes: Vec<ResourceInstance> = update
             .image_pull_successes
@@ -351,13 +364,14 @@ impl Reconciler {
         let fault_kind = fault_kind.to_owned();
         let description = description.to_owned();
         self.db.call(move |db| {
-            let already_filed = faults::list_active_faults(db, Some("_system"))
+            let system = AppName::new_unchecked("_system");
+            let already_filed = faults::list_active_faults(db, Some(&system))
                 .unwrap_or_default()
                 .iter()
                 .any(|f| f.kind == fault_kind);
             if !already_filed
                 && let Err(e) =
-                    faults::file_fault(db, "_system", None, None, None, &fault_kind, &description)
+                    faults::file_fault(db, &system, None, None, None, &fault_kind, &description)
             {
                 tracing::warn!("failed to file system fault ({fault_kind}): {e}");
             }
@@ -367,21 +381,22 @@ impl Reconciler {
     pub(super) fn clear_system_fault(&self, fault_kind: &str) {
         let fault_kind = fault_kind.to_owned();
         self.db.call(move |db| {
-            let cleared: Vec<_> = faults::list_active_faults(db, Some("_system"))
+            let system = AppName::new_unchecked("_system");
+            let cleared: Vec<_> = faults::list_active_faults(db, Some(&system))
                 .unwrap_or_default()
                 .into_iter()
                 .filter(|f| f.kind == fault_kind)
                 .collect();
             for f in cleared {
-                if let Err(e) = faults::clear_fault(db, &f.id, "_system") {
+                if let Err(e) = faults::clear_fault(db, &f.id, &system) {
                     tracing::warn!(fault_id = %f.id, "failed to clear system fault ({fault_kind}): {e}");
                 }
             }
         });
     }
 
-    pub(super) fn clear_registry_faults(&self, app: &str) {
-        let app = app.to_owned();
+    pub(super) fn clear_registry_faults(&self, app: &AppName) {
+        let app = app.clone();
         self.db.call(move |db| {
             let cleared: Vec<_> = faults::list_active_faults(db, Some(&app))
                 .unwrap_or_default()
@@ -398,7 +413,7 @@ impl Reconciler {
 
     fn file_instance_registry_fault_inner(
         db: &crate::runtime::db::Db,
-        app: &str,
+        app: &AppName,
         instance: &ResourceInstance,
     ) {
         let inst_hex = instance.id.to_hex();
@@ -428,7 +443,7 @@ impl Reconciler {
 
     fn clear_instance_registry_fault_inner(
         db: &crate::runtime::db::Db,
-        app: &str,
+        app: &AppName,
         instance: &ResourceInstance,
     ) {
         let inst_hex = instance.id.to_hex();
@@ -446,7 +461,7 @@ impl Reconciler {
 
     fn file_instance_faults(
         db: &crate::runtime::db::Db,
-        app: &str,
+        app: &AppName,
         failures: &[(ResourceInstance, String)],
         fault_kind: &str,
     ) {

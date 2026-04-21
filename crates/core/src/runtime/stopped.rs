@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use rusqlite::params;
+use seedling_protocol::names::AppName;
 
 use crate::defs::resource::ResourceKind;
 use crate::runtime::db::Db;
@@ -10,7 +11,7 @@ use crate::runtime::db::Db;
 pub type StoppedSet = HashSet<(ResourceKind, String)>;
 
 // i[impl resource.stop]
-pub fn load_stopped(db: &Db, app: &str) -> rusqlite::Result<StoppedSet> {
+pub fn load_stopped(db: &Db, app: &AppName) -> rusqlite::Result<StoppedSet> {
     let mut stmt = db
         .conn
         .prepare("SELECT kind, name FROM stopped_resources WHERE app = ?1")?;
@@ -30,7 +31,12 @@ pub fn load_stopped(db: &Db, app: &str) -> rusqlite::Result<StoppedSet> {
 }
 
 // i[impl resource.stop]
-pub fn stop_resource(db: &Db, app: &str, kind: ResourceKind, name: &str) -> rusqlite::Result<()> {
+pub fn stop_resource(
+    db: &Db,
+    app: &AppName,
+    kind: ResourceKind,
+    name: &str,
+) -> rusqlite::Result<()> {
     db.conn.execute(
         "INSERT OR IGNORE INTO stopped_resources (app, kind, name) VALUES (?1, ?2, ?3)",
         params![app, kind_str(kind), name],
@@ -39,7 +45,12 @@ pub fn stop_resource(db: &Db, app: &str, kind: ResourceKind, name: &str) -> rusq
 }
 
 // i[impl resource.unstop]
-pub fn unstop_resource(db: &Db, app: &str, kind: ResourceKind, name: &str) -> rusqlite::Result<()> {
+pub fn unstop_resource(
+    db: &Db,
+    app: &AppName,
+    kind: ResourceKind,
+    name: &str,
+) -> rusqlite::Result<()> {
     db.conn.execute(
         "DELETE FROM stopped_resources WHERE app = ?1 AND kind = ?2 AND name = ?3",
         params![app, kind_str(kind), name],
@@ -48,14 +59,14 @@ pub fn unstop_resource(db: &Db, app: &str, kind: ResourceKind, name: &str) -> ru
 }
 
 // i[impl resource.unstop-all]
-pub fn unstop_all(db: &Db, app: &str) -> rusqlite::Result<()> {
+pub fn unstop_all(db: &Db, app: &AppName) -> rusqlite::Result<()> {
     db.conn
         .execute("DELETE FROM stopped_resources WHERE app = ?1", params![app])?;
     Ok(())
 }
 
 /// Delete all stopped records for an app on deregister / uninstall.
-pub fn delete_stopped_for_app(db: &Db, app: &str) -> rusqlite::Result<()> {
+pub fn delete_stopped_for_app(db: &Db, app: &AppName) -> rusqlite::Result<()> {
     unstop_all(db, app)
 }
 

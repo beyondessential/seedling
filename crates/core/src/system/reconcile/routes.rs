@@ -1,7 +1,9 @@
 use std::net::Ipv6Addr;
 
 use ipnet::Ipv6Net;
+use seedling_protocol::names::AppName;
 
+use super::RunningPod;
 use crate::{
     defs::{
         app::AppDef,
@@ -15,8 +17,6 @@ use crate::{
     system::{translate::proxy::instance_ipv6, types::ServiceRoute},
 };
 
-use super::RunningPod;
-
 // r[autonomous.network]
 // r[fault.non-blocking]
 #[expect(
@@ -29,7 +29,7 @@ pub(super) fn build(
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
     running_pods: &[RunningPod],
-    app_name: &str,
+    app_name: &AppName,
 ) -> Result<
     (
         Vec<ServiceRoute>,

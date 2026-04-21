@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, fmt::Write as FmtWrite};
 
 use secrecy::{ExposeSecret, SecretString};
+use seedling_protocol::names::AppName;
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -90,7 +91,7 @@ pub enum Error {
     Db(rusqlite::Error),
     Script(apps::ScriptError),
     NoCurrentGeneration(String),
-    NotFound { app: String, generation: Generation },
+    NotFound { app: AppName, generation: Generation },
     MissingScript(String),
 }
 
@@ -164,7 +165,7 @@ pub fn script_body(db: &Db, hash: &str) -> rusqlite::Result<Option<String>> {
     }
 }
 
-pub fn current(db: &Db, app: &str) -> rusqlite::Result<Option<Generation>> {
+pub fn current(db: &Db, app: &AppName) -> rusqlite::Result<Option<Generation>> {
     let mut stmt = db
         .conn
         .prepare("SELECT current_generation FROM registered_apps WHERE name = ?1")?;
@@ -177,7 +178,7 @@ pub fn current(db: &Db, app: &str) -> rusqlite::Result<Option<Generation>> {
 }
 
 // r[impl generation.monotonic]
-fn next_generation_for(db: &Db, app: &str) -> rusqlite::Result<Generation> {
+fn next_generation_for(db: &Db, app: &AppName) -> rusqlite::Result<Generation> {
     let mut stmt = db
         .conn
         .prepare("SELECT COALESCE(MAX(generation), 0) FROM generations WHERE app = ?1")?;
@@ -192,7 +193,7 @@ fn now() -> String {
 // r[impl generation.bumps]
 fn insert_register_or_update(
     db: &Db,
-    app: &str,
+    app: &AppName,
     kind: Kind,
     script_hash: &str,
 ) -> rusqlite::Result<Generation> {
@@ -212,7 +213,7 @@ fn insert_register_or_update(
 
 /// Bump the generation for the initial registration of an app.
 /// Stores the script body content-addressed and writes a `Register` history entry.
-pub fn bump_register(db: &Db, app: &str, script: &str) -> rusqlite::Result<Generation> {
+pub fn bump_register(db: &Db, app: &AppName, script: &str) -> rusqlite::Result<Generation> {
     let hash = store_script(db, script)?;
     insert_register_or_update(db, app, Kind::Register, &hash)
 }
@@ -220,12 +221,12 @@ pub fn bump_register(db: &Db, app: &str, script: &str) -> rusqlite::Result<Gener
 /// Bump the generation for a script update. The new script is stored and a
 /// `ScriptUpdate` entry is written. Idempotent storage: identical script content
 /// reuses the existing `script_bodies` row.
-pub fn bump_script_update(db: &Db, app: &str, script: &str) -> rusqlite::Result<Generation> {
+pub fn bump_script_update(db: &Db, app: &AppName, script: &str) -> rusqlite::Result<Generation> {
     let hash = store_script(db, script)?;
     insert_register_or_update(db, app, Kind::ScriptUpdate, &hash)
 }
 
-fn current_script_hash(db: &Db, app: &str) -> rusqlite::Result<String> {
+fn current_script_hash(db: &Db, app: &AppName) -> rusqlite::Result<String> {
     let mut stmt = db.conn.prepare(
         "SELECT script_hash FROM generations
          WHERE app = ?1
@@ -240,7 +241,7 @@ fn current_script_hash(db: &Db, app: &str) -> rusqlite::Result<String> {
 // r[impl secret.history]
 pub fn bump_param_set(
     db: &Db,
-    app: &str,
+    app: &AppName,
     name: &str,
     previous: Option<&str>,
     new_value: &str,
@@ -291,7 +292,7 @@ pub fn bump_param_set(
 // r[impl secret.history]
 pub fn bump_param_unset(
     db: &Db,
-    app: &str,
+    app: &AppName,
     name: &str,
     previous: &str,
     cipher: &Cipher,
@@ -334,7 +335,7 @@ pub fn bump_param_unset(
 /// (or other) lifecycle operation.
 pub fn attach_operation(
     db: &Db,
-    app: &str,
+    app: &AppName,
     generation: Generation,
     operation_id: &str,
 ) -> rusqlite::Result<()> {
@@ -351,7 +352,7 @@ pub fn attach_operation(
 /// Record the final outcome of the lifecycle operation attached to a generation.
 pub fn record_outcome(
     db: &Db,
-    app: &str,
+    app: &AppName,
     generation: Generation,
     outcome: Outcome,
     error: Option<&str>,
@@ -370,7 +371,7 @@ pub fn record_outcome(
 /// `before`, when provided, restricts results to `generation < before`.
 pub fn list(
     db: &Db,
-    app: &str,
+    app: &AppName,
     before: Option<Generation>,
     limit: usize,
 ) -> rusqlite::Result<Vec<HistoryEntry>> {
@@ -427,7 +428,7 @@ fn rows_to_entries(mut rows: rusqlite::Rows<'_>) -> rusqlite::Result<Vec<History
 }
 
 /// Look up a single generation entry.
-pub fn get(db: &Db, app: &str, generation: Generation) -> rusqlite::Result<Option<HistoryEntry>> {
+pub fn get(db: &Db, app: &AppName, generation: Generation) -> rusqlite::Result<Option<HistoryEntry>> {
     let mut stmt = db.conn.prepare(
         "SELECT generation, created_at, kind, param_name, previous_value,
                 new_value, script_hash, operation_id, outcome, outcome_error,
@@ -445,7 +446,7 @@ pub fn get(db: &Db, app: &str, generation: Generation) -> rusqlite::Result<Optio
 // r[impl secret.history]
 pub fn param_map_at(
     db: &Db,
-    app: &str,
+    app: &AppName,
     generation: Generation,
     cipher: &Cipher,
 ) -> rusqlite::Result<BTreeMap<String, String>> {
@@ -475,7 +476,7 @@ pub fn param_map_at(
                 match cipher.decrypt(&ct) {
                     Ok(s) => Some(s.expose_secret().to_owned()),
                     Err(e) => {
-                        tracing::error!(app, param = %name, "failed to decrypt param history for reconstruction: {e}");
+                        tracing::error!(app = %app, param = %name, "failed to decrypt param history for reconstruction: {e}");
                         None
                     }
                 }
@@ -493,7 +494,7 @@ pub fn param_map_at(
 /// Look up the script hash active at a specific generation: the script_hash
 /// of the most recent Register/ScriptUpdate at or before that generation.
 // r[impl generation.previous]
-pub fn script_hash_at(db: &Db, app: &str, generation: Generation) -> Result<String, Error> {
+pub fn script_hash_at(db: &Db, app: &AppName, generation: Generation) -> Result<String, Error> {
     let mut stmt = db.conn.prepare(
         "SELECT script_hash
          FROM generations
@@ -506,7 +507,7 @@ pub fn script_hash_at(db: &Db, app: &str, generation: Generation) -> Result<Stri
     }) {
         Ok(h) => Ok(h),
         Err(rusqlite::Error::QueryReturnedNoRows) => Err(Error::NotFound {
-            app: app.to_owned(),
+            app: app.clone(),
             generation,
         }),
         Err(e) => Err(e.into()),
@@ -519,14 +520,14 @@ pub fn script_hash_at(db: &Db, app: &str, generation: Generation) -> Result<Stri
 // r[impl generation.reconstruction]
 pub fn reconstruct_app_def(
     db: &Db,
-    app: &str,
+    app: &AppName,
     generation: Generation,
     limits: &crate::ScriptLimits,
     cipher: &Cipher,
 ) -> Result<App, Error> {
     if get(db, app, generation)?.is_none() {
         return Err(Error::NotFound {
-            app: app.to_owned(),
+            app: app.clone(),
             generation,
         });
     }
@@ -543,7 +544,7 @@ pub fn reconstruct_app_def(
 /// Delete all generation history and orphaned script bodies for an app.
 /// Called as part of deregistration.
 // r[impl generation.deregister]
-pub fn delete_for_app(db: &Db, app: &str) -> rusqlite::Result<()> {
+pub fn delete_for_app(db: &Db, app: &AppName) -> rusqlite::Result<()> {
     db.conn
         .execute("DELETE FROM generations WHERE app = ?1", [app])?;
     // Garbage-collect any script bodies no longer referenced by any generation.

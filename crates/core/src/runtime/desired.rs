@@ -1,6 +1,8 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
+use seedling_protocol::names::AppName;
+
 use crate::defs::app::AppDef;
 use crate::defs::resource::{Resource, ResourceId, ResourceKind};
 use crate::runtime::barrier::{ActionLogEntry, CallKind};
@@ -139,7 +141,7 @@ impl OperationProgress {
 /// explicitly placed into the desired state are included.
 // r[impl desired-state.definition]
 pub fn compute(
-    app_name: &str,
+    app_name: &AppName,
     app_def: &AppDef,
     operation_progress: Option<&OperationProgress>,
     registry: &dyn InstanceRegistry,
@@ -155,7 +157,7 @@ pub fn compute(
 /// Compute the desired state for an app that is being uninstalled.
 /// All resources are desired at `Unscheduled`.
 pub fn compute_uninstalling(
-    app_name: &str,
+    app_name: &AppName,
     app_def: &AppDef,
     registry: &dyn InstanceRegistry,
 ) -> Result<DesiredState, RegistryError> {
@@ -180,7 +182,7 @@ pub fn compute_uninstalling(
 
 // r[impl desired-state.steady]
 fn compute_steady(
-    app_name: &str,
+    app_name: &AppName,
     app_def: &AppDef,
     registry: &dyn InstanceRegistry,
     effective_scales: &EffectiveScales,
@@ -264,7 +266,7 @@ fn lookup_definition(app_def: &AppDef, instance: &ResourceInstance) -> Option<Re
 /// A persisted dynamic resource record.
 pub struct DynamicResourceRecord {
     pub instance_id: String,
-    pub app: String,
+    pub app: AppName,
     pub operation_id: String,
     pub kind: String,
     pub display_name: String,
@@ -324,7 +326,7 @@ pub fn list_dynamic_resources(db: &Db) -> rusqlite::Result<Vec<DynamicResourceRe
 /// Load dynamic resource records for a single app.
 pub fn list_dynamic_resources_for_app(
     db: &Db,
-    app: &str,
+    app: &AppName,
 ) -> rusqlite::Result<Vec<DynamicResourceRecord>> {
     let mut stmt = db.conn.prepare(
         "SELECT instance_id, app, operation_id, kind, display_name, resource_name
@@ -336,7 +338,7 @@ pub fn list_dynamic_resources_for_app(
 fn parse_dynamic_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DynamicResourceRecord> {
     Ok(DynamicResourceRecord {
         instance_id: row.get(0)?,
-        app: row.get(1)?,
+        app: row.get::<_, AppName>(1)?,
         operation_id: row.get(2)?,
         kind: row.get(3)?,
         display_name: row.get(4)?,

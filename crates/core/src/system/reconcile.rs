@@ -9,6 +9,7 @@ use std::{
 use ipnet::Ipv6Net;
 use parking_lot::{Mutex, RwLock};
 use seedling_protocol::events::EventSender;
+use seedling_protocol::names::AppName;
 use tokio::sync::RwLock as AsyncRwLock;
 use tracing::{error, warn};
 
@@ -122,7 +123,7 @@ pub(crate) struct RunningPod {
 
 /// Point-in-time snapshot of a single app's state, taken at tick start.
 struct AppSnapshot {
-    name: String,
+    name: AppName,
     desired: DesiredState,
     app_def: AppDef,
     phase: AppPhase,
@@ -158,7 +159,7 @@ pub struct Reconciler {
     /// Set from pod actuation results; read by `compute_effective_scales` to bump
     /// the effective instance count by one during rollouts.
     // r[impl update.rolling.over-provision]
-    rolling_updates: HashSet<(String, String)>,
+    rolling_updates: HashSet<(AppName, String)>,
     /// Whether seedling is providing its own NAT64 translator.
     nat64_active: bool,
     /// Upstream DNS servers CoreDNS forwards to. When `--dns-upstreams`
@@ -313,7 +314,7 @@ impl Reconciler {
 
     /// Build the effective-scale map for every Deployment in an app.
     // r[impl update.rolling.over-provision]
-    fn compute_effective_scales(&self, app_name: &str, app_def: &AppDef) -> EffectiveScales {
+    fn compute_effective_scales(&self, app_name: &AppName, app_def: &AppDef) -> EffectiveScales {
         // Collect the data we need before entering db.call().
         let deployments: Vec<(String, u16, u16)> = app_def
             .resources
@@ -331,7 +332,7 @@ impl Reconciler {
                 }
             })
             .collect();
-        let app_name_owned = app_name.to_owned();
+        let app_name_owned = app_name.clone();
         let scale_data: Vec<(String, u16, u16, u16)> = self.db.call(move |db| {
             deployments
                 .into_iter()
@@ -347,7 +348,7 @@ impl Reconciler {
         for (dep_name, low, high, mut effective) in scale_data {
             if self
                 .rolling_updates
-                .contains(&(app_name.to_owned(), dep_name.clone()))
+                .contains(&(app_name.clone(), dep_name.clone()))
             {
                 effective = effective.saturating_add(1);
             }
@@ -653,8 +654,8 @@ impl Reconciler {
     fn ingest_pod_results(
         &mut self,
         apps: &[AppSnapshot],
-        pod_updates: Vec<(String, pods::PodActuationUpdate)>,
-    ) -> HashMap<String, Vec<RunningPod>> {
+        pod_updates: Vec<(AppName, pods::PodActuationUpdate)>,
+    ) -> HashMap<AppName, Vec<RunningPod>> {
         let mut running_pods_by_app = HashMap::new();
         // r[impl update.rolling.over-provision]
         // Rebuild rolling_updates from scratch each tick so that completed
@@ -691,7 +692,7 @@ impl Reconciler {
     fn ingest_volume_results(
         &mut self,
         apps: &[AppSnapshot],
-        vol_updates: Vec<(String, volumes::VolumeActuationUpdate)>,
+        vol_updates: Vec<(AppName, volumes::VolumeActuationUpdate)>,
     ) {
         for (app_name, vol_update) in vol_updates {
             self.file_volume_actuation_faults(&app_name, &vol_update);
@@ -707,7 +708,7 @@ impl Reconciler {
     async fn run_uninstall_phase(
         &mut self,
         apps: &[AppSnapshot],
-        running_pods_by_app: &HashMap<String, Vec<RunningPod>>,
+        running_pods_by_app: &HashMap<AppName, Vec<RunningPod>>,
     ) {
         for app in apps {
             if app.phase != AppPhase::Uninstalling {

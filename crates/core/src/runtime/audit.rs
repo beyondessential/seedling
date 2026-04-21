@@ -5,10 +5,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use seedling_protocol::events::OiEvent;
+use seedling_protocol::names::AppName;
 use tokio::{sync::broadcast, task::JoinHandle};
 use tracing::{error, warn};
-
-use seedling_protocol::events::OiEvent;
 
 use crate::runtime::db::DbHandle;
 
@@ -95,9 +95,10 @@ pub fn spawn_audit_task(
                     // r[impl audit.log.resilience]
                     warn!(dropped = n, "audit log receiver lagged, events lost");
                     db.call(move |db| {
+                        let seedling_app = AppName::new_unchecked("seedling");
                         let _ = crate::runtime::faults::file_fault(
                             db,
-                            "seedling",
+                            &seedling_app,
                             None,
                             None,
                             None,
@@ -125,7 +126,7 @@ mod tests {
     fn test_event(app: &str) -> OiEvent {
         OiEvent::AppRegistered {
             timestamp: jiff::Timestamp::now(),
-            app: app.to_owned(),
+            app: AppName::new_unchecked(app),
             generation: 1,
             actor: None,
         }
