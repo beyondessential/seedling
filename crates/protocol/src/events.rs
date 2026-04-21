@@ -236,6 +236,89 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
+    // r[impl volume.site.lifecycle.events]
+    SiteVolumeCreated {
+        timestamp: Timestamp,
+        name: String,
+        /// "managed" or "bind".
+        kind: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        host_path: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
+    // r[impl volume.site.lifecycle.events]
+    SiteVolumeDeleted {
+        timestamp: Timestamp,
+        name: String,
+        /// "managed", "bind", or "snapshot".
+        kind: String,
+        /// Set when the deletion routed through the held-volume mechanism;
+        /// absent for bind site volumes whose host path is left untouched.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        held_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
+    // r[impl volume.site.snapshot.events]
+    SiteVolumeSnapshotted {
+        timestamp: Timestamp,
+        name: String,
+        /// None when the source is a site volume; Some(app) when the source is an app volume.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source_app: Option<String>,
+        source_volume: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
+    // r[impl volume.site.promote.events]
+    SiteVolumePromoted {
+        timestamp: Timestamp,
+        name: String,
+        source: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
+    // r[impl volume.external.mapping.events]
+    ExternalVolumeMapped {
+        timestamp: Timestamp,
+        app: String,
+        external_name: String,
+        /// "exported" or "site".
+        target_kind: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        target_app: Option<String>,
+        target_volume: String,
+        read_only: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
+    // r[impl volume.external.mapping.events]
+    ExternalVolumeUnmapped {
+        timestamp: Timestamp,
+        app: String,
+        external_name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
+    // r[impl volume.external.mapping.events]
+    ExternalVolumeRemapped {
+        timestamp: Timestamp,
+        app: String,
+        external_name: String,
+        target_kind: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        target_app: Option<String>,
+        target_volume: String,
+        read_only: bool,
+        previous_target_kind: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        previous_target_app: Option<String>,
+        previous_target_volume: String,
+        previous_read_only: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
 }
 
 /// Newtype over `broadcast::Sender<OiEvent>` that carries event-emission methods.
@@ -260,6 +343,18 @@ fn now() -> Timestamp {
 
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+/// Borrowed snapshot of an external volume mapping's target. Used to emit
+/// remap events without forcing the caller to stringify fields twice.
+#[derive(Clone, Copy, Debug)]
+pub struct ExternalMappingSnapshot<'a> {
+    /// "exported" or "site".
+    pub kind: &'a str,
+    /// Only set when `kind == "exported"`.
+    pub app: Option<&'a str>,
+    pub volume: &'a str,
+    pub read_only: bool,
 }
 
 impl EventSender {
@@ -461,6 +556,134 @@ impl EventSender {
         self.emit(OiEvent::HeldVolumeDeleted {
             timestamp: now(),
             held_id: held_id.to_owned(),
+            actor,
+        });
+    }
+
+    // r[impl volume.site.lifecycle.events]
+    pub fn site_volume_created(
+        &self,
+        name: &str,
+        kind: &str,
+        host_path: Option<&str>,
+        actor: Option<Arc<Actor>>,
+    ) {
+        self.emit(OiEvent::SiteVolumeCreated {
+            timestamp: now(),
+            name: name.to_owned(),
+            kind: kind.to_owned(),
+            host_path: host_path.map(str::to_owned),
+            actor,
+        });
+    }
+
+    // r[impl volume.site.lifecycle.events]
+    pub fn site_volume_deleted(
+        &self,
+        name: &str,
+        kind: &str,
+        held_id: Option<&str>,
+        actor: Option<Arc<Actor>>,
+    ) {
+        self.emit(OiEvent::SiteVolumeDeleted {
+            timestamp: now(),
+            name: name.to_owned(),
+            kind: kind.to_owned(),
+            held_id: held_id.map(str::to_owned),
+            actor,
+        });
+    }
+
+    // r[impl volume.site.snapshot.events]
+    pub fn site_volume_snapshotted(
+        &self,
+        name: &str,
+        source_app: Option<&str>,
+        source_volume: &str,
+        actor: Option<Arc<Actor>>,
+    ) {
+        self.emit(OiEvent::SiteVolumeSnapshotted {
+            timestamp: now(),
+            name: name.to_owned(),
+            source_app: source_app.map(str::to_owned),
+            source_volume: source_volume.to_owned(),
+            actor,
+        });
+    }
+
+    // r[impl volume.site.promote.events]
+    pub fn site_volume_promoted(&self, name: &str, source: &str, actor: Option<Arc<Actor>>) {
+        self.emit(OiEvent::SiteVolumePromoted {
+            timestamp: now(),
+            name: name.to_owned(),
+            source: source.to_owned(),
+            actor,
+        });
+    }
+
+    // r[impl volume.external.mapping.events]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mapping events capture the full target tuple and read_only flag; collapsing them would obscure the audit payload"
+    )]
+    pub fn external_volume_mapped(
+        &self,
+        app: &str,
+        external_name: &str,
+        target_kind: &str,
+        target_app: Option<&str>,
+        target_volume: &str,
+        read_only: bool,
+        actor: Option<Arc<Actor>>,
+    ) {
+        self.emit(OiEvent::ExternalVolumeMapped {
+            timestamp: now(),
+            app: app.to_owned(),
+            external_name: external_name.to_owned(),
+            target_kind: target_kind.to_owned(),
+            target_app: target_app.map(str::to_owned),
+            target_volume: target_volume.to_owned(),
+            read_only,
+            actor,
+        });
+    }
+
+    // r[impl volume.external.mapping.events]
+    pub fn external_volume_unmapped(
+        &self,
+        app: &str,
+        external_name: &str,
+        actor: Option<Arc<Actor>>,
+    ) {
+        self.emit(OiEvent::ExternalVolumeUnmapped {
+            timestamp: now(),
+            app: app.to_owned(),
+            external_name: external_name.to_owned(),
+            actor,
+        });
+    }
+
+    // r[impl volume.external.mapping.events]
+    pub fn external_volume_remapped(
+        &self,
+        app: &str,
+        external_name: &str,
+        new: ExternalMappingSnapshot<'_>,
+        previous: ExternalMappingSnapshot<'_>,
+        actor: Option<Arc<Actor>>,
+    ) {
+        self.emit(OiEvent::ExternalVolumeRemapped {
+            timestamp: now(),
+            app: app.to_owned(),
+            external_name: external_name.to_owned(),
+            target_kind: new.kind.to_owned(),
+            target_app: new.app.map(str::to_owned),
+            target_volume: new.volume.to_owned(),
+            read_only: new.read_only,
+            previous_target_kind: previous.kind.to_owned(),
+            previous_target_app: previous.app.map(str::to_owned),
+            previous_target_volume: previous.volume.to_owned(),
+            previous_read_only: previous.read_only,
             actor,
         });
     }
@@ -668,6 +891,83 @@ impl EventSenderWithActor {
     pub fn held_volume_deleted(&self, held_id: &str) {
         self.inner
             .held_volume_deleted(held_id, Some(Arc::clone(&self.actor)));
+    }
+
+    // r[impl volume.site.lifecycle.events]
+    pub fn site_volume_created(&self, name: &str, kind: &str, host_path: Option<&str>) {
+        self.inner
+            .site_volume_created(name, kind, host_path, Some(Arc::clone(&self.actor)));
+    }
+
+    // r[impl volume.site.lifecycle.events]
+    pub fn site_volume_deleted(&self, name: &str, kind: &str, held_id: Option<&str>) {
+        self.inner
+            .site_volume_deleted(name, kind, held_id, Some(Arc::clone(&self.actor)));
+    }
+
+    // r[impl volume.site.snapshot.events]
+    pub fn site_volume_snapshotted(
+        &self,
+        name: &str,
+        source_app: Option<&str>,
+        source_volume: &str,
+    ) {
+        self.inner.site_volume_snapshotted(
+            name,
+            source_app,
+            source_volume,
+            Some(Arc::clone(&self.actor)),
+        );
+    }
+
+    // r[impl volume.site.promote.events]
+    pub fn site_volume_promoted(&self, name: &str, source: &str) {
+        self.inner
+            .site_volume_promoted(name, source, Some(Arc::clone(&self.actor)));
+    }
+
+    // r[impl volume.external.mapping.events]
+    pub fn external_volume_mapped(
+        &self,
+        app: &str,
+        external_name: &str,
+        target_kind: &str,
+        target_app: Option<&str>,
+        target_volume: &str,
+        read_only: bool,
+    ) {
+        self.inner.external_volume_mapped(
+            app,
+            external_name,
+            target_kind,
+            target_app,
+            target_volume,
+            read_only,
+            Some(Arc::clone(&self.actor)),
+        );
+    }
+
+    // r[impl volume.external.mapping.events]
+    pub fn external_volume_unmapped(&self, app: &str, external_name: &str) {
+        self.inner
+            .external_volume_unmapped(app, external_name, Some(Arc::clone(&self.actor)));
+    }
+
+    // r[impl volume.external.mapping.events]
+    pub fn external_volume_remapped(
+        &self,
+        app: &str,
+        external_name: &str,
+        new: ExternalMappingSnapshot<'_>,
+        previous: ExternalMappingSnapshot<'_>,
+    ) {
+        self.inner.external_volume_remapped(
+            app,
+            external_name,
+            new,
+            previous,
+            Some(Arc::clone(&self.actor)),
+        );
     }
 }
 
