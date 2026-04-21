@@ -10,8 +10,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[transport.quic]
 > The OI uses QUIC as its wire transport protocol.
 
-> i[transport.local]
-> In local operation mode, the OI endpoint listens on a loopback address configured at startup.
+> i[transport.server-identity]
 > The server authenticates using an RFC 7250 raw public key (SPKI).
 > The server's key pair is generated at first startup and persisted to the data directory so that clients can pin the SPKI fingerprint across restarts.
 > Clients verify the server by its SPKI fingerprint; certificate chain validation is not used.
@@ -20,10 +19,6 @@ Absent specification bugs, anything that is not defined here is either defined i
 > The server may be configured to listen on one or more addresses at startup.
 > All configured addresses share the same server identity (key pair and SPKI fingerprint) and the same authorized key set.
 > When no addresses are explicitly configured, the server listens on a single loopback address on the default port.
-
-> i[transport.remote]
-> Remote operation mode — binding to a non-loopback address, with client authentication and PKI — is reserved for a future extension of this spec.
-> Authentication and certificate verification requirements for remote mode are not defined here yet.
 
 > i[transport.fingerprint-probe]
 > When a client connects to a server whose fingerprint is not yet in its known-hosts store, it must

@@ -84,7 +84,7 @@ fn synthesise_actor(state: &OiState, fp: Option<&str>) -> Arc<Actor> {
 }
 
 // i[transport.quic]
-// i[transport.local]
+// i[transport.server-identity]
 // i[transport.client-auth]
 // i[transport.listen]
 pub async fn run(
