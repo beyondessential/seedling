@@ -6,7 +6,7 @@ use tokio::sync::broadcast;
 
 use crate::{
     actor::Actor,
-    names::{ActionName, AppName},
+    names::{ActionName, AppName, ForwardId, SessionId},
 };
 
 // i[event.types]
@@ -152,7 +152,7 @@ pub enum OiEvent {
     },
     ShellStarted {
         timestamp: Timestamp,
-        session_id: String,
+        session_id: SessionId,
         app: AppName,
         name: String,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -160,14 +160,14 @@ pub enum OiEvent {
     },
     ShellExited {
         timestamp: Timestamp,
-        session_id: String,
+        session_id: SessionId,
         exit_code: i32,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
     ForwardStarted {
         timestamp: Timestamp,
-        forward_id: String,
+        forward_id: ForwardId,
         app: AppName,
         service: String,
         port: u16,
@@ -176,7 +176,7 @@ pub enum OiEvent {
     },
     ForwardStopped {
         timestamp: Timestamp,
-        forward_id: String,
+        forward_id: ForwardId,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
@@ -508,10 +508,10 @@ impl EventSender {
     }
 
     // i[impl shell.start]
-    pub fn shell_started(&self, session_id: &str, app: &AppName, name: &str) {
+    pub fn shell_started(&self, session_id: SessionId, app: &AppName, name: &str) {
         self.emit(OiEvent::ShellStarted {
             timestamp: now(),
-            session_id: session_id.to_owned(),
+            session_id,
             app: app.clone(),
             name: name.to_owned(),
             actor: None,
@@ -519,20 +519,20 @@ impl EventSender {
     }
 
     // i[impl shell.exit]
-    pub fn shell_exited(&self, session_id: &str, exit_code: i32) {
+    pub fn shell_exited(&self, session_id: SessionId, exit_code: i32) {
         self.emit(OiEvent::ShellExited {
             timestamp: now(),
-            session_id: session_id.to_owned(),
+            session_id,
             exit_code,
             actor: None,
         });
     }
 
     // i[impl forward.start]
-    pub fn forward_started(&self, forward_id: &str, app: &AppName, service: &str, port: u16) {
+    pub fn forward_started(&self, forward_id: ForwardId, app: &AppName, service: &str, port: u16) {
         self.emit(OiEvent::ForwardStarted {
             timestamp: now(),
-            forward_id: forward_id.to_owned(),
+            forward_id,
             app: app.clone(),
             service: service.to_owned(),
             port,
@@ -541,10 +541,10 @@ impl EventSender {
     }
 
     // i[impl forward.start]
-    pub fn forward_stopped(&self, forward_id: &str) {
+    pub fn forward_stopped(&self, forward_id: ForwardId) {
         self.emit(OiEvent::ForwardStopped {
             timestamp: now(),
-            forward_id: forward_id.to_owned(),
+            forward_id,
             actor: None,
         });
     }
