@@ -99,23 +99,15 @@ export function PlanDiff({ plan }: Props) {
         )}
       </Box>
 
-      <Box>
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          sx={{ display: "block", mb: 0.5 }}
-        >
-          on_change handlers that would fire ({handlers.length})
-        </Typography>
-        {handlers.length === 0 ? (
+      {handlers.length > 0 && (
+        <Box>
           <Typography
-            variant="body2"
-            color="text.disabled"
-            sx={{ fontStyle: "italic" }}
+            variant="caption"
+            color="text.secondary"
+            sx={{ display: "block", mb: 0.5 }}
           >
-            None.
+            on_change handlers that would fire ({handlers.length})
           </Typography>
-        ) : (
           <Stack direction="row" spacing={0.5} sx={{ flexWrap: "wrap", gap: 0.5 }}>
             {handlers.map((h) => (
               <Chip
@@ -126,8 +118,8 @@ export function PlanDiff({ plan }: Props) {
               />
             ))}
           </Stack>
-        )}
-      </Box>
+        </Box>
+      )}
     </Stack>
   );
 }

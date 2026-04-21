@@ -134,18 +134,15 @@ export default function EditScript() {
         maxWidth="md"
         fullWidth
       >
-        <DialogTitle>Review changes</DialogTitle>
+        <DialogTitle>
+          Review changes ·{" "}
+          <Box component="span" sx={{ fontFamily: "monospace" }}>
+            {name}
+          </Box>
+        </DialogTitle>
         <DialogContent dividers>
           <Stack spacing={2}>
             {saveError && <OiErrorAlert error={saveError} />}
-            <Typography variant="body2" color="text.secondary">
-              Updating script for{" "}
-              <Box component="span" sx={{ fontFamily: "monospace", fontWeight: 500 }}>
-                {name}
-              </Box>
-              . Applying will bump the app's generation; any matching{" "}
-              <code>on_change</code> handlers are scheduled for the next tick.
-            </Typography>
             {plan && <PlanDiff plan={plan} />}
           </Stack>
         </DialogContent>
