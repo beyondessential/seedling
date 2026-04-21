@@ -2,7 +2,7 @@ use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
 
 use parking_lot::RwLock;
 use seedling_protocol::events::OperationEventCtx;
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{ActionName, AppName};
 use tokio::sync::Notify;
 
 use crate::{
@@ -53,7 +53,7 @@ fn run_operation_loop(
     cancel_token: Arc<CancelToken>,
 ) -> bool {
     let app_name = &op_ctx.app;
-    let action_name = op_ctx.action_name.as_str();
+    let action_name = &op_ctx.action_name;
     let operation_id = OperationId(op_ctx.operation_id.clone());
 
     let (engine, mut scope, _) = crate::setup_language(script_limits);
@@ -82,7 +82,7 @@ fn run_operation_loop(
         db.clone(),
         operation_id.clone(),
         app_name.clone(),
-        action_name,
+        action_name.clone(),
     );
     let world = Arc::new(DbWorldOracle::new(db.clone()));
     let registry: Arc<dyn InstanceRegistry> = Arc::new(DbInstanceRegistry::new(db.clone()));
@@ -97,7 +97,7 @@ fn run_operation_loop(
         let record = CurrentOperation {
             operation_id: operation_id.clone(),
             app: app_name.clone(),
-            action_name: action_name.to_owned(),
+            action_name: action_name.clone(),
             source_generation: op_ctx.source_generation,
             target_generation: op_ctx.target_generation,
         };
@@ -121,7 +121,7 @@ fn run_operation_loop(
                 script_ast: &ast,
                 operation_id: operation_id.clone(),
                 app,
-                action_name,
+                action_name: action_name.as_str(),
                 log: &log,
                 world: Arc::clone(&world),
                 registry: Arc::clone(&registry),
@@ -511,7 +511,7 @@ fn revert_install_phase(state: &OiState, app_name: &AppName) {
 pub fn spawn_accepted_operation(
     state: Arc<OiState>,
     app_name: AppName,
-    action_name: String,
+    action_name: ActionName,
     operation_id: OperationId,
     params: serde_json::Map<String, serde_json::Value>,
     source_generation: u64,
@@ -544,7 +544,7 @@ pub fn spawn_accepted_operation(
         // i[wire.actor]
         let op_ctx = event_tx.operation(
             app_name.clone(),
-            &action_name,
+            action_name.clone(),
             &operation_id.0,
             source_generation,
             target_generation,
@@ -644,7 +644,7 @@ pub fn spawn_accepted_operation(
 pub(crate) async fn run_operation_for_backup(
     state: &Arc<OiState>,
     backup_app_name: &AppName,
-    action_name: &str,
+    action_name: &ActionName,
     operation_id: OperationId,
     params: serde_json::Map<String, serde_json::Value>,
     source_generation: u64,
@@ -681,7 +681,7 @@ pub(crate) async fn run_operation_for_backup(
 
     let op_ctx = state.event_tx.operation(
         backup_app_name.clone(),
-        action_name,
+        action_name.clone(),
         &operation_id.0,
         source_generation,
         target_generation,

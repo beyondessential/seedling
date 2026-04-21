@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use seedling_protocol::error::{ErrorCode, OiError};
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{ActionName, AppName};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -22,7 +22,7 @@ pub mod lifecycle;
 #[derive(Deserialize)]
 pub(crate) struct InvokeActionParams {
     pub app: AppName,
-    pub name: String,
+    pub name: ActionName,
     #[serde(default)]
     pub params: Option<serde_json::Map<String, serde_json::Value>>,
 }
@@ -148,7 +148,7 @@ pub(crate) fn invoke_action(
         }
 
         let def = entry.app.def.load();
-        if def.shells.contains_key(action_name) {
+        if def.shells.contains_key(action_name.as_str()) {
             return Err(OiError::not_found(format!(
                 "'{action_name}' is a shell action; use /shells/start"
             )));
@@ -161,7 +161,7 @@ pub(crate) fn invoke_action(
         }
         let action_def = def
             .actions
-            .get(action_name)
+            .get(action_name.as_str())
             .ok_or_else(|| OiError::not_found(format!("action not found: {action_name}")))?;
 
         // i[action.invoke]
@@ -203,7 +203,7 @@ pub(crate) fn invoke_action(
             spawn_accepted_operation(
                 Arc::clone(state),
                 app_name.clone(),
-                action_name.to_owned(),
+                action_name.clone(),
                 op_id,
                 action_params,
                 current_generation,

@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use seedling_protocol::error::{ErrorCode, OiError};
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{ActionName, AppName};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -215,11 +215,12 @@ pub(crate) fn invoke_install(
             .map(|e| e.current_generation)
             .unwrap_or(0)
     };
+    let install_action = ActionName::new_unchecked("install");
     let (result, op_id_str) = {
         let mut sched = state.scheduler.lock();
         let result = sched.request(
             app_name,
-            "install",
+            &install_action,
             op_params.clone(),
             current_generation,
             current_generation,
@@ -242,7 +243,7 @@ pub(crate) fn invoke_install(
             spawn_accepted_operation(
                 Arc::clone(state),
                 app_name.clone(),
-                "install".to_owned(),
+                install_action,
                 op_id,
                 op_params,
                 current_generation,

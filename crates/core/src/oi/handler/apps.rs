@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use seedling_protocol::error::{ErrorCode, OiError};
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{ActionName, AppName};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -247,7 +247,7 @@ pub(crate) fn sync_fault_state(
 
 // r[impl schedule.prune]
 fn sync_action_schedules(state: &OiState, app_name: &AppName) {
-    let valid_pairs: Vec<(String, String)> = {
+    let valid_pairs: Vec<(ActionName, String)> = {
         let reg = state.registry.read();
         let Some(entry) = reg.get(app_name.as_str()) else {
             return;
@@ -727,7 +727,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                     Some(a.operation_id.clone()),
                 )
             })
-            .unwrap_or_else(|| (String::new(), 0, 0, None));
+            .unwrap_or_else(|| (ActionName::default(), 0, 0, None));
 
         // i[impl action.describe.barrier]
         // Surface the currently-blocking barrier (if any) so operators can

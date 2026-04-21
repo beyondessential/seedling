@@ -3,7 +3,7 @@ use std::sync::Arc;
 use seedling_protocol::{
     backup_actions,
     error::{ErrorCode, HandlerResult, OiError},
-    names::AppName,
+    names::{ActionName, AppName},
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -533,7 +533,7 @@ async fn run_volume_backup(
         let success = run_operation_for_backup(
             state,
             backing_app_name,
-            "save-snapshot",
+            &ActionName::new_unchecked("save-snapshot"),
             operation_id.clone(),
             action_params,
             0,
@@ -596,13 +596,14 @@ async fn acquire_scheduler_slot(
     app_name: &AppName,
     operation_id: &OperationId,
 ) {
+    let save_snapshot = ActionName::new_unchecked("save-snapshot");
     loop {
         {
             let mut sched = state.scheduler.lock();
             if sched.active().is_none() {
                 sched.request_with_id(
                     app_name,
-                    "save-snapshot",
+                    &save_snapshot,
                     serde_json::Map::new(),
                     0,
                     0,
@@ -669,7 +670,7 @@ async fn list_snapshots_async(state: &Arc<OiState>, params: ListSnapshotsParams)
     let success = run_operation_for_backup(
         state,
         &backing_app_name,
-        "list-snapshots",
+        &ActionName::new_unchecked("list-snapshots"),
         operation_id,
         action_params,
         0,
@@ -762,7 +763,7 @@ async fn restore_backup_async(state: &Arc<OiState>, params: RestoreBackupParams)
     let success = run_operation_for_backup(
         state,
         &backing_app_name,
-        "restore-snapshot",
+        &ActionName::new_unchecked("restore-snapshot"),
         operation_id,
         action_params,
         0,
@@ -941,7 +942,9 @@ fn compute_next_fire_at(s: &backup_strategies::BackupStrategy) -> Option<String>
 
     let cronexpr_str = backup_execution::schedule_to_cronexpr(&s.schedule)?;
     let backup_app = AppName::new_unchecked("backup");
-    let crontab = crate::defs::action::parse_cron_expr(cronexpr_str, &backup_app, &s.name).ok()?;
+    let strategy_action = ActionName::new_unchecked(&s.name);
+    let crontab =
+        crate::defs::action::parse_cron_expr(cronexpr_str, &backup_app, &strategy_action).ok()?;
 
     let now = Timestamp::now();
     let base_time = match &s.last_fired_at {

@@ -168,10 +168,13 @@ fn schedule_on_change(
         return Ok("not_scheduled");
     }
     let source_generation = generation.saturating_sub(1);
+    // The on_change handler is dispatched by using the param name itself as an
+    // action identifier. Param names follow the same bsl.name rules.
+    let param_action = seedling_protocol::names::ActionName::new_unchecked(param_name);
     let mut sched = state.scheduler.lock();
     let result = sched.request(
         app,
-        param_name,
+        &param_action,
         serde_json::Map::new(),
         source_generation,
         generation,

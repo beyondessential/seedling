@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, net::Ipv6Addr, sync::Arc, time::Duration};
 
 use parking_lot::Mutex;
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{ActionName, AppName};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
@@ -230,11 +230,14 @@ pub(crate) async fn open_shell_session(
         let db = db_for_task;
         let registry: Arc<dyn crate::runtime::InstanceRegistry> =
             Arc::new(DbInstanceRegistry::new(db.clone()));
+        // Shell names follow the same bsl.name rules as action names; reuse
+        // ActionName as the identifier written into the action log.
+        let shell_as_action = ActionName::new_unchecked(&shell_name_for_task);
         let log = DbActionLog::new(
             db.clone(),
             op_id_for_log.clone(),
             app_name_for_task.clone(),
-            shell_name_for_task.clone(),
+            shell_as_action,
         );
         let world = Arc::new(DbWorldOracle::new(db.clone()));
 
