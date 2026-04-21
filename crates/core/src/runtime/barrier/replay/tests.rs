@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{ActionName, AppName};
 
 use super::*;
 use crate::defs::resource::ResourceKind;
@@ -12,6 +12,10 @@ use crate::runtime::lifecycle::LifecycleState;
 
 fn app_name() -> AppName {
     AppName::new("test-app").unwrap()
+}
+
+fn action_name(s: &str) -> ActionName {
+    ActionName::new(s).unwrap()
 }
 
 fn dep(name: &str) -> ResourceInstance {
@@ -53,7 +57,7 @@ fn db_action_log_barrier_suspends_then_resumes() {
             DbHandle::open_in_memory().expect("in-memory DB"),
             op.clone(),
             app_name(),
-            "start",
+            action_name("start"),
         )
     };
 
@@ -160,7 +164,7 @@ fn db_action_log_sequential_barriers() {
         DbHandle::open_in_memory().expect("in-memory DB"),
         op.clone(),
         app_name(),
-        "start",
+        action_name("start"),
     );
 
     // Pass 1: frontend not Scheduled -> suspend

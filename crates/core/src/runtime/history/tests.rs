@@ -1,4 +1,4 @@
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{ActionName, AppName};
 
 use super::*;
 use crate::defs::resource::ResourceKind;
@@ -9,6 +9,10 @@ use crate::runtime::lifecycle::LifecycleState;
 
 fn app_name(s: &str) -> AppName {
     AppName::new(s).unwrap()
+}
+
+fn action_name(s: &str) -> ActionName {
+    ActionName::new(s).unwrap()
 }
 
 fn dep(app: &str, name: &str) -> ResourceInstance {
@@ -29,7 +33,7 @@ fn save_and_load_current_operation() {
     let op = CurrentOperation {
         operation_id: OperationId("test-op-id".into()),
         app: app_name("myapp"),
-        action_name: "start".into(),
+        action_name: action_name("start"),
         source_generation: 3,
         target_generation: 4,
     };
@@ -57,7 +61,7 @@ fn clear_current_operation_removes_record() {
     let op = CurrentOperation {
         operation_id: OperationId("op-1".into()),
         app: app_name("app"),
-        action_name: "start".into(),
+        action_name: action_name("start"),
         source_generation: 1,
         target_generation: 1,
     };
@@ -76,7 +80,7 @@ fn cancel_requested_round_trips_through_db() {
     let op = CurrentOperation {
         operation_id: OperationId("op-c1".into()),
         app: app_name("app"),
-        action_name: "save-snapshot".into(),
+        action_name: action_name("save-snapshot"),
         source_generation: 1,
         target_generation: 1,
     };
@@ -115,7 +119,7 @@ fn install_params_round_trip_through_cipher() {
     let op = CurrentOperation {
         operation_id: OperationId("install-op".into()),
         app: app_name("myapp"),
-        action_name: "install".into(),
+        action_name: action_name("install"),
         source_generation: 1,
         target_generation: 1,
     };
@@ -154,7 +158,7 @@ fn non_install_operation_params_round_trip() {
     let op = CurrentOperation {
         operation_id: OperationId("invoke-op".into()),
         app: app_name("myapp"),
-        action_name: "rotate_secret".into(),
+        action_name: ActionName::new_unchecked("rotate_secret"),
         source_generation: 5,
         target_generation: 5,
     };
@@ -182,7 +186,7 @@ fn empty_params_round_trip() {
     let op = CurrentOperation {
         operation_id: OperationId("start-op".into()),
         app: app_name("myapp"),
-        action_name: "start".into(),
+        action_name: action_name("start"),
         source_generation: 1,
         target_generation: 1,
     };
@@ -205,14 +209,14 @@ fn save_overwrites_previous_current_operation() {
     let op1 = CurrentOperation {
         operation_id: OperationId("op-1".into()),
         app: app_name("app"),
-        action_name: "start".into(),
+        action_name: action_name("start"),
         source_generation: 1,
         target_generation: 1,
     };
     let op2 = CurrentOperation {
         operation_id: OperationId("op-2".into()),
         app: app_name("app"),
-        action_name: "stop".into(),
+        action_name: action_name("stop"),
         source_generation: 1,
         target_generation: 1,
     };
@@ -480,7 +484,7 @@ fn insert_and_load_action_log_entry_without_barrier() {
     let db = Db::open_in_memory().unwrap();
     let op = OperationId("op-1".into());
     let entry = make_entry(0, CallKind::Start, None);
-    insert_action_log_entry(&db, &op, &app_name("myapp"), "start", &entry).unwrap();
+    insert_action_log_entry(&db, &op, &app_name("myapp"), &action_name("start"), &entry).unwrap();
 
     let loaded = load_action_log(&db, &op).unwrap();
     assert_eq!(loaded.len(), 1);
@@ -501,7 +505,7 @@ fn insert_and_load_action_log_entry_with_barrier() {
         started_at_secs: Some(1000),
     };
     let entry = make_entry(0, CallKind::Start, Some(barrier));
-    insert_action_log_entry(&db, &op, &app_name("myapp"), "start", &entry).unwrap();
+    insert_action_log_entry(&db, &op, &app_name("myapp"), &action_name("start"), &entry).unwrap();
 
     let loaded = load_action_log(&db, &op).unwrap();
     let b = loaded[0].barrier.as_ref().unwrap();
@@ -523,7 +527,7 @@ fn barrier_satisfaction_update_via_replace() {
         started_at_secs: Some(1000),
     };
     let entry = make_entry(0, CallKind::Start, Some(barrier));
-    insert_action_log_entry(&db, &op, &app_name("myapp"), "start", &entry).unwrap();
+    insert_action_log_entry(&db, &op, &app_name("myapp"), &action_name("start"), &entry).unwrap();
 
     let satisfied_entry = ActionLogEntry {
         call_index: 0,
@@ -536,7 +540,14 @@ fn barrier_satisfaction_update_via_replace() {
             started_at_secs: Some(1000),
         }),
     };
-    insert_action_log_entry(&db, &op, &app_name("myapp"), "start", &satisfied_entry).unwrap();
+    insert_action_log_entry(
+        &db,
+        &op,
+        &app_name("myapp"),
+        &action_name("start"),
+        &satisfied_entry,
+    )
+    .unwrap();
 
     let loaded = load_action_log(&db, &op).unwrap();
     assert_eq!(loaded.len(), 1, "INSERT OR REPLACE should not duplicate");
@@ -553,7 +564,7 @@ fn action_log_multiple_entries_ordered_by_call_index() {
             &db,
             &op,
             &app_name("myapp"),
-            "start",
+            &action_name("start"),
             &make_entry(i, CallKind::Start, None),
         )
         .unwrap();
@@ -575,7 +586,7 @@ fn action_log_scoped_to_operation_id() {
         &db,
         &op1,
         &app_name("myapp"),
-        "start",
+        &action_name("start"),
         &make_entry(0, CallKind::Start, None),
     )
     .unwrap();
@@ -583,7 +594,7 @@ fn action_log_scoped_to_operation_id() {
         &db,
         &op2,
         &app_name("myapp"),
-        "start",
+        &action_name("start"),
         &make_entry(0, CallKind::Stop, None),
     )
     .unwrap();

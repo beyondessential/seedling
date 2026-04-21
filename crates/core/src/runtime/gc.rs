@@ -206,6 +206,10 @@ mod tests {
         seedling_protocol::names::AppName::new(s).unwrap()
     }
 
+    fn action_name(s: &str) -> seedling_protocol::names::ActionName {
+        seedling_protocol::names::ActionName::new(s).unwrap()
+    }
+
     fn dep(app: &str, name: &str) -> ResourceInstance {
         ResourceInstance::new_singleton(app_name(app), ResourceKind::Deployment, name)
     }
@@ -241,7 +245,7 @@ mod tests {
                 &db,
                 &current_op,
                 &app_name("app"),
-                "start",
+                &action_name("start"),
                 &make_entry(i),
             )
             .unwrap();
@@ -251,7 +255,7 @@ mod tests {
                 &db,
                 &old_op,
                 &app_name("app"),
-                "start",
+                &action_name("start"),
                 &make_entry(i),
             )
             .unwrap();
@@ -264,7 +268,7 @@ mod tests {
             &CurrentOperation {
                 operation_id: current_op.clone(),
                 app: app_name("app"),
-                action_name: "start".into(),
+                action_name: action_name("start"),
                 source_generation: 1,
                 target_generation: 1,
             },
@@ -310,8 +314,14 @@ mod tests {
 
         let op = OperationId("recent-op".into());
         for i in 0..3 {
-            history::insert_action_log_entry(&db, &op, &app_name("app"), "start", &make_entry(i))
-                .unwrap();
+            history::insert_action_log_entry(
+                &db,
+                &op,
+                &app_name("app"),
+                &action_name("start"),
+                &make_entry(i),
+            )
+            .unwrap();
         }
 
         let deleted = gc_action_log(&db, Duration::from_secs(24 * 60 * 60)).unwrap();

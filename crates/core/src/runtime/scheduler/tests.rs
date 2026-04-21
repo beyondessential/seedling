@@ -1,12 +1,16 @@
 use std::time::{Duration, UNIX_EPOCH};
 
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{ActionName, AppName};
 
 use super::*;
 use crate::runtime::identity::InstanceId;
 
 fn app(s: &str) -> AppName {
     AppName::new(s).unwrap()
+}
+
+fn act(s: &str) -> ActionName {
+    ActionName::new_unchecked(s)
 }
 
 // -----------------------------------------------------------------------
@@ -45,7 +49,7 @@ fn empty_scheduler_accepts_first_request() {
     assert_eq!(
         s.request(
             &app("app1"),
-            "start",
+            &act("start"),
             serde_json::Map::new(),
             1,
             1,
@@ -64,7 +68,7 @@ fn same_app_second_request_rejected() {
     let mut s = Scheduler::new();
     s.request(
         &app("app1"),
-        "start",
+        &act("start"),
         serde_json::Map::new(),
         1,
         1,
@@ -73,7 +77,7 @@ fn same_app_second_request_rejected() {
     assert_eq!(
         s.request(
             &app("app1"),
-            "start",
+            &act("start"),
             serde_json::Map::new(),
             1,
             1,
@@ -89,7 +93,7 @@ fn same_app_different_action_still_rejected() {
     let mut s = Scheduler::new();
     s.request(
         &app("app1"),
-        "start",
+        &act("start"),
         serde_json::Map::new(),
         1,
         1,
@@ -98,7 +102,7 @@ fn same_app_different_action_still_rejected() {
     assert_eq!(
         s.request(
             &app("app1"),
-            "deploy",
+            &act("deploy"),
             serde_json::Map::new(),
             1,
             1,
@@ -118,7 +122,7 @@ fn different_app_request_is_queued() {
     let mut s = Scheduler::new();
     s.request(
         &app("app1"),
-        "start",
+        &act("start"),
         serde_json::Map::new(),
         1,
         1,
@@ -127,7 +131,7 @@ fn different_app_request_is_queued() {
     assert_eq!(
         s.request(
             &app("app2"),
-            "start",
+            &act("start"),
             serde_json::Map::new(),
             1,
             1,
@@ -147,7 +151,7 @@ fn already_queued_app_is_rejected() {
     let mut s = Scheduler::new();
     s.request(
         &app("app1"),
-        "start",
+        &act("start"),
         serde_json::Map::new(),
         1,
         1,
@@ -155,7 +159,7 @@ fn already_queued_app_is_rejected() {
     );
     s.request(
         &app("app2"),
-        "start",
+        &act("start"),
         serde_json::Map::new(),
         1,
         1,
@@ -164,7 +168,7 @@ fn already_queued_app_is_rejected() {
     assert_eq!(
         s.request(
             &app("app2"),
-            "start",
+            &act("start"),
             serde_json::Map::new(),
             1,
             1,
@@ -180,7 +184,7 @@ fn two_different_apps_can_both_queue() {
     let mut s = Scheduler::new();
     s.request(
         &app("app1"),
-        "start",
+        &act("start"),
         serde_json::Map::new(),
         1,
         1,
@@ -189,7 +193,7 @@ fn two_different_apps_can_both_queue() {
     assert_eq!(
         s.request(
             &app("app2"),
-            "start",
+            &act("start"),
             serde_json::Map::new(),
             1,
             1,
@@ -200,7 +204,7 @@ fn two_different_apps_can_both_queue() {
     assert_eq!(
         s.request(
             &app("app3"),
-            "start",
+            &act("start"),
             serde_json::Map::new(),
             1,
             1,
@@ -217,7 +221,7 @@ fn queued_app_rejected_regardless_of_action_name() {
     let mut s = Scheduler::new();
     s.request(
         &app("app1"),
-        "start",
+        &act("start"),
         serde_json::Map::new(),
         1,
         1,
@@ -225,7 +229,7 @@ fn queued_app_rejected_regardless_of_action_name() {
     );
     s.request(
         &app("app2"),
-        "start",
+        &act("start"),
         serde_json::Map::new(),
         1,
         1,
@@ -234,7 +238,7 @@ fn queued_app_rejected_regardless_of_action_name() {
     assert_eq!(
         s.request(
             &app("app2"),
-            "deploy",
+            &act("deploy"),
             serde_json::Map::new(),
             1,
             1,
@@ -254,7 +258,7 @@ fn complete_current_with_empty_queue_clears_active() {
     let mut s = Scheduler::new();
     s.request(
         &app("app1"),
-        "start",
+        &act("start"),
         serde_json::Map::new(),
         1,
         1,
@@ -272,7 +276,7 @@ fn complete_current_dequeues_next_and_makes_it_active() {
     let mut s = Scheduler::new();
     s.request(
         &app("app1"),
-        "start",
+        &act("start"),
         serde_json::Map::new(),
         1,
         1,
@@ -280,7 +284,7 @@ fn complete_current_dequeues_next_and_makes_it_active() {
     );
     s.request(
         &app("app2"),
-        "deploy",
+        &act("deploy"),
         serde_json::Map::new(),
         1,
         1,
@@ -303,7 +307,7 @@ fn queue_is_drained_in_fifo_order() {
     let mut s = Scheduler::new();
     s.request(
         &app("app1"),
-        "start",
+        &act("start"),
         serde_json::Map::new(),
         1,
         1,
@@ -311,7 +315,7 @@ fn queue_is_drained_in_fifo_order() {
     );
     s.request(
         &app("app2"),
-        "start",
+        &act("start"),
         serde_json::Map::new(),
         1,
         1,
@@ -319,7 +323,7 @@ fn queue_is_drained_in_fifo_order() {
     );
     s.request(
         &app("app3"),
-        "start",
+        &act("start"),
         serde_json::Map::new(),
         1,
         1,
@@ -343,7 +347,7 @@ fn after_complete_same_app_can_be_requested_again() {
     let mut s = Scheduler::new();
     s.request(
         &app("app1"),
-        "start",
+        &act("start"),
         serde_json::Map::new(),
         1,
         1,
@@ -354,7 +358,7 @@ fn after_complete_same_app_can_be_requested_again() {
     assert_eq!(
         s.request(
             &app("app1"),
-            "start",
+            &act("start"),
             serde_json::Map::new(),
             1,
             1,
@@ -374,15 +378,15 @@ fn push_call_with_no_cycle_succeeds() {
     let mut s = Scheduler::new();
     s.request(
         &app("app1"),
-        "start",
+        &act("start"),
         serde_json::Map::new(),
         1,
         1,
         "operator",
     );
-    assert!(s.push_call("start").is_ok());
-    assert!(s.push_call("setup").is_ok());
-    assert!(s.push_call("configure").is_ok());
+    assert!(s.push_call(&act("start")).is_ok());
+    assert!(s.push_call(&act("setup")).is_ok());
+    assert!(s.push_call(&act("configure")).is_ok());
 }
 
 // r[verify operation.composition.cycles]
@@ -391,14 +395,14 @@ fn push_call_detects_direct_cycle() {
     let mut s = Scheduler::new();
     s.request(
         &app("app1"),
-        "start",
+        &act("start"),
         serde_json::Map::new(),
         1,
         1,
         "operator",
     );
-    s.push_call("start").unwrap();
-    let err = s.push_call("start").unwrap_err();
+    s.push_call(&act("start")).unwrap();
+    let err = s.push_call(&act("start")).unwrap_err();
     assert_eq!(err.action, "start");
     assert_eq!(err.stack, vec!["start"]);
 }
@@ -409,16 +413,16 @@ fn push_call_detects_transitive_cycle() {
     let mut s = Scheduler::new();
     s.request(
         &app("app1"),
-        "start",
+        &act("start"),
         serde_json::Map::new(),
         1,
         1,
         "operator",
     );
-    s.push_call("start").unwrap();
-    s.push_call("setup").unwrap();
-    s.push_call("configure").unwrap();
-    let err = s.push_call("start").unwrap_err();
+    s.push_call(&act("start")).unwrap();
+    s.push_call(&act("setup")).unwrap();
+    s.push_call(&act("configure")).unwrap();
+    let err = s.push_call(&act("start")).unwrap_err();
     assert_eq!(err.action, "start");
     assert_eq!(err.stack, vec!["start", "setup", "configure"]);
 }
@@ -429,16 +433,16 @@ fn pop_call_allows_reuse_of_action_name() {
     let mut s = Scheduler::new();
     s.request(
         &app("app1"),
-        "start",
+        &act("start"),
         serde_json::Map::new(),
         1,
         1,
         "operator",
     );
-    s.push_call("setup").unwrap();
+    s.push_call(&act("setup")).unwrap();
     s.pop_call();
     // After popping "setup", pushing it again must not be a cycle.
-    assert!(s.push_call("setup").is_ok());
+    assert!(s.push_call(&act("setup")).is_ok());
 }
 
 // r[verify operation.lifecycle.completion]
@@ -447,7 +451,7 @@ fn complete_current_clears_call_stack() {
     let mut s = Scheduler::new();
     s.request(
         &app("app1"),
-        "start",
+        &act("start"),
         serde_json::Map::new(),
         1,
         1,
@@ -455,14 +459,14 @@ fn complete_current_clears_call_stack() {
     );
     s.request(
         &app("app2"),
-        "start",
+        &act("start"),
         serde_json::Map::new(),
         1,
         1,
         "operator",
     );
-    s.push_call("start").unwrap();
-    s.push_call("setup").unwrap();
+    s.push_call(&act("start")).unwrap();
+    s.push_call(&act("setup")).unwrap();
 
     s.complete_current();
     assert!(s.call_stack().is_empty());
@@ -474,7 +478,7 @@ fn call_stack_is_empty_at_start_of_new_operation() {
     let mut s = Scheduler::new();
     s.request(
         &app("app1"),
-        "start",
+        &act("start"),
         serde_json::Map::new(),
         1,
         1,
