@@ -17,6 +17,7 @@ mod logs;
 mod op;
 mod shell;
 mod subscribe;
+mod templates;
 mod volumes;
 
 #[derive(Parser)]
@@ -84,6 +85,11 @@ enum Command {
     Backups {
         #[command(subcommand)]
         command: backups::BackupsCommand,
+    },
+    /// BSL script templates
+    Templates {
+        #[command(subcommand)]
+        command: templates::TemplatesCommand,
     },
     /// User/key management
     User {
@@ -302,6 +308,7 @@ async fn main() {
         Command::Forwards { command } => op::dispatch_forwards(&client, command).await,
         Command::Registries { command } => op::dispatch_registries(&client, command).await,
         Command::Backups { command } => backups::dispatch(&client, command).await,
+        Command::Templates { command } => templates::dispatch(&client, command).await,
         Command::User { command } => op::dispatch_user(&client, command).await,
         Command::Status => {
             print_result(
