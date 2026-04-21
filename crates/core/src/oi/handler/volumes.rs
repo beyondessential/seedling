@@ -104,7 +104,11 @@ pub(crate) struct CreateSiteVolumeParams {
 }
 
 // r[impl volume.site.lifecycle]
-pub(crate) fn create_site_volume(state: &OiState, params: CreateSiteVolumeParams) -> HandlerResult {
+pub(crate) fn create_site_volume(
+    state: &OiState,
+    params: CreateSiteVolumeParams,
+    ctx: &RequestCtx,
+) -> HandlerResult {
     use crate::runtime::site_volumes::{SiteVolumeDef, SiteVolumeKind};
 
     let kind = match params.kind.as_str() {
@@ -166,6 +170,15 @@ pub(crate) fn create_site_volume(state: &OiState, params: CreateSiteVolumeParams
                 format!("failed to store site volume: {e}"),
             )
         })?;
+
+    // r[impl volume.site.lifecycle.events]
+    let (kind_str, host_path) = match &kind {
+        SiteVolumeKind::Managed => ("managed", None),
+        SiteVolumeKind::Bind { host_path } => ("bind", Some(host_path.as_str())),
+        SiteVolumeKind::Snapshot { .. } => unreachable!("create_site_volume never builds Snapshot"),
+    };
+    ctx.events
+        .site_volume_created(&params.name, kind_str, host_path);
 
     Ok(json!({ "created": true }))
 }
@@ -291,11 +304,20 @@ pub(crate) fn delete_site_volume(
             )
         })?;
 
-    if let Some(meta) = held_meta {
+    let held_id = held_meta.as_ref().map(|m| m.id.as_str());
+    let kind_str = match def.kind {
+        SiteVolumeKind::Managed => "managed",
+        SiteVolumeKind::Bind { .. } => "bind",
+        SiteVolumeKind::Snapshot { .. } => "snapshot",
+    };
+    if let Some(meta) = &held_meta {
         // r[impl actuate.volume.hold.events]
         ctx.events
             .held_volume_created(&meta.id, &meta.app, &meta.volume_name, &meta.reason);
     }
+    // r[impl volume.site.lifecycle.events]
+    ctx.events
+        .site_volume_deleted(&params.name, kind_str, held_id);
 
     Ok(json!({ "deleted": true }))
 }
@@ -312,6 +334,7 @@ pub(crate) struct SnapshotSiteVolumeParams {
 pub(crate) fn snapshot_site_volume(
     state: &OiState,
     params: SnapshotSiteVolumeParams,
+    ctx: &RequestCtx,
 ) -> HandlerResult {
     use crate::runtime::site_volumes::{SiteVolumeDef, SiteVolumeKind};
 
@@ -334,6 +357,8 @@ pub(crate) fn snapshot_site_volume(
         })
     })?;
 
+    let event_source_app = source_app.clone();
+    let event_source_volume = source_volume.clone();
     let def = SiteVolumeDef {
         name: params.name.clone(),
         kind: SiteVolumeKind::Snapshot {
@@ -353,6 +378,13 @@ pub(crate) fn snapshot_site_volume(
             )
         })?;
 
+    // r[impl volume.site.snapshot.events]
+    ctx.events.site_volume_snapshotted(
+        &params.name,
+        event_source_app.as_deref(),
+        &event_source_volume,
+    );
+
     Ok(json!({ "created": true, "name": params.name }))
 }
 
@@ -368,6 +400,7 @@ pub(crate) struct PromoteSiteVolumeParams {
 pub(crate) fn promote_site_volume(
     state: &OiState,
     params: PromoteSiteVolumeParams,
+    ctx: &RequestCtx,
 ) -> HandlerResult {
     use crate::runtime::site_volumes::{SiteVolumeDef, SiteVolumeKind};
 
@@ -432,6 +465,10 @@ pub(crate) fn promote_site_volume(
                 format!("failed to store promoted site volume: {e}"),
             )
         })?;
+
+    // r[impl volume.site.promote.events]
+    ctx.events
+        .site_volume_promoted(&params.name, &params.source);
 
     Ok(json!({ "promoted": true, "name": params.name }))
 }
@@ -498,6 +535,7 @@ pub(crate) struct MapExternalVolumeParams {
 pub(crate) fn map_external_volume(
     state: &OiState,
     params: MapExternalVolumeParams,
+    ctx: &RequestCtx,
 ) -> HandlerResult {
     use crate::runtime::external_volume_mappings::{self, ExternalVolumeMapping};
 
@@ -507,6 +545,8 @@ pub(crate) fn map_external_volume(
         &params.target_volume,
     )?;
 
+    let app = params.app.clone();
+    let external_name = params.external_name.clone();
     let mapping = ExternalVolumeMapping {
         app: params.app,
         external_name: params.external_name,
@@ -524,6 +564,16 @@ pub(crate) fn map_external_volume(
             )
         })?;
 
+    // r[impl volume.external.mapping.events]
+    ctx.events.external_volume_mapped(
+        &app,
+        &external_name,
+        &params.target_kind,
+        params.target_app.as_deref(),
+        &params.target_volume,
+        params.read_only,
+    );
+
     state.tick_notify.notify_one();
     Ok(json!({ "mapped": true }))
 }
@@ -537,6 +587,7 @@ pub(crate) struct UnmapExternalVolumeParams {
 pub(crate) fn unmap_external_volume(
     state: &OiState,
     params: UnmapExternalVolumeParams,
+    ctx: &RequestCtx,
 ) -> HandlerResult {
     use crate::runtime::external_volume_mappings;
 
@@ -584,14 +635,19 @@ pub(crate) fn unmap_external_volume(
         ));
     }
 
+    // r[impl volume.external.mapping.events]
+    ctx.events
+        .external_volume_unmapped(&params.app, &params.external_name);
+
     Ok(json!({ "unmapped": true }))
 }
 
 pub(crate) fn remap_external_volume(
     state: &OiState,
     params: MapExternalVolumeParams,
+    ctx: &RequestCtx,
 ) -> HandlerResult {
-    use crate::runtime::external_volume_mappings::{self, ExternalVolumeMapping};
+    use crate::runtime::external_volume_mappings::{self, ExternalVolumeMapping, MappingTarget};
 
     let target = parse_mapping_target(
         &params.target_kind,
@@ -606,9 +662,15 @@ pub(crate) fn remap_external_volume(
         read_only: params.read_only,
     };
 
-    let updated = state
+    let app_for_prev = params.app.clone();
+    let external_name_for_prev = params.external_name.clone();
+    let (updated, previous) = state
         .db
-        .call(move |db| external_volume_mappings::update(db, &mapping))
+        .call(move |db| {
+            let prev = external_volume_mappings::get(db, &app_for_prev, &external_name_for_prev)?;
+            let updated = external_volume_mappings::update(db, &mapping)?;
+            Ok::<_, rusqlite::Error>((updated, prev))
+        })
         .map_err(|e| {
             OiError::new(
                 ErrorCode::Internal,
@@ -625,6 +687,36 @@ pub(crate) fn remap_external_volume(
             ),
         ));
     }
+
+    let previous = previous.expect("update succeeded so prior row existed");
+    let (prev_kind, prev_app, prev_volume) = match &previous.target {
+        MappingTarget::Exported {
+            target_app,
+            target_volume,
+        } => (
+            "exported",
+            Some(target_app.as_str()),
+            target_volume.as_str(),
+        ),
+        MappingTarget::Site { target_volume } => ("site", None, target_volume.as_str()),
+    };
+    // r[impl volume.external.mapping.events]
+    ctx.events.external_volume_remapped(
+        &params.app,
+        &params.external_name,
+        seedling_protocol::events::ExternalMappingSnapshot {
+            kind: &params.target_kind,
+            app: params.target_app.as_deref(),
+            volume: &params.target_volume,
+            read_only: params.read_only,
+        },
+        seedling_protocol::events::ExternalMappingSnapshot {
+            kind: prev_kind,
+            app: prev_app,
+            volume: prev_volume,
+            read_only: previous.read_only,
+        },
+    );
 
     // Trigger reconciliation so containers pick up the new mapping.
     state.tick_notify.notify_one();
