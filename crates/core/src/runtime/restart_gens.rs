@@ -2,7 +2,7 @@ use rusqlite::params;
 
 use crate::runtime::db::Db;
 
-// r[impl deployment.restart]
+// i[impl deployment.restart]
 /// Load the stored restart generation for a deployment. Returns 0 if none has been stored.
 pub fn load_restart_gen(db: &Db, app: &str, deployment: &str) -> rusqlite::Result<u64> {
     let mut stmt = db
@@ -18,7 +18,7 @@ pub fn load_restart_gen(db: &Db, app: &str, deployment: &str) -> rusqlite::Resul
     }
 }
 
-// r[impl deployment.restart]
+// i[impl deployment.restart]
 /// Increment the restart generation for a deployment and return the new value.
 pub fn bump_restart_gen(db: &Db, app: &str, deployment: &str) -> rusqlite::Result<u64> {
     let now = jiff::Timestamp::now().to_string();

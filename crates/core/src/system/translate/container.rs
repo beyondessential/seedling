@@ -41,7 +41,7 @@ pub fn deployment_spec(
         volumes_dir,
         external_volumes,
     );
-    // r[impl deployment.restart]
+    // i[impl deployment.restart]
     if restart_gen > 0 {
         spec.labels
             .insert("seedling.restart-gen".to_string(), restart_gen.to_string());

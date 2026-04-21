@@ -260,7 +260,7 @@ impl Reconciler {
             let app_def = (*app_def_arc).clone();
             // r[impl autonomous.scale]
             let effective_scales = self.compute_effective_scales(&name, &app_def);
-            // r[impl resource.stop]
+            // i[impl resource.stop]
             let stopped_set = {
                 let app_name_for_stop = name.clone();
                 self.db.call(move |db| {

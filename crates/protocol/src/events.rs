@@ -188,7 +188,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl deployment.restart]
+    // i[impl deployment.restart]
     DeploymentRestarted {
         timestamp: Timestamp,
         app: String,
@@ -197,7 +197,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl resource.stop]
+    // i[impl resource.stop]
     ResourceStopped {
         timestamp: Timestamp,
         app: String,
@@ -206,7 +206,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl resource.unstop]
+    // i[impl resource.unstop]
     ResourceUnstopped {
         timestamp: Timestamp,
         app: String,
@@ -422,7 +422,7 @@ impl EventSender {
         });
     }
 
-    // r[impl deployment.restart]
+    // i[impl deployment.restart]
     pub fn deployment_restarted(
         &self,
         app: &str,
@@ -439,7 +439,7 @@ impl EventSender {
         });
     }
 
-    // r[impl resource.stop]
+    // i[impl resource.stop]
     pub fn resource_stopped(&self, app: &str, kind: &str, name: &str, actor: Option<Arc<Actor>>) {
         self.emit(OiEvent::ResourceStopped {
             timestamp: now(),
@@ -450,7 +450,7 @@ impl EventSender {
         });
     }
 
-    // r[impl resource.unstop]
+    // i[impl resource.unstop]
     pub fn resource_unstopped(&self, app: &str, kind: &str, name: &str, actor: Option<Arc<Actor>>) {
         self.emit(OiEvent::ResourceUnstopped {
             timestamp: now(),
@@ -588,7 +588,7 @@ impl EventSenderWithActor {
         )
     }
 
-    // r[impl deployment.restart]
+    // i[impl deployment.restart]
     pub fn deployment_restarted(&self, app: &str, deployment: &str, operation_id: &str) {
         self.inner.deployment_restarted(
             app,
@@ -598,13 +598,13 @@ impl EventSenderWithActor {
         );
     }
 
-    // r[impl resource.stop]
+    // i[impl resource.stop]
     pub fn resource_stopped(&self, app: &str, kind: &str, name: &str) {
         self.inner
             .resource_stopped(app, kind, name, Some(Arc::clone(&self.actor)));
     }
 
-    // r[impl resource.unstop]
+    // i[impl resource.unstop]
     pub fn resource_unstopped(&self, app: &str, kind: &str, name: &str) {
         self.inner
             .resource_unstopped(app, kind, name, Some(Arc::clone(&self.actor)));

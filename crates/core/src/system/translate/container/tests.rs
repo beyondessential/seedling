@@ -183,7 +183,7 @@ fn podman_args_hardening_overrides() {
     assert!(!args.iter().any(|a| a.starts_with("--workdir")));
 }
 
-// i[verify container.workdir]
+// l[verify container.workdir]
 #[test]
 fn podman_args_workdir() {
     let spec = ContainerSpec {

@@ -170,7 +170,7 @@ impl Actuator {
                     let container = pod.container.lock();
                     let image = container.image.clone().unwrap_or_default();
                     let raw_mounts = pod.service_mounts.clone();
-                    // r[impl container.on-exit]
+                    // l[impl container.on-exit]
                     let restart = map_on_exit(container.on_exit.unwrap_or(OnExit::Restart));
                     let required_ext_vols: Vec<String> = container
                         .volume_mounts
@@ -203,7 +203,7 @@ impl Actuator {
                         return Err(ExternalVolumeNotMappedSnafu { name: name.clone() }.build());
                     }
                 }
-                // r[impl deployment.restart]
+                // i[impl deployment.restart]
                 let restart_gen = {
                     let app_name = instance.app.clone();
                     let dep_name = instance.name.as_deref().unwrap_or("").to_owned();
@@ -242,7 +242,7 @@ impl Actuator {
                     let container = pod.container.lock();
                     let image = container.image.clone().unwrap_or_default();
                     let raw_mounts = pod.service_mounts.clone();
-                    // r[impl container.on-exit]
+                    // l[impl container.on-exit]
                     // Jobs default to Terminate so systemd does not restart them on completion.
                     let restart = map_on_exit(container.on_exit.unwrap_or(OnExit::Terminate));
                     let required_ext_vols: Vec<String> = container
@@ -503,7 +503,7 @@ impl Actuator {
                         return None;
                     }
                 };
-                // r[impl deployment.restart]
+                // i[impl deployment.restart]
                 let dep_name = instance.name.as_deref().unwrap_or("").to_owned();
                 let restart_gen = {
                     let app_name = instance.app.clone();

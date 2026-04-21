@@ -194,7 +194,7 @@ fn compute_steady(
         if id.kind == ResourceKind::Deployment
             && let Some(&(_low, _high, effective)) = effective_scales.get(id.name.as_str())
         {
-            // r[impl resource.stop]
+            // i[impl resource.stop]
             // r[impl autonomous.scale]
             let scale = if is_stopped { 0 } else { effective };
             let group =
@@ -218,7 +218,7 @@ fn compute_steady(
 
         // Non-deployment resources: singleton.
         let inst = registry.get_or_create_singleton(app_name, id.kind, Some(id.name.as_str()))?;
-        // r[impl resource.stop]
+        // i[impl resource.stop]
         let desired = if is_stopped {
             LifecycleState::Unscheduled
         } else {

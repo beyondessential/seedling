@@ -237,7 +237,7 @@ fn reconstruct_unknown_generation_returns_not_found() {
     let _ = BTreeMap::<String, String>::new();
 }
 
-// i[verify secret.history]
+// r[verify secret.history]
 #[test]
 fn secret_param_set_stores_ciphertext_not_plaintext() {
     let db = test_db();
@@ -263,7 +263,7 @@ fn secret_param_set_stores_ciphertext_not_plaintext() {
     assert!(!entry.previous_value_redacted);
 }
 
-// i[verify secret.history]
+// r[verify secret.history]
 #[test]
 fn secret_param_unset_stores_ciphertext_not_plaintext() {
     let db = test_db();
@@ -291,7 +291,7 @@ fn secret_param_unset_stores_ciphertext_not_plaintext() {
     );
 }
 
-// i[verify secret.history]
+// r[verify secret.history]
 #[test]
 fn param_map_at_decrypts_secret_history() {
     let db = test_db();
