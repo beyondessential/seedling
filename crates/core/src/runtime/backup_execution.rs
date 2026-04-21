@@ -12,7 +12,6 @@ pub struct DueStrategy {
 }
 
 // r[impl backup.schedule]
-// r[impl backup.execution]
 pub fn schedule_to_cronexpr(schedule: &str) -> Option<&'static str> {
     match schedule {
         "every hour" => Some("0 * * * *"),

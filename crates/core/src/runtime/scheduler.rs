@@ -230,8 +230,8 @@ impl Scheduler {
     /// Returns `Err(CycleError)` if `action_name` is already on the stack,
     /// which means this invocation would form a direct or transitive cycle.
     // r[impl operation.composition]
-    // r[impl operation.composition.cycles]
     pub fn push_call(&mut self, action_name: &str) -> Result<(), CycleError> {
+        // r[impl operation.composition.cycles]
         if self.call_stack.iter().any(|a| a == action_name) {
             return Err(CycleError {
                 action: action_name.to_owned(),

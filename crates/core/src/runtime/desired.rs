@@ -179,8 +179,6 @@ pub fn compute_uninstalling(
 }
 
 // r[impl desired-state.steady]
-// r[impl autonomous.scale]
-// r[impl resource.stop]
 fn compute_steady(
     app_name: &str,
     app_def: &AppDef,
@@ -197,6 +195,7 @@ fn compute_steady(
             && let Some(&(_low, _high, effective)) = effective_scales.get(id.name.as_str())
         {
             // r[impl resource.stop]
+            // r[impl autonomous.scale]
             let scale = if is_stopped { 0 } else { effective };
             let group =
                 registry.ensure_scaled_group(app_name, id.kind, Some(id.name.as_str()), scale)?;

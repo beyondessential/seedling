@@ -45,7 +45,6 @@ pub fn clear_shell_attach_ctx() {
 }
 
 // l[impl action.shell.control]
-// l[impl action.shell.attach]
 #[derive(Debug, Clone)]
 pub struct ShellControl {
     attached: bool,
@@ -62,6 +61,7 @@ impl ShellControl {
         Self { attached: false }
     }
 
+    // l[impl action.shell.attach]
     fn do_attach(&mut self, job: Dynamic) -> Result<(), Box<EvalAltResult>> {
         use crate::defs::job::Job;
 

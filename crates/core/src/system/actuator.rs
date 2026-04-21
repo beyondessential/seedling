@@ -172,7 +172,6 @@ impl Actuator {
                     let raw_mounts = pod.service_mounts.clone();
                     // r[impl container.on-exit]
                     let restart = map_on_exit(container.on_exit.unwrap_or(OnExit::Restart));
-                    // r[impl fault.external-volume-unmapped]
                     let required_ext_vols: Vec<String> = container
                         .volume_mounts
                         .values()
@@ -246,7 +245,6 @@ impl Actuator {
                     // r[impl container.on-exit]
                     // Jobs default to Terminate so systemd does not restart them on completion.
                     let restart = map_on_exit(container.on_exit.unwrap_or(OnExit::Terminate));
-                    // r[impl fault.external-volume-unmapped]
                     let required_ext_vols: Vec<String> = container
                         .volume_mounts
                         .values()

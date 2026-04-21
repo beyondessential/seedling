@@ -472,8 +472,6 @@ pub struct CurrentOperation {
     pub target_generation: u64,
 }
 
-// r[impl operation.lifecycle.events]
-// r[impl operation.lifecycle.generations]
 pub fn save_current_operation(db: &Db, op: &CurrentOperation) -> rusqlite::Result<()> {
     db.conn.execute(
         "INSERT OR REPLACE INTO current_operation

@@ -306,7 +306,6 @@ pub(crate) fn run_backup(state: &Arc<OiState>, params: RunBackupParams) -> Handl
     Ok(json!(operations))
 }
 
-// r[impl backup.execution]
 pub fn spawn_backup_run(
     state: Arc<OiState>,
     strategy: backup_strategies::BackupStrategy,
@@ -318,9 +317,7 @@ pub fn spawn_backup_run(
     });
 }
 
-// r[impl backup.validation.fire-time]
 // r[impl backup.execution]
-// r[impl backup.execution.per-volume-failure]
 async fn run_strategy_backup(
     state: &Arc<OiState>,
     strategy: &backup_strategies::BackupStrategy,
@@ -437,7 +434,6 @@ async fn run_volume_backup(
         }
     };
 
-    // r[impl backup.execution]
     if !source_path.exists() {
         tracing::error!(strategy = %strategy.name, vol = %vol_id, "source volume path does not exist");
         let app_owned = backing_app_name.to_owned();
@@ -467,7 +463,6 @@ async fn run_volume_backup(
     loop {
         attempt += 1;
 
-        // r[impl backup.execution]
         if let Err(e) = vol_store.snapshot_site(&snapshot_name, &source_path).await {
             tracing::error!(
                 strategy = %strategy.name,
@@ -624,11 +619,11 @@ pub(crate) struct ListSnapshotsParams {
 }
 
 // i[impl backup.snapshots.list]
-// r[impl backup.list]
 pub(crate) fn list_snapshots(state: &Arc<OiState>, params: ListSnapshotsParams) -> HandlerResult {
     tokio::runtime::Handle::current().block_on(list_snapshots_async(state, params))
 }
 
+// r[impl backup.list]
 async fn list_snapshots_async(state: &Arc<OiState>, params: ListSnapshotsParams) -> HandlerResult {
     let backing_app_name = resolve_backup_app(state, &params.strategy, &params.volume)?;
     validate_backup_app_actions(state, &backing_app_name)?;
@@ -705,11 +700,11 @@ pub(crate) struct RestoreBackupParams {
 }
 
 // i[impl backup.restore]
-// r[impl backup.restore]
 pub(crate) fn restore_backup(state: &Arc<OiState>, params: RestoreBackupParams) -> HandlerResult {
     tokio::runtime::Handle::current().block_on(restore_backup_async(state, params))
 }
 
+// r[impl backup.restore]
 async fn restore_backup_async(state: &Arc<OiState>, params: RestoreBackupParams) -> HandlerResult {
     let backing_app_name = resolve_backup_app(state, &params.strategy, &params.volume)?;
     validate_backup_app_actions(state, &backing_app_name)?;

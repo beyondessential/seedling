@@ -7,8 +7,6 @@ use crate::defs::resource::ResourceKind;
 use crate::runtime::history::WorldObservation;
 use crate::runtime::{LifecycleState, ResourceInstance};
 
-// r[impl lifecycle.derivation]
-// r[impl history.world.state-derivation]
 pub trait WorldStateOracle: Send + Sync {
     fn lifecycle_state(&self, resource: &ResourceInstance) -> LifecycleState;
 
