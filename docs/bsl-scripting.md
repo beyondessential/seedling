@@ -143,7 +143,8 @@ rt.warm_certs(resources)        // pre-provision TLS certs for ingresses
 started.scheduled(deadline?)
 started.running(deadline?)
 started.ready(deadline?)
-started.terminated()            // returns Termination
+started.terminated(deadline?)   // six-hour dealine, returns Termination
+started.terminated_eventually() // no deadline, returns Termination
 
 termination.ensure_success()    // throws if the resource failed
 ```
