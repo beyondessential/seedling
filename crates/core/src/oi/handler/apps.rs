@@ -272,7 +272,7 @@ fn sync_action_schedules(state: &OiState, app_name: &str) {
     });
 }
 
-fn validate_name(name: &str) -> Result<(), OiError> {
+pub(crate) fn validate_name(name: &str) -> Result<(), OiError> {
     if name.starts_with('_') {
         return Err(OiError::new(
             ErrorCode::RequirementsInvalid,
@@ -297,7 +297,7 @@ fn validate_name(name: &str) -> Result<(), OiError> {
     }
 }
 
-fn install_requirement_kind_str(kind: ParamKind) -> &'static str {
+pub(crate) fn install_requirement_kind_str(kind: ParamKind) -> &'static str {
     match kind {
         ParamKind::Text => "text",
         ParamKind::Email => "email",
@@ -306,7 +306,7 @@ fn install_requirement_kind_str(kind: ParamKind) -> &'static str {
     }
 }
 
-fn serialize_param_schema(
+pub(crate) fn serialize_param_schema(
     schema: &std::collections::BTreeMap<String, crate::defs::install::ParamDef>,
 ) -> serde_json::Map<String, Value> {
     schema
