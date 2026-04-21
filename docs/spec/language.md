@@ -791,6 +791,11 @@ This spec defines the semantics of the Runtime Instance as far as BSL is concern
 > l[rt.query]
 > The `rt.query(resources: Collection)` method returns a [Started](#l--rt.started) _without_ scheduling the resources.
 
+> l[rt.restart]
+> The `rt.restart(deployment: Deployment)` method triggers a restart of all running instances of the named Deployment, following its configured update strategy ([on_update](#l--deployment.on-update)).
+> It does not change the deployment's definition or generation, and returns no value.
+> Triggering semantics and durability are specified in [deployment.restart](../interface.md#i--deployment.restart) at the interface level.
+
 > l[rt.warm-certs]
 > The `rt.warm_certs(resources: Collection)` method selects all TLS-terminating [Ingresses](#l--ingress.type) from the given Collection and ensures their TLS certificates are provisioned and cached, without yet routing traffic to those ingresses.
 > Non-ingress resources and ingresses without TLS termination in the collection are ignored.
