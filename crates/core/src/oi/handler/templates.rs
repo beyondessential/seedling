@@ -1,19 +1,21 @@
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
-use serde_json::{Value, json, to_value};
+use serde_json::{Value, json};
 
 use seedling_protocol::error::{ErrorCode, HandlerResult, OiError};
 
 use crate::{
-    defs::resource::Resource,
     oi::{handler::RequestCtx, state::OiState},
     runtime::{self, apps::evaluate_script},
 };
 
-use super::apps::{
-    self as apps_handler, AppScriptParams, install_requirement_kind_str, serialize_param_schema,
-    validate_name,
+use super::{
+    appdef_json::{
+        action_entry_json, install_entry_json, param_schema_entry_json, resource_static_json,
+        shell_entry_json,
+    },
+    apps::{self as apps_handler, AppScriptParams, validate_name},
 };
 
 #[derive(Deserialize)]
@@ -180,87 +182,21 @@ pub(crate) fn preview_template(state: &OiState, params: PreviewParams) -> Handle
     let resources_json: Vec<Value> = def
         .resources
         .iter()
-        .map(|(id, resource)| {
-            let type_str = format!("{:?}", id.kind).to_lowercase();
-            let mut obj = json!({
-                "name": id.name.as_str(),
-                "type": type_str,
-                "def": to_value(resource.summary()).unwrap_or(Value::Null),
-            });
-            if let Resource::Deployment(deployment) = resource {
-                let dep_def = deployment.def.lock();
-                obj["scale"] = json!({
-                    "low": dep_def.scale.start,
-                    "high": dep_def.scale.end,
-                });
-            }
-            if let Resource::Volume(vol) = resource {
-                let vol_def = vol.def.lock();
-                if let Some(export_opts) = &vol_def.exported {
-                    let mut export = json!({ "exported": true });
-                    if let Some(desc) = &export_opts.description {
-                        export["description"] = json!(desc);
-                    }
-                    obj["export"] = export;
-                }
-            }
-            obj
-        })
+        .map(|(id, resource)| resource_static_json(id.kind, id.name.as_str(), resource))
         .collect();
 
     let params_json: Vec<Value> = def
         .params
         .iter()
-        .map(|(k, schema)| {
-            json!({
-                "name": k,
-                "kind": install_requirement_kind_str(schema.kind),
-                "required": schema.required,
-                "description": schema.description,
-                "default_value": schema.default_value,
-                "secret": schema.is_secret(),
-            })
-        })
+        .map(|(k, schema)| param_schema_entry_json(k, schema))
         .collect();
 
-    let mut actions_json: Vec<Value> = def
-        .actions
-        .values()
-        .map(|a| {
-            let kind = if a.name == "start" {
-                "lifecycle"
-            } else {
-                "action"
-            };
-            let mut obj = json!({
-                "name": a.name,
-                "description": a.description,
-                "kind": kind,
-                "params": serialize_param_schema(&a.params),
-            });
-            if !a.schedules.is_empty() {
-                obj["schedules"] = json!(a.schedules);
-            }
-            obj
-        })
-        .collect();
-
+    let mut actions_json: Vec<Value> = def.actions.values().map(action_entry_json).collect();
     for s in def.shells.values() {
-        actions_json.push(json!({
-            "name": s.name,
-            "description": s.description,
-            "kind": "shell",
-            "params": serialize_param_schema(&s.params),
-        }));
+        actions_json.push(shell_entry_json(s));
     }
-
     if let Some(inst) = &def.install {
-        actions_json.push(json!({
-            "name": "install",
-            "description": null,
-            "kind": "install",
-            "params": serialize_param_schema(&inst.requirements),
-        }));
+        actions_json.push(install_entry_json(inst));
     }
 
     Ok(json!({

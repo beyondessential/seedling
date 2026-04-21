@@ -11,6 +11,7 @@ use seedling_protocol::{
 use super::state::OiState;
 
 pub mod actions;
+mod appdef_json;
 mod apps;
 pub mod backups;
 mod faults;

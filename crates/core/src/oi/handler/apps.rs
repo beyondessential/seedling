@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use serde::Deserialize;
-use serde_json::{Value, json, to_value};
+use serde_json::{Value, json};
 
 use seedling_protocol::error::{ErrorCode, OiError};
 
@@ -26,7 +26,13 @@ use crate::{
     },
 };
 
-use super::HandlerResult;
+use super::{
+    HandlerResult,
+    appdef_json::{
+        action_entry_json, install_entry_json, param_schema_entry_json, resource_static_json,
+        scale_bounds_of, shell_entry_json,
+    },
+};
 
 #[derive(Deserialize)]
 pub(crate) struct AppParams {
@@ -485,34 +491,19 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         .params
         .iter()
         .map(|(k, schema)| {
+            let mut obj = param_schema_entry_json(k, schema);
             let is_set = stored_params.contains_key(k);
-            if schema.is_secret() {
-                json!({
-                    "name": k,
-                    "value": Value::Null,
-                    "is_set": is_set,
-                    "secret": true,
-                    "kind": install_requirement_kind_str(schema.kind),
-                    "required": schema.required,
-                    "description": schema.description,
-                    "default_value": schema.default_value,
-                })
+            let value = if schema.is_secret() {
+                Value::Null
             } else {
-                let value = stored_params
+                stored_params
                     .get(k)
                     .map(|v| Value::String(v.clone()))
-                    .unwrap_or(Value::Null);
-                json!({
-                    "name": k,
-                    "value": value,
-                    "is_set": is_set,
-                    "secret": false,
-                    "kind": install_requirement_kind_str(schema.kind),
-                    "required": schema.required,
-                    "description": schema.description,
-                    "default_value": schema.default_value,
-                })
-            }
+                    .unwrap_or(Value::Null)
+            };
+            obj["value"] = value;
+            obj["is_set"] = json!(is_set);
+            obj
         })
         .collect();
 
@@ -525,48 +516,12 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         .collect();
 
     // i[app.describe]
-    // actions (kind: "action" or "lifecycle")
-    let mut actions_json: Vec<Value> = def
-        .actions
-        .values()
-        .map(|a| {
-            // l[impl action.start.no-manual-invoke]
-            let kind = if a.name == "start" {
-                "lifecycle"
-            } else {
-                "action"
-            };
-            let mut obj = json!({
-                "name": a.name,
-                "description": a.description,
-                "kind": kind,
-                "params": serialize_param_schema(&a.params),
-            });
-            if !a.schedules.is_empty() {
-                obj["schedules"] = json!(a.schedules);
-            }
-            obj
-        })
-        .collect();
-
-    // shells (kind: "shell")
+    let mut actions_json: Vec<Value> = def.actions.values().map(action_entry_json).collect();
     for s in def.shells.values() {
-        actions_json.push(json!({
-            "name": s.name,
-            "description": s.description,
-            "kind": "shell",
-            "params": serialize_param_schema(&s.params),
-        }));
+        actions_json.push(shell_entry_json(s));
     }
-
-    // install action (kind: "install")
     if let Some(inst) = &def.install {
-        actions_json.push(json!({
-            "name": "install",
-            "description": null,
-            "kind": "install",
-            "params": serialize_param_schema(&inst.requirements),
-        }));
+        actions_json.push(install_entry_json(inst));
     }
 
     // resources — with instance lifecycle state from DB observations.
@@ -581,44 +536,23 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
             | AppStatus::Uninstalling
     );
     // i[app.describe]
-    // Collect the data we need from resources before calling into the DB thread.
+    // Pre-render each resource's static declaration while we still hold the
+    // def. The DB closure below only needs plain data (no locks) to augment
+    // with instance state, faults, stopped flag, and current scale.
     struct ResourceInfo {
         kind: ResourceKind,
         name_str: String,
-        summary: Value,
-        // For deployments: (low, high)
+        base_json: Value,
         scale_bounds: Option<(u16, u16)>,
-        export: Option<Value>,
     }
     let resource_infos: Vec<ResourceInfo> = def
         .resources
         .iter()
-        .map(|(id, resource)| {
-            let scale_bounds = if let Resource::Deployment(deployment) = resource {
-                let dep_def = deployment.def.lock();
-                Some((dep_def.scale.start, dep_def.scale.end))
-            } else {
-                None
-            };
-            let export = if let Resource::Volume(vol) = resource {
-                let vol_def = vol.def.lock();
-                vol_def.exported.as_ref().map(|export_opts| {
-                    let mut export = json!({ "exported": true });
-                    if let Some(desc) = &export_opts.description {
-                        export["description"] = json!(desc);
-                    }
-                    export
-                })
-            } else {
-                None
-            };
-            ResourceInfo {
-                kind: id.kind,
-                name_str: id.name.as_str().to_owned(),
-                summary: to_value(resource.summary()).unwrap_or(Value::Null),
-                scale_bounds,
-                export,
-            }
+        .map(|(id, resource)| ResourceInfo {
+            kind: id.kind,
+            name_str: id.name.as_str().to_owned(),
+            base_json: resource_static_json(id.kind, id.name.as_str(), resource),
+            scale_bounds: scale_bounds_of(resource),
         })
         .collect();
 
@@ -673,14 +607,11 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                     .collect();
 
                 let is_stopped = stopped_set_clone.contains(&(info.kind, info.name_str.clone()));
-                let mut resource_obj = json!({
-                    "name": &info.name_str,
-                    "type": resource_type_str,
-                    "instances": instances_json,
-                    "faults": resource_faults,
-                    "def": info.summary,
-                    "stopped": is_stopped,
-                });
+
+                let mut resource_obj = info.base_json;
+                resource_obj["instances"] = json!(instances_json);
+                resource_obj["faults"] = json!(resource_faults);
+                resource_obj["stopped"] = json!(is_stopped);
 
                 // i[impl scale.describe]
                 if let Some((low, high)) = info.scale_bounds {
@@ -692,10 +623,6 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                         "high": high,
                         "current": current,
                     });
-                }
-
-                if let Some(export) = info.export {
-                    resource_obj["export"] = export;
                 }
 
                 resource_obj
