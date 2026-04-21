@@ -77,37 +77,10 @@ export function Navbar() {
           variant="h6"
           component={Link}
           to="/"
-          sx={{ fontWeight: 700, letterSpacing: "-0.5px", color: "inherit", textDecoration: "none" }}
+          sx={{ fontWeight: 700, letterSpacing: "-0.5px", color: "inherit", textDecoration: "none", mr: 2 }}
         >
           Seedling
         </Typography>
-        <Box sx={{ flexGrow: 1 }} />
-        {faultCount > 0 && (
-          <Tooltip title={`${faultCount} active fault${faultCount === 1 ? "" : "s"}`}>
-            <Chip
-              label={`${faultCount} fault${faultCount === 1 ? "" : "s"}`}
-              size="small"
-              color="error"
-              component={Link}
-              to="/faults"
-              clickable
-              sx={{ mr: 1, fontFamily: "monospace" }}
-            />
-          </Tooltip>
-        )}
-        {reconnecting && (
-          <Chip
-            label="Reconnecting…"
-            size="small"
-            color="warning"
-            sx={{ mr: 1, fontFamily: "monospace" }}
-          />
-        )}
-        {data?.hostname && (
-          <Typography variant="body2" sx={{ opacity: 0.85, mr: 1, fontFamily: "monospace" }}>
-            {data.hostname}
-          </Typography>
-        )}
         <Tooltip
           title={
             heldCount > 0
@@ -200,6 +173,33 @@ export function Navbar() {
             </Badge>
           </IconButton>
         </Tooltip>
+        <Box sx={{ flexGrow: 1 }} />
+        {faultCount > 0 && (
+          <Tooltip title={`${faultCount} active fault${faultCount === 1 ? "" : "s"}`}>
+            <Chip
+              label={`${faultCount} fault${faultCount === 1 ? "" : "s"}`}
+              size="small"
+              color="error"
+              component={Link}
+              to="/faults"
+              clickable
+              sx={{ mr: 1, fontFamily: "monospace" }}
+            />
+          </Tooltip>
+        )}
+        {reconnecting && (
+          <Chip
+            label="Reconnecting…"
+            size="small"
+            color="warning"
+            sx={{ mr: 1, fontFamily: "monospace" }}
+          />
+        )}
+        {data?.hostname && (
+          <Typography variant="body2" sx={{ opacity: 0.85, mr: 1, fontFamily: "monospace" }}>
+            {data.hostname}
+          </Typography>
+        )}
         <Tooltip title={sidebarOpen ? "Hide events" : "Show events"}>
           <IconButton
             color={sidebarOpen ? "inherit" : "default"}
