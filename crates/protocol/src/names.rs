@@ -301,6 +301,127 @@ impl rusqlite::types::FromSql for ActionName {
 }
 
 // ---------------------------------------------------------------------------
+// ExternalVolumeName
+// ---------------------------------------------------------------------------
+
+/// Canonical name of an external-volume slot declared by a BSL app.
+///
+/// External-volume names follow the same [`bsl.name`](../../docs/spec/language.md)
+/// rules as app and action names: ASCII alphanumeric with hyphens, 3-63
+/// characters, starting with a letter, not starting or ending with a hyphen,
+/// and not starting with an underscore.
+///
+/// This type names the *slot* the app declares in its script (e.g.
+/// `app.external_volume("data")`); the *target* volume the operator maps into
+/// that slot is still plain text for now — it can refer to either a site
+/// volume or another app's volume, so it needs a different newtype.
+// l[impl bsl.name]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[serde(transparent)]
+pub struct ExternalVolumeName(String);
+
+impl ExternalVolumeName {
+    pub fn new(s: impl Into<String>) -> Result<Self, InvalidName> {
+        let s = s.into();
+        validate_bsl_name(&s)?;
+        Ok(Self(s))
+    }
+
+    /// Construct without re-running validation. The caller guarantees that
+    /// `s` already satisfies the name rules.
+    pub fn new_unchecked(s: impl Into<String>) -> Self {
+        Self(s.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl fmt::Display for ExternalVolumeName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl AsRef<str> for ExternalVolumeName {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::borrow::Borrow<str> for ExternalVolumeName {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl FromStr for ExternalVolumeName {
+    type Err = InvalidName;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::new(s.to_owned())
+    }
+}
+
+impl From<ExternalVolumeName> for String {
+    fn from(n: ExternalVolumeName) -> Self {
+        n.0
+    }
+}
+
+impl PartialEq<str> for ExternalVolumeName {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for ExternalVolumeName {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<ExternalVolumeName> for str {
+    fn eq(&self, other: &ExternalVolumeName) -> bool {
+        self == other.0
+    }
+}
+
+impl PartialEq<String> for ExternalVolumeName {
+    fn eq(&self, other: &String) -> bool {
+        &self.0 == other
+    }
+}
+
+impl<'de> Deserialize<'de> for ExternalVolumeName {
+    fn deserialize<D>(d: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(d)?;
+        Self::new(s).map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(feature = "rusqlite")]
+impl rusqlite::ToSql for ExternalVolumeName {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        self.0.to_sql()
+    }
+}
+
+#[cfg(feature = "rusqlite")]
+impl rusqlite::types::FromSql for ExternalVolumeName {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        String::column_result(value).map(Self)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // SessionId, ForwardId — UUID-backed ephemeral identifiers
 // ---------------------------------------------------------------------------
 
@@ -371,6 +492,14 @@ uuid_newtype! {
 uuid_newtype! {
     /// Identifier for an active port forward.
     ForwardId
+}
+
+uuid_newtype! {
+    /// Identifier for a volume that has been removed from service and held
+    /// for operator review. The id becomes the directory name under the
+    /// `held-volumes` store and the stem of the sidecar `{id}.meta.json`
+    /// file, so the wire/on-disk form is the plain UUID string.
+    HeldVolumeId
 }
 
 #[cfg(test)]
@@ -534,5 +663,40 @@ mod tests {
         let json = serde_json::to_string(&id).unwrap();
         let round: ForwardId = serde_json::from_str(&json).unwrap();
         assert_eq!(id, round);
+    }
+
+    #[test]
+    fn held_volume_id_round_trip() {
+        let id = HeldVolumeId::generate();
+        let s = id.to_string();
+        let parsed: HeldVolumeId = s.parse().unwrap();
+        assert_eq!(id, parsed);
+    }
+
+    #[test]
+    fn external_volume_name_accepts_canonical() {
+        ExternalVolumeName::new("data").unwrap();
+        ExternalVolumeName::new("shared-store").unwrap();
+    }
+
+    #[test]
+    fn external_volume_name_rejects_underscore_prefix() {
+        assert!(matches!(
+            ExternalVolumeName::new("_data"),
+            Err(InvalidName::LeadingUnderscore)
+        ));
+    }
+
+    #[test]
+    fn external_volume_name_serde_transparent() {
+        let n = ExternalVolumeName::new("data").unwrap();
+        assert_eq!(serde_json::to_string(&n).unwrap(), "\"data\"");
+    }
+
+    #[test]
+    fn external_volume_name_is_distinct_from_app_name() {
+        let a = AppName::new("data").unwrap();
+        let e = ExternalVolumeName::new("data").unwrap();
+        assert_eq!(a.as_str(), e.as_str());
     }
 }
