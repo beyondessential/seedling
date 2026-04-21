@@ -25,6 +25,7 @@ use seedling_core::{
         resolver::{resolver_addr, resolver_gateway_addr, spawn_dns_forwarder},
     },
 };
+use seedling_protocol::names::AppName;
 use tokio::sync::Notify;
 
 #[derive(Parser)]
@@ -460,7 +461,7 @@ async fn main() {
                 // down, so image_pull_failed / container_start_failed
                 // filed in a previous run don't linger after restart.
                 // r[fault.image-pull] r[fault.container-start]
-                let faulted_instances: Vec<(String, String)> = records
+                let faulted_instances: Vec<(AppName, String)> = records
                     .iter()
                     .filter(|r| Some(&r.operation_id) != replay_op_id.as_ref())
                     .map(|r| (r.app.clone(), r.instance_id.clone()))
@@ -680,7 +681,7 @@ async fn main() {
     // Any container with a "seedling.app" label that doesn't belong to a
     // currently registered app is an orphan.
     {
-        let known_apps: std::collections::HashSet<String> = {
+        let known_apps: std::collections::HashSet<AppName> = {
             let reg = registry.read();
             reg.list().into_iter().map(|(name, _)| name).collect()
         };
@@ -705,7 +706,7 @@ async fn main() {
             .filter(|c| {
                 c.labels
                     .get("seedling.app")
-                    .is_none_or(|app| !known_apps.contains(app))
+                    .is_none_or(|app| !known_apps.contains(app.as_str()))
             })
             .collect();
 
@@ -876,12 +877,12 @@ async fn main() {
                 // Snapshot generations before acquiring the DB to maintain
                 // consistent lock order (registry → db) across the codebase.
                 if let Some(now) = schedule_ticker.maybe_tick() {
-                    let app_generations: std::collections::HashMap<String, u64> = {
+                    let app_generations: std::collections::HashMap<AppName, u64> = {
                         let reg = schedule_registry.read();
                         reg.list()
                             .into_iter()
                             .filter_map(|(name, _)| {
-                                reg.get(&name).map(|e| (name, e.current_generation))
+                                reg.get(name.as_str()).map(|e| (name, e.current_generation))
                             })
                             .collect()
                     };
@@ -1036,7 +1037,7 @@ fn replay_interrupted_operation(
     // the row and move on.
     let phase_opt = {
         let reg = state.registry.read();
-        reg.get(&app_name).map(|e| e.phase.lock().clone())
+        reg.get(app_name.as_str()).map(|e| e.phase.lock().clone())
     };
     let Some(phase) = phase_opt else {
         tracing::warn!(
@@ -1172,14 +1173,14 @@ fn replay_interrupted_operation(
 /// Flip a persisted Installing row back to NotInstalled and file a fault
 /// indicating the install was interrupted and could not be replayed.
 // i[impl action.invoke.install.completion]
-fn revert_install_and_fault(state: &Arc<OiState>, app_name: &str) {
+fn revert_install_and_fault(state: &Arc<OiState>, app_name: &AppName) {
     use seedling_core::runtime::apps::AppPhase;
     use seedling_core::runtime::history::clear_current_operation;
 
     // Only flip if the app is actually in Installing.
     let was_installing = {
         let reg = state.registry.read();
-        reg.get(app_name)
+        reg.get(app_name.as_str())
             .map(|e| matches!(*e.phase.lock(), AppPhase::Installing))
             .unwrap_or(false)
     };
@@ -1187,11 +1188,11 @@ fn revert_install_and_fault(state: &Arc<OiState>, app_name: &str) {
     if was_installing {
         {
             let mut reg = state.registry.write();
-            if let Some(entry) = reg.get_mut(app_name) {
+            if let Some(entry) = reg.get_mut(app_name.as_str()) {
                 *entry.phase.lock() = AppPhase::NotInstalled;
             }
         }
-        let app_owned = app_name.to_owned();
+        let app_owned = app_name.clone();
         state.db.call(move |db| {
             if let Err(e) = db.conn.execute(
                 "UPDATE registered_apps SET installing = 0, installed = 0, uninstalling = 0 \
