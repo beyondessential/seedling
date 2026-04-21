@@ -4,7 +4,7 @@ use jiff::Timestamp;
 use serde::Serialize;
 use tokio::sync::broadcast;
 
-use crate::actor::Actor;
+use crate::{actor::Actor, names::AppName};
 
 // i[event.types]
 #[derive(Debug, Clone, Serialize)]
@@ -13,21 +13,21 @@ pub enum OiEvent {
     // r[impl audit.log.generations]
     AppRegistered {
         timestamp: Timestamp,
-        app: String,
+        app: AppName,
         generation: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
     AppDeregistered {
         timestamp: Timestamp,
-        app: String,
+        app: AppName,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
     // r[impl audit.log.generations]
     AppUpdated {
         timestamp: Timestamp,
-        app: String,
+        app: AppName,
         generation: u64,
         previous_generation: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -41,7 +41,7 @@ pub enum OiEvent {
     /// does not emit OperationStarted/OperationCompleted.
     AppPhaseChanged {
         timestamp: Timestamp,
-        app: String,
+        app: AppName,
         phase: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
@@ -50,7 +50,7 @@ pub enum OiEvent {
     // i[impl param.store.secret]
     ParamSet {
         timestamp: Timestamp,
-        app: String,
+        app: AppName,
         name: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         previous_value: Option<String>,
@@ -67,7 +67,7 @@ pub enum OiEvent {
     // i[impl param.store.secret]
     ParamUnset {
         timestamp: Timestamp,
-        app: String,
+        app: AppName,
         name: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         previous_value: Option<String>,
@@ -82,7 +82,7 @@ pub enum OiEvent {
     // i[impl event.types]
     OperationStarted {
         timestamp: Timestamp,
-        app: String,
+        app: AppName,
         action_name: String,
         operation_id: String,
         source_generation: u64,
@@ -94,7 +94,7 @@ pub enum OiEvent {
     // r[impl operation.lifecycle.generations]
     OperationCompleted {
         timestamp: Timestamp,
-        app: String,
+        app: AppName,
         action_name: String,
         operation_id: String,
         source_generation: u64,
@@ -105,7 +105,7 @@ pub enum OiEvent {
     // r[impl operation.lifecycle.generations]
     OperationFailed {
         timestamp: Timestamp,
-        app: String,
+        app: AppName,
         action_name: String,
         operation_id: String,
         source_generation: u64,
@@ -117,7 +117,7 @@ pub enum OiEvent {
     FaultFiled {
         timestamp: Timestamp,
         id: String,
-        app: String,
+        app: AppName,
         resource_type: Option<String>,
         resource_name: Option<String>,
         instance_id: Option<String>,
@@ -129,7 +129,7 @@ pub enum OiEvent {
     FaultCleared {
         timestamp: Timestamp,
         id: String,
-        app: String,
+        app: AppName,
         /// Kind of the fault that was cleared. Mirrors
         /// [`FaultFiled::kind`] so UIs can render a useful summary without
         /// having to remember every fault ID they saw.
@@ -139,7 +139,7 @@ pub enum OiEvent {
     },
     ResourceStateChanged {
         timestamp: Timestamp,
-        app: String,
+        app: AppName,
         resource_type: String,
         resource_name: String,
         instance_id: String,
@@ -150,7 +150,7 @@ pub enum OiEvent {
     ShellStarted {
         timestamp: Timestamp,
         session_id: String,
-        app: String,
+        app: AppName,
         name: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
@@ -165,7 +165,7 @@ pub enum OiEvent {
     ForwardStarted {
         timestamp: Timestamp,
         forward_id: String,
-        app: String,
+        app: AppName,
         service: String,
         port: u16,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -179,7 +179,7 @@ pub enum OiEvent {
     },
     ScaleChanged {
         timestamp: Timestamp,
-        app: String,
+        app: AppName,
         deployment: String,
         scale: u16,
         previous_scale: u16,
@@ -191,7 +191,7 @@ pub enum OiEvent {
     // i[impl deployment.restart]
     DeploymentRestarted {
         timestamp: Timestamp,
-        app: String,
+        app: AppName,
         deployment: String,
         operation_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -200,7 +200,7 @@ pub enum OiEvent {
     // i[impl resource.stop]
     ResourceStopped {
         timestamp: Timestamp,
-        app: String,
+        app: AppName,
         kind: String,
         name: String,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -209,7 +209,7 @@ pub enum OiEvent {
     // i[impl resource.unstop]
     ResourceUnstopped {
         timestamp: Timestamp,
-        app: String,
+        app: AppName,
         kind: String,
         name: String,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -224,7 +224,7 @@ pub enum OiEvent {
     HeldVolumeCreated {
         timestamp: Timestamp,
         held_id: String,
-        app: String,
+        app: AppName,
         volume_name: String,
         reason: String,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -266,7 +266,7 @@ pub enum OiEvent {
         name: String,
         /// None when the source is a site volume; Some(app) when the source is an app volume.
         #[serde(skip_serializing_if = "Option::is_none")]
-        source_app: Option<String>,
+        source_app: Option<AppName>,
         source_volume: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
@@ -282,12 +282,12 @@ pub enum OiEvent {
     // r[impl volume.external.mapping.events]
     ExternalVolumeMapped {
         timestamp: Timestamp,
-        app: String,
+        app: AppName,
         external_name: String,
         /// "exported" or "site".
         target_kind: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        target_app: Option<String>,
+        target_app: Option<AppName>,
         target_volume: String,
         read_only: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -296,7 +296,7 @@ pub enum OiEvent {
     // r[impl volume.external.mapping.events]
     ExternalVolumeUnmapped {
         timestamp: Timestamp,
-        app: String,
+        app: AppName,
         external_name: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
@@ -304,16 +304,16 @@ pub enum OiEvent {
     // r[impl volume.external.mapping.events]
     ExternalVolumeRemapped {
         timestamp: Timestamp,
-        app: String,
+        app: AppName,
         external_name: String,
         target_kind: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        target_app: Option<String>,
+        target_app: Option<AppName>,
         target_volume: String,
         read_only: bool,
         previous_target_kind: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        previous_target_app: Option<String>,
+        previous_target_app: Option<AppName>,
         previous_target_volume: String,
         previous_read_only: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -337,7 +337,7 @@ pub enum OiEvent {
     TemplateInstantiated {
         timestamp: Timestamp,
         template: String,
-        app: String,
+        app: AppName,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
@@ -374,7 +374,7 @@ pub struct ExternalMappingSnapshot<'a> {
     /// "exported" or "site".
     pub kind: &'a str,
     /// Only set when `kind == "exported"`.
-    pub app: Option<&'a str>,
+    pub app: Option<&'a AppName>,
     pub volume: &'a str,
     pub read_only: bool,
 }
@@ -384,33 +384,33 @@ impl EventSender {
         let _ = self.0.send(event);
     }
 
-    pub fn app_registered(&self, app: &str, generation: u64, actor: Option<Arc<Actor>>) {
+    pub fn app_registered(&self, app: &AppName, generation: u64, actor: Option<Arc<Actor>>) {
         self.emit(OiEvent::AppRegistered {
             timestamp: now(),
-            app: app.to_owned(),
+            app: app.clone(),
             generation,
             actor,
         });
     }
 
-    pub fn app_deregistered(&self, app: &str, actor: Option<Arc<Actor>>) {
+    pub fn app_deregistered(&self, app: &AppName, actor: Option<Arc<Actor>>) {
         self.emit(OiEvent::AppDeregistered {
             timestamp: now(),
-            app: app.to_owned(),
+            app: app.clone(),
             actor,
         });
     }
 
     pub fn app_updated(
         &self,
-        app: &str,
+        app: &AppName,
         generation: u64,
         previous_generation: Option<u64>,
         actor: Option<Arc<Actor>>,
     ) {
         self.emit(OiEvent::AppUpdated {
             timestamp: now(),
-            app: app.to_owned(),
+            app: app.clone(),
             generation,
             previous_generation,
             actor,
@@ -419,10 +419,10 @@ impl EventSender {
 
     /// Emit `AppPhaseChanged`. `phase` is the lowercase snake-case phase name
     /// matching [`crate::events::OiEvent::AppPhaseChanged::phase`].
-    pub fn app_phase_changed(&self, app: &str, phase: &str, actor: Option<Arc<Actor>>) {
+    pub fn app_phase_changed(&self, app: &AppName, phase: &str, actor: Option<Arc<Actor>>) {
         self.emit(OiEvent::AppPhaseChanged {
             timestamp: now(),
-            app: app.to_owned(),
+            app: app.clone(),
             phase: phase.to_owned(),
             actor,
         });
@@ -432,7 +432,7 @@ impl EventSender {
     /// Captures the deployment identity and bounds; call `.changed(new, prev)` to emit.
     pub fn scale(
         &self,
-        app: impl Into<String>,
+        app: AppName,
         deployment: impl Into<String>,
         bounds_low: u16,
         bounds_high: u16,
@@ -440,7 +440,7 @@ impl EventSender {
     ) -> ScaleEventCtx {
         ScaleEventCtx {
             tx: self.clone(),
-            app: app.into(),
+            app,
             deployment: deployment.into(),
             bounds_low,
             bounds_high,
@@ -455,7 +455,7 @@ impl EventSender {
     pub fn fault_filed(
         &self,
         id: &str,
-        app: &str,
+        app: &AppName,
         resource_type: Option<&str>,
         resource_name: Option<&str>,
         instance_id: Option<&str>,
@@ -465,7 +465,7 @@ impl EventSender {
         self.emit(OiEvent::FaultFiled {
             timestamp: now(),
             id: id.to_owned(),
-            app: app.to_owned(),
+            app: app.clone(),
             resource_type: resource_type.map(str::to_owned),
             resource_name: resource_name.map(str::to_owned),
             instance_id: instance_id.map(str::to_owned),
@@ -475,11 +475,11 @@ impl EventSender {
         });
     }
 
-    pub fn fault_cleared(&self, id: &str, app: &str, kind: &str) {
+    pub fn fault_cleared(&self, id: &str, app: &AppName, kind: &str) {
         self.emit(OiEvent::FaultCleared {
             timestamp: now(),
             id: id.to_owned(),
-            app: app.to_owned(),
+            app: app.clone(),
             kind: kind.to_owned(),
             actor: None,
         });
@@ -487,7 +487,7 @@ impl EventSender {
 
     pub fn resource_state_changed(
         &self,
-        app: &str,
+        app: &AppName,
         resource_type: &str,
         resource_name: &str,
         instance_id: &str,
@@ -495,7 +495,7 @@ impl EventSender {
     ) {
         self.emit(OiEvent::ResourceStateChanged {
             timestamp: now(),
-            app: app.to_owned(),
+            app: app.clone(),
             resource_type: resource_type.to_owned(),
             resource_name: resource_name.to_owned(),
             instance_id: instance_id.to_owned(),
@@ -505,11 +505,11 @@ impl EventSender {
     }
 
     // i[impl shell.start]
-    pub fn shell_started(&self, session_id: &str, app: &str, name: &str) {
+    pub fn shell_started(&self, session_id: &str, app: &AppName, name: &str) {
         self.emit(OiEvent::ShellStarted {
             timestamp: now(),
             session_id: session_id.to_owned(),
-            app: app.to_owned(),
+            app: app.clone(),
             name: name.to_owned(),
             actor: None,
         });
@@ -526,11 +526,11 @@ impl EventSender {
     }
 
     // i[impl forward.start]
-    pub fn forward_started(&self, forward_id: &str, app: &str, service: &str, port: u16) {
+    pub fn forward_started(&self, forward_id: &str, app: &AppName, service: &str, port: u16) {
         self.emit(OiEvent::ForwardStarted {
             timestamp: now(),
             forward_id: forward_id.to_owned(),
-            app: app.to_owned(),
+            app: app.clone(),
             service: service.to_owned(),
             port,
             actor: None,
@@ -558,7 +558,7 @@ impl EventSender {
     pub fn held_volume_created(
         &self,
         held_id: &str,
-        app: &str,
+        app: &AppName,
         volume_name: &str,
         reason: &str,
         actor: Option<Arc<Actor>>,
@@ -566,7 +566,7 @@ impl EventSender {
         self.emit(OiEvent::HeldVolumeCreated {
             timestamp: now(),
             held_id: held_id.to_owned(),
-            app: app.to_owned(),
+            app: app.clone(),
             volume_name: volume_name.to_owned(),
             reason: reason.to_owned(),
             actor,
@@ -620,14 +620,14 @@ impl EventSender {
     pub fn site_volume_snapshotted(
         &self,
         name: &str,
-        source_app: Option<&str>,
+        source_app: Option<&AppName>,
         source_volume: &str,
         actor: Option<Arc<Actor>>,
     ) {
         self.emit(OiEvent::SiteVolumeSnapshotted {
             timestamp: now(),
             name: name.to_owned(),
-            source_app: source_app.map(str::to_owned),
+            source_app: source_app.cloned(),
             source_volume: source_volume.to_owned(),
             actor,
         });
@@ -650,20 +650,20 @@ impl EventSender {
     )]
     pub fn external_volume_mapped(
         &self,
-        app: &str,
+        app: &AppName,
         external_name: &str,
         target_kind: &str,
-        target_app: Option<&str>,
+        target_app: Option<&AppName>,
         target_volume: &str,
         read_only: bool,
         actor: Option<Arc<Actor>>,
     ) {
         self.emit(OiEvent::ExternalVolumeMapped {
             timestamp: now(),
-            app: app.to_owned(),
+            app: app.clone(),
             external_name: external_name.to_owned(),
             target_kind: target_kind.to_owned(),
-            target_app: target_app.map(str::to_owned),
+            target_app: target_app.cloned(),
             target_volume: target_volume.to_owned(),
             read_only,
             actor,
@@ -673,13 +673,13 @@ impl EventSender {
     // r[impl volume.external.mapping.events]
     pub fn external_volume_unmapped(
         &self,
-        app: &str,
+        app: &AppName,
         external_name: &str,
         actor: Option<Arc<Actor>>,
     ) {
         self.emit(OiEvent::ExternalVolumeUnmapped {
             timestamp: now(),
-            app: app.to_owned(),
+            app: app.clone(),
             external_name: external_name.to_owned(),
             actor,
         });
@@ -688,7 +688,7 @@ impl EventSender {
     // r[impl volume.external.mapping.events]
     pub fn external_volume_remapped(
         &self,
-        app: &str,
+        app: &AppName,
         external_name: &str,
         new: ExternalMappingSnapshot<'_>,
         previous: ExternalMappingSnapshot<'_>,
@@ -696,14 +696,14 @@ impl EventSender {
     ) {
         self.emit(OiEvent::ExternalVolumeRemapped {
             timestamp: now(),
-            app: app.to_owned(),
+            app: app.clone(),
             external_name: external_name.to_owned(),
             target_kind: new.kind.to_owned(),
-            target_app: new.app.map(str::to_owned),
+            target_app: new.app.cloned(),
             target_volume: new.volume.to_owned(),
             read_only: new.read_only,
             previous_target_kind: previous.kind.to_owned(),
-            previous_target_app: previous.app.map(str::to_owned),
+            previous_target_app: previous.app.cloned(),
             previous_target_volume: previous.volume.to_owned(),
             previous_read_only: previous.read_only,
             actor,
@@ -713,14 +713,14 @@ impl EventSender {
     // i[impl deployment.restart]
     pub fn deployment_restarted(
         &self,
-        app: &str,
+        app: &AppName,
         deployment: &str,
         operation_id: &str,
         actor: Option<Arc<Actor>>,
     ) {
         self.emit(OiEvent::DeploymentRestarted {
             timestamp: now(),
-            app: app.to_owned(),
+            app: app.clone(),
             deployment: deployment.to_owned(),
             operation_id: operation_id.to_owned(),
             actor,
@@ -728,10 +728,16 @@ impl EventSender {
     }
 
     // i[impl resource.stop]
-    pub fn resource_stopped(&self, app: &str, kind: &str, name: &str, actor: Option<Arc<Actor>>) {
+    pub fn resource_stopped(
+        &self,
+        app: &AppName,
+        kind: &str,
+        name: &str,
+        actor: Option<Arc<Actor>>,
+    ) {
         self.emit(OiEvent::ResourceStopped {
             timestamp: now(),
-            app: app.to_owned(),
+            app: app.clone(),
             kind: kind.to_owned(),
             name: name.to_owned(),
             actor,
@@ -739,10 +745,16 @@ impl EventSender {
     }
 
     // i[impl resource.unstop]
-    pub fn resource_unstopped(&self, app: &str, kind: &str, name: &str, actor: Option<Arc<Actor>>) {
+    pub fn resource_unstopped(
+        &self,
+        app: &AppName,
+        kind: &str,
+        name: &str,
+        actor: Option<Arc<Actor>>,
+    ) {
         self.emit(OiEvent::ResourceUnstopped {
             timestamp: now(),
-            app: app.to_owned(),
+            app: app.clone(),
             kind: kind.to_owned(),
             name: name.to_owned(),
             actor,
@@ -754,7 +766,7 @@ impl EventSender {
     // i[wire.actor]
     pub fn operation(
         &self,
-        app: impl Into<String>,
+        app: AppName,
         action_name: impl Into<String>,
         operation_id: impl Into<String>,
         source_generation: u64,
@@ -763,7 +775,7 @@ impl EventSender {
     ) -> OperationEventCtx {
         OperationEventCtx {
             tx: self.clone(),
-            app: app.into(),
+            app,
             action_name: action_name.into(),
             operation_id: operation_id.into(),
             source_generation,
@@ -775,14 +787,14 @@ impl EventSender {
     /// Build a context for param-change events (set/unset).
     pub fn param_change(
         &self,
-        app: impl Into<String>,
+        app: AppName,
         generation: u64,
         previous_generation: u64,
         actor: Option<Arc<Actor>>,
     ) -> ParamEventCtx {
         ParamEventCtx {
             tx: self.clone(),
-            app: app.into(),
+            app,
             generation,
             previous_generation,
             actor,
@@ -808,11 +820,11 @@ impl EventSender {
     }
 
     // r[impl audit.log.events]
-    pub fn template_instantiated(&self, template: &str, app: &str, actor: Option<Arc<Actor>>) {
+    pub fn template_instantiated(&self, template: &str, app: &AppName, actor: Option<Arc<Actor>>) {
         self.emit(OiEvent::TemplateInstantiated {
             timestamp: now(),
             template: template.to_owned(),
-            app: app.to_owned(),
+            app: app.clone(),
             actor,
         });
     }
@@ -831,17 +843,17 @@ impl EventSenderWithActor {
         Self { inner, actor }
     }
 
-    pub fn app_registered(&self, app: &str, generation: u64) {
+    pub fn app_registered(&self, app: &AppName, generation: u64) {
         self.inner
             .app_registered(app, generation, Some(Arc::clone(&self.actor)));
     }
 
-    pub fn app_deregistered(&self, app: &str) {
+    pub fn app_deregistered(&self, app: &AppName) {
         self.inner
             .app_deregistered(app, Some(Arc::clone(&self.actor)));
     }
 
-    pub fn app_updated(&self, app: &str, generation: u64, previous_generation: Option<u64>) {
+    pub fn app_updated(&self, app: &AppName, generation: u64, previous_generation: Option<u64>) {
         self.inner.app_updated(
             app,
             generation,
@@ -850,14 +862,14 @@ impl EventSenderWithActor {
         );
     }
 
-    pub fn app_phase_changed(&self, app: &str, phase: &str) {
+    pub fn app_phase_changed(&self, app: &AppName, phase: &str) {
         self.inner
             .app_phase_changed(app, phase, Some(Arc::clone(&self.actor)));
     }
 
     pub fn scale(
         &self,
-        app: impl Into<String>,
+        app: AppName,
         deployment: impl Into<String>,
         bounds_low: u16,
         bounds_high: u16,
@@ -874,7 +886,7 @@ impl EventSenderWithActor {
     // i[wire.actor]
     pub fn operation(
         &self,
-        app: impl Into<String>,
+        app: AppName,
         action_name: impl Into<String>,
         operation_id: impl Into<String>,
         source_generation: u64,
@@ -892,7 +904,7 @@ impl EventSenderWithActor {
 
     pub fn param_change(
         &self,
-        app: impl Into<String>,
+        app: AppName,
         generation: u64,
         previous_generation: u64,
     ) -> ParamEventCtx {
@@ -905,7 +917,7 @@ impl EventSenderWithActor {
     }
 
     // i[impl deployment.restart]
-    pub fn deployment_restarted(&self, app: &str, deployment: &str, operation_id: &str) {
+    pub fn deployment_restarted(&self, app: &AppName, deployment: &str, operation_id: &str) {
         self.inner.deployment_restarted(
             app,
             deployment,
@@ -915,19 +927,25 @@ impl EventSenderWithActor {
     }
 
     // i[impl resource.stop]
-    pub fn resource_stopped(&self, app: &str, kind: &str, name: &str) {
+    pub fn resource_stopped(&self, app: &AppName, kind: &str, name: &str) {
         self.inner
             .resource_stopped(app, kind, name, Some(Arc::clone(&self.actor)));
     }
 
     // i[impl resource.unstop]
-    pub fn resource_unstopped(&self, app: &str, kind: &str, name: &str) {
+    pub fn resource_unstopped(&self, app: &AppName, kind: &str, name: &str) {
         self.inner
             .resource_unstopped(app, kind, name, Some(Arc::clone(&self.actor)));
     }
 
     // r[impl actuate.volume.hold.events]
-    pub fn held_volume_created(&self, held_id: &str, app: &str, volume_name: &str, reason: &str) {
+    pub fn held_volume_created(
+        &self,
+        held_id: &str,
+        app: &AppName,
+        volume_name: &str,
+        reason: &str,
+    ) {
         self.inner.held_volume_created(
             held_id,
             app,
@@ -959,7 +977,7 @@ impl EventSenderWithActor {
     pub fn site_volume_snapshotted(
         &self,
         name: &str,
-        source_app: Option<&str>,
+        source_app: Option<&AppName>,
         source_volume: &str,
     ) {
         self.inner.site_volume_snapshotted(
@@ -977,12 +995,16 @@ impl EventSenderWithActor {
     }
 
     // r[impl volume.external.mapping.events]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mapping events capture the full target tuple and read_only flag; collapsing them would obscure the audit payload"
+    )]
     pub fn external_volume_mapped(
         &self,
-        app: &str,
+        app: &AppName,
         external_name: &str,
         target_kind: &str,
-        target_app: Option<&str>,
+        target_app: Option<&AppName>,
         target_volume: &str,
         read_only: bool,
     ) {
@@ -998,7 +1020,7 @@ impl EventSenderWithActor {
     }
 
     // r[impl volume.external.mapping.events]
-    pub fn external_volume_unmapped(&self, app: &str, external_name: &str) {
+    pub fn external_volume_unmapped(&self, app: &AppName, external_name: &str) {
         self.inner
             .external_volume_unmapped(app, external_name, Some(Arc::clone(&self.actor)));
     }
@@ -1006,7 +1028,7 @@ impl EventSenderWithActor {
     // r[impl volume.external.mapping.events]
     pub fn external_volume_remapped(
         &self,
-        app: &str,
+        app: &AppName,
         external_name: &str,
         new: ExternalMappingSnapshot<'_>,
         previous: ExternalMappingSnapshot<'_>,
@@ -1033,7 +1055,7 @@ impl EventSenderWithActor {
     }
 
     // r[impl audit.log.events]
-    pub fn template_instantiated(&self, template: &str, app: &str) {
+    pub fn template_instantiated(&self, template: &str, app: &AppName) {
         self.inner
             .template_instantiated(template, app, Some(Arc::clone(&self.actor)));
     }
@@ -1044,7 +1066,7 @@ impl EventSenderWithActor {
 #[derive(Clone)]
 pub struct OperationEventCtx {
     tx: EventSender,
-    pub app: String,
+    pub app: AppName,
     pub action_name: String,
     pub operation_id: String,
     pub source_generation: u64,
@@ -1096,7 +1118,7 @@ impl OperationEventCtx {
 #[derive(Clone)]
 pub struct ParamEventCtx {
     tx: EventSender,
-    app: String,
+    app: AppName,
     generation: u64,
     previous_generation: u64,
     actor: Option<Arc<Actor>>,
@@ -1165,7 +1187,7 @@ impl ParamEventCtx {
 #[derive(Clone)]
 pub struct ScaleEventCtx {
     tx: EventSender,
-    app: String,
+    app: AppName,
     deployment: String,
     bounds_low: u16,
     bounds_high: u16,
