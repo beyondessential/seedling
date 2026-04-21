@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
-use crate::runtime::db::Db;
+use seedling_protocol::names::AppName;
 
 use super::AppEntry;
+use crate::runtime::db::Db;
 
 /// Read only the plaintext `params` table. Prefer `load_all_params_for_app`
 /// in any reload path — secret params live in a separate table and this
@@ -10,7 +11,7 @@ use super::AppEntry;
 // i[param.store]
 pub(super) fn load_params_for_app(
     db: &Db,
-    app_name: &str,
+    app_name: &AppName,
 ) -> rusqlite::Result<BTreeMap<String, String>> {
     let mut stmt = db
         .conn
@@ -27,7 +28,7 @@ pub(super) fn load_params_for_app(
 // i[param.set]
 pub fn upsert_param(
     db: &Db,
-    app_name: &str,
+    app_name: &AppName,
     param_name: &str,
     value: &str,
 ) -> rusqlite::Result<()> {
@@ -38,14 +39,14 @@ pub fn upsert_param(
     Ok(())
 }
 
-pub fn delete_app_params(db: &Db, app_name: &str) -> rusqlite::Result<()> {
+pub fn delete_app_params(db: &Db, app_name: &AppName) -> rusqlite::Result<()> {
     db.conn
         .execute("DELETE FROM params WHERE app_name = ?1", [app_name])?;
     Ok(())
 }
 
 // i[param.unset]
-pub fn delete_one_param(db: &Db, app_name: &str, param_name: &str) -> rusqlite::Result<()> {
+pub fn delete_one_param(db: &Db, app_name: &AppName, param_name: &str) -> rusqlite::Result<()> {
     db.conn.execute(
         "DELETE FROM params WHERE app_name = ?1 AND param_name = ?2",
         rusqlite::params![app_name, param_name],

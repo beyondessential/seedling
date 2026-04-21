@@ -5,6 +5,7 @@ use std::{
 
 use jiff::Timestamp;
 use parking_lot::{Mutex, RwLock};
+use seedling_protocol::names::AppName;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 
@@ -71,7 +72,7 @@ impl AppStatus {
 }
 
 pub struct AppEntry {
-    pub name: String,
+    pub name: AppName,
     pub script: String,
     pub app: App,
     /// Shared with the reconciler so it can transition the phase when cleanup completes.
@@ -114,7 +115,7 @@ impl AppRegistry {
     // i[app.register]
     pub fn register(
         &mut self,
-        name: String,
+        name: AppName,
         script: String,
         tick_notify: Arc<Notify>,
         limits: &crate::ScriptLimits,
@@ -125,7 +126,7 @@ impl AppRegistry {
             (e.to_string(), Timestamp::now())
         });
         self.entries.insert(
-            name.clone(),
+            name.as_str().to_owned(),
             AppEntry {
                 name,
                 script,
@@ -154,13 +155,13 @@ impl AppRegistry {
     /// running and the fault is recorded — the caller always succeeds.
     pub fn reload(
         &mut self,
-        name: &str,
+        name: &AppName,
         script: String,
         params: &BTreeMap<String, String>,
         limits: &crate::ScriptLimits,
     ) {
         let (app, raw_error) = evaluate_script(name, &script, params, limits);
-        if let Some(entry) = self.entries.get_mut(name) {
+        if let Some(entry) = self.entries.get_mut(name.as_str()) {
             entry.script = script;
             entry.app = app;
             entry.script_error = raw_error.map(|e| (e.to_string(), Timestamp::now()));
@@ -180,7 +181,7 @@ impl AppRegistry {
     }
 
     // i[app.list]
-    pub fn list(&self) -> Vec<(String, AppStatus)> {
+    pub fn list(&self) -> Vec<(AppName, AppStatus)> {
         let mut result: Vec<_> = self
             .entries
             .values()
@@ -206,10 +207,10 @@ impl AppRegistry {
             "SELECT name, installed, uninstalling, installing, current_generation \
              FROM registered_apps ORDER BY name",
         )?;
-        let rows: Vec<(String, bool, bool, bool, i64)> = stmt
+        let rows: Vec<(AppName, bool, bool, bool, i64)> = stmt
             .query_map([], |row| {
                 Ok((
-                    row.get::<_, String>(0)?,
+                    row.get::<_, AppName>(0)?,
                     row.get::<_, bool>(1)?,
                     row.get::<_, bool>(2)?,
                     row.get::<_, bool>(3)?,
@@ -219,7 +220,7 @@ impl AppRegistry {
             .collect::<rusqlite::Result<_>>()?;
 
         for (name, installed, uninstalling, installing, current_gen) in rows {
-            let phase = decode_phase(&name, installed, uninstalling, installing);
+            let phase = decode_phase(name.as_str(), installed, uninstalling, installing);
             if current_gen <= 0 {
                 tracing::warn!(app = %name, "skipping app with no current generation");
                 continue;
@@ -254,7 +255,7 @@ impl AppRegistry {
                 (e.to_string(), Timestamp::now())
             });
             registry.entries.insert(
-                name.clone(),
+                name.as_str().to_owned(),
                 AppEntry {
                     name,
                     script,
@@ -289,7 +290,7 @@ impl AppRegistry {
         Ok(())
     }
 
-    pub fn remove_app(db: &Db, name: &str) -> rusqlite::Result<()> {
+    pub fn remove_app(db: &Db, name: &AppName) -> rusqlite::Result<()> {
         db.conn
             .execute("DELETE FROM registered_apps WHERE name = ?1", [name])?;
         Ok(())
@@ -300,7 +301,7 @@ impl AppRegistry {
 /// name (for cross-checking selection in the OI handler).
 pub fn get_script_at_generation(
     db: &Db,
-    app: &str,
+    app: &AppName,
     generation: generations::Generation,
 ) -> rusqlite::Result<Option<String>> {
     let hash = match generations::script_hash_at(db, app, generation) {
@@ -308,7 +309,7 @@ pub fn get_script_at_generation(
         Err(generations::Error::NotFound { .. }) => return Ok(None),
         Err(generations::Error::Db(e)) => return Err(e),
         Err(e) => {
-            tracing::warn!(app, generation, "script_hash_at failed: {e}");
+            tracing::warn!(app = %app, generation, "script_hash_at failed: {e}");
             return Ok(None);
         }
     };
@@ -318,7 +319,7 @@ pub fn get_script_at_generation(
 /// Retrieve the script for the current generation of an app.
 pub fn get_current_script(
     db: &Db,
-    app: &str,
+    app: &AppName,
 ) -> rusqlite::Result<Option<(generations::Generation, String)>> {
     let Some(current_gen) = generations::current(db, app)? else {
         return Ok(None);
@@ -398,7 +399,7 @@ pub fn transition_phase(
     phase_arc: &Mutex<AppPhase>,
     new_phase: AppPhase,
     db: &Db,
-    app_name: &str,
+    app_name: &AppName,
     _script: &str,
 ) {
     *phase_arc.lock() = new_phase.clone();
@@ -421,7 +422,7 @@ pub fn transition_phase(
 pub fn load_all_params_for_app(
     db: &Db,
     cipher: &crate::runtime::secrets::Cipher,
-    app_name: &str,
+    app_name: &AppName,
 ) -> BTreeMap<String, String> {
     let mut merged = params::load_params_for_app(db, app_name).unwrap_or_default();
     match secret_params::load_secret_params_for_app(db, cipher, app_name) {
@@ -435,7 +436,7 @@ pub fn load_all_params_for_app(
 fn migrate_newly_secret_params(
     db: &Db,
     cipher: &crate::runtime::secrets::Cipher,
-    app_name: &str,
+    app_name: &AppName,
     app: &App,
 ) {
     let def = app.def.load();
@@ -453,7 +454,7 @@ fn migrate_newly_secret_params(
 }
 
 pub fn evaluate_script(
-    name: &str,
+    name: &AppName,
     script: &str,
     params: &BTreeMap<String, String>,
     limits: &crate::ScriptLimits,
@@ -465,7 +466,7 @@ pub fn evaluate_script(
     *app.stored.lock() = params.clone();
     app.def.rcu(|d| {
         let mut d = (**d).clone();
-        d.name = name.to_owned();
+        d.name = name.clone();
         d
     });
     crate::defs::app::set_appdef_holder(&app.def);

@@ -1,6 +1,7 @@
 use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
 use rhai::{CustomType, Dynamic, EvalAltResult, Map, TypeBuilder};
+use seedling_protocol::names::AppName;
 
 use crate::defs::app::AppDef;
 use crate::defs::volume::OperationVolumeBinding;
@@ -249,7 +250,7 @@ pub fn extract_cancel_hit(err: &EvalAltResult) -> bool {
 #[derive(Clone)]
 pub struct RuntimeInstance {
     pub ctx: Option<SharedContext>,
-    pub app_name: String,
+    pub app_name: AppName,
     pub registry: Arc<dyn InstanceRegistry>,
     pub db: Option<crate::runtime::db::DbHandle>,
 }
@@ -268,7 +269,7 @@ impl RuntimeInstance {
         use crate::runtime::registry::EphemeralInstanceRegistry;
         Self {
             ctx: None,
-            app_name: String::new(),
+            app_name: AppName::default(),
             registry: Arc::new(EphemeralInstanceRegistry::new()),
             db: None,
         }
@@ -276,13 +277,13 @@ impl RuntimeInstance {
 
     pub fn with_context(
         ctx: SharedContext,
-        app_name: impl Into<String>,
+        app_name: AppName,
         registry: Arc<dyn InstanceRegistry>,
         db: Option<crate::runtime::db::DbHandle>,
     ) -> Self {
         Self {
             ctx: Some(ctx),
-            app_name: app_name.into(),
+            app_name,
             registry,
             db,
         }

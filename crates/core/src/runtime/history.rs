@@ -1,5 +1,7 @@
-use rusqlite::params;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use rusqlite::params;
+use seedling_protocol::names::AppName;
 
 use crate::defs::resource::ResourceKind;
 use crate::runtime::barrier::{ActionLogEntry, BarrierRecord, CallKind, OperationId};
@@ -46,7 +48,7 @@ pub fn find_instance(db: &Db, id: InstanceId) -> rusqlite::Result<Option<Resourc
          WHERE id = ?1",
     )?;
     let result = stmt.query_row(params![id.to_hex()], |row| {
-        let app: String = row.get(0)?;
+        let app: AppName = row.get(0)?;
         let kind_str: String = row.get(1)?;
         let name: Option<String> = row.get(2)?;
         let is_scaled: i64 = row.get(3)?;
@@ -79,7 +81,7 @@ pub fn find_instance(db: &Db, id: InstanceId) -> rusqlite::Result<Option<Resourc
 // r[impl identity.components]
 pub fn find_instances_for_group(
     db: &Db,
-    app: &str,
+    app: &AppName,
     kind: ResourceKind,
     name: Option<&str>,
 ) -> rusqlite::Result<Vec<ResourceInstance>> {
@@ -108,7 +110,7 @@ pub fn find_instances_for_group(
             };
             instances.push(ResourceInstance {
                 id,
-                app: app.to_owned(),
+                app: app.clone(),
                 kind,
                 name: name.map(|s| s.to_owned()),
                 variant,
@@ -137,7 +139,7 @@ pub fn delete_instance(db: &Db, id: InstanceId) -> rusqlite::Result<()> {
 // r[impl identity.components]
 pub fn get_or_create_singleton(
     db: &Db,
-    app: &str,
+    app: &AppName,
     kind: ResourceKind,
     name: Option<&str>,
 ) -> rusqlite::Result<ResourceInstance> {
@@ -148,8 +150,8 @@ pub fn get_or_create_singleton(
     let tx = db.conn.unchecked_transaction()?;
 
     let candidate = match name {
-        Some(n) => ResourceInstance::new_singleton(app, kind, n),
-        None => ResourceInstance::new_anonymous(app, kind),
+        Some(n) => ResourceInstance::new_singleton(app.clone(), kind, n),
+        None => ResourceInstance::new_anonymous(app.clone(), kind),
     };
     tx.execute(
         "INSERT OR IGNORE INTO resource_instances
@@ -181,7 +183,7 @@ pub fn get_or_create_singleton(
     })?;
     Ok(ResourceInstance {
         id,
-        app: app.to_owned(),
+        app: app.clone(),
         kind,
         name: name.map(|s| s.to_owned()),
         variant: InstanceVariant::Singleton,
@@ -347,7 +349,7 @@ pub fn query_autonomous_operations(
 pub fn insert_action_log_entry(
     db: &Db,
     operation_id: &OperationId,
-    app: &str,
+    app: &AppName,
     action_name: &str,
     entry: &ActionLogEntry,
 ) -> rusqlite::Result<()> {
@@ -466,7 +468,7 @@ pub fn load_action_log(
 // r[impl barrier.replay]
 pub struct CurrentOperation {
     pub operation_id: OperationId,
-    pub app: String,
+    pub app: AppName,
     pub action_name: String,
     pub source_generation: u64,
     pub target_generation: u64,

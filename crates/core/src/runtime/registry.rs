@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
 use parking_lot::Mutex;
+use seedling_protocol::names::AppName;
 
 use crate::defs::resource::ResourceKind;
-use crate::runtime::db::{Db, DbHandle};
+use crate::runtime::db::DbHandle;
 use crate::runtime::history;
 use crate::runtime::identity::{InstanceVariant, ResourceInstance};
 
@@ -48,7 +49,7 @@ pub trait InstanceRegistry: Send + Sync {
     /// persisting a new one if none exists yet.
     fn get_or_create_singleton(
         &self,
-        app: &str,
+        app: &AppName,
         kind: ResourceKind,
         name: Option<&str>,
     ) -> Result<ResourceInstance, RegistryError>;
@@ -58,7 +59,7 @@ pub trait InstanceRegistry: Send + Sync {
     /// Existing instances are kept in creation order (oldest first).
     fn ensure_scaled_group(
         &self,
-        app: &str,
+        app: &AppName,
         kind: ResourceKind,
         name: Option<&str>,
         count: u16,
@@ -69,7 +70,7 @@ pub trait InstanceRegistry: Send + Sync {
     /// that needs to be torn down.
     fn find_all_instances(
         &self,
-        app: &str,
+        app: &AppName,
         kind: ResourceKind,
         name: Option<&str>,
     ) -> Result<Vec<ResourceInstance>, RegistryError>;
@@ -79,7 +80,7 @@ pub trait InstanceRegistry: Send + Sync {
 // EphemeralInstanceRegistry
 // ---------------------------------------------------------------------------
 
-type InstanceRegistryKey = (String, ResourceKind, Option<String>);
+type InstanceRegistryKey = (AppName, ResourceKind, Option<String>);
 
 /// Generates UUIDs on first use and caches them for the lifetime of this
 /// registry instance.  Repeated calls for the same `(app, kind, name)` return
@@ -113,18 +114,18 @@ impl Default for EphemeralInstanceRegistry {
 impl InstanceRegistry for EphemeralInstanceRegistry {
     fn get_or_create_singleton(
         &self,
-        app: &str,
+        app: &AppName,
         kind: ResourceKind,
         name: Option<&str>,
     ) -> Result<ResourceInstance, RegistryError> {
-        let key: InstanceRegistryKey = (app.to_owned(), kind, name.map(|s| s.to_owned()));
+        let key: InstanceRegistryKey = (app.clone(), kind, name.map(|s| s.to_owned()));
         let mut cache = self.cache.lock();
         if let Some(instance) = cache.get(&key) {
             return Ok(instance.clone());
         }
         let instance = match name {
-            Some(n) => ResourceInstance::new_singleton(app, kind, n),
-            None => ResourceInstance::new_anonymous(app, kind),
+            Some(n) => ResourceInstance::new_singleton(app.clone(), kind, n),
+            None => ResourceInstance::new_anonymous(app.clone(), kind),
         };
         cache.insert(key, instance.clone());
         Ok(instance)
@@ -132,18 +133,18 @@ impl InstanceRegistry for EphemeralInstanceRegistry {
 
     fn ensure_scaled_group(
         &self,
-        app: &str,
+        app: &AppName,
         kind: ResourceKind,
         name: Option<&str>,
         count: u16,
     ) -> Result<ScaledGroup, RegistryError> {
-        let key: InstanceRegistryKey = (app.to_owned(), kind, name.map(|s| s.to_owned()));
+        let key: InstanceRegistryKey = (app.clone(), kind, name.map(|s| s.to_owned()));
         let mut scaled_cache = self.scaled_cache.lock();
         let instances = scaled_cache.entry(key.clone()).or_default();
 
         let count = usize::from(count);
         while instances.len() < count {
-            let instance = ResourceInstance::new_scaled(app, kind, name.unwrap_or(""));
+            let instance = ResourceInstance::new_scaled(app.clone(), kind, name.unwrap_or(""));
             instances.push(instance);
         }
 
@@ -163,11 +164,11 @@ impl InstanceRegistry for EphemeralInstanceRegistry {
 
     fn find_all_instances(
         &self,
-        app: &str,
+        app: &AppName,
         kind: ResourceKind,
         name: Option<&str>,
     ) -> Result<Vec<ResourceInstance>, RegistryError> {
-        let key: InstanceRegistryKey = (app.to_owned(), kind, name.map(|s| s.to_owned()));
+        let key: InstanceRegistryKey = (app.clone(), kind, name.map(|s| s.to_owned()));
         let mut result = Vec::new();
 
         let cache = self.cache.lock();
@@ -204,11 +205,11 @@ impl DbInstanceRegistry {
 impl InstanceRegistry for DbInstanceRegistry {
     fn get_or_create_singleton(
         &self,
-        app: &str,
+        app: &AppName,
         kind: ResourceKind,
         name: Option<&str>,
     ) -> Result<ResourceInstance, RegistryError> {
-        let app = app.to_owned();
+        let app = app.clone();
         let name = name.map(|s| s.to_owned());
         Ok(self
             .db
@@ -217,12 +218,12 @@ impl InstanceRegistry for DbInstanceRegistry {
 
     fn ensure_scaled_group(
         &self,
-        app: &str,
+        app: &AppName,
         kind: ResourceKind,
         name: Option<&str>,
         count: u16,
     ) -> Result<ScaledGroup, RegistryError> {
-        let app = app.to_owned();
+        let app = app.clone();
         let name = name.map(|s| s.to_owned());
         Ok(self.db.call(move |db| -> rusqlite::Result<ScaledGroup> {
             let existing = history::find_instances_for_group(db, &app, kind, name.as_deref())?;
@@ -240,8 +241,11 @@ impl InstanceRegistry for DbInstanceRegistry {
 
             let count = usize::from(count);
             while scaled.len() < count {
-                let instance =
-                    ResourceInstance::new_scaled(&app, kind, name.as_deref().unwrap_or(""));
+                let instance = ResourceInstance::new_scaled(
+                    app.clone(),
+                    kind,
+                    name.as_deref().unwrap_or(""),
+                );
                 history::insert_instance(db, &instance)?;
                 scaled.push(instance);
             }
@@ -259,11 +263,11 @@ impl InstanceRegistry for DbInstanceRegistry {
 
     fn find_all_instances(
         &self,
-        app: &str,
+        app: &AppName,
         kind: ResourceKind,
         name: Option<&str>,
     ) -> Result<Vec<ResourceInstance>, RegistryError> {
-        let app = app.to_owned();
+        let app = app.clone();
         let name = name.map(|s| s.to_owned());
         Ok(self
             .db

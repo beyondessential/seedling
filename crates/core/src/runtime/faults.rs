@@ -1,10 +1,10 @@
 use std::sync::OnceLock;
 
 use jiff::Timestamp;
+use seedling_protocol::events::EventSender;
+use seedling_protocol::names::AppName;
 use serde::Serialize;
 use tracing::warn;
-
-use seedling_protocol::events::EventSender;
 
 static EVENT_TX: OnceLock<EventSender> = OnceLock::new();
 
@@ -31,7 +31,7 @@ fn emit_filed(record: &FaultRecord) {
     }
 }
 
-fn emit_cleared(id: &str, app: &str, kind: &str) {
+fn emit_cleared(id: &str, app: &AppName, kind: &str) {
     if let Some(tx) = EVENT_TX.get() {
         tx.fault_cleared(id, app, kind);
     }
@@ -41,7 +41,7 @@ fn emit_cleared(id: &str, app: &str, kind: &str) {
 #[derive(Debug, Clone, Serialize)]
 pub struct FaultRecord {
     pub id: String,
-    pub app: String,
+    pub app: AppName,
     pub resource_type: Option<String>,
     pub resource_name: Option<String>,
     pub instance_id: Option<String>,
@@ -53,7 +53,7 @@ pub struct FaultRecord {
 // i[fault.record]
 pub fn file_fault(
     db: &crate::runtime::db::Db,
-    app: &str,
+    app: &AppName,
     resource_type: Option<&str>,
     resource_name: Option<&str>,
     instance_id: Option<&str>,
@@ -69,12 +69,12 @@ pub fn file_fault(
         rusqlite::params![id, app, resource_type, resource_name, instance_id, kind, timestamp, description],
     )?;
     warn!(
-        app,
+        app = %app,
         kind, resource_type, resource_name, instance_id, "fault filed: {description}",
     );
     let record = FaultRecord {
         id: id.clone(),
-        app: app.to_owned(),
+        app: app.clone(),
         resource_type: resource_type.map(str::to_owned),
         resource_name: resource_name.map(str::to_owned),
         instance_id: instance_id.map(str::to_owned),
@@ -92,7 +92,11 @@ pub fn file_fault(
 /// `FaultCleared` event so clients can render a meaningful summary without
 /// having to remember every fault ID they saw.
 // i[impl fault.derived]
-pub fn clear_fault(db: &crate::runtime::db::Db, fault_id: &str, app: &str) -> rusqlite::Result<()> {
+pub fn clear_fault(
+    db: &crate::runtime::db::Db,
+    fault_id: &str,
+    app: &AppName,
+) -> rusqlite::Result<()> {
     let now = Timestamp::now();
     // Read the kind before the UPDATE — after clearing, the row is no longer
     // "active" but still exists, so this also works post-clear, but reading
@@ -116,7 +120,7 @@ pub fn clear_fault(db: &crate::runtime::db::Db, fault_id: &str, app: &str) -> ru
 // i[fault.list]
 pub fn list_active_faults(
     db: &crate::runtime::db::Db,
-    app: Option<&str>,
+    app: Option<&AppName>,
 ) -> rusqlite::Result<Vec<FaultRecord>> {
     let mut records = Vec::new();
     match app {
@@ -167,7 +171,7 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<FaultRecord> {
 // i[impl fault.derived]
 pub fn clear_faults_by_kind(
     db: &crate::runtime::db::Db,
-    app: &str,
+    app: &AppName,
     kind: &str,
 ) -> rusqlite::Result<u64> {
     let to_clear: Vec<_> = list_active_faults(db, Some(app))?
@@ -182,7 +186,10 @@ pub fn clear_faults_by_kind(
 }
 
 /// Clear all active faults for an app (used during deregistration).
-pub fn clear_all_faults_for_app(db: &crate::runtime::db::Db, app: &str) -> rusqlite::Result<()> {
+pub fn clear_all_faults_for_app(
+    db: &crate::runtime::db::Db,
+    app: &AppName,
+) -> rusqlite::Result<()> {
     let to_clear = list_active_faults(db, Some(app))?;
     for f in &to_clear {
         clear_fault(db, &f.id, app)?;
@@ -199,7 +206,7 @@ pub fn clear_all_faults_for_app(db: &crate::runtime::db::Db, app: &str) -> rusql
 // i[impl fault.derived]
 pub fn clear_faults_for_instance(
     db: &crate::runtime::db::Db,
-    app: &str,
+    app: &AppName,
     instance_id: &str,
 ) -> rusqlite::Result<()> {
     let to_clear: Vec<_> = list_active_faults(db, Some(app))?
@@ -212,7 +219,7 @@ pub fn clear_faults_for_instance(
     Ok(())
 }
 
-pub fn has_active_faults(db: &crate::runtime::db::Db, app: &str) -> rusqlite::Result<bool> {
+pub fn has_active_faults(db: &crate::runtime::db::Db, app: &AppName) -> rusqlite::Result<bool> {
     let count: i64 = db.conn.query_row(
         "SELECT COUNT(*) FROM faults WHERE app = ?1 AND cleared_at IS NULL",
         [app],

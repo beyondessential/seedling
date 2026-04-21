@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use rusqlite::OptionalExtension;
 use secrecy::{ExposeSecret, SecretString};
+use seedling_protocol::names::AppName;
 
 use crate::runtime::{db::Db, secrets::Cipher};
 
@@ -9,7 +10,7 @@ use crate::runtime::{db::Db, secrets::Cipher};
 pub fn load_secret_params_for_app(
     db: &Db,
     cipher: &Cipher,
-    app_name: &str,
+    app_name: &AppName,
 ) -> rusqlite::Result<BTreeMap<String, String>> {
     let mut stmt = db.conn.prepare(
         "SELECT param_name, ciphertext FROM secret_params WHERE app_name = ?1 ORDER BY param_name",
@@ -38,7 +39,7 @@ pub fn load_secret_params_for_app(
 pub fn upsert_secret_param(
     db: &Db,
     cipher: &Cipher,
-    app_name: &str,
+    app_name: &AppName,
     param_name: &str,
     value: &SecretString,
 ) -> rusqlite::Result<()> {
@@ -52,7 +53,11 @@ pub fn upsert_secret_param(
     Ok(())
 }
 
-pub fn delete_one_secret_param(db: &Db, app_name: &str, param_name: &str) -> rusqlite::Result<()> {
+pub fn delete_one_secret_param(
+    db: &Db,
+    app_name: &AppName,
+    param_name: &str,
+) -> rusqlite::Result<()> {
     db.conn.execute(
         "DELETE FROM secret_params WHERE app_name = ?1 AND param_name = ?2",
         rusqlite::params![app_name, param_name],
@@ -60,7 +65,7 @@ pub fn delete_one_secret_param(db: &Db, app_name: &str, param_name: &str) -> rus
     Ok(())
 }
 
-pub fn delete_app_secret_params(db: &Db, app_name: &str) -> rusqlite::Result<()> {
+pub fn delete_app_secret_params(db: &Db, app_name: &AppName) -> rusqlite::Result<()> {
     db.conn
         .execute("DELETE FROM secret_params WHERE app_name = ?1", [app_name])?;
     Ok(())
@@ -70,7 +75,7 @@ pub fn delete_app_secret_params(db: &Db, app_name: &str) -> rusqlite::Result<()>
 pub fn migrate_to_secret(
     db: &Db,
     cipher: &Cipher,
-    app_name: &str,
+    app_name: &AppName,
     param_name: &str,
 ) -> rusqlite::Result<()> {
     let plaintext: Option<String> = db

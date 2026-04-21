@@ -1,3 +1,5 @@
+use seedling_protocol::names::AppName;
+
 use super::*;
 use crate::defs::resource::ResourceKind;
 use crate::runtime::barrier::{ActionLogEntry, BarrierRecord, CallKind, OperationId};
@@ -5,8 +7,12 @@ use crate::runtime::db::Db;
 use crate::runtime::identity::{InstanceId, InstanceVariant, ResourceInstance};
 use crate::runtime::lifecycle::LifecycleState;
 
+fn app_name(s: &str) -> AppName {
+    AppName::new(s).unwrap()
+}
+
 fn dep(app: &str, name: &str) -> ResourceInstance {
-    ResourceInstance::new_singleton(app, ResourceKind::Deployment, name)
+    ResourceInstance::new_singleton(app_name(app), ResourceKind::Deployment, name)
 }
 
 // -----------------------------------------------------------------------
@@ -22,7 +28,7 @@ fn save_and_load_current_operation() {
     let cipher = Cipher::for_tests();
     let op = CurrentOperation {
         operation_id: OperationId("test-op-id".into()),
-        app: "myapp".into(),
+        app: app_name("myapp"),
         action_name: "start".into(),
         source_generation: 3,
         target_generation: 4,
@@ -50,7 +56,7 @@ fn clear_current_operation_removes_record() {
     let cipher = Cipher::for_tests();
     let op = CurrentOperation {
         operation_id: OperationId("op-1".into()),
-        app: "app".into(),
+        app: app_name("app"),
         action_name: "start".into(),
         source_generation: 1,
         target_generation: 1,
@@ -69,7 +75,7 @@ fn cancel_requested_round_trips_through_db() {
     let cipher = Cipher::for_tests();
     let op = CurrentOperation {
         operation_id: OperationId("op-c1".into()),
-        app: "app".into(),
+        app: app_name("app"),
         action_name: "save-snapshot".into(),
         source_generation: 1,
         target_generation: 1,
@@ -108,7 +114,7 @@ fn install_params_round_trip_through_cipher() {
     let cipher = Cipher::for_tests();
     let op = CurrentOperation {
         operation_id: OperationId("install-op".into()),
-        app: "myapp".into(),
+        app: app_name("myapp"),
         action_name: "install".into(),
         source_generation: 1,
         target_generation: 1,
@@ -147,7 +153,7 @@ fn non_install_operation_params_round_trip() {
     let cipher = Cipher::for_tests();
     let op = CurrentOperation {
         operation_id: OperationId("invoke-op".into()),
-        app: "myapp".into(),
+        app: app_name("myapp"),
         action_name: "rotate_secret".into(),
         source_generation: 5,
         target_generation: 5,
@@ -175,7 +181,7 @@ fn empty_params_round_trip() {
     let cipher = Cipher::for_tests();
     let op = CurrentOperation {
         operation_id: OperationId("start-op".into()),
-        app: "myapp".into(),
+        app: app_name("myapp"),
         action_name: "start".into(),
         source_generation: 1,
         target_generation: 1,
@@ -198,14 +204,14 @@ fn save_overwrites_previous_current_operation() {
     let cipher = Cipher::for_tests();
     let op1 = CurrentOperation {
         operation_id: OperationId("op-1".into()),
-        app: "app".into(),
+        app: app_name("app"),
         action_name: "start".into(),
         source_generation: 1,
         target_generation: 1,
     };
     let op2 = CurrentOperation {
         operation_id: OperationId("op-2".into()),
-        app: "app".into(),
+        app: app_name("app"),
         action_name: "stop".into(),
         source_generation: 1,
         target_generation: 1,
@@ -260,7 +266,7 @@ fn insert_instance_is_idempotent() {
 fn get_or_create_singleton_creates_on_first_call() {
     let db = Db::open_in_memory().unwrap();
     let instance =
-        get_or_create_singleton(&db, "myapp", ResourceKind::Deployment, Some("web")).unwrap();
+        get_or_create_singleton(&db, &app_name("myapp"), ResourceKind::Deployment, Some("web")).unwrap();
     assert_eq!(instance.app, "myapp");
     assert_eq!(instance.name.as_deref(), Some("web"));
     assert_eq!(instance.variant, InstanceVariant::Singleton);
@@ -270,8 +276,8 @@ fn get_or_create_singleton_creates_on_first_call() {
 #[test]
 fn get_or_create_singleton_returns_same_id_on_second_call() {
     let db = Db::open_in_memory().unwrap();
-    let a = get_or_create_singleton(&db, "myapp", ResourceKind::Deployment, Some("web")).unwrap();
-    let b = get_or_create_singleton(&db, "myapp", ResourceKind::Deployment, Some("web")).unwrap();
+    let a = get_or_create_singleton(&db, &app_name("myapp"), ResourceKind::Deployment, Some("web")).unwrap();
+    let b = get_or_create_singleton(&db, &app_name("myapp"), ResourceKind::Deployment, Some("web")).unwrap();
     assert_eq!(a.id, b.id);
     assert_eq!(a.display_name, b.display_name);
 }
@@ -280,13 +286,14 @@ fn get_or_create_singleton_returns_same_id_on_second_call() {
 #[test]
 fn find_instances_for_group_returns_all_scaled() {
     let db = Db::open_in_memory().unwrap();
-    let a = ResourceInstance::new_scaled("myapp", ResourceKind::Deployment, "web");
-    let b = ResourceInstance::new_scaled("myapp", ResourceKind::Deployment, "web");
+    let a = ResourceInstance::new_scaled(app_name("myapp"), ResourceKind::Deployment, "web");
+    let b = ResourceInstance::new_scaled(app_name("myapp"), ResourceKind::Deployment, "web");
     insert_instance(&db, &a).unwrap();
     insert_instance(&db, &b).unwrap();
 
     let found =
-        find_instances_for_group(&db, "myapp", ResourceKind::Deployment, Some("web")).unwrap();
+        find_instances_for_group(&db, &app_name("myapp"), ResourceKind::Deployment, Some("web"))
+            .unwrap();
     assert_eq!(found.len(), 2);
     let ids: std::collections::HashSet<_> = found.iter().map(|i| i.id).collect();
     assert!(ids.contains(&a.id));
@@ -452,7 +459,7 @@ fn insert_and_load_action_log_entry_without_barrier() {
     let db = Db::open_in_memory().unwrap();
     let op = OperationId("op-1".into());
     let entry = make_entry(0, CallKind::Start, None);
-    insert_action_log_entry(&db, &op, "myapp", "start", &entry).unwrap();
+    insert_action_log_entry(&db, &op, &app_name("myapp"), "start", &entry).unwrap();
 
     let loaded = load_action_log(&db, &op).unwrap();
     assert_eq!(loaded.len(), 1);
@@ -473,7 +480,7 @@ fn insert_and_load_action_log_entry_with_barrier() {
         started_at_secs: Some(1000),
     };
     let entry = make_entry(0, CallKind::Start, Some(barrier));
-    insert_action_log_entry(&db, &op, "myapp", "start", &entry).unwrap();
+    insert_action_log_entry(&db, &op, &app_name("myapp"), "start", &entry).unwrap();
 
     let loaded = load_action_log(&db, &op).unwrap();
     let b = loaded[0].barrier.as_ref().unwrap();
@@ -495,7 +502,7 @@ fn barrier_satisfaction_update_via_replace() {
         started_at_secs: Some(1000),
     };
     let entry = make_entry(0, CallKind::Start, Some(barrier));
-    insert_action_log_entry(&db, &op, "myapp", "start", &entry).unwrap();
+    insert_action_log_entry(&db, &op, &app_name("myapp"), "start", &entry).unwrap();
 
     let satisfied_entry = ActionLogEntry {
         call_index: 0,
@@ -524,7 +531,7 @@ fn action_log_multiple_entries_ordered_by_call_index() {
         insert_action_log_entry(
             &db,
             &op,
-            "myapp",
+            &app_name("myapp"),
             "start",
             &make_entry(i, CallKind::Start, None),
         )
@@ -546,7 +553,7 @@ fn action_log_scoped_to_operation_id() {
     insert_action_log_entry(
         &db,
         &op1,
-        "myapp",
+        &app_name("myapp"),
         "start",
         &make_entry(0, CallKind::Start, None),
     )
@@ -554,7 +561,7 @@ fn action_log_scoped_to_operation_id() {
     insert_action_log_entry(
         &db,
         &op2,
-        "myapp",
+        &app_name("myapp"),
         "start",
         &make_entry(0, CallKind::Stop, None),
     )
