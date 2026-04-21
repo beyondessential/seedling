@@ -1,6 +1,11 @@
 import {
   Box,
   Button,
+  CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Stack,
   TextField,
   Typography,
@@ -9,7 +14,9 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { ScriptEditor } from "../components/ScriptEditor";
+import { ScriptInventory } from "../components/ScriptInventory";
 import { useOiAction } from "../hooks/useOiAction";
+import type { TemplatePreview } from "../lib/types";
 
 const NAME_RE = /^[a-zA-Z][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]$/;
 
@@ -24,22 +31,38 @@ function nameError(name: string): string | null {
 
 export default function CreateApp() {
   const navigate = useNavigate();
-  const { execute, loading, error } = useOiAction();
+  const { execute: previewExec, loading: previewing, error: previewError } = useOiAction();
+  const { execute: createExec, loading: creating, error: createError } = useOiAction();
   const [name, setName] = useState("");
   const [script, setScript] = useState("");
   const [nameTouched, setNameTouched] = useState(false);
+  const [preview, setPreview] = useState<TemplatePreview | null>(null);
 
   const validationError = nameError(name);
-  const canSubmit = name.length > 0 && validationError === null && !loading;
+  const canReview =
+    name.length > 0 && validationError === null && script.length > 0 && !previewing && !creating;
 
-  const handleCreate = async () => {
-    if (!canSubmit) return;
+  const handleReview = async () => {
+    if (!canReview) return;
     try {
-      await execute("/apps/create", { app: name, script });
+      const result = (await previewExec("/templates/preview", { body: script })) as TemplatePreview;
+      setPreview(result);
+    } catch {
+      // displayed via previewError
+    }
+  };
+
+  const handleConfirm = async () => {
+    try {
+      await createExec("/apps/create", { app: name, script });
       navigate(`/apps/${name}`);
     } catch {
-      // displayed via error
+      // displayed via createError
     }
+  };
+
+  const handleCancel = () => {
+    setPreview(null);
   };
 
   return (
@@ -71,21 +94,21 @@ export default function CreateApp() {
         </Typography>
         <Typography variant="body2">New app</Typography>
         <Box sx={{ flexGrow: 1 }} />
-        <Button size="small" component={Link} to="/" disabled={loading}>
+        <Button size="small" component={Link} to="/" disabled={previewing || creating}>
           Cancel
         </Button>
         <Button
           size="small"
           variant="contained"
-          onClick={handleCreate}
-          disabled={!canSubmit}
+          onClick={handleReview}
+          disabled={!canReview}
         >
-          {loading ? "Creating…" : "Create"}
+          {previewing ? "Previewing…" : "Review & create"}
         </Button>
       </Box>
 
       <Stack spacing={2}>
-        {error && <OiErrorAlert error={error} />}
+        {previewError && <OiErrorAlert error={previewError} />}
 
         <TextField
           label="App name"
@@ -98,13 +121,51 @@ export default function CreateApp() {
           inputProps={{ style: { fontFamily: "monospace" } }}
           sx={{ maxWidth: 400 }}
           autoFocus
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && canSubmit) void handleCreate();
-          }}
         />
 
         <ScriptEditor value={script} onChange={setScript} />
       </Stack>
+
+      <Dialog
+        open={preview !== null}
+        onClose={() => !creating && handleCancel()}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>Review new app</DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={2}>
+            {createError && <OiErrorAlert error={createError} />}
+            <Typography variant="body2" color="text.secondary">
+              Creating app{" "}
+              <Box component="span" sx={{ fontFamily: "monospace", fontWeight: 500 }}>
+                {name}
+              </Box>
+              . The app will be registered in the <code>NotInstalled</code> state;
+              no resources start until you run install.
+            </Typography>
+            {preview && <ScriptInventory preview={preview} />}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCancel} disabled={creating}>
+            Back to editor
+          </Button>
+          <Button
+            variant="contained"
+            onClick={handleConfirm}
+            disabled={creating || preview?.script_error !== null}
+          >
+            {creating ? (
+              <>
+                <CircularProgress size={14} sx={{ mr: 1 }} /> Creating…
+              </>
+            ) : (
+              "Create app"
+            )}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

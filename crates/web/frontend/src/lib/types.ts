@@ -312,6 +312,19 @@ export interface BackupRunResult {
   operation_id: string;
 }
 
+export interface PlanDiffEntry {
+  resource_type: string;
+  resource_name: string;
+  change: "added" | "removed" | "modified";
+  fields?: string[];
+}
+
+export interface PlanResponse {
+  diff?: PlanDiffEntry[];
+  on_change_would_fire?: string[];
+  errors?: string[];
+}
+
 export interface TemplateSummary {
   name: string;
   description: string | null;
