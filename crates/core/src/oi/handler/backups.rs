@@ -9,7 +9,7 @@ use seedling_protocol::{
 };
 
 use crate::{
-    defs::volume::OperationVolumeBinding,
+    defs::volume::{VolumeParamSpec, build_operation_volume_params},
     oi::{handler::actions::lifecycle::run_operation_for_backup, state::OiState},
     runtime::{backup_apps, backup_execution, backup_strategies, barrier::OperationId, faults},
 };
@@ -185,15 +185,12 @@ pub(crate) fn show_strategy(state: &OiState, params: StrategyNameParams) -> Hand
 
 // i[impl backup.strategy.list]
 pub(crate) fn list_strategies(state: &OiState) -> HandlerResult {
-    let strategies = state
-        .db
-        .call(backup_strategies::list_all)
-        .map_err(|e| {
-            OiError::new(
-                ErrorCode::Internal,
-                format!("failed to list strategies: {e}"),
-            )
-        })?;
+    let strategies = state.db.call(backup_strategies::list_all).map_err(|e| {
+        OiError::new(
+            ErrorCode::Internal,
+            format!("failed to list strategies: {e}"),
+        )
+    })?;
 
     Ok(json!(
         strategies.iter().map(strategy_to_json).collect::<Vec<_>>()
@@ -509,13 +506,17 @@ async fn run_volume_backup(
         // app in the registry.
         acquire_scheduler_slot(state, backing_app_name, operation_id).await;
 
-        let mut bindings = std::collections::HashMap::new();
-        bindings.insert(
-            "source".to_owned(),
-            OperationVolumeBinding {
-                host_path: snapshot_path,
-                read_only: true,
-            },
+        // r[impl operation.volume-param]
+        let (bindings, mut action_params) = build_operation_volume_params(
+            &operation_id.0,
+            [(
+                "source",
+                VolumeParamSpec {
+                    host_path: snapshot_path,
+                    read_only: true,
+                    filename: None,
+                },
+            )],
         );
 
         // Pass the structured backup object through so the action can stamp
@@ -524,7 +525,6 @@ async fn run_volume_backup(
         // filter on it — otherwise an operator restoring "myapp/data" from
         // a strategy that shares a backend repository with "otherapp/logs"
         // could see both, pick wrong, and overwrite the wrong target.
-        let mut action_params = serde_json::Map::new();
         action_params.insert(
             "backup".to_owned(),
             build_backup_param(&strategy.name, vol_id),
@@ -640,16 +640,23 @@ async fn list_snapshots_async(state: &Arc<OiState>, params: ListSnapshotsParams)
     // not the backup-app nickname (backup_app_name).
     acquire_scheduler_slot(state, &backing_app_name, &operation_id).await;
 
-    let mut bindings = std::collections::HashMap::new();
-    bindings.insert(
-        "output".to_owned(),
-        OperationVolumeBinding {
-            host_path: tempdir.path().to_owned(),
-            read_only: false,
-        },
+    // r[impl operation.volume-param] r[impl operation.volume-param.filename]
+    // The output filename is an implementation detail of the runtime — the
+    // action closure receives it via `param["output_filename"]` and must
+    // write exactly that name.
+    let output_filename = "snapshots.json";
+    let (bindings, mut action_params) = build_operation_volume_params(
+        &operation_id.0,
+        [(
+            "output",
+            VolumeParamSpec {
+                host_path: tempdir.path().to_owned(),
+                read_only: false,
+                filename: Some(output_filename.to_owned()),
+            },
+        )],
     );
 
-    let mut action_params = serde_json::Map::new();
     action_params.insert(
         "backup".to_owned(),
         build_backup_param(&params.strategy, &params.volume),
@@ -674,18 +681,18 @@ async fn list_snapshots_async(state: &Arc<OiState>, params: ListSnapshotsParams)
         ));
     }
 
-    let snapshots_path = tempdir.path().join("snapshots.json");
+    let snapshots_path = tempdir.path().join(output_filename);
     let raw: Vec<u8> = tokio::fs::read(&snapshots_path).await.map_err(|e| {
         OiError::new(
             ErrorCode::Internal,
-            format!("list-snapshots did not write snapshots.json: {e}"),
+            format!("list-snapshots did not write {output_filename:?}: {e}"),
         )
     })?;
 
     let value: serde_json::Value = serde_json::from_slice(&raw).map_err(|e| {
         OiError::new(
             ErrorCode::Internal,
-            format!("snapshots.json is not valid JSON: {e}"),
+            format!("{output_filename:?} is not valid JSON: {e}"),
         )
     })?;
 
@@ -729,16 +736,19 @@ async fn restore_backup_async(state: &Arc<OiState>, params: RestoreBackupParams)
     acquire_scheduler_slot(state, &backing_app_name, &operation_id).await;
 
     let dest_path = vol_store.site_path(&site_vol_name);
-    let mut bindings = std::collections::HashMap::new();
-    bindings.insert(
-        "destination".to_owned(),
-        OperationVolumeBinding {
-            host_path: dest_path,
-            read_only: false,
-        },
+    // r[impl operation.volume-param]
+    let (bindings, mut action_params) = build_operation_volume_params(
+        &operation_id.0,
+        [(
+            "destination",
+            VolumeParamSpec {
+                host_path: dest_path,
+                read_only: false,
+                filename: None,
+            },
+        )],
     );
 
-    let mut action_params = serde_json::Map::new();
     action_params.insert(
         "backup".to_owned(),
         build_backup_param(&params.strategy, &params.volume),

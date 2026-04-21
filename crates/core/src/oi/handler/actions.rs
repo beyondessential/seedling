@@ -30,14 +30,17 @@ pub(crate) struct InvokeActionParams {
 }
 
 // l[impl action.params]
+// r[impl operation.volume-param.reserved]
 fn validate_action_params(
     params: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), OiError> {
     for key in params.keys() {
-        if key.ends_with("_volume") {
+        if key.ends_with("_volume") || key.ends_with("_filename") {
             return Err(OiError::new(
                 ErrorCode::RequirementsInvalid,
-                format!("param key {key:?} is reserved (keys ending in _volume are reserved)"),
+                format!(
+                    "param key {key:?} is reserved (keys ending in _volume or _filename are reserved)"
+                ),
             ));
         }
     }
@@ -182,5 +185,38 @@ pub(crate) fn invoke_action(
             ErrorCode::AlreadyQueued,
             format!("already queued for app: {app_name}"),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // l[impl action.params] r[impl operation.volume-param.reserved]
+    #[test]
+    fn rejects_reserved_volume_suffix() {
+        let mut params = serde_json::Map::new();
+        params.insert("source_volume".into(), json!("anything"));
+        let err = validate_action_params(&params).unwrap_err();
+        assert!(matches!(err.code, ErrorCode::RequirementsInvalid));
+    }
+
+    // l[impl action.params] r[impl operation.volume-param.reserved]
+    #[test]
+    fn rejects_reserved_filename_suffix() {
+        let mut params = serde_json::Map::new();
+        params.insert("output_filename".into(), json!("anything"));
+        let err = validate_action_params(&params).unwrap_err();
+        assert!(matches!(err.code, ErrorCode::RequirementsInvalid));
+    }
+
+    #[test]
+    fn accepts_unreserved_keys() {
+        let mut params = serde_json::Map::new();
+        params.insert("volume".into(), json!("ok"));
+        params.insert("filename".into(), json!("ok"));
+        params.insert("source".into(), json!("ok"));
+        params.insert("backup".into(), json!({ "strategy": "s" }));
+        validate_action_params(&params).unwrap();
     }
 }
