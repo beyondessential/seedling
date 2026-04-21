@@ -8,7 +8,7 @@ use std::{
 use ipnet::Ipv6Net;
 use parking_lot::Mutex as ParkingMutex;
 use seedling_protocol::events::EventSender;
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{AppName, ExternalVolumeName};
 use snafu::{IntoError, ResultExt, Snafu};
 
 use crate::{
@@ -158,7 +158,7 @@ impl Actuator {
     fn resolve_external_volumes(
         &self,
         app: &AppName,
-    ) -> HashMap<String, crate::system::types::ResolvedExternalMount> {
+    ) -> HashMap<ExternalVolumeName, crate::system::types::ResolvedExternalMount> {
         resolve_external_volumes(&self.db, &self.driver.volume_store, app)
     }
 
@@ -460,7 +460,7 @@ impl Actuator {
                             })?;
                         // r[impl actuate.volume.hold.events]
                         self.event_tx.held_volume_created(
-                            &meta.id,
+                            meta.id,
                             &instance.app,
                             &meta.volume_name,
                             &meta.reason,
@@ -505,7 +505,7 @@ impl Actuator {
                         })?;
                     // r[impl actuate.volume.hold.events]
                     self.event_tx.held_volume_created(
-                        &meta.id,
+                        meta.id,
                         &instance.app,
                         &meta.volume_name,
                         &meta.reason,
@@ -600,7 +600,7 @@ pub fn resolve_external_volumes(
     db: &DbHandle,
     vol_store: &crate::system::volume_store::VolumeStore,
     app: &AppName,
-) -> HashMap<String, crate::system::types::ResolvedExternalMount> {
+) -> HashMap<ExternalVolumeName, crate::system::types::ResolvedExternalMount> {
     use crate::system::types::{MountSource, ResolvedExternalMount};
 
     let app_owned = app.clone();

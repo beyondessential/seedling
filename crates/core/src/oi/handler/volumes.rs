@@ -1,5 +1,5 @@
 use seedling_protocol::error::{ErrorCode, HandlerResult, OiError};
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{AppName, ExternalVolumeName, HeldVolumeId};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -32,7 +32,7 @@ pub(crate) fn list_held(state: &OiState) -> HandlerResult {
 
 #[derive(Deserialize)]
 pub(crate) struct DeleteHeldParams {
-    pub id: String,
+    pub id: HeldVolumeId,
 }
 
 // r[impl actuate.volume.hold.confirm]
@@ -60,7 +60,7 @@ pub(crate) fn delete_held(
     })?;
 
     // r[impl actuate.volume.hold.events]
-    ctx.events.held_volume_deleted(&params.id);
+    ctx.events.held_volume_deleted(params.id);
 
     Ok(json!({ "deleted": true }))
 }
@@ -342,7 +342,7 @@ pub(crate) fn delete_site_volume(
             )
         })?;
 
-    let held_id = held_meta.as_ref().map(|m| m.id.as_str());
+    let held_id = held_meta.as_ref().map(|m| m.id);
     let kind_str = match def.kind {
         SiteVolumeKind::Managed => "managed",
         SiteVolumeKind::Bind { .. } => "bind",
@@ -356,7 +356,7 @@ pub(crate) fn delete_site_volume(
         // through the event.
         let held_app = AppName::new_unchecked(meta.app.clone());
         ctx.events
-            .held_volume_created(&meta.id, &held_app, &meta.volume_name, &meta.reason);
+            .held_volume_created(meta.id, &held_app, &meta.volume_name, &meta.reason);
     }
     // r[impl volume.site.lifecycle.events]
     ctx.events
@@ -567,7 +567,7 @@ fn parse_source_vol_id(
 #[derive(Deserialize)]
 pub(crate) struct MapExternalVolumeParams {
     pub app: AppName,
-    pub external_name: String,
+    pub external_name: ExternalVolumeName,
     /// "exported" or "site"
     pub target_kind: String,
     /// Required when target_kind is "exported"
@@ -626,7 +626,7 @@ pub(crate) fn map_external_volume(
 #[derive(Deserialize)]
 pub(crate) struct UnmapExternalVolumeParams {
     pub app: AppName,
-    pub external_name: String,
+    pub external_name: ExternalVolumeName,
 }
 
 pub(crate) fn unmap_external_volume(
@@ -643,7 +643,7 @@ pub(crate) fn unmap_external_volume(
             let def = entry.app.def.load();
             let has_volume = def.resources.keys().any(|id| {
                 id.kind == crate::defs::resource::ResourceKind::ExternalVolume
-                    && id.name.as_str() == params.external_name
+                    && params.external_name == id.name.as_str()
             });
             if has_volume {
                 return Err(OiError::new(

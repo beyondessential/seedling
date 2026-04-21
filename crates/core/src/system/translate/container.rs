@@ -5,6 +5,7 @@ use std::{
 };
 
 use ipnet::Ipv6Net;
+use seedling_protocol::names::ExternalVolumeName;
 
 use crate::{
     defs::{container::VolumeMount, deployment::DeploymentDef, job::JobDef, pod::PodDef},
@@ -28,7 +29,7 @@ pub fn deployment_spec(
     mounts: &[(u16, Ipv6Addr, u16)],
     dns_servers: &[Ipv6Addr],
     volumes_dir: Option<&Path>,
-    external_volumes: &HashMap<String, ResolvedExternalMount>,
+    external_volumes: &HashMap<ExternalVolumeName, ResolvedExternalMount>,
     restart_gen: u64,
 ) -> ContainerSpec {
     let pod = def.pod.lock();
@@ -62,7 +63,7 @@ pub fn job_spec(
     mounts: &[(u16, Ipv6Addr, u16)],
     dns_servers: &[Ipv6Addr],
     volumes_dir: Option<&Path>,
-    external_volumes: &HashMap<String, ResolvedExternalMount>,
+    external_volumes: &HashMap<ExternalVolumeName, ResolvedExternalMount>,
     restart_gen: u64,
 ) -> ContainerSpec {
     let pod = def.pod.lock();
@@ -237,7 +238,7 @@ fn spec_from_pod(
     mounts: &[(u16, Ipv6Addr, u16)],
     dns_servers: &[Ipv6Addr],
     volumes_dir: Option<&Path>,
-    external_volumes: &HashMap<String, ResolvedExternalMount>,
+    external_volumes: &HashMap<ExternalVolumeName, ResolvedExternalMount>,
 ) -> ContainerSpec {
     let container = pod.container.lock();
 
@@ -268,7 +269,7 @@ fn spec_from_pod(
                     };
                 }
                 // Fall back to static external volume mappings.
-                if let Some(resolved) = external_volumes.get(ev.name.as_ref()) {
+                if let Some(resolved) = external_volumes.get(ev.name.as_str()) {
                     return Mount {
                         source: resolved.source.clone(),
                         target: path.to_string_lossy().into_owned(),

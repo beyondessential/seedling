@@ -1,12 +1,12 @@
 use rusqlite::params;
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{AppName, ExternalVolumeName};
 
 use crate::runtime::db::Db;
 
 #[derive(Debug, Clone)]
 pub struct ExternalVolumeMapping {
     pub app: AppName,
-    pub external_name: String,
+    pub external_name: ExternalVolumeName,
     pub target: MappingTarget,
     pub read_only: bool,
 }
@@ -70,7 +70,11 @@ pub fn update(db: &Db, mapping: &ExternalVolumeMapping) -> rusqlite::Result<bool
     Ok(count > 0)
 }
 
-pub fn delete(db: &Db, app: &AppName, external_name: &str) -> rusqlite::Result<bool> {
+pub fn delete(
+    db: &Db,
+    app: &AppName,
+    external_name: &ExternalVolumeName,
+) -> rusqlite::Result<bool> {
     let count = db.conn.execute(
         "DELETE FROM external_volume_mappings WHERE app = ?1 AND external_name = ?2",
         params![app, external_name],
@@ -99,7 +103,7 @@ pub fn list_all(db: &Db) -> rusqlite::Result<Vec<ExternalVolumeMapping>> {
 pub fn get(
     db: &Db,
     app: &AppName,
-    external_name: &str,
+    external_name: &ExternalVolumeName,
 ) -> rusqlite::Result<Option<ExternalVolumeMapping>> {
     let mut stmt = db.conn.prepare(
         "SELECT app, external_name, target_kind, target_app, target_volume, read_only
@@ -114,7 +118,7 @@ pub fn get(
 
 fn row_to_mapping(row: &rusqlite::Row<'_>) -> rusqlite::Result<ExternalVolumeMapping> {
     let app: AppName = row.get(0)?;
-    let external_name: String = row.get(1)?;
+    let external_name: ExternalVolumeName = row.get(1)?;
     let kind: String = row.get(2)?;
     let target_app: Option<AppName> = row.get(3)?;
     let target_volume: String = row.get(4)?;

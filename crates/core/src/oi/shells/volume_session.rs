@@ -1,6 +1,6 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
-use seedling_protocol::names::{AppName, SessionId};
+use seedling_protocol::names::{AppName, HeldVolumeId, SessionId};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::registry::ShellSession;
@@ -23,7 +23,7 @@ enum VolumeRef {
     // /volumes/held/list. Mounted read-write so the operator can cherry-
     // pick files back out into another volume if they want to recover a
     // subset before deleting the rest.
-    Held { id: String },
+    Held { id: HeldVolumeId },
 }
 
 struct ResolvedMount {

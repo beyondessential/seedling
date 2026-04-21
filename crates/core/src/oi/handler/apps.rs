@@ -1519,7 +1519,7 @@ pub(crate) fn update_app(
                             );
                             // r[impl actuate.volume.hold.events]
                             ctx.events.held_volume_created(
-                                &meta.id,
+                                meta.id,
                                 &params.app,
                                 &meta.volume_name,
                                 &meta.reason,

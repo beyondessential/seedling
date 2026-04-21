@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use seedling_protocol::names::HeldVolumeId;
 use serde::{Deserialize, Serialize};
 
 use crate::runtime::identity::VolumeName;
@@ -164,12 +165,12 @@ impl VolumeStore {
         let held_dir = self.held_dir();
         tokio::fs::create_dir_all(&held_dir).await?;
 
-        let id = uuid::Uuid::new_v4().to_string();
-        let dest = held_dir.join(&id);
+        let id = HeldVolumeId::generate();
+        let dest = held_dir.join(id.to_string());
         tokio::fs::rename(&src, &dest).await?;
 
         let meta = HeldVolumeMeta {
-            id: id.clone(),
+            id,
             app: app.to_owned(),
             volume_name: volume_name.to_owned(),
             display_name: display_name.to_owned(),
@@ -199,9 +200,9 @@ impl VolumeStore {
     /// (either the id is bogus or the volume's meta.json has been
     /// hand-removed). The caller should use this as the definitive source
     /// of truth rather than constructing the path themselves.
-    pub fn held_path(&self, id: &str) -> Option<PathBuf> {
+    pub fn held_path(&self, id: &HeldVolumeId) -> Option<PathBuf> {
         let held_dir = self.held_dir();
-        let data_path = held_dir.join(id);
+        let data_path = held_dir.join(id.to_string());
         let meta_path = held_dir.join(format!("{id}.meta.json"));
         if !meta_path.exists() || !data_path.exists() {
             return None;
@@ -229,9 +230,9 @@ impl VolumeStore {
         Ok(results)
     }
 
-    pub async fn confirm_delete_held(&self, id: &str) -> std::io::Result<()> {
+    pub async fn confirm_delete_held(&self, id: &HeldVolumeId) -> std::io::Result<()> {
         let held_dir = self.held_dir();
-        let data_path = held_dir.join(id);
+        let data_path = held_dir.join(id.to_string());
         let meta_path = held_dir.join(format!("{id}.meta.json"));
 
         if !meta_path.exists() {
@@ -345,7 +346,7 @@ impl VolumeStore {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeldVolumeMeta {
-    pub id: String,
+    pub id: HeldVolumeId,
     pub app: String,
     pub volume_name: String,
     pub display_name: String,
