@@ -62,6 +62,112 @@ import type {
   VolumeRef,
 } from "../lib/types";
 
+// w[impl routes.volumes.delete-confirm]
+function ConfirmDeleteHeldDialog({
+  volume,
+  onCancel,
+  onConfirm,
+  loading,
+}: {
+  volume: HeldVolume;
+  onCancel: () => void;
+  onConfirm: () => void;
+  loading: boolean;
+}) {
+  return (
+    <Dialog open onClose={loading ? undefined : onCancel} maxWidth="xs" fullWidth>
+      <DialogTitle>Permanently delete held volume?</DialogTitle>
+      <DialogContent>
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          This will erase the volume's data irreversibly. There is no undo.
+        </Alert>
+        <Typography variant="body2" sx={{ mb: 1 }}>
+          Held volume from app{" "}
+          <Box component="span" sx={{ fontFamily: "monospace" }}>
+            {volume.app}
+          </Box>
+          , originally named{" "}
+          <Box component="span" sx={{ fontFamily: "monospace" }}>
+            {volume.volume_name}
+          </Box>
+          .
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          Reason it was held: {volume.reason}
+        </Typography>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onCancel} disabled={loading}>
+          Cancel
+        </Button>
+        <Button
+          variant="contained"
+          color="error"
+          onClick={onConfirm}
+          disabled={loading}
+        >
+          {loading ? "Deleting…" : "Delete permanently"}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+// w[impl routes.volumes.delete-confirm]
+function ConfirmDeleteSiteDialog({
+  volume,
+  onCancel,
+  onConfirm,
+  loading,
+}: {
+  volume: SiteVolume;
+  onCancel: () => void;
+  onConfirm: () => void;
+  loading: boolean;
+}) {
+  const isBind = volume.kind === "bind";
+  return (
+    <Dialog open onClose={loading ? undefined : onCancel} maxWidth="xs" fullWidth>
+      <DialogTitle>Delete site volume?</DialogTitle>
+      <DialogContent>
+        <Typography variant="body2" sx={{ mb: 2 }}>
+          Delete site volume{" "}
+          <Box component="span" sx={{ fontFamily: "monospace" }}>
+            {volume.name}
+          </Box>
+          ?
+        </Typography>
+        {isBind ? (
+          <Alert severity="info">
+            This is a bind-mount reference. Deleting it only drops the
+            runtime's reference; the operator-provided host path is left
+            untouched.
+          </Alert>
+        ) : (
+          <Alert severity="warning">
+            The volume's data will be moved into the held-volumes list and can
+            be recovered from there, or permanently deleted later. Any app
+            that still depends on it will start seeing it as missing.
+          </Alert>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onCancel} disabled={loading}>
+          Cancel
+        </Button>
+        <Button
+          variant="contained"
+          color={isBind ? "primary" : "warning"}
+          onClick={onConfirm}
+          disabled={loading}
+        >
+          {loading ? "Deleting…" : isBind ? "Delete reference" : "Move to held"}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
 // w[impl routes.volumes]
 function CreateSiteVolumeDialog({
   open,
@@ -468,6 +574,9 @@ export default function Volumes() {
   const [promoteTarget, setPromoteTarget] = useState<string | null>(null);
   const [remapTarget, setRemapTarget] = useState<ExternalMapping | null>(null);
   const [prefillTarget, setPrefillTarget] = useState<{ app: string; name: string } | null>(null);
+  const [siteDeleteTarget, setSiteDeleteTarget] = useState<SiteVolume | null>(null);
+  const [heldDeleteTarget, setHeldDeleteTarget] = useState<HeldVolume | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   const refreshAll = () => {
     refetchSite();
@@ -477,9 +586,17 @@ export default function Volumes() {
     refetchHeld();
   };
 
-  const deleteSiteVol = async (name: string) => {
-    await execute("/volumes/site/delete", { name });
-    refetchSite();
+  const confirmDeleteSiteVol = async () => {
+    if (!siteDeleteTarget) return;
+    setDeleteBusy(true);
+    try {
+      await execute("/volumes/site/delete", { name: siteDeleteTarget.name });
+      refetchSite();
+      refetchHeld();
+      setSiteDeleteTarget(null);
+    } finally {
+      setDeleteBusy(false);
+    }
   };
 
   const unmapVolume = async (app: string, external_name: string) => {
@@ -487,9 +604,16 @@ export default function Volumes() {
     refetchMappings();
   };
 
-  const confirmDeleteHeld = async (id: string) => {
-    await execute("/volumes/held/delete", { id });
-    refetchHeld();
+  const confirmDeleteHeld = async () => {
+    if (!heldDeleteTarget) return;
+    setDeleteBusy(true);
+    try {
+      await execute("/volumes/held/delete", { id: heldDeleteTarget.id });
+      refetchHeld();
+      setHeldDeleteTarget(null);
+    } finally {
+      setDeleteBusy(false);
+    }
   };
 
   const anyLoading =
@@ -615,7 +739,7 @@ export default function Volumes() {
                           <Tooltip title="Delete">
                             <IconButton
                               size="small"
-                              onClick={() => void deleteSiteVol(v.name)}
+                              onClick={() => setSiteDeleteTarget(v)}
                             >
                               <DeleteOutlineIcon sx={{ fontSize: 16 }} />
                             </IconButton>
@@ -815,7 +939,18 @@ export default function Volumes() {
                     {heldVols.map((h) => (
                       <TableRow key={h.id}>
                         <TableCell sx={{ fontFamily: "monospace" }}>
-                          <Link to={`/apps/${h.app}`}>{h.app}</Link>
+                          {h.app === "_site" ? (
+                            <Typography
+                              component="span"
+                              variant="body2"
+                              color="text.secondary"
+                              sx={{ fontFamily: "monospace" }}
+                            >
+                              _site
+                            </Typography>
+                          ) : (
+                            <Link to={`/apps/${h.app}`}>{h.app}</Link>
+                          )}
                         </TableCell>
                         <TableCell sx={{ fontFamily: "monospace" }}>
                           {h.display_name}
@@ -843,7 +978,7 @@ export default function Volumes() {
                           <Tooltip title="Confirm delete">
                             <IconButton
                               size="small"
-                              onClick={() => void confirmDeleteHeld(h.id)}
+                              onClick={() => setHeldDeleteTarget(h)}
                             >
                               <DeleteOutlineIcon sx={{ fontSize: 16 }} />
                             </IconButton>
@@ -926,6 +1061,24 @@ export default function Volumes() {
           }}
           existing={remapTarget ?? undefined}
           prefill={prefillTarget ?? undefined}
+        />
+      )}
+
+      {siteDeleteTarget && (
+        <ConfirmDeleteSiteDialog
+          volume={siteDeleteTarget}
+          onCancel={() => setSiteDeleteTarget(null)}
+          onConfirm={() => void confirmDeleteSiteVol()}
+          loading={deleteBusy}
+        />
+      )}
+
+      {heldDeleteTarget && (
+        <ConfirmDeleteHeldDialog
+          volume={heldDeleteTarget}
+          onCancel={() => setHeldDeleteTarget(null)}
+          onConfirm={() => void confirmDeleteHeld()}
+          loading={deleteBusy}
         />
       )}
     </Box>
