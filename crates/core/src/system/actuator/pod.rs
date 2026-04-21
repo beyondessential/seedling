@@ -65,8 +65,8 @@ pub(super) fn collect_container_volumes(
         .container
         .lock()
         .volume_mounts
-        .iter()
-        .filter_map(|(_path, vm)| match vm {
+        .values()
+        .filter_map(|vm| match vm {
             VolumeMount::Volume(v) => {
                 let (name, remove_on_stop, host_path) = match &v.name {
                     None => {
