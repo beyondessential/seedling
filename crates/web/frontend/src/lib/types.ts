@@ -306,6 +306,7 @@ export interface BackupStrategy {
   schedule: BackupSchedule;
   volumes: string[];
   last_fired_at: string | null;
+  next_fire_at: string | null;
 }
 
 export interface BackupRunResult {

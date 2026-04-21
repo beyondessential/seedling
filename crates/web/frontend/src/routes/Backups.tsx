@@ -524,6 +524,7 @@ export default function Backups() {
                     <TableCell>Via</TableCell>
                     <TableCell>Schedule</TableCell>
                     <TableCell>Last fired</TableCell>
+                    <TableCell>Next fire</TableCell>
                     <TableCell>Volumes</TableCell>
                     <TableCell width={100} />
                   </TableRow>
@@ -536,6 +537,9 @@ export default function Backups() {
                       <TableCell>{s.schedule}</TableCell>
                       <TableCell sx={{ color: s.last_fired_at ? undefined : "text.disabled" }}>
                         {s.last_fired_at ? new Date(s.last_fired_at).toLocaleString() : "never"}
+                      </TableCell>
+                      <TableCell sx={{ color: s.next_fire_at ? undefined : "text.disabled" }}>
+                        {s.next_fire_at ? new Date(s.next_fire_at).toLocaleString() : "—"}
                       </TableCell>
                       <TableCell>
                         <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>

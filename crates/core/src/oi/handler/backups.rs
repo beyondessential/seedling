@@ -925,5 +925,30 @@ fn strategy_to_json(s: &backup_strategies::BackupStrategy) -> serde_json::Value 
         "schedule": s.schedule,
         "volumes": s.volumes,
         "last_fired_at": s.last_fired_at,
+        "next_fire_at": compute_next_fire_at(s),
     })
+}
+
+/// The cron boundary at which this strategy is expected to fire next,
+/// mirroring the logic in `backup_execution::check_due_strategies`. Returns
+/// `None` when the schedule is unknown or parsing fails.
+fn compute_next_fire_at(s: &backup_strategies::BackupStrategy) -> Option<String> {
+    use jiff::{SignedDuration, Timestamp};
+
+    let cronexpr_str = backup_execution::schedule_to_cronexpr(&s.schedule)?;
+    let crontab = crate::defs::action::parse_cron_expr(cronexpr_str, "backup", &s.name).ok()?;
+
+    let now = Timestamp::now();
+    let base_time = match &s.last_fired_at {
+        Some(ts) => ts.parse::<Timestamp>().unwrap_or_else(|_| {
+            now.checked_sub(SignedDuration::from_secs(300))
+                .unwrap_or(now)
+        }),
+        None => now
+            .checked_sub(SignedDuration::from_secs(300))
+            .unwrap_or(now),
+    };
+
+    let next = crontab.find_next(base_time).ok()?;
+    Some(Timestamp::from(next).to_string())
 }
