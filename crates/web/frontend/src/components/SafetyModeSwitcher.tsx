@@ -15,8 +15,12 @@ import {
   MenuItem,
   Tooltip,
 } from "@mui/material";
-import { useState, type MouseEvent } from "react";
-import { useSafetyMode, type SafetyMode } from "./SafetyModeProvider";
+import { useEffect, useState, type MouseEvent } from "react";
+import {
+  ELEVATION_DURATION_MS,
+  useSafetyMode,
+  type SafetyMode,
+} from "./SafetyModeProvider";
 
 const MODE_LABEL: Record<SafetyMode, string> = {
   read: "Read-only",
@@ -30,6 +34,8 @@ const MODE_TOOLTIP: Record<SafetyMode, string> = {
   dangerous: "Dangerous: all actions including destructive ones are enabled",
 };
 
+const ELEVATION_MINUTES = Math.round(ELEVATION_DURATION_MS / 60_000);
+
 function ModeIcon({ mode }: { mode: SafetyMode }) {
   if (mode === "read") return <LockIcon fontSize="small" />;
   if (mode === "write") return <ShieldIcon fontSize="small" />;
@@ -42,8 +48,28 @@ function chipColor(mode: SafetyMode): "default" | "warning" | "error" {
   return "error";
 }
 
+function formatRemaining(ms: number): string {
+  if (ms <= 0) return "0s";
+  const totalSeconds = Math.ceil(ms / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const mins = Math.floor(totalSeconds / 60);
+  const secs = totalSeconds % 60;
+  return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+}
+
+function useRemaining(until: number | null): number | null {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (until === null) return;
+    const id = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(id);
+  }, [until]);
+  return until === null ? null : Math.max(0, until - now);
+}
+
 export function SafetyModeSwitcher() {
-  const { mode, setMode } = useSafetyMode();
+  const { mode, setMode, elevatedUntil } = useSafetyMode();
+  const remaining = useRemaining(elevatedUntil);
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
   const [pendingDangerous, setPendingDangerous] = useState(false);
 
@@ -64,12 +90,22 @@ export function SafetyModeSwitcher() {
     setMode("dangerous");
   };
 
+  const remainingText = remaining !== null ? formatRemaining(remaining) : null;
+  const chipLabel =
+    remainingText !== null && mode !== "read"
+      ? `${MODE_LABEL[mode]} · ${remainingText}`
+      : MODE_LABEL[mode];
+  const tooltip =
+    remainingText !== null && mode !== "read"
+      ? `${MODE_TOOLTIP[mode]}. Auto-reverts to read-only in ${remainingText}.`
+      : MODE_TOOLTIP[mode];
+
   return (
     <>
-      <Tooltip title={MODE_TOOLTIP[mode]}>
+      <Tooltip title={tooltip}>
         <Chip
           icon={<ModeIcon mode={mode} />}
-          label={MODE_LABEL[mode]}
+          label={chipLabel}
           size="small"
           color={chipColor(mode)}
           onClick={openMenu}
@@ -79,14 +115,22 @@ export function SafetyModeSwitcher() {
         />
       </Tooltip>
       <Menu anchorEl={anchorEl} open={!!anchorEl} onClose={closeMenu}>
-        {(["read", "write", "dangerous"] as const).map((m) => (
-          <MenuItem key={m} selected={m === mode} onClick={() => pick(m)}>
-            <ListItemIcon>
-              <ModeIcon mode={m} />
-            </ListItemIcon>
-            <ListItemText primary={MODE_LABEL[m]} secondary={MODE_TOOLTIP[m]} />
-          </MenuItem>
-        ))}
+        {(["read", "write", "dangerous"] as const).map((m) => {
+          const secondary =
+            m !== "read" && m === mode && remainingText !== null
+              ? `${MODE_TOOLTIP[m]} · reverts in ${remainingText}`
+              : m !== "read"
+                ? `${MODE_TOOLTIP[m]} · auto-reverts after ${ELEVATION_MINUTES} min`
+                : MODE_TOOLTIP[m];
+          return (
+            <MenuItem key={m} selected={m === mode} onClick={() => pick(m)}>
+              <ListItemIcon>
+                <ModeIcon mode={m} />
+              </ListItemIcon>
+              <ListItemText primary={MODE_LABEL[m]} secondary={secondary} />
+            </MenuItem>
+          );
+        })}
       </Menu>
       <Dialog open={pendingDangerous} onClose={() => setPendingDangerous(false)} maxWidth="xs">
         <DialogTitle>Enable Dangerous mode?</DialogTitle>
@@ -94,7 +138,8 @@ export function SafetyModeSwitcher() {
           <DialogContentText>
             Dangerous mode unlocks destructive actions such as deleting apps, volumes
             and keys, and terminating other users' sessions. These actions are
-            irreversible or affect other operators — use with care.
+            irreversible or affect other operators — use with care. Dangerous mode
+            auto-reverts to read-only after {ELEVATION_MINUTES} minutes.
           </DialogContentText>
         </DialogContent>
         <DialogActions>

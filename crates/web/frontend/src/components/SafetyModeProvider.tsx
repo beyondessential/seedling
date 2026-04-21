@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
 export type SafetyMode = "read" | "write" | "dangerous";
 export type SafetyTier = "write" | "dangerous";
@@ -6,19 +6,38 @@ export type SafetyTier = "write" | "dangerous";
 const STORAGE_KEY = "seedling.safetyMode";
 const RANK: Record<SafetyMode, number> = { read: 0, write: 1, dangerous: 2 };
 
-function loadMode(): SafetyMode {
-  try {
-    const v = sessionStorage.getItem(STORAGE_KEY);
-    if (v === "write" || v === "dangerous") return v;
-  } catch {
-    // ignore
-  }
-  return "read";
+export const ELEVATION_DURATION_MS = 10 * 60 * 1000;
+
+interface StoredState {
+  mode: SafetyMode;
+  elevatedUntil: number | null;
 }
 
-function storeMode(mode: SafetyMode) {
+function loadState(): StoredState {
   try {
-    sessionStorage.setItem(STORAGE_KEY, mode);
+    const raw = sessionStorage.getItem(STORAGE_KEY);
+    if (!raw) return { mode: "read", elevatedUntil: null };
+    const parsed = JSON.parse(raw) as Partial<StoredState>;
+    if (parsed.mode !== "write" && parsed.mode !== "dangerous") {
+      return { mode: "read", elevatedUntil: null };
+    }
+    const until = typeof parsed.elevatedUntil === "number" ? parsed.elevatedUntil : null;
+    if (until === null || until <= Date.now()) {
+      return { mode: "read", elevatedUntil: null };
+    }
+    return { mode: parsed.mode, elevatedUntil: until };
+  } catch {
+    return { mode: "read", elevatedUntil: null };
+  }
+}
+
+function storeState(state: StoredState) {
+  try {
+    if (state.mode === "read") {
+      sessionStorage.removeItem(STORAGE_KEY);
+    } else {
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    }
   } catch {
     // ignore
   }
@@ -29,6 +48,7 @@ interface SafetyModeCtx {
   setMode: (mode: SafetyMode) => void;
   allowsWrite: boolean;
   allowsDangerous: boolean;
+  elevatedUntil: number | null;
 }
 
 const SafetyModeContext = createContext<SafetyModeCtx>({
@@ -36,15 +56,40 @@ const SafetyModeContext = createContext<SafetyModeCtx>({
   setMode: () => undefined,
   allowsWrite: false,
   allowsDangerous: false,
+  elevatedUntil: null,
 });
 
 export function SafetyModeProvider({ children }: { children: ReactNode }) {
-  const [mode, setModeState] = useState<SafetyMode>(() => loadMode());
+  const [{ mode, elevatedUntil }, setState] = useState<StoredState>(() => loadState());
 
   const setMode = useCallback((next: SafetyMode) => {
-    setModeState(next);
-    storeMode(next);
+    const nextState: StoredState =
+      next === "read"
+        ? { mode: "read", elevatedUntil: null }
+        : { mode: next, elevatedUntil: Date.now() + ELEVATION_DURATION_MS };
+    setState(nextState);
+    storeState(nextState);
   }, []);
+
+  // Auto-revert to read when the elevation window expires. Scheduled via
+  // setTimeout so we don't drain the battery with a rerender-per-second
+  // countdown in the provider; the switcher renders its own countdown.
+  useEffect(() => {
+    if (mode === "read" || elevatedUntil === null) return;
+    const remaining = elevatedUntil - Date.now();
+    if (remaining <= 0) {
+      const revert: StoredState = { mode: "read", elevatedUntil: null };
+      setState(revert);
+      storeState(revert);
+      return;
+    }
+    const t = window.setTimeout(() => {
+      const revert: StoredState = { mode: "read", elevatedUntil: null };
+      setState(revert);
+      storeState(revert);
+    }, remaining);
+    return () => window.clearTimeout(t);
+  }, [mode, elevatedUntil]);
 
   const value = useMemo<SafetyModeCtx>(
     () => ({
@@ -52,8 +97,9 @@ export function SafetyModeProvider({ children }: { children: ReactNode }) {
       setMode,
       allowsWrite: RANK[mode] >= RANK.write,
       allowsDangerous: RANK[mode] >= RANK.dangerous,
+      elevatedUntil,
     }),
-    [mode, setMode],
+    [mode, elevatedUntil, setMode],
   );
 
   return <SafetyModeContext.Provider value={value}>{children}</SafetyModeContext.Provider>;
