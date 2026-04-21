@@ -81,6 +81,49 @@ export function Navbar() {
         >
           Seedling
         </Typography>
+        <Tooltip title={`${sessionCount} connected client${sessionCount === 1 ? "" : "s"}`}>
+          <IconButton
+            size="small"
+            component={Link}
+            to="/"
+            sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
+          >
+            <Badge
+              badgeContent={sessionCount}
+              color="primary"
+              sx={{
+                "& .MuiBadge-badge": {
+                  fontSize: "0.6rem",
+                  minWidth: 14,
+                  height: 14,
+                  padding: "0 3px",
+                },
+              }}
+            >
+              <PeopleAltIcon fontSize="small" />
+            </Badge>
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Authorised OI keys">
+          <IconButton
+            size="small"
+            component={Link}
+            to="/keys"
+            sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
+          >
+            <KeyIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Container registry allowlist">
+          <IconButton
+            size="small"
+            component={Link}
+            to="/registries"
+            sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
+          >
+            <CloudQueueIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
         <Tooltip
           title={
             heldCount > 0
@@ -110,16 +153,6 @@ export function Navbar() {
             </Badge>
           </IconButton>
         </Tooltip>
-        <Tooltip title="Templates">
-          <IconButton
-            size="small"
-            component={Link}
-            to="/templates"
-            sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
-          >
-            <DescriptionIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
         <Tooltip title="Backups">
           <IconButton
             size="small"
@@ -130,47 +163,14 @@ export function Navbar() {
             <BackupIcon fontSize="small" />
           </IconButton>
         </Tooltip>
-        <Tooltip title="Container registry allowlist">
+        <Tooltip title="Templates">
           <IconButton
             size="small"
             component={Link}
-            to="/registries"
+            to="/templates"
             sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
           >
-            <CloudQueueIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
-        <Tooltip title="Authorised OI keys">
-          <IconButton
-            size="small"
-            component={Link}
-            to="/keys"
-            sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
-          >
-            <KeyIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
-        <Tooltip title={`${sessionCount} connected client${sessionCount === 1 ? "" : "s"}`}>
-          <IconButton
-            size="small"
-            component={Link}
-            to="/"
-            sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
-          >
-            <Badge
-              badgeContent={sessionCount}
-              color="primary"
-              sx={{
-                "& .MuiBadge-badge": {
-                  fontSize: "0.6rem",
-                  minWidth: 14,
-                  height: 14,
-                  padding: "0 3px",
-                },
-              }}
-            >
-              <PeopleAltIcon fontSize="small" />
-            </Badge>
+            <DescriptionIcon fontSize="small" />
           </IconButton>
         </Tooltip>
         <Box sx={{ flexGrow: 1 }} />
