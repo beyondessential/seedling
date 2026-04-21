@@ -83,6 +83,22 @@ pub(crate) async fn open_shell_session(
     let initial_cols = params.cols;
     let submitted_params = params.params.unwrap_or_default();
 
+    // i[impl shell.open]
+    if let Some(reserved) = submitted_params.keys().find(|k| k.ends_with("_volume")) {
+        let resp = serde_json::to_vec(&serde_json::json!({
+            "error": {
+                "code": "requirements_invalid",
+                "message": format!(
+                    "param key {reserved:?} is reserved (keys ending in _volume are reserved)"
+                ),
+            }
+        }))
+        .unwrap_or_default();
+        let _ = send.write_all(&resp).await;
+        let _ = send.finish();
+        return;
+    }
+
     // All registry access is done in a synchronous closure so no lock guard
     // crosses an await point (parking_lot guards are not Send).
     let lookup: Result<_, (&str, String)> = (|| {
