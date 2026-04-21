@@ -55,6 +55,12 @@ const BACKUP_STRATEGY_EVENTS: Set<string> = new Set([
   "OperationStarted", "OperationCompleted", "OperationFailed",
 ]);
 
+// Listing snapshots invokes the backup app out-of-process and can take the
+// better part of a minute. Snapshot sets change rarely during a session, so we
+// cache the response long enough that the user can browse away, make notes, and
+// come back without waiting again. The refresh button forces a bypass.
+const SNAPSHOTS_CACHE_MS = 15 * 60 * 1000;
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 function snapshotId(item: unknown): string | null {
@@ -89,9 +95,10 @@ function SnapshotsDialog({
   const [volume, setVolume] = useState(strategy.volumes[0] ?? "");
   const [restoredVolume, setRestoredVolume] = useState<string | null>(null);
 
-  const { data: snapshots, loading, error, refetch } = useOiQuery<unknown>(
+  const { data: snapshots, loading, error, refetch, cachedAt } = useOiQuery<unknown>(
     "/backups/snapshots/list",
     { strategy: strategy.name, volume },
+    { cacheMs: SNAPSHOTS_CACHE_MS },
   );
 
   const { execute: doRestore, loading: restoring, error: restoreError } = useOiAction();
@@ -231,9 +238,18 @@ function SnapshotsDialog({
         </Stack>
       </DialogContent>
       <DialogActions>
-        <IconButton size="small" onClick={reload} disabled={loading} sx={{ mr: "auto" }}>
-          <RefreshIcon fontSize="small" />
-        </IconButton>
+        <Tooltip title={cachedAt ? "Showing cached list — click to refresh" : "Refresh"}>
+          <span style={{ marginRight: "auto" }}>
+            <IconButton size="small" onClick={reload} disabled={loading}>
+              <RefreshIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+        {cachedAt && (
+          <Typography variant="caption" color="text.secondary" sx={{ mr: 1 }}>
+            cached {new Date(cachedAt).toLocaleTimeString()}
+          </Typography>
+        )}
         <Button onClick={onClose}>Close</Button>
       </DialogActions>
     </Dialog>
