@@ -3,7 +3,7 @@ use serde_json::json;
 
 use seedling_protocol::error::{ErrorCode, HandlerResult, OiError};
 
-use crate::oi::state::OiState;
+use crate::oi::{handler::RequestCtx, state::OiState};
 
 pub(crate) fn list_held(state: &OiState) -> HandlerResult {
     let held = state.driver.volume_store.list_held().map_err(|e| {
@@ -36,7 +36,11 @@ pub(crate) struct DeleteHeldParams {
 }
 
 // r[impl actuate.volume.hold.confirm]
-pub(crate) fn delete_held(state: &OiState, params: DeleteHeldParams) -> HandlerResult {
+pub(crate) fn delete_held(
+    state: &OiState,
+    params: DeleteHeldParams,
+    ctx: &RequestCtx,
+) -> HandlerResult {
     // confirm_delete_held is async, but OI handlers are sync.
     // Use block_in_place to run the async operation.
     tokio::task::block_in_place(|| {
@@ -54,6 +58,9 @@ pub(crate) fn delete_held(state: &OiState, params: DeleteHeldParams) -> HandlerR
                 })
         })
     })?;
+
+    // r[impl actuate.volume.hold.events]
+    ctx.events.held_volume_deleted(&params.id);
 
     Ok(json!({ "deleted": true }))
 }
@@ -215,7 +222,13 @@ pub(crate) struct DeleteSiteVolumeParams {
 }
 
 // r[impl volume.site.lifecycle]
-pub(crate) fn delete_site_volume(state: &OiState, params: DeleteSiteVolumeParams) -> HandlerResult {
+pub(crate) fn delete_site_volume(
+    state: &OiState,
+    params: DeleteSiteVolumeParams,
+    ctx: &RequestCtx,
+) -> HandlerResult {
+    use crate::runtime::site_volumes::SiteVolumeKind;
+
     let name_owned = params.name.clone();
     let def = state
         .db
@@ -234,24 +247,38 @@ pub(crate) fn delete_site_volume(state: &OiState, params: DeleteSiteVolumeParams
         )
     })?;
 
-    // For managed volumes, remove the backing storage.
-    if def.kind == crate::runtime::site_volumes::SiteVolumeKind::Managed {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                state
-                    .driver
-                    .volume_store
-                    .remove_site(&params.name)
-                    .await
-                    .map_err(|e| {
-                        OiError::new(
-                            ErrorCode::Internal,
-                            format!("failed to remove site volume storage: {e}"),
-                        )
-                    })
-            })
-        })?;
-    }
+    // r[impl actuate.volume.hold]
+    // Managed and snapshot kinds carry data the runtime owns; route their
+    // deletion through the held-volume mechanism so an operator must
+    // explicitly confirm the final removal. Bind kinds only reference an
+    // operator-provided host path — dropping the row leaves the host path
+    // untouched and no hold is created.
+    let held_meta = match def.kind {
+        SiteVolumeKind::Managed | SiteVolumeKind::Snapshot { .. } => {
+            let reason = match def.kind {
+                SiteVolumeKind::Managed => "site volume deleted by operator",
+                SiteVolumeKind::Snapshot { .. } => "site snapshot deleted by operator",
+                SiteVolumeKind::Bind { .. } => unreachable!(),
+            };
+            let meta = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    state
+                        .driver
+                        .volume_store
+                        .hold_site(&params.name, reason)
+                        .await
+                        .map_err(|e| {
+                            OiError::new(
+                                ErrorCode::Internal,
+                                format!("failed to hold site volume for review: {e}"),
+                            )
+                        })
+                })
+            })?;
+            Some(meta)
+        }
+        SiteVolumeKind::Bind { .. } => None,
+    };
 
     let name_owned = params.name.clone();
     state
@@ -263,6 +290,12 @@ pub(crate) fn delete_site_volume(state: &OiState, params: DeleteSiteVolumeParams
                 format!("failed to delete site volume: {e}"),
             )
         })?;
+
+    if let Some(meta) = held_meta {
+        // r[impl actuate.volume.hold.events]
+        ctx.events
+            .held_volume_created(&meta.id, &meta.app, &meta.volume_name, &meta.reason);
+    }
 
     Ok(json!({ "deleted": true }))
 }
