@@ -1,6 +1,7 @@
 use std::{fmt, str::FromStr};
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
 // Shared validation
@@ -299,6 +300,79 @@ impl rusqlite::types::FromSql for ActionName {
     }
 }
 
+// ---------------------------------------------------------------------------
+// SessionId, ForwardId — UUID-backed ephemeral identifiers
+// ---------------------------------------------------------------------------
+
+macro_rules! uuid_newtype {
+    (
+        $(#[$attr:meta])*
+        $name:ident
+    ) => {
+        $(#[$attr])*
+        #[derive(
+            Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+        )]
+        #[serde(transparent)]
+        pub struct $name(Uuid);
+
+        impl $name {
+            /// Generate a fresh random identifier.
+            pub fn generate() -> Self {
+                Self(Uuid::new_v4())
+            }
+
+            /// Wrap an existing UUID value.
+            pub const fn from_uuid(id: Uuid) -> Self {
+                Self(id)
+            }
+
+            pub const fn as_uuid(&self) -> &Uuid {
+                &self.0
+            }
+
+            pub const fn into_uuid(self) -> Uuid {
+                self.0
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                fmt::Display::fmt(&self.0, f)
+            }
+        }
+
+        impl FromStr for $name {
+            type Err = uuid::Error;
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                Uuid::parse_str(s).map(Self)
+            }
+        }
+
+        impl From<Uuid> for $name {
+            fn from(id: Uuid) -> Self {
+                Self(id)
+            }
+        }
+
+        impl From<$name> for Uuid {
+            fn from(id: $name) -> Self {
+                id.0
+            }
+        }
+    };
+}
+
+uuid_newtype! {
+    /// Identifier for a running shell session.
+    SessionId
+}
+
+uuid_newtype! {
+    /// Identifier for an active port forward.
+    ForwardId
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,5 +487,52 @@ mod tests {
         let a: AppName = AppName::new("web").unwrap();
         let b: ActionName = ActionName::new("web").unwrap();
         assert_eq!(a.as_str(), b.as_str());
+    }
+
+    #[test]
+    fn session_id_generate_is_unique() {
+        let a = SessionId::generate();
+        let b = SessionId::generate();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn session_id_serde_is_uuid_string() {
+        let id = SessionId::generate();
+        let json = serde_json::to_string(&id).unwrap();
+        // serialised as "...uuid..." (quoted string)
+        assert_eq!(json.len(), 38);
+        let round: SessionId = serde_json::from_str(&json).unwrap();
+        assert_eq!(id, round);
+    }
+
+    #[test]
+    fn session_id_parse_round_trips_display() {
+        let id = SessionId::generate();
+        let s = id.to_string();
+        let parsed: SessionId = s.parse().unwrap();
+        assert_eq!(id, parsed);
+    }
+
+    #[test]
+    fn session_id_rejects_garbage() {
+        let r: Result<SessionId, _> = "not-a-uuid".parse();
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn forward_id_is_distinct_from_session_id() {
+        // Compile-time: a ForwardId and SessionId share structure but are not assignable.
+        let s = SessionId::generate();
+        let f = ForwardId::generate();
+        assert_ne!(s.as_uuid(), f.as_uuid());
+    }
+
+    #[test]
+    fn forward_id_serde_round_trip() {
+        let id = ForwardId::generate();
+        let json = serde_json::to_string(&id).unwrap();
+        let round: ForwardId = serde_json::from_str(&json).unwrap();
+        assert_eq!(id, round);
     }
 }
