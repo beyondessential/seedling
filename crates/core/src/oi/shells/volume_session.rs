@@ -1,8 +1,7 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{AppName, SessionId};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use uuid::Uuid;
 
 use super::registry::ShellSession;
 use crate::{
@@ -265,7 +264,7 @@ pub(crate) async fn open_volume_shell_session(
         }
     };
 
-    let session_id = Uuid::new_v4();
+    let session_id = SessionId::generate();
 
     // Write handshake.
     {
@@ -364,7 +363,7 @@ pub(crate) async fn open_volume_shell_session(
     // i[impl volumes.shell]
     state
         .event_tx
-        .shell_started(&session_id.to_string(), &volumes_app, &session_name);
+        .shell_started(session_id, &volumes_app, &session_name);
 
     let _ = stderr_send.finish();
 
@@ -373,7 +372,7 @@ pub(crate) async fn open_volume_shell_session(
 
     if !leftover_stdin.is_empty() && exec_handle.stdin.write_all(&leftover_stdin).await.is_err() {
         state.shells.remove(&session_id);
-        state.event_tx.shell_exited(&session_id.to_string(), -1);
+        state.event_tx.shell_exited(session_id, -1);
         let _ = state.container_runtime.remove_network(&net_name).await;
         fail!(-1);
     }
@@ -404,7 +403,7 @@ pub(crate) async fn open_volume_shell_session(
             status = exec_handle.child.wait() => {
                 exit_code = status.ok().and_then(|s| s.code()).unwrap_or(-1);
                 state.shells.remove(&session_id);
-                state.event_tx.shell_exited(&session_id.to_string(), exit_code);
+                state.event_tx.shell_exited(session_id, exit_code);
                 let _ = state.container_runtime.remove_network(&net_name).await;
                 let mut exit_frame =
                     serde_json::to_vec(&serde_json::json!({ "exit_code": exit_code }))
@@ -450,9 +449,7 @@ pub(crate) async fn open_volume_shell_session(
     };
 
     state.shells.remove(&session_id);
-    state
-        .event_tx
-        .shell_exited(&session_id.to_string(), exit_code);
+    state.event_tx.shell_exited(session_id, exit_code);
     let _ = state.container_runtime.remove_network(&net_name).await;
 
     let mut exit_frame =

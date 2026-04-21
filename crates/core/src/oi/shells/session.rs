@@ -1,9 +1,8 @@
 use std::{collections::BTreeMap, net::Ipv6Addr, sync::Arc, time::Duration};
 
 use parking_lot::Mutex;
-use seedling_protocol::names::{ActionName, AppName};
+use seedling_protocol::names::{ActionName, AppName, SessionId};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use uuid::Uuid;
 
 use super::registry::ShellSession;
 use crate::{
@@ -183,7 +182,7 @@ pub(crate) async fn open_shell_session(
         }
     };
 
-    let session_id = Uuid::new_v4();
+    let session_id = SessionId::generate();
 
     {
         // i[impl shell.open]
@@ -496,7 +495,7 @@ pub(crate) async fn open_shell_session(
     // i[impl shell.start]
     state
         .event_tx
-        .shell_started(&session_id.to_string(), &app_name, &shell_name);
+        .shell_started(session_id, &app_name, &shell_name);
 
     let _ = stderr_send.finish();
 
@@ -506,7 +505,7 @@ pub(crate) async fn open_shell_session(
     if !leftover_stdin.is_empty() && exec_handle.stdin.write_all(&leftover_stdin).await.is_err() {
         state.shells.remove(&session_id);
         // i[impl shell.exit]
-        state.event_tx.shell_exited(&session_id.to_string(), -1);
+        state.event_tx.shell_exited(session_id, -1);
         let resp = serde_json::to_vec(&serde_json::json!({ "exit_code": -1 })).unwrap_or_default();
         let _ = send.write_all(&resp).await;
         let _ = send.finish();
@@ -542,7 +541,7 @@ pub(crate) async fn open_shell_session(
                 exit_code = status.ok().and_then(|s| s.code()).unwrap_or(-1);
                 state.shells.remove(&session_id);
                 // i[impl shell.exit]
-                state.event_tx.shell_exited(&session_id.to_string(), exit_code);
+                state.event_tx.shell_exited(session_id, exit_code);
                 let _ = state.container_runtime.remove_network(&net_name).await;
                 // i[impl stream.shell.framing]
                 let mut exit_frame =
@@ -591,9 +590,7 @@ pub(crate) async fn open_shell_session(
 
     state.shells.remove(&session_id);
     // i[impl shell.exit]
-    state
-        .event_tx
-        .shell_exited(&session_id.to_string(), exit_code);
+    state.event_tx.shell_exited(session_id, exit_code);
     let _ = state.container_runtime.remove_network(&net_name).await;
 
     // i[impl stream.shell.framing]

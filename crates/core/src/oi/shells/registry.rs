@@ -3,10 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use jiff::Timestamp;
 use parking_lot::Mutex;
 use seedling_protocol::actor::Actor;
-use seedling_protocol::names::AppName;
-use uuid::Uuid;
-
-pub type SessionId = Uuid;
+use seedling_protocol::names::{AppName, SessionId};
 
 pub struct ShellSession {
     pub session_id: SessionId,

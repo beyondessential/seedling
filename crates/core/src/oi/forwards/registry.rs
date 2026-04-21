@@ -3,11 +3,8 @@ use std::{collections::HashMap, fmt, net::Ipv6Addr, sync::Arc};
 use jiff::Timestamp;
 use parking_lot::Mutex;
 use seedling_protocol::actor::Actor;
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{AppName, ForwardId};
 use tokio::sync::{mpsc, watch};
-use uuid::Uuid;
-
-pub type ForwardId = Uuid;
 
 // i[forward.request]
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

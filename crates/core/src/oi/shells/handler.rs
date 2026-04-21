@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
+use seedling_protocol::error::{ErrorCode, HandlerResult, OiError};
+use seedling_protocol::names::SessionId;
 use serde::Deserialize;
 use serde_json::json;
-use uuid::Uuid;
-
-use seedling_protocol::error::{ErrorCode, HandlerResult, OiError};
 
 use crate::oi::state::OiState;
 
@@ -27,7 +26,9 @@ pub(crate) struct StopShellParams {
 
 // i[shell.resize]
 pub(crate) fn resize_shell(state: &Arc<OiState>, params: ResizeShellParams) -> HandlerResult {
-    let id = Uuid::parse_str(&params.session_id)
+    let id: SessionId = params
+        .session_id
+        .parse()
         .map_err(|_| OiError::new(ErrorCode::RequirementsInvalid, "invalid session_id"))?;
     if !state.shells.resize(&id, params.rows, params.cols) {
         return Err(OiError::not_found(format!(
@@ -58,7 +59,9 @@ pub(crate) fn list_shells(state: &Arc<OiState>, params: ListShellsParams) -> Han
 
 // i[shell.stop]
 pub(crate) fn stop_shell(state: &Arc<OiState>, params: StopShellParams) -> HandlerResult {
-    let id = Uuid::parse_str(&params.session_id)
+    let id: SessionId = params
+        .session_id
+        .parse()
         .map_err(|_| OiError::new(ErrorCode::RequirementsInvalid, "invalid session_id"))?;
     if !state.shells.stop(&id) {
         return Err(OiError::not_found(format!(

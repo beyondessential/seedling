@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{AppName, ForwardId};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use uuid::Uuid;
 
 use super::registry::{ForwardEntry, ForwardProto};
 use crate::{
@@ -133,7 +132,7 @@ pub(crate) async fn forward_port_session(
     };
 
     let conn_id = conn.stable_id();
-    let forward_id = Uuid::new_v4();
+    let forward_id = ForwardId::generate();
     let forward_key_result = state.forwards.lock().alloc_key(conn_id);
     let forward_key = match forward_key_result {
         Ok(k) => k,
@@ -217,12 +216,9 @@ pub(crate) async fn forward_port_session(
         fwd = %forward_id, "forward started"
     );
     // i[impl forward.start]
-    state.event_tx.forward_started(
-        &forward_id.to_string(),
-        &params.app,
-        &params.service,
-        params.port,
-    );
+    state
+        .event_tx
+        .forward_started(forward_id, &params.app, &params.service, params.port);
 
     let mut ctrl_buf = [0u8; 1];
     loop {
@@ -264,7 +260,7 @@ pub(crate) async fn forward_port_session(
         let _ = entry.stop_tx.send(true);
     }
     // i[impl forward.start]
-    state.event_tx.forward_stopped(&forward_id.to_string());
+    state.event_tx.forward_stopped(forward_id);
 
     let _ = send.finish();
     tracing::info!(
@@ -281,7 +277,7 @@ pub(crate) async fn handle_forward_stream(
     leftover: Vec<u8>,
     state: Arc<OiState>,
 ) {
-    let forward_id = match uuid::Uuid::parse_str(&forward_id_str) {
+    let forward_id: ForwardId = match forward_id_str.parse() {
         Ok(id) => id,
         Err(_) => {
             tracing::warn!(fwd = %forward_id_str, "invalid forward_id in stream header");
