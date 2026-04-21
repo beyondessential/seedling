@@ -515,7 +515,7 @@ fn barrier_satisfaction_update_via_replace() {
             started_at_secs: Some(1000),
         }),
     };
-    insert_action_log_entry(&db, &op, "myapp", "start", &satisfied_entry).unwrap();
+    insert_action_log_entry(&db, &op, &app_name("myapp"), "start", &satisfied_entry).unwrap();
 
     let loaded = load_action_log(&db, &op).unwrap();
     assert_eq!(loaded.len(), 1, "INSERT OR REPLACE should not duplicate");

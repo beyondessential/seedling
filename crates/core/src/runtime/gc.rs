@@ -202,8 +202,12 @@ mod tests {
     use crate::runtime::history::{self, CurrentOperation, Provenance};
     use crate::runtime::identity::ResourceInstance;
 
+    fn app_name(s: &str) -> seedling_protocol::names::AppName {
+        seedling_protocol::names::AppName::new(s).unwrap()
+    }
+
     fn dep(app: &str, name: &str) -> ResourceInstance {
-        ResourceInstance::new_singleton(app, ResourceKind::Deployment, name)
+        ResourceInstance::new_singleton(app_name(app), ResourceKind::Deployment, name)
     }
 
     fn make_entry(call_index: usize) -> ActionLogEntry {
@@ -233,11 +237,12 @@ mod tests {
         let old_op = OperationId("old-op".into());
 
         for i in 0..3 {
-            history::insert_action_log_entry(&db, &current_op, "app", "start", &make_entry(i))
+            history::insert_action_log_entry(&db, &current_op, &app_name("app"), "start", &make_entry(i))
                 .unwrap();
         }
         for i in 0..2 {
-            history::insert_action_log_entry(&db, &old_op, "app", "start", &make_entry(i)).unwrap();
+            history::insert_action_log_entry(&db, &old_op, &app_name("app"), "start", &make_entry(i))
+                .unwrap();
         }
 
         let cipher = crate::runtime::secrets::Cipher::for_tests();
@@ -246,7 +251,7 @@ mod tests {
             &cipher,
             &CurrentOperation {
                 operation_id: current_op.clone(),
-                app: "app".into(),
+                app: app_name("app"),
                 action_name: "start".into(),
                 source_generation: 1,
                 target_generation: 1,
@@ -293,7 +298,7 @@ mod tests {
 
         let op = OperationId("recent-op".into());
         for i in 0..3 {
-            history::insert_action_log_entry(&db, &op, "app", "start", &make_entry(i)).unwrap();
+            history::insert_action_log_entry(&db, &op, &app_name("app"), "start", &make_entry(i)).unwrap();
         }
 
         let deleted = gc_action_log(&db, Duration::from_secs(24 * 60 * 60)).unwrap();
@@ -314,7 +319,7 @@ mod tests {
 
         let id1 = crate::runtime::faults::file_fault(
             &db,
-            "app",
+            &app_name("app"),
             Some("Deployment"),
             Some("web"),
             None,
@@ -324,7 +329,7 @@ mod tests {
         .unwrap();
         let id2 = crate::runtime::faults::file_fault(
             &db,
-            "app",
+            &app_name("app"),
             Some("Deployment"),
             Some("api"),
             None,
@@ -333,7 +338,7 @@ mod tests {
         )
         .unwrap();
 
-        crate::runtime::faults::clear_fault(&db, &id1, "app").unwrap();
+        crate::runtime::faults::clear_fault(&db, &id1, &app_name("app")).unwrap();
 
         let old_ts = Timestamp::now()
             .checked_sub(jiff::SignedDuration::from_hours(30 * 24))

@@ -1,11 +1,16 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use seedling_protocol::names::AppName;
 use tokio::sync::Notify;
 
 use super::params::load_params_for_app;
 use super::*;
 use crate::runtime::db::Db;
+
+fn app(s: &str) -> AppName {
+    AppName::new(s).unwrap()
+}
 
 // i[verify app.status] i[verify action.invoke.install]
 #[test]
@@ -39,10 +44,10 @@ fn decode_phase_prefers_uninstalling_over_conflicts() {
 #[test]
 fn upsert_and_load_params_round_trip() {
     let db = Db::open_in_memory().expect("open");
-    upsert_param(&db, "myapp", "host", "example.com").expect("upsert");
-    upsert_param(&db, "myapp", "port", "8080").expect("upsert");
+    upsert_param(&db, &app("myapp"), "host", "example.com").expect("upsert");
+    upsert_param(&db, &app("myapp"), "port", "8080").expect("upsert");
 
-    let params = load_params_for_app(&db, "myapp").expect("load");
+    let params = load_params_for_app(&db, &app("myapp")).expect("load");
     assert_eq!(params.get("host").map(String::as_str), Some("example.com"));
     assert_eq!(params.get("port").map(String::as_str), Some("8080"));
 }
@@ -51,10 +56,10 @@ fn upsert_and_load_params_round_trip() {
 #[test]
 fn upsert_param_replaces_existing_value() {
     let db = Db::open_in_memory().expect("open");
-    upsert_param(&db, "myapp", "host", "old.example.com").expect("first upsert");
-    upsert_param(&db, "myapp", "host", "new.example.com").expect("second upsert");
+    upsert_param(&db, &app("myapp"), "host", "old.example.com").expect("first upsert");
+    upsert_param(&db, &app("myapp"), "host", "new.example.com").expect("second upsert");
 
-    let params = load_params_for_app(&db, "myapp").expect("load");
+    let params = load_params_for_app(&db, &app("myapp")).expect("load");
     assert_eq!(
         params.get("host").map(String::as_str),
         Some("new.example.com")
@@ -64,7 +69,7 @@ fn upsert_param_replaces_existing_value() {
 
 fn make_entry(name: &str, script_error: Option<&str>) -> AppEntry {
     AppEntry {
-        name: name.to_owned(),
+        name: app(name),
         script: String::new(),
         app: crate::defs::app::App::default(),
         phase: Arc::new(parking_lot::Mutex::new(AppPhase::NotInstalled)),
@@ -83,7 +88,7 @@ fn sync_clears_fault_on_successful_reload() {
     let entry = make_entry("myapp", Some("has_value not found"));
     sync_script_error_fault(&db, &entry);
     assert_eq!(
-        crate::runtime::faults::list_active_faults(&db, Some("myapp"))
+        crate::runtime::faults::list_active_faults(&db, Some(&app("myapp")))
             .unwrap()
             .len(),
         1
@@ -92,7 +97,7 @@ fn sync_clears_fault_on_successful_reload() {
     let entry = make_entry("myapp", None);
     sync_script_error_fault(&db, &entry);
     assert!(
-        crate::runtime::faults::list_active_faults(&db, Some("myapp"))
+        crate::runtime::faults::list_active_faults(&db, Some(&app("myapp")))
             .unwrap()
             .is_empty(),
         "fault should be cleared after successful reload"
@@ -106,14 +111,14 @@ fn sync_replaces_fault_when_error_changes() {
 
     let entry = make_entry("myapp", Some("has_value not found"));
     sync_script_error_fault(&db, &entry);
-    let faults = crate::runtime::faults::list_active_faults(&db, Some("myapp")).unwrap();
+    let faults = crate::runtime::faults::list_active_faults(&db, Some(&app("myapp"))).unwrap();
     assert_eq!(faults.len(), 1);
     assert_eq!(faults[0].description, "has_value not found");
     let old_id = faults[0].id.clone();
 
     let entry = make_entry("myapp", Some("different error"));
     sync_script_error_fault(&db, &entry);
-    let faults = crate::runtime::faults::list_active_faults(&db, Some("myapp")).unwrap();
+    let faults = crate::runtime::faults::list_active_faults(&db, Some(&app("myapp"))).unwrap();
     assert_eq!(
         faults.len(),
         1,
@@ -130,12 +135,12 @@ fn sync_is_idempotent_for_same_error() {
 
     let entry = make_entry("myapp", Some("parse failed"));
     sync_script_error_fault(&db, &entry);
-    let first = crate::runtime::faults::list_active_faults(&db, Some("myapp")).unwrap();
+    let first = crate::runtime::faults::list_active_faults(&db, Some(&app("myapp"))).unwrap();
     assert_eq!(first.len(), 1);
     let first_id = first[0].id.clone();
 
     sync_script_error_fault(&db, &entry);
-    let second = crate::runtime::faults::list_active_faults(&db, Some("myapp")).unwrap();
+    let second = crate::runtime::faults::list_active_faults(&db, Some(&app("myapp"))).unwrap();
     assert_eq!(second.len(), 1);
     assert_eq!(
         second[0].id, first_id,
@@ -147,11 +152,11 @@ fn sync_is_idempotent_for_same_error() {
 #[test]
 fn load_params_scoped_to_app() {
     let db = Db::open_in_memory().expect("open");
-    upsert_param(&db, "app-a", "key", "val-a").expect("upsert a");
-    upsert_param(&db, "app-b", "key", "val-b").expect("upsert b");
+    upsert_param(&db, &app("app-a"), "key", "val-a").expect("upsert a");
+    upsert_param(&db, &app("app-b"), "key", "val-b").expect("upsert b");
 
-    let params_a = load_params_for_app(&db, "app-a").expect("load a");
-    let params_b = load_params_for_app(&db, "app-b").expect("load b");
+    let params_a = load_params_for_app(&db, &app("app-a")).expect("load a");
+    let params_b = load_params_for_app(&db, &app("app-b")).expect("load b");
 
     assert_eq!(params_a.get("key").map(String::as_str), Some("val-a"));
     assert_eq!(params_b.get("key").map(String::as_str), Some("val-b"));
@@ -161,7 +166,7 @@ fn load_params_scoped_to_app() {
 #[test]
 fn load_params_returns_empty_for_unknown_app() {
     let db = Db::open_in_memory().expect("open");
-    let params = load_params_for_app(&db, "nonexistent").expect("load");
+    let params = load_params_for_app(&db, &app("nonexistent")).expect("load");
     assert!(params.is_empty());
 }
 
@@ -169,18 +174,18 @@ fn load_params_returns_empty_for_unknown_app() {
 #[test]
 fn delete_app_params_removes_only_that_apps_params() {
     let db = Db::open_in_memory().expect("open");
-    upsert_param(&db, "app-a", "key", "val-a").expect("upsert a");
-    upsert_param(&db, "app-b", "key", "val-b").expect("upsert b");
+    upsert_param(&db, &app("app-a"), "key", "val-a").expect("upsert a");
+    upsert_param(&db, &app("app-b"), "key", "val-b").expect("upsert b");
 
-    delete_app_params(&db, "app-a").expect("delete");
+    delete_app_params(&db, &app("app-a")).expect("delete");
 
     assert!(
-        load_params_for_app(&db, "app-a")
+        load_params_for_app(&db, &app("app-a"))
             .expect("load a")
             .is_empty()
     );
     assert_eq!(
-        load_params_for_app(&db, "app-b")
+        load_params_for_app(&db, &app("app-b"))
             .expect("load b")
             .get("key")
             .map(String::as_str),
@@ -194,8 +199,8 @@ fn evaluate_script_injects_params_into_stored() {
     let mut params = BTreeMap::new();
     params.insert("hostname".to_owned(), "prod.example.com".to_owned());
 
-    let (app, err) = evaluate_script(
-        "test-app",
+    let (app_def, err) = evaluate_script(
+        &app("test-app"),
         r#"let h = app.param("hostname");"#,
         &params,
         &crate::ScriptLimits::default(),
@@ -203,11 +208,11 @@ fn evaluate_script_injects_params_into_stored() {
     assert!(err.is_none(), "unexpected script error: {err:?}");
 
     assert!(
-        app.def.load().params.contains_key("hostname"),
+        app_def.def.load().params.contains_key("hostname"),
         "hostname should be in declared params"
     );
     assert_eq!(
-        app.stored.lock().get("hostname").map(String::as_str),
+        app_def.stored.lock().get("hostname").map(String::as_str),
         Some("prod.example.com"),
         "stored param value should be accessible via app.stored"
     );
@@ -217,8 +222,8 @@ fn evaluate_script_injects_params_into_stored() {
 #[test]
 fn evaluate_script_absent_param_has_no_stored_value() {
     let params = BTreeMap::new();
-    let (app, err) = evaluate_script(
-        "test-app",
+    let (app_def, err) = evaluate_script(
+        &app("test-app"),
         r#"let h = app.param("hostname");"#,
         &params,
         &crate::ScriptLimits::default(),
@@ -226,11 +231,11 @@ fn evaluate_script_absent_param_has_no_stored_value() {
     assert!(err.is_none(), "unexpected script error: {err:?}");
 
     assert!(
-        app.def.load().params.contains_key("hostname"),
+        app_def.def.load().params.contains_key("hostname"),
         "hostname should be recorded as declared"
     );
     assert!(
-        app.stored.lock().get("hostname").is_none(),
+        app_def.stored.lock().get("hostname").is_none(),
         "absent param should have no stored value"
     );
 }
@@ -252,18 +257,19 @@ fn reload_after_secret_param_set_populates_stored() {
     secret_params::upsert_secret_param(
         &db,
         &cipher,
-        "myapp",
+        &app("myapp"),
         "apikey",
         &SecretString::new("sekret123".to_owned().into()),
     )
     .expect("upsert secret");
 
-    let loaded = load_all_params_for_app(&db, &cipher, "myapp");
-    let (app, err) = evaluate_script("myapp", script, &loaded, &crate::ScriptLimits::default());
+    let loaded = load_all_params_for_app(&db, &cipher, &app("myapp"));
+    let (app_def, err) =
+        evaluate_script(&app("myapp"), script, &loaded, &crate::ScriptLimits::default());
     assert!(err.is_none(), "script error: {err:?}");
 
     assert_eq!(
-        app.stored.lock().get("apikey").map(String::as_str),
+        app_def.stored.lock().get("apikey").map(String::as_str),
         Some("sekret123"),
         "secret param must be decrypted into app.stored after reload"
     );
@@ -284,19 +290,19 @@ fn load_params_for_app_alone_misses_secrets() {
     secret_params::upsert_secret_param(
         &db,
         &cipher,
-        "myapp",
+        &app("myapp"),
         "apikey",
         &SecretString::new("sekret".to_owned().into()),
     )
     .expect("upsert secret");
 
-    let plaintext_only = load_params_for_app(&db, "myapp").expect("load");
+    let plaintext_only = load_params_for_app(&db, &app("myapp")).expect("load");
     assert!(
         !plaintext_only.contains_key("apikey"),
         "plaintext-only loader must not surface secrets (confirms the trap)"
     );
 
-    let merged = load_all_params_for_app(&db, &cipher, "myapp");
+    let merged = load_all_params_for_app(&db, &cipher, &app("myapp"));
     assert_eq!(
         merged.get("apikey").map(String::as_str),
         Some("sekret"),
@@ -317,10 +323,14 @@ fn registry_load_from_db_restores_params() {
         )
         .expect("insert app");
 
-    crate::runtime::generations::bump_register(&db, "myapp", r#"let h = app.param("hostname");"#)
-        .expect("bump register");
+    crate::runtime::generations::bump_register(
+        &db,
+        &app("myapp"),
+        r#"let h = app.param("hostname");"#,
+    )
+    .expect("bump register");
 
-    upsert_param(&db, "myapp", "hostname", "restored.example.com").expect("upsert");
+    upsert_param(&db, &app("myapp"), "hostname", "restored.example.com").expect("upsert");
     // The handler would also bump generation for the param — for this test
     // (purely about load_from_db), we set the current_generation directly.
     db.conn

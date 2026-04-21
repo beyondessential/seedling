@@ -24,11 +24,19 @@ fn setup_with_script(
 }
 
 fn dep(name: &str) -> ResourceInstance {
-    ResourceInstance::new_singleton("test-app", ResourceKind::Deployment, name)
+    ResourceInstance::new_singleton(
+        seedling_protocol::names::AppName::new("test-app").unwrap(),
+        ResourceKind::Deployment,
+        name,
+    )
 }
 
 fn ing(name: &str) -> ResourceInstance {
-    ResourceInstance::new_singleton("test-app", ResourceKind::Ingress, name)
+    ResourceInstance::new_singleton(
+        seedling_protocol::names::AppName::new("test-app").unwrap(),
+        ResourceKind::Ingress,
+        name,
+    )
 }
 
 fn registry() -> Arc<dyn crate::runtime::InstanceRegistry> {

@@ -18,7 +18,7 @@ fn file_and_list_fault() {
     init_test_events();
     let id = file_fault(
         &db,
-        "myapp",
+        &app("myapp"),
         None,
         None,
         None,
@@ -44,7 +44,7 @@ fn file_fault_with_resource_fields() {
     init_test_events();
     let id = file_fault(
         &db,
-        "myapp",
+        &app("myapp"),
         Some("deployment"),
         Some("web"),
         Some("abcd1234"),
@@ -83,7 +83,7 @@ fn clear_faults_by_kind_clears_matching() {
     file_fault(&db, &app("myapp"), None, None, None, "script_error", "err2").expect("file2");
     file_fault(
         &db,
-        "myapp",
+        &app("myapp"),
         Some("deployment"),
         Some("web"),
         None,
@@ -138,7 +138,7 @@ fn clear_all_faults_for_app_clears_only_that_app() {
     file_fault(&db, &app("app-a"), None, None, None, "script_error", "a err").expect("a");
     file_fault(
         &db,
-        "app-a",
+        &app("app-a"),
         Some("deployment"),
         Some("web"),
         None,
@@ -259,7 +259,7 @@ fn clear_faults_for_instance_only_removes_matching_instance() {
     init_test_events();
     file_fault(
         &db,
-        "myapp",
+        &app("myapp"),
         Some("job"),
         None,
         Some("instance-a"),
@@ -269,7 +269,7 @@ fn clear_faults_for_instance_only_removes_matching_instance() {
     .expect("file a");
     file_fault(
         &db,
-        "myapp",
+        &app("myapp"),
         Some("job"),
         None,
         Some("instance-b"),
@@ -281,7 +281,7 @@ fn clear_faults_for_instance_only_removes_matching_instance() {
     // should both survive.
     file_fault(
         &db,
-        "myapp",
+        &app("myapp"),
         None,
         None,
         None,

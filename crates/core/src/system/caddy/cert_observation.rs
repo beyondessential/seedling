@@ -61,7 +61,11 @@ mod tests {
     use crate::defs::resource::ResourceKind;
 
     fn ingress_instance(name: &str) -> ResourceInstance {
-        ResourceInstance::new_singleton("test-app", ResourceKind::Ingress, name)
+        ResourceInstance::new_singleton(
+            seedling_protocol::names::AppName::new("test-app").unwrap(),
+            ResourceKind::Ingress,
+            name,
+        )
     }
 
     #[test]

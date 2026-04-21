@@ -266,7 +266,7 @@ fn on_change_inside_action_closure_throws() {
     let oracle = Arc::new(TestWorldOracle::new());
     oracle.set(
         crate::runtime::ResourceInstance::new_singleton(
-            "test",
+            seedling_protocol::names::AppName::new("test").unwrap(),
             crate::defs::resource::ResourceKind::Deployment,
             "x",
         ),

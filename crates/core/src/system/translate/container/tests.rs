@@ -247,7 +247,7 @@ fn volume_mount_uses_app_prefixed_display_name() {
 
     let instance = ResourceInstance {
         id: InstanceId::generate(),
-        app: "myapp".to_string(),
+        app: seedling_protocol::names::AppName::new("myapp").unwrap(),
         kind: ResourceKind::Deployment,
         name: Some("web".to_string()),
         variant: InstanceVariant::Singleton,

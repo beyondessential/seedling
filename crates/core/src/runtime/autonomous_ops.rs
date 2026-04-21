@@ -83,7 +83,11 @@ mod tests {
     use crate::runtime::identity::ResourceInstance;
 
     fn dep(app: &str, name: &str) -> ResourceInstance {
-        ResourceInstance::new_singleton(app, ResourceKind::Deployment, name)
+        ResourceInstance::new_singleton(
+            seedling_protocol::names::AppName::new(app).unwrap(),
+            ResourceKind::Deployment,
+            name,
+        )
     }
 
     // r[verify autonomous.provenance-required]

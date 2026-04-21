@@ -1,24 +1,30 @@
 use std::time::{Duration, UNIX_EPOCH};
 
+use seedling_protocol::names::AppName;
+
 use super::*;
 use crate::defs::resource::ResourceKind;
 use crate::runtime::db::{Db, DbHandle};
 use crate::runtime::history::{WorldObservation, insert_observation, query_observations};
 
+fn app_name(s: &str) -> AppName {
+    AppName::new(s).unwrap()
+}
+
 fn dep(app: &str, name: &str) -> ResourceInstance {
-    ResourceInstance::new_singleton(app, ResourceKind::Deployment, name)
+    ResourceInstance::new_singleton(app_name(app), ResourceKind::Deployment, name)
 }
 
 fn svc(name: &str) -> ResourceInstance {
-    ResourceInstance::new_singleton("app", ResourceKind::Service, name)
+    ResourceInstance::new_singleton(app_name("app"), ResourceKind::Service, name)
 }
 
 fn ing(name: &str) -> ResourceInstance {
-    ResourceInstance::new_singleton("app", ResourceKind::Ingress, name)
+    ResourceInstance::new_singleton(app_name("app"), ResourceKind::Ingress, name)
 }
 
 fn vol(name: &str) -> ResourceInstance {
-    ResourceInstance::new_singleton("app", ResourceKind::Volume, name)
+    ResourceInstance::new_singleton(app_name("app"), ResourceKind::Volume, name)
 }
 
 /// Build a `WorldObservation` with `recorded_at = 0` for testing the pure

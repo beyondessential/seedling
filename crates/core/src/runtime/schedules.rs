@@ -181,6 +181,10 @@ mod tests {
     use super::*;
     use crate::runtime::db::Db;
 
+    fn app_name(s: &str) -> AppName {
+        AppName::new(s).unwrap()
+    }
+
     // r[verify schedule.state]
     #[test]
     fn schedule_table_roundtrip() {
@@ -189,15 +193,15 @@ mod tests {
             ("backup".to_owned(), "0 2 * * *".to_owned()),
             ("cleanup".to_owned(), "*/15 * * * *".to_owned()),
         ];
-        db::ensure_schedules(&db, "myapp", &pairs).unwrap();
+        db::ensure_schedules(&db, &app_name("myapp"), &pairs).unwrap();
 
-        let rows = db::list_schedules(&db, "myapp").unwrap();
+        let rows = db::list_schedules(&db, &app_name("myapp")).unwrap();
         assert_eq!(rows.len(), 2);
 
-        db::upsert_schedule_fired(&db, "myapp", "backup", "0 2 * * *", "2026-01-01T02:00:00Z")
+        db::upsert_schedule_fired(&db, &app_name("myapp"), "backup", "0 2 * * *", "2026-01-01T02:00:00Z")
             .unwrap();
 
-        let rows = db::list_schedules(&db, "myapp").unwrap();
+        let rows = db::list_schedules(&db, &app_name("myapp")).unwrap();
         let backup_row = rows.iter().find(|r| r.action == "backup").unwrap();
         assert_eq!(
             backup_row.last_fired_at.as_deref(),
@@ -213,12 +217,12 @@ mod tests {
             ("backup".to_owned(), "0 2 * * *".to_owned()),
             ("cleanup".to_owned(), "*/15 * * * *".to_owned()),
         ];
-        db::ensure_schedules(&db, "myapp", &pairs).unwrap();
+        db::ensure_schedules(&db, &app_name("myapp"), &pairs).unwrap();
 
         let valid = vec![("backup".to_owned(), "0 2 * * *".to_owned())];
-        db::prune_schedules(&db, "myapp", &valid).unwrap();
+        db::prune_schedules(&db, &app_name("myapp"), &valid).unwrap();
 
-        let rows = db::list_schedules(&db, "myapp").unwrap();
+        let rows = db::list_schedules(&db, &app_name("myapp")).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].action, "backup");
     }
@@ -229,10 +233,10 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
 
         let pairs = vec![("backup".to_owned(), "* * * * *".to_owned())];
-        db::ensure_schedules(&db, "myapp", &pairs).unwrap();
+        db::ensure_schedules(&db, &app_name("myapp"), &pairs).unwrap();
 
         let now: Timestamp = "2026-04-18T12:01:00Z".parse().unwrap();
-        db::upsert_schedule_fired(&db, "myapp", "backup", "* * * * *", "2026-04-18T12:00:00Z")
+        db::upsert_schedule_fired(&db, &app_name("myapp"), "backup", "* * * * *", "2026-04-18T12:00:00Z")
             .unwrap();
 
         let mut scheduler = Scheduler::new();
@@ -253,12 +257,12 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
 
         let pairs = vec![("backup".to_owned(), "0 * * * *".to_owned())];
-        db::ensure_schedules(&db, "myapp", &pairs).unwrap();
+        db::ensure_schedules(&db, &app_name("myapp"), &pairs).unwrap();
 
         // Last fired ~25 hours ago; next cron boundary from that point is
         // yesterday's 18:00, which is well outside any 59 s or 5-minute
         // window centred on `now`.
-        db::upsert_schedule_fired(&db, "myapp", "backup", "0 * * * *", "2026-04-20T17:05:00Z")
+        db::upsert_schedule_fired(&db, &app_name("myapp"), "backup", "0 * * * *", "2026-04-20T17:05:00Z")
             .unwrap();
 
         let now: Timestamp = "2026-04-21T18:37:22Z".parse().unwrap();
@@ -284,7 +288,7 @@ mod tests {
         let mut engine = Engine::new();
         engine.build_type::<Action>();
 
-        let action = Action::new("start".to_owned(), "testapp".to_owned());
+        let action = Action::new("start".to_owned(), app_name("testapp"));
         let mut scope = rhai::Scope::new();
         scope.push("action", action);
 

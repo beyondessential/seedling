@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use seedling_protocol::names::AppName;
+
 use super::*;
 use crate::defs::resource::ResourceKind;
 use crate::runtime::barrier::OperationId;
@@ -8,8 +10,12 @@ use crate::runtime::db::DbHandle;
 use crate::runtime::identity::ResourceInstance;
 use crate::runtime::lifecycle::LifecycleState;
 
+fn app_name() -> AppName {
+    AppName::new("test-app").unwrap()
+}
+
 fn dep(name: &str) -> ResourceInstance {
-    ResourceInstance::new_singleton("test-app", ResourceKind::Deployment, name)
+    ResourceInstance::new_singleton(app_name(), ResourceKind::Deployment, name)
 }
 
 // r[barrier.suspension]
@@ -41,7 +47,7 @@ fn db_action_log_barrier_suspends_then_resumes() {
         DbActionLog::new(
             DbHandle::open_in_memory().expect("in-memory DB"),
             op.clone(),
-            "test-app",
+            app_name(),
             "start",
         )
     };
@@ -143,7 +149,7 @@ fn db_action_log_sequential_barriers() {
     let log = DbActionLog::new(
         DbHandle::open_in_memory().expect("in-memory DB"),
         op.clone(),
-        "test-app",
+        app_name(),
         "start",
     );
 
