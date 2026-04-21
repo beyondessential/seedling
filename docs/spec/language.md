@@ -608,6 +608,8 @@ This is currently the only value.
 > If the name resolves to an operation-scoped binding, the returned `ExternalVolume` references the bound path for the duration of the operation. The binding is removed when the operation ends.
 >
 > If the name does not match any operation-scoped binding, the lookup falls back to the static external volume mapping table as for any other external volume reference.
+>
+> The names used for operation-scoped bindings are not fixed strings: they are generated per invocation by the runtime and delivered to the action closure in reserved params. See [operation.volume-param](runtime.md#r--operation.volume-param).
 
 # Action
 
@@ -637,7 +639,7 @@ This is currently the only value.
 >
 > The `param` is an arbitrary key-value map provided by the invoker. When no params are provided, `param` is an empty map (`#{}`).
 >
-> Param keys ending in `_volume` are reserved for internal use by the Seedling runtime. The runtime must reject operator-provided params whose keys end in `_volume`.
+> Param keys ending in `_volume` or `_filename` are reserved for internal use by the Seedling runtime. The runtime must reject operator-provided params whose keys end in either suffix. See [operation.volume-param](runtime.md#r--operation.volume-param) for how the runtime uses these suffixes to hand operation-scoped volumes to action closures.
 
 ## Start Action
 

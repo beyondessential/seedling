@@ -401,7 +401,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > i[action.invoke]
 > `/apps/action/invoke { app, name, params? }` schedules the named action as a lifecycle operation.
-> `params` is an optional JSON object. Keys ending in `_volume` are reserved and must be rejected.
+> `params` is an optional JSON object. Keys ending in `_volume` or `_filename` are reserved for internal use (see [operation.volume-param](runtime.md#r--operation.volume-param)) and must be rejected.
 > If the app has an active `script_error` fault, the request is rejected with `script_error`.
 > If the action has a declared param schema, schema-defined params are validated and defaults applied before the operation is enqueued; validation failure returns `requirements_invalid`.
 > Shell actions must not be invoked via this method; `not_found` is returned if a shell name is provided.
@@ -436,7 +436,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > i[shell.open]
 > `/shells/start { app, name, rows, cols, params? }` opens an interactive shell session.
-> `params` is an optional JSON object. Keys ending in `_volume` are reserved and must be rejected.
+> `params` is an optional JSON object. Keys ending in `_volume` or `_filename` are reserved for internal use (see [operation.volume-param](runtime.md#r--operation.volume-param)) and must be rejected.
 > Returns `{ session_id, stdout_stream_id, stderr_stream_id }` as the handshake response on the session stream.
 > After the handshake response is written, the server treats subsequent bytes on the session stream's client-to-server direction as raw stdin for the shell's job.
 
@@ -769,7 +769,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > The action is expected to filter its output to only snapshots it took for that volume via `save-snapshot`, so that restores cannot accidentally select a snapshot belonging to a different volume that shares the same backend repository. The information needed to filter is delivered via the `backup` param object (see [backup.action.backup-param](#i--backup.action.backup-param)).
 >
-> Returns the parsed JSON written by the action to its `"output"` volume as `snapshots.json`.
+> Returns the parsed JSON written by the action to the volume delivered under the logical binding key `"output"`, at the filename given by the runtime (see [backup.list](runtime.md#r--backup.list) and [operation.volume-param](runtime.md#r--operation.volume-param)).
 
 > i[backup.action.backup-param]
 > When Seedling invokes any of the three required backup actions (`save-snapshot`, `list-snapshots`, `restore-snapshot`) on a registered backup app, the param map passed to the action closure must contain a key `backup` whose value is an object with the following string fields:

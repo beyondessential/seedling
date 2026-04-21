@@ -383,6 +383,29 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Shell sessions do not persist params; shells are not replayable.
 > Backup operations do not persist params; they bind per-process snapshot paths that cannot survive a runtime restart, so interrupted backups are dropped and the next scheduled fire takes over.
 
+## Operation Volume Params
+
+Some internal operations (for example [backup.list](#r--backup.list), [backup.restore](#r--backup.restore), [backup.execution](#r--backup.execution)) must hand a writable or read-only path to an action closure without giving that path a stable, app-visible name. The runtime uses reserved param keys and operation-scoped volume bindings to do this in a collision-free way.
+
+> r[operation.volume-param]
+> When an internal operation hands a volume to an action closure, it must not use a fixed name hard-coded in the BSL script. Instead, for each logical binding the operation wants to provide, the runtime must:
+>
+> 1. Generate a fresh name that is unique for the operation — typically `seedling-op-<operation-id>-<logical-key>`. The name must not appear anywhere in the operator-provided param map.
+> 2. Register that name in the operation-scoped volume binding table (see [volume.external.dynamic](language.md#l--volume.external.dynamic)), mapping it to the actual filesystem path and the intended `read_only` flag. The binding lives for the duration of the operation and is removed when the operation ends.
+> 3. Insert a param named `<logical-key>_volume` into the `param` map delivered to the action closure, whose value is the generated name.
+>
+> The action closure resolves the volume by reading the param, then calling `app.external_volume(param["<logical-key>_volume"])`.
+>
+> Because the generated name is produced by the runtime, not chosen by the script, different operations cannot collide with each other and cannot collide with operator-configured static external volume mappings.
+
+> r[operation.volume-param.filename]
+> An operation may additionally instruct an action closure to read or write a specific filename under an injected volume. It must not rely on a fixed filename known only to the runtime: instead, for each `<logical-key>_volume` param it adds, the runtime may add a companion param named `<logical-key>_filename` whose value is the filename the action closure must use.
+>
+> This keeps the filename an implementation detail of the runtime — the runtime may rename it or change its structure without requiring every backup app's BSL script to be rewritten.
+
+> r[operation.volume-param.reserved]
+> Param keys ending in `_volume` or `_filename` are reserved. The runtime must reject operator-provided params whose keys end in either suffix (see [action.invoke](interface.md#i--action.invoke) and [action.params](language.md#l--action.params)). Only the runtime may insert such keys, and only as described in [operation.volume-param](#r--operation.volume-param) and [operation.volume-param.filename](#r--operation.volume-param.filename).
+
 ## Action Composition
 
 > r[operation.composition]
@@ -460,7 +483,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 >    `backup_source_unavailable` fault against the backup app and skip the volume.
 > 2. Create a read-only snapshot of the source volume at a temporary path.
 > 3. Acquire the scheduler slot (waiting until no other operation is active).
-> 4. Run the backup app's `save-snapshot` action with the snapshot bound to the volume key `"source"`.
+> 4. Run the backup app's `save-snapshot` action with the snapshot handed in under the logical
+>    binding key `"source"`, using the scheme described in [operation.volume-param](#r--operation.volume-param). The action closure reads the generated volume name from `param["source_volume"]`.
 > 5. After the action completes (success or failure), remove the snapshot.
 >
 > On success, any existing `backup_failed` and `backup_source_unavailable` faults for the backup app are cleared.
@@ -477,22 +501,25 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > r[backup.list]
 > To list available snapshots for a volume, the runtime must synchronously invoke the backup app's
-> `list-snapshots` action. The action receives:
+> `list-snapshots` action. Using the scheme described in [operation.volume-param](#r--operation.volume-param) and [operation.volume-param.filename](#r--operation.volume-param.filename), the action receives:
 >
-> - A param `"volume"` containing the volume identifier string.
-> - A writable volume bound to key `"output"`.
+> - A `backup` param carrying the structured identity of the operation (see the interface spec's `backup.action.backup-param`).
+> - A writable volume provided under the logical binding key `"output"`. The action closure reads
+>   the generated volume name from `param["output_volume"]`.
+> - A companion `param["output_filename"]` naming the file that the action must write. The
+>   runtime chooses the filename; the action must write to exactly that name within the output
+>   volume.
 >
-> The action must write a file named `snapshots.json` to the output volume.
 > The runtime reads and returns the contents of that file as the result.
 
 > r[backup.restore]
 > To restore a snapshot, the runtime must:
 >
 > 1. Create a new site volume with a generated name.
-> 2. Synchronously invoke the backup app's `restore-snapshot` action. The action receives:
+> 2. Synchronously invoke the backup app's `restore-snapshot` action. Using the scheme described in [operation.volume-param](#r--operation.volume-param), the action receives:
 >    - A param `"snapshot"` containing the snapshot identifier.
->    - A param `"volume"` containing the source volume identifier string.
->    - A writable volume bound to key `"destination"` pointing at the new site volume.
+>    - A `backup` param carrying the structured identity of the operation (see the interface spec's `backup.action.backup-param`).
+>    - A writable volume provided under the logical binding key `"destination"` pointing at the new site volume. The action closure reads the generated volume name from `param["destination_volume"]`.
 > 3. If the action fails, remove the site volume and propagate the error.
 > 4. Return the site volume name.
 
