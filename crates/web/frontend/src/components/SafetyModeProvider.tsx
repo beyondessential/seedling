@@ -6,7 +6,9 @@ export type SafetyTier = "write" | "dangerous";
 const STORAGE_KEY = "seedling.safetyMode";
 const RANK: Record<SafetyMode, number> = { read: 0, write: 1, dangerous: 2 };
 
-export const ELEVATION_DURATION_MS = 10 * 60 * 1000;
+// 9m59s — starts at "10m" after rounding to minutes and lets the countdown
+// step through 9m, 8m… without pausing an extra second on each boundary.
+export const ELEVATION_DURATION_MS = 10 * 60 * 1000 - 1_000;
 
 interface StoredState {
   mode: SafetyMode;

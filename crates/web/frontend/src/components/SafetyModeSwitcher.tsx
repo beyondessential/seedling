@@ -51,10 +51,8 @@ function chipColor(mode: SafetyMode): "default" | "warning" | "error" {
 function formatRemaining(ms: number): string {
   if (ms <= 0) return "0s";
   const totalSeconds = Math.ceil(ms / 1000);
-  if (totalSeconds < 60) return `${totalSeconds}s`;
-  const mins = Math.floor(totalSeconds / 60);
-  const secs = totalSeconds % 60;
-  return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+  if (totalSeconds <= 59) return `${totalSeconds}s`;
+  return `${Math.round(ms / 60_000)}m`;
 }
 
 function useRemaining(until: number | null): number | null {
