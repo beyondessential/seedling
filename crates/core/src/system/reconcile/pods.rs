@@ -304,6 +304,12 @@ async fn actuate_one_pod(
         }
     }
 
+    // r[impl autonomous.restart]
+    // When an instance in the desired state is not running (or is running a
+    // stale spec), the reconciler starts a replacement. Combined with the
+    // per-unit on_exit policy (applied by the actuator via `map_on_exit`),
+    // this covers both intra-unit systemd restarts and reconciler-driven
+    // recreations once a container reaches Terminated.
     match dr.desired {
         LifecycleState::Ready if !obs.is_running || obs.spec_stale => {
             if obs.spec_stale && inhibit_stop {

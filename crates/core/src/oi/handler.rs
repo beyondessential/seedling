@@ -40,7 +40,9 @@ fn parse_params<T: DeserializeOwned>(params: Value) -> Result<T, OiError> {
 /// and return the serialised JSON response (no trailing newline).
 pub fn dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Vec<u8> {
     let response = match parse_and_dispatch(state, buf, ctx) {
+        // i[impl wire.response.ok]
         Ok(result) => json!({ "result": result }),
+        // i[impl wire.response.error]
         Err(e) => json!({
             "error": {
                 "code": e.code,
@@ -52,6 +54,7 @@ pub fn dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Vec<u8> {
 }
 
 fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> HandlerResult {
+    // i[impl wire.request]
     #[derive(serde::Deserialize)]
     struct Request {
         method: String,

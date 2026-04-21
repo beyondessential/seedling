@@ -6,6 +6,8 @@ impl Reconciler {
     /// File a fault scoped to a specific resource instance, if no active fault
     /// of the same kind already exists for that instance. Used by callers that
     /// don't have a typed update struct (e.g. cert observation).
+    // r[impl fault.detection]
+    // r[impl fault.surfacing]
     pub(super) fn file_resource_fault(
         &self,
         instance: &ResourceInstance,

@@ -16,6 +16,7 @@ pub fn init(tx: EventSender) {
         .expect("faults::init must be called exactly once");
 }
 
+// r[impl fault.surfacing]
 fn emit_filed(record: &FaultRecord) {
     if let Some(tx) = EVENT_TX.get() {
         tx.fault_filed(
@@ -36,6 +37,7 @@ fn emit_cleared(id: &str, app: &str, kind: &str) {
     }
 }
 
+// r[impl fault.definition]
 #[derive(Debug, Clone, Serialize)]
 pub struct FaultRecord {
     pub id: String,
@@ -89,6 +91,7 @@ pub fn file_fault(
 /// kind is read in the same statement and included in the emitted
 /// `FaultCleared` event so clients can render a meaningful summary without
 /// having to remember every fault ID they saw.
+// i[impl fault.derived]
 pub fn clear_fault(db: &crate::runtime::db::Db, fault_id: &str, app: &str) -> rusqlite::Result<()> {
     let now = Timestamp::now();
     // Read the kind before the UPDATE — after clearing, the row is no longer
@@ -161,6 +164,7 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<FaultRecord> {
 }
 
 /// Clear all active faults matching an app + kind. Returns how many were cleared.
+// i[impl fault.derived]
 pub fn clear_faults_by_kind(
     db: &crate::runtime::db::Db,
     app: &str,
@@ -192,6 +196,7 @@ pub fn clear_all_faults_for_app(db: &crate::runtime::db::Db, app: &str) -> rusql
 /// being retired. Without this, per-instance faults (image_pull_failed,
 /// container_start_failed, …) filed against short-lived Job instances
 /// linger forever because nothing ever references the dead instance id again.
+// i[impl fault.derived]
 pub fn clear_faults_for_instance(
     db: &crate::runtime::db::Db,
     app: &str,

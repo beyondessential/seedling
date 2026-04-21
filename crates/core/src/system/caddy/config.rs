@@ -100,6 +100,7 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
 
     if !all_subjects.is_empty() {
         // r[impl actuate.ingress.warm-certs]
+        // l[impl ingress.certificates]
         // For routed subjects, Caddy acquires the cert lazily on first
         // request to the matching server; for warm-only subjects, no server
         // matches and Caddy must be told explicitly via certificates.automate.

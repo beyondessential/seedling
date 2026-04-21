@@ -287,6 +287,9 @@ impl ContainerDef {
         _resource: impl Fn(&mut T) -> ResourceId + Copy + 'static,
     ) {
         // l[impl container.image]
+        // l[impl bsl.builder]
+        // Canonical builder method: takes `&mut T`, returns `this.clone()` so
+        // calls chain. Every `with_fn` below this follows the same shape.
         builder.with_fn(
             "image",
             move |this: &mut T, image: &str| -> Result<T, Box<EvalAltResult>> {

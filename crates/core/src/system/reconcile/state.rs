@@ -240,6 +240,10 @@ impl Reconciler {
     }
 
     // r[impl observe.persist]
+    // r[impl history.world.source]
+    // `batch` is collected from probing real podman/systemd state during the
+    // current tick — every entry persisted here corresponds to a check or
+    // event actually observed, never a synthesised or expected value.
     pub(super) fn persist_obs(
         &mut self,
         batch: Vec<(ResourceInstance, &'static str, serde_json::Value)>,

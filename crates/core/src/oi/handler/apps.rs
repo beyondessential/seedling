@@ -363,6 +363,7 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
 /// Refines a base `AppStatus::Running` into `Running` or `Degraded` by
 /// checking whether all resource instances have reached `Ready`.  All other
 /// statuses are returned unchanged.
+// i[impl app.status.priority]
 pub(crate) fn effective_app_status(
     base: AppStatus,
     entry: &AppEntry,

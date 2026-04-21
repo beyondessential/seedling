@@ -34,6 +34,7 @@ pub(crate) async fn open_shell_session(
     initial_line: Vec<u8>,
     state: Arc<OiState>,
 ) {
+    // i[impl shell.open]
     #[derive(serde::Deserialize)]
     struct Params {
         app: String,
@@ -138,6 +139,8 @@ pub(crate) async fn open_shell_session(
             }
         };
 
+    // i[impl stream.shell]
+    // i[impl shell.streams]
     let (mut stdout_send, stdout_stream_id) = match conn.open_uni().await {
         Ok(s) => {
             let id = s.id().index();
@@ -164,6 +167,8 @@ pub(crate) async fn open_shell_session(
     let session_id = Uuid::new_v4();
 
     {
+        // i[impl shell.open]
+        // i[impl stream.shell.framing]
         let mut resp = serde_json::to_vec(&serde_json::json!({
             "result": {
                 "session_id": session_id.to_string(),
@@ -232,7 +237,13 @@ pub(crate) async fn open_shell_session(
                     active_progress: None,
                     tick_notify: None,
                     params: validated_params_for_task.clone(),
+                    // r[impl operation.shell]
                     is_shell: true,
+                    // r[impl operation.shell.resources]
+                    // Passing None means rt.start_* calls do not persist
+                    // dynamic resources to the desired state, so resources
+                    // created within a shell session disappear when the
+                    // session's replay context is dropped.
                     db: None,
                     source_generation: 0,
                     target_generation: 0,
@@ -502,6 +513,7 @@ pub(crate) async fn open_shell_session(
                 // i[impl shell.exit]
                 state.event_tx.shell_exited(&session_id.to_string(), exit_code);
                 let _ = state.container_runtime.remove_network(&net_name).await;
+                // i[impl stream.shell.framing]
                 let mut exit_frame =
                     serde_json::to_vec(&serde_json::json!({ "exit_code": exit_code }))
                         .unwrap_or_default();
@@ -553,6 +565,7 @@ pub(crate) async fn open_shell_session(
         .shell_exited(&session_id.to_string(), exit_code);
     let _ = state.container_runtime.remove_network(&net_name).await;
 
+    // i[impl stream.shell.framing]
     let mut exit_frame =
         serde_json::to_vec(&serde_json::json!({ "exit_code": exit_code })).unwrap_or_default();
     exit_frame.push(b'\n');

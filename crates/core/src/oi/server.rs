@@ -421,6 +421,7 @@ async fn handle_bidi_stream(
         return;
     }
 
+    // i[impl shell.concurrent]
     if maybe_method.as_deref() == Some("/shells/start") {
         drop(stream_permit);
         open_shell_session(conn, send, recv, leftover, line, state).await;

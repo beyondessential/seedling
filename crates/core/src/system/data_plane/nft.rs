@@ -319,6 +319,7 @@ pub(super) fn service_dnat_rule_stmts(rule: &ServiceDnatRule) -> Vec<Vec<Stateme
 /// DNAT to one or more backends. Single backend: plain DNAT. Multiple
 /// backends: round-robin via `numgen inc mod N` mapping to `addr . port`
 /// concatenations so each backend can have its own pod-side port.
+// l[impl service.routing]
 pub(super) fn dnat_lb(backends: &[(Ipv6Addr, u16)]) -> Statement<'static> {
     assert!(!backends.is_empty(), "dnat_lb called with no backends");
 

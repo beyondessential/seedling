@@ -389,6 +389,7 @@ function RegisterBackupAppDialog({
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
+// w[impl routes.backups]
 export default function Backups() {
   const { data: strategies, loading: stratLoading, error: stratError, refetch: refetchStrat } =
     useOiQuery<BackupStrategy[]>("/backups/strategies/list", {});

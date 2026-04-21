@@ -329,6 +329,12 @@ pub fn get_current_script(
     }
 }
 
+// i[impl app.status.priority]
+// Resolves the four highest-priority states: Uninstalling (= Deregistering),
+// Installing, Operating, NotInstalled. A Running result here is refined into
+// Running/Faulted/Degraded by `effective_app_status` — matching the spec's
+// priority order (Deregistering > Installing > Operating > NotInstalled >
+// Faulted > Degraded > Running).
 fn derive_status(entry: &AppEntry) -> AppStatus {
     let phase = entry.phase.lock();
     match *phase {
@@ -462,6 +468,11 @@ pub fn evaluate_script(
         d
     });
     crate::defs::app::set_appdef_holder(&app.def);
+    // l[impl bsl.errors]
+    // Unhandled Rhai exceptions bubble up from `run_with_scope` and stop
+    // further execution of this script evaluation. Rhai's native try/catch
+    // is available to BSL authors for recovery; anything that escapes it
+    // becomes a ScriptError and is surfaced as a fault by the caller.
     let err = engine
         .run_with_scope(&mut scope, script)
         .err()

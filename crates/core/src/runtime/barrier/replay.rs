@@ -474,6 +474,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
 /// differ. A mismatch means the BSL script produces different structure on
 /// re-run, which indicates a non-idempotent script and may cause the closure's
 /// captured variables to be inconsistent with the stored resource state.
+// r[impl barrier.replay.determinism]
 fn check_idempotent(fresh: &AppDef, stored: &AppDef) {
     let mut diffs: Vec<&str> = Vec::new();
 

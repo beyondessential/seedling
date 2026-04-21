@@ -37,6 +37,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                     None => Err(format!("no static volume named '{}'", name).into()),
                 }
             } else {
+                // l[impl app.resources.static]
                 let id = ResourceId {
                     kind: ResourceKind::Volume,
                     name: rname.clone(),
@@ -59,6 +60,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
 
     // l[impl volume.type]
     // l[impl app.resources.context.anonymous]
+    // l[impl app.resources.dynamic]
     builder.with_fn(
         "volume",
         |_this: &mut App| -> Result<Volume, Box<EvalAltResult>> {
