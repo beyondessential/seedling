@@ -1,8 +1,9 @@
 use std::collections::VecDeque;
 use std::fmt;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::runtime::barrier::OperationId;
+use crate::runtime::barrier::{CancelToken, OperationId};
 use crate::runtime::history::AutonomousOperation;
 use crate::runtime::identity::InstanceId;
 
@@ -25,6 +26,11 @@ pub struct ActiveOperation {
     /// the current generation at dispatch for operator-invoked actions.
     // r[impl operation.lifecycle.generations]
     pub target_generation: u64,
+    /// Cooperative cancellation signal. Flipped by the cancel-action
+    /// endpoint; observed by the action runtime at barrier entry and by the
+    /// lifecycle loop's interruptible sleep.
+    // r[impl operation.cancel]
+    pub cancel_token: Arc<CancelToken>,
 }
 
 // r[impl operation.lifecycle]
@@ -180,6 +186,7 @@ impl Scheduler {
                     operation_id,
                     source_generation,
                     target_generation,
+                    cancel_token: Arc::new(CancelToken::new()),
                 });
                 ScheduleResult::Accepted
             }
@@ -221,8 +228,27 @@ impl Scheduler {
             operation_id: next.operation_id.clone(),
             source_generation: next.source_generation,
             target_generation: next.target_generation,
+            cancel_token: Arc::new(CancelToken::new()),
         });
         Some(next)
+    }
+
+    /// Request cancellation of the active operation if it belongs to `app`.
+    /// Returns `true` if a token was flipped, `false` if there is no matching
+    /// active operation or if it has already been cancelled.
+    // r[impl operation.cancel]
+    pub fn request_cancel(&self, app: &str) -> bool {
+        let Some(active) = self.active.as_ref() else {
+            return false;
+        };
+        if active.app != app {
+            return false;
+        }
+        if active.cancel_token.is_cancelled() {
+            return false;
+        }
+        active.cancel_token.request();
+        true
     }
 
     /// Push an action name onto the composition call stack.

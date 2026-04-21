@@ -242,6 +242,7 @@ fn param_used_in_closure_captures_injected_value() {
             script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: std::sync::Arc::new(crate::runtime::barrier::CancelToken::new()),
         },
         &mut scope,
     );
@@ -292,6 +293,7 @@ fn on_change_inside_action_closure_throws() {
             script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: std::sync::Arc::new(crate::runtime::barrier::CancelToken::new()),
         },
         &mut scope,
     );

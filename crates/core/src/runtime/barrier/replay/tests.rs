@@ -68,6 +68,7 @@ fn db_action_log_barrier_suspends_then_resumes() {
             script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
         },
         &mut scope,
     );
@@ -104,6 +105,7 @@ fn db_action_log_barrier_suspends_then_resumes() {
             script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
         },
         &mut scope,
     );
@@ -166,6 +168,7 @@ fn db_action_log_sequential_barriers() {
             script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
         },
         &mut scope,
     );
@@ -194,6 +197,7 @@ fn db_action_log_sequential_barriers() {
             script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
         },
         &mut scope,
     );
@@ -222,6 +226,7 @@ fn db_action_log_sequential_barriers() {
             script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
         },
         &mut scope,
     );

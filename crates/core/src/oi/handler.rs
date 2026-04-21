@@ -101,6 +101,8 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/apps/params/unset" => params::unset_param(state, parse_params(req.params)?, ctx),
         // i[action.invoke]
         "/apps/action/invoke" => actions::invoke_action(state, parse_params(req.params)?, ctx),
+        // i[action.cancel]
+        "/apps/action/cancel" => actions::cancel_action(state, parse_params(req.params)?),
         // i[action.invoke.install]
         "/apps/install/invoke" => {
             actions::install::invoke_install(state, parse_params(req.params)?, ctx)

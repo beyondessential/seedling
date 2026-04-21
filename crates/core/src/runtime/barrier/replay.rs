@@ -13,8 +13,11 @@ use crate::defs::volume::OperationVolumeBinding;
 use crate::runtime::barrier::oracle::WorldStateOracle;
 use crate::runtime::barrier::runtime::{
     ActionClosureGuard, RuntimeInstance, clear_barrier_hit, extract_barrier_hit,
+    extract_cancel_hit,
 };
-use crate::runtime::barrier::{ActionLogEntry, BarrierCondition, OperationId, ReplayContext};
+use crate::runtime::barrier::{
+    ActionLogEntry, BarrierCondition, CancelToken, OperationId, ReplayContext,
+};
 use crate::runtime::registry::InstanceRegistry;
 
 // ---------------------------------------------------------------------------
@@ -165,6 +168,11 @@ pub enum OperationResult {
     Suspended(BarrierCondition),
     /// The closure threw a genuine BSL error.
     Failed(Box<EvalAltResult>),
+    /// The operation was cancelled mid-run via the cancel token. Cleanup is
+    /// run as for `Failed`, but the terminal state is distinct for audit
+    /// purposes.
+    // r[impl operation.cancel]
+    Cancelled,
 }
 
 // ---------------------------------------------------------------------------
@@ -249,6 +257,11 @@ pub struct OperationContext<'a, W: WorldStateOracle + 'static> {
     /// backup actions that need to expose snapshot paths to the closure.
     // l[impl volume.external.dynamic]
     pub operation_volume_bindings: HashMap<String, OperationVolumeBinding>,
+    /// Cooperative cancellation signal. Barriers consult it at entry so an
+    /// in-flight cancel unwinds quickly instead of waiting for the next
+    /// deadline.
+    // r[impl operation.cancel]
+    pub cancel_token: Arc<CancelToken>,
 }
 
 /// The `log` carries committed entries across calls; pass the same `log`
@@ -278,6 +291,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         script_limits,
         cipher,
         operation_volume_bindings,
+        cancel_token,
     } = op;
 
     // Save the operation ID string before it is moved into the replay context.
@@ -297,6 +311,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         operation_id,
         committed,
         world as Arc<dyn WorldStateOracle>,
+        Arc::clone(&cancel_token),
     )));
 
     // Clear the thread-local barrier-hit flag at the start of each pass.
@@ -463,10 +478,16 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
 
     match result {
         Ok(_) => OperationResult::Completed,
-        Err(ref e) => match extract_barrier_hit(e) {
-            Some(condition) => OperationResult::Suspended(condition),
-            None => OperationResult::Failed(result.unwrap_err()),
-        },
+        Err(ref e) => {
+            // r[impl operation.cancel]
+            if extract_cancel_hit(e) {
+                return OperationResult::Cancelled;
+            }
+            match extract_barrier_hit(e) {
+                Some(condition) => OperationResult::Suspended(condition),
+                None => OperationResult::Failed(result.unwrap_err()),
+            }
+        }
     }
 }
 

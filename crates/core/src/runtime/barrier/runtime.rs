@@ -213,6 +213,29 @@ pub fn extract_barrier_hit(err: &EvalAltResult) -> Option<BarrierCondition> {
 }
 
 // ---------------------------------------------------------------------------
+// CancelHit — operation cancellation control-flow exception
+// ---------------------------------------------------------------------------
+
+// r[impl operation.cancel]
+#[derive(Debug, Clone)]
+pub struct CancelHitPayload;
+
+pub fn make_cancel_error() -> Box<EvalAltResult> {
+    Box::new(EvalAltResult::ErrorRuntime(
+        Dynamic::from(CancelHitPayload),
+        rhai::Position::NONE,
+    ))
+}
+
+pub fn extract_cancel_hit(err: &EvalAltResult) -> bool {
+    match err {
+        EvalAltResult::ErrorRuntime(val, _) => val.clone().try_cast::<CancelHitPayload>().is_some(),
+        EvalAltResult::ErrorInFunctionCall(_, _, inner, _) => extract_cancel_hit(inner),
+        _ => false,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Resource extraction from Rhai Dynamic
 // ---------------------------------------------------------------------------
 
@@ -584,6 +607,11 @@ impl RuntimeInstance {
             Some(c) => Arc::clone(c),
         };
 
+        // r[impl operation.cancel]
+        if ctx.lock().cancel_token.is_cancelled() {
+            return Err(make_cancel_error());
+        }
+
         let mut g = ctx.lock();
 
         if g.is_replaying() {
@@ -797,6 +825,12 @@ impl Started {
             None => return Ok(self.clone()),
             Some(c) => Arc::clone(c),
         };
+
+        // r[impl operation.cancel]
+        // Cooperatively honour a cancel request before doing any more work.
+        if ctx.lock().cancel_token.is_cancelled() {
+            return Err(make_cancel_error());
+        }
 
         let mut g = ctx.lock();
         let now = (g.now_secs)();

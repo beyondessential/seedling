@@ -29,6 +29,28 @@ pub(crate) struct InvokeActionParams {
     pub params: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
+// i[action.cancel]
+#[derive(Deserialize)]
+pub(crate) struct CancelActionParams {
+    pub app: String,
+}
+
+/// Request cancellation of the currently-active operation for `app`.
+/// No-op (returns not-found) if no operation is active for that app.
+// r[impl operation.cancel]
+// i[action.cancel]
+pub(crate) fn cancel_action(state: &Arc<OiState>, params: CancelActionParams) -> HandlerResult {
+    let app_name = params.app.as_str();
+    let flipped = state.scheduler.lock().request_cancel(app_name);
+    if !flipped {
+        return Err(OiError::not_found(format!(
+            "no active operation to cancel for app: {app_name}"
+        )));
+    }
+    tracing::info!(app = %app_name, "operation cancel requested");
+    Ok(json!({ "cancelled": true }))
+}
+
 // l[impl action.params]
 // r[impl operation.volume-param.reserved]
 fn validate_action_params(

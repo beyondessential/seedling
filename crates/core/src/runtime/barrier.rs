@@ -1,3 +1,4 @@
+pub mod cancel;
 pub mod oracle;
 pub mod replay;
 pub mod runtime;
@@ -8,6 +9,8 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::Arc;
+
+pub use cancel::CancelToken;
 
 // r[impl operation.lifecycle]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -77,6 +80,11 @@ pub struct ReplayContext {
     pub pending_barrier: Option<BarrierCondition>,
     pub now_secs: Arc<dyn Fn() -> u64 + Send + Sync>,
     pub world: Arc<dyn oracle::WorldStateOracle>,
+    /// Cancellation signal for the current operation. Checked at the entry of
+    /// every barrier / stop call so an in-flight cancel aborts cleanly instead
+    /// of waiting for the next deadline.
+    // r[impl operation.cancel]
+    pub cancel_token: Arc<CancelToken>,
     /// Definitions of dynamic (anonymous) resources started during this pass.
     /// Populated by rt.start() calls in the action closure; read by the
     /// reconciler to compute desired state for resources not in the static AppDef.
@@ -111,6 +119,7 @@ impl ReplayContext {
         operation_id: OperationId,
         committed: Vec<ActionLogEntry>,
         world: Arc<dyn oracle::WorldStateOracle>,
+        cancel_token: Arc<CancelToken>,
     ) -> Self {
         Self {
             operation_id,
@@ -125,6 +134,7 @@ impl ReplayContext {
                     .as_secs()
             }),
             world,
+            cancel_token,
             dynamic_defs: std::collections::HashMap::new(),
             anon_counter: 0,
         }

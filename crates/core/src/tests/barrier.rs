@@ -73,6 +73,7 @@ fn barrier_satisfied_on_first_pass() {
             script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
         },
         &mut scope,
     );
@@ -119,6 +120,7 @@ fn barrier_suspends_then_resumes() {
             script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
         },
         &mut scope,
     );
@@ -148,6 +150,7 @@ fn barrier_suspends_then_resumes() {
             script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
         },
         &mut scope,
     );
@@ -196,6 +199,7 @@ fn sequential_barriers() {
             script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
         },
         &mut scope,
     );
@@ -224,6 +228,7 @@ fn sequential_barriers() {
             script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
         },
         &mut scope,
     );
@@ -252,6 +257,7 @@ fn sequential_barriers() {
             script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
         },
         &mut scope,
     );
@@ -296,6 +302,7 @@ fn barrier_deadline_zero_expires_on_second_pass() {
             script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
         },
         &mut scope,
     );
@@ -322,6 +329,7 @@ fn barrier_deadline_zero_expires_on_second_pass() {
             script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
         },
         &mut scope,
     );
@@ -370,6 +378,7 @@ fn replay_idempotency() {
             script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
         },
         &mut scope,
     );
@@ -398,6 +407,7 @@ fn replay_idempotency() {
             script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
         },
         &mut scope,
     );
@@ -460,6 +470,7 @@ fn rt_stop_acts_as_barrier() {
             script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
         },
         &mut scope,
     );
@@ -488,6 +499,7 @@ fn rt_stop_acts_as_barrier() {
             script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
         },
         &mut scope,
     );
@@ -536,6 +548,7 @@ fn warm_certs_barrier_uses_cert_oracle() {
             script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
         },
         &mut scope,
     );
@@ -583,6 +596,7 @@ fn warm_certs_barrier_suspends_when_cert_not_valid() {
             script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
         },
         &mut scope,
     );

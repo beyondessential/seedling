@@ -270,6 +270,9 @@ pub(crate) async fn open_shell_session(
                     script_limits: None,
                     cipher: None,
                     operation_volume_bindings: std::collections::HashMap::new(),
+                    // Shell sessions don't participate in operator-initiated
+                    // cancellation; an inert token never fires.
+                    cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
                 },
                 &mut scope,
             );
@@ -282,6 +285,11 @@ pub(crate) async fn open_shell_session(
                     );
                     break false;
                 }
+                // r[impl operation.cancel]
+                // Shell sessions don't participate in operator cancellation;
+                // the inert token never fires this branch. Present for
+                // exhaustiveness.
+                OperationResult::Cancelled => break false,
                 OperationResult::Suspended(_) => {
                     std::thread::sleep(Duration::from_secs(2));
                 }

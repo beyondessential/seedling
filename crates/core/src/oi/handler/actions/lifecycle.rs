@@ -10,7 +10,7 @@ use crate::{
     runtime::{
         AppPhase, InstanceRegistry,
         barrier::{
-            OperationId,
+            CancelToken, OperationId,
             oracle::DbWorldOracle,
             replay::{DbActionLog, OperationContext, OperationResult, run_operation},
         },
@@ -49,6 +49,7 @@ fn run_operation_loop(
     cipher: Arc<crate::runtime::secrets::Cipher>,
     operation_volume_bindings: HashMap<String, OperationVolumeBinding>,
     persist_for_replay: bool,
+    cancel_token: Arc<CancelToken>,
 ) -> bool {
     let app_name = op_ctx.app.as_str();
     let action_name = op_ctx.action_name.as_str();
@@ -128,6 +129,7 @@ fn run_operation_loop(
                 script_limits: Some(script_limits.clone()),
                 cipher: Some(Arc::clone(&cipher)),
                 operation_volume_bindings: operation_volume_bindings.clone(),
+                cancel_token: Arc::clone(&cancel_token),
             },
             &mut scope,
         );
@@ -160,12 +162,97 @@ fn run_operation_loop(
                 op_ctx.failed(&e.to_string());
                 return false;
             }
+            // r[impl operation.cancel]
+            OperationResult::Cancelled => {
+                tracing::warn!(app = %app_name, action = %action_name, "operation cancelled");
+                let app_name_owned = app_name.to_owned();
+                let desc = format!("{action_name} cancelled by operator");
+                let desc_for_fault = desc.clone();
+                db.call(move |db| {
+                    let _ = faults::file_fault(
+                        db,
+                        &app_name_owned,
+                        None,
+                        None,
+                        None,
+                        "operation_cancelled",
+                        &desc_for_fault,
+                    );
+                    let _ = clear_current_operation(db);
+                });
+                op_ctx.failed(&desc);
+                return false;
+            }
             OperationResult::Suspended(_) => {
                 tick_notify.notify_one();
-                std::thread::sleep(Duration::from_secs(2));
+                let waited = earliest_unsatisfied_barrier_wait_secs(&log);
+                wait_next_tick(&cancel_token, waited);
             }
         }
     }
+}
+
+/// Sleep between replay cycles. Returns early if the operation was cancelled.
+///
+/// Cadence is dynamic: short while freshly suspended (so short barriers feel
+/// responsive) and long for protracted waits (so an hours-long backup doesn't
+/// replay tens of thousands of times).
+// r[impl barrier.suspension.poll-backoff]
+fn wait_next_tick(cancel_token: &CancelToken, waited_on_barrier_secs: u64) {
+    let interval = dynamic_poll_interval(waited_on_barrier_secs);
+    // The cancel token's condvar wakes the sleep so an operator-initiated
+    // cancel takes effect within one observation, not up to `interval` later.
+    cancel_token.wait_for(interval);
+}
+
+/// How long has the operation been blocked on its earliest unsatisfied
+/// barrier? Returns 0 if none.
+fn earliest_unsatisfied_barrier_wait_secs(log: &DbActionLog) -> u64 {
+    use crate::runtime::barrier::replay::ActionLog;
+    let Ok(entries) = log.load() else { return 0 };
+    let now = now_secs();
+    entries
+        .iter()
+        .filter_map(|e| e.barrier.as_ref())
+        .filter(|b| !b.satisfied)
+        .filter_map(|b| b.started_at_secs)
+        .map(|started| now.saturating_sub(started))
+        .max()
+        .unwrap_or(0)
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// Piecewise backoff: 2s while waited < 2 min, then ramp to 30s at 1 hour,
+/// then ramp to 300s at 6 hours, then cap at 300s.
+// r[impl barrier.suspension.poll-backoff]
+pub(crate) fn dynamic_poll_interval(waited_secs: u64) -> Duration {
+    const LOW: u64 = 2;
+    const MID: u64 = 30;
+    const HIGH: u64 = 300;
+    const T_LOW_END: u64 = 120; // 2 min
+    const T_MID_END: u64 = 3600; // 1 hour
+    const T_HIGH_END: u64 = 21600; // 6 hours
+
+    let poll = if waited_secs <= T_LOW_END {
+        LOW
+    } else if waited_secs <= T_MID_END {
+        let ratio = (waited_secs - T_LOW_END) as f64
+            / (T_MID_END - T_LOW_END) as f64;
+        LOW + ((MID - LOW) as f64 * ratio) as u64
+    } else if waited_secs <= T_HIGH_END {
+        let ratio = (waited_secs - T_MID_END) as f64
+            / (T_HIGH_END - T_MID_END) as f64;
+        MID + ((HIGH - MID) as f64 * ratio) as u64
+    } else {
+        HIGH
+    };
+    Duration::from_secs(poll)
 }
 
 async fn cleanup_dynamic_resources(
@@ -459,6 +546,17 @@ pub fn spawn_accepted_operation(
 
         let operation_id_str = operation_id.0.clone();
 
+        // r[impl operation.cancel]
+        // Take the cancel token from the active scheduler record so a
+        // subsequent cancel endpoint call wakes this operation.
+        let cancel_token = state
+            .scheduler
+            .lock()
+            .active()
+            .filter(|a| a.operation_id == operation_id)
+            .map(|a| Arc::clone(&a.cancel_token))
+            .unwrap_or_else(|| Arc::new(CancelToken::new()));
+
         let success = {
             let app_name = app_name.clone();
             let active_progress = Arc::clone(&active_progress);
@@ -466,6 +564,7 @@ pub fn spawn_accepted_operation(
             let params = params.clone();
             let op_ctx = op_ctx.clone();
             let cipher = Arc::clone(&cipher);
+            let cancel_token = Arc::clone(&cancel_token);
 
             tokio::task::spawn_blocking(move || {
                 let db = match open_operation_dbs(&db_path, &app_name) {
@@ -484,6 +583,7 @@ pub fn spawn_accepted_operation(
                     cipher,
                     HashMap::new(),
                     true,
+                    cancel_token,
                 )
             })
             .await
@@ -573,10 +673,20 @@ pub(crate) async fn run_operation_for_backup(
     );
     op_ctx.started("backup");
 
+    // r[impl operation.cancel]
+    let cancel_token = state
+        .scheduler
+        .lock()
+        .active()
+        .filter(|a| a.operation_id == operation_id)
+        .map(|a| Arc::clone(&a.cancel_token))
+        .unwrap_or_else(|| Arc::new(CancelToken::new()));
+
     let success = {
         let active_progress_clone = Arc::clone(&active_progress);
         let tick_notify_clone = Arc::clone(&tick_notify);
         let op_ctx = op_ctx.clone();
+        let cancel_token = Arc::clone(&cancel_token);
         tokio::task::spawn_blocking(move || {
             let db = match open_operation_dbs(&db_path, &op_ctx.app) {
                 Some(d) => d,
@@ -597,6 +707,7 @@ pub(crate) async fn run_operation_for_backup(
                 // operation_volume_bindings that cannot survive a restart;
                 // the spec exempts them from replay.
                 false,
+                cancel_token,
             )
         })
         .await
