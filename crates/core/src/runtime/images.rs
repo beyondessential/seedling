@@ -82,9 +82,7 @@ pub fn list_pinned_apps_for_references(
         return Ok(out);
     }
     let placeholders = references.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let sql = format!(
-        "SELECT app, reference FROM image_pins WHERE reference IN ({placeholders})"
-    );
+    let sql = format!("SELECT app, reference FROM image_pins WHERE reference IN ({placeholders})");
     let mut stmt = db.conn.prepare(&sql)?;
     let params: Vec<&dyn rusqlite::ToSql> = references
         .iter()
@@ -181,9 +179,7 @@ pub fn prune_tracking_except(db: &Db, live: &[String]) -> rusqlite::Result<usize
         return db.conn.execute("DELETE FROM image_tracking", []);
     }
     let placeholders = live.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let sql = format!(
-        "DELETE FROM image_tracking WHERE image_id NOT IN ({placeholders})"
-    );
+    let sql = format!("DELETE FROM image_tracking WHERE image_id NOT IN ({placeholders})");
     let mut stmt = db.conn.prepare(&sql)?;
     let params: Vec<&dyn rusqlite::ToSql> =
         live.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
@@ -193,10 +189,7 @@ pub fn prune_tracking_except(db: &Db, live: &[String]) -> rusqlite::Result<usize
 /// Return image IDs whose `last_used_at` is older than `older_than_ms` and
 /// have no pin resolving through `resolve_id` in the given live reference
 /// map, caller filters further by active-use.
-pub fn gc_candidates(
-    db: &Db,
-    older_than_ms: i64,
-) -> rusqlite::Result<Vec<ImageTrackingRow>> {
+pub fn gc_candidates(db: &Db, older_than_ms: i64) -> rusqlite::Result<Vec<ImageTrackingRow>> {
     let cutoff = now_ms() - older_than_ms;
     let mut stmt = db.conn.prepare(
         "SELECT image_id, first_seen_at, last_used_at
@@ -218,8 +211,10 @@ pub fn gc_candidates(
 
 /// Remove tracking row for an image that no longer exists locally.
 pub fn drop_tracking(db: &Db, image_id: &str) -> rusqlite::Result<()> {
-    db.conn
-        .execute("DELETE FROM image_tracking WHERE image_id = ?1", params![image_id])?;
+    db.conn.execute(
+        "DELETE FROM image_tracking WHERE image_id = ?1",
+        params![image_id],
+    )?;
     Ok(())
 }
 

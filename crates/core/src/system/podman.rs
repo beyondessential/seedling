@@ -520,11 +520,7 @@ impl PodmanRuntime {
         Ok(out)
     }
 
-    async fn remove_image_impl(
-        &self,
-        reference: &str,
-        force: bool,
-    ) -> Result<bool, PodmanError> {
+    async fn remove_image_impl(&self, reference: &str, force: bool) -> Result<bool, PodmanError> {
         let params = ImageDeleteLibpod { force: Some(force) };
         let report = match self
             .client
@@ -547,9 +543,8 @@ impl PodmanRuntime {
             .fail();
         }
 
-        let deleted_any =
-            report.deleted.as_ref().is_some_and(|v| !v.is_empty())
-                || report.untagged.as_ref().is_some_and(|v| !v.is_empty());
+        let deleted_any = report.deleted.as_ref().is_some_and(|v| !v.is_empty())
+            || report.untagged.as_ref().is_some_and(|v| !v.is_empty());
         Ok(deleted_any)
     }
 

@@ -40,10 +40,7 @@ impl Reconciler {
     // r[impl actuate.image.warm]
     // r[impl image.pin]
     // r[impl image.track]
-    pub(super) async fn reconcile_images(
-        &self,
-        running_pods: impl Iterator<Item = &RunningPod>,
-    ) {
+    pub(super) async fn reconcile_images(&self, running_pods: impl Iterator<Item = &RunningPod>) {
         let driver = Arc::clone(&self.driver);
         let db = self.db.clone();
 
@@ -159,15 +156,14 @@ impl Reconciler {
     }
 
     async fn drive_warm_pulls(&self) {
-        let pins = self.db.call(|db| images::list_pins(db, None).unwrap_or_default());
+        let pins = self
+            .db
+            .call(|db| images::list_pins(db, None).unwrap_or_default());
         for pin in pins {
-            if self
-                .db
-                .call({
-                    let reference = pin.reference.clone();
-                    move |db| images::reference_present(db, &reference).unwrap_or(false)
-                })
-            {
+            if self.db.call({
+                let reference = pin.reference.clone();
+                move |db| images::reference_present(db, &reference).unwrap_or(false)
+            }) {
                 // Already present: nothing to pull. The eviction logic above
                 // will retire the pin once a running container is observed.
                 continue;
@@ -229,9 +225,8 @@ impl Reconciler {
                 continue;
             }
             let image_id = row.image_id.clone();
-            let refs = db.call(move |db| {
-                images::references_for_image(db, &image_id).unwrap_or_default()
-            });
+            let refs =
+                db.call(move |db| images::references_for_image(db, &image_id).unwrap_or_default());
             let pinned = db.call(move |db| {
                 images::list_pinned_apps_for_references(
                     db,

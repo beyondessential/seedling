@@ -175,8 +175,9 @@ impl WorldStateOracle for DbWorldOracle {
     // r[impl actuate.image.warm]
     fn image_present(&self, reference: &str) -> bool {
         let reference = reference.to_owned();
-        self.db
-            .call(move |db| crate::runtime::images::reference_present(db, &reference).unwrap_or(false))
+        self.db.call(move |db| {
+            crate::runtime::images::reference_present(db, &reference).unwrap_or(false)
+        })
     }
 
     fn cert_valid_for(&self, resource: &ResourceInstance) -> bool {

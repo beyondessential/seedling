@@ -81,6 +81,11 @@ enum Command {
         #[command(subcommand)]
         command: op::RegistriesCommand,
     },
+    /// Container image management
+    Images {
+        #[command(subcommand)]
+        command: op::ImagesCommand,
+    },
     /// Backup app management
     Backups {
         #[command(subcommand)]
@@ -307,6 +312,7 @@ async fn main() {
         Command::Shells { command } => op::dispatch_shells(&client, command).await,
         Command::Forwards { command } => op::dispatch_forwards(&client, command).await,
         Command::Registries { command } => op::dispatch_registries(&client, command).await,
+        Command::Images { command } => op::dispatch_images(&client, command).await,
         Command::Backups { command } => backups::dispatch(&client, command).await,
         Command::Templates { command } => templates::dispatch(&client, command).await,
         Command::User { command } => op::dispatch_user(&client, command).await,

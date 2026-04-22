@@ -38,6 +38,48 @@ pub(super) enum RegistriesCommand {
 }
 
 #[derive(Subcommand)]
+pub(super) enum ImagesCommand {
+    /// List container images in local storage with size and pin/in-use state
+    List,
+    /// Pull a container image now (optionally pinning it for an app)
+    Pull {
+        /// Image reference (e.g. ghcr.io/example/foo:1.2.3)
+        reference: String,
+        /// App to pin the pulled image to
+        #[arg(long)]
+        app: Option<String>,
+    },
+    /// Remove a container image from local storage
+    Remove {
+        /// Image reference or digest (e.g. ghcr.io/example/foo:1.2.3)
+        reference: String,
+        /// Remove even if a running container uses the image
+        #[arg(long)]
+        force: bool,
+    },
+    /// Pin management
+    Pins {
+        #[command(subcommand)]
+        command: PinsCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub(super) enum PinsCommand {
+    /// List image pins
+    List {
+        #[arg(long)]
+        app: Option<String>,
+    },
+    /// Clear pins for an app (optionally a specific reference)
+    Clear {
+        app: String,
+        #[arg(long)]
+        reference: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 pub(super) enum UserCommand {
     /// List authorized client keys
     List,
@@ -146,6 +188,47 @@ pub(super) async fn dispatch_registries(client: &OiClient, cmd: RegistriesComman
                     .await,
             );
         }
+    }
+}
+
+pub(super) async fn dispatch_images(client: &OiClient, cmd: ImagesCommand) {
+    match cmd {
+        ImagesCommand::List => {
+            print_result(client.request("/images/list", serde_json::json!({})).await);
+        }
+        ImagesCommand::Pull { reference, app } => {
+            let mut body = serde_json::json!({ "reference": reference });
+            if let Some(app) = app {
+                body["app"] = serde_json::Value::String(app);
+            }
+            print_result(client.request("/images/pull", body).await);
+        }
+        ImagesCommand::Remove { reference, force } => {
+            print_result(
+                client
+                    .request(
+                        "/images/remove",
+                        serde_json::json!({ "reference": reference, "force": force }),
+                    )
+                    .await,
+            );
+        }
+        ImagesCommand::Pins { command } => match command {
+            PinsCommand::List { app } => {
+                print_result(
+                    client
+                        .request("/images/pins/list", serde_json::json!({ "app": app }))
+                        .await,
+                );
+            }
+            PinsCommand::Clear { app, reference } => {
+                let mut body = serde_json::json!({ "app": app });
+                if let Some(r) = reference {
+                    body["reference"] = serde_json::Value::String(r);
+                }
+                print_result(client.request("/images/pins/clear", body).await);
+            }
+        },
     }
 }
 

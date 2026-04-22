@@ -622,30 +622,28 @@ impl RuntimeInstance {
                 }
                 _ => {
                     // Fall back to the action-context AppDef for named resources.
-                    action_def
-                        .as_ref()
-                        .and_then(|arc| {
-                            let def = arc.load_full();
-                            let name = inst.name.as_deref()?;
-                            let id = crate::defs::resource::ResourceId {
-                                kind: inst.kind,
-                                name: std::sync::Arc::new(name.to_owned()),
-                            };
-                            let resource = def.resources.get(&id)?.clone();
-                            match resource {
-                                Resource::Deployment(dep) => {
-                                    let dd = dep.def.lock();
-                                    let pod = dd.pod.lock();
-                                    pod.container.lock().image.clone()
-                                }
-                                Resource::Job(job) => {
-                                    let jd = job.def.lock();
-                                    let pod = jd.pod.lock();
-                                    pod.container.lock().image.clone()
-                                }
-                                _ => None,
+                    action_def.as_ref().and_then(|arc| {
+                        let def = arc.load_full();
+                        let name = inst.name.as_deref()?;
+                        let id = crate::defs::resource::ResourceId {
+                            kind: inst.kind,
+                            name: std::sync::Arc::new(name.to_owned()),
+                        };
+                        let resource = def.resources.get(&id)?.clone();
+                        match resource {
+                            Resource::Deployment(dep) => {
+                                let dd = dep.def.lock();
+                                let pod = dd.pod.lock();
+                                pod.container.lock().image.clone()
                             }
-                        })
+                            Resource::Job(job) => {
+                                let jd = job.def.lock();
+                                let pod = jd.pod.lock();
+                                pod.container.lock().image.clone()
+                            }
+                            _ => None,
+                        }
+                    })
                 }
             };
 
@@ -669,9 +667,9 @@ impl RuntimeInstance {
             for reference in &refs {
                 let app = self.app_name.clone();
                 let reference = reference.clone();
-                if let Err(e) = db.call(move |db| {
-                    crate::runtime::images::upsert_pin(db, &app, &reference)
-                }) {
+                if let Err(e) =
+                    db.call(move |db| crate::runtime::images::upsert_pin(db, &app, &reference))
+                {
                     tracing::warn!(error = %e, "rt.warm_images: failed to persist image pin");
                 }
             }

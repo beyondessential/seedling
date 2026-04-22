@@ -15,6 +15,7 @@ mod appdef_json;
 mod apps;
 pub mod backups;
 mod faults;
+mod images;
 mod key_mgmt;
 mod params;
 mod registries;
@@ -135,6 +136,16 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/registries/add" => registries::add_registry(state, parse_params(req.params)?),
         // i[registry.remove]
         "/registries/remove" => registries::remove_registry(state, parse_params(req.params)?),
+        // i[image.list]
+        "/images/list" => images::list_images(state),
+        // i[image.pull]
+        "/images/pull" => images::pull_image(state, parse_params(req.params)?),
+        // i[image.remove]
+        "/images/remove" => images::remove_image(state, parse_params(req.params)?),
+        // i[image.pin.list]
+        "/images/pins/list" => images::list_pins(state, parse_params(req.params)?),
+        // i[image.pin.clear]
+        "/images/pins/clear" => images::clear_pins(state, parse_params(req.params)?),
         "/volumes/held/list" => volumes::list_held(state),
         "/volumes/held/delete" => volumes::delete_held(state, parse_params(req.params)?, ctx),
         "/volumes/exported/list" => volumes::list_exported(state),
