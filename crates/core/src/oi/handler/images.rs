@@ -26,10 +26,9 @@ pub(crate) fn list_images(state: &OiState) -> HandlerResult {
                 std::collections::HashSet::new();
             let running = state
                 .container_runtime
-                .list(crate::system::types::ContainerFilter {
-                    label_key: Some("seedling.spec-hash"),
-                    ..Default::default()
-                })
+                // Unfiltered: every running container (workload, shell, Caddy,
+                // resolver, or operator-started) keeps its image in use.
+                .list(crate::system::types::ContainerFilter::default())
                 .await
                 .unwrap_or_default();
             for c in running {
@@ -196,10 +195,7 @@ pub(crate) fn remove_image(state: &OiState, params: RemoveParams) -> HandlerResu
                 if let Some(target_id) = target_id.as_deref() {
                     let running = state
                         .container_runtime
-                        .list(crate::system::types::ContainerFilter {
-                            label_key: Some("seedling.spec-hash"),
-                            ..Default::default()
-                        })
+                        .list(crate::system::types::ContainerFilter::default())
                         .await
                         .unwrap_or_default();
                     for c in running {

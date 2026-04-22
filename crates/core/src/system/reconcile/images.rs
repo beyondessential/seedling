@@ -141,10 +141,10 @@ impl Reconciler {
         match self
             .driver
             .container
-            .list(ContainerFilter {
-                label_key: Some("seedling.spec-hash"),
-                ..Default::default()
-            })
+            // Unfiltered: every running container (workload, shell, Caddy,
+            // resolver, or operator-started) keeps its image in use and
+            // blocks autonomous GC of that image.
+            .list(ContainerFilter::default())
             .await
         {
             Ok(list) => list.into_iter().map(|c| c.name).collect(),
@@ -194,13 +194,11 @@ impl Reconciler {
         }
 
         // Re-check the ground truth before removing each candidate: it must
-        // not be pinned and must not be in use by any running container.
+        // not be pinned and must not be in use by any running container
+        // (workload, shell, infra, or anything else podman is tracking).
         let observed_ids: HashSet<String> = match driver
             .container
-            .list(crate::system::types::ContainerFilter {
-                label_key: Some("seedling.spec-hash"),
-                ..Default::default()
-            })
+            .list(crate::system::types::ContainerFilter::default())
             .await
         {
             Ok(list) => {
