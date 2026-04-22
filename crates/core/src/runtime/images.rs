@@ -283,6 +283,7 @@ mod tests {
         AppName::new(s).unwrap()
     }
 
+    // r[verify image.pin]
     #[test]
     fn pin_upsert_and_clear() {
         let db = Db::open_in_memory().unwrap();
@@ -298,6 +299,7 @@ mod tests {
         assert!(!cleared_again);
     }
 
+    // r[verify image.pin]
     #[test]
     fn pin_clear_by_reference() {
         let db = Db::open_in_memory().unwrap();
@@ -309,6 +311,7 @@ mod tests {
         assert_eq!(list_pins(&db, None).unwrap().len(), 1);
     }
 
+    // r[verify image.track]
     #[test]
     fn track_note_then_mark_used() {
         let db = Db::open_in_memory().unwrap();
@@ -327,6 +330,7 @@ mod tests {
         assert!(r2.last_used_at > r1.last_used_at - 1000);
     }
 
+    // r[verify image.gc]
     #[test]
     fn gc_candidates_respects_cutoff() {
         let db = Db::open_in_memory().unwrap();
