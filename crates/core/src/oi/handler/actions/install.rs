@@ -39,9 +39,7 @@ fn is_valid_email(email: &str) -> bool {
 
 // i[action.invoke.install.validation]
 fn is_strong_password(password: &str) -> bool {
-    zxcvbn::zxcvbn(password, &[])
-        .map(|e| e.score() >= 3)
-        .unwrap_or(false)
+    zxcvbn::zxcvbn(password, &[]).score() >= zxcvbn::Score::Three
 }
 
 // i[action.invoke.install.validation]
