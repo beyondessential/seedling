@@ -129,9 +129,9 @@ pub fn podman_args(spec: &ContainerSpec) -> Vec<String> {
     args.push("--network".to_string());
     args.push(spec.network.clone());
 
-    for (k, v) in &spec.env {
+    for var in &spec.env {
         args.push("--env".to_string());
-        args.push(format!("{k}={v}"));
+        args.push(var.to_string());
     }
 
     for mount in &spec.mounts {

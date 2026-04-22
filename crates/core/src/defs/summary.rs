@@ -300,7 +300,7 @@ impl ContainerDef {
         let env: BTreeMap<String, String> = self
             .env
             .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
+            .map(|ev| (ev.name.as_str().to_owned(), ev.value.clone()))
             .collect();
         let volume_mounts: BTreeMap<String, VolumeMountSummary> = self
             .volume_mounts

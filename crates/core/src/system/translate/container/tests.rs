@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use seedling_protocol::env::EnvVar;
+
 use super::*;
 
 #[test]
@@ -13,7 +15,7 @@ fn podman_args_basic_shape() {
             "daemon off;".to_string(),
         ],
         entrypoint: vec![],
-        env: vec![("PORT".to_string(), "8080".to_string())],
+        env: vec![EnvVar::new("PORT", "8080").unwrap()],
         mounts: vec![],
         network: "seedling-abc123".to_string(),
         labels: BTreeMap::new(),

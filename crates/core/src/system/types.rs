@@ -6,6 +6,7 @@ use std::{
 };
 
 use ipnet::Ipv6Net;
+use seedling_protocol::env::EnvVar;
 
 // ---------------------------------------------------------------------------
 // Container observation
@@ -82,7 +83,7 @@ pub struct ContainerSpec {
     pub image: String,
     pub command: Vec<String>,
     pub entrypoint: Vec<String>,
-    pub env: Vec<(String, String)>,
+    pub env: Vec<EnvVar>,
     pub mounts: Vec<Mount>,
     /// Pod network name.
     pub network: String,

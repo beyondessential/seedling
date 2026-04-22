@@ -254,7 +254,8 @@ fn container_env_override() {
         let pod = dep_def.pod.lock();
         let container = pod.container.lock();
         assert_eq!(container.env.len(), 1);
-        assert_eq!(container.env[0], ("KEY".into(), "new".into()));
+        assert_eq!(container.env[0].name.as_str(), "KEY");
+        assert_eq!(container.env[0].value, "new");
     } else {
         panic!("expected Deployment");
     }
