@@ -395,6 +395,26 @@ export interface ImagePin {
   pinned_at: string;
 }
 
+export type HandlerKind =
+  | "install"
+  | "start"
+  | "action"
+  | "shell"
+  | "param_change";
+
+export interface HandlerProbe {
+  name: string;
+  kind: HandlerKind;
+  images: string[];
+  error: string | null;
+  skipped_reason: string | null;
+}
+
+export interface DiscoverResponse {
+  per_handler: HandlerProbe[];
+  all_images: string[];
+}
+
 export interface ConnectRequest {
   token?: string;
   password?: string;

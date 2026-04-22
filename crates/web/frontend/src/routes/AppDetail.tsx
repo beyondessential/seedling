@@ -60,8 +60,10 @@ import type {
   AppParam,
   AppResource,
   AppStatus,
+  DiscoverResponse,
   ExternalMapping,
   FaultRecord,
+  HandlerProbe,
   ImagePin,
   ImageSummary,
   InstallRequirement,
@@ -1407,6 +1409,33 @@ function humanBytes(n: number): string {
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
 }
 
+// w[impl routes.images.discover]
+function DiscoverSummary({ result }: { result: DiscoverResponse }) {
+  const problems = result.per_handler.filter(
+    (h) => h.error !== null || h.skipped_reason !== null,
+  );
+  if (problems.length === 0) return null;
+  return (
+    <Alert severity="info" sx={{ mb: 1 }}>
+      <Stack spacing={0.5}>
+        <Typography variant="body2">
+          Some handlers couldn't be probed cleanly; their images (if any)
+          aren't included in the results.
+        </Typography>
+        {problems.map((h: HandlerProbe) => (
+          <Typography
+            key={`${h.kind}:${h.name}`}
+            variant="caption"
+            sx={{ fontFamily: "monospace" }}
+          >
+            {h.kind}/{h.name}: {h.error ?? h.skipped_reason}
+          </Typography>
+        ))}
+      </Stack>
+    </Alert>
+  );
+}
+
 function AppImagesSection({
   appName,
   resources,
@@ -1431,6 +1460,10 @@ function AppImagesSection({
 
   const [removing, setRemoving] = useState<ImageSummary | null>(null);
   const [clearAllOpen, setClearAllOpen] = useState(false);
+  const [discoverResult, setDiscoverResult] =
+    useState<DiscoverResponse | null>(null);
+  const [discovering, setDiscovering] = useState(false);
+  const [warmingAll, setWarmingAll] = useState(false);
 
   // Image refs declared by this app's container resources.
   const declaredImages = useMemo(() => {
@@ -1495,16 +1528,147 @@ function AppImagesSection({
     }
   };
 
-  if (rows.length === 0 && pins.length === 0) {
-    return null;
+  // w[impl routes.images.discover]
+  const runDiscover = async () => {
+    clearError();
+    setDiscovering(true);
+    try {
+      const result = (await execute("/apps/images/discover", {
+        app: appName,
+        lenient: true,
+      })) as DiscoverResponse;
+      setDiscoverResult(result);
+    } catch {
+      /* surfaced via mutateError */
+    } finally {
+      setDiscovering(false);
+    }
+  };
+
+  // Discovered references not already in-use (any reference) and not pinned.
+  const discoveredExtras = useMemo<string[]>(() => {
+    if (!discoverResult) return [];
+    const present = new Set<string>();
+    for (const img of imagesData?.images ?? []) {
+      if (img.in_use) {
+        for (const t of img.tags) present.add(t);
+        for (const d of img.digests) present.add(d.reference);
+      }
+    }
+    for (const p of pins) present.add(p.reference);
+    return discoverResult.all_images.filter((r) => !present.has(r));
+  }, [discoverResult, imagesData, pins]);
+
+  const warmReference = async (reference: string) => {
+    try {
+      await execute("/images/pull", { reference, app: appName });
+      refreshAll();
+    } catch {
+      /* surfaced via mutateError */
+    }
+  };
+
+  // w[impl routes.images.discover]
+  const warmAllDiscovered = async () => {
+    if (discoveredExtras.length === 0) return;
+    setWarmingAll(true);
+    for (const ref of discoveredExtras) {
+      try {
+        await execute("/images/pull", { reference: ref, app: appName });
+      } catch {
+        break;
+      }
+    }
+    setWarmingAll(false);
+    refreshAll();
+  };
+
+  const hasAnything =
+    rows.length > 0 || pins.length > 0 || discoverResult !== null;
+
+  if (!hasAnything && !discovering) {
+    // Show just the discover button so operators have a way to find
+    // handler-only images even when no static/pinned images are present.
+    return (
+      <>
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            mb: 1,
+            gap: 1,
+          }}
+        >
+          <Typography variant="h6" sx={{ flexGrow: 1 }}>
+            Images
+          </Typography>
+          <Tooltip title="Run handler probe to discover images that actions might pull">
+            <span>
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={runDiscover}
+                disabled={mutating || discovering}
+              >
+                Discover from handlers
+              </Button>
+            </span>
+          </Tooltip>
+        </Box>
+        {mutateError && <OiErrorAlert error={mutateError} />}
+      </>
+    );
   }
 
   return (
     <>
-      <Box sx={{ display: "flex", alignItems: "center", mb: 1, gap: 1 }}>
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          mb: 1,
+          gap: 1,
+          flexWrap: "wrap",
+        }}
+      >
         <Typography variant="h6" sx={{ flexGrow: 1 }}>
           Images
         </Typography>
+        {/* w[impl routes.images.discover] */}
+        {discoveredExtras.length > 0 && (
+          <Tooltip
+            title={
+              !writeGuard.allowed
+                ? writeGuard.reason ?? ""
+                : `Warm ${discoveredExtras.length} discovered image${discoveredExtras.length === 1 ? "" : "s"}`
+            }
+          >
+            <span>
+              <Button
+                size="small"
+                variant="contained"
+                onClick={warmAllDiscovered}
+                disabled={
+                  !writeGuard.allowed || mutating || warmingAll
+                }
+              >
+                {warmingAll ? "Warming…" : "Warm all discovered"}
+              </Button>
+            </span>
+          </Tooltip>
+        )}
+        <Tooltip title="Run handler probe to discover images that actions might pull">
+          <span>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={runDiscover}
+              disabled={mutating || discovering}
+            >
+              {discovering ? "Discovering…" : "Discover from handlers"}
+            </Button>
+          </span>
+        </Tooltip>
         {pins.length > 0 && (
           <Tooltip
             title={
@@ -1529,6 +1693,10 @@ function AppImagesSection({
           </Tooltip>
         )}
       </Box>
+      {mutateError && <OiErrorAlert error={mutateError} />}
+      {discoverResult && (
+        <DiscoverSummary result={discoverResult} />
+      )}
       <TableContainer component={Paper} variant="outlined">
         <Table size="small">
           <TableHead>
@@ -1582,6 +1750,54 @@ function AppImagesSection({
                       >
                         <DeleteOutlineIcon fontSize="small" />
                       </IconButton>
+                    </span>
+                  </Tooltip>
+                </TableCell>
+              </TableRow>
+            ))}
+            {/* w[impl routes.images.discover] */}
+            {discoveredExtras.map((ref) => (
+              <TableRow key={`discovered::${ref}`} hover>
+                <TableCell>
+                  <Typography
+                    variant="body2"
+                    sx={{ fontFamily: "monospace" }}
+                  >
+                    {ref}
+                  </Typography>
+                </TableCell>
+                <TableCell>
+                  <Typography
+                    variant="caption"
+                    sx={{ color: "text.disabled" }}
+                  >
+                    not present
+                  </Typography>
+                </TableCell>
+                <TableCell>
+                  <Chip
+                    label="potentially used"
+                    size="small"
+                    color="warning"
+                    variant="outlined"
+                  />
+                </TableCell>
+                <TableCell align="right">
+                  <Tooltip
+                    title={
+                      !writeGuard.allowed
+                        ? writeGuard.reason ?? ""
+                        : "Pull and pin to this app"
+                    }
+                  >
+                    <span>
+                      <Button
+                        size="small"
+                        onClick={() => warmReference(ref)}
+                        disabled={!writeGuard.allowed || mutating}
+                      >
+                        Warm
+                      </Button>
                     </span>
                   </Tooltip>
                 </TableCell>
