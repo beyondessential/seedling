@@ -113,6 +113,11 @@ export function SafetyModeSwitcher() {
             mr: 1,
             pl: "0.5em",
             fontFamily: "monospace",
+            ...(mode === "read" && {
+              color: "common.white",
+              borderColor: "rgba(255,255,255,0.5)",
+              "& .MuiChip-icon": { color: "common.white" },
+            }),
           }}
         />
       </Tooltip>
