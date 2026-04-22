@@ -1,6 +1,6 @@
 use clap::Subcommand;
 use seedling_protocol::client::OiClient;
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{AppName, BackupStrategyName};
 
 use super::print_result;
 
@@ -20,7 +20,7 @@ pub(super) enum BackupsCommand {
     Run {
         /// Strategy name
         #[arg(long)]
-        strategy: String,
+        strategy: BackupStrategyName,
     },
     /// Snapshot management
     Snapshots {
@@ -31,7 +31,7 @@ pub(super) enum BackupsCommand {
     Restore {
         /// Strategy name
         #[arg(long)]
-        strategy: String,
+        strategy: BackupStrategyName,
         /// Volume identifier (e.g. myapp/data or _site/vol)
         #[arg(long)]
         volume: String,
@@ -66,10 +66,10 @@ pub(super) enum BackupStrategiesCommand {
     Create {
         /// Strategy name
         #[arg(long)]
-        name: String,
+        name: BackupStrategyName,
         /// Registered backup app name
         #[arg(long)]
-        via: String,
+        via: AppName,
         /// Schedule: "every hour", "twice a day", or "every day"
         #[arg(long)]
         schedule: String,
@@ -86,16 +86,16 @@ pub(super) enum BackupStrategiesCommand {
     Show {
         /// Strategy name
         #[arg(long)]
-        name: String,
+        name: BackupStrategyName,
     },
     /// Update a backup strategy
     Update {
         /// Strategy name
         #[arg(long)]
-        name: String,
+        name: BackupStrategyName,
         /// Change the backup app
         #[arg(long)]
-        via: Option<String>,
+        via: Option<AppName>,
         /// Change the schedule
         #[arg(long)]
         schedule: Option<String>,
@@ -110,7 +110,7 @@ pub(super) enum BackupStrategiesCommand {
     Delete {
         /// Strategy name
         #[arg(long)]
-        name: String,
+        name: BackupStrategyName,
     },
 }
 
@@ -120,7 +120,7 @@ pub(super) enum BackupSnapshotsCommand {
     List {
         /// Strategy name
         #[arg(long)]
-        strategy: String,
+        strategy: BackupStrategyName,
         /// Volume identifier (e.g. myapp/data or _site/vol)
         #[arg(long)]
         volume: String,

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::Subcommand;
 use seedling_protocol::client::OiClient;
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{AppName, TemplateName};
 
 use super::print_result;
 
@@ -13,12 +13,12 @@ pub(super) enum TemplatesCommand {
     /// Show a template's body and metadata
     Show {
         /// Template name
-        name: String,
+        name: TemplateName,
     },
     /// Upload a new template from a script file
     Create {
         /// Template name
-        name: String,
+        name: TemplateName,
         /// Path to the BSL script file to upload
         script_file: PathBuf,
         /// Optional human-readable description
@@ -28,7 +28,7 @@ pub(super) enum TemplatesCommand {
     /// Remove an uploaded template
     Remove {
         /// Template name
-        name: String,
+        name: TemplateName,
         /// Confirm removal without prompting
         #[arg(long)]
         confirm: bool,
@@ -36,7 +36,7 @@ pub(super) enum TemplatesCommand {
     /// Preview a template's declared resources, params, and actions
     Preview {
         /// Stored template name (omit when using --file)
-        name: Option<String>,
+        name: Option<TemplateName>,
         /// Preview a local script file instead of a stored template
         #[arg(long, conflicts_with = "name")]
         file: Option<PathBuf>,
@@ -44,7 +44,7 @@ pub(super) enum TemplatesCommand {
     /// Create a new app from a template (copies the script wholesale)
     Instantiate {
         /// Template name
-        template: String,
+        template: TemplateName,
         /// Name for the new app
         app: AppName,
     },

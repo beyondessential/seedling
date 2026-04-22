@@ -1,12 +1,12 @@
 use jiff::{SignedDuration, Timestamp};
-use seedling_protocol::names::{ActionName, AppName};
+use seedling_protocol::names::{ActionName, AppName, BackupStrategyName};
 
 use crate::defs::action::parse_cron_expr;
 use crate::runtime::backup_strategies;
 use crate::runtime::db::Db;
 
 pub struct DueStrategy {
-    pub name: String,
+    pub name: BackupStrategyName,
     pub via: AppName,
     pub schedule: String,
     pub volumes: Vec<String>,
@@ -57,7 +57,7 @@ pub fn check_due_strategies(db: &Db, now: Timestamp) -> Vec<DueStrategy> {
         };
 
         let backup_app = AppName::new_unchecked("backup");
-        let strategy_action = ActionName::new_unchecked(&strategy.name);
+        let strategy_action = ActionName::new_unchecked(strategy.name.as_str());
         let crontab = match parse_cron_expr(cronexpr_str, &backup_app, &strategy_action) {
             Ok(c) => c,
             Err(e) => {
@@ -156,7 +156,7 @@ mod tests {
         backup_strategies::create(
             db,
             &backup_strategies::BackupStrategy {
-                name: "nightly".to_owned(),
+                name: BackupStrategyName::new("nightly").unwrap(),
                 via: AppName::new("backup-kopia-s3").unwrap(),
                 schedule: schedule.to_owned(),
                 volumes: vec!["myapp/data".to_owned()],
@@ -177,7 +177,12 @@ mod tests {
         // Simulate a strategy that last fired 25 hours ago — the daemon has
         // been down through many hourly boundaries.
         let long_ago = "2026-04-20T12:34:56Z";
-        backup_strategies::update_last_fired_at(&db, "nightly", long_ago).unwrap();
+        backup_strategies::update_last_fired_at(
+            &db,
+            &BackupStrategyName::new("nightly").unwrap(),
+            long_ago,
+        )
+        .unwrap();
 
         let now: Timestamp = "2026-04-21T13:47:22Z".parse().unwrap();
         let due = check_due_strategies(&db, now);
@@ -197,7 +202,12 @@ mod tests {
     fn fires_at_scheduled_boundary() {
         let db = Db::open_in_memory().expect("open in-memory db");
         create_strategy(&db, "every hour");
-        backup_strategies::update_last_fired_at(&db, "nightly", "2026-04-21T12:00:12Z").unwrap();
+        backup_strategies::update_last_fired_at(
+            &db,
+            &BackupStrategyName::new("nightly").unwrap(),
+            "2026-04-21T12:00:12Z",
+        )
+        .unwrap();
 
         // Just before 13:00: nothing due.
         let before: Timestamp = "2026-04-21T12:59:45Z".parse().unwrap();

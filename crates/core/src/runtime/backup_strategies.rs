@@ -1,5 +1,5 @@
 use rusqlite::params;
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{AppName, BackupStrategyName};
 
 use crate::runtime::db::Db;
 
@@ -7,7 +7,7 @@ pub const VALID_SCHEDULES: &[&str] = &["every hour", "twice a day", "every day"]
 
 #[derive(Debug, Clone)]
 pub struct BackupStrategy {
-    pub name: String,
+    pub name: BackupStrategyName,
     pub via: AppName,
     pub schedule: String,
     pub volumes: Vec<String>,
@@ -25,7 +25,7 @@ pub fn create(db: &Db, strategy: &BackupStrategy) -> rusqlite::Result<()> {
     Ok(())
 }
 
-pub fn get(db: &Db, name: &str) -> rusqlite::Result<Option<BackupStrategy>> {
+pub fn get(db: &Db, name: &BackupStrategyName) -> rusqlite::Result<Option<BackupStrategy>> {
     let mut stmt = db.conn.prepare(
         "SELECT name, via, schedule, volumes, last_fired_at FROM backup_strategies WHERE name = ?1",
     )?;
@@ -48,7 +48,7 @@ pub fn list_all(db: &Db) -> rusqlite::Result<Vec<BackupStrategy>> {
 // i[impl backup.strategy.update]
 pub fn update(
     db: &Db,
-    name: &str,
+    name: &BackupStrategyName,
     via: Option<&AppName>,
     schedule: Option<&str>,
     volumes: Option<&[String]>,
@@ -69,7 +69,7 @@ pub fn update(
 }
 
 // i[impl backup.strategy.delete]
-pub fn delete(db: &Db, name: &str) -> rusqlite::Result<bool> {
+pub fn delete(db: &Db, name: &BackupStrategyName) -> rusqlite::Result<bool> {
     let count = db.conn.execute(
         "DELETE FROM backup_strategies WHERE name = ?1",
         params![name],
@@ -87,7 +87,11 @@ pub fn references_backup_app(db: &Db, backup_app_name: &AppName) -> rusqlite::Re
 }
 
 // r[impl backup.execution]
-pub fn update_last_fired_at(db: &Db, name: &str, fired_at: &str) -> rusqlite::Result<()> {
+pub fn update_last_fired_at(
+    db: &Db,
+    name: &BackupStrategyName,
+    fired_at: &str,
+) -> rusqlite::Result<()> {
     db.conn.execute(
         "UPDATE backup_strategies SET last_fired_at = ?2 WHERE name = ?1",
         params![name, fired_at],
@@ -96,7 +100,7 @@ pub fn update_last_fired_at(db: &Db, name: &str, fired_at: &str) -> rusqlite::Re
 }
 
 fn row_to_strategy(row: &rusqlite::Row<'_>) -> rusqlite::Result<BackupStrategy> {
-    let name: String = row.get(0)?;
+    let name: BackupStrategyName = row.get(0)?;
     let via: AppName = row.get(1)?;
     let schedule: String = row.get(2)?;
     let volumes_json: String = row.get(3)?;

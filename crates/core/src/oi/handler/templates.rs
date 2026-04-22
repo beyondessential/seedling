@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use seedling_protocol::error::{ErrorCode, HandlerResult, OiError};
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{AppName, TemplateName};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -10,7 +10,7 @@ use super::{
         action_entry_json, install_entry_json, param_schema_entry_json, resource_static_json,
         shell_entry_json,
     },
-    apps::{self as apps_handler, AppScriptParams, validate_name},
+    apps::{self as apps_handler, AppScriptParams},
 };
 use crate::{
     oi::{handler::RequestCtx, state::OiState},
@@ -19,7 +19,7 @@ use crate::{
 
 #[derive(Deserialize)]
 pub(crate) struct CreateParams {
-    pub name: String,
+    pub name: TemplateName,
     pub body: String,
     #[serde(default)]
     pub description: Option<String>,
@@ -27,20 +27,20 @@ pub(crate) struct CreateParams {
 
 #[derive(Deserialize)]
 pub(crate) struct NameParams {
-    pub name: String,
+    pub name: TemplateName,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct PreviewParams {
     #[serde(default)]
-    pub name: Option<String>,
+    pub name: Option<TemplateName>,
     #[serde(default)]
     pub body: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct InstantiateParams {
-    pub template: String,
+    pub template: TemplateName,
     pub app: AppName,
 }
 
@@ -50,9 +50,7 @@ pub(crate) fn create_template(
     params: CreateParams,
     ctx: &RequestCtx,
 ) -> HandlerResult {
-    // i[impl template.name]
-    validate_name(&params.name)?;
-
+    // i[impl template.name] — validation runs inside TemplateName::deserialize.
     let t = runtime::templates::Template {
         name: params.name.clone(),
         body: params.body,
@@ -163,13 +161,15 @@ pub(crate) fn preview_template(state: &OiState, params: PreviewParams) -> Handle
             ));
         }
         (Some(name), None) => {
-            let lookup = name.clone();
             let row = state
                 .db
-                .call(move |db| runtime::templates::get(db, &lookup))
+                .call({
+                    let name = name.clone();
+                    move |db| runtime::templates::get(db, &name)
+                })
                 .map_err(|e| OiError::new(ErrorCode::Internal, format!("db error: {e}")))?
                 .ok_or_else(|| OiError::not_found(format!("template not found: {name}")))?;
-            (name, row.body)
+            (name.into_string(), row.body)
         }
         (None, Some(body)) => ("(preview)".to_owned(), body),
     };

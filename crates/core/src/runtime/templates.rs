@@ -1,11 +1,12 @@
 use rusqlite::{OptionalExtension, params};
+use seedling_protocol::names::TemplateName;
 
 use crate::runtime::db::Db;
 
 // i[impl template.definition]
 #[derive(Debug, Clone)]
 pub struct Template {
-    pub name: String,
+    pub name: TemplateName,
     pub body: String,
     pub description: Option<String>,
     pub created_at: String,
@@ -39,29 +40,29 @@ pub fn list(db: &Db) -> rusqlite::Result<Vec<Template>> {
 }
 
 // i[impl template.show]
-pub fn get(db: &Db, name: &str) -> rusqlite::Result<Option<Template>> {
+pub fn get(db: &Db, name: &TemplateName) -> rusqlite::Result<Option<Template>> {
     db.conn
         .query_row(
             "SELECT name, body, description, created_at FROM templates WHERE name = ?1",
-            [name],
+            params![name],
             row_to_template,
         )
         .optional()
 }
 
 // i[impl template.remove]
-pub fn delete(db: &Db, name: &str) -> rusqlite::Result<bool> {
+pub fn delete(db: &Db, name: &TemplateName) -> rusqlite::Result<bool> {
     let n = db
         .conn
         .execute("DELETE FROM templates WHERE name = ?1", params![name])?;
     Ok(n > 0)
 }
 
-pub fn exists(db: &Db, name: &str) -> rusqlite::Result<bool> {
+pub fn exists(db: &Db, name: &TemplateName) -> rusqlite::Result<bool> {
     db.conn
         .query_row(
             "SELECT 1 FROM templates WHERE name = ?1",
-            [name],
+            params![name],
             |_| Ok(()),
         )
         .optional()

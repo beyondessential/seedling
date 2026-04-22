@@ -3,7 +3,7 @@ use std::sync::Arc;
 use seedling_protocol::{
     backup_actions,
     error::{ErrorCode, HandlerResult, OiError},
-    names::{ActionName, AppName},
+    names::{ActionName, AppName, BackupStrategyName},
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -128,7 +128,7 @@ pub(crate) fn list_backup_apps(state: &OiState) -> HandlerResult {
 
 #[derive(Deserialize)]
 pub(crate) struct CreateStrategyParams {
-    pub name: String,
+    pub name: BackupStrategyName,
     pub via: AppName,
     pub schedule: String,
     pub volumes: Vec<String>,
@@ -168,7 +168,7 @@ pub(crate) fn create_strategy(state: &OiState, params: CreateStrategyParams) -> 
 
 #[derive(Deserialize)]
 pub(crate) struct StrategyNameParams {
-    pub name: String,
+    pub name: BackupStrategyName,
 }
 
 // i[impl backup.strategy.show]
@@ -199,7 +199,7 @@ pub(crate) fn list_strategies(state: &OiState) -> HandlerResult {
 
 #[derive(Deserialize)]
 pub(crate) struct UpdateStrategyParams {
-    pub name: String,
+    pub name: BackupStrategyName,
     pub via: Option<AppName>,
     pub schedule: Option<String>,
     pub volumes: Option<Vec<String>>,
@@ -274,7 +274,7 @@ pub(crate) fn delete_strategy(state: &OiState, params: StrategyNameParams) -> Ha
 
 #[derive(Deserialize)]
 pub(crate) struct RunBackupParams {
-    pub strategy: String,
+    pub strategy: BackupStrategyName,
 }
 
 // i[impl backup.run]
@@ -619,7 +619,7 @@ async fn acquire_scheduler_slot(
 
 #[derive(Deserialize)]
 pub(crate) struct ListSnapshotsParams {
-    pub strategy: String,
+    pub strategy: BackupStrategyName,
     pub volume: String,
 }
 
@@ -706,7 +706,7 @@ async fn list_snapshots_async(state: &Arc<OiState>, params: ListSnapshotsParams)
 
 #[derive(Deserialize)]
 pub(crate) struct RestoreBackupParams {
-    pub strategy: String,
+    pub strategy: BackupStrategyName,
     pub volume: String,
     pub snapshot: String,
 }
@@ -818,10 +818,10 @@ async fn restore_backup_async(state: &Arc<OiState>, params: RestoreBackupParams)
 /// missing or if its `via` app is no longer registered as a backup app.
 fn resolve_backup_app(
     state: &Arc<OiState>,
-    strategy_name: &str,
+    strategy_name: &BackupStrategyName,
     _volume: &str,
 ) -> Result<AppName, OiError> {
-    let strategy_name_owned = strategy_name.to_owned();
+    let strategy_name_owned = strategy_name.clone();
     state.db.call(move |db| -> Result<AppName, OiError> {
         let strategy = backup_strategies::get(db, &strategy_name_owned)
             .map_err(|e| OiError::new(ErrorCode::Internal, format!("db strategies: {e}")))?
@@ -880,7 +880,7 @@ fn validate_backup_app_actions(
 /// The volume id has the shape `"<app>/<volume>"` or `"_site/<volume>"` — we
 /// split it once on `/` to produce the structured fields.
 // i[impl backup.action.backup-param]
-fn build_backup_param(strategy_name: &str, vol_id: &str) -> serde_json::Value {
+fn build_backup_param(strategy_name: &BackupStrategyName, vol_id: &str) -> serde_json::Value {
     let (app, volume) = vol_id.split_once('/').unwrap_or((vol_id, ""));
     json!({
         "strategy": strategy_name,
@@ -942,7 +942,7 @@ fn compute_next_fire_at(s: &backup_strategies::BackupStrategy) -> Option<String>
 
     let cronexpr_str = backup_execution::schedule_to_cronexpr(&s.schedule)?;
     let backup_app = AppName::new_unchecked("backup");
-    let strategy_action = ActionName::new_unchecked(&s.name);
+    let strategy_action = ActionName::new_unchecked(s.name.as_str());
     let crontab =
         crate::defs::action::parse_cron_expr(cronexpr_str, &backup_app, &strategy_action).ok()?;
 
