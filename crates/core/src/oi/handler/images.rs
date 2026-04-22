@@ -299,6 +299,7 @@ pub(crate) fn list_pins(state: &OiState, params: PinsListParams) -> HandlerResul
                 "app": p.app.as_str(),
                 "reference": p.reference,
                 "pinned_at": rfc3339_from_millis(p.pinned_at),
+                "expires_at": p.expires_at.map(rfc3339_from_millis),
             })
         })
         .collect();
@@ -431,4 +432,118 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
         "per_handler": per_handler,
         "all_images": all_images,
     }))
+}
+
+/// Reconcile `app`'s pins against the current AppDef and a lenient probe
+/// of the app's script. Called after operator-driven AppDef changes
+/// (`/apps/update`, `/apps/params/set`, `/apps/params/unset`).
+///
+/// - Clean probe → orphan pins are deleted.
+/// - Dirty probe (any handler reported an error or skipped_reason) →
+///   orphan pins are stamped with a 30-day expiry, which the reconciler
+///   sweeps once it passes. Pins with references matching the (possibly
+///   partial) safe set have their expiration cleared.
+// r[impl image.pin.update-reconcile]
+pub(crate) fn reconcile_pins_post_update(state: &OiState, app_name: &AppName) {
+    let (app, script) = {
+        let reg = state.registry.read();
+        match reg.get(app_name.as_str()) {
+            Some(entry) => (entry.app.clone(), entry.script.clone()),
+            None => return,
+        }
+    };
+
+    // Static AppDef images for Deployments/Jobs.
+    let static_images: std::collections::BTreeSet<String> = {
+        use crate::defs::resource::Resource;
+        let def = app.def.load();
+        let mut out = std::collections::BTreeSet::new();
+        for resource in def.resources.values() {
+            let image = match resource {
+                Resource::Deployment(d) => d.def.lock().pod.lock().container.lock().image.clone(),
+                Resource::Job(j) => j.def.lock().pod.lock().container.lock().image.clone(),
+                _ => None,
+            };
+            if let Some(img) = image.filter(|s| !s.is_empty()) {
+                out.insert(img);
+            }
+        }
+        out
+    };
+
+    let (engine, _scope, _stub) = crate::setup_language(&state.script_limits);
+    let ast = match engine.compile(&script) {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::warn!(
+                app = %app_name,
+                error = %e,
+                "post-update pin reconciliation: script failed to compile; leaving pins untouched"
+            );
+            return;
+        }
+    };
+
+    let registry: std::sync::Arc<dyn InstanceRegistry> =
+        std::sync::Arc::new(DbInstanceRegistry::new(state.db.clone()));
+
+    let probe_response = match crate::runtime::probe::probe_app(
+        &engine,
+        &ast,
+        &app,
+        registry,
+        &ProbeRequest {
+            lenient: true,
+            ..Default::default()
+        },
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(
+                app = %app_name,
+                error = %e,
+                "post-update pin reconciliation: probe failed; leaving pins untouched"
+            );
+            return;
+        }
+    };
+
+    let probe_clean = probe_response
+        .per_handler
+        .iter()
+        .all(|h| h.error.is_none() && h.skipped_reason.is_none());
+
+    let mut safe: std::collections::BTreeSet<String> = static_images;
+    safe.extend(probe_response.all_images);
+
+    const EXPIRY_WINDOW_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+    let app_for_db = app_name.clone();
+    let safe_owned: Vec<String> = safe.into_iter().collect();
+    state.db.call(move |db| {
+        let borrowed: Vec<&str> = safe_owned.iter().map(String::as_str).collect();
+        match images::reconcile_pins_after_update(
+            db,
+            &app_for_db,
+            &borrowed,
+            probe_clean,
+            EXPIRY_WINDOW_MS,
+        ) {
+            Ok(deleted) => {
+                if deleted > 0 {
+                    tracing::info!(
+                        app = %app_for_db,
+                        deleted,
+                        "post-update pin reconciliation: dropped orphan pins"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    app = %app_for_db,
+                    error = %e,
+                    "post-update pin reconciliation: DB error"
+                );
+            }
+        }
+    });
 }

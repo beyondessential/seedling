@@ -1670,6 +1670,9 @@ pub(crate) fn update_app(
     // r[impl schedule.prune]
     sync_action_schedules(state, &params.app);
 
+    // r[impl image.pin.update-reconcile]
+    super::images::reconcile_pins_post_update(state, &params.app);
+
     tracing::info!(app = %name, generation, "updated app");
     ctx.events.app_updated(
         &params.app,

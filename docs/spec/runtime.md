@@ -717,6 +717,23 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > A pin must not be automatically re-created when a workload stops using an image; a subsequent `rt.warm_images` call is required to re-pin.
 > Operators may clear any pin explicitly via the operator interface.
 
+> r[image.pin.expiry]
+> A pin may carry an optional expiration timestamp. When an expiration is set and passes, the reconciler must delete the pin on a subsequent tick exactly as if an operator had cleared it explicitly.
+> Setting, clearing, and reading an expiration does not change any other aspect of the pin's lifecycle — in particular, an expired-but-not-yet-swept pin still protects its image from [autonomous removal](#r--image.gc) until the reconciler sweeps it.
+> Expirations are only set by the post-update reconciliation rule (see [`image.pin.update-reconcile`](#r--image.pin.update-reconcile)); they are cleared whenever a pin's reference is observed to be valid again for the owning app.
+
+> r[image.pin.update-reconcile]
+> Whenever an app's `AppDef` changes because of an operator-driven edit (a script update or a parameter change that triggers re-evaluation), the runtime must re-probe the new script and use the result to reconcile that app's pins:
+>
+> 1. Build the _safe set_: every image reference declared by a `Deployment` or `Job` in the new `AppDef`, plus every image reference in the probe's [`all_images`](#r--image.discover) output.
+> 2. For any pin whose reference is in the safe set, clear its expiration (if any) so the pin is kept indefinitely.
+> 3. For any pin whose reference is _not_ in the safe set:
+>    - If the probe ran without errors _and_ without skipped handlers, the safe set is authoritative: delete the pin.
+>    - Otherwise the safe set is incomplete: set the pin's expiration to 30 days from now, unless an earlier expiration is already set.
+>
+> A pin's reference is "in the safe set" based on exact string equality; a tag-pinned reference and a digest-pinned reference to the same image id are treated as distinct.
+> The rule fires only on operator-driven AppDef changes; autonomous reconciliation ticks do not run probes.
+
 > r[image.track]
 > The runtime must maintain, for each locally-present container image, a _last-used_ timestamp initialised to the time the image was first observed locally.
 > On every reconciliation pass, the last-used timestamp of every image whose `image_id` appears on at least one running container must be updated to the current time.

@@ -96,6 +96,10 @@ impl Reconciler {
             if let Err(e) = images::prune_tracking_except(db, &live_for_db) {
                 warn!(error = %e, "images: prune_tracking_except failed");
             }
+            // r[impl image.pin.expiry]
+            if let Err(e) = images::drop_expired_pins(db) {
+                warn!(error = %e, "images: drop_expired_pins failed");
+            }
             for id in &live_for_db {
                 if let Err(e) = images::note_present(db, id) {
                     warn!(image_id = %id, error = %e, "images: note_present failed");

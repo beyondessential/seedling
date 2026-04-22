@@ -9,6 +9,10 @@ pub struct ImagePin {
     pub app: AppName,
     pub reference: String,
     pub pinned_at: i64,
+    /// Unix-millisecond expiration, or `None` for an indefinite pin. When
+    /// set and in the past, [`drop_expired_pins`] removes the pin.
+    // r[impl image.pin.expiry]
+    pub expires_at: Option<i64>,
 }
 
 fn now_ms() -> i64 {
@@ -55,18 +59,129 @@ pub fn clear_pins_by_reference(db: &Db, reference: &str) -> rusqlite::Result<usi
     )
 }
 
+/// Delete any pin whose `expires_at` has passed. Called once per reconcile tick.
+// r[impl image.pin.expiry]
+pub fn drop_expired_pins(db: &Db) -> rusqlite::Result<usize> {
+    db.conn.execute(
+        "DELETE FROM image_pins WHERE expires_at IS NOT NULL AND expires_at <= ?1",
+        params![now_ms()],
+    )
+}
+
+/// Apply the post-update pin reconciliation rule for `app`:
+///
+/// - Pins whose reference is in `safe_references` have their `expires_at`
+///   cleared (the reference is still relevant).
+/// - Pins whose reference is NOT in `safe_references`:
+///   - If `probe_clean`: deleted immediately.
+///   - Else: `expires_at` is set to `now + expiry_window_ms`, but only if
+///     there isn't already an earlier expiration set.
+///
+/// Returns the number of pins deleted (only non-zero when `probe_clean`).
+// r[impl image.pin.update-reconcile]
+pub fn reconcile_pins_after_update(
+    db: &Db,
+    app: &AppName,
+    safe_references: &[&str],
+    probe_clean: bool,
+    expiry_window_ms: i64,
+) -> rusqlite::Result<usize> {
+    let tx = db.conn.unchecked_transaction()?;
+
+    // Clear expiry on pins that are in the safe set — they've been
+    // re-validated by either the static AppDef or a clean probe output.
+    if !safe_references.is_empty() {
+        let placeholders = safe_references
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "UPDATE image_pins SET expires_at = NULL
+             WHERE app = ?1 AND reference IN ({placeholders})"
+        );
+        let mut stmt = tx.prepare(&sql)?;
+        let mut bind: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(1 + safe_references.len());
+        bind.push(app);
+        for r in safe_references {
+            bind.push(r);
+        }
+        stmt.execute(bind.as_slice())?;
+    }
+
+    let deleted = if probe_clean {
+        // Authoritative safe set → drop orphans outright.
+        if safe_references.is_empty() {
+            tx.execute("DELETE FROM image_pins WHERE app = ?1", params![app])?
+        } else {
+            let placeholders = safe_references
+                .iter()
+                .map(|_| "?")
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "DELETE FROM image_pins
+                 WHERE app = ?1 AND reference NOT IN ({placeholders})"
+            );
+            let mut stmt = tx.prepare(&sql)?;
+            let mut bind: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(1 + safe_references.len());
+            bind.push(app);
+            for r in safe_references {
+                bind.push(r);
+            }
+            stmt.execute(bind.as_slice())?
+        }
+    } else {
+        // Partial safe set → stamp an expiry on not-yet-expiring pins
+        // whose reference isn't confirmed. An earlier expiration wins to
+        // avoid repeated probes pushing the deadline out.
+        let target_expiry = now_ms() + expiry_window_ms;
+        if safe_references.is_empty() {
+            tx.execute(
+                "UPDATE image_pins SET expires_at = ?2
+                 WHERE app = ?1 AND (expires_at IS NULL OR expires_at > ?2)",
+                params![app, target_expiry],
+            )?;
+        } else {
+            let placeholders = safe_references
+                .iter()
+                .map(|_| "?")
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "UPDATE image_pins SET expires_at = ?1
+                 WHERE app = ?2 AND reference NOT IN ({placeholders})
+                   AND (expires_at IS NULL OR expires_at > ?1)"
+            );
+            let mut stmt = tx.prepare(&sql)?;
+            let mut bind: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(2 + safe_references.len());
+            bind.push(&target_expiry);
+            bind.push(app);
+            for r in safe_references {
+                bind.push(r);
+            }
+            stmt.execute(bind.as_slice())?;
+        }
+        0
+    };
+
+    tx.commit()?;
+    Ok(deleted)
+}
+
 pub fn list_pins(db: &Db, app: Option<&AppName>) -> rusqlite::Result<Vec<ImagePin>> {
     match app {
         Some(a) => {
             let mut stmt = db.conn.prepare(
-                "SELECT app, reference, pinned_at FROM image_pins
+                "SELECT app, reference, pinned_at, expires_at FROM image_pins
                  WHERE app = ?1 ORDER BY reference",
             )?;
             collect_pins(stmt.query_map(params![a], parse_pin_row)?)
         }
         None => {
             let mut stmt = db.conn.prepare(
-                "SELECT app, reference, pinned_at FROM image_pins ORDER BY app, reference",
+                "SELECT app, reference, pinned_at, expires_at FROM image_pins
+                 ORDER BY app, reference",
             )?;
             collect_pins(stmt.query_map([], parse_pin_row)?)
         }
@@ -103,6 +218,7 @@ fn parse_pin_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ImagePin> {
         app: row.get::<_, AppName>(0)?,
         reference: row.get(1)?,
         pinned_at: row.get(2)?,
+        expires_at: row.get(3)?,
     })
 }
 
@@ -328,6 +444,115 @@ mod tests {
         mark_used(&db, "sha256:aaa").unwrap();
         let r2 = get_tracking(&db, "sha256:aaa").unwrap().unwrap();
         assert!(r2.last_used_at > r1.last_used_at - 1000);
+    }
+
+    // r[verify image.pin.expiry]
+    #[test]
+    fn drop_expired_pins_removes_past_due() {
+        let db = Db::open_in_memory().unwrap();
+        upsert_pin(&db, &app("foo"), "ghcr.io/x:1").unwrap();
+        upsert_pin(&db, &app("foo"), "ghcr.io/x:2").unwrap();
+
+        // Backdate one pin's expiry to 10 minutes ago; leave the other with no expiry.
+        let past = now_ms() - 10 * 60 * 1000;
+        db.conn
+            .execute(
+                "UPDATE image_pins SET expires_at = ?1
+                 WHERE app = ?2 AND reference = ?3",
+                params![past, app("foo"), "ghcr.io/x:1"],
+            )
+            .unwrap();
+
+        let removed = drop_expired_pins(&db).unwrap();
+        assert_eq!(removed, 1);
+
+        let remaining = list_pins(&db, Some(&app("foo"))).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].reference, "ghcr.io/x:2");
+    }
+
+    // r[verify image.pin.update-reconcile]
+    #[test]
+    fn reconcile_strict_deletes_orphan_pins() {
+        let db = Db::open_in_memory().unwrap();
+        upsert_pin(&db, &app("foo"), "ghcr.io/keep:1").unwrap();
+        upsert_pin(&db, &app("foo"), "ghcr.io/drop:1").unwrap();
+
+        let safe = vec!["ghcr.io/keep:1"];
+        let deleted = reconcile_pins_after_update(
+            &db,
+            &app("foo"),
+            &safe,
+            /* probe_clean */ true,
+            30 * 24 * 60 * 60 * 1000,
+        )
+        .unwrap();
+        assert_eq!(deleted, 1);
+        let remaining = list_pins(&db, Some(&app("foo"))).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].reference, "ghcr.io/keep:1");
+        assert!(remaining[0].expires_at.is_none());
+    }
+
+    // r[verify image.pin.update-reconcile]
+    #[test]
+    fn reconcile_lenient_stamps_expiry_on_orphans() {
+        let db = Db::open_in_memory().unwrap();
+        upsert_pin(&db, &app("foo"), "ghcr.io/keep:1").unwrap();
+        upsert_pin(&db, &app("foo"), "ghcr.io/maybe-orphan:1").unwrap();
+
+        let safe = vec!["ghcr.io/keep:1"];
+        let expiry_window = 30 * 24 * 60 * 60 * 1000_i64;
+        let deleted = reconcile_pins_after_update(
+            &db,
+            &app("foo"),
+            &safe,
+            /* probe_clean */ false,
+            expiry_window,
+        )
+        .unwrap();
+        assert_eq!(deleted, 0);
+
+        let pins = list_pins(&db, Some(&app("foo"))).unwrap();
+        assert_eq!(pins.len(), 2);
+        let keep = pins
+            .iter()
+            .find(|p| p.reference == "ghcr.io/keep:1")
+            .unwrap();
+        assert!(keep.expires_at.is_none());
+        let orphan = pins
+            .iter()
+            .find(|p| p.reference == "ghcr.io/maybe-orphan:1")
+            .unwrap();
+        let exp = orphan.expires_at.expect("expiry should be set");
+        let now = now_ms();
+        assert!(exp > now && exp - now <= expiry_window + 1000);
+    }
+
+    // r[verify image.pin.update-reconcile]
+    #[test]
+    fn reconcile_clears_expiry_when_reference_becomes_safe_again() {
+        let db = Db::open_in_memory().unwrap();
+        upsert_pin(&db, &app("foo"), "ghcr.io/x:1").unwrap();
+
+        // First pass: dirty probe, stamps expiry.
+        let _ = reconcile_pins_after_update(&db, &app("foo"), &[], false, 30 * 24 * 60 * 60 * 1000)
+            .unwrap();
+        let pins = list_pins(&db, Some(&app("foo"))).unwrap();
+        assert!(pins[0].expires_at.is_some());
+
+        // Second pass: clean probe puts the reference back in the safe set.
+        let _ = reconcile_pins_after_update(
+            &db,
+            &app("foo"),
+            &["ghcr.io/x:1"],
+            true,
+            30 * 24 * 60 * 60 * 1000,
+        )
+        .unwrap();
+        let pins = list_pins(&db, Some(&app("foo"))).unwrap();
+        assert_eq!(pins.len(), 1);
+        assert!(pins[0].expires_at.is_none());
     }
 
     // r[verify image.gc]

@@ -316,6 +316,9 @@ pub(crate) fn set_param(
 
     reload_and_persist_apperror(state, app, generation)?;
 
+    // r[impl image.pin.update-reconcile]
+    super::images::reconcile_pins_post_update(state, app);
+
     let schedule = schedule_on_change(state, app, param_name, generation)?;
 
     // i[impl param.store.secret]
@@ -402,6 +405,9 @@ pub(crate) fn unset_param(
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
 
     reload_and_persist_apperror(state, app, generation)?;
+
+    // r[impl image.pin.update-reconcile]
+    super::images::reconcile_pins_post_update(state, app);
 
     let schedule = schedule_on_change(state, app, param_name, generation)?;
 
