@@ -14,16 +14,16 @@ ed25519-dalek.workspace = true
 futures-util.workspace = true
 ipnet.workspace = true
 jiff.workspace = true
-libc = "0.2.172"
+libc = "0.2.185"
 nftables = { version = "0.6.3", features = ["tokio"] }
-nix = { version = "0.29.0", features = ["term"] }
+nix = { version = "0.30.1", features = ["term"] }
 parking_lot.workspace = true
 podman-rest-client = { version = "0.13.0", features = ["uds"] }
 quinn.workspace = true
 rand_core.workspace = true
 reqwest.workspace = true
 rhai = { version = "1.24.0", features = ["metadata"] }
-rtnetlink = "0.20.0"
+rtnetlink = "0.21.0"
 rusqlite = { version = "0.39.0", features = ["bundled"] }
 rustix = { version = "1.0.7", features = ["fs", "process"] }
 rustls.workspace = true
@@ -40,7 +40,7 @@ tracing.workspace = true
 uuid.workspace = true
 wildmatch.workspace = true
 zbus = { version = "5.14.0", features = ["tokio"] }
-zxcvbn = "2.2.2"
+zxcvbn = "3.1.0"
 whoami.workspace = true
 orion = "0.17.13"
 secrecy = "0.10.3"
