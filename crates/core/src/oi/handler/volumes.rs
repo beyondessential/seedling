@@ -538,8 +538,7 @@ fn parse_source_vol_id(
         let path = state.driver.volume_store.site_path(vol);
         Ok((None, vol.to_owned(), path))
     } else {
-        let app = AppName::new(prefix.to_owned())
-            .map_err(|e| format!("invalid app name {prefix:?}: {e}"))?;
+        let app = AppName::new(prefix).map_err(|e| format!("invalid app name {prefix:?}: {e}"))?;
         let vol_name = vol.to_owned();
         let instances = {
             let app = app.clone();

@@ -1,5 +1,6 @@
 use std::{fmt, str::FromStr};
 
+use compact_str::CompactString;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -52,15 +53,19 @@ fn validate_bsl_name(s: &str) -> Result<(), InvalidName> {
 // bsl.name-shaped string newtypes
 // ---------------------------------------------------------------------------
 
-/// Generate a `String`-backed bsl.name newtype with the whole standard API:
+/// Generate a `CompactString`-backed bsl.name newtype with the standard API:
 /// validating `new`, `new_unchecked`, `as_str`, `into_string`, `Display`,
 /// `AsRef<str>`, `Borrow<str>`, `FromStr`, transparent serde, `PartialEq`
 /// against `str`/`&str`/`String`, and (under the `rusqlite` feature)
 /// `ToSql`/`FromSql`.
 ///
 /// Every type also derives `Default` — the default is an empty string that
-/// fails validation; it exists only so derive-`Default` structs embedding the
-/// newtype compile, and must be overwritten before anything inspects it.
+/// fails validation; it exists only so derive-`Default` structs embedding
+/// the newtype compile, and must be overwritten before anything inspects it.
+///
+/// `CompactString` holds names up to 24 bytes inline on the stack (zero heap)
+/// and falls back to a reference-counted heap representation for longer
+/// names, so clone is cheap regardless of length.
 macro_rules! bsl_name_newtype {
     (
         $(#[$attr:meta])*
@@ -70,85 +75,85 @@ macro_rules! bsl_name_newtype {
         // l[impl bsl.name]
         #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
         #[serde(transparent)]
-        pub struct $name(String);
+        pub struct $name(CompactString);
 
         impl $name {
             /// Validate `s` against the bsl.name rules and wrap it on success.
-            pub fn new(s: impl Into<String>) -> Result<Self, InvalidName> {
-                let s = s.into();
-                validate_bsl_name(&s)?;
-                Ok(Self(s))
+            pub fn new(s: impl AsRef<str>) -> Result<Self, InvalidName> {
+                let s = s.as_ref();
+                validate_bsl_name(s)?;
+                Ok(Self(CompactString::from(s)))
             }
 
             /// Wrap `s` without re-running validation. The caller guarantees
             /// that `s` already satisfies the name rules — typically because
             /// it was read from the database or another component that
             /// validated it on the way in.
-            pub fn new_unchecked(s: impl Into<String>) -> Self {
+            pub fn new_unchecked(s: impl Into<CompactString>) -> Self {
                 Self(s.into())
             }
 
             pub fn as_str(&self) -> &str {
-                &self.0
+                self.0.as_str()
             }
 
             pub fn into_string(self) -> String {
-                self.0
+                self.0.into_string()
             }
         }
 
         impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str(&self.0)
+                f.write_str(self.0.as_str())
             }
         }
 
         impl AsRef<str> for $name {
             fn as_ref(&self) -> &str {
-                &self.0
+                self.0.as_str()
             }
         }
 
         impl std::borrow::Borrow<str> for $name {
             fn borrow(&self) -> &str {
-                &self.0
+                self.0.as_str()
             }
         }
 
         impl FromStr for $name {
             type Err = InvalidName;
             fn from_str(s: &str) -> Result<Self, Self::Err> {
-                Self::new(s.to_owned())
+                Self::new(s)
             }
         }
 
         impl From<$name> for String {
             fn from(n: $name) -> Self {
-                n.0
+                n.0.into_string()
             }
         }
 
         impl PartialEq<str> for $name {
             fn eq(&self, other: &str) -> bool {
-                self.0 == other
+                self.0.as_str() == other
             }
         }
 
         impl PartialEq<&str> for $name {
             fn eq(&self, other: &&str) -> bool {
-                self.0 == *other
+                self.0.as_str() == *other
             }
         }
 
         impl PartialEq<$name> for str {
             fn eq(&self, other: &$name) -> bool {
-                self == other.0
+                self == other.0.as_str()
             }
         }
 
         impl PartialEq<String> for $name {
             fn eq(&self, other: &String) -> bool {
-                &self.0 == other
+                self.0.as_str() == other.as_str()
             }
         }
 
@@ -157,15 +162,16 @@ macro_rules! bsl_name_newtype {
             where
                 D: serde::Deserializer<'de>,
             {
-                let s = String::deserialize(d)?;
-                Self::new(s).map_err(serde::de::Error::custom)
+                let s = CompactString::deserialize(d)?;
+                validate_bsl_name(s.as_str()).map_err(serde::de::Error::custom)?;
+                Ok(Self(s))
             }
         }
 
         #[cfg(feature = "rusqlite")]
         impl rusqlite::ToSql for $name {
             fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
-                self.0.to_sql()
+                self.0.as_str().to_sql()
             }
         }
 
@@ -177,7 +183,7 @@ macro_rules! bsl_name_newtype {
                 // Values in SQLite were written after validation on the way
                 // in, so bypass re-validation here (matches the contract of
                 // `new_unchecked`).
-                String::column_result(value).map(Self)
+                value.as_str().map(|s| Self(CompactString::from(s)))
             }
         }
     };
