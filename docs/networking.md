@@ -19,9 +19,15 @@ Within that /48, addresses are carved up as follows:
     fd5e:XXYY:ZZWW:KKUU::/64        pod network (one per pod instance)
     fd5e:XXYY:ZZWW:KKUU::1/128      bridge gateway (assigned by netavark)
     fd5e:XXYY:ZZWW:KKUU:..../128    pod container address (SLAAC)
+    fd5e:XXYY:ZZWW:fd00::/64        seedling-resolver network (CoreDNS)
+    fd5e:XXYY:ZZWW:fd00::1/128      resolver bridge gateway + in-process DNS forwarder
+    fd5e:XXYY:ZZWW:fd00::53/128     CoreDNS container address
     fd5e:XXYY:ZZWW:fffe::1/128      node-wide mount endpoint
     fd5e:XXYY:ZZWW:ff00::/64        seedling-proxy network (Caddy)
+    10.89.254.0/24                   seedling-resolver IPv4 subnet (dual-stack)
     10.89.255.0/24                   seedling-proxy IPv4 subnet (dual-stack)
+
+    64:ff9b::/96                     NAT64 well-known prefix (RFC 6052)
 
 The `KK` byte is a `ResourceKind` discriminant:
 
@@ -41,8 +47,19 @@ The `UU` byte and bytes 8–15 come from the resource instance's persisted
 UUID (bytes 0–8 of the UUID). This makes every resource instance's /128
 address and every pod's /64 prefix stable across restarts.
 
-The proxy network uses `0xff` as its subnet discriminant (byte 6), which
-is above the ResourceKind range and can never collide with a pod prefix.
+Three subnet discriminants sit above the `ResourceKind` range in byte 6
+and can never collide with a pod or service prefix:
+
+| Byte  | Subnet                              |
+|-------|-------------------------------------|
+| 0xfd  | `seedling-resolver` (CoreDNS)       |
+| 0xfe  | node-wide mount endpoint (`fffe::1`) |
+| 0xff  | `seedling-proxy` (Caddy)            |
+
+The NAT64 prefix `64:ff9b::/96` is not derived from the node prefix; it
+is the IANA well-known NAT64 prefix (RFC 6052) and is used unchanged so
+that any DNS64-aware resolver on the network — including an external
+one — produces synthetic AAAAs that match the same translator pool.
 
 ## Pod networks
 
@@ -113,11 +130,15 @@ alongside all other nftables rules.
 A pod can consume another service via `.mount(svc.port(80))`. Inside
 the container, the service is reachable at `localmount:80`.
 
-The `localmount` hostname resolves to the pod's bridge mount endpoint
-(`prefix::1000`). nftables DNAT rules in the prerouting chain translate
-this to the backing pod:
+The `localmount` hostname resolves to the node-wide mount endpoint
+`fd5e:XXYY:ZZWW:fffe::1` (injected via `--add-host localmount:<addr>` on
+every pod container). No interface is ever assigned that address;
+nftables DNAT rules in the prerouting chain intercept the packet before
+any routing decision and rewrite it to the backing pod, gated on the
+consuming pod's /64 so each mount binding targets only its own
+consumer:
 
-    ip6 saddr <pod_prefix>::/64 ip6 daddr <pod_prefix>::1000 \
+    ip6 saddr <pod_prefix>::/64 ip6 daddr fd5e:XXYY:ZZWW:fffe::1 \
       tcp dport 80 dnat ip6 to [<backend_ip>]:<backend_port>
 
 Mount rules resolve backends at rule-building time using the same
@@ -233,6 +254,131 @@ The JSON payload always includes `"admin": {"listen": ":2019"}` to
 preserve the admin listener across full-config replacements. Caddy
 listens on `:2019` on all interfaces inside its container.
 
+## DNS resolver
+
+Every pod runs with `--dns <resolver_addr>` so its `/etc/resolv.conf`
+points at a single node-local resolver. The resolver is a CoreDNS
+container running on a dedicated dual-stack bridge network
+`seedling-resolver` (IPv6 `fd5e:XXYY:ZZWW:fd00::/64` and IPv4
+`10.89.254.0/24`). CoreDNS itself listens at the static address
+`fd5e:XXYY:ZZWW:fd00::53`; the `::53` host byte is chosen only for
+memorability.
+
+The resolver network is dual-stack so CoreDNS can forward queries to
+upstream IPv4 DNS servers when the operator supplies any via
+`--dns-upstreams`.
+
+Like Caddy, the resolver runs in blue/green container slots
+(`seedling-resolver-blue` / `seedling-resolver-green`) for zero-downtime
+image upgrades. The active slot is recorded in the database; upgrades
+start the inactive slot at the same well-known address, health-check
+the `/health` endpoint on port 8080, then swap.
+
+The Corefile is generated from two inputs:
+
+- `forward .` — the list of upstreams. Either the operator's explicit
+  `--dns-upstreams` list, or (default) a single entry pointing at
+  seedling's in-process DNS forwarder on the resolver bridge gateway
+  (`[<prefix>:fd00::1]:53`).
+- `dns64 { prefix 64:ff9b::/96 }` — added if and only if NAT64 is
+  active (see below), so lookups of IPv4-only names return a
+  synthesised AAAA.
+
+### Host DNS forwarder
+
+When no `--dns-upstreams` is given, seedling would ideally point
+CoreDNS at `127.0.0.53` to inherit all of systemd-resolved's features
+(split DNS, Tailscale MagicDNS, DNSSEC, per-link resolvers, search
+domains). Two problems block the direct approach: CoreDNS runs inside
+a container and cannot reach the host's loopback, and `127.0.0.53`
+only accepts queries sourced from `127.0.0.0/8`.
+
+Seedling bridges these with a small UDP+TCP forwarder process embedded
+in the daemon. It binds to `[<prefix>:fd00::1]:53` — the
+netavark-assigned gateway address of the resolver bridge — and
+proxies every query to `127.0.0.54:53`, systemd-resolved's "extra
+stub". The extra stub, unlike `127.0.0.53`, accepts queries whose
+source address is not in `127.0.0.0/8`, so the host's LAN-sourced
+packets from the bridge are served normally.
+
+`--dns-upstreams` disables the forwarder entirely; CoreDNS then talks
+directly to the operator-supplied servers.
+
+## NAT64 egress
+
+Pod networks carry only IPv6 ULA addresses — no IPv4 and no GUA — so
+reaching any IPv4-only destination on the internet requires NAT64. On
+hosts where the upstream network does not already provide it, seedling
+stands up its own translator.
+
+### Mode selection and detection
+
+The `--nat64` flag takes one of three values:
+
+- `auto` (default) — seedling probes for existing NAT64 infrastructure
+  at startup by resolving `ipv4only.arpa` for AAAA (RFC 7050). If a
+  synthetic AAAA comes back (i.e. an address outside the canonical
+  `192.0.0.170` / `192.0.0.171`), the network already has a NAT64+DNS64
+  setup and seedling leaves it alone. Otherwise seedling activates its
+  own.
+- `enabled` — always activate.
+- `disabled` — never activate.
+
+Detection is performed once, before the reconciliation loop starts.
+
+### Translator
+
+When NAT64 is active, seedling installs and runs a stateful translator
+using [Jool](https://nicmx.github.io/Jool/):
+
+1. `modprobe jool` loads the kernel module (the package must be
+   installed on the host).
+2. `jool instance add seedling --netfilter --pool6 64:ff9b::/96`
+   creates a translator instance that hooks netfilter directly.
+3. `net.ipv6.conf.all.forwarding` and `net.ipv4.conf.all.forwarding`
+   are both set to `1`.
+
+Because the instance runs in Jool's netfilter mode, no explicit `ip -6
+route` for `64:ff9b::/96` is needed: Jool installs a netfilter hook
+that catches matching packets before they reach the routing decision.
+No pool4 is configured, so Jool masquerades translated IPv4 traffic
+using the host's primary IPv4 address.
+
+Translator setup happens at daemon startup, before any pods are
+touched. If NAT64 is required but initialisation fails, the daemon
+exits and files a fault — pods must not come up on a node that cannot
+reach the IPv4 internet.
+
+### DNS64
+
+When NAT64 is active, the CoreDNS Corefile includes the `dns64` plugin
+with the matching `64:ff9b::/96` prefix. For names that have only A
+records (no AAAA), CoreDNS synthesises an AAAA record pointing into
+the NAT64 prefix.
+
+### End-to-end egress flow
+
+For a pod reaching an IPv4-only host `ipv4only.example.com`:
+
+1. Pod's libc queries `<prefix>:fd00::53` (CoreDNS) for AAAA.
+2. Upstream returns NXDOMAIN / empty AAAA; the `dns64` plugin
+   synthesises `64:ff9b::<a.b.c.d>`.
+3. Pod sends a TCP/UDP packet to `[64:ff9b::<a.b.c.d>]:<port>`.
+   Source is the pod's SLAAC ULA; default route sends the packet via
+   the pod bridge gateway.
+4. On the host, before any forwarding decision, Jool's netfilter hook
+   matches the destination against pool6, translates to IPv4,
+   rewrites the source to the host's IPv4 address, and creates a
+   conntrack entry.
+5. The IPv4 packet egresses via the host's normal IPv4 uplink.
+6. Replies arrive as IPv4, Jool's conntrack reverses the translation,
+   and the resulting IPv6 packet is routed back to the pod via its
+   bridge.
+
+For a destination that already has a real AAAA record, DNS64 does not
+synthesise and the pod reaches it directly over IPv6 through whatever
+native IPv6 connectivity the host has.
+
 ## nftables table structure
 
 All rules live in a single `inet` (dual-stack) table:
@@ -254,15 +400,26 @@ All rules live in a single `inet` (dual-stack) table:
       }
       chain forward {
         type filter hook forward priority filter; policy accept;
-        # single rule: accept fd5e:ed00::/24 ↔ fd5e:ed00::/24
+        # ct state established,related accept
+        # ct status dnat accept
+        # accept saddr <node/48> daddr <node/48>
+        # drop unsolicited new inbound to <node/48>
       }
     }
 
 The entire table is flushed and rebuilt atomically on every
-reconciliation tick. The forward chain carries a single blanket accept
-rule allowing all forwarded traffic within the seedling ULA range. The
-postrouting chain carries masquerade rules for loopback-sourced traffic
-(see [Loopback hairpin NAT](#loopback-hairpin-nat) above).
+reconciliation tick. The forward chain accepts established/related and
+DNAT-redirected traffic, accepts intra-node traffic sourced and
+destined within the node's `/48`, and drops unsolicited new inbound
+flows directed into that `/48`. The postrouting chain carries
+masquerade rules for loopback-sourced traffic (see [Loopback hairpin
+NAT](#loopback-hairpin-nat) above).
+
+Jool's netfilter hook for NAT64 translation is installed by the jool
+kernel module and lives outside this table. A pod packet destined for
+`64:ff9b::/96` is caught by the Jool hook before any routing decision,
+translated to IPv4, and then takes the host's normal IPv4 output path
+— not the `inet seedling_net` forward chain above.
 
 ## Host service interactions
 
@@ -291,20 +448,54 @@ Reload avahi after editing: `systemctl reload avahi-daemon`.
 
 ## Reconciliation order
 
-The reconciler runs these phases sequentially each tick:
+### Daemon startup (once, before the loop)
 
-1. **Pods** — observe and actuate containers for each app. Collects
-   running pod IPs and updates the bridge name map.
-2. **Uninstall** — for apps being uninstalled, checks whether all pods
-   and systemd units are gone.
-3. **Bridges + Volumes** — ensures `::1000` mount endpoints are assigned
-   on bridge interfaces; observes and actuates volumes.
-4. **Routes** — builds and applies `ip -6 route replace` for every
-   service across all apps.
-5. **Caddy** — ensures the Caddy container is running and healthy. If
-   this fails, phases 6 and 7 are skipped for this tick.
-6. **nftables** — builds and atomically applies all ingress, mount, and
-   service DNAT rules.
-7. **Proxy config** — builds the Caddy JSON config from ingress/service
-   pairs and applies it via the admin API. Caches the config to disk
-   for upgrade continuity.
+1. Derive the node `/48` prefix from `/etc/machine-id`.
+2. Decide NAT64 activation (`--nat64` mode + RFC 7050 probe in `auto`).
+3. If NAT64 is to be active, load the `jool` kernel module, create the
+   jool instance, and enable IPv4+IPv6 forwarding. Failure here is
+   fatal.
+4. Start the in-process DNS forwarder (unless `--dns-upstreams` is
+   set). It retry-binds until the resolver bridge comes up on the
+   first tick.
+5. Build system-driver handles (container runtime, process manager,
+   data plane) and spawn the reconciliation loop.
+
+### Per-tick phases
+
+Within each reconciliation tick:
+
+1. **Observe + actuate (concurrent)** — `tokio::join!` runs four
+   phases side by side:
+   - **Pods** — observe and actuate containers for each app; collect
+     running pod IPs and update the bridge-name map.
+   - **Volumes** — observe and actuate volume resources.
+   - **Caddy** — ensure the Caddy container is running and healthy.
+   - **Resolver** — ensure the CoreDNS container is running and
+     healthy; regenerate the Corefile if upstreams or NAT64 status
+     changed; blue/green upgrade on image change.
+   If Caddy fails, the nftables and proxy-config apply steps are
+   skipped for this tick. Resolver failure is recorded as a fault but
+   does not block the rest of the tick — workloads keep whatever
+   `/etc/resolv.conf` they already have.
+2. **Uninstall** (sequential, needs pod results) — for apps being
+   uninstalled, check whether all pods and systemd units are gone.
+3. **Compute** (sync, in-memory) — build service routes, nftables
+   rules, and the Caddy JSON config from the observed state.
+4. **Apply (concurrent)** — another `tokio::join!` writes the three
+   data-plane surfaces in parallel:
+   - `ip -6 route replace` for every service;
+   - the single-table atomic nftables reload (ingress / mount /
+     service DNAT rules, plus loopback-masquerade and forward-chain
+     policy);
+   - the Caddy admin API `POST /config/`.
+   Each write's success or failure is recorded as a system fault.
+5. **Emit + retire** — surface state-change events and retire any
+   unscheduled excess instances.
+
+### Idle teardown
+
+When no apps remain registered, the reconciler flushes routes and
+nftables rules, tears down the Caddy and resolver containers, and
+removes their networks. The jool NAT64 instance is not torn down in
+the current daemon shutdown path.
