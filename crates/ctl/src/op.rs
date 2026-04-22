@@ -62,6 +62,14 @@ pub(super) enum ImagesCommand {
         #[command(subcommand)]
         command: PinsCommand,
     },
+    /// Discover images an app's handlers might pull (dry-run every action/shell)
+    Discover {
+        /// App name
+        app: String,
+        /// Run in lenient mode: handlers with unresolved required params are skipped
+        #[arg(long)]
+        lenient: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -209,6 +217,16 @@ pub(super) async fn dispatch_images(client: &OiClient, cmd: ImagesCommand) {
                     .request(
                         "/images/remove",
                         serde_json::json!({ "reference": reference, "force": force }),
+                    )
+                    .await,
+            );
+        }
+        ImagesCommand::Discover { app, lenient } => {
+            print_result(
+                client
+                    .request(
+                        "/apps/images/discover",
+                        serde_json::json!({ "app": app, "lenient": lenient }),
                     )
                     .await,
             );

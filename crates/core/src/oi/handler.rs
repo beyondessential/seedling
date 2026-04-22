@@ -146,6 +146,8 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/images/pins/list" => images::list_pins(state, parse_params(req.params)?),
         // i[image.pin.clear]
         "/images/pins/clear" => images::clear_pins(state, parse_params(req.params)?),
+        // i[image.discover]
+        "/apps/images/discover" => images::discover_images(state, parse_params(req.params)?),
         "/volumes/held/list" => volumes::list_held(state),
         "/volumes/held/delete" => volumes::delete_held(state, parse_params(req.params)?, ctx),
         "/volumes/exported/list" => volumes::list_exported(state),

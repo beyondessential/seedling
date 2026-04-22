@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use jiff::Timestamp;
 use seedling_protocol::{
@@ -8,7 +8,13 @@ use seedling_protocol::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::{oi::state::OiState, runtime::images};
+use crate::{
+    oi::state::OiState,
+    runtime::{
+        DbInstanceRegistry, InstanceRegistry, images,
+        probe::{ProbeRequest, probe_app},
+    },
+};
 
 // ---------------------------------------------------------------------------
 // /images/list
@@ -323,4 +329,78 @@ pub(crate) fn clear_pins(state: &OiState, params: PinsClearParams) -> HandlerRes
         }
     });
     Ok(json!({ "ok": true }))
+}
+
+// ---------------------------------------------------------------------------
+// /apps/images/discover
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub(crate) struct DiscoverParams {
+    pub app: String,
+    /// Per-handler supplied param values. Outer key = handler name
+    /// (e.g. `"migrate"`, `"install"`), inner = param-name → string.
+    #[serde(default)]
+    pub action_params: HashMap<String, HashMap<String, String>>,
+    #[serde(default)]
+    pub lenient: bool,
+}
+
+// i[image.discover]
+pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> HandlerResult {
+    let name = AppName::new(&params.app)
+        .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, format!("invalid app: {e}")))?;
+
+    // Clone the App handle out of the registry; we'll set up a fresh
+    // engine + AST for the probe so its evaluation never touches live
+    // state (including the registry entry's AppDef — RuntimeInstance has
+    // its own action_def thread-local for extraction).
+    let (app, script) = {
+        let reg = state.registry.read();
+        match reg.get(name.as_str()) {
+            Some(entry) => (entry.app.clone(), entry.script.clone()),
+            None => return Err(OiError::not_found(format!("app not registered: {name}"))),
+        }
+    };
+
+    let (engine, _scope, _stub_app) = crate::setup_language(&state.script_limits);
+    let ast = match engine.compile(&script) {
+        Ok(a) => a,
+        Err(e) => {
+            return Err(OiError::new(
+                ErrorCode::NotFound,
+                format!("failed to compile app script: {e}"),
+            ));
+        }
+    };
+
+    let registry: std::sync::Arc<dyn InstanceRegistry> =
+        std::sync::Arc::new(DbInstanceRegistry::new(state.db.clone()));
+
+    let request = ProbeRequest {
+        action_params: params.action_params,
+        lenient: params.lenient,
+    };
+    let response = probe_app(&engine, &ast, &app, registry, &request)
+        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("probe failed: {e}")))?;
+
+    let per_handler: Vec<Value> = response
+        .per_handler
+        .iter()
+        .map(|h| {
+            json!({
+                "name": h.name,
+                "kind": h.kind.as_str(),
+                "images": h.images.iter().cloned().collect::<Vec<_>>(),
+                "error": h.error,
+                "skipped_reason": h.skipped_reason,
+            })
+        })
+        .collect();
+    let all_images: Vec<String> = response.all_images.into_iter().collect();
+
+    Ok(json!({
+        "per_handler": per_handler,
+        "all_images": all_images,
+    }))
 }
