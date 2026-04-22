@@ -31,6 +31,7 @@ use crate::{
 };
 
 mod faults;
+mod images;
 mod phases;
 mod state;
 
@@ -190,6 +191,9 @@ pub struct Reconciler {
     /// lifetime, used to gate `cert_acquisition_failed` faults.
     // r[impl fault.cert-acquisition]
     warm_cert_first_seen: HashMap<String, std::time::Instant>,
+    /// Scratch state for the image reconcile phase (last-GC timestamp).
+    // r[impl image.gc]
+    image_phase_state: images::ImagePhaseState,
 }
 
 impl Reconciler {
@@ -248,6 +252,7 @@ impl Reconciler {
             shells,
             caddy_data_path: tokio::sync::OnceCell::new(),
             warm_cert_first_seen: HashMap::new(),
+            image_phase_state: images::ImagePhaseState::new(),
         }
     }
 
@@ -463,6 +468,11 @@ impl Reconciler {
 
         // --- Process volume results ---
         self.ingest_volume_results(&apps, vol_observations);
+
+        // --- Image reconciliation: pins, tracking, and autonomous GC ---
+        // r[impl actuate.image.warm] r[impl image.pin] r[impl image.track]
+        self.reconcile_images(running_pods_by_app.values().flatten())
+            .await;
 
         // --- Process resolver result ---
         match resolver_result {
