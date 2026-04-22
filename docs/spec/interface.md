@@ -771,6 +771,35 @@ Absent specification bugs, anything that is not defined here is either defined i
 > When `reference` is provided, only the pin matching that reference is cleared (no-op if absent); otherwise all pins for the app are cleared.
 > Returns `{ "ok": true }`.
 
+> i[image.discover]
+> `/apps/images/discover { app, action_params?, lenient? }` runs the probe execution mode defined in [`image.discover`](runtime.md#r--image.discover) across every handler declared by the named app (`install`, the implicit `start` handler, every explicit action, every shell, and every `on_change` handler), then returns what those handlers might pull.
+>
+> Params:
+>
+> - `action_params`: optional object map of handler name → object map of param name → string value. Values supplied here override stored values and defaults for the named handler's probe.
+> - `lenient`: boolean, default `false`. When `true`, handlers with unresolved required parameters are reported as skipped and the probe continues; when `false`, the same condition is reported as an error and the other handlers still probe normally.
+>
+> Response shape:
+>
+> ```json
+> {
+>   "per_handler": [
+>     {
+>       "name": "migrate",
+>       "kind": "action",
+>       "images": ["ghcr.io/example/foo:1.2.3"],
+>       "error": null,
+>       "skipped_reason": null
+>     },
+>     { "name": "install", "kind": "install", "images": [], "error": null, "skipped_reason": null },
+>     { "name": "upgrade", "kind": "action", "images": [], "error": null, "skipped_reason": "requires params: old_version" }
+>   ],
+>   "all_images": ["ghcr.io/example/foo:1.2.3"]
+> }
+> ```
+>
+> `kind` is one of `"install" | "start" | "action" | "shell" | "param_change"`. `error` is a human-readable message or `null`. `skipped_reason` is populated only in lenient mode when a handler was not probed. `all_images` is the deduplicated union of `images` across every handler with no `error` and no `skipped_reason`.
+
 ## Backup Apps
 
 > i[backup.app.register]

@@ -731,6 +731,30 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > Removal failures must be logged and must not prevent removal of other images in the same pass.
 > Autonomous image GC must not be extended with shorter retention periods or more aggressive policies without explicit operator configuration; operators remove images they no longer need through the operator interface.
 
+> r[image.discover]
+> The runtime must provide a _probe_ execution mode that runs an app's handler closures without any world-modifying side effects, in order to enumerate every container image reference the handler might pull. The probe must:
+>
+> - Drive every `rt.*` call whose normal semantics would mutate state or wait on the world. `rt.start(...)` and `rt.warm_images(...)` extract image references from the supplied container resources and record them to the probe output without scheduling anything or writing pins. `rt.stop(...)`, `rt.warm_certs(...)`, `rt.restart(...)`, and `rt.query(...)` are no-ops.
+> - Satisfy every barrier immediately: `.scheduled()`, `.running()`, `.ready()`, `.ready_eventually()`, `.terminated()`, `.terminated_eventually()`, and `rt.stop(...)`'s implicit barrier all return as if their condition is met. `Termination::ensure_success()` succeeds unconditionally.
+> - Not record anything to the action log, the autonomous operations log, the world observation history, or the `image_pins` table.
+>
+> The probe is invoked per handler and operates on a handler's captured closure, the current `AppDef`, and a resolved param map supplied by the caller. Error-path image references (those only reached via a closure branch predicated on `termination.ensure_success()` failing, or a similar live-state signal) are necessarily missed by the probe, since the probe always returns the success path.
+
+> r[image.discover.params]
+> The probe accepts a param map per handler. Parameter resolution proceeds in priority order:
+>
+> 1. Values supplied by the probe caller override everything.
+> 2. Otherwise, the app's persisted param store supplies the value.
+> 3. Otherwise, the param schema's `default_value` is used.
+> 4. Otherwise, the param is unset.
+>
+> Probing may operate in either of two modes:
+>
+> - **Strict**: when a handler declares a required parameter that remains unresolved after step 3, the probe for that handler must return an error identifying the missing parameters without invoking the closure.
+> - **Lenient**: the same condition causes the handler to be reported as _skipped_ with the same error payload, without invoking the closure or producing any images.
+>
+> Closures that throw during probing must be reported with the thrown message as their error; images accumulated before the throw must be returned alongside.
+
 > r[actuate.volume.start]
 > Starting a Volume instance must create the named volume if it does not already exist, then apply any declared file writes to the volume.
 

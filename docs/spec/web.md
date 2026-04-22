@@ -152,6 +152,11 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > w[routes.images.confirm]
 > Both the images page and the app-detail images table must require confirmation before issuing an image remove, and the confirmation must state that remove fails if the image is currently in use.
 
+> w[routes.images.discover]
+> The app detail Images section must offer a "Discover from handlers" action that calls [`/apps/images/discover`](interface.md#i--image.discover) with `lenient: true`, merging the discovered image references into the displayed table as a third state — _potentially used_ — distinct from _in use_ and _pinned_.
+> When any handler's probe reports an error or is skipped, that must be surfaced inline near the discover results so the operator can decide to re-run the probe with explicit param values.
+> A "Warm all discovered" button must enqueue a pull-and-pin for each discovered image reference that is not already present or pinned.
+
 > w[routes.backups]
 > The web interface exposes backup management: registering and deregistering backup apps; creating, listing, showing, updating, and deleting backup strategies; triggering immediate backups; listing snapshots; and restoring snapshots.
 
