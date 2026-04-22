@@ -26,6 +26,10 @@ import {
 } from "@mui/material";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import {
+  ImageReferencesCell,
+  primaryReference,
+} from "../components/ImageReferences";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useGuard } from "../components/SafetyModeProvider";
 import { useOiQuery } from "../hooks/useOi";
@@ -82,9 +86,6 @@ export default function Images() {
     () => images.filter((i) => !i.in_use && i.pinned_by.length === 0),
     [images],
   );
-
-  const primaryReference = (img: ImageSummary) =>
-    img.references[0] ?? img.image_id;
 
   const refreshAll = () => {
     refetch();
@@ -215,29 +216,7 @@ export default function Images() {
               {images.map((img) => (
                 <TableRow key={img.image_id} hover>
                   <TableCell>
-                    <Stack spacing={0.5}>
-                      {img.references.length === 0 ? (
-                        <Typography
-                          variant="caption"
-                          sx={{
-                            color: "text.secondary",
-                            fontFamily: "monospace",
-                          }}
-                        >
-                          (dangling) {img.image_id.slice(0, 19)}
-                        </Typography>
-                      ) : (
-                        img.references.map((r) => (
-                          <Typography
-                            key={r}
-                            variant="body2"
-                            sx={{ fontFamily: "monospace" }}
-                          >
-                            {r}
-                          </Typography>
-                        ))
-                      )}
-                    </Stack>
+                    <ImageReferencesCell image={img} />
                   </TableCell>
                   <TableCell>{humanBytes(img.size_bytes)}</TableCell>
                   <TableCell>

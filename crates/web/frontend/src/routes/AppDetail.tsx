@@ -40,6 +40,10 @@ import {
 } from "@mui/material";
 import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import {
+  ImageReferencesCell,
+  primaryReference,
+} from "../components/ImageReferences";
 import { MapVolumeDialog } from "../components/MapVolumeDialog";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useGuard } from "../components/SafetyModeProvider";
@@ -1452,17 +1456,15 @@ function AppImagesSection({
   const rows = useMemo<ImageSummary[]>(() => {
     const all = imagesData?.images ?? [];
     return all.filter((img) => {
+      const refs = [...img.tags, ...img.digests.map((d) => d.reference)];
       const hitsDeclared =
-        img.in_use && img.references.some((r) => declaredImages.has(r));
+        img.in_use && refs.some((r) => declaredImages.has(r));
       const hitsPin =
         img.pinned_by.includes(appName) ||
-        img.references.some((r) => pinnedRefs.has(r));
+        refs.some((r) => pinnedRefs.has(r));
       return hitsDeclared || hitsPin;
     });
   }, [imagesData, declaredImages, pinnedRefs, appName]);
-
-  const primaryReference = (img: ImageSummary) =>
-    img.references[0] ?? img.image_id;
 
   const refreshAll = () => {
     onRefresh();
@@ -1541,29 +1543,7 @@ function AppImagesSection({
             {rows.map((img) => (
               <TableRow key={img.image_id} hover>
                 <TableCell>
-                  <Stack spacing={0.5}>
-                    {img.references.length === 0 ? (
-                      <Typography
-                        variant="caption"
-                        sx={{
-                          color: "text.secondary",
-                          fontFamily: "monospace",
-                        }}
-                      >
-                        (dangling) {img.image_id.slice(0, 19)}
-                      </Typography>
-                    ) : (
-                      img.references.map((r) => (
-                        <Typography
-                          key={r}
-                          variant="body2"
-                          sx={{ fontFamily: "monospace" }}
-                        >
-                          {r}
-                        </Typography>
-                      ))
-                    )}
-                  </Stack>
+                  <ImageReferencesCell image={img} />
                 </TableCell>
                 <TableCell>{humanBytes(img.size_bytes)}</TableCell>
                 <TableCell>

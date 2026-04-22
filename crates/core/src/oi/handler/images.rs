@@ -45,7 +45,7 @@ pub(crate) fn list_images(state: &OiState) -> HandlerResult {
     // Build reference → pinning-apps map in one DB call.
     let references: Vec<String> = images
         .iter()
-        .flat_map(|img| img.references.iter().cloned())
+        .flat_map(|img| img.all_references().map(str::to_owned))
         .collect();
     let pinned_map = state.db.call(move |db| {
         images::list_pinned_apps_for_references(
@@ -72,8 +72,7 @@ pub(crate) fn list_images(state: &OiState) -> HandlerResult {
     let mut out: Vec<Value> = Vec::with_capacity(images.len());
     for img in images {
         let pinned_by: Vec<AppName> = img
-            .references
-            .iter()
+            .all_references()
             .flat_map(|r| pinned_map.get(r).cloned().unwrap_or_default())
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
@@ -85,9 +84,28 @@ pub(crate) fn list_images(state: &OiState) -> HandlerResult {
             .map(|ms| rfc3339_from_millis(*ms))
             .unwrap_or_else(|| created_at.clone());
 
+        // Classify each digest reference: if its hash matches the image's
+        // own manifest digest, it IS the image manifest; otherwise it's a
+        // manifest-list digest from the multi-arch tag the image came from.
+        let manifest_hash = img.manifest_digest.as_deref().map(digest_hash_part);
+        let digests: Vec<Value> = img
+            .digests
+            .iter()
+            .map(|d| {
+                let kind = match manifest_hash {
+                    Some(h) if digest_hash_part(d) == h => "manifest",
+                    Some(_) => "manifest_list",
+                    None => "unknown",
+                };
+                json!({ "reference": d, "kind": kind })
+            })
+            .collect();
+
         out.push(json!({
             "image_id": img.image_id,
-            "references": img.references,
+            "tags": img.tags,
+            "digests": digests,
+            "manifest_digest": img.manifest_digest,
             "size_bytes": img.size_bytes,
             "created_at": created_at,
             "last_used_at": last_used_at,
@@ -97,6 +115,16 @@ pub(crate) fn list_images(state: &OiState) -> HandlerResult {
     }
 
     Ok(json!({ "images": out }))
+}
+
+/// Strip the `registry/repo@` prefix from a digest reference, returning
+/// just the `sha256:hex` portion. Accepts both bare digests (`"sha256:..."`)
+/// and full `repo@sha256:...` references.
+fn digest_hash_part(s: &str) -> &str {
+    match s.rfind('@') {
+        Some(idx) => &s[idx + 1..],
+        None => s,
+    }
 }
 
 fn rfc3339_from_secs(secs: i64) -> String {

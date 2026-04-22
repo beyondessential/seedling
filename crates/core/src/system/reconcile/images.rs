@@ -58,8 +58,8 @@ impl Reconciler {
         let mut live_ids: Vec<String> = Vec::with_capacity(images.len());
         for img in &images {
             live_ids.push(img.image_id.clone());
-            for reference in &img.references {
-                ref_pairs.push((reference.clone(), img.image_id.clone()));
+            for reference in img.all_references() {
+                ref_pairs.push((reference.to_owned(), img.image_id.clone()));
             }
         }
 

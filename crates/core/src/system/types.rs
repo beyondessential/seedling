@@ -77,11 +77,32 @@ pub struct NetworkSummary {
 pub struct ImageSummary {
     /// Content-addressable digest, e.g. `"sha256:..."`.
     pub image_id: String,
-    /// All tag and digest references that resolve to this image in local storage.
-    pub references: Vec<String>,
+    /// Named tag references (e.g. `"docker.io/library/node:latest"`).
+    pub tags: Vec<String>,
+    /// Pinned-digest references (e.g. `"docker.io/library/node@sha256:..."`).
+    /// May contain both the image-manifest digest and the manifest-list
+    /// digest of the multi-arch tag the image was pulled from; use
+    /// [`Self::manifest_digest`] to tell them apart.
+    pub digests: Vec<String>,
+    /// The image's own manifest digest (e.g. `"sha256:..."`), when the
+    /// container runtime reports one. A digest reference in `digests`
+    /// whose hash matches this is the image manifest; any others are
+    /// manifest-list digests for the multi-arch tag the image came from.
+    pub manifest_digest: Option<String>,
     pub size_bytes: i64,
     /// Image creation time as reported by the runtime, Unix seconds.
     pub created_at_secs: i64,
+}
+
+impl ImageSummary {
+    /// Flat list of every reference (tags + digests) that currently
+    /// resolves to this image. Used for DB bookkeeping.
+    pub fn all_references(&self) -> impl Iterator<Item = &str> {
+        self.tags
+            .iter()
+            .chain(self.digests.iter())
+            .map(String::as_str)
+    }
 }
 
 // ---------------------------------------------------------------------------

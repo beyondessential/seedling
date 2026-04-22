@@ -361,9 +361,27 @@ export interface TemplatePreview {
   script_error: string | null;
 }
 
+/**
+ * `manifest`: the digest refers to this image's own image manifest.
+ * `manifest_list`: the digest refers to the multi-arch manifest list the
+ *   image was pulled from (so the same local image can reach that digest
+ *   only by traversing the list).
+ * `unknown`: the container runtime didn't report the image's own manifest
+ *   digest, so we can't classify.
+ */
+export type ImageDigestKind = "manifest" | "manifest_list" | "unknown";
+
+export interface ImageDigest {
+  reference: string;
+  kind: ImageDigestKind;
+}
+
 export interface ImageSummary {
   image_id: string;
-  references: string[];
+  tags: string[];
+  digests: ImageDigest[];
+  /** The image's own manifest digest, as `"sha256:..."`, when known. */
+  manifest_digest: string | null;
   size_bytes: number;
   created_at: string;
   last_used_at: string;

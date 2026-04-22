@@ -503,16 +503,24 @@ impl PodmanRuntime {
                 Some(id) if !id.is_empty() => id,
                 _ => continue,
             };
-            let mut references: Vec<String> = Vec::new();
-            if let Some(tags) = s.repo_tags {
-                references.extend(tags.into_iter().filter(|t| !t.is_empty()));
-            }
-            if let Some(digests) = s.repo_digests {
-                references.extend(digests.into_iter().filter(|d| !d.is_empty()));
-            }
+            let tags: Vec<String> = s
+                .repo_tags
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|t| !t.is_empty() && t != "<none>:<none>")
+                .collect();
+            let digests: Vec<String> = s
+                .repo_digests
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|d| !d.is_empty())
+                .collect();
+            let manifest_digest = s.digest.filter(|d| !d.is_empty());
             out.push(ImageSummary {
                 image_id,
-                references,
+                tags,
+                digests,
+                manifest_digest,
                 size_bytes: s.size.unwrap_or(0),
                 created_at_secs: s.created.unwrap_or(0),
             });
