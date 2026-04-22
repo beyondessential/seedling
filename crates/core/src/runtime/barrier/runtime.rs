@@ -237,6 +237,54 @@ pub fn extract_cancel_hit(err: &EvalAltResult) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Image extraction from Deployment/Job resources
+// ---------------------------------------------------------------------------
+
+/// For each Deployment/Job in `resources_with_defs`, return `(instance, image)`
+/// pairs for those that declare a non-empty image reference. Anonymous
+/// resources arrive with a def attached; named ones are looked up in the
+/// action-context AppDef (the thread-local set by [`ActionClosureGuard`]).
+pub(crate) fn extract_container_images(
+    resources_with_defs: &[(ResourceInstance, Option<crate::defs::resource::Resource>)],
+) -> Vec<(ResourceInstance, String)> {
+    use crate::defs::resource::{Resource, ResourceKind};
+
+    fn image_of(resource: &Resource) -> Option<String> {
+        match resource {
+            Resource::Deployment(dep) => dep.def.lock().pod.lock().container.lock().image.clone(),
+            Resource::Job(job) => job.def.lock().pod.lock().container.lock().image.clone(),
+            _ => None,
+        }
+    }
+
+    let action_def = action_def();
+    let mut out = Vec::new();
+    for (inst, maybe_def) in resources_with_defs {
+        if !matches!(inst.kind, ResourceKind::Deployment | ResourceKind::Job) {
+            continue;
+        }
+
+        let image = match maybe_def {
+            Some(r) => image_of(r),
+            None => action_def.as_ref().and_then(|arc| {
+                let def = arc.load_full();
+                let name = inst.name.as_deref()?;
+                let id = crate::defs::resource::ResourceId {
+                    kind: inst.kind,
+                    name: std::sync::Arc::new(name.to_owned()),
+                };
+                def.resources.get(&id).and_then(image_of)
+            }),
+        };
+
+        if let Some(img) = image.filter(|s| !s.is_empty()) {
+            out.push((inst.clone(), img));
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Resource extraction from Rhai Dynamic
 // ---------------------------------------------------------------------------
 
@@ -456,6 +504,22 @@ impl RuntimeInstance {
         let resources: Vec<ResourceInstance> =
             resources_with_defs.iter().map(|(r, _)| r.clone()).collect();
 
+        // r[impl image.discover]
+        // Probe mode: capture images that would be pulled and return an
+        // already-satisfied Started. No log entries, no DB writes.
+        if let Some(ctx) = &self.ctx
+            && let Some(probe) = ctx.lock().probe_images.clone()
+        {
+            for (_, img) in extract_container_images(&resources_with_defs) {
+                probe.lock().insert(img);
+            }
+            return Ok(Started {
+                ctx: Some(Arc::clone(ctx)),
+                resources,
+                warm: WarmMode::None,
+            });
+        }
+
         if let Some(ctx) = &self.ctx {
             let mut g = ctx.lock();
             for (instance, maybe_def) in &resources_with_defs {
@@ -549,6 +613,19 @@ impl RuntimeInstance {
             .map(|(inst, _)| inst)
             .collect();
 
+        // r[impl image.discover]
+        // Probe mode: warm_certs has no image content to surface and no
+        // relevant side effect for discovery; return an immediate Started.
+        if let Some(ctx) = &self.ctx
+            && ctx.lock().probe_mode()
+        {
+            return Ok(Started {
+                ctx: Some(Arc::clone(ctx)),
+                resources,
+                warm: WarmMode::Certs,
+            });
+        }
+
         if is_barrier_hit_pending()
             && let Some(ctx) = &self.ctx
             && let Some(cond) = ctx.lock().pending_barrier.clone()
@@ -596,61 +673,7 @@ impl RuntimeInstance {
         &mut self,
         resources_with_defs: Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)>,
     ) -> Result<Started, Box<EvalAltResult>> {
-        use crate::defs::resource::{Resource, ResourceKind};
-
-        // Pair up each Deployment/Job with its image reference. Anonymous
-        // resources always arrive with a def attached; named resources rely
-        // on the static AppDef held by the registry/action-def thread-local.
-        let action_def = action_def();
-        let mut pairs: Vec<(ResourceInstance, String)> = Vec::new();
-
-        for (inst, maybe_def) in resources_with_defs {
-            if !matches!(inst.kind, ResourceKind::Deployment | ResourceKind::Job) {
-                continue;
-            }
-
-            let image: Option<String> = match maybe_def {
-                Some(Resource::Deployment(dep)) => {
-                    let dd = dep.def.lock();
-                    let pod = dd.pod.lock();
-                    pod.container.lock().image.clone()
-                }
-                Some(Resource::Job(job)) => {
-                    let jd = job.def.lock();
-                    let pod = jd.pod.lock();
-                    pod.container.lock().image.clone()
-                }
-                _ => {
-                    // Fall back to the action-context AppDef for named resources.
-                    action_def.as_ref().and_then(|arc| {
-                        let def = arc.load_full();
-                        let name = inst.name.as_deref()?;
-                        let id = crate::defs::resource::ResourceId {
-                            kind: inst.kind,
-                            name: std::sync::Arc::new(name.to_owned()),
-                        };
-                        let resource = def.resources.get(&id)?.clone();
-                        match resource {
-                            Resource::Deployment(dep) => {
-                                let dd = dep.def.lock();
-                                let pod = dd.pod.lock();
-                                pod.container.lock().image.clone()
-                            }
-                            Resource::Job(job) => {
-                                let jd = job.def.lock();
-                                let pod = jd.pod.lock();
-                                pod.container.lock().image.clone()
-                            }
-                            _ => None,
-                        }
-                    })
-                }
-            };
-
-            if let Some(img) = image.filter(|s| !s.is_empty()) {
-                pairs.push((inst, img));
-            }
-        }
+        let pairs = extract_container_images(&resources_with_defs);
 
         // Deduplicate image refs while keeping the resource list for audit.
         let mut refs: Vec<String> = Vec::new();
@@ -660,6 +683,24 @@ impl RuntimeInstance {
             }
         }
         let resources: Vec<ResourceInstance> = pairs.into_iter().map(|(r, _)| r).collect();
+
+        // r[impl image.discover]
+        // Probe mode: capture refs, skip pin writes and log entries, and
+        // return a Started whose barrier resolves immediately.
+        if let Some(ctx) = &self.ctx
+            && let Some(probe) = ctx.lock().probe_images.clone()
+        {
+            let mut p = probe.lock();
+            for r in &refs {
+                p.insert(r.clone());
+            }
+            drop(p);
+            return Ok(Started {
+                ctx: Some(Arc::clone(ctx)),
+                resources,
+                warm: WarmMode::Images(refs),
+            });
+        }
 
         // Persist pins immediately. Pins are idempotent and outlive the
         // in-memory action log — replay is free to re-upsert the same rows.
@@ -722,6 +763,16 @@ impl RuntimeInstance {
         resources: Vec<ResourceInstance>,
         deadline_secs: Option<u64>,
     ) -> Result<(), Box<EvalAltResult>> {
+        // r[impl image.discover]
+        // Probe mode: stop has no image content and no discovery-relevant
+        // side effect. Return immediately without touching the log.
+        if let Some(ctx) = &self.ctx
+            && ctx.lock().probe_mode()
+        {
+            let _ = (resources, deadline_secs);
+            return Ok(());
+        }
+
         if is_barrier_hit_pending()
             && let Some(ctx) = &self.ctx
             && let Some(cond) = ctx.lock().pending_barrier.clone()
@@ -855,6 +906,12 @@ impl CustomType for RuntimeInstance {
                     let dep_name = dep.name.as_str().to_owned();
                     if dep_name.is_empty() {
                         return Err("rt.restart requires a named deployment".into());
+                    }
+                    // r[impl image.discover]
+                    if let Some(ctx) = &this.ctx
+                        && ctx.lock().probe_mode()
+                    {
+                        return Ok(());
                     }
                     if let Some(db) = &this.db {
                         let app_name = this.app_name.clone();
@@ -1007,6 +1064,13 @@ impl Started {
             Some(c) => Arc::clone(c),
         };
 
+        // r[impl image.discover]
+        // Probe mode: every barrier resolves immediately.
+        if ctx.lock().probe_mode() {
+            let _ = (required, deadline_secs);
+            return Ok(self.clone());
+        }
+
         // r[impl operation.cancel]
         // Cooperatively honour a cancel request before doing any more work.
         if ctx.lock().cancel_token.is_cancelled() {
@@ -1154,6 +1218,14 @@ impl Started {
             // BSL parse/type-check runs don't flap.
             return Termination { success: true };
         };
+        // r[impl image.discover]
+        // Probe mode: pretend every terminated resource succeeded. We
+        // accept that this misses error-path image references (code
+        // guarded by `termination.ensure_success()` throwing); catching
+        // those would require speculatively executing both branches.
+        if ctx.lock().probe_mode() {
+            return Termination { success: true };
+        }
         let world = Arc::clone(&ctx.lock().world);
         let success = self
             .resources

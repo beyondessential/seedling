@@ -101,6 +101,13 @@ pub struct ReplayContext {
     /// Counter for assigning stable operation-scoped IDs to anonymous resources.
     /// Incremented each time an anonymous resource instance is created.
     pub anon_counter: u32,
+    /// When set, the replay is running in _probe_ mode: all `rt.*` calls that
+    /// would normally mutate state or wait on the world are short-circuited,
+    /// and image references extracted from `rt.start` / `rt.warm_images`
+    /// resources are appended to this set. The call site never needs to
+    /// inspect it directly — it uses [`probe_mode`](Self::probe_mode) instead.
+    // r[impl image.discover]
+    pub probe_images: Option<Arc<Mutex<std::collections::BTreeSet<String>>>>,
 }
 
 impl fmt::Debug for ReplayContext {
@@ -143,7 +150,27 @@ impl ReplayContext {
             cancel_token,
             dynamic_defs: std::collections::HashMap::new(),
             anon_counter: 0,
+            probe_images: None,
         }
+    }
+
+    /// Construct a `ReplayContext` configured for probe execution: no
+    /// committed entries, no real oracle, and an image-capture buffer.
+    // r[impl image.discover]
+    pub fn new_probe(
+        operation_id: OperationId,
+        world: Arc<dyn oracle::WorldStateOracle>,
+        cancel_token: Arc<CancelToken>,
+        probe_images: Arc<Mutex<std::collections::BTreeSet<String>>>,
+    ) -> Self {
+        let mut ctx = Self::new(operation_id, Vec::new(), world, cancel_token);
+        ctx.probe_images = Some(probe_images);
+        ctx
+    }
+
+    /// `true` when the replay is running in probe mode.
+    pub fn probe_mode(&self) -> bool {
+        self.probe_images.is_some()
     }
 
     pub fn is_replaying(&self) -> bool {
