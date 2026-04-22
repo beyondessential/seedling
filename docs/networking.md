@@ -349,6 +349,17 @@ touched. If NAT64 is required but initialisation fails, the daemon
 exits and files a fault — pods must not come up on a node that cannot
 reach the IPv4 internet.
 
+The translator tracks the workload lifecycle after that. On the
+transition to idle (no workloads registered), the reconciler calls
+`jool instance remove seedling` so an idle node carries no stale
+translator state. On the transition back out of idle, the first tick
+that sees workloads calls `setup_nat64` again before the pod phase
+runs — failure there files a `nat64_setup_failed` fault and short-
+circuits the tick so no pod comes up without NAT64. The jool kernel
+module stays loaded across the idle cycle; only the instance is
+added and removed. Forwarding sysctls are not flipped on idle (they
+are host-wide state).
+
 ### DNS64
 
 When NAT64 is active, the CoreDNS Corefile includes the `dns64` plugin
@@ -540,6 +551,8 @@ Within each reconciliation tick:
 ### Idle teardown
 
 When no apps remain registered, the reconciler flushes routes and
-nftables rules, tears down the Caddy and resolver containers, and
-removes their networks. The jool NAT64 instance is not torn down in
-the current daemon shutdown path.
+nftables rules, tears down the Caddy and resolver containers and
+their networks, and removes the jool NAT64 instance. The jool kernel
+module stays loaded and forwarding sysctls stay set. The translator
+is reinstalled on the first subsequent tick that sees a registered
+workload (see "NAT64 egress — Translator" above).

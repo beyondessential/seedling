@@ -162,6 +162,12 @@ pub struct Reconciler {
     rolling_updates: HashSet<(AppName, String)>,
     /// Whether seedling is providing its own NAT64 translator.
     nat64_active: bool,
+    /// Whether the jool translator instance is currently installed on
+    /// this host. The daemon sets up NAT64 at startup when required,
+    /// and the reconciler tears it down on transition to idle and
+    /// re-installs it on the transition back to non-idle.
+    // r[impl infra.nat64.translator.lifecycle]
+    nat64_installed: bool,
     /// Whether the DNS64 plugin should translate names that already
     /// have a real AAAA record (emits `translate_all` into the
     /// Corefile). Set when NAT64 is seedling-managed and the host has
@@ -233,6 +239,9 @@ impl Reconciler {
             prev_states: BTreeMap::new(),
             rolling_updates: HashSet::new(),
             nat64_active,
+            // Daemon startup has already called `setup_nat64` iff
+            // `nat64_active`; mirror that in our tracking flag.
+            nat64_installed: nat64_active,
             force_dns64_translation,
             dns_upstreams,
             resolver_addr: None,
@@ -383,6 +392,28 @@ impl Reconciler {
         if apps.is_empty() {
             self.tear_down_idle().await;
             return false;
+        }
+
+        // r[impl infra.nat64.translator.lifecycle]
+        // Wake-from-idle: ensure NAT64 translator is installed before any
+        // pod starts. Setup is idempotent (forwarding sysctls already at 1,
+        // module already loaded, instance-add handles EEXIST) so it is safe
+        // to run on every non-idle tick where `nat64_installed` is false.
+        if self.nat64_active && !self.nat64_installed {
+            match crate::system::jool::setup_nat64().await {
+                Ok(()) => {
+                    self.nat64_installed = true;
+                    self.clear_system_fault("nat64_setup_failed");
+                }
+                Err(e) => {
+                    error!(error = %e, "NAT64 re-setup failed; skipping tick to keep pods offline");
+                    self.file_system_fault(
+                        "nat64_setup_failed",
+                        &format!("NAT64 re-setup failed: {e}"),
+                    );
+                    return true;
+                }
+            }
         }
 
         // r[impl reconciliation.liveness]
@@ -655,6 +686,20 @@ impl Reconciler {
         resolver::teardown_resolver(&*self.driver.container, &*self.driver.process).await;
         self.caddy_v4_addr = None;
         self.resolver_addr = None;
+
+        // r[impl infra.nat64.translator.lifecycle]
+        if self.nat64_installed {
+            match crate::system::jool::teardown_nat64().await {
+                Ok(()) => self.nat64_installed = false,
+                Err(e) => {
+                    // Leave `nat64_installed = true` so the next non-idle
+                    // tick won't redundantly try to re-setup. Instance
+                    // removal failure is not fatal — the stale instance
+                    // is harmless and the next startup will handle it.
+                    error!(error = %e, "idle: NAT64 teardown failed");
+                }
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
