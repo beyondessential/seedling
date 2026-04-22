@@ -1,5 +1,7 @@
 use seedling_protocol::error::{ErrorCode, HandlerResult, OiError};
-use seedling_protocol::names::{AppName, ExternalVolumeName, HeldVolumeId};
+use seedling_protocol::names::{
+    AppName, AppVolumeName, ExternalVolumeName, HeldVolumeId, SiteVolumeName, VolumeRef,
+};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -134,7 +136,7 @@ pub(crate) fn list_app_volumes(state: &OiState) -> HandlerResult {
 
 #[derive(Deserialize)]
 pub(crate) struct CreateSiteVolumeParams {
-    pub name: String,
+    pub name: SiteVolumeName,
     /// "managed" or "bind"
     pub kind: String,
     /// Required when kind is "bind"
@@ -187,7 +189,7 @@ pub(crate) fn create_site_volume(
                 state
                     .driver
                     .volume_store
-                    .create_site(&params.name)
+                    .create_site(params.name.as_str())
                     .await
                     .map_err(|e| {
                         OiError::new(
@@ -216,7 +218,7 @@ pub(crate) fn create_site_volume(
         SiteVolumeKind::Snapshot { .. } => unreachable!("create_site_volume never builds Snapshot"),
     };
     ctx.events
-        .site_volume_created(&params.name, kind_str, host_path);
+        .site_volume_created(params.name.as_str(), kind_str, host_path);
 
     Ok(json!({ "created": true }))
 }
@@ -249,16 +251,8 @@ pub(crate) fn list_site_volumes(state: &OiState) -> HandlerResult {
             if let SiteVolumeKind::Bind { host_path } = &v.kind {
                 obj["host_path"] = json!(host_path);
             }
-            if let SiteVolumeKind::Snapshot {
-                source_app,
-                source_volume,
-            } = &v.kind
-            {
-                if let Some(app) = source_app {
-                    obj["source"] = json!(format!("{app}/{source_volume}"));
-                } else {
-                    obj["source"] = json!(format!("_site/{source_volume}"));
-                }
+            if let SiteVolumeKind::Snapshot { source } = &v.kind {
+                obj["source"] = json!(volume_ref_display(source));
             }
             obj
         })
@@ -269,7 +263,7 @@ pub(crate) fn list_site_volumes(state: &OiState) -> HandlerResult {
 
 #[derive(Deserialize)]
 pub(crate) struct DeleteSiteVolumeParams {
-    pub name: String,
+    pub name: SiteVolumeName,
 }
 
 // r[impl volume.site.lifecycle]
@@ -294,7 +288,7 @@ pub(crate) fn delete_site_volume(
     let def = def.ok_or_else(|| {
         OiError::new(
             ErrorCode::RequirementsInvalid,
-            format!("no site volume named {:?}", params.name),
+            format!("no site volume named {:?}", params.name.as_str()),
         )
     })?;
 
@@ -316,7 +310,7 @@ pub(crate) fn delete_site_volume(
                     state
                         .driver
                         .volume_store
-                        .hold_site(&params.name, reason)
+                        .hold_site(params.name.as_str(), reason)
                         .await
                         .map_err(|e| {
                             OiError::new(
@@ -360,7 +354,7 @@ pub(crate) fn delete_site_volume(
     }
     // r[impl volume.site.lifecycle.events]
     ctx.events
-        .site_volume_deleted(&params.name, kind_str, held_id);
+        .site_volume_deleted(params.name.as_str(), kind_str, held_id);
 
     Ok(json!({ "deleted": true }))
 }
@@ -368,7 +362,7 @@ pub(crate) fn delete_site_volume(
 #[derive(Deserialize)]
 pub(crate) struct SnapshotSiteVolumeParams {
     /// Name for the new snapshot site volume
-    pub name: String,
+    pub name: SiteVolumeName,
     /// Source volume ID: _site/<name> for a managed site volume, or <app>/<volume> for an app volume
     pub source: String,
 }
@@ -381,7 +375,7 @@ pub(crate) fn snapshot_site_volume(
 ) -> HandlerResult {
     use crate::runtime::site_volumes::{SiteVolumeDef, SiteVolumeKind};
 
-    let (source_app, source_volume, source_path) = parse_source_vol_id(&params.source, state)
+    let (source, source_path) = parse_source_vol_id(&params.source, state)
         .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e))?;
 
     tokio::task::block_in_place(|| {
@@ -389,7 +383,7 @@ pub(crate) fn snapshot_site_volume(
             state
                 .driver
                 .volume_store
-                .snapshot_site(&params.name, &source_path)
+                .snapshot_site(params.name.as_str(), &source_path)
                 .await
                 .map_err(|e| {
                     OiError::new(
@@ -400,14 +394,10 @@ pub(crate) fn snapshot_site_volume(
         })
     })?;
 
-    let event_source_app = source_app.clone();
-    let event_source_volume = source_volume.clone();
+    let event_source = source.clone();
     let def = SiteVolumeDef {
         name: params.name.clone(),
-        kind: SiteVolumeKind::Snapshot {
-            source_app,
-            source_volume,
-        },
+        kind: SiteVolumeKind::Snapshot { source },
         created_at: jiff::Timestamp::now().to_string(),
     };
 
@@ -422,11 +412,8 @@ pub(crate) fn snapshot_site_volume(
         })?;
 
     // r[impl volume.site.snapshot.events]
-    ctx.events.site_volume_snapshotted(
-        &params.name,
-        event_source_app.as_ref(),
-        &event_source_volume,
-    );
+    ctx.events
+        .site_volume_snapshotted(params.name.as_str(), &event_source);
 
     Ok(json!({ "created": true, "name": params.name }))
 }
@@ -434,9 +421,9 @@ pub(crate) fn snapshot_site_volume(
 #[derive(Deserialize)]
 pub(crate) struct PromoteSiteVolumeParams {
     /// Name of the existing snapshot site volume to promote
-    pub source: String,
+    pub source: SiteVolumeName,
     /// Name for the new managed site volume
-    pub name: String,
+    pub name: SiteVolumeName,
 }
 
 // r[impl volume.site.promote]
@@ -461,7 +448,7 @@ pub(crate) fn promote_site_volume(
     let source_def = source_def.ok_or_else(|| {
         OiError::new(
             ErrorCode::RequirementsInvalid,
-            format!("no site volume named {:?}", params.source),
+            format!("no site volume named {:?}", params.source.as_str()),
         )
     })?;
 
@@ -470,19 +457,19 @@ pub(crate) fn promote_site_volume(
             ErrorCode::RequirementsInvalid,
             format!(
                 "site volume {:?} is not a snapshot; only snapshot site volumes can be promoted",
-                params.source
+                params.source.as_str()
             ),
         ));
     }
 
-    let source_path = state.driver.volume_store.site_path(&params.source);
+    let source_path = state.driver.volume_store.site_path(params.source.as_str());
 
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
             state
                 .driver
                 .volume_store
-                .promote_site_snapshot(&params.name, &source_path)
+                .promote_site_snapshot(params.name.as_str(), &source_path)
                 .await
                 .map_err(|e| {
                     OiError::new(
@@ -511,21 +498,21 @@ pub(crate) fn promote_site_volume(
 
     // r[impl volume.site.promote.events]
     ctx.events
-        .site_volume_promoted(&params.name, &params.source);
+        .site_volume_promoted(params.name.as_str(), params.source.as_str());
 
     Ok(json!({ "promoted": true, "name": params.name }))
 }
 
-/// Resolve a volume id like `_site/<name>` or `<app>/<volume>` to the tuple
-/// `(source_app, source_volume_name, on_disk_path)`. For app-scoped volumes
-/// the on-disk path is pulled from the registry's display_name rather than
-/// rebuilt from the BSL name — the naming scheme ("<app>-volume-<name>" for
-/// kind=Volume via the default arm of new_singleton) is not something any
-/// caller should hand-roll.
+/// Resolve a volume id like `_site/<name>` or `<app>/<volume>` into a
+/// `(VolumeRef, on-disk path)` pair. For app-scoped volumes the on-disk path
+/// is pulled from the registry's display_name rather than rebuilt from the
+/// BSL name — the naming scheme ("<app>-volume-<name>" for kind=Volume via
+/// the default arm of new_singleton) is not something any caller should
+/// hand-roll.
 fn parse_source_vol_id(
     vol_id: &str,
     state: &OiState,
-) -> Result<(Option<AppName>, String, std::path::PathBuf), String> {
+) -> Result<(VolumeRef, std::path::PathBuf), String> {
     let (prefix, vol) = vol_id.split_once('/').ok_or_else(|| {
         format!("invalid source {vol_id:?}: expected _site/<name> or <app>/<volume>")
     })?;
@@ -536,19 +523,22 @@ fn parse_source_vol_id(
     }
     if prefix == "_site" {
         let path = state.driver.volume_store.site_path(vol);
-        Ok((None, vol.to_owned(), path))
+        let name = SiteVolumeName::new(vol)
+            .map_err(|e| format!("invalid site volume name {vol:?}: {e}"))?;
+        Ok((VolumeRef::Site { name }, path))
     } else {
         let app = AppName::new(prefix).map_err(|e| format!("invalid app name {prefix:?}: {e}"))?;
-        let vol_name = vol.to_owned();
+        let volume =
+            AppVolumeName::new(vol).map_err(|e| format!("invalid app volume name {vol:?}: {e}"))?;
         let instances = {
             let app = app.clone();
-            let vol_name = vol_name.clone();
+            let volume_str = volume.as_str().to_owned();
             state.db.call(move |db| {
                 crate::runtime::history::find_instances_for_group(
                     db,
                     &app,
                     crate::defs::resource::ResourceKind::Volume,
-                    Some(&vol_name),
+                    Some(&volume_str),
                 )
                 .unwrap_or_default()
             })
@@ -559,7 +549,16 @@ fn parse_source_vol_id(
             .ok_or_else(|| format!("no volume {prefix}/{vol} known to the registry"))?;
         let vol_name_canonical = crate::runtime::identity::VolumeName::of_instance(&inst);
         let path = state.driver.volume_store.path(&vol_name_canonical);
-        Ok((Some(app), vol_name, path))
+        Ok((VolumeRef::App { app, volume }, path))
+    }
+}
+
+/// Format a [`VolumeRef`] into the `"_site/<name>"` / `"<app>/<volume>"`
+/// shorthand used in JSON payloads.
+fn volume_ref_display(r: &VolumeRef) -> String {
+    match r {
+        VolumeRef::Site { name } => format!("_site/{name}"),
+        VolumeRef::App { app, volume } => format!("{app}/{volume}"),
     }
 }
 
@@ -567,11 +566,7 @@ fn parse_source_vol_id(
 pub(crate) struct MapExternalVolumeParams {
     pub app: AppName,
     pub external_name: ExternalVolumeName,
-    /// "exported" or "site"
-    pub target_kind: String,
-    /// Required when target_kind is "exported"
-    pub target_app: Option<AppName>,
-    pub target_volume: String,
+    pub target: VolumeRef,
     #[serde(default)]
     pub read_only: bool,
 }
@@ -583,18 +578,13 @@ pub(crate) fn map_external_volume(
 ) -> HandlerResult {
     use crate::runtime::external_volume_mappings::{self, ExternalVolumeMapping};
 
-    let target = parse_mapping_target(
-        &params.target_kind,
-        params.target_app.as_ref(),
-        &params.target_volume,
-    )?;
-
     let app = params.app.clone();
     let external_name = params.external_name.clone();
+    let event_target = params.target.clone();
     let mapping = ExternalVolumeMapping {
         app: params.app,
         external_name: params.external_name,
-        target,
+        target: params.target,
         read_only: params.read_only,
     };
 
@@ -609,14 +599,8 @@ pub(crate) fn map_external_volume(
         })?;
 
     // r[impl volume.external.mapping.events]
-    ctx.events.external_volume_mapped(
-        &app,
-        &external_name,
-        &params.target_kind,
-        params.target_app.as_ref(),
-        &params.target_volume,
-        params.read_only,
-    );
+    ctx.events
+        .external_volume_mapped(&app, &external_name, &event_target, params.read_only);
 
     state.tick_notify.notify_one();
     Ok(json!({ "mapped": true }))
@@ -691,18 +675,12 @@ pub(crate) fn remap_external_volume(
     params: MapExternalVolumeParams,
     ctx: &RequestCtx,
 ) -> HandlerResult {
-    use crate::runtime::external_volume_mappings::{self, ExternalVolumeMapping, MappingTarget};
-
-    let target = parse_mapping_target(
-        &params.target_kind,
-        params.target_app.as_ref(),
-        &params.target_volume,
-    )?;
+    use crate::runtime::external_volume_mappings::{self, ExternalVolumeMapping};
 
     let mapping = ExternalVolumeMapping {
         app: params.app.clone(),
         external_name: params.external_name.clone(),
-        target,
+        target: params.target.clone(),
         read_only: params.read_only,
     };
 
@@ -733,27 +711,16 @@ pub(crate) fn remap_external_volume(
     }
 
     let previous = previous.expect("update succeeded so prior row existed");
-    let (prev_kind, prev_app, prev_volume) = match &previous.target {
-        MappingTarget::Exported {
-            target_app,
-            target_volume,
-        } => ("exported", Some(target_app), target_volume.as_str()),
-        MappingTarget::Site { target_volume } => ("site", None, target_volume.as_str()),
-    };
     // r[impl volume.external.mapping.events]
     ctx.events.external_volume_remapped(
         &params.app,
         &params.external_name,
         seedling_protocol::events::ExternalMappingSnapshot {
-            kind: &params.target_kind,
-            app: params.target_app.as_ref(),
-            volume: &params.target_volume,
+            target: &params.target,
             read_only: params.read_only,
         },
         seedling_protocol::events::ExternalMappingSnapshot {
-            kind: prev_kind,
-            app: prev_app,
-            volume: prev_volume,
+            target: &previous.target,
             read_only: previous.read_only,
         },
     );
@@ -772,7 +739,7 @@ pub(crate) fn list_external_mappings(
     state: &OiState,
     params: ListExternalMappingsParams,
 ) -> HandlerResult {
-    use crate::runtime::external_volume_mappings::{self, MappingTarget};
+    use crate::runtime::external_volume_mappings;
 
     let app_filter = params.app.clone();
     let mappings = state
@@ -789,26 +756,12 @@ pub(crate) fn list_external_mappings(
     let items: Vec<_> = mappings
         .iter()
         .map(|m| {
-            let mut obj = json!({
+            json!({
                 "app": m.app,
                 "external_name": m.external_name,
                 "read_only": m.read_only,
-            });
-            match &m.target {
-                MappingTarget::Exported {
-                    target_app,
-                    target_volume,
-                } => {
-                    obj["target_kind"] = json!("exported");
-                    obj["target_app"] = json!(target_app);
-                    obj["target_volume"] = json!(target_volume);
-                }
-                MappingTarget::Site { target_volume } => {
-                    obj["target_kind"] = json!("site");
-                    obj["target_volume"] = json!(target_volume);
-                }
-            }
-            obj
+                "target": m.target,
+            })
         })
         .collect();
 
@@ -842,34 +795,4 @@ pub(crate) fn list_declared_external_volumes(state: &OiState) -> HandlerResult {
         ak.cmp(&bk)
     });
     Ok(json!(items))
-}
-
-fn parse_mapping_target(
-    kind: &str,
-    target_app: Option<&AppName>,
-    target_volume: &str,
-) -> Result<crate::runtime::external_volume_mappings::MappingTarget, OiError> {
-    use crate::runtime::external_volume_mappings::MappingTarget;
-
-    match kind {
-        "exported" => {
-            let app = target_app.ok_or_else(|| {
-                OiError::new(
-                    ErrorCode::RequirementsInvalid,
-                    "target_app is required for exported volume mappings".to_string(),
-                )
-            })?;
-            Ok(MappingTarget::Exported {
-                target_app: app.clone(),
-                target_volume: target_volume.to_owned(),
-            })
-        }
-        "site" => Ok(MappingTarget::Site {
-            target_volume: target_volume.to_owned(),
-        }),
-        other => Err(OiError::new(
-            ErrorCode::RequirementsInvalid,
-            format!("invalid target_kind: {other:?}, expected \"exported\" or \"site\""),
-        )),
-    }
 }

@@ -722,25 +722,28 @@ async fn restore_backup_async(state: &Arc<OiState>, params: RestoreBackupParams)
     validate_backup_app_actions(state, &backing_app_name)?;
 
     let vol_store = &state.driver.volume_store;
-    let site_vol_name = format!(
+    let site_vol_name = seedling_protocol::names::SiteVolumeName::new_unchecked(format!(
         "restore-{}-{}",
         params.strategy,
         uuid::Uuid::new_v4().simple()
-    );
+    ));
 
-    vol_store.create_site(&site_vol_name).await.map_err(|e| {
-        OiError::new(
-            ErrorCode::Internal,
-            format!("failed to create restore site volume: {e}"),
-        )
-    })?;
+    vol_store
+        .create_site(site_vol_name.as_str())
+        .await
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("failed to create restore site volume: {e}"),
+            )
+        })?;
 
     let operation_id = OperationId::new();
     // Scheduler + registry are keyed on the BSL app (backing_app_name),
     // not the backup-app nickname (backup_app_name).
     acquire_scheduler_slot(state, &backing_app_name, &operation_id).await;
 
-    let dest_path = vol_store.site_path(&site_vol_name);
+    let dest_path = vol_store.site_path(site_vol_name.as_str());
     // r[impl operation.volume-param]
     let (bindings, mut action_params) = build_operation_volume_params(
         &operation_id.0,
@@ -773,7 +776,7 @@ async fn restore_backup_async(state: &Arc<OiState>, params: RestoreBackupParams)
     .await;
 
     if !success {
-        let _ = vol_store.remove_site(&site_vol_name).await;
+        let _ = vol_store.remove_site(site_vol_name.as_str()).await;
         return Err(OiError::new(
             ErrorCode::Internal,
             "restore-snapshot action failed".to_owned(),
@@ -804,7 +807,7 @@ async fn restore_backup_async(state: &Arc<OiState>, params: RestoreBackupParams)
         // down the directory so we don't leak orphan data whose existence
         // the operator can't see. Returning the error is honest: the
         // restore didn't achieve its stated effect.
-        let _ = vol_store.remove_site(&site_vol_name).await;
+        let _ = vol_store.remove_site(site_vol_name.as_str()).await;
         return Err(OiError::new(
             ErrorCode::Internal,
             format!("restore succeeded but failed to register site volume: {e}"),

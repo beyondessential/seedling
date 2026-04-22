@@ -1,6 +1,6 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
-use seedling_protocol::names::{AppName, HeldVolumeId, SessionId};
+use seedling_protocol::names::{AppName, AppVolumeName, HeldVolumeId, SessionId, SiteVolumeName};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::registry::ShellSession;
@@ -16,9 +16,9 @@ use crate::{
 
 #[derive(serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-enum VolumeRef {
-    Site { name: String },
-    App { app: AppName, volume: String },
+enum VolumeShellMount {
+    Site { name: SiteVolumeName },
+    App { app: AppName, volume: AppVolumeName },
     // Inspect a held volume's data. The `id` is the one returned by
     // /volumes/held/list. Mounted read-write so the operator can cherry-
     // pick files back out into another volume if they want to recover a
@@ -58,7 +58,7 @@ pub(crate) async fn open_volume_shell_session(
 ) {
     #[derive(serde::Deserialize)]
     struct Params {
-        volumes: Vec<VolumeRef>,
+        volumes: Vec<VolumeShellMount>,
         rows: u16,
         cols: u16,
     }
@@ -114,7 +114,7 @@ pub(crate) async fn open_volume_shell_session(
 
     for vol_ref in &params.volumes {
         let (path, read_only, display_name) = match vol_ref {
-            VolumeRef::Site { name } => {
+            VolumeShellMount::Site { name } => {
                 let name_owned = name.clone();
                 let def = match tokio::task::block_in_place(|| {
                     state
@@ -130,7 +130,7 @@ pub(crate) async fn open_volume_shell_session(
                 let read_only = def.is_read_only();
                 let path = match &def.kind {
                     SiteVolumeKind::Managed | SiteVolumeKind::Snapshot { .. } => {
-                        let p = vol_store.site_path(name);
+                        let p = vol_store.site_path(name.as_str());
                         if !p.exists() {
                             err!(
                                 "not_found",
@@ -150,13 +150,13 @@ pub(crate) async fn open_volume_shell_session(
                         p
                     }
                 };
-                let display_name = sanitise_name(name);
+                let display_name = sanitise_name(name.as_str());
                 (path, read_only, display_name)
             }
 
-            VolumeRef::App { app, volume } => {
+            VolumeShellMount::App { app, volume } => {
                 let on_disk_name =
-                    crate::runtime::identity::VolumeName::for_app(app.as_str(), volume);
+                    crate::runtime::identity::VolumeName::for_app(app.as_str(), volume.as_str());
                 let path = vol_store.path(&on_disk_name);
                 if !path.exists() {
                     err!(
@@ -168,7 +168,7 @@ pub(crate) async fn open_volume_shell_session(
                 (path, false, display_name)
             }
 
-            VolumeRef::Held { id } => {
+            VolumeShellMount::Held { id } => {
                 let path = match vol_store.held_path(id) {
                     Some(p) => p,
                     None => err!("not_found", format!("held volume not found: {id}")),
