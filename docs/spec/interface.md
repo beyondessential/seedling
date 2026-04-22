@@ -735,6 +735,42 @@ Absent specification bugs, anything that is not defined here is either defined i
 > `/registries/remove { registry }` removes a registry hostname from the allowlist.
 > All registered apps are re-evaluated after a registry is removed; any app whose images reference the removed registry will receive a `disallowed_registry` fault.
 
+## Image Management
+
+> i[image.list]
+> `/images/list {}` returns the set of locally-present container images.
+> Response `result` is an array of objects, each with fields:
+>
+> - `image_id`: string, the image's content-addressable digest (e.g. `"sha256:..."`).
+> - `references`: array of strings; the tags and/or digest references that currently point at this image in local storage. May be empty for dangling images.
+> - `size_bytes`: integer.
+> - `created_at`: RFC 3339 timestamp, as reported by the container runtime.
+> - `last_used_at`: RFC 3339 timestamp — the last time the runtime observed this image being used by a running container, or the time the image was first recorded locally if it has never been in use.
+> - `in_use`: boolean; `true` when at least one running container currently uses this image.
+> - `pinned_by`: array of app names that currently pin at least one reference resolving to this image.
+
+> i[image.pull]
+> `/images/pull { reference, app? }` requests that the named image reference be pulled into local storage through the runtime's standard pull machinery (with retries and back-off).
+> `reference` must be a non-empty container image reference (e.g. `"ghcr.io/example/foo:1.2.3"`).
+> If `app` is provided, the app must be registered; the pulled reference is additionally [pinned](#r--image.pin) to that app.
+> Returns `{ "ok": true }` on accepted pull. Pull failures surface through the existing [image pull fault](#r--fault.image-pull) mechanism rather than the response.
+
+> i[image.remove]
+> `/images/remove { reference, force? }` removes the named image from local storage.
+> If at least one running container currently uses the image, the request is rejected with `requirements_invalid` unless `force` is `true`.
+> Pins targeting `reference` are cleared regardless of outcome.
+> Returns `{ "ok": true }` on successful removal; `not_found` if no image resolves to `reference` in local storage.
+
+> i[image.pin.list]
+> `/images/pins/list { app? }` returns the set of image pins.
+> When `app` is provided, only that app's pins are returned; otherwise pins for all apps are returned.
+> Response `result` is an array of objects with fields `app` (string), `reference` (string), and `pinned_at` (RFC 3339 timestamp).
+
+> i[image.pin.clear]
+> `/images/pins/clear { app, reference? }` clears pins for `app`.
+> When `reference` is provided, only the pin matching that reference is cleared (no-op if absent); otherwise all pins for the app are cleared.
+> Returns `{ "ok": true }`.
+
 ## Backup Apps
 
 > i[backup.app.register]

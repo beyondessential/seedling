@@ -812,6 +812,19 @@ This spec defines the semantics of the Runtime Instance as far as BSL is concern
 >
 > Calling `rt.warm_certs(app)` from within an [`on_change`](#l--param.on-change) handler warms exactly the ingresses that exist in the new generation. Ingresses present in the previous generation but not the new one are not warmed.
 
+> l[rt.warm-images]
+> The `rt.warm_images(resources: Collection)` method selects all [Deployment](#l--deployment.type) and [Job](#l--job.type) resources from the given Collection, extracts their container image references, and ensures those images are present in local container storage, without starting the containers.
+> Non-container resources, and container resources that have no image reference declared, are ignored.
+>
+> Each distinct image reference in the selection is _pinned_ to the calling app: a pinned image is protected from autonomous image removal until a running container is observed using it (at which point the pin is cleared automatically) or an operator clears the pin explicitly. Pins are not automatically re-established when a workload that was using an image stops; a subsequent `rt.warm_images` call is required to re-pin.
+>
+> It returns a [Started](#l--rt.started). Calling `.ready()` on the returned `Started` blocks until every selected image is present locally.
+> If an image pull fails persistently, a fault is filed and the barrier throws when its deadline expires.
+>
+> If the selection contains no images to warm, the returned `Started` is immediately satisfied.
+>
+> Anonymous container resources are supported: `rt.warm_images(app.job().image("registry/foo:1.2.3"))` warms the single image reference of a dynamic job without ever starting it, which is the idiomatic way to pre-load a future version of an image ahead of a deploy.
+
 ## Waiting on resource state
 
 > l[rt.started.type]

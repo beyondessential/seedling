@@ -138,6 +138,7 @@ rt.start(resources)             // schedule resources, returns Started
 rt.stop(resources, deadline?)   // unschedule and block until terminated
 rt.query(resources)             // returns Started without scheduling
 rt.warm_certs(resources)        // pre-provision TLS certs for ingresses
+rt.warm_images(resources)       // pre-pull container images without starting them
 
 // Started methods — all block until state is reached (deadline in seconds):
 started.scheduled(deadline?)

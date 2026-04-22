@@ -704,6 +704,33 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 >
 > The warm_certs call must be recorded in the [action execution log](#r--history.action-log) and must be idempotent on replay: a subsequent invocation with the same selection observes the existing cert state and returns immediately when `valid`, without re-initiating acquisition.
 
+> r[actuate.image.warm]
+> When an action closure invokes [`rt.warm_images`](#l--rt.warm-images) with a selection that contains container resources, the runtime must collect the distinct image references from those resources' container definitions and initiate pulls for each image that is not already present locally.
+> For each extracted image reference the runtime must durably record a [pin](#r--image.pin) tying the calling app to the reference, upserted idempotently.
+>
+> The warm_images call must be recorded in the [action execution log](#r--history.action-log) and must be idempotent on replay: a subsequent invocation with the same selection observes the existing local image state and returns immediately when all selected images are present.
+
+> r[image.pin]
+> A _pin_ is a durable `(app, image_reference)` record indicating that an app has requested the referenced image be warmed.
+> While a pin exists it must protect its image reference from autonomous removal (see [image.gc](#r--image.gc)).
+> The runtime must remove a pin whenever it observes a running container whose image reference matches that pin, so that a warmed image transitions from _pinned_ to _in use_ automatically on first observed use.
+> A pin must not be automatically re-created when a workload stops using an image; a subsequent `rt.warm_images` call is required to re-pin.
+> Operators may clear any pin explicitly via the operator interface.
+
+> r[image.track]
+> The runtime must maintain, for each locally-present container image, a _last-used_ timestamp initialised to the time the image was first observed locally.
+> On every reconciliation pass, the last-used timestamp of every image whose `image_id` appears on at least one running container must be updated to the current time.
+
+> r[image.gc]
+> At a regular interval matching the background garbage collector cadence, the runtime must remove locally-present container images that satisfy all of the following:
+>
+> - No [pin](#r--image.pin) exists for any reference pointing at the image.
+> - No running container is currently observed using the image.
+> - The image's [last-used timestamp](#r--image.track) is at least 30 days in the past.
+>
+> Removal failures must be logged and must not prevent removal of other images in the same pass.
+> Autonomous image GC must not be extended with shorter retention periods or more aggressive policies without explicit operator configuration; operators remove images they no longer need through the operator interface.
+
 > r[actuate.volume.start]
 > Starting a Volume instance must create the named volume if it does not already exist, then apply any declared file writes to the volume.
 
