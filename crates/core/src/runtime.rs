@@ -17,6 +17,7 @@ pub mod gc;
 pub mod generations;
 pub mod history;
 pub mod identity;
+pub mod images;
 pub mod lifecycle;
 pub mod registries;
 pub mod registry;
