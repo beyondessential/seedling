@@ -220,9 +220,28 @@ bsl_name_newtype! {
     ///
     /// Names the *slot* the app declares in its script (e.g.
     /// `app.external_volume("data")`); the *target* volume the operator maps
-    /// into that slot is still plain text for now — it can refer to either a
-    /// site volume or another app's volume, so it needs a different newtype.
+    /// into that slot is represented by [`VolumeRef`].
     ExternalVolumeName
+}
+
+bsl_name_newtype! {
+    /// Canonical name of a site-level volume.
+    ///
+    /// Site volumes are created and owned by the operator (via
+    /// `/volumes/site/create` or a snapshot of another volume), independent of
+    /// any app. They're referenced by name when mapping into an app's external
+    /// volume slot or when opening a volume-shell session.
+    SiteVolumeName
+}
+
+bsl_name_newtype! {
+    /// Canonical name of a volume declared inside an app's BSL script.
+    ///
+    /// This is the BSL-level identifier the app uses when calling
+    /// `app.volume("data")`. It's distinct from [`VolumeName`] (the
+    /// canonical on-disk/podman name) and from [`SiteVolumeName`] (which
+    /// lives at the site level).
+    AppVolumeName
 }
 
 bsl_name_newtype! {
@@ -322,6 +341,36 @@ uuid_newtype! {
     /// `held-volumes` store and the stem of the sidecar `{id}.meta.json`
     /// file, so the wire/on-disk form is the plain UUID string.
     HeldVolumeId
+}
+
+// ---------------------------------------------------------------------------
+// VolumeRef — polymorphic reference to a named volume
+// ---------------------------------------------------------------------------
+
+/// Reference to a named volume in the system. A volume lives either at the
+/// site level (managed by the operator) or inside an app (declared in its
+/// BSL script); a `VolumeRef` names exactly one of those.
+///
+/// The serialised form is a tagged object — `{"kind": "site", "name": ...}`
+/// or `{"kind": "app", "app": ..., "volume": ...}` — so the discriminator is
+/// part of the payload and cannot drift.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum VolumeRef {
+    /// A volume owned by the site.
+    Site { name: SiteVolumeName },
+    /// A volume declared by a specific app.
+    App { app: AppName, volume: AppVolumeName },
+}
+
+impl VolumeRef {
+    /// The owning app, if this ref points at an app volume.
+    pub fn app(&self) -> Option<&AppName> {
+        match self {
+            Self::Site { .. } => None,
+            Self::App { app, .. } => Some(app),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -537,5 +586,60 @@ mod tests {
         let t = TemplateName::new("foo").unwrap();
         let b = BackupStrategyName::new("foo").unwrap();
         assert_eq!(t.as_str(), b.as_str());
+    }
+
+    #[test]
+    fn site_volume_name_accepts_canonical() {
+        SiteVolumeName::new("backups").unwrap();
+        SiteVolumeName::new("shared-ca").unwrap();
+    }
+
+    #[test]
+    fn app_volume_name_accepts_canonical() {
+        AppVolumeName::new("data").unwrap();
+        AppVolumeName::new("db-storage").unwrap();
+    }
+
+    #[test]
+    fn volume_names_are_distinct_types() {
+        let s = SiteVolumeName::new("shared").unwrap();
+        let a = AppVolumeName::new("shared").unwrap();
+        assert_eq!(s.as_str(), a.as_str());
+    }
+
+    #[test]
+    fn volume_ref_site_round_trips() {
+        let r = VolumeRef::Site {
+            name: SiteVolumeName::new("backups").unwrap(),
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        assert_eq!(json, r#"{"kind":"site","name":"backups"}"#);
+        let back: VolumeRef = serde_json::from_str(&json).unwrap();
+        assert_eq!(r, back);
+    }
+
+    #[test]
+    fn volume_ref_app_round_trips() {
+        let r = VolumeRef::App {
+            app: AppName::new("myapp").unwrap(),
+            volume: AppVolumeName::new("data").unwrap(),
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        assert_eq!(json, r#"{"kind":"app","app":"myapp","volume":"data"}"#);
+        let back: VolumeRef = serde_json::from_str(&json).unwrap();
+        assert_eq!(r, back);
+    }
+
+    #[test]
+    fn volume_ref_app_returns_owner() {
+        let a = VolumeRef::App {
+            app: AppName::new("myapp").unwrap(),
+            volume: AppVolumeName::new("data").unwrap(),
+        };
+        assert_eq!(a.app().map(|n| n.as_str()), Some("myapp"));
+        let s = VolumeRef::Site {
+            name: SiteVolumeName::new("shared").unwrap(),
+        };
+        assert!(s.app().is_none());
     }
 }
