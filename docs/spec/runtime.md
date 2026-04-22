@@ -1031,10 +1031,13 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > and removed when they cannot. Specifically: the translator must be set up at daemon
 > startup (when NAT64 is required) and on every transition from no-workloads-registered
 > back to workloads-registered. It must be torn down on the transition to
-> no-workloads-registered and during graceful shutdown. The translator must be operational
-> before any workload container is started. If the translator cannot be initialised and
-> NAT64 is required (`enabled` mode or `auto` mode with no external NAT64 detected), the
-> runtime must report an error and file a fault.
+> no-workloads-registered. The translator must be operational before any workload
+> container is started. The runtime must not remove the translator on daemon shutdown:
+> workload containers continue running across daemon restarts and depend on NAT64 to
+> reach the IPv4 internet, so the kernel translator state must survive the daemon
+> process. If the translator cannot be initialised and NAT64 is required (`enabled` mode
+> or `auto` mode with no external NAT64 detected), the runtime must report an error and
+> file a fault.
 
 > r[infra.nat64.forwarding]
 > When NAT64 is active, the runtime must ensure that IPv6 and IPv4 forwarding are enabled on
