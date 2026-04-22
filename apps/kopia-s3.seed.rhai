@@ -23,6 +23,8 @@ let version = app.param("version")
 
 let image = || `docker.io/kopia/kopia:${if version.is_set() { version.value() } else { "latest" }}`;
 
+let alpine = "docker.io/library/alpine:latest";
+
 // ── Connection params ─────────────────────────────────────────────────────────
 
 let bucket = app.param("bucket")
@@ -155,6 +157,12 @@ let kopia_job = || {
         .mount("/app/cache", cache)
 };
 
+// Use at the end of each action to keep the images warm
+let keep_warm = |rt| {
+    rt.warm_images(kopia_job.call());
+    rt.warm_images(app.job().image(alpine));
+};
+
 // ── Install ───────────────────────────────────────────────────────────────────
 
 // Connects to the Kopia repository in S3, creating it if it does not yet
@@ -168,6 +176,7 @@ app.on_install(|rt, _param| {
             "; } && " + policy_sh.call()
         ])
     ).terminated(300).ensure_success();
+    keep_warm.call(rt);
 }, #{});
 
 // ── Connection management ─────────────────────────────────────────────────────
@@ -182,6 +191,7 @@ app.on_action("connect", |rt, _param| {
             "kopia repository connect s3" + s3_args_sh.call()
         ])
     ).terminated(120).ensure_success();
+    keep_warm.call(rt);
 }, #{ description: "Re-connect to the Kopia repository using current params" });
 
 // ── Required backup actions ───────────────────────────────────────────────────
@@ -208,6 +218,7 @@ app.on_action("save-snapshot", |rt, param| {
             " /source"
         ])
     ).terminated_eventually().ensure_success();
+    keep_warm.call(rt);
 }, #{ description: "Upload a volume snapshot to the Kopia repository" });
 
 app.on_action("list-snapshots", |rt, param| {
@@ -226,7 +237,7 @@ app.on_action("list-snapshots", |rt, param| {
         ])
     ).terminated(300).ensure_success();
     rt.start(app.job()
-        .image("docker.io/library/alpine:latest")
+        .image(alpine)
         .writable_rootfs()
         .mount("/output", output)
         .command(["sh", "-c",
@@ -236,6 +247,7 @@ app.on_action("list-snapshots", |rt, param| {
             " > /output/" + output_file
         ])
     ).terminated(20).ensure_success();
+    keep_warm.call(rt);
 }, #{ description: "List snapshots in the Kopia repository" });
 
 app.on_action("restore-snapshot", |rt, param| {
@@ -247,6 +259,7 @@ app.on_action("restore-snapshot", |rt, param| {
              "kopia", "snapshot", "restore", param["snapshot"], "/destination"
         ])
     ).terminated_eventually().ensure_success();
+    keep_warm.call(rt);
 }, #{ description: "Restore a Kopia snapshot to a new volume" });
 
 // ── Maintenance actions ───────────────────────────────────────────────────────
@@ -257,6 +270,7 @@ app.on_action("maintenance", |rt, _param| {
     rt.start(kopia_job.call()
         .command(["kopia", "maintenance", "run"])
     ).terminated();
+    keep_warm.call(rt);
 }, #{ description: "Run quick maintenance (expire snapshots, compact indexes)" })
     .on_schedule("H 3 * * *");
 
@@ -267,6 +281,7 @@ app.on_action("maintenance-full", |rt, _param| {
     rt.start(kopia_job.call()
         .command(["kopia", "maintenance", "run", "--full"])
     ).terminated_eventually();
+    keep_warm.call(rt);
 }, #{ description: "Run full maintenance including garbage collection" })
     .on_schedule("H 4 * * 0");
 
@@ -276,6 +291,7 @@ app.on_action("apply-policy", |rt, _param| {
     rt.start(kopia_job.call()
         .command(["sh", "-c", policy_sh.call()])
     ).terminated().ensure_success();
+    keep_warm.call(rt);
 }, #{ description: "Apply current compression and retention settings to the global policy" });
 
 // ── Shell ─────────────────────────────────────────────────────────────────────
@@ -286,4 +302,5 @@ app.on_shell("kopia", |_rt, shell, _param| {
     shell.attach(kopia_job.call()
         .command("bash")
     );
+    keep_warm.call(rt);
 }, #{ description: "Shell with the Kopia repository connected" });
