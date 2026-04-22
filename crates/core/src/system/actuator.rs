@@ -8,7 +8,7 @@ use std::{
 use ipnet::Ipv6Net;
 use parking_lot::Mutex as ParkingMutex;
 use seedling_protocol::events::EventSender;
-use seedling_protocol::names::{AppName, ExternalVolumeName};
+use seedling_protocol::names::{AppName, ExternalVolumeName, VolumeRef};
 use snafu::{IntoError, ResultExt, Snafu};
 
 use crate::{
@@ -616,17 +616,19 @@ pub fn resolve_external_volumes(
     let mut resolved = HashMap::new();
     for mapping in mappings {
         let mount = match &mapping.target {
-            external_volume_mappings::MappingTarget::Site { target_volume } => {
-                let site_vol = site_vols.iter().find(|s| s.name == *target_volume);
+            VolumeRef::Site { name } => {
+                let site_vol = site_vols.iter().find(|s| s.name == *name);
                 match site_vol {
                     Some(sv) => {
                         let path = match &sv.kind {
-                            site_volumes::SiteVolumeKind::Managed => vol_store.site_path(&sv.name),
+                            site_volumes::SiteVolumeKind::Managed => {
+                                vol_store.site_path(sv.name.as_str())
+                            }
                             site_volumes::SiteVolumeKind::Bind { host_path } => {
                                 std::path::PathBuf::from(host_path)
                             }
                             site_volumes::SiteVolumeKind::Snapshot { .. } => {
-                                vol_store.site_path(&sv.name)
+                                vol_store.site_path(sv.name.as_str())
                             }
                         };
                         // r[impl volume.site.snapshot]
@@ -641,18 +643,18 @@ pub fn resolve_external_volumes(
                         tracing::warn!(
                             app = %app,
                             external = %mapping.external_name,
-                            target = %target_volume,
+                            target = %name,
                             "site volume not found for external volume mapping"
                         );
                         continue;
                     }
                 }
             }
-            external_volume_mappings::MappingTarget::Exported {
-                target_app,
-                target_volume,
+            VolumeRef::App {
+                app: target_app,
+                volume,
             } => {
-                let vol_name = VolumeName::for_app(target_app.as_str(), target_volume);
+                let vol_name = VolumeName::for_app(target_app.as_str(), volume.as_str());
                 let path = vol_store.path(&vol_name);
                 ResolvedExternalMount {
                     source: MountSource::Bind(path),

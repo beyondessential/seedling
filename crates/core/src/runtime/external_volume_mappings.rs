@@ -1,5 +1,7 @@
 use rusqlite::params;
-use seedling_protocol::names::{AppName, ExternalVolumeName};
+use seedling_protocol::names::{
+    AppName, AppVolumeName, ExternalVolumeName, SiteVolumeName, VolumeRef,
+};
 
 use crate::runtime::db::Db;
 
@@ -7,33 +9,37 @@ use crate::runtime::db::Db;
 pub struct ExternalVolumeMapping {
     pub app: AppName,
     pub external_name: ExternalVolumeName,
-    pub target: MappingTarget,
+    pub target: VolumeRef,
     pub read_only: bool,
 }
 
-#[derive(Debug, Clone)]
-pub enum MappingTarget {
-    Exported {
-        target_app: AppName,
-        target_volume: String,
-    },
-    Site {
-        target_volume: String,
-    },
+/// Decompose a [`VolumeRef`] into the `(target_kind, target_app, target_volume)`
+/// tuple stored across three columns in the `external_volume_mappings` table.
+fn to_row(target: &VolumeRef) -> (&'static str, Option<&AppName>, &str) {
+    match target {
+        VolumeRef::App { app, volume } => ("app", Some(app), volume.as_str()),
+        VolumeRef::Site { name } => ("site", None, name.as_str()),
+    }
+}
+
+/// Reassemble a [`VolumeRef`] from the DB columns. The `target_kind` column
+/// is always present; `target_app` is only populated for the `app` kind.
+/// Historical rows may carry the legacy `"exported"` kind — treat that as
+/// `"app"`.
+fn from_row(kind: &str, target_app: Option<AppName>, target_volume: String) -> VolumeRef {
+    match kind {
+        "app" | "exported" => VolumeRef::App {
+            app: target_app.unwrap_or_default(),
+            volume: AppVolumeName::new_unchecked(target_volume),
+        },
+        _ => VolumeRef::Site {
+            name: SiteVolumeName::new_unchecked(target_volume),
+        },
+    }
 }
 
 pub fn create(db: &Db, mapping: &ExternalVolumeMapping) -> rusqlite::Result<()> {
-    let (kind, target_app, target_volume) = match &mapping.target {
-        MappingTarget::Exported {
-            target_app,
-            target_volume,
-        } => (
-            "exported",
-            Some(target_app.as_str()),
-            target_volume.as_str(),
-        ),
-        MappingTarget::Site { target_volume } => ("site", None, target_volume.as_str()),
-    };
+    let (kind, target_app, target_volume) = to_row(&mapping.target);
     db.conn.execute(
         "INSERT INTO external_volume_mappings (app, external_name, target_kind, target_app, target_volume, read_only)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -43,17 +49,7 @@ pub fn create(db: &Db, mapping: &ExternalVolumeMapping) -> rusqlite::Result<()> 
 }
 
 pub fn update(db: &Db, mapping: &ExternalVolumeMapping) -> rusqlite::Result<bool> {
-    let (kind, target_app, target_volume) = match &mapping.target {
-        MappingTarget::Exported {
-            target_app,
-            target_volume,
-        } => (
-            "exported",
-            Some(target_app.as_str()),
-            target_volume.as_str(),
-        ),
-        MappingTarget::Site { target_volume } => ("site", None, target_volume.as_str()),
-    };
+    let (kind, target_app, target_volume) = to_row(&mapping.target);
     let count = db.conn.execute(
         "UPDATE external_volume_mappings
          SET target_kind = ?3, target_app = ?4, target_volume = ?5, read_only = ?6
@@ -123,13 +119,7 @@ fn row_to_mapping(row: &rusqlite::Row<'_>) -> rusqlite::Result<ExternalVolumeMap
     let target_app: Option<AppName> = row.get(3)?;
     let target_volume: String = row.get(4)?;
     let read_only: bool = row.get(5)?;
-    let target = match kind.as_str() {
-        "exported" => MappingTarget::Exported {
-            target_app: target_app.unwrap_or_default(),
-            target_volume,
-        },
-        _ => MappingTarget::Site { target_volume },
-    };
+    let target = from_row(kind.as_str(), target_app, target_volume);
     Ok(ExternalVolumeMapping {
         app,
         external_name,

@@ -8,6 +8,7 @@ use crate::{
     actor::Actor,
     names::{
         ActionName, AppName, ExternalVolumeName, ForwardId, HeldVolumeId, SessionId, TemplateName,
+        VolumeRef,
     },
 };
 
@@ -269,10 +270,7 @@ pub enum OiEvent {
     SiteVolumeSnapshotted {
         timestamp: Timestamp,
         name: String,
-        /// None when the source is a site volume; Some(app) when the source is an app volume.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        source_app: Option<AppName>,
-        source_volume: String,
+        source: VolumeRef,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
@@ -289,11 +287,7 @@ pub enum OiEvent {
         timestamp: Timestamp,
         app: AppName,
         external_name: ExternalVolumeName,
-        /// "exported" or "site".
-        target_kind: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        target_app: Option<AppName>,
-        target_volume: String,
+        target: VolumeRef,
         read_only: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
@@ -311,15 +305,9 @@ pub enum OiEvent {
         timestamp: Timestamp,
         app: AppName,
         external_name: ExternalVolumeName,
-        target_kind: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        target_app: Option<AppName>,
-        target_volume: String,
+        target: VolumeRef,
         read_only: bool,
-        previous_target_kind: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        previous_target_app: Option<AppName>,
-        previous_target_volume: String,
+        previous_target: VolumeRef,
         previous_read_only: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
@@ -372,15 +360,11 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
-/// Borrowed snapshot of an external volume mapping's target. Used to emit
-/// remap events without forcing the caller to stringify fields twice.
-#[derive(Clone, Copy, Debug)]
+/// Snapshot of an external volume mapping's target. Used to emit remap
+/// events without forcing the caller to stringify fields twice.
+#[derive(Clone, Debug)]
 pub struct ExternalMappingSnapshot<'a> {
-    /// "exported" or "site".
-    pub kind: &'a str,
-    /// Only set when `kind == "exported"`.
-    pub app: Option<&'a AppName>,
-    pub volume: &'a str,
+    pub target: &'a VolumeRef,
     pub read_only: bool,
 }
 
@@ -625,15 +609,13 @@ impl EventSender {
     pub fn site_volume_snapshotted(
         &self,
         name: &str,
-        source_app: Option<&AppName>,
-        source_volume: &str,
+        source: &VolumeRef,
         actor: Option<Arc<Actor>>,
     ) {
         self.emit(OiEvent::SiteVolumeSnapshotted {
             timestamp: now(),
             name: name.to_owned(),
-            source_app: source_app.cloned(),
-            source_volume: source_volume.to_owned(),
+            source: source.clone(),
             actor,
         });
     }
@@ -649,17 +631,11 @@ impl EventSender {
     }
 
     // r[impl volume.external.mapping.events]
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "mapping events capture the full target tuple and read_only flag; collapsing them would obscure the audit payload"
-    )]
     pub fn external_volume_mapped(
         &self,
         app: &AppName,
         external_name: &ExternalVolumeName,
-        target_kind: &str,
-        target_app: Option<&AppName>,
-        target_volume: &str,
+        target: &VolumeRef,
         read_only: bool,
         actor: Option<Arc<Actor>>,
     ) {
@@ -667,9 +643,7 @@ impl EventSender {
             timestamp: now(),
             app: app.clone(),
             external_name: external_name.clone(),
-            target_kind: target_kind.to_owned(),
-            target_app: target_app.cloned(),
-            target_volume: target_volume.to_owned(),
+            target: target.clone(),
             read_only,
             actor,
         });
@@ -703,13 +677,9 @@ impl EventSender {
             timestamp: now(),
             app: app.clone(),
             external_name: external_name.clone(),
-            target_kind: new.kind.to_owned(),
-            target_app: new.app.cloned(),
-            target_volume: new.volume.to_owned(),
+            target: new.target.clone(),
             read_only: new.read_only,
-            previous_target_kind: previous.kind.to_owned(),
-            previous_target_app: previous.app.cloned(),
-            previous_target_volume: previous.volume.to_owned(),
+            previous_target: previous.target.clone(),
             previous_read_only: previous.read_only,
             actor,
         });
@@ -984,18 +954,9 @@ impl EventSenderWithActor {
     }
 
     // r[impl volume.site.snapshot.events]
-    pub fn site_volume_snapshotted(
-        &self,
-        name: &str,
-        source_app: Option<&AppName>,
-        source_volume: &str,
-    ) {
-        self.inner.site_volume_snapshotted(
-            name,
-            source_app,
-            source_volume,
-            Some(Arc::clone(&self.actor)),
-        );
+    pub fn site_volume_snapshotted(&self, name: &str, source: &VolumeRef) {
+        self.inner
+            .site_volume_snapshotted(name, source, Some(Arc::clone(&self.actor)));
     }
 
     // r[impl volume.site.promote.events]
@@ -1009,17 +970,13 @@ impl EventSenderWithActor {
         &self,
         app: &AppName,
         external_name: &ExternalVolumeName,
-        target_kind: &str,
-        target_app: Option<&AppName>,
-        target_volume: &str,
+        target: &VolumeRef,
         read_only: bool,
     ) {
         self.inner.external_volume_mapped(
             app,
             external_name,
-            target_kind,
-            target_app,
-            target_volume,
+            target,
             read_only,
             Some(Arc::clone(&self.actor)),
         );

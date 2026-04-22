@@ -1,12 +1,12 @@
 use rusqlite::params;
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{AppName, AppVolumeName, SiteVolumeName, VolumeRef};
 
 use crate::runtime::db::Db;
 
 // r[impl volume.site]
 #[derive(Debug, Clone)]
 pub struct SiteVolumeDef {
-    pub name: String,
+    pub name: SiteVolumeName,
     pub kind: SiteVolumeKind,
     pub created_at: String,
 }
@@ -21,28 +21,41 @@ impl SiteVolumeDef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SiteVolumeKind {
     Managed,
-    Bind {
-        host_path: String,
-    },
-    Snapshot {
-        source_app: Option<AppName>,
-        source_volume: String,
-    },
+    Bind { host_path: String },
+    Snapshot { source: VolumeRef },
+}
+
+/// Decompose the snapshot source into the `(source_app, source_volume)`
+/// columns stored in the `site_volumes` table.
+fn snapshot_source_row(source: &VolumeRef) -> (Option<&AppName>, &str) {
+    match source {
+        VolumeRef::App { app, volume } => (Some(app), volume.as_str()),
+        VolumeRef::Site { name } => (None, name.as_str()),
+    }
+}
+
+/// Reassemble a snapshot source from the `(source_app, source_volume)`
+/// column pair. `None` in `source_app` means the source was a site volume.
+fn snapshot_source_from_row(source_app: Option<AppName>, source_volume: String) -> VolumeRef {
+    match source_app {
+        Some(app) => VolumeRef::App {
+            app,
+            volume: AppVolumeName::new_unchecked(source_volume),
+        },
+        None => VolumeRef::Site {
+            name: SiteVolumeName::new_unchecked(source_volume),
+        },
+    }
 }
 
 pub fn create(db: &Db, def: &SiteVolumeDef) -> rusqlite::Result<()> {
     let (kind_str, host_path, source_app, source_volume) = match &def.kind {
         SiteVolumeKind::Managed => ("managed", None, None, None),
         SiteVolumeKind::Bind { host_path } => ("bind", Some(host_path.as_str()), None, None),
-        SiteVolumeKind::Snapshot {
-            source_app,
-            source_volume,
-        } => (
-            "snapshot",
-            None,
-            source_app.as_ref().map(|n| n.as_str()),
-            Some(source_volume.as_str()),
-        ),
+        SiteVolumeKind::Snapshot { source } => {
+            let (app, volume) = snapshot_source_row(source);
+            ("snapshot", None, app.map(|a| a.as_str()), Some(volume))
+        }
     };
     db.conn.execute(
         "INSERT INTO site_volumes (name, kind, host_path, source_app, source_volume, created_at)
@@ -60,7 +73,7 @@ pub fn create(db: &Db, def: &SiteVolumeDef) -> rusqlite::Result<()> {
 }
 
 fn row_to_def(row: &rusqlite::Row<'_>) -> rusqlite::Result<SiteVolumeDef> {
-    let name: String = row.get(0)?;
+    let name: SiteVolumeName = row.get(0)?;
     let kind_str: String = row.get(1)?;
     let host_path: Option<String> = row.get(2)?;
     let source_app: Option<AppName> = row.get(3)?;
@@ -71,8 +84,7 @@ fn row_to_def(row: &rusqlite::Row<'_>) -> rusqlite::Result<SiteVolumeDef> {
             host_path: host_path.unwrap_or_default(),
         },
         "snapshot" => SiteVolumeKind::Snapshot {
-            source_app,
-            source_volume: source_volume.unwrap_or_default(),
+            source: snapshot_source_from_row(source_app, source_volume.unwrap_or_default()),
         },
         _ => SiteVolumeKind::Managed,
     };
@@ -91,7 +103,7 @@ pub fn list(db: &Db) -> rusqlite::Result<Vec<SiteVolumeDef>> {
     rows.collect()
 }
 
-pub fn get(db: &Db, name: &str) -> rusqlite::Result<Option<SiteVolumeDef>> {
+pub fn get(db: &Db, name: &SiteVolumeName) -> rusqlite::Result<Option<SiteVolumeDef>> {
     let mut stmt = db.conn.prepare(
         "SELECT name, kind, host_path, source_app, source_volume, created_at FROM site_volumes WHERE name = ?1",
     )?;
@@ -102,7 +114,7 @@ pub fn get(db: &Db, name: &str) -> rusqlite::Result<Option<SiteVolumeDef>> {
     }
 }
 
-pub fn delete(db: &Db, name: &str) -> rusqlite::Result<bool> {
+pub fn delete(db: &Db, name: &SiteVolumeName) -> rusqlite::Result<bool> {
     let count = db
         .conn
         .execute("DELETE FROM site_volumes WHERE name = ?1", params![name])?;
