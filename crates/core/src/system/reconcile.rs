@@ -162,6 +162,13 @@ pub struct Reconciler {
     rolling_updates: HashSet<(AppName, String)>,
     /// Whether seedling is providing its own NAT64 translator.
     nat64_active: bool,
+    /// Whether the DNS64 plugin should translate names that already
+    /// have a real AAAA record (emits `translate_all` into the
+    /// Corefile). Set when NAT64 is seedling-managed and the host has
+    /// no IPv6 egress — forcing every flow through the translator is
+    /// the only way the pod can reach dual-stack remotes.
+    // r[impl infra.nat64.dns64.force-translation]
+    force_dns64_translation: bool,
     /// Upstream DNS servers CoreDNS forwards to. When `--dns-upstreams`
     /// is set, these are the operator-supplied servers; otherwise it's
     /// a single entry pointing at seedling's in-process forwarder on
@@ -196,6 +203,7 @@ impl Reconciler {
         dns_servers: Vec<Ipv6Addr>,
         dns_upstreams: Vec<std::net::SocketAddr>,
         nat64_active: bool,
+        force_dns64_translation: bool,
         shells: Arc<ShellRegistry>,
     ) -> Self {
         let observer = Observer::new(Arc::clone(&driver));
@@ -225,6 +233,7 @@ impl Reconciler {
             prev_states: BTreeMap::new(),
             rolling_updates: HashSet::new(),
             nat64_active,
+            force_dns64_translation,
             dns_upstreams,
             resolver_addr: None,
             shells,
@@ -413,6 +422,7 @@ impl Reconciler {
                     &self.data_dir,
                     &self.dns_upstreams,
                     self.nat64_active,
+                    self.force_dns64_translation,
                 ),
             ),
         );

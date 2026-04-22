@@ -265,6 +265,7 @@ pub async fn ensure_resolver_running(
     data_dir: &Path,
     upstreams: &[SocketAddr],
     nat64_active: bool,
+    force_dns64_translation: bool,
 ) -> Result<ResolverAddrs, ResolverStartupError> {
     let resolver_prefix = resolver_network_prefix(node_prefix);
     let resolver_ip = resolver_addr(node_prefix);
@@ -288,7 +289,8 @@ pub async fn ensure_resolver_running(
 
     // 2. Write the Corefile.
     let corefile_path = data_dir.join("Corefile");
-    let corefile_content = super::config::generate_corefile(upstreams, nat64_active);
+    let corefile_content =
+        super::config::generate_corefile(upstreams, nat64_active, force_dns64_translation);
     std::fs::write(&corefile_path, corefile_content).context(IoSnafu)?;
 
     // 3. Read active container from DB (default blue).

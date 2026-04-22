@@ -356,6 +356,43 @@ with the matching `64:ff9b::/96` prefix. For names that have only A
 records (no AAAA), CoreDNS synthesises an AAAA record pointing into
 the NAT64 prefix.
 
+#### Forcing translation on IPv4-only hosts
+
+By default, the `dns64` plugin leaves names alone when the upstream
+already returns a real AAAA. That is the right behaviour when the
+host has working IPv6 egress: pods reach dual-stack destinations
+natively over v6 and fall back to NAT64 only for IPv4-only names.
+
+It is the *wrong* behaviour when seedling is managing NAT64 on an
+IPv4-only host. The pod sits in a v6-only namespace; if DNS hands it
+a real GUA AAAA and the host has no v6 default route, the packet
+hits a dead routing path and the flow either ICMPv6-unreaches or
+times out. There is no IPv4 fallback inside the pod.
+
+At startup, seedling probes the host's IPv6 egress by reading
+rtnetlink state — no DNS, no outbound packets:
+
+- Is there a default IPv6 unicast route (`::/0`) in the main table?
+- Is there at least one non-loopback interface carrying a global
+  unicast source address (within `2000::/3`)? ULAs and link-locals
+  don't count.
+
+If both hold, the host has IPv6 egress.
+
+When seedling is providing its own NAT64 (not standing down to an
+external NAT64+DNS64) *and* the probe reports no IPv6 egress, the
+Corefile emits `translate_all` inside the `dns64` block. CoreDNS then
+synthesises AAAAs for every A-resolvable name, including those with
+real AAAA records. Every pod flow goes through the NAT64 translator
+and egresses as IPv4 — the only path that actually works on this
+host. The tradeoff is that native IPv6 to dual-stack destinations is
+also routed through the translator; given the host can't use native
+IPv6 anyway, that is the intended behaviour.
+
+The decision is cached once at startup and does not re-evaluate. A
+host that gains IPv6 egress mid-run keeps `translate_all` until the
+daemon restarts.
+
 ### End-to-end egress flow
 
 For a pod reaching an IPv4-only host `ipv4only.example.com`:
@@ -375,9 +412,12 @@ For a pod reaching an IPv4-only host `ipv4only.example.com`:
    and the resulting IPv6 packet is routed back to the pod via its
    bridge.
 
-For a destination that already has a real AAAA record, DNS64 does not
-synthesise and the pod reaches it directly over IPv6 through whatever
-native IPv6 connectivity the host has.
+For a destination that already has a real AAAA record, DNS64
+normally leaves it alone and the pod reaches it directly over IPv6
+through whatever native IPv6 connectivity the host has. On
+IPv4-only hosts this flips — see "Forcing translation on IPv4-only
+hosts" below — and every flow, dual-stack or not, ends up going
+through the translator.
 
 ## nftables table structure
 
@@ -455,10 +495,14 @@ Reload avahi after editing: `systemctl reload avahi-daemon`.
 3. If NAT64 is to be active, load the `jool` kernel module, create the
    jool instance, and enable IPv4+IPv6 forwarding. Failure here is
    fatal.
-4. Start the in-process DNS forwarder (unless `--dns-upstreams` is
+4. Probe the host's IPv6 egress (rtnetlink-only: default v6 route +
+   at least one global unicast source). The result decides whether
+   CoreDNS's DNS64 plugin should force-translate dual-stack names;
+   see "Forcing translation on IPv4-only hosts" under NAT64.
+5. Start the in-process DNS forwarder (unless `--dns-upstreams` is
    set). It retry-binds until the resolver bridge comes up on the
    first tick.
-5. Build system-driver handles (container runtime, process manager,
+6. Build system-driver handles (container runtime, process manager,
    data plane) and spawn the reconciliation loop.
 
 ### Per-tick phases

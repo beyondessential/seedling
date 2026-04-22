@@ -19,7 +19,7 @@ use seedling_core::{
     },
     system::{
         System,
-        nat64::should_activate_nat64,
+        nat64::{detect_ipv6_egress, should_activate_nat64},
         node_prefix_from_machine_id,
         reconcile::Reconciler,
         resolver::{resolver_addr, resolver_gateway_addr, spawn_dns_forwarder},
@@ -307,6 +307,18 @@ async fn main() {
         tracing::error!(error = %e, "failed to set up NAT64 translator; exiting");
         std::process::exit(1);
     }
+
+    // r[impl infra.nat64.ipv6-egress]
+    // r[impl infra.nat64.dns64.force-translation]
+    // Force DNS64 to translate all names only when seedling is itself
+    // providing NAT64 and the host cannot route native IPv6. If an external
+    // NAT64+DNS64 setup is in play, trust its own policy.
+    let force_dns64_translation = nat64_active && !detect_ipv6_egress().await;
+    tracing::info!(
+        nat64_active,
+        force_dns64_translation,
+        "DNS64 translate-all decision"
+    );
 
     let dns_servers: Vec<std::net::Ipv6Addr> = vec![resolver_addr(&node_prefix)];
 
@@ -773,6 +785,7 @@ async fn main() {
         dns_servers.clone(),
         dns_upstreams,
         nat64_active,
+        force_dns64_translation,
         Arc::clone(&shells),
     );
 

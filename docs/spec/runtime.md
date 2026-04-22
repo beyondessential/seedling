@@ -1043,6 +1043,24 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > `64:ff9b::/96`. When NAT64 is not active, DNS64 synthesis must be disabled in the
 > resolver configuration.
 
+> r[infra.nat64.ipv6-egress]
+> At startup, the runtime must determine whether the host has working IPv6 egress to the
+> internet. The determination must be based on observable host network state (such as the
+> presence of a default IPv6 route and at least one globally-scoped IPv6 source address on a
+> non-loopback interface) and must not depend on DNS resolution or outbound internet traffic.
+> The outcome is recorded once at startup and does not change for the lifetime of the
+> process.
+
+> r[infra.nat64.dns64.force-translation]
+> When the runtime is providing its own NAT64 translator (i.e. is not relying on external
+> NAT64+DNS64 infrastructure) and the host lacks working IPv6 egress (see
+> [infra.nat64.ipv6-egress](#r--infra.nat64.ipv6-egress)), the resolver configuration must
+> synthesise AAAA records under `64:ff9b::/96` for all IPv4-resolvable names, including
+> names that already have a real AAAA record. This ensures workload containers reach
+> dual-stack destinations via the NAT64 translator rather than attempting native IPv6 that
+> the host cannot route. In all other cases, real AAAA records must be preserved so that
+> native IPv6 remains the preferred path.
+
 # Secret Parameter Storage
 
 > r[secret.key]
