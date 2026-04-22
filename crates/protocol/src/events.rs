@@ -6,7 +6,9 @@ use tokio::sync::broadcast;
 
 use crate::{
     actor::Actor,
-    names::{ActionName, AppName, ExternalVolumeName, ForwardId, HeldVolumeId, SessionId},
+    names::{
+        ActionName, AppName, ExternalVolumeName, ForwardId, HeldVolumeId, SessionId, TemplateName,
+    },
 };
 
 // i[event.types]
@@ -325,21 +327,21 @@ pub enum OiEvent {
     // r[impl audit.log.events]
     TemplateCreated {
         timestamp: Timestamp,
-        name: String,
+        name: TemplateName,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
     // r[impl audit.log.events]
     TemplateRemoved {
         timestamp: Timestamp,
-        name: String,
+        name: TemplateName,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
     // r[impl audit.log.events]
     TemplateInstantiated {
         timestamp: Timestamp,
-        template: String,
+        template: TemplateName,
         app: AppName,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
@@ -805,28 +807,33 @@ impl EventSender {
     }
 
     // r[impl audit.log.events]
-    pub fn template_created(&self, name: &str, actor: Option<Arc<Actor>>) {
+    pub fn template_created(&self, name: &TemplateName, actor: Option<Arc<Actor>>) {
         self.emit(OiEvent::TemplateCreated {
             timestamp: now(),
-            name: name.to_owned(),
+            name: name.clone(),
             actor,
         });
     }
 
     // r[impl audit.log.events]
-    pub fn template_removed(&self, name: &str, actor: Option<Arc<Actor>>) {
+    pub fn template_removed(&self, name: &TemplateName, actor: Option<Arc<Actor>>) {
         self.emit(OiEvent::TemplateRemoved {
             timestamp: now(),
-            name: name.to_owned(),
+            name: name.clone(),
             actor,
         });
     }
 
     // r[impl audit.log.events]
-    pub fn template_instantiated(&self, template: &str, app: &AppName, actor: Option<Arc<Actor>>) {
+    pub fn template_instantiated(
+        &self,
+        template: &TemplateName,
+        app: &AppName,
+        actor: Option<Arc<Actor>>,
+    ) {
         self.emit(OiEvent::TemplateInstantiated {
             timestamp: now(),
-            template: template.to_owned(),
+            template: template.clone(),
             app: app.clone(),
             actor,
         });
@@ -1042,19 +1049,19 @@ impl EventSenderWithActor {
     }
 
     // r[impl audit.log.events]
-    pub fn template_created(&self, name: &str) {
+    pub fn template_created(&self, name: &TemplateName) {
         self.inner
             .template_created(name, Some(Arc::clone(&self.actor)));
     }
 
     // r[impl audit.log.events]
-    pub fn template_removed(&self, name: &str) {
+    pub fn template_removed(&self, name: &TemplateName) {
         self.inner
             .template_removed(name, Some(Arc::clone(&self.actor)));
     }
 
     // r[impl audit.log.events]
-    pub fn template_instantiated(&self, template: &str, app: &AppName) {
+    pub fn template_instantiated(&self, template: &TemplateName, app: &AppName) {
         self.inner
             .template_instantiated(template, app, Some(Arc::clone(&self.actor)));
     }
