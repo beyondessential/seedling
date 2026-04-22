@@ -1,5 +1,5 @@
 import AddIcon from "@mui/icons-material/Add";
-import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlineOutlined";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import {
   Alert,
@@ -104,28 +104,28 @@ export default function Keys() {
           </span>
         </Tooltip>
       </Box>
-
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+      <Typography
+        variant="body2"
+        sx={{
+          color: "text.secondary",
+          mb: 2
+        }}>
         Clients identify themselves with a 32-byte SPKI fingerprint of an
         Ed25519 raw public key. Only fingerprints listed here may open OI
         connections.
       </Typography>
-
       {error && <OiErrorAlert error={error} />}
-
       {loading && !data && (
         <Box sx={{ display: "flex", justifyContent: "center", mt: 4 }}>
           <CircularProgress />
         </Box>
       )}
-
       {data && data.length === 0 && (
         <Alert severity="warning">
           No authorised keys. Until at least one key is authorised, OI clients
           cannot connect.
         </Alert>
       )}
-
       {data && data.length > 0 && (
         <TableContainer component={Paper} variant="outlined">
           <Table size="small">
@@ -169,7 +169,6 @@ export default function Keys() {
           </Table>
         </TableContainer>
       )}
-
       <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} fullWidth maxWidth="sm">
         <DialogTitle>Authorise OI key</DialogTitle>
         <DialogContent>
@@ -216,7 +215,6 @@ export default function Keys() {
           </Tooltip>
         </DialogActions>
       </Dialog>
-
       <Dialog open={revoking !== null} onClose={() => setRevoking(null)} fullWidth maxWidth="sm">
         <DialogTitle>Revoke OI key</DialogTitle>
         <DialogContent>

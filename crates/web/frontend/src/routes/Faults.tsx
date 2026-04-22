@@ -35,19 +35,17 @@ export default function Faults() {
           </span>
         </Tooltip>
       </Box>
-
       {error && <OiErrorAlert error={error} />}
-
       {loading && !data && (
         <Box sx={{ display: "flex", justifyContent: "center", mt: 4 }}>
           <CircularProgress />
         </Box>
       )}
-
       {data && data.length === 0 && (
-        <Typography color="text.secondary">No active faults.</Typography>
+        <Typography sx={{
+          color: "text.secondary"
+        }}>No active faults.</Typography>
       )}
-
       {data && data.length > 0 && (
         <Stack spacing={1}>
           {data.map((f) => (
@@ -68,7 +66,13 @@ export default function Faults() {
                   {" — "}
                   {f.description}
                 </Box>
-                <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "nowrap", alignSelf: "center" }}>
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: "text.secondary",
+                    whiteSpace: "nowrap",
+                    alignSelf: "center"
+                  }}>
                   {new Date(f.timestamp).toLocaleString()}
                 </Typography>
               </Box>

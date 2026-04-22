@@ -92,7 +92,9 @@ export default function CreateApp() {
         >
           Apps
         </Typography>
-        <Typography variant="body2" color="text.disabled">
+        <Typography variant="body2" sx={{
+          color: "text.disabled"
+        }}>
           /
         </Typography>
         <Typography variant="body2">New app</Typography>
@@ -113,7 +115,6 @@ export default function CreateApp() {
           </span>
         </Tooltip>
       </Box>
-
       <Stack spacing={2}>
         {previewError && <OiErrorAlert error={previewError} />}
 
@@ -125,14 +126,15 @@ export default function CreateApp() {
           onBlur={() => setNameTouched(true)}
           error={nameTouched && validationError !== null}
           helperText={nameTouched ? (validationError ?? " ") : " "}
-          inputProps={{ style: { fontFamily: "monospace" } }}
           sx={{ maxWidth: 400 }}
           autoFocus
+          slotProps={{
+            htmlInput: { style: { fontFamily: "monospace" } }
+          }}
         />
 
         <ScriptEditor value={script} onChange={setScript} />
       </Stack>
-
       <Dialog
         open={preview !== null}
         onClose={() => !creating && handleCancel()}
@@ -143,7 +145,9 @@ export default function CreateApp() {
         <DialogContent dividers>
           <Stack spacing={2}>
             {createError && <OiErrorAlert error={createError} />}
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="body2" sx={{
+              color: "text.secondary"
+            }}>
               Creating app{" "}
               <Box component="span" sx={{ fontFamily: "monospace", fontWeight: 500 }}>
                 {name}

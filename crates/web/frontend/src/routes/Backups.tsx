@@ -1,5 +1,5 @@
 import AddIcon from "@mui/icons-material/Add";
-import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlineOutlined";
 import HistoryIcon from "@mui/icons-material/History";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import RefreshIcon from "@mui/icons-material/Refresh";
@@ -162,7 +162,9 @@ function SnapshotsDialog({
           {snapshots !== null && !loading && (
             snapshotList ? (
               snapshotList.length === 0 ? (
-                <Typography color="text.secondary" variant="body2">No snapshots found.</Typography>
+                <Typography variant="body2" sx={{
+                  color: "text.secondary"
+                }}>No snapshots found.</Typography>
               ) : (
                 <TableContainer component={Paper} variant="outlined">
                   <Table size="small">
@@ -233,7 +235,9 @@ function SnapshotsDialog({
           )}
 
           {snapshots === null && !loading && !error && (
-            <Typography color="text.secondary" variant="body2">Select a volume and refresh to list snapshots.</Typography>
+            <Typography variant="body2" sx={{
+              color: "text.secondary"
+            }}>Select a volume and refresh to list snapshots.</Typography>
           )}
         </Stack>
       </DialogContent>
@@ -246,7 +250,12 @@ function SnapshotsDialog({
           </span>
         </Tooltip>
         {cachedAt && (
-          <Typography variant="caption" color="text.secondary" sx={{ mr: 1 }}>
+          <Typography
+            variant="caption"
+            sx={{
+              color: "text.secondary",
+              mr: 1
+            }}>
             cached {new Date(cachedAt).toLocaleTimeString()}
           </Typography>
         )}
@@ -302,8 +311,10 @@ function CreateStrategyDialog({
             size="small"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            inputProps={{ style: { fontFamily: "monospace" } }}
             autoFocus
+            slotProps={{
+              htmlInput: { style: { fontFamily: "monospace" } }
+            }}
           />
           <FormControl size="small">
             <InputLabel>Backup app</InputLabel>
@@ -405,7 +416,9 @@ function RegisterBackupAppDialog({
               ))}
             </Select>
           </FormControl>
-          <Typography variant="caption" color="text.secondary">
+          <Typography variant="caption" sx={{
+            color: "text.secondary"
+          }}>
             The app's BSL script must declare save-snapshot, list-snapshots,
             and restore-snapshot actions.
           </Typography>
@@ -488,7 +501,6 @@ export default function Backups() {
           </span>
         </Tooltip>
       </Box>
-
       {runResults && (
         <Alert severity="success" onClose={() => setRunResults(null)} sx={{ mb: 2 }}>
           Backup triggered for <strong>{runResults.strategy}</strong>.{" "}
@@ -499,7 +511,6 @@ export default function Backups() {
           ))}
         </Alert>
       )}
-
       <Stack spacing={4}>
         {/* Strategies */}
         <Box>
@@ -523,7 +534,9 @@ export default function Backups() {
           {stratLoading && !strategies && <CircularProgress size={20} />}
 
           {!stratLoading && !stratError && strategies?.length === 0 && (
-            <Typography color="text.secondary" variant="body2">
+            <Typography variant="body2" sx={{
+              color: "text.secondary"
+            }}>
               No backup strategies.{" "}
               {backupApps?.length === 0
                 ? "Register a backup app first."
@@ -625,7 +638,9 @@ export default function Backups() {
           {appsLoading && !backupApps && <CircularProgress size={20} />}
 
           {backupApps?.length === 0 && (
-            <Typography color="text.secondary" variant="body2">
+            <Typography variant="body2" sx={{
+              color: "text.secondary"
+            }}>
               No backup apps registered. Register a Seedling app that implements{" "}
               <Box component="span" sx={{ fontFamily: "monospace" }}>save-snapshot</Box>,{" "}
               <Box component="span" sx={{ fontFamily: "monospace" }}>list-snapshots</Box>, and{" "}
@@ -669,7 +684,6 @@ export default function Backups() {
           )}
         </Box>
       </Stack>
-
       {/* Dialogs */}
       {createStratOpen && backupApps && (
         <CreateStrategyDialog
@@ -680,7 +694,6 @@ export default function Backups() {
           onSuccess={() => { refetchStrat(); setCreateStratOpen(false); }}
         />
       )}
-
       {registerAppOpen && (
         <RegisterBackupAppDialog
           apps={allApps ?? []}
@@ -688,7 +701,6 @@ export default function Backups() {
           onSuccess={() => { refetchApps(); setRegisterAppOpen(false); }}
         />
       )}
-
       {snapshotsFor && (
         <SnapshotsDialog
           key={snapshotsFor.name}

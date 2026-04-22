@@ -46,16 +46,20 @@ export function ScriptEditor({ value, onChange, minHeight = "60vh" }: Props) {
   return (
     <Box>
       <Box sx={{ display: "flex", alignItems: "center", mb: 0.5, gap: 1 }}>
-        <Typography variant="caption" color="text.secondary">
+        <Typography variant="caption" sx={{
+          color: "text.secondary"
+        }}>
           Script
         </Typography>
         <Box sx={{ flexGrow: 1 }} />
         {fileName && (
           <Typography
             variant="caption"
-            color="text.secondary"
-            sx={{ fontFamily: "monospace", opacity: 0.7 }}
-          >
+            sx={{
+              color: "text.secondary",
+              fontFamily: "monospace",
+              opacity: 0.7
+            }}>
             {fileName}
           </Typography>
         )}

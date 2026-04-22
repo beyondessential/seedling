@@ -65,7 +65,9 @@ export function SnapshotVolumeDialog({
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 0.5 }}>
           {error && <OiErrorAlert error={error} />}
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" sx={{
+            color: "text.secondary"
+          }}>
             Capture a point-in-time copy of{" "}
             <Box component="span" sx={{ fontFamily: "monospace" }}>
               {sourceLabel}
@@ -77,9 +79,11 @@ export function SnapshotVolumeDialog({
             size="small"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            inputProps={{ style: { fontFamily: "monospace" } }}
             autoFocus
             helperText="Must be unique across site volumes"
+            slotProps={{
+              htmlInput: { style: { fontFamily: "monospace" } }
+            }}
           />
         </Stack>
       </DialogContent>

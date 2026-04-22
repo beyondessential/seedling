@@ -59,7 +59,9 @@ export function PromoteSnapshotDialog({
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 0.5 }}>
           {error && <OiErrorAlert error={error} />}
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" sx={{
+            color: "text.secondary"
+          }}>
             Create a fresh read-write managed site volume seeded from{" "}
             <Box component="span" sx={{ fontFamily: "monospace" }}>
               {source}
@@ -71,9 +73,11 @@ export function PromoteSnapshotDialog({
             size="small"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            inputProps={{ style: { fontFamily: "monospace" } }}
             autoFocus
             helperText="Must be unique across site volumes"
+            slotProps={{
+              htmlInput: { style: { fontFamily: "monospace" } }
+            }}
           />
         </Stack>
       </DialogContent>

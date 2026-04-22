@@ -3,7 +3,7 @@ import ArticleIcon from "@mui/icons-material/Article";
 import CameraAltIcon from "@mui/icons-material/CameraAlt";
 import CheckIcon from "@mui/icons-material/Check";
 import ClearIcon from "@mui/icons-material/Clear";
-import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlineOutlined";
 import EditIcon from "@mui/icons-material/Edit";
 import PauseIcon from "@mui/icons-material/Pause";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
@@ -87,7 +87,13 @@ function FaultList({ faults, showApp }: { faults: FaultRecord[]; showApp?: boole
               {" — "}
               {f.description}
             </Box>
-            <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "nowrap", alignSelf: "center" }}>
+            <Typography
+              variant="caption"
+              sx={{
+                color: "text.secondary",
+                whiteSpace: "nowrap",
+                alignSelf: "center"
+              }}>
               {new Date(f.timestamp).toLocaleString()}
             </Typography>
           </Box>
@@ -234,7 +240,9 @@ function ResourcesSection({
   if (resources.length === 0)
     return (
       <>
-        <Typography color="text.secondary">No resources.</Typography>
+        <Typography sx={{
+          color: "text.secondary"
+        }}>No resources.</Typography>
         {snapshotDialog}
       </>
     );
@@ -244,7 +252,9 @@ function ResourcesSection({
         <Box key={`${r.type}/${r.name}`}>
           <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 0.5 }}>
             <Typography variant="subtitle2">{r.name}</Typography>
-            <Typography variant="caption" color="text.secondary">
+            <Typography variant="caption" sx={{
+              color: "text.secondary"
+            }}>
               {r.type}
             </Typography>
             {r.stopped && (
@@ -265,7 +275,9 @@ function ResourcesSection({
             )}
             {r.scale && (
               <>
-                <Typography variant="caption" color="text.secondary">
+                <Typography variant="caption" sx={{
+                  color: "text.secondary"
+                }}>
                   · scale
                 </Typography>
                 <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
@@ -294,7 +306,9 @@ function ResourcesSection({
                       </IconButton>
                     </span>
                   </Tooltip>
-                  <Typography variant="caption" color="text.secondary">
+                  <Typography variant="caption" sx={{
+                    color: "text.secondary"
+                  }}>
                     [{r.scale.low}–{r.scale.high}]
                   </Typography>
                 </Box>
@@ -538,8 +552,10 @@ function ParamsSection({
             if (e.key === "Escape") cancelAdd();
           }}
           autoFocus
-          inputProps={{ style: { fontFamily: "monospace" } }}
           sx={{ width: 200 }}
+          slotProps={{
+            htmlInput: { style: { fontFamily: "monospace" } }
+          }}
         />
       </TableCell>
       <TableCell>
@@ -553,7 +569,9 @@ function ParamsSection({
             if (e.key === "Escape") cancelAdd();
           }}
           fullWidth
-          inputProps={{ style: { fontFamily: "monospace" } }}
+          slotProps={{
+            htmlInput: { style: { fontFamily: "monospace" } }
+          }}
         />
       </TableCell>
       <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
@@ -585,7 +603,9 @@ function ParamsSection({
         {disabledBanner}
         {error && <OiErrorAlert error={error} />}
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-          <Typography color="text.secondary">No params.</Typography>
+          <Typography sx={{
+            color: "text.secondary"
+          }}>No params.</Typography>
           <Tooltip title={editsDisabledReason ?? ""}>
             <span>
               <Button
@@ -672,52 +692,54 @@ function ParamsSection({
                             ? `Strength: ${passwordScore(draft)}/4${p.description ? ` — ${p.description}` : ""}`
                             : (p.description ?? undefined)
                       }
-                      inputProps={{ style: { fontFamily: "monospace" } }}
-                      InputProps={{
-                        endAdornment: (
-                          <InputAdornment position="end">
-                            {(p.secret || p.kind === "password" ||
-                              p.kind === "weak-password") && (
-                              <Tooltip
-                                title={
-                                  showPassword ? "Hide" : "Show"
-                                }
-                              >
-                                <IconButton
-                                  size="small"
-                                  onClick={() =>
-                                    setShowPassword((v) => !v)
+                      slotProps={{
+                        input: {
+                          endAdornment: (
+                            <InputAdornment position="end">
+                              {(p.secret || p.kind === "password" ||
+                                p.kind === "weak-password") && (
+                                <Tooltip
+                                  title={
+                                    showPassword ? "Hide" : "Show"
                                   }
-                                  edge="end"
                                 >
-                                  {showPassword ? (
-                                    <VisibilityOffIcon fontSize="small" />
-                                  ) : (
-                                    <VisibilityIcon fontSize="small" />
-                                  )}
+                                  <IconButton
+                                    size="small"
+                                    onClick={() =>
+                                      setShowPassword((v) => !v)
+                                    }
+                                    edge="end"
+                                  >
+                                    {showPassword ? (
+                                      <VisibilityOffIcon fontSize="small" />
+                                    ) : (
+                                      <VisibilityIcon fontSize="small" />
+                                    )}
+                                  </IconButton>
+                                </Tooltip>
+                              )}
+                              <Tooltip title="Save">
+                                <span>
+                                  <IconButton
+                                    size="small"
+                                    onClick={() => void save()}
+                                    disabled={loading}
+                                  >
+                                    <CheckIcon fontSize="small" />
+                                  </IconButton>
+                                </span>
+                              </Tooltip>
+                              <Tooltip title="Cancel">
+                                <IconButton size="small" onClick={cancel}>
+                                  <ClearIcon fontSize="small" />
                                 </IconButton>
                               </Tooltip>
-                            )}
-                            <Tooltip title="Save">
-                              <span>
-                                <IconButton
-                                  size="small"
-                                  onClick={() => void save()}
-                                  disabled={loading}
-                                >
-                                  <CheckIcon fontSize="small" />
-                                </IconButton>
-                              </span>
-                            </Tooltip>
-                            <Tooltip title="Cancel">
-                              <IconButton size="small" onClick={cancel}>
-                                <ClearIcon fontSize="small" />
-                              </IconButton>
-                            </Tooltip>
-                          </InputAdornment>
-                        ),
-                      }}
-                    />
+                            </InputAdornment>
+                          ),
+                        },
+
+                        htmlInput: { style: { fontFamily: "monospace" } }
+                      }} />
                   </TableCell>
                 </TableRow>
               ) : (
@@ -730,7 +752,9 @@ function ParamsSection({
                       )}
                     </Box>
                     {p.description && (
-                      <Typography variant="caption" color="text.secondary">
+                      <Typography variant="caption" sx={{
+                        color: "text.secondary"
+                      }}>
                         {p.description}
                       </Typography>
                     )}
@@ -883,7 +907,9 @@ function ActionInvokeDialog({
         <Stack spacing={2} sx={{ mt: 0.5 }}>
           {error && <OiErrorAlert error={error} />}
           {paramEntries.length === 0 ? (
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="body2" sx={{
+              color: "text.secondary"
+            }}>
               No params required.
             </Typography>
           ) : (
@@ -914,9 +940,8 @@ function ActionInvokeDialog({
                   error={weak}
                   type={showPasswords[key] ? "text" : paramFieldType(def.kind)}
                   required={def.required}
-                  inputProps={{ style: { fontFamily: "monospace" } }}
-                  InputProps={
-                    isPassword
+                  slotProps={{
+                    input: isPassword
                       ? {
                           endAdornment: (
                             <InputAdornment position="end">
@@ -936,9 +961,10 @@ function ActionInvokeDialog({
                             </InputAdornment>
                           ),
                         }
-                      : undefined
-                  }
-                />
+                      : undefined,
+
+                    htmlInput: { style: { fontFamily: "monospace" } }
+                  }} />
               );
             })
           )}
@@ -987,7 +1013,11 @@ function InstallingSection({
       }}
     >
       <CircularProgress />
-      <Typography color="text.secondary" sx={{ textAlign: "center" }}>
+      <Typography
+        sx={{
+          color: "text.secondary",
+          textAlign: "center"
+        }}>
         Install in progress — the runtime is actuating your resources.
       </Typography>
       <Button
@@ -1061,7 +1091,9 @@ function InstallSection({
           py: 6,
         }}
       >
-        <Typography color="text.secondary">
+        <Typography sx={{
+          color: "text.secondary"
+        }}>
           This app has not been installed yet.
         </Typography>
         <Tooltip title={writeGuard.reason ?? ""}>
@@ -1144,7 +1176,11 @@ function ActionsSection({
     status !== "operating";
 
   if (actions.length === 0)
-    return <Typography color="text.secondary">No actions.</Typography>;
+    return (
+      <Typography sx={{
+        color: "text.secondary"
+      }}>No actions.</Typography>
+    );
 
   return (
     <>
@@ -1315,9 +1351,8 @@ function ShellOpenDialog({
                 error={weak}
                 type={showPasswords[key] ? "text" : paramFieldType(def.kind)}
                 required={def.required}
-                inputProps={{ style: { fontFamily: "monospace" } }}
-                InputProps={
-                  isPassword
+                slotProps={{
+                  input: isPassword
                     ? {
                         endAdornment: (
                           <InputAdornment position="end">
@@ -1333,9 +1368,10 @@ function ShellOpenDialog({
                           </InputAdornment>
                         ),
                       }
-                    : undefined
-                }
-              />
+                    : undefined,
+
+                  htmlInput: { style: { fontFamily: "monospace" } }
+                }} />
             );
           })}
         </Stack>
@@ -1487,7 +1523,9 @@ export default function AppDetail() {
         >
           Apps
         </Typography>
-        <Typography variant="body2" color="text.disabled">
+        <Typography variant="body2" sx={{
+          color: "text.disabled"
+        }}>
           /
         </Typography>
         <Typography variant="body2">{name}</Typography>
@@ -1551,15 +1589,12 @@ export default function AppDetail() {
           </span>
         </Tooltip>
       </Box>
-
       {error && <OiErrorAlert error={error} />}
-
       {loading && !data && (
         <Box sx={{ display: "flex", justifyContent: "center", mt: 4 }}>
           <CircularProgress />
         </Box>
       )}
-
       {data && (
         <Stack spacing={3}>
           <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
@@ -1572,7 +1607,9 @@ export default function AppDetail() {
               color={statusColor(data.status)}
               size="small"
             />
-            <Typography variant="caption" color="text.secondary">
+            <Typography variant="caption" sx={{
+              color: "text.secondary"
+            }}>
               gen {data.generation}
             </Typography>
           </Box>
@@ -1705,7 +1742,9 @@ export default function AppDetail() {
                                     )}
                                   </Box>
                                 ) : (
-                                  <Typography variant="caption" color="text.secondary">
+                                  <Typography variant="caption" sx={{
+                                    color: "text.secondary"
+                                  }}>
                                     Not mapped
                                   </Typography>
                                 )}

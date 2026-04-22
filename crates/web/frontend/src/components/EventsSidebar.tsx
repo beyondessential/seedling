@@ -72,7 +72,13 @@ function EventRow({ ev }: { ev: SeedlingEvent }) {
           variant="outlined"
           sx={{ fontSize: "0.65rem", height: 18, "& .MuiChip-label": { px: 0.75 } }}
         />
-        <Typography variant="caption" color="text.disabled" sx={{ ml: "auto", whiteSpace: "nowrap" }}>
+        <Typography
+          variant="caption"
+          sx={{
+            color: "text.disabled",
+            ml: "auto",
+            whiteSpace: "nowrap"
+          }}>
           {timeStr}
         </Typography>
       </Box>
@@ -89,10 +95,13 @@ function EventRow({ ev }: { ev: SeedlingEvent }) {
       {eventSummary(ev) && (
         <Typography
           variant="caption"
-          display="block"
-          color="text.secondary"
-          sx={{ fontFamily: "monospace", fontSize: "0.72rem", wordBreak: "break-all" }}
-        >
+          sx={{
+            display: "block",
+            color: "text.secondary",
+            fontFamily: "monospace",
+            fontSize: "0.72rem",
+            wordBreak: "break-all"
+          }}>
           {eventSummary(ev)}
         </Typography>
       )}
@@ -165,32 +174,35 @@ export function EventsSidebar() {
           "&:hover": { bgcolor: "primary.main", opacity: 0.4 },
         }}
       />
-
       <Box sx={{ px: 1.5, py: 0.75, display: "flex", alignItems: "center" }}>
         <Typography variant="subtitle2" sx={{ fontWeight: 700, flexGrow: 1 }}>
           Events
         </Typography>
         <Tooltip title={`${events.length} event${events.length === 1 ? "" : "s"} cached`}>
-          <Typography variant="caption" color="text.disabled">
+          <Typography variant="caption" sx={{
+            color: "text.disabled"
+          }}>
             {events.length}
           </Typography>
         </Tooltip>
       </Box>
-
       <Divider />
-
       <Box sx={{ flexGrow: 1, overflow: "auto" }}>
         {events.length === 0 ? (
-          <Typography variant="caption" color="text.disabled" sx={{ display: "block", p: 1.5 }}>
+          <Typography
+            variant="caption"
+            sx={{
+              color: "text.disabled",
+              display: "block",
+              p: 1.5
+            }}>
             No events yet.
           </Typography>
         ) : (
           events.map((ev, i) => <EventRow key={i} ev={ev} />)
         )}
       </Box>
-
       <Divider />
-
       <Box sx={{ px: 1.5, py: 0.75 }}>
         <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.75 }}>
           Infrastructure

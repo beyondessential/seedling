@@ -126,7 +126,9 @@ export default function Templates() {
         >
           Apps
         </Typography>
-        <Typography variant="body2" color="text.disabled">
+        <Typography variant="body2" sx={{
+          color: "text.disabled"
+        }}>
           /
         </Typography>
         <Typography variant="h5" sx={{ flexGrow: 1 }}>
@@ -153,16 +155,13 @@ export default function Templates() {
           </span>
         </Tooltip>
       </Box>
-
       {error && <OiErrorAlert error={error} />}
       {removeError && <OiErrorAlert error={removeError} />}
-
       {loading && !templates && (
         <Box sx={{ display: "flex", justifyContent: "center", mt: 4 }}>
           <CircularProgress />
         </Box>
       )}
-
       {templates && (
         <TableContainer component={Paper} variant="outlined">
           <Table size="small">
@@ -225,7 +224,6 @@ export default function Templates() {
           </Table>
         </TableContainer>
       )}
-
       <Dialog
         open={dialogOpen}
         onClose={() => {
@@ -249,9 +247,11 @@ export default function Templates() {
               onBlur={() => setNameTouched(true)}
               error={nameTouched && validationError !== null}
               helperText={nameTouched ? (validationError ?? " ") : " "}
-              inputProps={{ style: { fontFamily: "monospace" } }}
               sx={{ maxWidth: 400 }}
               autoFocus
+              slotProps={{
+                htmlInput: { style: { fontFamily: "monospace" } }
+              }}
             />
             <TextField
               label="Description (optional)"
@@ -286,7 +286,6 @@ export default function Templates() {
           </Tooltip>
         </DialogActions>
       </Dialog>
-
       <Dialog
         open={confirmRemove !== null}
         onClose={() => setConfirmRemove(null)}

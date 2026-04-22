@@ -43,19 +43,17 @@ export default function Sessions() {
           </span>
         </Tooltip>
       </Box>
-
       {error && <OiErrorAlert error={error} />}
-
       {loading && !data && (
         <Box sx={{ display: "flex", justifyContent: "center", mt: 4 }}>
           <CircularProgress />
         </Box>
       )}
-
       {data && total === 0 && (
-        <Typography color="text.secondary">No active clients.</Typography>
+        <Typography sx={{
+          color: "text.secondary"
+        }}>No active clients.</Typography>
       )}
-
       {data && total > 0 && (
         <Stack spacing={3}>
           {webCount > 0 && (

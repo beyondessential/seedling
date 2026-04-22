@@ -31,21 +31,23 @@ export function PlanDiff({ plan }: Props) {
             {e}
           </Alert>
         ))}
-
       <Box>
         <Typography
           variant="caption"
-          color="text.secondary"
-          sx={{ display: "block", mb: 0.5 }}
-        >
+          sx={{
+            color: "text.secondary",
+            display: "block",
+            mb: 0.5
+          }}>
           Resource changes ({diff.length})
         </Typography>
         {diff.length === 0 ? (
           <Typography
             variant="body2"
-            color="text.disabled"
-            sx={{ fontStyle: "italic" }}
-          >
+            sx={{
+              color: "text.disabled",
+              fontStyle: "italic"
+            }}>
             No resource changes.
           </Typography>
         ) : (
@@ -98,14 +100,15 @@ export function PlanDiff({ plan }: Props) {
           </TableContainer>
         )}
       </Box>
-
       {handlers.length > 0 && (
         <Box>
           <Typography
             variant="caption"
-            color="text.secondary"
-            sx={{ display: "block", mb: 0.5 }}
-          >
+            sx={{
+              color: "text.secondary",
+              display: "block",
+              mb: 0.5
+            }}>
             on_change handlers that would fire ({handlers.length})
           </Typography>
           <Stack direction="row" spacing={0.5} sx={{ flexWrap: "wrap", gap: 0.5 }}>

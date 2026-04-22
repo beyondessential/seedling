@@ -1,5 +1,5 @@
 import AddIcon from "@mui/icons-material/Add";
-import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlineOutlined";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import {
   Alert,
@@ -108,28 +108,28 @@ export default function Registries() {
           </span>
         </Tooltip>
       </Box>
-
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+      <Typography
+        variant="body2"
+        sx={{
+          color: "text.secondary",
+          mb: 2
+        }}>
         Apps may only pull container images from registries listed here.
         Removing a registry files a <code>disallowed_registry</code> fault on
         any app whose images reference it.
       </Typography>
-
       {error && <OiErrorAlert error={error} />}
-
       {loading && !data && (
         <Box sx={{ display: "flex", justifyContent: "center", mt: 4 }}>
           <CircularProgress />
         </Box>
       )}
-
       {data && registries.length === 0 && (
         <Alert severity="warning">
           The allowlist is empty. No container images can be pulled until at
           least one registry is added.
         </Alert>
       )}
-
       {registries.length > 0 && (
         <TableContainer component={Paper} variant="outlined">
           <Table size="small">
@@ -165,7 +165,6 @@ export default function Registries() {
           </Table>
         </TableContainer>
       )}
-
       <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} fullWidth maxWidth="sm">
         <DialogTitle>Add registry</DialogTitle>
         <DialogContent>
@@ -204,7 +203,6 @@ export default function Registries() {
           </Tooltip>
         </DialogActions>
       </Dialog>
-
       <Dialog open={removing !== null} onClose={() => setRemoving(null)} fullWidth maxWidth="sm">
         <DialogTitle>Remove registry</DialogTitle>
         <DialogContent>

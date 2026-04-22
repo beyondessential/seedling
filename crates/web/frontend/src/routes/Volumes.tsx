@@ -1,6 +1,6 @@
 import AddIcon from "@mui/icons-material/Add";
 import CameraAltIcon from "@mui/icons-material/CameraAlt";
-import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlineOutlined";
 import EditIcon from "@mui/icons-material/Edit";
 import LinkOffIcon from "@mui/icons-material/LinkOff";
 import RefreshIcon from "@mui/icons-material/Refresh";
@@ -95,7 +95,9 @@ function ConfirmDeleteHeldDialog({
           </Box>
           .
         </Typography>
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="body2" sx={{
+          color: "text.secondary"
+        }}>
           Reason it was held: {volume.reason}
         </Typography>
       </DialogContent>
@@ -255,8 +257,10 @@ function CreateSiteVolumeDialog({
             size="small"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            inputProps={{ style: { fontFamily: "monospace" } }}
             autoFocus
+            slotProps={{
+              htmlInput: { style: { fontFamily: "monospace" } }
+            }}
           />
           <FormControl>
             <FormLabel>Kind</FormLabel>
@@ -288,8 +292,10 @@ function CreateSiteVolumeDialog({
               size="small"
               value={hostPath}
               onChange={(e) => setHostPath(e.target.value)}
-              inputProps={{ style: { fontFamily: "monospace" } }}
               placeholder="/data/mypath"
+              slotProps={{
+                htmlInput: { style: { fontFamily: "monospace" } }
+              }}
             />
           )}
           {kind === "snapshot" && (
@@ -319,9 +325,11 @@ function CreateSiteVolumeDialog({
                 size="small"
                 value={source}
                 onChange={(e) => setSource(e.target.value)}
-                inputProps={{ style: { fontFamily: "monospace" } }}
                 placeholder="_site/name or app/volume"
                 helperText="No site volumes or exported app volumes found — enter manually."
+                slotProps={{
+                  htmlInput: { style: { fontFamily: "monospace" } }
+                }}
               />
             )
           )}
@@ -432,7 +440,12 @@ function MultiVolumeShellDialog({
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
       <DialogTitle>Open shell over volumes</DialogTitle>
       <DialogContent>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        <Typography
+          variant="body2"
+          sx={{
+            color: "text.secondary",
+            mb: 2
+          }}>
           Mount multiple volumes side-by-side under <code>/mnt</code> so you
           can <code>cp</code>, <code>rsync</code>, diff, or recover data
           across them from a single shell.
@@ -459,8 +472,10 @@ function MultiVolumeShellDialog({
                     </ListItemIcon>
                     <ListItemText
                       primary={v.name}
-                      primaryTypographyProps={{ sx: { fontFamily: "monospace" } }}
                       secondary={v.kind}
+                      slotProps={{
+                        primary: { sx: { fontFamily: "monospace" } }
+                      }}
                     />
                   </ListItemButton>
                 </ListItem>
@@ -493,8 +508,10 @@ function MultiVolumeShellDialog({
                     </ListItemIcon>
                     <ListItemText
                       primary={`${v.app}/${v.volume_name}`}
-                      primaryTypographyProps={{ sx: { fontFamily: "monospace" } }}
                       secondary={secondary}
+                      slotProps={{
+                        primary: { sx: { fontFamily: "monospace" } }
+                      }}
                     />
                   </ListItemButton>
                 </ListItem>
@@ -524,8 +541,10 @@ function MultiVolumeShellDialog({
                     </ListItemIcon>
                     <ListItemText
                       primary={`${h.app}/${h.display_name}`}
-                      primaryTypographyProps={{ sx: { fontFamily: "monospace" } }}
                       secondary={h.reason}
+                      slotProps={{
+                        primary: { sx: { fontFamily: "monospace" } }
+                      }}
                     />
                   </ListItemButton>
                 </ListItem>
@@ -682,13 +701,11 @@ export default function Volumes() {
           </span>
         </Tooltip>
       </Box>
-
       {actionError && (
         <Alert severity="error" sx={{ mb: 2 }}>
           {actionError.message}
         </Alert>
       )}
-
       <Stack spacing={4}>
         {/* Site Volumes */}
         <Box>
@@ -713,7 +730,9 @@ export default function Volumes() {
           {siteLoading && !siteVols && <CircularProgress size={20} />}
           {siteVols &&
             (siteVols.length === 0 ? (
-              <Typography color="text.secondary" variant="body2">
+              <Typography variant="body2" sx={{
+                color: "text.secondary"
+              }}>
                 No site volumes.
               </Typography>
             ) : (
@@ -818,7 +837,9 @@ export default function Volumes() {
           {exportedLoading && !exportedVols && <CircularProgress size={20} />}
           {exportedVols &&
             (exportedVols.length === 0 ? (
-              <Typography color="text.secondary" variant="body2">
+              <Typography variant="body2" sx={{
+                color: "text.secondary"
+              }}>
                 No exported volumes.
               </Typography>
             ) : (
@@ -912,7 +933,9 @@ export default function Volumes() {
           {(declaredLoading || mappingsLoading) && !declared && <CircularProgress size={20} />}
           {declared && (
             declared.length === 0 ? (
-              <Typography color="text.secondary" variant="body2">
+              <Typography variant="body2" sx={{
+                color: "text.secondary"
+              }}>
                 No external volume requests across registered apps.
               </Typography>
             ) : (
@@ -948,7 +971,9 @@ export default function Volumes() {
                                 )}
                               </>
                             ) : (
-                              <Typography variant="caption" color="warning.main">unmapped</Typography>
+                              <Typography variant="caption" sx={{
+                                color: "warning.main"
+                              }}>unmapped</Typography>
                             )}
                           </TableCell>
                           <TableCell align="right" sx={{ px: 0.5, whiteSpace: "nowrap" }}>
@@ -1029,9 +1054,10 @@ export default function Volumes() {
                             <Typography
                               component="span"
                               variant="body2"
-                              color="text.secondary"
-                              sx={{ fontFamily: "monospace" }}
-                            >
+                              sx={{
+                                color: "text.secondary",
+                                fontFamily: "monospace"
+                              }}>
                               _site
                             </Typography>
                           ) : (
@@ -1085,7 +1111,6 @@ export default function Volumes() {
           </>
         )}
       </Stack>
-
       <CreateSiteVolumeDialog
         open={createOpen}
         onClose={() => setCreateOpen(false)}
@@ -1096,7 +1121,6 @@ export default function Volumes() {
         siteVolumes={siteVols ?? []}
         exportedVolumes={exportedVols ?? []}
       />
-
       <MultiVolumeShellDialog
         open={shellPickerOpen}
         onClose={() => setShellPickerOpen(false)}
@@ -1105,7 +1129,6 @@ export default function Volumes() {
         heldVols={heldVols ?? []}
         onOpen={(volumes, label) => openVolumeShell(volumes, label)}
       />
-
       {snapshotTarget && (
         <SnapshotVolumeDialog
           key={snapshotTarget.source}
@@ -1117,7 +1140,6 @@ export default function Volumes() {
           }}
         />
       )}
-
       {promoteTarget && (
         <PromoteSnapshotDialog
           key={promoteTarget}
@@ -1128,7 +1150,6 @@ export default function Volumes() {
           }}
         />
       )}
-
       {(mapOpen || remapTarget != null || prefillTarget != null) && (
         <MapVolumeDialog
           key={
@@ -1155,7 +1176,6 @@ export default function Volumes() {
           prefill={prefillTarget ?? undefined}
         />
       )}
-
       {siteDeleteTarget && (
         <ConfirmDeleteSiteDialog
           volume={siteDeleteTarget}
@@ -1164,7 +1184,6 @@ export default function Volumes() {
           loading={deleteBusy}
         />
       )}
-
       {heldDeleteTarget && (
         <ConfirmDeleteHeldDialog
           volume={heldDeleteTarget}

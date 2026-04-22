@@ -152,13 +152,20 @@ function Section({
     <Box>
       <Typography
         variant="caption"
-        color="text.secondary"
-        sx={{ display: "block", mb: 0.5 }}
-      >
+        sx={{
+          color: "text.secondary",
+          display: "block",
+          mb: 0.5
+        }}>
         {title} ({count})
       </Typography>
       {count === 0 ? (
-        <Typography variant="body2" color="text.disabled" sx={{ fontStyle: "italic" }}>
+        <Typography
+          variant="body2"
+          sx={{
+            color: "text.disabled",
+            fontStyle: "italic"
+          }}>
           None declared.
         </Typography>
       ) : (

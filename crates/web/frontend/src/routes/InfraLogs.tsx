@@ -146,7 +146,9 @@ export default function InfraLogs() {
         <Typography variant="body2" sx={{ color: "text.primary" }}>
           {label}
         </Typography>
-        <Typography variant="body2" color="text.disabled">
+        <Typography variant="body2" sx={{
+          color: "text.disabled"
+        }}>
           — infra logs
         </Typography>
         <Typography
@@ -185,20 +187,24 @@ export default function InfraLogs() {
 
         {streaming && <CircularProgress size={16} />}
       </Box>
-
       {error && (
         <Alert severity="error" sx={{ m: 1, flexShrink: 0 }}>
           {error}
         </Alert>
       )}
-
       <Box
         ref={scrollRef}
         onScroll={onScroll}
         sx={{ flexGrow: 1, overflow: "auto", bgcolor: "grey.950", py: 0.5 }}
       >
         {entries.length === 0 && !streaming && !error && (
-          <Typography variant="caption" color="text.disabled" sx={{ display: "block", p: 2 }}>
+          <Typography
+            variant="caption"
+            sx={{
+              color: "text.disabled",
+              display: "block",
+              p: 2
+            }}>
             No log entries.
           </Typography>
         )}

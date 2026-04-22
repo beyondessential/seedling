@@ -87,7 +87,9 @@ export default function EditScript() {
         >
           Apps
         </Typography>
-        <Typography variant="body2" color="text.disabled">/</Typography>
+        <Typography variant="body2" sx={{
+          color: "text.disabled"
+        }}>/</Typography>
         <Typography
           component={Link}
           to={`/apps/${name}`}
@@ -96,7 +98,9 @@ export default function EditScript() {
         >
           {name}
         </Typography>
-        <Typography variant="body2" color="text.disabled">/</Typography>
+        <Typography variant="body2" sx={{
+          color: "text.disabled"
+        }}>/</Typography>
         <Typography variant="body2">Edit script</Typography>
         <Box sx={{ flexGrow: 1 }} />
         <Button
@@ -119,22 +123,18 @@ export default function EditScript() {
           </span>
         </Tooltip>
       </Box>
-
       <Stack spacing={1}>
         {fetchError && <OiErrorAlert error={fetchError} />}
         {planError && <OiErrorAlert error={planError} />}
       </Stack>
-
       {fetching && (
         <Box sx={{ display: "flex", justifyContent: "center", mt: 4 }}>
           <CircularProgress />
         </Box>
       )}
-
       {data && (
         <ScriptEditor value={script} onChange={setScript} minHeight="70vh" />
       )}
-
       <Dialog
         open={plan !== null}
         onClose={() => !saving && handleCancel()}

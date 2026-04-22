@@ -118,7 +118,9 @@ export default function TemplateDetail() {
         >
           Templates
         </Typography>
-        <Typography variant="body2" color="text.disabled">
+        <Typography variant="body2" sx={{
+          color: "text.disabled"
+        }}>
           /
         </Typography>
         <Typography variant="h5" sx={{ flexGrow: 1, fontFamily: "monospace" }}>
@@ -151,17 +153,19 @@ export default function TemplateDetail() {
           </span>
         </Tooltip>
       </Box>
-
       {removeError && <OiErrorAlert error={removeError} />}
-
       <Stack spacing={3}>
         {template.description && (
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" sx={{
+            color: "text.secondary"
+          }}>
             {template.description}
           </Typography>
         )}
 
-        <Typography variant="caption" color="text.secondary">
+        <Typography variant="caption" sx={{
+          color: "text.secondary"
+        }}>
           Uploaded {new Date(template.created_at).toLocaleString()}
         </Typography>
 
@@ -206,7 +210,6 @@ export default function TemplateDetail() {
           </Box>
         </Box>
       </Stack>
-
       <Dialog
         open={instantiateOpen}
         onClose={() => !acting && setInstantiateOpen(false)}
@@ -215,7 +218,9 @@ export default function TemplateDetail() {
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 1, minWidth: 360 }}>
             {actionError && <OiErrorAlert error={actionError} />}
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="body2" sx={{
+              color: "text.secondary"
+            }}>
               The template's script will be copied into a new app with the
               name below. The app is independent of the template.
             </Typography>
@@ -229,10 +234,12 @@ export default function TemplateDetail() {
               helperText={
                 appNameTouched ? (appNameValidation ?? " ") : " "
               }
-              inputProps={{ style: { fontFamily: "monospace" } }}
               autoFocus
               onKeyDown={(e) => {
                 if (e.key === "Enter" && canInstantiate) void handleInstantiate();
+              }}
+              slotProps={{
+                htmlInput: { style: { fontFamily: "monospace" } }
               }}
             />
           </Stack>
@@ -257,7 +264,6 @@ export default function TemplateDetail() {
           </Tooltip>
         </DialogActions>
       </Dialog>
-
       <Dialog
         open={confirmRemove}
         onClose={() => setConfirmRemove(false)}

@@ -170,7 +170,9 @@ export default function Logs() {
         </Typography>
         {resource && (
           <>
-            <Typography variant="body2" color="text.disabled">/</Typography>
+            <Typography variant="body2" sx={{
+              color: "text.disabled"
+            }}>/</Typography>
             <Typography
               component={resource && !instance ? "span" : Link}
               to={resource && !instance ? undefined : `/apps/${name}/logs?resource=${resource}`}
@@ -183,7 +185,9 @@ export default function Logs() {
         )}
         {instance && (
           <>
-            <Typography variant="body2" color="text.disabled">/</Typography>
+            <Typography variant="body2" sx={{
+              color: "text.disabled"
+            }}>/</Typography>
             <Typography variant="body2">{instance}</Typography>
           </>
         )}
@@ -220,24 +224,28 @@ export default function Logs() {
 
         {streaming && <CircularProgress size={16} />}
       </Box>
-
       {/* Scope info */}
       <Box sx={{ px: 2, py: 0.5, display: "flex", gap: 1, alignItems: "center", borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}>
-        <Typography variant="caption" color="text.secondary">scope:</Typography>
+        <Typography variant="caption" sx={{
+          color: "text.secondary"
+        }}>scope:</Typography>
         <Chip label={scopeLabel} size="small" variant="outlined" />
-        <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+        <Typography
+          variant="caption"
+          sx={{
+            color: "text.secondary",
+            ml: 1
+          }}>
           {entries.length} line{entries.length === 1 ? "" : "s"}
           {entries.length === MAX_ENTRIES && " (truncated)"}
         </Typography>
       </Box>
-
       {/* Error */}
       {error && (
         <Alert severity="error" sx={{ m: 1, flexShrink: 0 }}>
           {error}
         </Alert>
       )}
-
       {/* Log area */}
       <Box
         ref={scrollRef}
@@ -250,7 +258,13 @@ export default function Logs() {
         }}
       >
         {entries.length === 0 && !streaming && !error && (
-          <Typography variant="caption" color="text.disabled" sx={{ display: "block", p: 2 }}>
+          <Typography
+            variant="caption"
+            sx={{
+              color: "text.disabled",
+              display: "block",
+              p: 2
+            }}>
             No log entries.
           </Typography>
         )}

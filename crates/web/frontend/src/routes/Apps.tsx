@@ -104,15 +104,12 @@ export default function Apps() {
           </span>
         </Tooltip>
       </Box>
-
       {appsError && <OiErrorAlert error={appsError} />}
-
       {appsLoading && !apps && (
         <Box sx={{ display: "flex", justifyContent: "center", mt: 4 }}>
           <CircularProgress />
         </Box>
       )}
-
       {apps && (
         <TableContainer component={Paper} variant="outlined">
           <Table size="small">
@@ -156,7 +153,6 @@ export default function Apps() {
           </Table>
         </TableContainer>
       )}
-
       {/* Sessions */}
       {(webSessions.length > 0 || shells.length > 0 || forwards.length > 0) && (
         <>
@@ -224,7 +220,9 @@ export default function Apps() {
                         <TableRow key={s.session_id}>
                           <TableCell sx={{ fontFamily: "monospace" }}>
                             {s.app === "_volumes"
-                              ? <Typography variant="caption" color="text.secondary">volumes</Typography>
+                              ? <Typography variant="caption" sx={{
+                              color: "text.secondary"
+                            }}>volumes</Typography>
                               : <Link to={`/apps/${s.app}`}>{s.app}</Link>}
                           </TableCell>
                           <TableCell sx={{ fontFamily: "monospace" }}>{s.name}</TableCell>

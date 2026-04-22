@@ -122,7 +122,9 @@ export function MapVolumeDialog({ open, onClose, onSuccess, existing, prefill }:
               size="small"
               value={`${resolvedApp} / ${resolvedName}`}
               disabled
-              inputProps={{ style: { fontFamily: "monospace" } }}
+              slotProps={{
+                htmlInput: { style: { fontFamily: "monospace" } }
+              }}
             />
           ) : (
             <FormControl size="small" fullWidth>
@@ -145,7 +147,12 @@ export function MapVolumeDialog({ open, onClose, onSuccess, existing, prefill }:
                     sx={{ fontFamily: "monospace" }}
                   >
                     {d.app}
-                    <Typography component="span" color="text.secondary" sx={{ mx: 0.5 }}>/</Typography>
+                    <Typography
+                      component="span"
+                      sx={{
+                        color: "text.secondary",
+                        mx: 0.5
+                      }}>/</Typography>
                     {d.name}
                   </MenuItem>
                 ))}
@@ -181,7 +188,13 @@ export function MapVolumeDialog({ open, onClose, onSuccess, existing, prefill }:
                   {(siteVolumes ?? []).map((v) => (
                     <MenuItem key={v.name} value={v.name} sx={{ fontFamily: "monospace" }}>
                       {v.name}
-                      <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                      <Typography
+                        component="span"
+                        variant="caption"
+                        sx={{
+                          color: "text.secondary",
+                          ml: 1
+                        }}>
                         {v.kind}
                       </Typography>
                     </MenuItem>
@@ -194,8 +207,10 @@ export function MapVolumeDialog({ open, onClose, onSuccess, existing, prefill }:
                 size="small"
                 value={targetVolume}
                 onChange={(e) => setTargetVolume(e.target.value)}
-                inputProps={{ style: { fontFamily: "monospace" } }}
                 helperText="No site volumes found — enter the name manually."
+                slotProps={{
+                  htmlInput: { style: { fontFamily: "monospace" } }
+                }}
               />
             )
           )}
@@ -221,10 +236,21 @@ export function MapVolumeDialog({ open, onClose, onSuccess, existing, prefill }:
                       sx={{ fontFamily: "monospace" }}
                     >
                       {v.app}
-                      <Typography component="span" color="text.secondary" sx={{ mx: 0.5 }}>/</Typography>
+                      <Typography
+                        component="span"
+                        sx={{
+                          color: "text.secondary",
+                          mx: 0.5
+                        }}>/</Typography>
                       {v.volume_name}
                       {v.description && (
-                        <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                        <Typography
+                          component="span"
+                          variant="caption"
+                          sx={{
+                            color: "text.secondary",
+                            ml: 1
+                          }}>
                           {v.description}
                         </Typography>
                       )}
@@ -242,14 +268,18 @@ export function MapVolumeDialog({ open, onClose, onSuccess, existing, prefill }:
                     setTargetApp(e.target.value);
                     setTargetVolume("");
                   }}
-                  inputProps={{ style: { fontFamily: "monospace" } }}
+                  slotProps={{
+                    htmlInput: { style: { fontFamily: "monospace" } }
+                  }}
                 />
                 <TextField
                   label="Exported volume name"
                   size="small"
                   value={targetVolume}
                   onChange={(e) => setTargetVolume(e.target.value)}
-                  inputProps={{ style: { fontFamily: "monospace" } }}
+                  slotProps={{
+                    htmlInput: { style: { fontFamily: "monospace" } }
+                  }}
                 />
               </>
             )
