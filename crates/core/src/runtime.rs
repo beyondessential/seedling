@@ -19,6 +19,7 @@ pub mod history;
 pub mod identity;
 pub mod images;
 pub mod lifecycle;
+pub mod probe;
 pub mod registries;
 pub mod registry;
 pub mod restart_gens;
