@@ -38,7 +38,7 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { MapVolumeDialog } from "../components/MapVolumeDialog";
 import { OiErrorAlert } from "../components/OiErrorAlert";
@@ -58,6 +58,8 @@ import type {
   AppStatus,
   ExternalMapping,
   FaultRecord,
+  ImagePin,
+  ImageSummary,
   InstallRequirement,
   ResourceDef,
   SeedlingEvent,
@@ -1394,6 +1396,301 @@ function ShellOpenDialog({
   );
 }
 
+function humanBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MiB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
+}
+
+function AppImagesSection({
+  appName,
+  resources,
+  onRefresh,
+}: {
+  appName: string;
+  resources: AppResource[];
+  onRefresh: () => void;
+}) {
+  // w[impl routes.images.app-detail]
+  const dangerGuard = useGuard("dangerous");
+  const writeGuard = useGuard("write");
+
+  const { data: imagesData, refetch: refetchImages } = useOiQuery<{
+    images: ImageSummary[];
+  }>("/images/list", {});
+  const { data: pinsData, refetch: refetchPins } = useOiQuery<{
+    pins: ImagePin[];
+  }>("/images/pins/list", { app: appName });
+  const { execute, loading: mutating, error: mutateError, clearError } =
+    useOiAction();
+
+  const [removing, setRemoving] = useState<ImageSummary | null>(null);
+  const [clearAllOpen, setClearAllOpen] = useState(false);
+
+  // Image refs declared by this app's container resources.
+  const declaredImages = useMemo(() => {
+    const refs = new Set<string>();
+    for (const r of resources) {
+      const img =
+        r.def?.kind === "deployment" || r.def?.kind === "job"
+          ? r.def.container.image
+          : null;
+      if (img) refs.add(img);
+    }
+    return refs;
+  }, [resources]);
+
+  const pins = pinsData?.pins ?? [];
+  const pinnedRefs = useMemo(
+    () => new Set(pins.map((p) => p.reference)),
+    [pins],
+  );
+
+  // Show images either (a) referenced by this app's resources and in-use,
+  // or (b) pinned by this app.
+  const rows = useMemo<ImageSummary[]>(() => {
+    const all = imagesData?.images ?? [];
+    return all.filter((img) => {
+      const hitsDeclared =
+        img.in_use && img.references.some((r) => declaredImages.has(r));
+      const hitsPin =
+        img.pinned_by.includes(appName) ||
+        img.references.some((r) => pinnedRefs.has(r));
+      return hitsDeclared || hitsPin;
+    });
+  }, [imagesData, declaredImages, pinnedRefs, appName]);
+
+  const primaryReference = (img: ImageSummary) =>
+    img.references[0] ?? img.image_id;
+
+  const refreshAll = () => {
+    onRefresh();
+    refetchImages();
+    refetchPins();
+  };
+
+  const submitRemove = async () => {
+    if (!removing) return;
+    try {
+      await execute("/images/remove", {
+        reference: primaryReference(removing),
+      });
+      setRemoving(null);
+      refreshAll();
+    } catch {
+      /* surfaced via mutateError */
+    }
+  };
+
+  const submitClearAll = async () => {
+    try {
+      await execute("/images/pins/clear", { app: appName });
+      setClearAllOpen(false);
+      refreshAll();
+    } catch {
+      /* surfaced via mutateError */
+    }
+  };
+
+  if (rows.length === 0 && pins.length === 0) {
+    return null;
+  }
+
+  return (
+    <>
+      <Box sx={{ display: "flex", alignItems: "center", mb: 1, gap: 1 }}>
+        <Typography variant="h6" sx={{ flexGrow: 1 }}>
+          Images
+        </Typography>
+        {pins.length > 0 && (
+          <Tooltip
+            title={
+              !writeGuard.allowed
+                ? writeGuard.reason ?? ""
+                : `Clear all ${pins.length} pin${pins.length === 1 ? "" : "s"} for this app`
+            }
+          >
+            <span>
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={() => {
+                  clearError();
+                  setClearAllOpen(true);
+                }}
+                disabled={!writeGuard.allowed || mutating}
+              >
+                Clear all pins
+              </Button>
+            </span>
+          </Tooltip>
+        )}
+      </Box>
+      <TableContainer component={Paper} variant="outlined">
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>Reference</TableCell>
+              <TableCell>Size</TableCell>
+              <TableCell>State</TableCell>
+              <TableCell width={80} align="right" />
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {rows.map((img) => (
+              <TableRow key={img.image_id} hover>
+                <TableCell>
+                  <Stack spacing={0.5}>
+                    {img.references.length === 0 ? (
+                      <Typography
+                        variant="caption"
+                        sx={{
+                          color: "text.secondary",
+                          fontFamily: "monospace",
+                        }}
+                      >
+                        (dangling) {img.image_id.slice(0, 19)}
+                      </Typography>
+                    ) : (
+                      img.references.map((r) => (
+                        <Typography
+                          key={r}
+                          variant="body2"
+                          sx={{ fontFamily: "monospace" }}
+                        >
+                          {r}
+                        </Typography>
+                      ))
+                    )}
+                  </Stack>
+                </TableCell>
+                <TableCell>{humanBytes(img.size_bytes)}</TableCell>
+                <TableCell>
+                  <Stack direction="row" spacing={0.5}>
+                    {img.in_use && (
+                      <Chip label="in use" size="small" color="success" />
+                    )}
+                    {img.pinned_by.includes(appName) && (
+                      <Chip
+                        label="pinned"
+                        size="small"
+                        color="primary"
+                        variant="outlined"
+                      />
+                    )}
+                  </Stack>
+                </TableCell>
+                <TableCell align="right">
+                  <Tooltip
+                    title={
+                      !dangerGuard.allowed
+                        ? dangerGuard.reason ?? ""
+                        : img.in_use
+                          ? "Cannot remove: image is in use"
+                          : "Remove"
+                    }
+                  >
+                    <span>
+                      <IconButton
+                        size="small"
+                        onClick={() => {
+                          clearError();
+                          setRemoving(img);
+                        }}
+                        disabled={!dangerGuard.allowed || img.in_use}
+                      >
+                        <DeleteOutlineIcon fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </TableContainer>
+
+      {/* w[impl routes.images.confirm] */}
+      <Dialog
+        open={removing !== null}
+        onClose={() => setRemoving(null)}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>Remove image</DialogTitle>
+        <DialogContent>
+          {removing && (
+            <Stack spacing={2} sx={{ mt: 1 }}>
+              <Typography>
+                Remove <code>{primaryReference(removing)}</code> from local
+                storage? This will fail if a running container is using the
+                image.
+              </Typography>
+              {mutateError && <OiErrorAlert error={mutateError} />}
+            </Stack>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRemoving(null)} disabled={mutating}>
+            Cancel
+          </Button>
+          <Tooltip title={dangerGuard.reason ?? ""}>
+            <span>
+              <Button
+                onClick={submitRemove}
+                variant="contained"
+                color="error"
+                disabled={mutating || !dangerGuard.allowed}
+              >
+                Remove
+              </Button>
+            </span>
+          </Tooltip>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={clearAllOpen}
+        onClose={() => setClearAllOpen(false)}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>Clear image pins</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            <Typography>
+              Clear all {pins.length} image pin{pins.length === 1 ? "" : "s"}{" "}
+              held by <strong>{appName}</strong>? Pinned images stay in local
+              storage but are no longer protected from autonomous GC.
+            </Typography>
+            {mutateError && <OiErrorAlert error={mutateError} />}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => setClearAllOpen(false)}
+            disabled={mutating}
+          >
+            Cancel
+          </Button>
+          <Tooltip title={writeGuard.reason ?? ""}>
+            <span>
+              <Button
+                onClick={submitClearAll}
+                variant="contained"
+                disabled={mutating || !writeGuard.allowed}
+              >
+                Clear all pins
+              </Button>
+            </span>
+          </Tooltip>
+        </DialogActions>
+      </Dialog>
+    </>
+  );
+}
+
 function Section({
   title,
   children,
@@ -1825,6 +2122,14 @@ export default function AppDetail() {
                     onRefresh={refetch}
                   />
                 </Section>
+
+                <Divider sx={{ my: 3 }} />
+
+                <AppImagesSection
+                  appName={name!}
+                  resources={data.resources}
+                  onRefresh={refetch}
+                />
               </Box>
             </>
           )}

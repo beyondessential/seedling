@@ -2,6 +2,7 @@ import BackupIcon from "@mui/icons-material/Backup";
 import CloudQueueIcon from "@mui/icons-material/CloudQueue";
 import DescriptionIcon from "@mui/icons-material/Description";
 import EventNoteIcon from "@mui/icons-material/EventNote";
+import InventoryIcon from "@mui/icons-material/Inventory2";
 import KeyIcon from "@mui/icons-material/Key";
 import PeopleAltIcon from "@mui/icons-material/PeopleAlt";
 import StorageIcon from "@mui/icons-material/Storage";
@@ -123,6 +124,16 @@ export function Navbar() {
             sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
           >
             <CloudQueueIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Container images">
+          <IconButton
+            size="small"
+            component={Link}
+            to="/images"
+            sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
+          >
+            <InventoryIcon fontSize="small" />
           </IconButton>
         </Tooltip>
         <Tooltip

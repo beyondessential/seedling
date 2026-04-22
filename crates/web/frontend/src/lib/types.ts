@@ -361,6 +361,22 @@ export interface TemplatePreview {
   script_error: string | null;
 }
 
+export interface ImageSummary {
+  image_id: string;
+  references: string[];
+  size_bytes: number;
+  created_at: string;
+  last_used_at: string;
+  in_use: boolean;
+  pinned_by: string[];
+}
+
+export interface ImagePin {
+  app: string;
+  reference: string;
+  pinned_at: string;
+}
+
 export interface ConnectRequest {
   token?: string;
   password?: string;

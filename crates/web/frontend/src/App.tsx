@@ -9,6 +9,7 @@ import Backups from "./routes/Backups";
 import CreateApp from "./routes/CreateApp";
 import EditScript from "./routes/EditScript";
 import Faults from "./routes/Faults";
+import Images from "./routes/Images";
 import InfraLogs from "./routes/InfraLogs";
 import Keys from "./routes/Keys";
 import Login from "./routes/Login";
@@ -36,6 +37,7 @@ const router = createBrowserRouter([
       { path: "backups", element: <Backups /> },
       { path: "keys", element: <Keys /> },
       { path: "registries", element: <Registries /> },
+      { path: "images", element: <Images /> },
       { path: "apps/:name/logs", element: <Logs /> },
       { path: "apps/:name/shell/:shellName", element: <Shell /> },
       { path: "infra/:component/logs", element: <InfraLogs /> },

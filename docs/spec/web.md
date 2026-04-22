@@ -137,6 +137,21 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > w[routes.registries]
 > The web interface exposes the container registry allowlist: listing, adding, and removing registry hostnames.
 
+> w[routes.images]
+> The web interface provides a dedicated Images page at `/images` showing:
+>
+> - A table of every container image in local storage — with its references, size, last-used timestamp, and pin/in-use status — and a per-row remove action.
+> - A separate table of current image pins — with the pinning app, reference, and pinned-at timestamp — and a per-row clear action.
+> - A "clear unused" button that removes every image that is not currently backing a running container, issued as a batch of individual remove calls.
+>
+> The page must not expose the force-remove option, nor a generic pull action; both remain OI/CLI-only affordances to keep the browser surface low-risk.
+
+> w[routes.images.app-detail]
+> Each app's detail page must show a table of the images that the app is directly concerned with — every image currently in-use by one of the app's running containers, together with every image the app has pinned. Each row exposes a remove action (non-forceful) and a single "clear all pins" button is offered for the app as a whole.
+
+> w[routes.images.confirm]
+> Both the images page and the app-detail images table must require confirmation before issuing an image remove, and the confirmation must state that remove fails if the image is currently in use.
+
 > w[routes.backups]
 > The web interface exposes backup management: registering and deregistering backup apps; creating, listing, showing, updating, and deleting backup strategies; triggering immediate backups; listing snapshots; and restoring snapshots.
 
