@@ -53,11 +53,19 @@ export function MapVolumeDialog({ open, onClose, onSuccess, existing, prefill }:
   const [selectedRequest, setSelectedRequest] = useState<string>(
     initialApp && initialName ? `${initialApp}\0${initialName}` : "",
   );
-  const [targetKind, setTargetKind] = useState<"site" | "exported">(
-    existing?.target_kind ?? "site",
+  const [targetKind, setTargetKind] = useState<"site" | "app">(
+    existing?.target.kind ?? "site",
   );
-  const [targetApp, setTargetApp] = useState(existing?.target_app ?? "");
-  const [targetVolume, setTargetVolume] = useState(existing?.target_volume ?? "");
+  const [targetApp, setTargetApp] = useState(
+    existing?.target.kind === "app" ? existing.target.app : "",
+  );
+  const [targetVolume, setTargetVolume] = useState(
+    existing
+      ? existing.target.kind === "app"
+        ? existing.target.volume
+        : existing.target.name
+      : "",
+  );
   const [readOnly, setReadOnly] = useState(existing?.read_only ?? false);
 
   const { data: siteVolumes } = useOiQuery<SiteVolume[]>("/volumes/site/list", {});
@@ -79,15 +87,17 @@ export function MapVolumeDialog({ open, onClose, onSuccess, existing, prefill }:
   };
 
   const handleSubmit = async () => {
+    const target =
+      targetKind === "app"
+        ? { kind: "app" as const, app: targetApp, volume: targetVolume }
+        : { kind: "site" as const, name: targetVolume };
     try {
       await execute(
         isRemap ? "/volumes/external/remap" : "/volumes/external/map",
         {
           app: resolvedApp,
           external_name: resolvedName,
-          target_kind: targetKind,
-          ...(targetKind === "exported" ? { target_app: targetApp } : {}),
-          target_volume: targetVolume,
+          target,
           read_only: readOnly,
         },
       );
@@ -154,7 +164,7 @@ export function MapVolumeDialog({ open, onClose, onSuccess, existing, prefill }:
               }}
             >
               <FormControlLabel value="site" control={<Radio size="small" />} label="Site volume" />
-              <FormControlLabel value="exported" control={<Radio size="small" />} label="Exported app volume" />
+              <FormControlLabel value="app" control={<Radio size="small" />} label="Exported app volume" />
             </RadioGroup>
           </FormControl>
 
@@ -190,7 +200,7 @@ export function MapVolumeDialog({ open, onClose, onSuccess, existing, prefill }:
             )
           )}
 
-          {targetKind === "exported" && (
+          {targetKind === "app" && (
             (exportedVolumes ?? []).length > 0 ? (
               <FormControl size="small" fullWidth>
                 <InputLabel>Exported volume</InputLabel>

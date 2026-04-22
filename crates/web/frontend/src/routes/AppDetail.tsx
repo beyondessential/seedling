@@ -1695,11 +1695,11 @@ export default function AppDetail() {
                                 {mapping ? (
                                   <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
                                     <Typography variant="caption" sx={{ fontFamily: "monospace" }}>
-                                      {mapping.target_kind === "exported" && mapping.target_app
-                                        ? `${mapping.target_app}/${mapping.target_volume}`
-                                        : mapping.target_volume}
+                                      {mapping.target.kind === "app"
+                                        ? `${mapping.target.app}/${mapping.target.volume}`
+                                        : mapping.target.name}
                                     </Typography>
-                                    <Chip label={mapping.target_kind} size="small" variant="outlined" />
+                                    <Chip label={mapping.target.kind} size="small" variant="outlined" />
                                     {mapping.read_only && (
                                       <Chip label="ro" size="small" variant="outlined" />
                                     )}

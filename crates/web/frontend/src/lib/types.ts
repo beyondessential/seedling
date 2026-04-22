@@ -282,9 +282,7 @@ export interface ExternalMapping {
   app: string;
   external_name: string;
   read_only: boolean;
-  target_kind: "exported" | "site";
-  target_app?: string;
-  target_volume: string;
+  target: Exclude<VolumeRef, { kind: "held" }>;
 }
 
 export interface HeldVolume {

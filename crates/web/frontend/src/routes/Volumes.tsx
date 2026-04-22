@@ -940,9 +940,9 @@ export default function Volumes() {
                           <TableCell sx={{ fontFamily: "monospace" }}>
                             {mapping ? (
                               <>
-                                {mapping.target_kind === "exported"
-                                  ? `${mapping.target_app}/${mapping.target_volume}`
-                                  : `_site/${mapping.target_volume}`}
+                                {mapping.target.kind === "app"
+                                  ? `${mapping.target.app}/${mapping.target.volume}`
+                                  : `_site/${mapping.target.name}`}
                                 {mapping.read_only && (
                                   <Chip label="ro" size="small" variant="outlined" sx={{ ml: 1 }} />
                                 )}
