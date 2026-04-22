@@ -254,17 +254,15 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                         std::process::exit(1);
                     }
                 };
-                let (target_kind, target_app, target_volume) = if prefix == "_site" {
-                    ("site", None, vol.to_owned())
+                let target = if prefix == "_site" {
+                    serde_json::json!({ "kind": "site", "name": vol })
                 } else {
-                    ("exported", Some(prefix.to_owned()), vol.to_owned())
+                    serde_json::json!({ "kind": "app", "app": prefix, "volume": vol })
                 };
                 let params = serde_json::json!({
                     "app": app,
                     "external_name": external_volume,
-                    "target_kind": target_kind,
-                    "target_app": target_app,
-                    "target_volume": target_volume,
+                    "target": target,
                     "read_only": read_only,
                 });
                 let route = if force {
