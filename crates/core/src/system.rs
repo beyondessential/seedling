@@ -5,7 +5,8 @@ use sha2::{Digest, Sha256};
 
 use crate::system::types::{
     ContainerFilter, ContainerSpec, ContainerState, ContainerSummary, DataPlaneRules, ExecHandle,
-    NetworkSummary, ProxyConfig, ServiceRoute, TransientUnitSpec, UnitState, UnitSummary,
+    ImageSummary, NetworkSummary, ProxyConfig, ServiceRoute, TransientUnitSpec, UnitState,
+    UnitSummary,
 };
 
 pub mod actuator;
@@ -68,6 +69,16 @@ pub trait ContainerRuntime: Send + Sync + 'static {
         &'a self,
         reference: &'a str,
     ) -> BoxFuture<'a, Result<Option<String>, BoxError>>;
+    /// Enumerate every image in local storage, with size and references.
+    fn list_images<'a>(&'a self) -> BoxFuture<'a, Result<Vec<ImageSummary>, BoxError>>;
+    /// Remove an image by reference (tag, digest ref, or image ID).
+    /// Returns `true` when the image was removed, `false` when it was not
+    /// present locally.
+    fn remove_image<'a>(
+        &'a self,
+        reference: &'a str,
+        force: bool,
+    ) -> BoxFuture<'a, Result<bool, BoxError>>;
 
     // Networks — one IPv6 /64 per pod instance.
     // The host bridge is assigned ::1 (gateway) and ::2 (mount endpoint).

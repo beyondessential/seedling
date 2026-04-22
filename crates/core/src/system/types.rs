@@ -71,6 +71,19 @@ pub struct NetworkSummary {
     pub bridge_name: String,
 }
 
+/// Returned by `ContainerRuntime::list_images`. Drives the `/images/list`
+/// OI endpoint and the autonomous GC's size/age book-keeping.
+#[derive(Debug, Clone)]
+pub struct ImageSummary {
+    /// Content-addressable digest, e.g. `"sha256:..."`.
+    pub image_id: String,
+    /// All tag and digest references that resolve to this image in local storage.
+    pub references: Vec<String>,
+    pub size_bytes: i64,
+    /// Image creation time as reported by the runtime, Unix seconds.
+    pub created_at_secs: i64,
+}
+
 // ---------------------------------------------------------------------------
 // Container spec
 // ---------------------------------------------------------------------------

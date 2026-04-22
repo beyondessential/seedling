@@ -14,8 +14,8 @@ use podman_rest_client::{
     v5::{
         models::{NetworkCreateLibpod, Subnet, VolumeCreateOptions},
         params::{
-            ContainerDeleteLibpod, ContainerListLibpod, ImagePullLibpod, NetworkDeleteLibpod,
-            VolumeDeleteLibpod,
+            ContainerDeleteLibpod, ContainerListLibpod, ImageDeleteLibpod, ImagePullLibpod,
+            NetworkDeleteLibpod, VolumeDeleteLibpod,
         },
     },
 };
@@ -31,7 +31,7 @@ use crate::system::{
     translate::container::podman_args,
     types::{
         ContainerFilter, ContainerHealth, ContainerSpec, ContainerState, ContainerStatus,
-        ContainerSummary, ExecHandle, NetworkSummary,
+        ContainerSummary, ExecHandle, ImageSummary, NetworkSummary,
     },
 };
 
@@ -488,6 +488,71 @@ impl PodmanRuntime {
         }
     }
 
+    async fn list_images_impl(&self) -> Result<Vec<ImageSummary>, PodmanError> {
+        let summaries = self
+            .client
+            .v5()
+            .images()
+            .image_list_libpod(None)
+            .await
+            .map_err(map_api_err)?;
+
+        let mut out = Vec::with_capacity(summaries.len());
+        for s in summaries {
+            let image_id = match s.id {
+                Some(id) if !id.is_empty() => id,
+                _ => continue,
+            };
+            let mut references: Vec<String> = Vec::new();
+            if let Some(tags) = s.repo_tags {
+                references.extend(tags.into_iter().filter(|t| !t.is_empty()));
+            }
+            if let Some(digests) = s.repo_digests {
+                references.extend(digests.into_iter().filter(|d| !d.is_empty()));
+            }
+            out.push(ImageSummary {
+                image_id,
+                references,
+                size_bytes: s.size.unwrap_or(0),
+                created_at_secs: s.created.unwrap_or(0),
+            });
+        }
+        Ok(out)
+    }
+
+    async fn remove_image_impl(
+        &self,
+        reference: &str,
+        force: bool,
+    ) -> Result<bool, PodmanError> {
+        let params = ImageDeleteLibpod { force: Some(force) };
+        let report = match self
+            .client
+            .v5()
+            .images()
+            .image_delete_libpod(reference, Some(params))
+            .await
+        {
+            Ok(r) => r,
+            Err(ref e) if is_not_found(e) => return Ok(false),
+            Err(e) => return Err(map_api_err(e)),
+        };
+
+        if let Some(errors) = report.errors
+            && let Some(first) = errors.into_iter().next()
+        {
+            return ProtocolSnafu {
+                message: format!("image delete '{reference}': {first}"),
+            }
+            .fail();
+        }
+
+        let deleted_any =
+            report.deleted.as_ref().is_some_and(|v| !v.is_empty())
+                || report.untagged.as_ref().is_some_and(|v| !v.is_empty());
+        Ok(deleted_any)
+    }
+
     async fn exec_impl(&self, spec: ContainerSpec) -> Result<ExecHandle, PodmanError> {
         let pty = nix::pty::openpty(None, None).map_err(|e| {
             ProtocolSnafu {
@@ -787,6 +852,22 @@ impl ContainerRuntime for PodmanRuntime {
     ) -> BoxFuture<'a, Result<Option<String>, BoxError>> {
         Box::pin(async move {
             self.local_image_digest_impl(reference)
+                .await
+                .map_err(Into::into)
+        })
+    }
+
+    fn list_images<'a>(&'a self) -> BoxFuture<'a, Result<Vec<ImageSummary>, BoxError>> {
+        Box::pin(async move { self.list_images_impl().await.map_err(Into::into) })
+    }
+
+    fn remove_image<'a>(
+        &'a self,
+        reference: &'a str,
+        force: bool,
+    ) -> BoxFuture<'a, Result<bool, BoxError>> {
+        Box::pin(async move {
+            self.remove_image_impl(reference, force)
                 .await
                 .map_err(Into::into)
         })
