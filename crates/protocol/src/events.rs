@@ -8,7 +8,7 @@ use crate::{
     actor::Actor,
     names::{
         ActionName, AppName, ExternalVolumeName, ForwardId, HeldVolumeId, ParamName, SessionId,
-        TemplateName, VolumeRef,
+        ShellName, TemplateName, VolumeRef,
     },
 };
 
@@ -157,7 +157,7 @@ pub enum OiEvent {
         timestamp: Timestamp,
         session_id: SessionId,
         app: AppName,
-        name: String,
+        name: ShellName,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
@@ -494,12 +494,12 @@ impl EventSender {
     }
 
     // i[impl shell.start]
-    pub fn shell_started(&self, session_id: SessionId, app: &AppName, name: &str) {
+    pub fn shell_started(&self, session_id: SessionId, app: &AppName, name: &ShellName) {
         self.emit(OiEvent::ShellStarted {
             timestamp: now(),
             session_id,
             app: app.clone(),
-            name: name.to_owned(),
+            name: name.clone(),
             actor: None,
         });
     }

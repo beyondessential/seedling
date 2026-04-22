@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, net::Ipv6Addr, sync::Arc, time::Duration};
 
 use parking_lot::Mutex;
-use seedling_protocol::names::{ActionName, AppName, SessionId};
+use seedling_protocol::names::{ActionName, AppName, SessionId, ShellName};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::registry::ShellSession;
@@ -37,7 +37,7 @@ pub(crate) async fn open_shell_session(
     #[derive(serde::Deserialize)]
     struct Params {
         app: AppName,
-        name: String,
+        name: ShellName,
         rows: u16,
         cols: u16,
         #[serde(default)]
@@ -231,7 +231,7 @@ pub(crate) async fn open_shell_session(
             Arc::new(DbInstanceRegistry::new(db.clone()));
         // Shell names follow the same bsl.name rules as action names; reuse
         // ActionName as the identifier written into the action log.
-        let shell_as_action = ActionName::new_unchecked(&shell_name_for_task);
+        let shell_as_action = ActionName::new_unchecked(shell_name_for_task.as_str());
         let log = DbActionLog::new(
             db.clone(),
             op_id_for_log.clone(),
@@ -252,7 +252,7 @@ pub(crate) async fn open_shell_session(
                     script_ast: &ast,
                     operation_id: op_id_for_log.clone(),
                     app: &app,
-                    action_name: &shell_name_for_task,
+                    action_name: shell_name_for_task.as_str(),
                     log: &log,
                     world: Arc::clone(&world),
                     registry: Arc::clone(&registry),
@@ -485,7 +485,7 @@ pub(crate) async fn open_shell_session(
     state.shells.insert(ShellSession {
         session_id,
         app: app_name.clone(),
-        name: shell_name.clone(),
+        name: shell_name.as_str().to_owned(),
         opened_at: jiff::Timestamp::now(),
         actor: req_actor,
         container_name: container_name.clone(),

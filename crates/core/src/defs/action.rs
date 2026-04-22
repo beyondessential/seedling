@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 
 use rhai::{CustomType, Dynamic, EvalAltResult, Map, TypeBuilder};
-use seedling_protocol::names::{ActionName, AppName, ParamName};
+use seedling_protocol::names::{ActionName, AppName, ParamName, ShellName};
 
 use super::collection::{Collection, col};
 use super::install::ParamDef;
@@ -110,7 +110,7 @@ impl CustomType for Action {
 
 #[derive(Debug, Clone)]
 pub struct ShellDef {
-    pub name: String,
+    pub name: ShellName,
     pub description: Option<String>,
     pub params: BTreeMap<ParamName, ParamDef>,
 }

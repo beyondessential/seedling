@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use rhai::{EvalAltResult, FnPtr, Map, TypeBuilder};
-use seedling_protocol::names::ParamName;
+use seedling_protocol::names::{ParamName, ShellName};
 
 use super::super::action::ShellDef;
 use super::App;
@@ -12,21 +12,22 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
         .with_fn(
             "on_shell",
             |this: &mut App, name: &str, closure: FnPtr| -> Result<(), Box<EvalAltResult>> {
-                super::super::validate_name(name)?;
-                let name_owned: String = name.into();
+                let shell_name = ShellName::new(name)
+                    .map_err(|e| -> Box<EvalAltResult> { e.to_string().into() })?;
+                let name_for_insert = shell_name.clone();
                 this.def.rcu(|d| {
                     let mut d = (**d).clone();
                     d.shells.insert(
-                        name_owned.clone(),
+                        name_for_insert.clone(),
                         ShellDef {
-                            name: name_owned.clone(),
+                            name: name_for_insert.clone(),
                             description: None,
                             params: BTreeMap::new(),
                         },
                     );
                     d
                 });
-                super::capture_shell(name.into(), closure);
+                super::capture_shell(shell_name, closure);
                 Ok(())
             },
         )
@@ -37,24 +38,25 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
              closure: FnPtr,
              options: Map|
              -> Result<(), Box<EvalAltResult>> {
-                super::super::validate_name(name)?;
+                let shell_name = ShellName::new(name)
+                    .map_err(|e| -> Box<EvalAltResult> { e.to_string().into() })?;
                 let desc = super::extract_description(&options);
                 // l[impl action.option-params]
                 let params = parse_shell_params(&options)?;
-                let name_owned: String = name.into();
+                let name_for_insert = shell_name.clone();
                 this.def.rcu(|d| {
                     let mut d = (**d).clone();
                     d.shells.insert(
-                        name_owned.clone(),
+                        name_for_insert.clone(),
                         ShellDef {
-                            name: name_owned.clone(),
+                            name: name_for_insert.clone(),
                             description: desc.clone(),
                             params: params.clone(),
                         },
                     );
                     d
                 });
-                super::capture_shell(name.into(), closure);
+                super::capture_shell(shell_name, closure);
                 Ok(())
             },
         );

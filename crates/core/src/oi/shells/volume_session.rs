@@ -1,6 +1,8 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
-use seedling_protocol::names::{AppName, AppVolumeName, HeldVolumeId, SessionId, SiteVolumeName};
+use seedling_protocol::names::{
+    AppName, AppVolumeName, HeldVolumeId, SessionId, ShellName, SiteVolumeName,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::registry::ShellSession;
@@ -361,9 +363,10 @@ pub(crate) async fn open_volume_shell_session(
         stop_tx,
     });
     // i[impl volumes.shell]
+    let shell_event_name = ShellName::new_unchecked("volume-shell");
     state
         .event_tx
-        .shell_started(session_id, &volumes_app, &session_name);
+        .shell_started(session_id, &volumes_app, &shell_event_name);
 
     let _ = stderr_send.finish();
 
