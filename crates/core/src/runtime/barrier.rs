@@ -49,6 +49,12 @@ pub enum CallKind {
     /// traffic. Records intent without affecting the standard desired state.
     // r[impl actuate.ingress.warm-certs]
     WarmCerts,
+    /// `rt.warm_images(...)` — pre-pull container images without running them,
+    /// pinning the references for autonomous-GC exemption. The image refs are
+    /// not stored on the log entry: pins persist directly to `image_pins`
+    /// at call time, which is what the reconciler and barrier consult.
+    // r[impl actuate.image.warm]
+    WarmImages,
 }
 
 // r[impl history.action-log.entries]

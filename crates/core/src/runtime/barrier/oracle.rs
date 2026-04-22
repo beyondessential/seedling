@@ -20,6 +20,14 @@ pub trait WorldStateOracle: Send + Sync {
         false
     }
 
+    /// Returns true if a container image matching `reference` is currently
+    /// present in local storage. Used by `rt.warm_images(...).ready()`.
+    // r[impl actuate.image.warm]
+    fn image_present(&self, reference: &str) -> bool {
+        let _ = reference;
+        false
+    }
+
     /// Returns `Some(true)` when the resource has terminated successfully,
     /// `Some(false)` when it has terminated unsuccessfully, and `None` when
     /// the resource has not yet terminated or when success is not meaningful
@@ -45,6 +53,7 @@ pub struct TestWorldOracle {
     states: Mutex<HashMap<(ResourceKind, Option<String>), LifecycleState>>,
     valid_certs: Mutex<std::collections::HashSet<(ResourceKind, Option<String>)>>,
     exit_codes: Mutex<HashMap<(ResourceKind, Option<String>), i32>>,
+    present_images: Mutex<std::collections::HashSet<String>>,
 }
 
 impl TestWorldOracle {
@@ -53,7 +62,13 @@ impl TestWorldOracle {
             states: Mutex::new(HashMap::new()),
             valid_certs: Mutex::new(std::collections::HashSet::new()),
             exit_codes: Mutex::new(HashMap::new()),
+            present_images: Mutex::new(std::collections::HashSet::new()),
         }
+    }
+
+    /// Mark `reference` as present locally for `image_present` queries.
+    pub fn set_image_present(&self, reference: impl Into<String>) {
+        self.present_images.lock().insert(reference.into());
     }
 
     pub fn set(&self, resource: ResourceInstance, state: LifecycleState) {
@@ -97,6 +112,10 @@ impl WorldStateOracle for TestWorldOracle {
         self.valid_certs
             .lock()
             .contains(&(resource.kind, resource.name.clone()))
+    }
+
+    fn image_present(&self, reference: &str) -> bool {
+        self.present_images.lock().contains(reference)
     }
 
     // l[impl rt.termination.ensure-success]
@@ -151,6 +170,13 @@ impl WorldStateOracle for DbWorldOracle {
             };
             derive_lifecycle_state(&resource, &observations)
         })
+    }
+
+    // r[impl actuate.image.warm]
+    fn image_present(&self, reference: &str) -> bool {
+        let reference = reference.to_owned();
+        self.db
+            .call(move |db| crate::runtime::images::reference_present(db, &reference).unwrap_or(false))
     }
 
     fn cert_valid_for(&self, resource: &ResourceInstance) -> bool {

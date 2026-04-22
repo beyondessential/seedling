@@ -122,6 +122,48 @@ fn exercise_warm_certs() {
     );
 }
 
+// l[verify rt.warm-images]
+#[test]
+fn exercise_warm_images() {
+    exercise(
+        r#"
+        app.on_start(|rt, _param| {
+            let dep = app.deployment("web").image("docker.io/library/nginx:latest");
+            let warm = rt.warm_images(dep);
+            warm.ready();
+        });
+    "#,
+    );
+}
+
+// l[verify rt.warm-images]
+#[test]
+fn warm_images_accepts_dynamic_job_with_image() {
+    exercise(
+        r#"
+        app.on_start(|rt, _param| {
+            let warm = rt.warm_images(app.job().image("ghcr.io/example/foo:1.2.3"));
+            warm.ready();
+        });
+    "#,
+    );
+}
+
+// l[verify rt.warm-images]
+#[test]
+fn warm_images_ignores_non_container_resources() {
+    exercise(
+        r#"
+        app.on_start(|rt, _param| {
+            let svc = app.service("public");
+            // Passing a non-container should not throw — just be ignored.
+            let warm = rt.warm_images(svc);
+            warm.ready();
+        });
+    "#,
+    );
+}
+
 // l[verify rt.warm-certs]
 #[test]
 fn warm_certs_ignores_non_ingress_resources() {

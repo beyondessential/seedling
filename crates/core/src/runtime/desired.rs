@@ -126,6 +126,11 @@ impl OperationProgress {
                         }
                     }
                 }
+                // r[impl actuate.image.warm]
+                // WarmImages has no effect on computed desired state. The
+                // pin rows written at call time drive pull reconciliation;
+                // no resources need to be marked Ready for it.
+                CallKind::WarmImages => {}
             }
         }
         this

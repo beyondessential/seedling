@@ -492,7 +492,7 @@ impl RuntimeInstance {
                 return Ok(Started {
                     ctx: None,
                     resources,
-                    is_warm: false,
+                    warm: WarmMode::None,
                 });
             }
             Some(c) => Arc::clone(c),
@@ -517,7 +517,7 @@ impl RuntimeInstance {
         Ok(Started {
             ctx: Some(ctx),
             resources,
-            is_warm: false,
+            warm: WarmMode::None,
         })
     }
 
@@ -561,7 +561,7 @@ impl RuntimeInstance {
                 return Ok(Started {
                     ctx: None,
                     resources,
-                    is_warm: true,
+                    warm: WarmMode::Certs,
                 });
             }
             Some(c) => Arc::clone(c),
@@ -586,7 +586,135 @@ impl RuntimeInstance {
         Ok(Started {
             ctx: Some(ctx),
             resources,
-            is_warm: true,
+            warm: WarmMode::Certs,
+        })
+    }
+
+    // l[impl rt.warm-images]
+    // r[impl actuate.image.warm]
+    fn do_warm_images(
+        &mut self,
+        resources_with_defs: Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)>,
+    ) -> Result<Started, Box<EvalAltResult>> {
+        use crate::defs::resource::{Resource, ResourceKind};
+
+        // Pair up each Deployment/Job with its image reference. Anonymous
+        // resources always arrive with a def attached; named resources rely
+        // on the static AppDef held by the registry/action-def thread-local.
+        let action_def = action_def();
+        let mut pairs: Vec<(ResourceInstance, String)> = Vec::new();
+
+        for (inst, maybe_def) in resources_with_defs {
+            if !matches!(inst.kind, ResourceKind::Deployment | ResourceKind::Job) {
+                continue;
+            }
+
+            let image: Option<String> = match maybe_def {
+                Some(Resource::Deployment(dep)) => {
+                    let dd = dep.def.lock();
+                    let pod = dd.pod.lock();
+                    pod.container.lock().image.clone()
+                }
+                Some(Resource::Job(job)) => {
+                    let jd = job.def.lock();
+                    let pod = jd.pod.lock();
+                    pod.container.lock().image.clone()
+                }
+                _ => {
+                    // Fall back to the action-context AppDef for named resources.
+                    action_def
+                        .as_ref()
+                        .and_then(|arc| {
+                            let def = arc.load_full();
+                            let name = inst.name.as_deref()?;
+                            let id = crate::defs::resource::ResourceId {
+                                kind: inst.kind,
+                                name: std::sync::Arc::new(name.to_owned()),
+                            };
+                            let resource = def.resources.get(&id)?.clone();
+                            match resource {
+                                Resource::Deployment(dep) => {
+                                    let dd = dep.def.lock();
+                                    let pod = dd.pod.lock();
+                                    pod.container.lock().image.clone()
+                                }
+                                Resource::Job(job) => {
+                                    let jd = job.def.lock();
+                                    let pod = jd.pod.lock();
+                                    pod.container.lock().image.clone()
+                                }
+                                _ => None,
+                            }
+                        })
+                }
+            };
+
+            if let Some(img) = image.filter(|s| !s.is_empty()) {
+                pairs.push((inst, img));
+            }
+        }
+
+        // Deduplicate image refs while keeping the resource list for audit.
+        let mut refs: Vec<String> = Vec::new();
+        for (_, img) in &pairs {
+            if !refs.contains(img) {
+                refs.push(img.clone());
+            }
+        }
+        let resources: Vec<ResourceInstance> = pairs.into_iter().map(|(r, _)| r).collect();
+
+        // Persist pins immediately. Pins are idempotent and outlive the
+        // in-memory action log — replay is free to re-upsert the same rows.
+        if let Some(db) = &self.db {
+            for reference in &refs {
+                let app = self.app_name.clone();
+                let reference = reference.clone();
+                if let Err(e) = db.call(move |db| {
+                    crate::runtime::images::upsert_pin(db, &app, &reference)
+                }) {
+                    tracing::warn!(error = %e, "rt.warm_images: failed to persist image pin");
+                }
+            }
+        }
+
+        if is_barrier_hit_pending()
+            && let Some(ctx) = &self.ctx
+            && let Some(cond) = ctx.lock().pending_barrier.clone()
+        {
+            return Err(make_barrier_error(cond));
+        }
+
+        let ctx = match &self.ctx {
+            None => {
+                return Ok(Started {
+                    ctx: None,
+                    resources,
+                    warm: WarmMode::Images(refs),
+                });
+            }
+            Some(c) => Arc::clone(c),
+        };
+
+        {
+            let mut g = ctx.lock();
+            if g.is_replaying() {
+                g.call_index += 1;
+            } else {
+                let idx = g.call_index;
+                g.pending.push(ActionLogEntry {
+                    call_index: idx,
+                    call_kind: CallKind::WarmImages,
+                    resources: resources.clone(),
+                    barrier: None,
+                });
+                g.call_index += 1;
+            }
+        }
+
+        Ok(Started {
+            ctx: Some(ctx),
+            resources,
+            warm: WarmMode::Images(refs),
         })
     }
 
@@ -816,6 +944,19 @@ impl CustomType for RuntimeInstance {
                     })?;
                     this.do_warm_certs(resources_with_defs)
                 },
+            )
+            // l[impl rt.warm-images]
+            .with_fn(
+                "warm_images",
+                |this: &mut Self, resources: Dynamic| -> Result<Started, Box<EvalAltResult>> {
+                    let resources_with_defs = this.extract_instances(resources).map_err(|e| {
+                        Box::new(EvalAltResult::ErrorRuntime(
+                            e.to_string().into(),
+                            rhai::Position::NONE,
+                        ))
+                    })?;
+                    this.do_warm_images(resources_with_defs)
+                },
             );
     }
 }
@@ -824,17 +965,29 @@ impl CustomType for RuntimeInstance {
 // Started
 // ---------------------------------------------------------------------------
 
+/// Discriminator for the "warm" variants of a `Started`. Changes how
+/// `Started::ready()` evaluates its barrier.
+#[derive(Debug, Clone, Default)]
+pub enum WarmMode {
+    /// Standard: `.ready()` waits for the lifecycle to reach `Ready`.
+    #[default]
+    None,
+    /// `rt.warm_certs` returned this `Started`. `.ready()` waits for the
+    /// TLS cert of every resource to be observed valid.
+    // l[impl rt.warm-certs]
+    Certs,
+    /// `rt.warm_images` returned this `Started`. `.ready()` waits until each
+    /// image reference is present in local container storage.
+    // l[impl rt.warm-images]
+    Images(Vec<String>),
+}
+
 // l[impl rt.started.type]
 #[derive(Debug, Clone)]
 pub struct Started {
     pub ctx: Option<SharedContext>,
     pub resources: Vec<ResourceInstance>,
-    /// Set when this `Started` was returned by `rt.warm_certs`. Changes the
-    /// `.ready()` barrier semantics to check cert validity (via the world
-    /// oracle's `cert_valid_for`) instead of the standard ingress lifecycle
-    /// `Ready` (which requires both cert and routing).
-    // l[impl rt.warm-certs]
-    pub is_warm: bool,
+    pub warm: WarmMode,
 }
 
 impl Started {
@@ -900,20 +1053,37 @@ impl Started {
             )));
         }
 
-        // Check if condition is currently satisfied.
-        // For warm-cert Starteds, `.ready()` checks cert validity directly via
-        // the oracle, since the standard ingress `Ready` lifecycle requires
-        // both routing and cert validity, but warm_certs intentionally does
-        // not route traffic.
-        // l[impl rt.warm-certs]
-        let all_reached = if self.is_warm && required == LifecycleState::Ready {
-            !self.resources.is_empty() && self.resources.iter().all(|r| g.world.cert_valid_for(r))
-        } else {
-            !self.resources.is_empty()
-                && self
-                    .resources
-                    .iter()
-                    .all(|r| g.world.lifecycle_state(r).has_reached(required))
+        // Check if condition is currently satisfied. Warm variants swap out
+        // the predicate for `.ready()`:
+        //
+        // - `rt.warm_certs` checks cert validity directly via the oracle,
+        //   since the standard ingress `Ready` lifecycle also requires routing
+        //   and warm_certs intentionally does not route traffic.
+        // - `rt.warm_images` checks that each recorded image reference is
+        //   present in local container storage; the resources it holds are
+        //   only for audit (and may be empty for anonymous references).
+        let all_reached = match (&self.warm, required) {
+            // l[impl rt.warm-certs]
+            // An empty resource list here means every element was filtered
+            // out (e.g. no TLS-terminating ingresses in the selection); the
+            // language spec says such a `Started` is immediately satisfied.
+            (WarmMode::Certs, LifecycleState::Ready) => {
+                self.resources.iter().all(|r| g.world.cert_valid_for(r))
+            }
+            // l[impl rt.warm-images]
+            // r[impl actuate.image.warm]
+            // Empty `refs` means the selection contained no container
+            // resources with an image to warm — immediately satisfied.
+            (WarmMode::Images(refs), LifecycleState::Ready) => {
+                refs.iter().all(|r| g.world.image_present(r))
+            }
+            _ => {
+                !self.resources.is_empty()
+                    && self
+                        .resources
+                        .iter()
+                        .all(|r| g.world.lifecycle_state(r).has_reached(required))
+            }
         };
 
         // r[impl barrier.resume]

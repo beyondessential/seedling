@@ -614,6 +614,104 @@ fn warm_certs_barrier_suspends_when_cert_not_valid() {
     );
 }
 
+// l[verify rt.warm-images]
+// r[verify actuate.image.warm]
+#[test]
+fn warm_images_barrier_uses_image_oracle() {
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        app.on_start(|rt, _param| {
+            let warm = rt.warm_images(
+                app.job().image("ghcr.io/example/foo:1.2.3")
+            );
+            warm.ready();
+        });
+    "#,
+    );
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    // Image already present locally — .ready() should succeed even though
+    // no resource lifecycle Ready observation exists.
+    oracle.set_image_present("ghcr.io/example/foo:1.2.3");
+
+    let log = InMemoryActionLog::new();
+    let result = run_operation(
+        OperationContext {
+            engine: &engine,
+            script_ast: &ast,
+            operation_id: OperationId::new(),
+            app: &app,
+            action_name: "start",
+            log: &log,
+            world: oracle,
+            registry: registry(),
+            active_progress: None,
+            tick_notify: None,
+            params: serde_json::Map::new(),
+            is_shell: false,
+            db: None,
+            source_generation: 0,
+            target_generation: 0,
+            script_limits: None,
+            cipher: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+        },
+        &mut scope,
+    );
+    assert!(
+        matches!(result, OperationResult::Completed),
+        "warm_images.ready() should resolve when image_present returns true; got {result:?}"
+    );
+}
+
+// l[verify rt.warm-images]
+#[test]
+fn warm_images_barrier_suspends_when_image_absent() {
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        app.on_start(|rt, _param| {
+            let warm = rt.warm_images(
+                app.job().image("ghcr.io/example/foo:1.2.3")
+            );
+            warm.ready();
+        });
+    "#,
+    );
+
+    let oracle = Arc::new(TestWorldOracle::new());
+
+    let log = InMemoryActionLog::new();
+    let result = run_operation(
+        OperationContext {
+            engine: &engine,
+            script_ast: &ast,
+            operation_id: OperationId::new(),
+            app: &app,
+            action_name: "start",
+            log: &log,
+            world: oracle,
+            registry: registry(),
+            active_progress: None,
+            tick_notify: None,
+            params: serde_json::Map::new(),
+            is_shell: false,
+            db: None,
+            source_generation: 0,
+            target_generation: 0,
+            script_limits: None,
+            cipher: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+        },
+        &mut scope,
+    );
+    assert!(
+        matches!(result, OperationResult::Suspended(_)),
+        "warm_images.ready() should suspend when the image is not present locally; got {result:?}"
+    );
+}
+
 // r[verify barrier.suspension]
 #[test]
 fn stub_runtime_still_passes_language_tests() {

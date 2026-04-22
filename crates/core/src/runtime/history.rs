@@ -415,6 +415,7 @@ pub fn load_action_log(
             "Stop" => CallKind::Stop,
             "Query" => CallKind::Query,
             "WarmCerts" => CallKind::WarmCerts,
+            "WarmImages" => CallKind::WarmImages,
             other => {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
                     1,

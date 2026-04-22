@@ -86,6 +86,8 @@ const SQL_V33: &str = include_str!("db/migrations/v33.sql");
 const SQL_V34: &str = include_str!("db/migrations/v34.sql");
 // r[impl image.pin] r[impl image.track]
 const SQL_V35: &str = include_str!("db/migrations/v35.sql");
+// r[impl image.track]
+const SQL_V36: &str = include_str!("db/migrations/v36.sql");
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -256,6 +258,11 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 35,
         sql: SQL_V35,
+        custom_run: None,
+    },
+    Migration {
+        version: 36,
+        sql: SQL_V36,
         custom_run: None,
     },
 ];

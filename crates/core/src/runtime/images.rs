@@ -223,6 +223,62 @@ pub fn drop_tracking(db: &Db, image_id: &str) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Refresh `image_references` from an authoritative `(reference, image_id)` list.
+/// Rows not present in `refs` are deleted; present rows are inserted or updated.
+// r[impl image.track]
+pub fn refresh_references(db: &Db, refs: &[(String, String)]) -> rusqlite::Result<()> {
+    let now = now_ms();
+    let tx = db.conn.unchecked_transaction()?;
+    tx.execute("DELETE FROM image_references", [])?;
+    for (reference, image_id) in refs {
+        tx.execute(
+            "INSERT INTO image_references (reference, image_id, observed_at)
+             VALUES (?1, ?2, ?3)",
+            params![reference, image_id, now],
+        )?;
+    }
+    tx.commit()
+}
+
+/// Resolve a reference to its currently-observed image_id, or `None` if the
+/// reference is not present locally.
+pub fn lookup_reference(db: &Db, reference: &str) -> rusqlite::Result<Option<String>> {
+    db.conn
+        .query_row(
+            "SELECT image_id FROM image_references WHERE reference = ?1",
+            params![reference],
+            |row| row.get::<_, String>(0),
+        )
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(other),
+        })
+}
+
+/// Return true if any reference in `refs` is currently present locally.
+pub fn reference_present(db: &Db, reference: &str) -> rusqlite::Result<bool> {
+    let count: i64 = db.conn.query_row(
+        "SELECT COUNT(*) FROM image_references WHERE reference = ?1",
+        params![reference],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+/// All references currently known to resolve to a given image_id.
+pub fn references_for_image(db: &Db, image_id: &str) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = db
+        .conn
+        .prepare("SELECT reference FROM image_references WHERE image_id = ?1")?;
+    let rows = stmt.query_map(params![image_id], |row| row.get::<_, String>(0))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
