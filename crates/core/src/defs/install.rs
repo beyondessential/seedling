@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
 
+use seedling_protocol::names::ParamName;
+
 // l[impl action.install]
 #[derive(Debug, Clone)]
 pub struct InstallDef {
-    pub requirements: BTreeMap<String, ParamDef>,
+    pub requirements: BTreeMap<ParamName, ParamDef>,
 }
 
 // l[impl action.install.requirements]

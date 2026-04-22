@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use rusqlite::OptionalExtension;
 use secrecy::{ExposeSecret, SecretString};
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{AppName, ParamName};
 
 use crate::runtime::{db::Db, secrets::Cipher};
 
@@ -40,7 +40,7 @@ pub fn upsert_secret_param(
     db: &Db,
     cipher: &Cipher,
     app_name: &AppName,
-    param_name: &str,
+    param_name: &ParamName,
     value: &SecretString,
 ) -> rusqlite::Result<()> {
     let ct = cipher
@@ -56,7 +56,7 @@ pub fn upsert_secret_param(
 pub fn delete_one_secret_param(
     db: &Db,
     app_name: &AppName,
-    param_name: &str,
+    param_name: &ParamName,
 ) -> rusqlite::Result<()> {
     db.conn.execute(
         "DELETE FROM secret_params WHERE app_name = ?1 AND param_name = ?2",
@@ -76,7 +76,7 @@ pub fn migrate_to_secret(
     db: &Db,
     cipher: &Cipher,
     app_name: &AppName,
-    param_name: &str,
+    param_name: &ParamName,
 ) -> rusqlite::Result<()> {
     let plaintext: Option<String> = db
         .conn

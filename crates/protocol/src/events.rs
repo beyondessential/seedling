@@ -7,8 +7,8 @@ use tokio::sync::broadcast;
 use crate::{
     actor::Actor,
     names::{
-        ActionName, AppName, ExternalVolumeName, ForwardId, HeldVolumeId, SessionId, TemplateName,
-        VolumeRef,
+        ActionName, AppName, ExternalVolumeName, ForwardId, HeldVolumeId, ParamName, SessionId,
+        TemplateName, VolumeRef,
     },
 };
 
@@ -57,7 +57,7 @@ pub enum OiEvent {
     ParamSet {
         timestamp: Timestamp,
         app: AppName,
-        name: String,
+        name: ParamName,
         #[serde(skip_serializing_if = "Option::is_none")]
         previous_value: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -74,7 +74,7 @@ pub enum OiEvent {
     ParamUnset {
         timestamp: Timestamp,
         app: AppName,
-        name: String,
+        name: ParamName,
         #[serde(skip_serializing_if = "Option::is_none")]
         previous_value: Option<String>,
         #[serde(skip_serializing_if = "is_false")]
@@ -1088,11 +1088,11 @@ pub struct ParamEventCtx {
 }
 
 impl ParamEventCtx {
-    pub fn set(&self, name: &str, previous_value: Option<&str>, new_value: &str) {
+    pub fn set(&self, name: &ParamName, previous_value: Option<&str>, new_value: &str) {
         self.tx.emit(OiEvent::ParamSet {
             timestamp: now(),
             app: self.app.clone(),
-            name: name.to_owned(),
+            name: name.clone(),
             previous_value: previous_value.map(str::to_owned),
             new_value: Some(new_value.to_owned()),
             redacted: false,
@@ -1103,11 +1103,11 @@ impl ParamEventCtx {
     }
 
     // i[impl param.store.secret]
-    pub fn set_redacted(&self, name: &str) {
+    pub fn set_redacted(&self, name: &ParamName) {
         self.tx.emit(OiEvent::ParamSet {
             timestamp: now(),
             app: self.app.clone(),
-            name: name.to_owned(),
+            name: name.clone(),
             previous_value: None,
             new_value: None,
             redacted: true,
@@ -1117,11 +1117,11 @@ impl ParamEventCtx {
         });
     }
 
-    pub fn unset(&self, name: &str, previous_value: &str) {
+    pub fn unset(&self, name: &ParamName, previous_value: &str) {
         self.tx.emit(OiEvent::ParamUnset {
             timestamp: now(),
             app: self.app.clone(),
-            name: name.to_owned(),
+            name: name.clone(),
             previous_value: Some(previous_value.to_owned()),
             redacted: false,
             generation: self.generation,
@@ -1131,11 +1131,11 @@ impl ParamEventCtx {
     }
 
     // i[impl param.store.secret]
-    pub fn unset_redacted(&self, name: &str) {
+    pub fn unset_redacted(&self, name: &ParamName) {
         self.tx.emit(OiEvent::ParamUnset {
             timestamp: now(),
             app: self.app.clone(),
-            name: name.to_owned(),
+            name: name.clone(),
             previous_value: None,
             redacted: true,
             generation: self.generation,

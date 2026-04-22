@@ -1,12 +1,16 @@
 use std::collections::BTreeMap;
 
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{AppName, ParamName};
 
 use super::*;
 use crate::{ScriptLimits, runtime::db::Db};
 
 fn app() -> AppName {
     AppName::new("myapp").unwrap()
+}
+
+fn param(s: &str) -> ParamName {
+    ParamName::new_unchecked(s)
 }
 
 const SCRIPT_A: &str = r#"app.deployment("web").image("ghcr.io/example/web:1.0");"#;
@@ -58,8 +62,17 @@ fn param_set_records_previous_value() {
     let db = test_db();
     let cipher = test_cipher();
     bump_register(&db, &app(), SCRIPT_A).unwrap();
-    bump_param_set(&db, &app(), "version", None, "1.0", &cipher, false).unwrap();
-    let g = bump_param_set(&db, &app(), "version", Some("1.0"), "2.0", &cipher, false).unwrap();
+    bump_param_set(&db, &app(), &param("version"), None, "1.0", &cipher, false).unwrap();
+    let g = bump_param_set(
+        &db,
+        &app(),
+        &param("version"),
+        Some("1.0"),
+        "2.0",
+        &cipher,
+        false,
+    )
+    .unwrap();
     let entry = get(&db, &app(), g).unwrap().unwrap();
     assert_eq!(entry.kind, Kind::ParamSet);
     assert_eq!(entry.param_name.as_deref(), Some("version"));
@@ -74,8 +87,17 @@ fn param_unset_records_previous_value_and_no_new() {
     let db = test_db();
     let cipher = test_cipher();
     bump_register(&db, &app(), SCRIPT_A).unwrap();
-    bump_param_set(&db, &app(), "domain", None, "old.example", &cipher, false).unwrap();
-    let g = bump_param_unset(&db, &app(), "domain", "old.example", &cipher, false).unwrap();
+    bump_param_set(
+        &db,
+        &app(),
+        &param("domain"),
+        None,
+        "old.example",
+        &cipher,
+        false,
+    )
+    .unwrap();
+    let g = bump_param_unset(&db, &app(), &param("domain"), "old.example", &cipher, false).unwrap();
     let entry = get(&db, &app(), g).unwrap().unwrap();
     assert_eq!(entry.kind, Kind::ParamUnset);
     assert_eq!(entry.previous_value.as_deref(), Some("old.example"));
@@ -88,12 +110,21 @@ fn param_map_at_walks_history() {
     let db = test_db();
     let cipher = test_cipher();
     bump_register(&db, &app(), SCRIPT_A).unwrap();
-    bump_param_set(&db, &app(), "domain", None, "v1", &cipher, false).unwrap();
+    bump_param_set(&db, &app(), &param("domain"), None, "v1", &cipher, false).unwrap();
     let g_after_v1 = current(&db, &app()).unwrap().unwrap();
-    bump_param_set(&db, &app(), "domain", Some("v1"), "v2", &cipher, false).unwrap();
+    bump_param_set(
+        &db,
+        &app(),
+        &param("domain"),
+        Some("v1"),
+        "v2",
+        &cipher,
+        false,
+    )
+    .unwrap();
     let g_after_v2 = current(&db, &app()).unwrap().unwrap();
-    bump_param_set(&db, &app(), "other", None, "x", &cipher, false).unwrap();
-    bump_param_unset(&db, &app(), "domain", "v2", &cipher, false).unwrap();
+    bump_param_set(&db, &app(), &param("other"), None, "x", &cipher, false).unwrap();
+    bump_param_unset(&db, &app(), &param("domain"), "v2", &cipher, false).unwrap();
     let g_after_unset = current(&db, &app()).unwrap().unwrap();
 
     let m1 = param_map_at(&db, &app(), g_after_v1, &cipher).unwrap();
@@ -161,7 +192,7 @@ fn list_returns_descending_with_limit_and_before() {
         bump_param_set(
             &db,
             &app(),
-            "k",
+            &param("k"),
             Some(&format!("v{i}")),
             &format!("v{}", i + 1),
             &cipher,
@@ -220,7 +251,7 @@ fn attach_operation_and_record_outcome() {
     let db = test_db();
     let cipher = test_cipher();
     bump_register(&db, &app(), SCRIPT_A).unwrap();
-    let g = bump_param_set(&db, &app(), "k", None, "v", &cipher, false).unwrap();
+    let g = bump_param_set(&db, &app(), &param("k"), None, "v", &cipher, false).unwrap();
     attach_operation(&db, &app(), g, "op-123").unwrap();
     let entry = get(&db, &app(), g).unwrap().unwrap();
     assert_eq!(entry.operation_id.as_deref(), Some("op-123"));
@@ -252,7 +283,7 @@ fn secret_param_set_stores_ciphertext_not_plaintext() {
     let g = bump_param_set(
         &db,
         &app(),
-        "api_key",
+        &param("api_key"),
         None,
         "my-secret-token",
         &cipher,
@@ -278,14 +309,22 @@ fn secret_param_unset_stores_ciphertext_not_plaintext() {
     bump_param_set(
         &db,
         &app(),
-        "api_key",
+        &param("api_key"),
         None,
         "my-secret-token",
         &cipher,
         true,
     )
     .unwrap();
-    let g = bump_param_unset(&db, &app(), "api_key", "my-secret-token", &cipher, true).unwrap();
+    let g = bump_param_unset(
+        &db,
+        &app(),
+        &param("api_key"),
+        "my-secret-token",
+        &cipher,
+        true,
+    )
+    .unwrap();
     let entry = get(&db, &app(), g).unwrap().unwrap();
     assert!(
         entry.previous_value_redacted,
@@ -303,7 +342,16 @@ fn param_map_at_decrypts_secret_history() {
     let db = test_db();
     let cipher = test_cipher();
     bump_register(&db, &app(), SCRIPT_A).unwrap();
-    bump_param_set(&db, &app(), "api_key", None, "secret-value", &cipher, true).unwrap();
+    bump_param_set(
+        &db,
+        &app(),
+        &param("api_key"),
+        None,
+        "secret-value",
+        &cipher,
+        true,
+    )
+    .unwrap();
     let g = current(&db, &app()).unwrap().unwrap();
 
     let map = param_map_at(&db, &app(), g, &cipher).unwrap();

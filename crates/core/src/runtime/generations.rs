@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, fmt::Write as FmtWrite};
 
 use secrecy::{ExposeSecret, SecretString};
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{AppName, ParamName};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -245,7 +245,7 @@ fn current_script_hash(db: &Db, app: &AppName) -> rusqlite::Result<String> {
 pub fn bump_param_set(
     db: &Db,
     app: &AppName,
-    name: &str,
+    name: &ParamName,
     previous: Option<&str>,
     new_value: &str,
     cipher: &Cipher,
@@ -296,7 +296,7 @@ pub fn bump_param_set(
 pub fn bump_param_unset(
     db: &Db,
     app: &AppName,
-    name: &str,
+    name: &ParamName,
     previous: &str,
     cipher: &Cipher,
     is_secret: bool,

@@ -126,12 +126,12 @@ fn on_install_with_requirements() {
         r#"
         app.on_install(|rt, reqs| {}, #{
             params: #{
-                admin_email: #{
+                "admin-email": #{
                     kind: "email",
                     description: "Admin email",
                     default_value: "admin@example.com",
                 },
-                admin_password: #{
+                "admin-password": #{
                     kind: "password",
                     description: "Admin password",
                 },
@@ -142,13 +142,13 @@ fn on_install_with_requirements() {
     let def = app.def.load();
     let install = def.install.as_ref().expect("install should exist");
     assert_eq!(install.requirements.len(), 2);
-    let email_req = &install.requirements["admin_email"];
+    let email_req = &install.requirements["admin-email"];
     assert!(matches!(email_req.kind, defs::install::ParamKind::Email));
     assert_eq!(
         email_req.default_value.as_deref(),
         Some("admin@example.com")
     );
-    let pw_req = &install.requirements["admin_password"];
+    let pw_req = &install.requirements["admin-password"];
     assert!(matches!(pw_req.kind, defs::install::ParamKind::Password));
     assert!(pw_req.default_value.is_none());
 }
@@ -173,7 +173,7 @@ fn install_requirement_kind_text() {
         r#"
         app.on_install(|rt, reqs| {}, #{
             params: #{
-                site_name: #{
+                "site-name": #{
                     kind: "text",
                     description: "Site name",
                 },
@@ -183,7 +183,7 @@ fn install_requirement_kind_text() {
     );
     let def = app.def.load();
     let install = def.install.as_ref().unwrap();
-    let req = &install.requirements["site_name"];
+    let req = &install.requirements["site-name"];
     assert!(matches!(req.kind, defs::install::ParamKind::Text));
 }
 
@@ -194,7 +194,7 @@ fn install_requirement_kind_defaults_to_text() {
         r#"
         app.on_install(|rt, reqs| {}, #{
             params: #{
-                site_name: #{
+                "site-name": #{
                     description: "Site name",
                 },
             },
@@ -203,7 +203,7 @@ fn install_requirement_kind_defaults_to_text() {
     );
     let def = app.def.load();
     let install = def.install.as_ref().unwrap();
-    let req = &install.requirements["site_name"];
+    let req = &install.requirements["site-name"];
     assert!(matches!(req.kind, defs::install::ParamKind::Text));
 }
 
@@ -214,7 +214,7 @@ fn install_requirement_kind_weak_password() {
         r#"
         app.on_install(|rt, reqs| {}, #{
             params: #{
-                api_key: #{
+                "api-key": #{
                     kind: "weak-password",
                     description: "API key",
                 },
@@ -224,7 +224,7 @@ fn install_requirement_kind_weak_password() {
     );
     let def = app.def.load();
     let install = def.install.as_ref().unwrap();
-    let req = &install.requirements["api_key"];
+    let req = &install.requirements["api-key"];
     assert!(matches!(req.kind, defs::install::ParamKind::WeakPassword));
 }
 
@@ -237,7 +237,7 @@ fn exercise_install_action() {
             rt.start(app.deployment("web").image("docker.io/library/nginx:latest")).ready();
         }, #{
             params: #{
-                admin_email: #{
+                "admin-email": #{
                     kind: "email",
                     description: "Admin email",
                 },
@@ -270,7 +270,7 @@ fn on_action_with_params() {
         r#"
         app.on_action("maintenance", |rt, params| {}, #{
             params: #{
-                contact_email: #{
+                "contact-email": #{
                     kind: "email",
                     description: "Contact email during maintenance",
                     default_value: "admin@example.com",
@@ -282,7 +282,7 @@ fn on_action_with_params() {
     let def = app.def.load();
     let action = &def.actions["maintenance"];
     assert_eq!(action.params.len(), 1);
-    let p = &action.params["contact_email"];
+    let p = &action.params["contact-email"];
     assert!(matches!(p.kind, defs::install::ParamKind::Email));
     assert_eq!(p.default_value.as_deref(), Some("admin@example.com"));
 }

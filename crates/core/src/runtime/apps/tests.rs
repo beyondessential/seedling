@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{AppName, ParamName};
 use tokio::sync::Notify;
 
 use super::params::load_params_for_app;
@@ -10,6 +10,10 @@ use crate::runtime::db::Db;
 
 fn app(s: &str) -> AppName {
     AppName::new(s).unwrap()
+}
+
+fn param(s: &str) -> ParamName {
+    ParamName::new_unchecked(s)
 }
 
 // i[verify app.status] i[verify action.invoke.install]
@@ -44,8 +48,8 @@ fn decode_phase_prefers_uninstalling_over_conflicts() {
 #[test]
 fn upsert_and_load_params_round_trip() {
     let db = Db::open_in_memory().expect("open");
-    upsert_param(&db, &app("myapp"), "host", "example.com").expect("upsert");
-    upsert_param(&db, &app("myapp"), "port", "8080").expect("upsert");
+    upsert_param(&db, &app("myapp"), &param("host"), "example.com").expect("upsert");
+    upsert_param(&db, &app("myapp"), &param("port"), "8080").expect("upsert");
 
     let params = load_params_for_app(&db, &app("myapp")).expect("load");
     assert_eq!(params.get("host").map(String::as_str), Some("example.com"));
@@ -56,8 +60,8 @@ fn upsert_and_load_params_round_trip() {
 #[test]
 fn upsert_param_replaces_existing_value() {
     let db = Db::open_in_memory().expect("open");
-    upsert_param(&db, &app("myapp"), "host", "old.example.com").expect("first upsert");
-    upsert_param(&db, &app("myapp"), "host", "new.example.com").expect("second upsert");
+    upsert_param(&db, &app("myapp"), &param("host"), "old.example.com").expect("first upsert");
+    upsert_param(&db, &app("myapp"), &param("host"), "new.example.com").expect("second upsert");
 
     let params = load_params_for_app(&db, &app("myapp")).expect("load");
     assert_eq!(
@@ -152,8 +156,8 @@ fn sync_is_idempotent_for_same_error() {
 #[test]
 fn load_params_scoped_to_app() {
     let db = Db::open_in_memory().expect("open");
-    upsert_param(&db, &app("app-a"), "key", "val-a").expect("upsert a");
-    upsert_param(&db, &app("app-b"), "key", "val-b").expect("upsert b");
+    upsert_param(&db, &app("app-a"), &param("key"), "val-a").expect("upsert a");
+    upsert_param(&db, &app("app-b"), &param("key"), "val-b").expect("upsert b");
 
     let params_a = load_params_for_app(&db, &app("app-a")).expect("load a");
     let params_b = load_params_for_app(&db, &app("app-b")).expect("load b");
@@ -174,8 +178,8 @@ fn load_params_returns_empty_for_unknown_app() {
 #[test]
 fn delete_app_params_removes_only_that_apps_params() {
     let db = Db::open_in_memory().expect("open");
-    upsert_param(&db, &app("app-a"), "key", "val-a").expect("upsert a");
-    upsert_param(&db, &app("app-b"), "key", "val-b").expect("upsert b");
+    upsert_param(&db, &app("app-a"), &param("key"), "val-a").expect("upsert a");
+    upsert_param(&db, &app("app-b"), &param("key"), "val-b").expect("upsert b");
 
     delete_app_params(&db, &app("app-a")).expect("delete");
 
@@ -258,7 +262,7 @@ fn reload_after_secret_param_set_populates_stored() {
         &db,
         &cipher,
         &app("myapp"),
-        "apikey",
+        &param("apikey"),
         &SecretString::new("sekret123".to_owned().into()),
     )
     .expect("upsert secret");
@@ -295,7 +299,7 @@ fn load_params_for_app_alone_misses_secrets() {
         &db,
         &cipher,
         &app("myapp"),
-        "apikey",
+        &param("apikey"),
         &SecretString::new("sekret".to_owned().into()),
     )
     .expect("upsert secret");
@@ -334,7 +338,13 @@ fn registry_load_from_db_restores_params() {
     )
     .expect("bump register");
 
-    upsert_param(&db, &app("myapp"), "hostname", "restored.example.com").expect("upsert");
+    upsert_param(
+        &db,
+        &app("myapp"),
+        &param("hostname"),
+        "restored.example.com",
+    )
+    .expect("upsert");
     // The handler would also bump generation for the param — for this test
     // (purely about load_from_db), we set the current_generation directly.
     db.conn

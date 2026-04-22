@@ -1,4 +1,5 @@
 use rhai::{CustomType, EvalAltResult, FnPtr, TypeBuilder};
+use seedling_protocol::names::ParamName;
 
 use super::app::App;
 use super::install::ParamKind;
@@ -6,7 +7,7 @@ use super::install::ParamKind;
 // l[impl param.type]
 #[derive(Debug, Clone)]
 pub struct Param {
-    pub name: String,
+    pub name: ParamName,
     pub value: Option<String>,
     /// Back-reference to the owning App so that `on_change` can register the
     /// handler in `AppDef.param_changes` without needing a separate method on App.

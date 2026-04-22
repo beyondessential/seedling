@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, str::FromStr as _};
 
 use rhai::{EvalAltResult, FnPtr, Map, TypeBuilder};
+use seedling_protocol::names::ParamName;
 
 use super::super::install::{InstallDef, ParamDef, ParamKind};
 use super::App;
@@ -44,7 +45,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
 // l[impl action.option-params]
 pub(super) fn parse_param_defs(
     map: &Map,
-) -> Result<BTreeMap<String, ParamDef>, Box<EvalAltResult>> {
+) -> Result<BTreeMap<ParamName, ParamDef>, Box<EvalAltResult>> {
     let mut reqs = BTreeMap::new();
     for (key, value) in map {
         if let Some(req_map) = value.read_lock::<Map>() {
@@ -76,8 +77,10 @@ pub(super) fn parse_param_defs(
                 .and_then(|v| v.as_bool().ok())
                 .unwrap_or(false);
 
+            let param_name = ParamName::new(key.as_str())
+                .map_err(|e| -> Box<EvalAltResult> { e.to_string().into() })?;
             reqs.insert(
-                key.to_string(),
+                param_name,
                 ParamDef {
                     kind,
                     required,

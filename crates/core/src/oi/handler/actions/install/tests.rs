@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use seedling_protocol::names::ParamName;
+
 use crate::defs::install::{ParamDef, ParamKind};
 
 use super::{is_strong_password, is_valid_email, validate_requirements};
@@ -58,10 +60,10 @@ fn weak_password_rejected() {
     assert!(!is_strong_password("abc"));
 }
 
-fn schema(fields: &[(&str, ParamDef)]) -> BTreeMap<String, ParamDef> {
+fn schema(fields: &[(&str, ParamDef)]) -> BTreeMap<ParamName, ParamDef> {
     fields
         .iter()
-        .map(|(k, v)| (k.to_string(), v.clone()))
+        .map(|(k, v)| (ParamName::new_unchecked(*k), v.clone()))
         .collect()
 }
 

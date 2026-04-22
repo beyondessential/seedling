@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use secrecy::SecretString;
 use seedling_protocol::error::{ErrorCode, OiError};
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{AppName, ParamName};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -18,23 +18,23 @@ use crate::{
 #[derive(Deserialize)]
 pub(crate) struct SetParamParams {
     pub app: AppName,
-    pub name: String,
+    pub name: ParamName,
     pub value: String,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct UnsetParamParams {
     pub app: AppName,
-    pub name: String,
+    pub name: ParamName,
 }
 
 fn current_param_value(
     state: &OiState,
     app: &AppName,
-    name: &str,
+    name: &ParamName,
 ) -> Result<Option<String>, OiError> {
     let app_owned = app.clone();
-    let name_owned = name.to_owned();
+    let name_owned = name.clone();
     let cipher = Arc::clone(&state.cipher);
     let map = state
         .db
@@ -44,10 +44,10 @@ fn current_param_value(
             ))
         })
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
-    Ok(map.get(&name_owned).cloned())
+    Ok(map.get(name_owned.as_str()).cloned())
 }
 
-fn param_is_secret(state: &OiState, app: &AppName, name: &str) -> bool {
+fn param_is_secret(state: &OiState, app: &AppName, name: &ParamName) -> bool {
     state
         .registry
         .read()
@@ -149,7 +149,7 @@ fn reload_and_persist_apperror(
 fn schedule_on_change(
     state: &OiState,
     app: &AppName,
-    param_name: &str,
+    param_name: &ParamName,
     generation: generations::Generation,
 ) -> Result<&'static str, OiError> {
     let (has_on_change, is_installed, tick_notify) = {
@@ -170,7 +170,7 @@ fn schedule_on_change(
     let source_generation = generation.saturating_sub(1);
     // The on_change handler is dispatched by using the param name itself as an
     // action identifier. Param names follow the same bsl.name rules.
-    let param_action = seedling_protocol::names::ActionName::new_unchecked(param_name);
+    let param_action = seedling_protocol::names::ActionName::new_unchecked(param_name.as_str());
     let mut sched = state.scheduler.lock();
     let result = sched.request(
         app,
@@ -234,7 +234,7 @@ pub(crate) fn set_param(
     ctx: &RequestCtx,
 ) -> HandlerResult {
     let app = &params.app;
-    let param_name = params.name.as_str();
+    let param_name = &params.name;
     let value = params.value.as_str();
 
     {
@@ -271,7 +271,7 @@ pub(crate) fn set_param(
 
     let is_secret = param_is_secret(state, app, param_name);
     let app_owned = app.clone();
-    let param_name_owned = param_name.to_owned();
+    let param_name_owned = param_name.clone();
     let value_owned = value.to_owned();
     let prev_owned = previous_value.clone();
     let cipher = Arc::clone(&state.cipher);
@@ -329,7 +329,7 @@ pub(crate) fn set_param(
             .set(param_name, previous_value.as_deref(), value);
     }
 
-    tracing::info!(app = %app, param = param_name, generation, schedule, "set_param");
+    tracing::info!(app = %app, param = %param_name, generation, schedule, "set_param");
     Ok(json!({ "schedule": schedule, "generation": generation }))
 }
 
@@ -342,7 +342,7 @@ pub(crate) fn unset_param(
     ctx: &RequestCtx,
 ) -> HandlerResult {
     let app = &params.app;
-    let param_name = params.name.as_str();
+    let param_name = &params.name;
 
     {
         let reg = state.registry.read();
@@ -377,7 +377,7 @@ pub(crate) fn unset_param(
     let is_secret = param_is_secret(state, app, param_name);
 
     let app_owned = app.clone();
-    let param_name_owned = param_name.to_owned();
+    let param_name_owned = param_name.clone();
     let prev_owned = previous_value.clone();
     let cipher = Arc::clone(&state.cipher);
     let generation = state
@@ -416,6 +416,6 @@ pub(crate) fn unset_param(
             .unset(param_name, &previous_value);
     }
 
-    tracing::info!(app = %app, param = param_name, generation, schedule, "unset_param");
+    tracing::info!(app = %app, param = %param_name, generation, schedule, "unset_param");
     Ok(json!({ "schedule": schedule, "generation": generation }))
 }

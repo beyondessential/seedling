@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 
 use rhai::{CustomType, Dynamic, EvalAltResult, Map, TypeBuilder};
-use seedling_protocol::names::{ActionName, AppName};
+use seedling_protocol::names::{ActionName, AppName, ParamName};
 
 use super::collection::{Collection, col};
 use super::install::ParamDef;
@@ -14,7 +14,7 @@ pub struct ActionDef {
     pub description: Option<String>,
     // l[impl action.schedule]
     pub schedules: Vec<String>,
-    pub params: BTreeMap<String, ParamDef>,
+    pub params: BTreeMap<ParamName, ParamDef>,
 }
 
 /// Compute a stable hash from `(app_name, action_name)` for use with cronexpr's
@@ -112,5 +112,5 @@ impl CustomType for Action {
 pub struct ShellDef {
     pub name: String,
     pub description: Option<String>,
-    pub params: BTreeMap<String, ParamDef>,
+    pub params: BTreeMap<ParamName, ParamDef>,
 }

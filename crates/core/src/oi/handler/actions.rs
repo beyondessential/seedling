@@ -88,7 +88,10 @@ fn validate_action_params(
 
 // i[action.invoke]
 fn apply_action_param_schema(
-    action_params_schema: &std::collections::BTreeMap<String, crate::defs::install::ParamDef>,
+    action_params_schema: &std::collections::BTreeMap<
+        seedling_protocol::names::ParamName,
+        crate::defs::install::ParamDef,
+    >,
     params: &mut serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), OiError> {
     if action_params_schema.is_empty() {
@@ -99,9 +102,9 @@ fn apply_action_param_schema(
         .keys()
         .filter_map(|k| {
             params
-                .get(k)
+                .get(k.as_str())
                 .and_then(|v| v.as_str())
-                .map(|s| (k.clone(), s.to_owned()))
+                .map(|s| (k.as_str().to_owned(), s.to_owned()))
         })
         .collect();
 

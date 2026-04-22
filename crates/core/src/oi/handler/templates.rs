@@ -191,7 +191,7 @@ pub(crate) fn preview_template(state: &OiState, params: PreviewParams) -> Handle
     let params_json: Vec<Value> = def
         .params
         .iter()
-        .map(|(k, schema)| param_schema_entry_json(k, schema))
+        .map(|(k, schema)| param_schema_entry_json(k.as_str(), schema))
         .collect();
 
     let mut actions_json: Vec<Value> = def.actions.values().map(action_entry_json).collect();

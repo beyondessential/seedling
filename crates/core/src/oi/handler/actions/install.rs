@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use seedling_protocol::error::{ErrorCode, OiError};
-use seedling_protocol::names::{ActionName, AppName};
+use seedling_protocol::names::{ActionName, AppName, ParamName};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -46,36 +46,37 @@ fn is_strong_password(password: &str) -> bool {
 
 // i[action.invoke.install.validation]
 pub(in crate::oi) fn validate_requirements(
-    schema: &BTreeMap<String, ParamDef>,
+    schema: &BTreeMap<ParamName, ParamDef>,
     submitted: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, String>, OiError> {
     let mut filled = submitted.clone();
     let mut errors: Vec<String> = Vec::new();
 
     for (field, req_def) in schema {
-        let raw = filled.get(field).map(|s| s.as_str()).unwrap_or("");
+        let field_str = field.as_str();
+        let raw = filled.get(field_str).map(|s| s.as_str()).unwrap_or("");
 
         if raw.is_empty() {
             if let Some(default) = &req_def.default_value {
-                filled.insert(field.clone(), default.clone());
+                filled.insert(field_str.to_owned(), default.clone());
             } else if req_def.required {
-                errors.push(format!("{field}: required field is missing"));
+                errors.push(format!("{field_str}: required field is missing"));
                 continue;
             } else {
                 continue;
             }
         }
 
-        let value = filled.get(field).map(|s| s.as_str()).unwrap_or("");
+        let value = filled.get(field_str).map(|s| s.as_str()).unwrap_or("");
         match req_def.kind {
             ParamKind::Email => {
                 if !is_valid_email(value) {
-                    errors.push(format!("{field}: invalid email address"));
+                    errors.push(format!("{field_str}: invalid email address"));
                 }
             }
             ParamKind::Password => {
                 if !is_strong_password(value) {
-                    errors.push(format!("{field}: password is too weak"));
+                    errors.push(format!("{field_str}: password is too weak"));
                 }
             }
             ParamKind::Text | ParamKind::WeakPassword => {}

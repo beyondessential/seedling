@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use rhai::{EvalAltResult, FnPtr, Map, TypeBuilder};
-use seedling_protocol::names::ActionName;
+use seedling_protocol::names::{ActionName, ParamName};
 
 use super::super::action::{Action, ActionDef};
 use super::App;
@@ -116,10 +116,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
 
 fn parse_action_params(
     options: &Map,
-) -> Result<
-    std::collections::BTreeMap<String, super::super::install::ParamDef>,
-    Box<rhai::EvalAltResult>,
-> {
+) -> Result<BTreeMap<ParamName, super::super::install::ParamDef>, Box<rhai::EvalAltResult>> {
     match options
         .get("params")
         .and_then(|v| v.read_lock::<Map>().map(|m| m.clone()))

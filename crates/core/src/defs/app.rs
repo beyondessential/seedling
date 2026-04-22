@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use rhai::{CustomType, FnPtr, Map, TypeBuilder};
-use seedling_protocol::names::{ActionName, AppName};
+use seedling_protocol::names::{ActionName, AppName, ParamName};
 
 use super::{
     Holder,
@@ -34,7 +34,7 @@ pub(crate) struct ClosureCapture {
     pub actions: BTreeMap<ActionName, FnPtr>,
     pub shells: BTreeMap<String, FnPtr>,
     pub install: Option<FnPtr>,
-    pub param_changes: BTreeMap<String, FnPtr>,
+    pub param_changes: BTreeMap<ParamName, FnPtr>,
 }
 
 thread_local! {
@@ -57,7 +57,7 @@ pub(crate) fn end_closure_capture() -> ClosureCapture {
 
 /// Called by `param.on_change` — writes the FnPtr into the active buffer if
 /// one exists, otherwise silently discards it.
-pub(crate) fn capture_param_change(name: String, fnptr: FnPtr) {
+pub(crate) fn capture_param_change(name: ParamName, fnptr: FnPtr) {
     CLOSURE_CAPTURE.with(|c| {
         if let Some(ref mut store) = *c.borrow_mut() {
             store.param_changes.insert(name, fnptr);
@@ -126,7 +126,7 @@ pub(crate) fn append_action_schedule(action_name: &ActionName, expr: &str) {
 pub struct AppDef {
     pub name: AppName,
     /// Parameters declared by the BSL script via `app.param()`, with optional schema metadata.
-    pub params: BTreeMap<String, ParamDef>,
+    pub params: BTreeMap<ParamName, ParamDef>,
     pub resources: BTreeMap<ResourceId, Resource>,
     /// Action metadata (name, description). No FnPtrs — closures are
     /// recovered on demand via the thread-local capture buffer.
@@ -134,7 +134,7 @@ pub struct AppDef {
     pub shells: BTreeMap<String, ShellDef>,
     pub install: Option<InstallDef>,
     /// Names of parameters that have an `on_change` handler registered.
-    pub param_changes: BTreeSet<String>,
+    pub param_changes: BTreeSet<ParamName>,
 }
 
 fn extract_description(options: &Map) -> Option<String> {

@@ -313,13 +313,16 @@ pub(crate) fn install_requirement_kind_str(kind: ParamKind) -> &'static str {
 }
 
 pub(crate) fn serialize_param_schema(
-    schema: &std::collections::BTreeMap<String, crate::defs::install::ParamDef>,
+    schema: &std::collections::BTreeMap<
+        seedling_protocol::names::ParamName,
+        crate::defs::install::ParamDef,
+    >,
 ) -> serde_json::Map<String, Value> {
     schema
         .iter()
         .map(|(k, req)| {
             (
-                k.clone(),
+                k.as_str().to_owned(),
                 json!({
                     "kind": install_requirement_kind_str(req.kind),
                     "required": req.required,
@@ -491,13 +494,13 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         .params
         .iter()
         .map(|(k, schema)| {
-            let mut obj = param_schema_entry_json(k, schema);
-            let is_set = stored_params.contains_key(k);
+            let mut obj = param_schema_entry_json(k.as_str(), schema);
+            let is_set = stored_params.contains_key(k.as_str());
             let value = if schema.is_secret() {
                 Value::Null
             } else {
                 stored_params
-                    .get(k)
+                    .get(k.as_str())
                     .map(|v| Value::String(v.clone()))
                     .unwrap_or(Value::Null)
             };
@@ -511,7 +514,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     // not reference; shown for operator awareness only.
     let unknown_params_json: Vec<Value> = stored_params
         .iter()
-        .filter(|(k, _)| !def.params.contains_key(*k))
+        .filter(|(k, _)| !def.params.contains_key(k.as_str()))
         .map(|(k, v)| json!({ "name": k, "value": v }))
         .collect();
 
@@ -1050,10 +1053,10 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams) -> HandlerResult
     // and proposed maps?
     let mut on_change_would_fire: Vec<String> = Vec::new();
     for handler_param in prop_def.param_changes.iter() {
-        let cur = current_params.get(handler_param);
-        let prop = proposed_param_map.get(handler_param);
+        let cur = current_params.get(handler_param.as_str());
+        let prop = proposed_param_map.get(handler_param.as_str());
         if cur != prop {
-            on_change_would_fire.push(handler_param.clone());
+            on_change_would_fire.push(handler_param.as_str().to_owned());
         }
     }
     on_change_would_fire.sort();

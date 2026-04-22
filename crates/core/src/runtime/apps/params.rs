@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{AppName, ParamName};
 
 use super::AppEntry;
 use crate::runtime::db::Db;
@@ -29,7 +29,7 @@ pub(super) fn load_params_for_app(
 pub fn upsert_param(
     db: &Db,
     app_name: &AppName,
-    param_name: &str,
+    param_name: &ParamName,
     value: &str,
 ) -> rusqlite::Result<()> {
     db.conn.execute(
@@ -46,7 +46,11 @@ pub fn delete_app_params(db: &Db, app_name: &AppName) -> rusqlite::Result<()> {
 }
 
 // i[param.unset]
-pub fn delete_one_param(db: &Db, app_name: &AppName, param_name: &str) -> rusqlite::Result<()> {
+pub fn delete_one_param(
+    db: &Db,
+    app_name: &AppName,
+    param_name: &ParamName,
+) -> rusqlite::Result<()> {
     db.conn.execute(
         "DELETE FROM params WHERE app_name = ?1 AND param_name = ?2",
         rusqlite::params![app_name, param_name],

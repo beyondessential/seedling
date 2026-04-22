@@ -225,6 +225,25 @@ bsl_name_newtype! {
 }
 
 bsl_name_newtype! {
+    /// Canonical name of a parameter declared by a BSL app via
+    /// `app.param("...")` or an action's `params` block.
+    ///
+    /// Used as a `BTreeMap` key in [`AppDef::params`], in the
+    /// per-action `params` maps, and as the identifier in `ParamSet`/
+    /// `ParamUnset` events.
+    ParamName
+}
+
+bsl_name_newtype! {
+    /// Canonical name of a shell declared by a BSL app via
+    /// `app.on_shell("...")`.
+    ///
+    /// Used as a `BTreeMap` key in [`AppDef::shells`] and identifies
+    /// the shell in `ShellStarted`/`ShellExited` events.
+    ShellName
+}
+
+bsl_name_newtype! {
     /// Canonical name of a site-level volume.
     ///
     /// Site volumes are created and owned by the operator (via
