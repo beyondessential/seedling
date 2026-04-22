@@ -16,12 +16,18 @@ import type { PlanDiffEntry, PlanResponse } from "../lib/types";
 
 interface Props {
   plan: PlanResponse;
+  /** Image refs the proposed script's handlers might pull, minus those
+   * already present locally or pinned to the app. Empty or missing means
+   * nothing to warn about. */
+  unwarmedHandlerImages?: string[];
 }
 
-export function PlanDiff({ plan }: Props) {
+// w[impl routes.images.discover]
+export function PlanDiff({ plan, unwarmedHandlerImages }: Props) {
   const diff = plan.diff ?? [];
   const handlers = plan.on_change_would_fire ?? [];
   const errors = plan.errors ?? [];
+  const unwarmed = unwarmedHandlerImages ?? [];
 
   return (
     <Stack spacing={2}>
@@ -31,6 +37,32 @@ export function PlanDiff({ plan }: Props) {
             {e}
           </Alert>
         ))}
+      {unwarmed.length > 0 && (
+        <Alert severity="warning">
+          <Typography variant="body2" sx={{ mb: 0.5 }}>
+            The proposed script's handlers may pull the following image
+            {unwarmed.length === 1 ? "" : "s"} at action time:
+          </Typography>
+          <Stack spacing={0.25}>
+            {unwarmed.map((r) => (
+              <Typography
+                key={r}
+                variant="caption"
+                sx={{ fontFamily: "monospace" }}
+              >
+                {r}
+              </Typography>
+            ))}
+          </Stack>
+          <Typography
+            variant="caption"
+            sx={{ mt: 0.5, display: "block", color: "text.secondary" }}
+          >
+            Consider warming them from the app's Images section before
+            invoking handlers that rely on them.
+          </Typography>
+        </Alert>
+      )}
       <Box>
         <Typography
           variant="caption"

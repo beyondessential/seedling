@@ -18,7 +18,12 @@ import { useGuard } from "../components/SafetyModeProvider";
 import { ScriptEditor } from "../components/ScriptEditor";
 import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
-import type { PlanResponse } from "../lib/types";
+import type {
+  DiscoverResponse,
+  ImagePin,
+  ImageSummary,
+  PlanResponse,
+} from "../lib/types";
 
 interface ScriptResponse {
   script: string;
@@ -36,10 +41,14 @@ export default function EditScript() {
   } = useOiQuery<ScriptResponse>("/apps/script", { app: name });
 
   const { execute: planExec, loading: planning, error: planError } = useOiAction();
+  const { execute: discoverExec } = useOiAction();
   const { execute: saveExec, loading: saving, error: saveError } = useOiAction();
   const writeGuard = useGuard("write");
   const [script, setScript] = useState("");
   const [plan, setPlan] = useState<PlanResponse | null>(null);
+  const [unwarmedHandlerImages, setUnwarmedHandlerImages] = useState<string[]>(
+    [],
+  );
 
   useEffect(() => {
     if (data) setScript(data.script);
@@ -56,6 +65,40 @@ export default function EditScript() {
         proposed_script: script,
       })) as PlanResponse;
       setPlan(result);
+      setUnwarmedHandlerImages([]);
+      // Best-effort: if the plan had no errors, probe the proposed script
+      // and cross-check its dynamic images against what's currently
+      // present + pinned. Errors here are silently ignored — the user
+      // can still proceed with the update.
+      // w[impl routes.images.discover]
+      if ((result.errors?.length ?? 0) === 0) {
+        try {
+          const [discovered, imgs, pins] = await Promise.all([
+            discoverExec("/apps/images/discover", {
+              app: name,
+              proposed_script: script,
+              lenient: true,
+            }) as Promise<DiscoverResponse>,
+            discoverExec("/images/list", {}) as Promise<{
+              images: ImageSummary[];
+            }>,
+            discoverExec("/images/pins/list", { app: name }) as Promise<{
+              pins: ImagePin[];
+            }>,
+          ]);
+          const present = new Set<string>();
+          for (const img of imgs.images) {
+            for (const t of img.tags) present.add(t);
+            for (const d of img.digests) present.add(d.reference);
+          }
+          for (const p of pins.pins) present.add(p.reference);
+          setUnwarmedHandlerImages(
+            discovered.all_images.filter((r) => !present.has(r)),
+          );
+        } catch {
+          // silently swallow — this is advisory
+        }
+      }
     } catch {
       // displayed via planError
     }
@@ -150,7 +193,12 @@ export default function EditScript() {
         <DialogContent dividers>
           <Stack spacing={2}>
             {saveError && <OiErrorAlert error={saveError} />}
-            {plan && <PlanDiff plan={plan} />}
+            {plan && (
+              <PlanDiff
+                plan={plan}
+                unwarmedHandlerImages={unwarmedHandlerImages}
+              />
+            )}
           </Stack>
         </DialogContent>
         <DialogActions>

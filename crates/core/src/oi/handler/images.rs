@@ -338,6 +338,11 @@ pub(crate) fn clear_pins(state: &OiState, params: PinsClearParams) -> HandlerRes
 #[derive(Deserialize)]
 pub(crate) struct DiscoverParams {
     pub app: String,
+    /// Optional BSL script source text to probe in place of the app's
+    /// stored script. The edit-script preview supplies this to surface
+    /// dynamic images a proposed script would introduce.
+    #[serde(default)]
+    pub proposed_script: Option<String>,
     /// Per-handler supplied param values. Outer key = handler name
     /// (e.g. `"migrate"`, `"install"`), inner = param-name → string.
     #[serde(default)]
@@ -351,16 +356,39 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
     let name = AppName::new(&params.app)
         .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, format!("invalid app: {e}")))?;
 
-    // Clone the App handle out of the registry; we'll set up a fresh
-    // engine + AST for the probe so its evaluation never touches live
-    // state (including the registry entry's AppDef — RuntimeInstance has
-    // its own action_def thread-local for extraction).
-    let (app, script) = {
+    let (stored_app, registered_script) = {
         let reg = state.registry.read();
         match reg.get(name.as_str()) {
             Some(entry) => (entry.app.clone(), entry.script.clone()),
             None => return Err(OiError::not_found(format!("app not registered: {name}"))),
         }
+    };
+
+    // When `proposed_script` is supplied, freshly evaluate it against the
+    // stored params so the probe sees the AppDef the update *would*
+    // produce. Otherwise probe the registered app as-is.
+    let script = params.proposed_script.clone().unwrap_or(registered_script);
+    let app = if params.proposed_script.is_some() {
+        let name_owned = name.clone();
+        let cipher = std::sync::Arc::clone(&state.cipher);
+        let stored_params = state.db.call(move |db| {
+            crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned)
+        });
+        let (proposed_app, err) = crate::runtime::apps::evaluate_script(
+            &name,
+            &script,
+            &stored_params,
+            &state.script_limits,
+        );
+        if let Some(e) = err {
+            return Err(OiError::new(
+                ErrorCode::NotFound,
+                format!("proposed script failed to evaluate: {e}"),
+            ));
+        }
+        proposed_app
+    } else {
+        stored_app
     };
 
     let (engine, _scope, _stub_app) = crate::setup_language(&state.script_limits);
