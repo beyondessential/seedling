@@ -8,7 +8,10 @@ use seedling_protocol::names::AppName;
 
 use super::{AppSnapshot, RunningPod, pods, proxy, routes, rules, volumes};
 use crate::{
-    runtime::{AppPhase, InstanceRegistry, db::DbHandle, identity::InstanceId},
+    runtime::{
+        AppPhase, InstanceRegistry, db::DbHandle,
+        external_service_mappings::ExternalServiceSnapshot, identity::InstanceId,
+    },
     system::{
         System, actuator::Actuator, observer::Observer, translate::proxy::build_proxy_config,
         types::DataPlaneRules,
@@ -71,6 +74,7 @@ pub(super) fn compute_routes(
     running_pods_by_app: &HashMap<AppName, Vec<RunningPod>>,
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
+    ext_snapshot: &ExternalServiceSnapshot,
 ) -> (
     Vec<crate::system::types::ServiceRoute>,
     Vec<(
@@ -96,6 +100,8 @@ pub(super) fn compute_routes(
             registry,
             running,
             &app.name,
+            running_pods_by_app,
+            ext_snapshot,
         ) {
             Ok(pair) => pair,
             Err(e) => {
@@ -116,7 +122,10 @@ pub(super) fn compute_nftables_rules(
     caddy_v4_addr: Option<Ipv4Addr>,
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
+    ext_snapshot: &ExternalServiceSnapshot,
 ) -> DataPlaneRules {
+    let backends_by_app = rules::collect_backends_by_app(running_pods_by_app);
+
     let mut all_ingress = Vec::new();
     let mut all_mounts = Vec::new();
     let mut all_service_dnat = Vec::new();
@@ -134,7 +143,14 @@ pub(super) fn compute_nftables_rules(
             caddy_v4_addr,
         ));
         all_mounts.extend(rules::build_mount_rules(running));
-        match rules::build_service_dnat_rules(node_prefix, registry, running, &app.name) {
+        match rules::build_service_dnat_rules(
+            node_prefix,
+            registry,
+            running,
+            &app.name,
+            ext_snapshot,
+            &backends_by_app,
+        ) {
             Ok(dnat) => all_service_dnat.extend(dnat),
             Err(e) => {
                 tracing::warn!(app = %app.name, error = %e, "nftables: registry lookup failed for app; skipping");

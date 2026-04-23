@@ -1,7 +1,7 @@
-use std::net::Ipv6Addr;
+use std::{collections::HashMap, net::Ipv6Addr};
 
 use ipnet::Ipv6Net;
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{AppName, ExternalServiceName, ServiceRef};
 
 use super::RunningPod;
 use crate::{
@@ -11,7 +11,8 @@ use crate::{
         resource::{Resource, ResourceKind},
     },
     runtime::{
-        InstanceRegistry, desired::DesiredState, identity::ResourceInstance,
+        InstanceRegistry, desired::DesiredState,
+        external_service_mappings::ExternalServiceSnapshot, identity::ResourceInstance,
         lifecycle::LifecycleState, registry::RegistryError,
     },
     system::{translate::proxy::instance_ipv6, types::ServiceRoute},
@@ -23,6 +24,7 @@ use crate::{
     clippy::type_complexity,
     reason = "flattening the tuple would hurt readability"
 )]
+#[expect(clippy::too_many_arguments, reason = "reconcile-tick state fan-out")]
 pub(super) fn build(
     desired: &DesiredState,
     snapshot: &AppDef,
@@ -30,6 +32,8 @@ pub(super) fn build(
     registry: &dyn InstanceRegistry,
     running_pods: &[RunningPod],
     app_name: &AppName,
+    running_pods_by_app: &HashMap<AppName, Vec<RunningPod>>,
+    ext_snapshot: &ExternalServiceSnapshot,
 ) -> Result<
     (
         Vec<ServiceRoute>,
@@ -70,6 +74,72 @@ pub(super) fn build(
         // Always install a route, even with no backends — the data plane
         // converts an empty backends list to a blackhole /128 so that
         // connections fail fast (RST) rather than timing out.
+        routes.push(ServiceRoute {
+            service_ip,
+            backends: backends.clone(),
+        });
+        if !backends.is_empty() {
+            observations.push((
+                svc_instance.clone(),
+                "backend_healthy",
+                serde_json::json!({}),
+            ));
+        }
+    }
+
+    // r[impl service.external.mapping.events] External-service slots get
+    // their own stable /128 route: resolve through the operator-configured
+    // mapping table, then for each matching backend install the same
+    // routing-table entry pattern we use for native services. Site targets
+    // that don't parse as IPv6 are silently skipped here (the DNAT layer
+    // surfaces the misconfiguration via an empty-backends blackhole).
+    for resource in snapshot.resources.values() {
+        let Resource::ExternalService(ext) = resource else {
+            continue;
+        };
+        let ext_name = ext.name.as_str();
+        let svc_instance = registry.get_or_create_singleton(
+            app_name,
+            ResourceKind::ExternalService,
+            Some(ext_name),
+        )?;
+        let service_ip = instance_ipv6(node_prefix, &svc_instance);
+
+        let ext_name_typed = ExternalServiceName::new_unchecked(ext_name.to_owned());
+        let target = ext_snapshot
+            .mappings
+            .get(&(app_name.clone(), ext_name_typed));
+
+        let backends: Vec<Ipv6Addr> = match target {
+            None => vec![],
+            Some(ServiceRef::App {
+                app: target_app,
+                service: target_svc,
+            }) => running_pods_by_app
+                .get(target_app)
+                .map(|pods| {
+                    pods.iter()
+                        .filter(|p| pod_backs_service(p, target_svc.as_str()))
+                        .map(|p| p.pod_ip)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            Some(ServiceRef::Site { name: site_name }) => ext_snapshot
+                .site_endpoints
+                .get(site_name)
+                .map(|eps| {
+                    eps.iter()
+                        .filter_map(|e| e.remote_host.parse::<Ipv6Addr>().ok())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default(),
+        };
+
+        observations.push((
+            svc_instance.clone(),
+            "network_created",
+            serde_json::json!({}),
+        ));
         routes.push(ServiceRoute {
             service_ip,
             backends: backends.clone(),

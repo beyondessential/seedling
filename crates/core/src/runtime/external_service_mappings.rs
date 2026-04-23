@@ -1,9 +1,12 @@
+use std::collections::HashMap;
+
 use rusqlite::params;
 use seedling_protocol::names::{
     AppName, AppServiceName, ExternalServiceName, ServiceRef, SiteServiceName,
 };
 
 use crate::runtime::db::Db;
+use crate::runtime::site_services::{self, SiteServiceEndpoint};
 
 // r[impl service.external.mapping.events]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,6 +126,34 @@ pub fn list_for_site_target(
     )?;
     let rows = stmt.query_map(params![site_service], row_to_mapping)?;
     rows.collect()
+}
+
+/// Joined snapshot of the two tables the reconciler needs to resolve
+/// `ExternalService` bindings: every app-level mapping and every site
+/// service's endpoints. Read once per reconcile tick so per-app rule and
+/// route building can look up targets without hitting SQLite again.
+#[derive(Debug, Default, Clone)]
+pub struct ExternalServiceSnapshot {
+    pub mappings: HashMap<(AppName, ExternalServiceName), ServiceRef>,
+    pub site_endpoints: HashMap<SiteServiceName, Vec<SiteServiceEndpoint>>,
+}
+
+impl ExternalServiceSnapshot {
+    pub fn load(db: &Db) -> rusqlite::Result<Self> {
+        let mappings_list = list_all(db)?;
+        let sites = site_services::list(db)?;
+
+        let mappings = mappings_list
+            .into_iter()
+            .map(|m| ((m.app, m.external_name), m.target))
+            .collect();
+        let site_endpoints = sites.into_iter().map(|s| (s.name, s.endpoints)).collect();
+
+        Ok(Self {
+            mappings,
+            site_endpoints,
+        })
+    }
 }
 
 fn row_to_mapping(row: &rusqlite::Row<'_>) -> rusqlite::Result<ExternalServiceMapping> {

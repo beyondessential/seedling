@@ -92,6 +92,24 @@ impl From<EndpointParams> for SiteServiceEndpoint {
     }
 }
 
+/// The current reconciler dataplane only routes over IPv6. DNS names and
+/// IPv4 literals are parked until the follow-up that introduces v4 or DNS
+/// resolution into `ServiceRoute` / `ServiceDnatRule`. Reject them here so
+/// operators get immediate feedback rather than a mysterious blackhole.
+fn require_ipv6_remote_host(host: &str) -> Result<(), OiError> {
+    if host.parse::<std::net::Ipv6Addr>().is_ok() {
+        Ok(())
+    } else {
+        Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!(
+                "remote_host {host:?} must be an IPv6 literal \
+                 (IPv4 and DNS name support is tracked as a follow-up)"
+            ),
+        ))
+    }
+}
+
 #[derive(Deserialize)]
 pub(crate) struct CreateSiteServiceParams {
     pub name: SiteServiceName,
@@ -107,6 +125,9 @@ pub(crate) fn create_site_service(
     params: CreateSiteServiceParams,
     ctx: &RequestCtx,
 ) -> HandlerResult {
+    for ep in &params.endpoints {
+        require_ipv6_remote_host(&ep.remote_host)?;
+    }
     let endpoints: Vec<SiteServiceEndpoint> =
         params.endpoints.into_iter().map(Into::into).collect();
     let def = SiteServiceDef {
@@ -261,6 +282,7 @@ pub(crate) fn add_site_service_endpoint(
     params: SiteServiceEndpointParams,
     ctx: &RequestCtx,
 ) -> HandlerResult {
+    require_ipv6_remote_host(&params.remote_host)?;
     let name = params.name.clone();
     let ep = SiteServiceEndpoint {
         service_port: params.service_port,
