@@ -45,6 +45,7 @@ function nameError(name: string): string | null {
 
 const TEMPLATE_EVENTS: Set<string> = new Set([
   "TemplateCreated",
+  "TemplateUpdated",
   "TemplateRemoved",
   "TemplateInstantiated",
 ]);

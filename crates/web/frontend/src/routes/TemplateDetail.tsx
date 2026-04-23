@@ -1,4 +1,5 @@
 import DeleteIcon from "@mui/icons-material/Delete";
+import EditIcon from "@mui/icons-material/Edit";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import {
   Box,
@@ -15,15 +16,16 @@ import {
   Typography,
 } from "@mui/material";
 import CodeMirror from "@uiw/react-codemirror";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useGuard } from "../components/SafetyModeProvider";
 import { ScriptInventory } from "../components/ScriptInventory";
+import { useEventRefresh } from "../hooks/useEventRefresh";
 import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
 import { rhaiLanguage } from "../lib/rhai-lang";
-import type { Template, TemplatePreview } from "../lib/types";
+import type { SeedlingEvent, Template, TemplatePreview } from "../lib/types";
 
 const APP_NAME_RE = /^[a-zA-Z][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]$/;
 
@@ -43,11 +45,23 @@ export default function TemplateDetail() {
     data: template,
     loading,
     error,
+    refetch,
   } = useOiQuery<Template>("/templates/show", { name });
-  const { data: preview, error: previewError } = useOiQuery<TemplatePreview>(
-    "/templates/preview",
-    { name },
+  const {
+    data: preview,
+    error: previewError,
+    refetch: refetchPreview,
+  } = useOiQuery<TemplatePreview>("/templates/preview", { name });
+  const matchThisTemplate = useCallback(
+    (ev: SeedlingEvent) =>
+      (ev.type === "TemplateUpdated" || ev.type === "TemplateRemoved") &&
+      ev.name === name,
+    [name],
   );
+  useEventRefresh(() => {
+    refetch();
+    refetchPreview();
+  }, matchThisTemplate);
   const { execute, loading: acting, error: actionError } = useOiAction();
   const { execute: removeExec, error: removeError } = useOiAction();
   const writeGuard = useGuard("write");
@@ -136,6 +150,18 @@ export default function TemplateDetail() {
               disabled={!writeGuard.allowed}
             >
               Create app from template
+            </Button>
+          </span>
+        </Tooltip>
+        <Tooltip title={writeGuard.reason ?? ""}>
+          <span>
+            <Button
+              size="small"
+              startIcon={<EditIcon />}
+              onClick={() => navigate(`/templates/${template.name}/edit`)}
+              disabled={!writeGuard.allowed}
+            >
+              Edit
             </Button>
           </span>
         </Tooltip>
