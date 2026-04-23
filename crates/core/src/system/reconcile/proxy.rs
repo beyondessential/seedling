@@ -181,13 +181,13 @@ fn find_upstream_port(snapshot: &AppDef, service_name: &str, fallback_port: u16)
 
 fn scan_pod_for_port(pod: &PodDef, service_name: &str) -> Option<u16> {
     for b in &pod.tcp_bindings {
-        if b.service_port.service.name.as_str() == service_name {
+        if b.service_port.service.name().as_str() == service_name {
             return Some(b.service_port.port.get());
         }
     }
 
     for b in &pod.http_bindings {
-        if b.route.http.service.name.as_str() == service_name {
+        if b.route.http.service.name().as_str() == service_name {
             return Some(b.route.http.port.get());
         }
     }

@@ -524,12 +524,29 @@ impl Reconciler {
         // --- Uninstall phase (sequential, needs running_pods_by_app) ---
         self.run_uninstall_phase(&apps, &running_pods_by_app).await;
 
+        // --- Load external-service mapping + site-service endpoint
+        // snapshot once per tick. ---
+        let ext_snapshot = self
+            .db
+            .call(
+                |db| match crate::runtime::external_service_mappings::ExternalServiceSnapshot::load(
+                    db,
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "external-service snapshot load failed; using empty");
+                        crate::runtime::external_service_mappings::ExternalServiceSnapshot::default()
+                    }
+                },
+            );
+
         // --- Compute routes (sync) ---
         let (all_routes, route_obs) = phases::compute_routes(
             &apps,
             &running_pods_by_app,
             &self.node_prefix,
             &*self.registry,
+            &ext_snapshot,
         );
         self.persist_obs(route_obs);
 
@@ -544,6 +561,7 @@ impl Reconciler {
                 self.caddy_v4_addr,
                 &self.node_prefix,
                 &*self.registry,
+                &ext_snapshot,
             );
 
             let proxy_build =

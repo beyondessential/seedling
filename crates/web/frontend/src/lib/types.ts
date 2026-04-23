@@ -393,6 +393,13 @@ export interface ImagePin {
   app: string;
   reference: string;
   pinned_at: string;
+  /**
+   * RFC 3339 timestamp when the reconciler will auto-delete this pin, or
+   * `null` for an indefinite pin. Set by the post-update reconciliation
+   * rule when the owning script's probe was dirty and couldn't confirm
+   * the pin's reference.
+   */
+  expires_at: string | null;
 }
 
 export type HandlerKind =

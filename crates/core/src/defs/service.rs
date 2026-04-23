@@ -1,10 +1,11 @@
 use std::sync::Weak;
 
-use rhai::{CustomType, EvalAltResult, TypeBuilder};
+use rhai::{CustomType, EvalAltResult, Map, TypeBuilder};
 
 use super::{
     Freezable, Holder, Port,
     app::AppDef,
+    export::ExportOptions,
     ingress::Ingress,
     resource::{Resource, ResourceId, ResourceKind, ResourceName},
 };
@@ -13,6 +14,7 @@ use super::{
 #[derive(Debug, Default, Clone)]
 pub struct ServiceDef {
     pub http: Option<HttpServiceDef>,
+    pub exported: Option<ExportOptions>,
 }
 
 #[derive(Debug, Clone)]
@@ -65,7 +67,7 @@ impl CustomType for Service {
                     this.ensure_unfrozen()?;
                     let port = Port::new(port)?;
                     Ok(ServicePort {
-                        service: this.clone(),
+                        service: this.clone().into(),
                         port,
                     })
                 },
@@ -77,7 +79,7 @@ impl CustomType for Service {
                     this.ensure_unfrozen()?;
                     this.def.lock().http.get_or_insert_default();
                     Ok(HttpService {
-                        service: this.clone(),
+                        service: this.clone().into(),
                         port: Port::from_u16(80),
                     })
                 },
@@ -89,9 +91,33 @@ impl CustomType for Service {
                     let port = Port::new(port)?;
                     this.def.lock().http.get_or_insert_default();
                     Ok(HttpService {
-                        service: this.clone(),
+                        service: this.clone().into(),
                         port,
                     })
+                },
+            )
+            // l[impl service.exported]
+            .with_fn(
+                "exported",
+                |this: &mut Self| -> Result<Service, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
+                    if this.name.as_str().is_empty() {
+                        return Err("only named services can be exported".into());
+                    }
+                    this.def.lock().exported = Some(ExportOptions::default());
+                    Ok(this.clone())
+                },
+            )
+            // l[impl service.exported]
+            .with_fn(
+                "exported",
+                |this: &mut Self, options: Map| -> Result<Service, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
+                    if this.name.as_str().is_empty() {
+                        return Err("only named services can be exported".into());
+                    }
+                    this.def.lock().exported = Some(ExportOptions::from_rhai_map(options)?);
+                    Ok(this.clone())
                 },
             )
             .with_fn(
@@ -127,10 +153,47 @@ impl CustomType for Service {
     }
 }
 
+// Reference-to-a-service carried by pod bindings. It's either an app's own
+// `Service` (declared in the same script) or an `ExternalService` slot whose
+// concrete target is supplied by the operator at runtime via
+// `external_service_mappings`. Downstream consumers should normally go
+// through [`BoundService::name`] and [`BoundService::is_external`] rather
+// than matching the variants inline.
+#[derive(Debug, Clone)]
+pub enum BoundService {
+    App(Service),
+    External(ExternalService),
+}
+
+impl BoundService {
+    pub fn name(&self) -> &ResourceName {
+        match self {
+            Self::App(s) => &s.name,
+            Self::External(e) => &e.name,
+        }
+    }
+
+    pub fn is_external(&self) -> bool {
+        matches!(self, Self::External(_))
+    }
+}
+
+impl From<Service> for BoundService {
+    fn from(s: Service) -> Self {
+        Self::App(s)
+    }
+}
+
+impl From<ExternalService> for BoundService {
+    fn from(e: ExternalService) -> Self {
+        Self::External(e)
+    }
+}
+
 // l[impl service.port]
 #[derive(Debug, Clone)]
 pub struct ServicePort {
-    pub service: Service,
+    pub service: BoundService,
     pub port: Port,
 }
 
@@ -146,7 +209,7 @@ pub struct HttpServiceDef {}
 
 #[derive(Debug, Clone)]
 pub struct HttpService {
-    pub service: Service,
+    pub service: BoundService,
     pub port: Port,
 }
 
@@ -192,6 +255,53 @@ pub struct HttpServiceRoute {
 impl CustomType for HttpServiceRoute {
     fn build(mut builder: TypeBuilder<Self>) {
         builder.with_name("HttpServiceRoute");
+    }
+}
+
+// l[impl service.external]
+#[derive(Debug, Clone)]
+pub struct ExternalService {
+    pub name: ResourceName,
+}
+
+impl CustomType for ExternalService {
+    fn build(mut builder: TypeBuilder<Self>) {
+        builder
+            .with_name("ExternalService")
+            // l[impl service.external]
+            // An external-service slot exposes the same port/http surface a
+            // native service does, but the resulting ServicePort/HttpService
+            // carries `BoundService::External`, so the reconciler knows to
+            // resolve the backend via `external_service_mappings`.
+            .with_fn(
+                "port",
+                |this: &mut Self, port: i64| -> Result<ServicePort, Box<EvalAltResult>> {
+                    let port = Port::new(port)?;
+                    Ok(ServicePort {
+                        service: this.clone().into(),
+                        port,
+                    })
+                },
+            )
+            .with_fn(
+                "http",
+                |this: &mut Self| -> Result<HttpService, Box<EvalAltResult>> {
+                    Ok(HttpService {
+                        service: this.clone().into(),
+                        port: Port::from_u16(80),
+                    })
+                },
+            )
+            .with_fn(
+                "http",
+                |this: &mut Self, port: i64| -> Result<HttpService, Box<EvalAltResult>> {
+                    let port = Port::new(port)?;
+                    Ok(HttpService {
+                        service: this.clone().into(),
+                        port,
+                    })
+                },
+            );
     }
 }
 

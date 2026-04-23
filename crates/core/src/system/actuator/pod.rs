@@ -214,7 +214,7 @@ impl Actuator {
                 let svc_instance = self.registry.get_or_create_singleton(
                     &instance.app,
                     ResourceKind::Service,
-                    Some(sp.service.name.as_str()),
+                    Some(sp.service.name().as_str()),
                 )?;
                 let service_ip = instance_ipv6(&self.node_prefix, &svc_instance);
                 Ok((sp.port.get(), service_ip, sp.port.get()))
@@ -288,6 +288,7 @@ impl Actuator {
             ResourceKind::Job => "job",
             ResourceKind::Volume => "volume",
             ResourceKind::ExternalVolume => "external_volume",
+            ResourceKind::ExternalService => "external_service",
             ResourceKind::Action => "action",
         };
         let resource_name = instance.name.as_deref().unwrap_or(&instance.display_name);

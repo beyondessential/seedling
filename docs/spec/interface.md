@@ -764,7 +764,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[image.pin.list]
 > `/images/pins/list { app? }` returns the set of image pins.
 > When `app` is provided, only that app's pins are returned; otherwise pins for all apps are returned.
-> Response `result` is an array of objects with fields `app` (string), `reference` (string), and `pinned_at` (RFC 3339 timestamp).
+> Response `result` is an array of objects with fields `app` (string), `reference` (string), `pinned_at` (RFC 3339 timestamp), and `expires_at` (RFC 3339 timestamp or `null`). When `expires_at` is set, the reconciler will delete the pin once it passes (see [`image.pin.expiry`](runtime.md#r--image.pin.expiry)).
 
 > i[image.pin.clear]
 > `/images/pins/clear { app, reference? }` clears pins for `app`.

@@ -53,10 +53,8 @@ specs (
                 include (
                     crates/web/src/*.rs
                     crates/web/src/**/*.rs
-                    crates/web/frontend/src/*.tsx
-                    crates/web/frontend/src/**/*.tsx
-                    crates/web/frontend/src/*.ts
-                    crates/web/frontend/src/**/*.ts
+                    crates/web/frontend/**/*.tsx
+                    crates/web/frontend/**/*.ts
                 )
             }
         )

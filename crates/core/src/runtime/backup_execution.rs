@@ -167,6 +167,8 @@ mod tests {
     }
 
     // r[impl backup.schedule.catch-up]
+    // r[verify backup.schedule]
+    // r[verify backup.schedule.catch-up]
     // If the daemon was down through a scheduled fire time, the strategy fires
     // once to catch up instead of staying stuck on a past boundary forever.
     #[test]
@@ -198,6 +200,7 @@ mod tests {
         );
     }
 
+    // r[verify backup.schedule]
     #[test]
     fn fires_at_scheduled_boundary() {
         let db = Db::open_in_memory().expect("open in-memory db");
@@ -218,6 +221,48 @@ mod tests {
         assert_eq!(check_due_strategies(&db, after).len(), 1);
     }
 
+    // r[verify backup.schedule]
+    // r[verify backup.run.last-fired]
+    #[test]
+    fn fire_updates_last_fired_at_to_now() {
+        let db = Db::open_in_memory().expect("open in-memory db");
+        create_strategy(&db, "every hour");
+
+        let now: Timestamp = "2026-04-21T13:00:30Z".parse().unwrap();
+        let due = check_due_strategies(&db, now);
+        assert_eq!(due.len(), 1);
+
+        let rows = backup_strategies::list_all(&db).unwrap();
+        let updated = rows.iter().find(|s| s.name == "nightly").unwrap();
+        assert_eq!(
+            updated.last_fired_at.as_deref(),
+            Some(now.to_string().as_str())
+        );
+    }
+
+    // r[verify backup.schedule.delay]
+    #[test]
+    fn random_delay_is_within_bounds_for_named_schedules() {
+        for _ in 0..64 {
+            let d = random_delay_secs("every hour");
+            assert!(d <= 360, "hourly delay should be 0..=360, got {d}");
+            let d = random_delay_secs("twice a day");
+            assert!(d <= 4320, "twice-daily delay should be 0..=4320, got {d}");
+            let d = random_delay_secs("every day");
+            assert!(d <= 8640, "daily delay should be 0..=8640, got {d}");
+        }
+    }
+
+    // r[verify backup.schedule]
+    #[test]
+    fn schedule_to_cronexpr_maps_known_buckets() {
+        assert_eq!(schedule_to_cronexpr("every hour"), Some("0 * * * *"));
+        assert_eq!(schedule_to_cronexpr("twice a day"), Some("0 0,12 * * *"));
+        assert_eq!(schedule_to_cronexpr("every day"), Some("0 0 * * *"));
+        assert_eq!(schedule_to_cronexpr("nonsense"), None);
+    }
+
+    // r[verify backup.schedule]
     #[test]
     fn no_refire_within_same_window() {
         let db = Db::open_in_memory().expect("open in-memory db");

@@ -106,7 +106,10 @@ impl PodDef {
             move |this: &mut T, port: i64, svc: Service| -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
                 let port = Port::new(port)?;
-                let service_port = ServicePort { service: svc, port };
+                let service_port = ServicePort {
+                    service: svc.into(),
+                    port,
+                };
                 ext(this).lock().tcp_bindings.push(TcpUdpBinding {
                     pod_port: port,
                     service_port,
@@ -135,7 +138,10 @@ impl PodDef {
             move |this: &mut T, port: i64, svc: Service| -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
                 let port = Port::new(port)?;
-                let service_port = ServicePort { service: svc, port };
+                let service_port = ServicePort {
+                    service: svc.into(),
+                    port,
+                };
                 ext(this).lock().udp_bindings.push(TcpUdpBinding {
                     pod_port: port,
                     service_port,

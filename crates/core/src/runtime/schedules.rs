@@ -238,6 +238,7 @@ mod tests {
     }
 
     // r[verify schedule.fire]
+    // r[verify schedule.tick]
     #[test]
     fn check_due_fires_overdue_schedule() {
         let db = Db::open_in_memory().unwrap();

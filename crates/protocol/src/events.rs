@@ -7,8 +7,8 @@ use tokio::sync::broadcast;
 use crate::{
     actor::Actor,
     names::{
-        ActionName, AppName, ExternalVolumeName, ForwardId, HeldVolumeId, ParamName, SessionId,
-        ShellName, TemplateName, VolumeRef,
+        ActionName, AppName, ExternalServiceName, ExternalVolumeName, ForwardId, HeldVolumeId,
+        ParamName, ServiceRef, SessionId, ShellName, TemplateName, VolumeRef,
     },
 };
 
@@ -312,6 +312,71 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
+    // r[impl service.site.lifecycle.events]
+    SiteServiceCreated {
+        timestamp: Timestamp,
+        name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
+    // r[impl service.site.lifecycle.events]
+    SiteServiceDeleted {
+        timestamp: Timestamp,
+        name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
+    // r[impl service.site.lifecycle.events]
+    SiteServiceEndpointAdded {
+        timestamp: Timestamp,
+        name: String,
+        service_port: u16,
+        protocol: String,
+        remote_host: String,
+        remote_port: u16,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
+    // r[impl service.site.lifecycle.events]
+    SiteServiceEndpointRemoved {
+        timestamp: Timestamp,
+        name: String,
+        service_port: u16,
+        protocol: String,
+        remote_host: String,
+        remote_port: u16,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
+    // r[impl service.external.mapping.events]
+    ExternalServiceMapped {
+        timestamp: Timestamp,
+        app: AppName,
+        external_name: ExternalServiceName,
+        target: ServiceRef,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
+    // r[impl service.external.mapping.events]
+    ExternalServiceUnmapped {
+        timestamp: Timestamp,
+        app: AppName,
+        external_name: ExternalServiceName,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
+    // r[impl service.external.mapping.events]
+    ExternalServiceRemapped {
+        timestamp: Timestamp,
+        app: AppName,
+        external_name: ExternalServiceName,
+        target: ServiceRef,
+        previous_target: ServiceRef,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
     // r[impl audit.log.events]
     TemplateCreated {
         timestamp: Timestamp,
@@ -366,6 +431,14 @@ fn is_false(b: &bool) -> bool {
 pub struct ExternalMappingSnapshot<'a> {
     pub target: &'a VolumeRef,
     pub read_only: bool,
+}
+
+/// Snapshot of an external service mapping's target, used by the remap
+/// event emitter to carry both the new and previous target in a single
+/// call.
+#[derive(Clone, Debug)]
+pub struct ExternalServiceMappingSnapshot<'a> {
+    pub target: &'a ServiceRef,
 }
 
 impl EventSender {
@@ -685,6 +758,125 @@ impl EventSender {
         });
     }
 
+    // r[impl service.site.lifecycle.events]
+    pub fn site_service_created(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        actor: Option<Arc<Actor>>,
+    ) {
+        self.emit(OiEvent::SiteServiceCreated {
+            timestamp: now(),
+            name: name.to_owned(),
+            description: description.map(str::to_owned),
+            actor,
+        });
+    }
+
+    // r[impl service.site.lifecycle.events]
+    pub fn site_service_deleted(&self, name: &str, actor: Option<Arc<Actor>>) {
+        self.emit(OiEvent::SiteServiceDeleted {
+            timestamp: now(),
+            name: name.to_owned(),
+            actor,
+        });
+    }
+
+    // r[impl service.site.lifecycle.events]
+    #[allow(clippy::too_many_arguments)]
+    pub fn site_service_endpoint_added(
+        &self,
+        name: &str,
+        service_port: u16,
+        protocol: &str,
+        remote_host: &str,
+        remote_port: u16,
+        actor: Option<Arc<Actor>>,
+    ) {
+        self.emit(OiEvent::SiteServiceEndpointAdded {
+            timestamp: now(),
+            name: name.to_owned(),
+            service_port,
+            protocol: protocol.to_owned(),
+            remote_host: remote_host.to_owned(),
+            remote_port,
+            actor,
+        });
+    }
+
+    // r[impl service.site.lifecycle.events]
+    #[allow(clippy::too_many_arguments)]
+    pub fn site_service_endpoint_removed(
+        &self,
+        name: &str,
+        service_port: u16,
+        protocol: &str,
+        remote_host: &str,
+        remote_port: u16,
+        actor: Option<Arc<Actor>>,
+    ) {
+        self.emit(OiEvent::SiteServiceEndpointRemoved {
+            timestamp: now(),
+            name: name.to_owned(),
+            service_port,
+            protocol: protocol.to_owned(),
+            remote_host: remote_host.to_owned(),
+            remote_port,
+            actor,
+        });
+    }
+
+    // r[impl service.external.mapping.events]
+    pub fn external_service_mapped(
+        &self,
+        app: &AppName,
+        external_name: &ExternalServiceName,
+        target: &ServiceRef,
+        actor: Option<Arc<Actor>>,
+    ) {
+        self.emit(OiEvent::ExternalServiceMapped {
+            timestamp: now(),
+            app: app.clone(),
+            external_name: external_name.clone(),
+            target: target.clone(),
+            actor,
+        });
+    }
+
+    // r[impl service.external.mapping.events]
+    pub fn external_service_unmapped(
+        &self,
+        app: &AppName,
+        external_name: &ExternalServiceName,
+        actor: Option<Arc<Actor>>,
+    ) {
+        self.emit(OiEvent::ExternalServiceUnmapped {
+            timestamp: now(),
+            app: app.clone(),
+            external_name: external_name.clone(),
+            actor,
+        });
+    }
+
+    // r[impl service.external.mapping.events]
+    pub fn external_service_remapped(
+        &self,
+        app: &AppName,
+        external_name: &ExternalServiceName,
+        new: ExternalServiceMappingSnapshot<'_>,
+        previous: ExternalServiceMappingSnapshot<'_>,
+        actor: Option<Arc<Actor>>,
+    ) {
+        self.emit(OiEvent::ExternalServiceRemapped {
+            timestamp: now(),
+            app: app.clone(),
+            external_name: external_name.clone(),
+            target: new.target.clone(),
+            previous_target: previous.target.clone(),
+            actor,
+        });
+    }
+
     // i[impl deployment.restart]
     pub fn deployment_restarted(
         &self,
@@ -997,6 +1189,94 @@ impl EventSenderWithActor {
         previous: ExternalMappingSnapshot<'_>,
     ) {
         self.inner.external_volume_remapped(
+            app,
+            external_name,
+            new,
+            previous,
+            Some(Arc::clone(&self.actor)),
+        );
+    }
+
+    // r[impl service.site.lifecycle.events]
+    pub fn site_service_created(&self, name: &str, description: Option<&str>) {
+        self.inner
+            .site_service_created(name, description, Some(Arc::clone(&self.actor)));
+    }
+
+    // r[impl service.site.lifecycle.events]
+    pub fn site_service_deleted(&self, name: &str) {
+        self.inner
+            .site_service_deleted(name, Some(Arc::clone(&self.actor)));
+    }
+
+    // r[impl service.site.lifecycle.events]
+    pub fn site_service_endpoint_added(
+        &self,
+        name: &str,
+        service_port: u16,
+        protocol: &str,
+        remote_host: &str,
+        remote_port: u16,
+    ) {
+        self.inner.site_service_endpoint_added(
+            name,
+            service_port,
+            protocol,
+            remote_host,
+            remote_port,
+            Some(Arc::clone(&self.actor)),
+        );
+    }
+
+    // r[impl service.site.lifecycle.events]
+    pub fn site_service_endpoint_removed(
+        &self,
+        name: &str,
+        service_port: u16,
+        protocol: &str,
+        remote_host: &str,
+        remote_port: u16,
+    ) {
+        self.inner.site_service_endpoint_removed(
+            name,
+            service_port,
+            protocol,
+            remote_host,
+            remote_port,
+            Some(Arc::clone(&self.actor)),
+        );
+    }
+
+    // r[impl service.external.mapping.events]
+    pub fn external_service_mapped(
+        &self,
+        app: &AppName,
+        external_name: &ExternalServiceName,
+        target: &ServiceRef,
+    ) {
+        self.inner.external_service_mapped(
+            app,
+            external_name,
+            target,
+            Some(Arc::clone(&self.actor)),
+        );
+    }
+
+    // r[impl service.external.mapping.events]
+    pub fn external_service_unmapped(&self, app: &AppName, external_name: &ExternalServiceName) {
+        self.inner
+            .external_service_unmapped(app, external_name, Some(Arc::clone(&self.actor)));
+    }
+
+    // r[impl service.external.mapping.events]
+    pub fn external_service_remapped(
+        &self,
+        app: &AppName,
+        external_name: &ExternalServiceName,
+        new: ExternalServiceMappingSnapshot<'_>,
+        previous: ExternalServiceMappingSnapshot<'_>,
+    ) {
+        self.inner.external_service_remapped(
             app,
             external_name,
             new,

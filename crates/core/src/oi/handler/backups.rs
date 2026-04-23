@@ -286,6 +286,23 @@ pub(crate) fn run_backup(state: &Arc<OiState>, params: RunBackupParams) -> Handl
         .map_err(|e| OiError::new(ErrorCode::Internal, format!("db strategies: {e}")))?
         .ok_or_else(|| OiError::not_found(format!("no strategy named {:?}", params.strategy)))?;
 
+    // r[impl backup.run.last-fired]
+    // Stamp the fire time up-front, before spawning the async run, so the
+    // operator sees it in `/backups/strategies/list` immediately and the
+    // scheduler doesn't fire again during the manual run's execution
+    // window.
+    let fired_at = jiff::Timestamp::now().to_string();
+    let strategy_name_for_update = strategy.name.clone();
+    let fired_at_for_update = fired_at.clone();
+    let _ = state.db.call(move |db| {
+        backup_strategies::update_last_fired_at(db, &strategy_name_for_update, &fired_at_for_update)
+    });
+
+    let strategy = backup_strategies::BackupStrategy {
+        last_fired_at: Some(fired_at),
+        ..strategy
+    };
+
     let ids: Vec<OperationId> = strategy
         .volumes
         .iter()

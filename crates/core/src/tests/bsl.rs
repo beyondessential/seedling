@@ -1,5 +1,6 @@
 use super::*;
 
+// l[verify bsl.script]
 // l[verify bsl.syntax]
 #[test]
 fn bsl_is_rhai() {

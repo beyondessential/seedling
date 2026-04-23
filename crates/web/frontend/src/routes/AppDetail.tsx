@@ -80,15 +80,35 @@ function lifecycleColor(
   return "default";
 }
 
-function FaultList({ faults, showApp }: { faults: FaultRecord[]; showApp?: boolean }) {
+function FaultList({
+  faults,
+  showApp,
+}: {
+  faults: FaultRecord[];
+  showApp?: boolean;
+}) {
   if (faults.length === 0) return null;
   return (
     <Stack spacing={1}>
       {faults.map((f) => (
         <Alert key={f.id} severity="error" sx={{ fontFamily: "monospace" }}>
-          <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2, flexWrap: "wrap" }}>
+          <Box
+            sx={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 2,
+              flexWrap: "wrap",
+            }}
+          >
             <Box>
-              {showApp && f.app && <><Link to={`/apps/${f.app}`} style={{ color: "inherit" }}>{f.app}</Link>{" · "}</>}
+              {showApp && f.app && (
+                <>
+                  <Link to={`/apps/${f.app}`} style={{ color: "inherit" }}>
+                    {f.app}
+                  </Link>
+                  {" · "}
+                </>
+              )}
               <strong>{f.kind}</strong>
               {f.resource_name && ` · ${f.resource_type}/${f.resource_name}`}
               {f.instance_id && ` (${f.instance_id.slice(0, 12)})`}
@@ -100,8 +120,9 @@ function FaultList({ faults, showApp }: { faults: FaultRecord[]; showApp?: boole
               sx={{
                 color: "text.secondary",
                 whiteSpace: "nowrap",
-                alignSelf: "center"
-              }}>
+                alignSelf: "center",
+              }}
+            >
               {new Date(f.timestamp).toLocaleString()}
             </Typography>
           </Box>
@@ -116,23 +137,44 @@ function ResourceDefDetail({ def }: { def: ResourceDef }) {
     const scheme = def.tls ? "https" : "http";
     const url = `${scheme}://${def.hostname}:${def.port}`;
     return (
-      <Box sx={{ mt: 0.5, display: "flex", gap: 0.5, flexWrap: "wrap", alignItems: "center" }}>
-        <Typography variant="caption" sx={{ fontFamily: "monospace", mr: 0.5 }}>{url}</Typography>
-        {def.http_terminate && <Chip label={def.http_terminate} size="small" variant="outlined" />}
+      <Box
+        sx={{
+          mt: 0.5,
+          display: "flex",
+          gap: 0.5,
+          flexWrap: "wrap",
+          alignItems: "center",
+        }}
+      >
+        <Typography variant="caption" sx={{ fontFamily: "monospace", mr: 0.5 }}>
+          {url}
+        </Typography>
+        {def.http_terminate && (
+          <Chip label={def.http_terminate} size="small" variant="outlined" />
+        )}
         {def.dtls && <Chip label="dtls" size="small" variant="outlined" />}
         {def.redirect && (
-          <Chip label={`redirect :${def.redirect.port} (${def.redirect.code})`} size="small" variant="outlined" />
+          <Chip
+            label={`redirect :${def.redirect.port} (${def.redirect.code})`}
+            size="small"
+            variant="outlined"
+          />
         )}
       </Box>
     );
   }
   if (def.kind === "service") {
     if (!def.http) return null;
-    return <Chip label="http" size="small" variant="outlined" sx={{ mt: 0.5 }} />;
+    return (
+      <Chip label="http" size="small" variant="outlined" sx={{ mt: 0.5 }} />
+    );
   }
   if (def.kind === "http_service") {
     return (
-      <Typography variant="caption" sx={{ fontFamily: "monospace", display: "block", mt: 0.5 }}>
+      <Typography
+        variant="caption"
+        sx={{ fontFamily: "monospace", display: "block", mt: 0.5 }}
+      >
         {def.service}:{def.port}
       </Typography>
     );
@@ -144,21 +186,54 @@ function ResourceDefDetail({ def }: { def: ResourceDef }) {
       ...def.pod.udp_bindings.map((b) => `udp: ${b}`),
     ];
     return (
-      <Box sx={{ mt: 0.5, display: "flex", gap: 0.5, flexWrap: "wrap", alignItems: "center" }}>
+      <Box
+        sx={{
+          mt: 0.5,
+          display: "flex",
+          gap: 0.5,
+          flexWrap: "wrap",
+          alignItems: "center",
+        }}
+      >
         {def.container.image && (
           <Typography
             variant="caption"
-            sx={{ fontFamily: "monospace", opacity: 0.8, maxWidth: 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+            sx={{
+              fontFamily: "monospace",
+              opacity: 0.8,
+              maxWidth: 400,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
             title={def.container.image}
           >
             {def.container.image}
           </Typography>
         )}
-        {bindings.map((b) => <Chip key={b} label={b} size="small" variant="outlined" />)}
-        {def.container.memory && <Chip label={`mem: ${def.container.memory}`} size="small" variant="outlined" />}
-        {def.container.cpus != null && <Chip label={`cpu: ${def.container.cpus}`} size="small" variant="outlined" />}
+        {bindings.map((b) => (
+          <Chip key={b} label={b} size="small" variant="outlined" />
+        ))}
+        {def.container.memory && (
+          <Chip
+            label={`mem: ${def.container.memory}`}
+            size="small"
+            variant="outlined"
+          />
+        )}
+        {def.container.cpus != null && (
+          <Chip
+            label={`cpu: ${def.container.cpus}`}
+            size="small"
+            variant="outlined"
+          />
+        )}
         {def.kind === "job" && def.deadline != null && (
-          <Chip label={`deadline: ${def.deadline}s`} size="small" variant="outlined" />
+          <Chip
+            label={`deadline: ${def.deadline}s`}
+            size="small"
+            variant="outlined"
+          />
         )}
       </Box>
     );
@@ -173,7 +248,9 @@ function ResourceDefDetail({ def }: { def: ResourceDef }) {
     if (chips.length === 0) return null;
     return (
       <Box sx={{ mt: 0.5, display: "flex", gap: 0.5, flexWrap: "wrap" }}>
-        {chips.map((c) => <Chip key={c} label={c} size="small" variant="outlined" />)}
+        {chips.map((c) => (
+          <Chip key={c} label={c} size="small" variant="outlined" />
+        ))}
       </Box>
     );
   }
@@ -196,13 +273,18 @@ function ResourcesSection({
   const { execute: executeStop, loading: stopping } = useOiAction();
   const { openVolumeShell } = useSessionContext();
   const writeGuard = useGuard("write");
-  const [snapshotTarget, setSnapshotTarget] = useState<
-    { source: string; label: string } | null
-  >(null);
+  const [snapshotTarget, setSnapshotTarget] = useState<{
+    source: string;
+    label: string;
+  } | null>(null);
 
   const scale = async (deploymentName: string, value: number) => {
     try {
-      await execute("/apps/scale", { app: appName, deployment: deploymentName, scale: value });
+      await execute("/apps/scale", {
+        app: appName,
+        deployment: deploymentName,
+        scale: value,
+      });
       onRefresh();
     } catch {
       // errors surfaced by useOiAction globally
@@ -211,7 +293,10 @@ function ResourcesSection({
 
   const restart = async (deploymentName: string) => {
     try {
-      await executeRestart("/apps/restart", { app: appName, deployment: deploymentName });
+      await executeRestart("/apps/restart", {
+        app: appName,
+        deployment: deploymentName,
+      });
     } catch {
       // errors surfaced by useOiAction globally
     }
@@ -219,7 +304,11 @@ function ResourcesSection({
 
   const stopResource = async (kind: string, resourceName: string) => {
     try {
-      await executeStop("/apps/resource/stop", { app: appName, kind, name: resourceName });
+      await executeStop("/apps/resource/stop", {
+        app: appName,
+        kind,
+        name: resourceName,
+      });
       onRefresh();
     } catch {
       // errors surfaced by useOiAction globally
@@ -228,7 +317,11 @@ function ResourcesSection({
 
   const unstopResource = async (kind: string, resourceName: string) => {
     try {
-      await executeStop("/apps/resource/unstop", { app: appName, kind, name: resourceName });
+      await executeStop("/apps/resource/unstop", {
+        app: appName,
+        kind,
+        name: resourceName,
+      });
       onRefresh();
     } catch {
       // errors surfaced by useOiAction globally
@@ -248,9 +341,13 @@ function ResourcesSection({
   if (resources.length === 0)
     return (
       <>
-        <Typography sx={{
-          color: "text.secondary"
-        }}>No resources.</Typography>
+        <Typography
+          sx={{
+            color: "text.secondary",
+          }}
+        >
+          No resources.
+        </Typography>
         {snapshotDialog}
       </>
     );
@@ -260,14 +357,25 @@ function ResourcesSection({
         <Box key={`${r.type}/${r.name}`}>
           <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 0.5 }}>
             <Typography variant="subtitle2">{r.name}</Typography>
-            <Typography variant="caption" sx={{
-              color: "text.secondary"
-            }}>
+            <Typography
+              variant="caption"
+              sx={{
+                color: "text.secondary",
+              }}
+            >
               {r.type}
             </Typography>
             {r.stopped && (
-              <Chip label="stopped" size="small" color="warning" variant="outlined"
-                sx={{ fontSize: "0.65rem", height: 18, "& .MuiChip-label": { px: 0.75 } }}
+              <Chip
+                label="stopped"
+                size="small"
+                color="warning"
+                variant="outlined"
+                sx={{
+                  fontSize: "0.65rem",
+                  height: 18,
+                  "& .MuiChip-label": { px: 0.75 },
+                }}
               />
             )}
             {(r.type === "deployment" || r.type === "job") && (
@@ -283,9 +391,12 @@ function ResourcesSection({
             )}
             {r.scale && (
               <>
-                <Typography variant="caption" sx={{
-                  color: "text.secondary"
-                }}>
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: "text.secondary",
+                  }}
+                >
                   · scale
                 </Typography>
                 <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
@@ -294,29 +405,38 @@ function ResourcesSection({
                       <IconButton
                         size="small"
                         onClick={() => void scale(r.name, r.scale!.current - 1)}
-                        disabled={scaling || r.scale.current <= r.scale.low || !writeGuard.allowed}
+                        disabled={
+                          scaling ||
+                          r.scale.current <= r.scale.low ||
+                          !writeGuard.allowed
+                        }
                       >
                         <RemoveIcon sx={{ fontSize: 14 }} />
                       </IconButton>
                     </span>
                   </Tooltip>
-                  <Typography variant="caption">
-                    {r.scale.current}
-                  </Typography>
+                  <Typography variant="caption">{r.scale.current}</Typography>
                   <Tooltip title={writeGuard.reason ?? "Scale up"}>
                     <span>
                       <IconButton
                         size="small"
                         onClick={() => void scale(r.name, r.scale!.current + 1)}
-                        disabled={scaling || r.scale.current >= r.scale.high || !writeGuard.allowed}
+                        disabled={
+                          scaling ||
+                          r.scale.current >= r.scale.high ||
+                          !writeGuard.allowed
+                        }
                       >
                         <AddIcon sx={{ fontSize: 14 }} />
                       </IconButton>
                     </span>
                   </Tooltip>
-                  <Typography variant="caption" sx={{
-                    color: "text.secondary"
-                  }}>
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      color: "text.secondary",
+                    }}
+                  >
                     [{r.scale.low}–{r.scale.high}]
                   </Typography>
                 </Box>
@@ -342,10 +462,12 @@ function ResourcesSection({
                   <span>
                     <IconButton
                       size="small"
-                      onClick={() => openVolumeShell(
-                        [{ kind: "app", app: appName, volume: r.name }],
-                        `${appName}.${r.name}`,
-                      )}
+                      onClick={() =>
+                        openVolumeShell(
+                          [{ kind: "app", app: appName, volume: r.name }],
+                          `${appName}.${r.name}`,
+                        )
+                      }
                       disabled={!writeGuard.allowed}
                     >
                       <TerminalIcon sx={{ fontSize: 14 }} />
@@ -370,8 +492,8 @@ function ResourcesSection({
                 </Tooltip>
               </>
             )}
-            {STOPPABLE_KINDS.has(r.type) && (
-              r.stopped ? (
+            {STOPPABLE_KINDS.has(r.type) &&
+              (r.stopped ? (
                 <Tooltip title={writeGuard.reason ?? "Unstop resource"}>
                   <span>
                     <IconButton
@@ -396,8 +518,7 @@ function ResourcesSection({
                     </IconButton>
                   </span>
                 </Tooltip>
-              )
-            )}
+              ))}
           </Box>
           <FaultList faults={r.faults} />
           {r.def && <ResourceDefDetail def={r.def} />}
@@ -406,7 +527,9 @@ function ResourcesSection({
               <TableHead>
                 <TableRow>
                   <TableCell>Instance</TableCell>
-                  <TableCell width={120} align="right">State</TableCell>
+                  <TableCell width={120} align="right">
+                    State
+                  </TableCell>
                   <TableCell width={40} />
                 </TableRow>
               </TableHead>
@@ -513,7 +636,11 @@ function ParamsSection({
   const saveAdd = async () => {
     if (!addName.trim()) return;
     try {
-      await execute("/apps/params/set", { app: appName, name: addName.trim(), value: addValue });
+      await execute("/apps/params/set", {
+        app: appName,
+        name: addName.trim(),
+        value: addValue,
+      });
       setAdding(false);
       setAddName("");
       setAddValue("");
@@ -562,7 +689,7 @@ function ParamsSection({
           autoFocus
           sx={{ width: 200 }}
           slotProps={{
-            htmlInput: { style: { fontFamily: "monospace" } }
+            htmlInput: { style: { fontFamily: "monospace" } },
           }}
         />
       </TableCell>
@@ -578,14 +705,18 @@ function ParamsSection({
           }}
           fullWidth
           slotProps={{
-            htmlInput: { style: { fontFamily: "monospace" } }
+            htmlInput: { style: { fontFamily: "monospace" } },
           }}
         />
       </TableCell>
       <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
         <Tooltip title="Save">
           <span>
-            <IconButton size="small" onClick={() => void saveAdd()} disabled={loading || !addName.trim()}>
+            <IconButton
+              size="small"
+              onClick={() => void saveAdd()}
+              disabled={loading || !addName.trim()}
+            >
               <CheckIcon fontSize="small" />
             </IconButton>
           </span>
@@ -611,9 +742,13 @@ function ParamsSection({
         {disabledBanner}
         {error && <OiErrorAlert error={error} />}
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-          <Typography sx={{
-            color: "text.secondary"
-          }}>No params.</Typography>
+          <Typography
+            sx={{
+              color: "text.secondary",
+            }}
+          >
+            No params.
+          </Typography>
           <Tooltip title={editsDisabledReason ?? ""}>
             <span>
               <Button
@@ -629,7 +764,9 @@ function ParamsSection({
         </Box>
         {adding && (
           <TableContainer component={Paper} variant="outlined">
-            <Table size="small"><TableBody>{addRow}</TableBody></Table>
+            <Table size="small">
+              <TableBody>{addRow}</TableBody>
+            </Table>
           </TableContainer>
         )}
       </Stack>
@@ -670,7 +807,9 @@ function ParamsSection({
             {params.map((p) =>
               editing === p.name ? (
                 <TableRow key={p.name}>
-                  <TableCell sx={{ fontFamily: "monospace" }}>{p.name}</TableCell>
+                  <TableCell sx={{ fontFamily: "monospace" }}>
+                    {p.name}
+                  </TableCell>
                   <TableCell>
                     <Chip label={p.kind} size="small" variant="outlined" />
                   </TableCell>
@@ -685,7 +824,9 @@ function ParamsSection({
                         if (e.key === "Escape") cancel();
                       }}
                       autoFocus
-                      type={showPassword ? "text" : paramFieldType(p.kind, p.secret)}
+                      type={
+                        showPassword ? "text" : paramFieldType(p.kind, p.secret)
+                      }
                       error={
                         p.kind === "password" &&
                         draft.length > 0 &&
@@ -704,18 +845,13 @@ function ParamsSection({
                         input: {
                           endAdornment: (
                             <InputAdornment position="end">
-                              {(p.secret || p.kind === "password" ||
+                              {(p.secret ||
+                                p.kind === "password" ||
                                 p.kind === "weak-password") && (
-                                <Tooltip
-                                  title={
-                                    showPassword ? "Hide" : "Show"
-                                  }
-                                >
+                                <Tooltip title={showPassword ? "Hide" : "Show"}>
                                   <IconButton
                                     size="small"
-                                    onClick={() =>
-                                      setShowPassword((v) => !v)
-                                    }
+                                    onClick={() => setShowPassword((v) => !v)}
                                     edge="end"
                                   >
                                     {showPassword ? (
@@ -746,8 +882,9 @@ function ParamsSection({
                           ),
                         },
 
-                        htmlInput: { style: { fontFamily: "monospace" } }
-                      }} />
+                        htmlInput: { style: { fontFamily: "monospace" } },
+                      }}
+                    />
                   </TableCell>
                 </TableRow>
               ) : (
@@ -756,13 +893,22 @@ function ParamsSection({
                     <Box sx={{ fontFamily: "monospace" }}>
                       {p.name}
                       {p.required && (
-                        <Typography component="span" color="error" sx={{ ml: 0.5 }}>*</Typography>
+                        <Typography
+                          component="span"
+                          color="error"
+                          sx={{ ml: 0.5 }}
+                        >
+                          *
+                        </Typography>
                       )}
                     </Box>
                     {p.description && (
-                      <Typography variant="caption" sx={{
-                        color: "text.secondary"
-                      }}>
+                      <Typography
+                        variant="caption"
+                        sx={{
+                          color: "text.secondary",
+                        }}
+                      >
                         {p.description}
                       </Typography>
                     )}
@@ -772,7 +918,10 @@ function ParamsSection({
                   </TableCell>
                   <TableCell sx={{ fontFamily: "monospace" }}>
                     {(() => {
-                      const isMasked = p.secret || p.kind === "password" || p.kind === "weak-password";
+                      const isMasked =
+                        p.secret ||
+                        p.kind === "password" ||
+                        p.kind === "weak-password";
                       if (p.secret && p.is_set) {
                         return "••••••••";
                       }
@@ -783,17 +932,30 @@ function ParamsSection({
                         return (
                           <Box component="span" sx={{ color: "text.disabled" }}>
                             {isMasked ? "••••••••" : p.default_value}
-                            <Typography component="span" variant="caption" sx={{ ml: 0.5 }}>
+                            <Typography
+                              component="span"
+                              variant="caption"
+                              sx={{ ml: 0.5 }}
+                            >
                               (default)
                             </Typography>
                           </Box>
                         );
                       }
-                      return <Box component="span" sx={{ color: "text.disabled" }}>—</Box>;
+                      return (
+                        <Box component="span" sx={{ color: "text.disabled" }}>
+                          —
+                        </Box>
+                      );
                     })()}
                   </TableCell>
                   <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
-                    <Tooltip title={editsDisabledReason ?? (p.value == null && !p.is_set ? "Set" : "Edit")}>
+                    <Tooltip
+                      title={
+                        editsDisabledReason ??
+                        (p.value == null && !p.is_set ? "Set" : "Edit")
+                      }
+                    >
                       <span>
                         <IconButton
                           size="small"
@@ -817,19 +979,23 @@ function ParamsSection({
                         </span>
                       </Tooltip>
                     )}
-                    {p.value != null && p.required && p.default_value != null && (
-                      <Tooltip title={editsDisabledReason ?? "Reset to default"}>
-                        <span>
-                          <IconButton
-                            size="small"
-                            onClick={() => void unset(p.name)}
-                            disabled={loading || editsDisabled}
-                          >
-                            <RestoreIcon fontSize="small" />
-                          </IconButton>
-                        </span>
-                      </Tooltip>
-                    )}
+                    {p.value != null &&
+                      p.required &&
+                      p.default_value != null && (
+                        <Tooltip
+                          title={editsDisabledReason ?? "Reset to default"}
+                        >
+                          <span>
+                            <IconButton
+                              size="small"
+                              onClick={() => void unset(p.name)}
+                              disabled={loading || editsDisabled}
+                            >
+                              <RestoreIcon fontSize="small" />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                      )}
                   </TableCell>
                 </TableRow>
               ),
@@ -843,7 +1009,8 @@ function ParamsSection({
 }
 
 function paramFieldType(kind: string, secret?: boolean): string {
-  if (secret || kind === "password" || kind === "weak-password") return "password";
+  if (secret || kind === "password" || kind === "weak-password")
+    return "password";
   if (kind === "email") return "email";
   return "text";
 }
@@ -865,13 +1032,17 @@ function ActionInvokeDialog({
   const writeGuard = useGuard("write");
   const [values, setValues] = useState<Record<string, string>>(() =>
     Object.fromEntries(
-      Object.entries(action.params).map(([k, def]: [string, InstallRequirement]) => [
-        k,
-        def.default_value ?? "",
-      ]),
+      Object.entries(action.params).map(
+        ([k, def]: [string, InstallRequirement]) => [
+          k,
+          def.default_value ?? "",
+        ],
+      ),
     ),
   );
-  const [showPasswords, setShowPasswords] = useState<Record<string, boolean>>({});
+  const [showPasswords, setShowPasswords] = useState<Record<string, boolean>>(
+    {},
+  );
 
   const toggleShow = (key: string) =>
     setShowPasswords((s) => ({ ...s, [key]: !s[key] }));
@@ -883,7 +1054,9 @@ function ActionInvokeDialog({
 
   const handleSubmit = async () => {
     const method =
-      action.kind === "install" ? "/apps/install/invoke" : "/apps/action/invoke";
+      action.kind === "install"
+        ? "/apps/install/invoke"
+        : "/apps/action/invoke";
     const params =
       action.kind === "install"
         ? { app: appName, params: values }
@@ -897,7 +1070,10 @@ function ActionInvokeDialog({
     }
   };
 
-  const paramEntries = Object.entries(action.params) as [string, InstallRequirement][];
+  const paramEntries = Object.entries(action.params) as [
+    string,
+    InstallRequirement,
+  ][];
 
   const hasWeakPassword = paramEntries.some(
     ([key, def]) =>
@@ -915,9 +1091,12 @@ function ActionInvokeDialog({
         <Stack spacing={2} sx={{ mt: 0.5 }}>
           {error && <OiErrorAlert error={error} />}
           {paramEntries.length === 0 ? (
-            <Typography variant="body2" sx={{
-              color: "text.secondary"
-            }}>
+            <Typography
+              variant="body2"
+              sx={{
+                color: "text.secondary",
+              }}
+            >
               No params required.
             </Typography>
           ) : (
@@ -926,7 +1105,9 @@ function ActionInvokeDialog({
                 def.kind === "password" || def.kind === "weak-password";
               const val = values[key] ?? "";
               const weak =
-                def.kind === "password" && val.length > 0 && !isStrongPassword(val);
+                def.kind === "password" &&
+                val.length > 0 &&
+                !isStrongPassword(val);
               const helperText =
                 def.kind === "password" && val.length > 0
                   ? weak
@@ -953,7 +1134,9 @@ function ActionInvokeDialog({
                       ? {
                           endAdornment: (
                             <InputAdornment position="end">
-                              <Tooltip title={showPasswords[key] ? "Hide" : "Show"}>
+                              <Tooltip
+                                title={showPasswords[key] ? "Hide" : "Show"}
+                              >
                                 <IconButton
                                   size="small"
                                   onClick={() => toggleShow(key)}
@@ -971,8 +1154,9 @@ function ActionInvokeDialog({
                         }
                       : undefined,
 
-                    htmlInput: { style: { fontFamily: "monospace" } }
-                  }} />
+                    htmlInput: { style: { fontFamily: "monospace" } },
+                  }}
+                />
               );
             })
           )}
@@ -1024,8 +1208,9 @@ function InstallingSection({
       <Typography
         sx={{
           color: "text.secondary",
-          textAlign: "center"
-        }}>
+          textAlign: "center",
+        }}
+      >
         Install in progress — the runtime is actuating your resources.
       </Typography>
       <Button
@@ -1073,7 +1258,8 @@ function InstallSection({
   const writeGuard = useGuard("write");
   const [dialogOpen, setDialogOpen] = useState(false);
 
-  const hasParams = installAction && Object.keys(installAction.params).length > 0;
+  const hasParams =
+    installAction && Object.keys(installAction.params).length > 0;
   // Surface the most-recent operation_failed fault so operators who land here
   // after a failed install (or just after uninstall) can see what went wrong
   // and jump straight to the logs, without having to hunt for the Logs button.
@@ -1099,9 +1285,11 @@ function InstallSection({
           py: 6,
         }}
       >
-        <Typography sx={{
-          color: "text.secondary"
-        }}>
+        <Typography
+          sx={{
+            color: "text.secondary",
+          }}
+        >
           This app has not been installed yet.
         </Typography>
         <Tooltip title={writeGuard.reason ?? ""}>
@@ -1185,9 +1373,13 @@ function ActionsSection({
 
   if (actions.length === 0)
     return (
-      <Typography sx={{
-        color: "text.secondary"
-      }}>No actions.</Typography>
+      <Typography
+        sx={{
+          color: "text.secondary",
+        }}
+      >
+        No actions.
+      </Typography>
     );
 
   return (
@@ -1207,12 +1399,12 @@ function ActionsSection({
               const isInvokable = a.kind !== "shell" && a.kind !== "lifecycle";
               const isRunning = a.name === operatingAction;
               const canRun =
-                a.kind === "install"
-                  ? canInstall
-                  : isInvokable && canInvoke;
+                a.kind === "install" ? canInstall : isInvokable && canInvoke;
               return (
                 <TableRow key={a.name}>
-                  <TableCell sx={{ fontFamily: "monospace" }}>{a.name}</TableCell>
+                  <TableCell sx={{ fontFamily: "monospace" }}>
+                    {a.name}
+                  </TableCell>
                   <TableCell>
                     <Chip label={a.kind} size="small" variant="outlined" />
                   </TableCell>
@@ -1240,8 +1432,9 @@ function ActionsSection({
                           </Button>
                         </span>
                       </Tooltip>
-                    ) : isInvokable && (
-                      isRunning ? (
+                    ) : (
+                      isInvokable &&
+                      (isRunning ? (
                         <Button
                           size="small"
                           variant="outlined"
@@ -1255,7 +1448,9 @@ function ActionsSection({
                           <span>
                             <Button
                               size="small"
-                              variant={a.kind === "install" ? "contained" : "outlined"}
+                              variant={
+                                a.kind === "install" ? "contained" : "outlined"
+                              }
                               onClick={() => setInvoking(a)}
                               disabled={!canRun || !writeGuard.allowed}
                             >
@@ -1263,7 +1458,7 @@ function ActionsSection({
                             </Button>
                           </span>
                         </Tooltip>
-                      )
+                      ))
                     )}
                   </TableCell>
                 </TableRow>
@@ -1312,18 +1507,25 @@ function ShellOpenDialog({
   const writeGuard = useGuard("write");
   const [values, setValues] = useState<Record<string, string>>(() =>
     Object.fromEntries(
-      Object.entries(action.params).map(([k, def]: [string, InstallRequirement]) => [
-        k,
-        def.default_value ?? "",
-      ]),
+      Object.entries(action.params).map(
+        ([k, def]: [string, InstallRequirement]) => [
+          k,
+          def.default_value ?? "",
+        ],
+      ),
     ),
   );
-  const [showPasswords, setShowPasswords] = useState<Record<string, boolean>>({});
+  const [showPasswords, setShowPasswords] = useState<Record<string, boolean>>(
+    {},
+  );
 
   const toggleShow = (key: string) =>
     setShowPasswords((s) => ({ ...s, [key]: !s[key] }));
 
-  const paramEntries = Object.entries(action.params) as [string, InstallRequirement][];
+  const paramEntries = Object.entries(action.params) as [
+    string,
+    InstallRequirement,
+  ][];
   const hasWeakPassword = paramEntries.some(
     ([key, def]) =>
       def.kind === "password" &&
@@ -1339,12 +1541,18 @@ function ShellOpenDialog({
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 0.5 }}>
           {paramEntries.map(([key, def]) => {
-            const isPassword = def.kind === "password" || def.kind === "weak-password";
+            const isPassword =
+              def.kind === "password" || def.kind === "weak-password";
             const val = values[key] ?? "";
-            const weak = def.kind === "password" && val.length > 0 && !isStrongPassword(val);
+            const weak =
+              def.kind === "password" &&
+              val.length > 0 &&
+              !isStrongPassword(val);
             const helperText =
               def.kind === "password" && val.length > 0
-                ? weak ? "Password is too weak" : (def.description ?? undefined)
+                ? weak
+                  ? "Password is too weak"
+                  : (def.description ?? undefined)
                 : def.kind === "weak-password" && val.length > 0
                   ? `Strength: ${passwordScore(val)}/4${def.description ? ` — ${def.description}` : ""}`
                   : (def.description ?? undefined);
@@ -1354,7 +1562,9 @@ function ShellOpenDialog({
                 label={key}
                 size="small"
                 value={val}
-                onChange={(e) => setValues((v) => ({ ...v, [key]: e.target.value }))}
+                onChange={(e) =>
+                  setValues((v) => ({ ...v, [key]: e.target.value }))
+                }
                 helperText={helperText}
                 error={weak}
                 type={showPasswords[key] ? "text" : paramFieldType(def.kind)}
@@ -1364,8 +1574,14 @@ function ShellOpenDialog({
                     ? {
                         endAdornment: (
                           <InputAdornment position="end">
-                            <Tooltip title={showPasswords[key] ? "Hide" : "Show"}>
-                              <IconButton size="small" onClick={() => toggleShow(key)} edge="end">
+                            <Tooltip
+                              title={showPasswords[key] ? "Hide" : "Show"}
+                            >
+                              <IconButton
+                                size="small"
+                                onClick={() => toggleShow(key)}
+                                edge="end"
+                              >
                                 {showPasswords[key] ? (
                                   <VisibilityOffIcon fontSize="small" />
                                 ) : (
@@ -1378,8 +1594,9 @@ function ShellOpenDialog({
                       }
                     : undefined,
 
-                  htmlInput: { style: { fontFamily: "monospace" } }
-                }} />
+                  htmlInput: { style: { fontFamily: "monospace" } },
+                }}
+              />
             );
           })}
         </Stack>
@@ -1419,8 +1636,8 @@ function DiscoverSummary({ result }: { result: DiscoverResponse }) {
     <Alert severity="info" sx={{ mb: 1 }}>
       <Stack spacing={0.5}>
         <Typography variant="body2">
-          Some handlers couldn't be probed cleanly; their images (if any)
-          aren't included in the results.
+          Some handlers couldn't be probed cleanly; their images (if any) aren't
+          included in the results.
         </Typography>
         {problems.map((h: HandlerProbe) => (
           <Typography
@@ -1436,6 +1653,7 @@ function DiscoverSummary({ result }: { result: DiscoverResponse }) {
   );
 }
 
+// w[impl routes.images.app-detail]
 function AppImagesSection({
   appName,
   resources,
@@ -1445,7 +1663,6 @@ function AppImagesSection({
   resources: AppResource[];
   onRefresh: () => void;
 }) {
-  // w[impl routes.images.app-detail]
   const dangerGuard = useGuard("dangerous");
   const writeGuard = useGuard("write");
 
@@ -1455,13 +1672,18 @@ function AppImagesSection({
   const { data: pinsData, refetch: refetchPins } = useOiQuery<{
     pins: ImagePin[];
   }>("/images/pins/list", { app: appName });
-  const { execute, loading: mutating, error: mutateError, clearError } =
-    useOiAction();
+  const {
+    execute,
+    loading: mutating,
+    error: mutateError,
+    clearError,
+  } = useOiAction();
 
   const [removing, setRemoving] = useState<ImageSummary | null>(null);
   const [clearAllOpen, setClearAllOpen] = useState(false);
-  const [discoverResult, setDiscoverResult] =
-    useState<DiscoverResponse | null>(null);
+  const [discoverResult, setDiscoverResult] = useState<DiscoverResponse | null>(
+    null,
+  );
   const [discovering, setDiscovering] = useState(false);
   const [warmingAll, setWarmingAll] = useState(false);
 
@@ -1493,8 +1715,7 @@ function AppImagesSection({
       const hitsDeclared =
         img.in_use && refs.some((r) => declaredImages.has(r));
       const hitsPin =
-        img.pinned_by.includes(appName) ||
-        refs.some((r) => pinnedRefs.has(r));
+        img.pinned_by.includes(appName) || refs.some((r) => pinnedRefs.has(r));
       return hitsDeclared || hitsPin;
     });
   }, [imagesData, declaredImages, pinnedRefs, appName]);
@@ -1639,7 +1860,7 @@ function AppImagesSection({
           <Tooltip
             title={
               !writeGuard.allowed
-                ? writeGuard.reason ?? ""
+                ? (writeGuard.reason ?? "")
                 : `Warm ${discoveredExtras.length} discovered image${discoveredExtras.length === 1 ? "" : "s"}`
             }
           >
@@ -1648,9 +1869,7 @@ function AppImagesSection({
                 size="small"
                 variant="contained"
                 onClick={warmAllDiscovered}
-                disabled={
-                  !writeGuard.allowed || mutating || warmingAll
-                }
+                disabled={!writeGuard.allowed || mutating || warmingAll}
               >
                 {warmingAll ? "Warming…" : "Warm all discovered"}
               </Button>
@@ -1673,7 +1892,7 @@ function AppImagesSection({
           <Tooltip
             title={
               !writeGuard.allowed
-                ? writeGuard.reason ?? ""
+                ? (writeGuard.reason ?? "")
                 : `Clear all ${pins.length} pin${pins.length === 1 ? "" : "s"} for this app`
             }
           >
@@ -1694,9 +1913,7 @@ function AppImagesSection({
         )}
       </Box>
       {mutateError && <OiErrorAlert error={mutateError} />}
-      {discoverResult && (
-        <DiscoverSummary result={discoverResult} />
-      )}
+      {discoverResult && <DiscoverSummary result={discoverResult} />}
       <TableContainer component={Paper} variant="outlined">
         <Table size="small">
           <TableHead>
@@ -1733,7 +1950,7 @@ function AppImagesSection({
                   <Tooltip
                     title={
                       !dangerGuard.allowed
-                        ? dangerGuard.reason ?? ""
+                        ? (dangerGuard.reason ?? "")
                         : img.in_use
                           ? "Cannot remove: image is in use"
                           : "Remove"
@@ -1759,18 +1976,12 @@ function AppImagesSection({
             {discoveredExtras.map((ref) => (
               <TableRow key={`discovered::${ref}`} hover>
                 <TableCell>
-                  <Typography
-                    variant="body2"
-                    sx={{ fontFamily: "monospace" }}
-                  >
+                  <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
                     {ref}
                   </Typography>
                 </TableCell>
                 <TableCell>
-                  <Typography
-                    variant="caption"
-                    sx={{ color: "text.disabled" }}
-                  >
+                  <Typography variant="caption" sx={{ color: "text.disabled" }}>
                     not present
                   </Typography>
                 </TableCell>
@@ -1786,7 +1997,7 @@ function AppImagesSection({
                   <Tooltip
                     title={
                       !writeGuard.allowed
-                        ? writeGuard.reason ?? ""
+                        ? (writeGuard.reason ?? "")
                         : "Pull and pin to this app"
                     }
                   >
@@ -1864,10 +2075,7 @@ function AppImagesSection({
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button
-            onClick={() => setClearAllOpen(false)}
-            disabled={mutating}
-          >
+          <Button onClick={() => setClearAllOpen(false)} disabled={mutating}>
             Cancel
           </Button>
           <Tooltip title={writeGuard.reason ?? ""}>
@@ -1930,23 +2138,36 @@ function AppRemovalDialog({
     }
   };
 
-  const handleClose = () => { clearError(); onClose(); };
+  const handleClose = () => {
+    clearError();
+    onClose();
+  };
 
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="xs" fullWidth>
-      <DialogTitle>{kind === "uninstall" ? "Uninstall app" : "Deregister app"}</DialogTitle>
+      <DialogTitle>
+        {kind === "uninstall" ? "Uninstall app" : "Deregister app"}
+      </DialogTitle>
       <DialogContent>
         {error && <OiErrorAlert error={error} />}
         <Typography>
           {kind === "uninstall" ? (
-            <>Uninstall <strong>{appName}</strong>? This will tear down all its resources. The app will remain registered and can be reinstalled.</>
+            <>
+              Uninstall <strong>{appName}</strong>? This will tear down all its
+              resources. The app will remain registered and can be reinstalled.
+            </>
           ) : (
-            <>Remove <strong>{appName}</strong> from Seedling entirely? This cannot be undone.</>
+            <>
+              Remove <strong>{appName}</strong> from Seedling entirely? This
+              cannot be undone.
+            </>
           )}
         </Typography>
       </DialogContent>
       <DialogActions>
-        <Button onClick={handleClose} disabled={loading}>Cancel</Button>
+        <Button onClick={handleClose} disabled={loading}>
+          Cancel
+        </Button>
         <Tooltip title={dangerGuard.reason ?? ""}>
           <span>
             <Button
@@ -1956,8 +2177,12 @@ function AppRemovalDialog({
               disabled={loading || !dangerGuard.allowed}
             >
               {loading
-                ? kind === "uninstall" ? "Uninstalling…" : "Removing…"
-                : kind === "uninstall" ? "Uninstall" : "Deregister"}
+                ? kind === "uninstall"
+                  ? "Uninstalling…"
+                  : "Removing…"
+                : kind === "uninstall"
+                  ? "Uninstall"
+                  : "Deregister"}
             </Button>
           </span>
         </Tooltip>
@@ -1967,10 +2192,20 @@ function AppRemovalDialog({
 }
 
 const APP_DETAIL_EVENTS: Set<string> = new Set([
-  "AppUpdated", "AppPhaseChanged",
-  "OperationStarted", "OperationCompleted", "OperationFailed",
-  "ParamSet", "ParamUnset", "ResourceStateChanged", "FaultFiled", "FaultCleared",
-  "ScaleChanged", "DeploymentRestarted", "ResourceStopped", "ResourceUnstopped",
+  "AppUpdated",
+  "AppPhaseChanged",
+  "OperationStarted",
+  "OperationCompleted",
+  "OperationFailed",
+  "ParamSet",
+  "ParamUnset",
+  "ResourceStateChanged",
+  "FaultFiled",
+  "FaultCleared",
+  "ScaleChanged",
+  "DeploymentRestarted",
+  "ResourceStopped",
+  "ResourceUnstopped",
 ]);
 
 export default function AppDetail() {
@@ -1979,24 +2214,25 @@ export default function AppDetail() {
   const [removalOpen, setRemovalOpen] = useState(false);
   const { execute: executeUnstopAll, loading: unstoppingAll } = useOiAction();
   // i[impl action.cancel]
-  const { execute: executeCancelAction, loading: cancellingAction } = useOiAction();
+  const { execute: executeCancelAction, loading: cancellingAction } =
+    useOiAction();
   const writeGuard = useGuard("write");
   const dangerGuard = useGuard("dangerous");
   const { data, loading, error, refetch } = useOiQuery<AppDetail>(
     "/apps/show",
     { app: name },
   );
-  const { data: mappings, refetch: refetchMappings } = useOiQuery<ExternalMapping[]>(
-    "/volumes/external/list",
-    { app: name },
-  );
+  const { data: mappings, refetch: refetchMappings } = useOiQuery<
+    ExternalMapping[]
+  >("/volumes/external/list", { app: name });
   const [mapDialogState, setMapDialogState] = useState<
     | { mode: "prefill"; volName: string }
     | { mode: "remap"; existing: ExternalMapping }
     | null
   >(null);
   const matchesApp = useCallback(
-    (ev: SeedlingEvent) => APP_DETAIL_EVENTS.has(ev.type) && (!ev.app || ev.app === name),
+    (ev: SeedlingEvent) =>
+      APP_DETAIL_EVENTS.has(ev.type) && (!ev.app || ev.app === name),
     [name],
   );
   useEventRefresh(refetch, matchesApp);
@@ -2016,9 +2252,12 @@ export default function AppDetail() {
         >
           Apps
         </Typography>
-        <Typography variant="body2" sx={{
-          color: "text.disabled"
-        }}>
+        <Typography
+          variant="body2"
+          sx={{
+            color: "text.disabled",
+          }}
+        >
           /
         </Typography>
         <Typography variant="body2">{name}</Typography>
@@ -2041,19 +2280,19 @@ export default function AppDetail() {
           data?.status !== "installing" &&
           data?.status !== "uninstalling" &&
           data?.status !== "deregistering" && (
-          <Tooltip title={dangerGuard.reason ?? ""}>
-            <span>
-              <Button
-                size="small"
-                color="error"
-                onClick={() => setRemovalOpen(true)}
-                disabled={loading || !dangerGuard.allowed}
-              >
-                Uninstall
-              </Button>
-            </span>
-          </Tooltip>
-        )}
+            <Tooltip title={dangerGuard.reason ?? ""}>
+              <span>
+                <Button
+                  size="small"
+                  color="error"
+                  onClick={() => setRemovalOpen(true)}
+                  disabled={loading || !dangerGuard.allowed}
+                >
+                  Uninstall
+                </Button>
+              </span>
+            </Tooltip>
+          )}
         <Button
           size="small"
           startIcon={<ArticleIcon />}
@@ -2100,9 +2339,12 @@ export default function AppDetail() {
               color={statusColor(data.status)}
               size="small"
             />
-            <Typography variant="caption" sx={{
-              color: "text.secondary"
-            }}>
+            <Typography
+              variant="caption"
+              sx={{
+                color: "text.secondary",
+              }}
+            >
               gen {data.generation}
             </Typography>
           </Box>
@@ -2119,7 +2361,9 @@ export default function AppDetail() {
                       disabled={cancellingAction || !writeGuard.allowed}
                       onClick={async () => {
                         try {
-                          await executeCancelAction("/apps/action/cancel", { app: name });
+                          await executeCancelAction("/apps/action/cancel", {
+                            app: name,
+                          });
                           refetch();
                         } catch {
                           // surfaced by useOiAction globally
@@ -2133,16 +2377,18 @@ export default function AppDetail() {
               }
             >
               Operation in progress:{" "}
-              <strong>{data.current_operation.action_name}</strong>{" "}
-              (gen {data.current_operation.source_generation} →{" "}
+              <strong>{data.current_operation.action_name}</strong> (gen{" "}
+              {data.current_operation.source_generation} →{" "}
               {data.current_operation.target_generation})
               {data.current_operation.barrier && (
                 <>
-                  {" "}· barrier: {data.current_operation.barrier.required_state}{" "}
-                  ({Math.round(data.current_operation.barrier.elapsed_secs)}s
+                  {" "}
+                  · barrier: {data.current_operation.barrier.required_state} (
+                  {Math.round(data.current_operation.barrier.elapsed_secs)}s
                   {data.current_operation.barrier.deadline_secs !== null
                     ? ` / ${data.current_operation.barrier.deadline_secs}s`
-                    : " / ∞"})
+                    : " / ∞"}
+                  )
                 </>
               )}
             </Alert>
@@ -2174,7 +2420,9 @@ export default function AppDetail() {
               }
             >
               Partially running —{" "}
-              {data.stopped_resources.map((r) => `${r.kind}/${r.name}`).join(", ")}{" "}
+              {data.stopped_resources
+                .map((r) => `${r.kind}/${r.name}`)
+                .join(", ")}{" "}
               {data.stopped_resources.length === 1 ? "is" : "are"} stopped.
             </Alert>
           )}
@@ -2223,21 +2471,41 @@ export default function AppDetail() {
                               </TableCell>
                               <TableCell>
                                 {mapping ? (
-                                  <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-                                    <Typography variant="caption" sx={{ fontFamily: "monospace" }}>
+                                  <Box
+                                    sx={{
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: 0.5,
+                                    }}
+                                  >
+                                    <Typography
+                                      variant="caption"
+                                      sx={{ fontFamily: "monospace" }}
+                                    >
                                       {mapping.target.kind === "app"
                                         ? `${mapping.target.app}/${mapping.target.volume}`
                                         : mapping.target.name}
                                     </Typography>
-                                    <Chip label={mapping.target.kind} size="small" variant="outlined" />
+                                    <Chip
+                                      label={mapping.target.kind}
+                                      size="small"
+                                      variant="outlined"
+                                    />
                                     {mapping.read_only && (
-                                      <Chip label="ro" size="small" variant="outlined" />
+                                      <Chip
+                                        label="ro"
+                                        size="small"
+                                        variant="outlined"
+                                      />
                                     )}
                                   </Box>
                                 ) : (
-                                  <Typography variant="caption" sx={{
-                                    color: "text.secondary"
-                                  }}>
+                                  <Typography
+                                    variant="caption"
+                                    sx={{
+                                      color: "text.secondary",
+                                    }}
+                                  >
                                     Not mapped
                                   </Typography>
                                 )}
@@ -2250,8 +2518,14 @@ export default function AppDetail() {
                                       onClick={() =>
                                         setMapDialogState(
                                           mapping
-                                            ? { mode: "remap", existing: mapping }
-                                            : { mode: "prefill", volName: r.name },
+                                            ? {
+                                                mode: "remap",
+                                                existing: mapping,
+                                              }
+                                            : {
+                                                mode: "prefill",
+                                                volName: r.name,
+                                              },
                                         )
                                       }
                                       disabled={!writeGuard.allowed}
@@ -2277,7 +2551,9 @@ export default function AppDetail() {
             <InstallSection
               appName={name!}
               installAction={data.actions.find((a) => a.kind === "install")}
-              hasScriptError={data.faults.some((f) => f.kind === "script_error")}
+              hasScriptError={data.faults.some(
+                (f) => f.kind === "script_error",
+              )}
               faults={data.faults}
               onRefresh={refetch}
             />
@@ -2294,7 +2570,8 @@ export default function AppDetail() {
               <Box
                 sx={{
                   opacity: data.status === "uninstalling" ? 0.5 : 1,
-                  pointerEvents: data.status === "uninstalling" ? "none" : "auto",
+                  pointerEvents:
+                    data.status === "uninstalling" ? "none" : "auto",
                   transition: "opacity 0.15s",
                 }}
               >
@@ -2303,7 +2580,9 @@ export default function AppDetail() {
                     appName={name!}
                     actions={data.actions}
                     status={data.status}
-                    hasScriptError={data.faults.some((f) => f.kind === "script_error")}
+                    hasScriptError={data.faults.some(
+                      (f) => f.kind === "script_error",
+                    )}
                     operatingAction={data.current_operation?.action_name}
                     onRefresh={refetch}
                   />
@@ -2341,8 +2620,7 @@ export default function AppDetail() {
           }}
           {...(mapDialogState.mode === "remap"
             ? { existing: mapDialogState.existing }
-            : { prefill: { app: name!, name: mapDialogState.volName } }
-          )}
+            : { prefill: { app: name!, name: mapDialogState.volName } })}
         />
       )}
       <AppRemovalDialog

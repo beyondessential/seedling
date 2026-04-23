@@ -496,6 +496,14 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > is then set to the catch-up fire time, so subsequent cron boundaries are
 > evaluated from there.
 
+> r[backup.run.last-fired]
+> Both scheduled fires and manually triggered fires via `/backups/run` must
+> update the strategy's last-fired timestamp to the moment the fire was
+> initiated, before any per-volume work begins. This keeps the scheduler's
+> next-fire computation consistent across triggers (so an immediately-due
+> scheduled fire does not double-run right after a manual invocation) and
+> lets the operator surface see the most recent fire promptly.
+
 > r[backup.validation.fire-time]
 > Before executing a backup strategy, the runtime must verify:
 >
@@ -717,6 +725,23 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > A pin must not be automatically re-created when a workload stops using an image; a subsequent `rt.warm_images` call is required to re-pin.
 > Operators may clear any pin explicitly via the operator interface.
 
+> r[image.pin.expiry]
+> A pin may carry an optional expiration timestamp. When an expiration is set and passes, the reconciler must delete the pin on a subsequent tick exactly as if an operator had cleared it explicitly.
+> Setting, clearing, and reading an expiration does not change any other aspect of the pin's lifecycle — in particular, an expired-but-not-yet-swept pin still protects its image from [autonomous removal](#r--image.gc) until the reconciler sweeps it.
+> Expirations are only set by the post-update reconciliation rule (see [`image.pin.update-reconcile`](#r--image.pin.update-reconcile)); they are cleared whenever a pin's reference is observed to be valid again for the owning app.
+
+> r[image.pin.update-reconcile]
+> Whenever an app's `AppDef` changes because of an operator-driven edit (a script update or a parameter change that triggers re-evaluation), the runtime must re-probe the new script and use the result to reconcile that app's pins:
+>
+> 1. Build the _safe set_: every image reference declared by a `Deployment` or `Job` in the new `AppDef`, plus every image reference in the probe's [`all_images`](#r--image.discover) output.
+> 2. For any pin whose reference is in the safe set, clear its expiration (if any) so the pin is kept indefinitely.
+> 3. For any pin whose reference is _not_ in the safe set:
+>    - If the probe ran without errors _and_ without skipped handlers, the safe set is authoritative: delete the pin.
+>    - Otherwise the safe set is incomplete: set the pin's expiration to 30 days from now, unless an earlier expiration is already set.
+>
+> A pin's reference is "in the safe set" based on exact string equality; a tag-pinned reference and a digest-pinned reference to the same image id are treated as distinct.
+> The rule fires only on operator-driven AppDef changes; autonomous reconciliation ticks do not run probes.
+
 > r[image.track]
 > The runtime must maintain, for each locally-present container image, a _last-used_ timestamp initialised to the time the image was first observed locally.
 > On every reconciliation pass, the last-used timestamp of every image whose `image_id` appears on at least one running container must be updated to the current time.
@@ -804,6 +829,24 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 
 > r[volume.external.mapping.events]
 > Creating, removing, or retargeting an operator-configured external volume mapping must emit an event identifying the app and external volume name, the new mapping target (or absence of one for removal), and — for retargeting — the previous target. These events feed both the event feed and the [audit log](#r--audit.log).
+
+> r[service.site]
+> A site service is a named service managed by operators, independent of any app. A site service carries a set of one or more endpoints, each a 4-tuple `(service_port, protocol, remote_host, remote_port)`.
+>
+> `service_port` is the port on which the site service exposes this backend; `remote_host` and `remote_port` are the address traffic is forwarded to. The two ports may differ (e.g. a site service exposes 80/tcp in front of backends listening on 8080). The protocol is one of `tcp`, `udp`, or `http`.
+>
+> The `(service_port, protocol)` pairs across a site service's endpoints define the ports the service exposes. Traffic destined for `(service, service_port, protocol)` is distributed across the `(remote_host, remote_port)` pairs of all endpoints whose `(service_port, protocol)` matches, as for any other multi-backend service (see [service.routing](language.md#l--service.routing)). Two endpoints sharing a `(service_port, protocol)` are peers for that port's traffic; endpoints differing in `(service_port, protocol)` back different exposed ports on the same site service.
+
+> r[service.site.lifecycle]
+> Site services are created, retargeted, and deleted exclusively through operator commands. Creating a site service registers its name and an optional human-readable description; endpoints are added and removed independently so operators may adjust the backing set without recreating the service.
+>
+> Deleting a site service must be rejected while any [external service mapping](#r--service.external.mapping.events) still targets it; operators must unmap or remap those slots first. Deletion removes the service record and its endpoints; no held-resource mechanism applies because site services carry no persistent state.
+
+> r[service.site.lifecycle.events]
+> Site service creation and deletion, and endpoint add/remove operations, must emit events on the event feed and be recorded in the [audit log](#r--audit.log). Endpoint events identify the site service name and the `(service_port, protocol, remote_host, remote_port)` tuple.
+
+> r[service.external.mapping.events]
+> Creating, removing, or retargeting an operator-configured external service mapping must emit an event identifying the app and external service name, the new mapping target (or absence of one for removal), and — for retargeting — the previous target. These events feed both the event feed and the [audit log](#r--audit.log).
 
 > r[actuate.volume.stop]
 > Stopping a Volume instance must remove the named volume.

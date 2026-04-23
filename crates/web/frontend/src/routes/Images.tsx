@@ -327,12 +327,30 @@ export default function Images() {
                     {p.reference}
                   </TableCell>
                   <TableCell>
-                    <Typography
-                      variant="caption"
-                      sx={{ fontFamily: "monospace" }}
-                    >
-                      {formatTimestamp(p.pinned_at)}
-                    </Typography>
+                    <Stack spacing={0.25}>
+                      <Typography
+                        variant="caption"
+                        sx={{ fontFamily: "monospace" }}
+                      >
+                        {formatTimestamp(p.pinned_at)}
+                      </Typography>
+                      {p.expires_at && (
+                        <Tooltip title="Auto-clears on or after this time unless a running container uses the reference or the pin is re-validated by a later probe.">
+                          <Chip
+                            label={`expires ${formatTimestamp(p.expires_at)}`}
+                            size="small"
+                            color="warning"
+                            variant="outlined"
+                            sx={{
+                              fontFamily: "monospace",
+                              fontSize: "0.68rem",
+                              height: 20,
+                              alignSelf: "flex-start",
+                            }}
+                          />
+                        </Tooltip>
+                      )}
+                    </Stack>
                   </TableCell>
                   <TableCell align="right">
                     <Tooltip title={writeGuard.reason ?? "Clear pin"}>

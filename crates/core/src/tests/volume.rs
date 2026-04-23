@@ -35,6 +35,78 @@ fn volume_anonymous_disallowed_at_top_level() {
     );
 }
 
+// l[verify volume.tmpfs]
+#[test]
+fn volume_tmpfs() {
+    let app = run_test_script_app(r#"let v = app.volume("cache").tmpfs();"#);
+    let def = app.def.load();
+    let id = def
+        .resources
+        .keys()
+        .find(|id| id.kind == ResourceKind::Volume && &*id.name == "cache")
+        .unwrap();
+    if let defs::resource::Resource::Volume(vol) = &def.resources[id] {
+        assert!(vol.def.lock().tmpfs);
+    } else {
+        panic!("expected Volume");
+    }
+}
+
+// l[verify volume.tmpfs]
+#[test]
+fn volume_tmpfs_defaults_false() {
+    let app = run_test_script_app(r#"let v = app.volume("data");"#);
+    let def = app.def.load();
+    let id = def
+        .resources
+        .keys()
+        .find(|id| id.kind == ResourceKind::Volume && &*id.name == "data")
+        .unwrap();
+    if let defs::resource::Resource::Volume(vol) = &def.resources[id] {
+        assert!(!vol.def.lock().tmpfs);
+    } else {
+        panic!("expected Volume");
+    }
+}
+
+// l[verify volume.exported]
+#[test]
+fn volume_exported_marks_export() {
+    let app = run_test_script_app(r#"let v = app.volume("pub").exported();"#);
+    let def = app.def.load();
+    let id = def
+        .resources
+        .keys()
+        .find(|id| id.kind == ResourceKind::Volume && &*id.name == "pub")
+        .unwrap();
+    if let defs::resource::Resource::Volume(vol) = &def.resources[id] {
+        assert!(vol.def.lock().exported.is_some());
+    } else {
+        panic!("expected Volume");
+    }
+}
+
+// l[verify volume.exported]
+#[test]
+fn volume_exported_with_description() {
+    let app = run_test_script_app(
+        r#"let v = app.volume("pub").exported(#{ description: "public data" });"#,
+    );
+    let def = app.def.load();
+    let id = def
+        .resources
+        .keys()
+        .find(|id| id.kind == ResourceKind::Volume && &*id.name == "pub")
+        .unwrap();
+    if let defs::resource::Resource::Volume(vol) = &def.resources[id] {
+        let vdef = vol.def.lock();
+        let export = vdef.exported.as_ref().expect("should be exported");
+        assert_eq!(export.description.as_deref(), Some("public data"));
+    } else {
+        panic!("expected Volume");
+    }
+}
+
 // l[verify volume.readonly]
 #[test]
 fn volume_readonly() {

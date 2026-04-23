@@ -11,6 +11,7 @@ fn app(s: &str) -> AppName {
     AppName::new(s).unwrap()
 }
 
+// r[verify fault.definition]
 // i[verify fault.record]
 #[test]
 fn file_and_list_fault() {
@@ -231,6 +232,7 @@ fn count_active_faults_counts_all_apps() {
     assert_eq!(count_active_faults(&db).expect("count"), 1);
 }
 
+// r[verify fault.surfacing]
 // i[verify fault.derived]
 #[test]
 fn file_fault_emits_fault_filed_event() {
@@ -263,6 +265,7 @@ fn file_fault_emits_fault_filed_event() {
     );
 }
 
+// r[verify fault.surfacing]
 // i[verify fault.derived]
 #[test]
 fn clear_fault_emits_fault_cleared_event() {

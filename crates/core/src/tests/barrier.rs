@@ -43,6 +43,7 @@ fn registry() -> Arc<dyn crate::runtime::InstanceRegistry> {
     Arc::new(EphemeralInstanceRegistry::new())
 }
 
+// r[verify operation.lifecycle]
 // r[verify barrier.suspension]
 // r[verify barrier.condition]
 #[test]
@@ -345,6 +346,7 @@ fn barrier_deadline_zero_expires_on_second_pass() {
 }
 
 // r[verify barrier.replay]
+// r[verify barrier.replay.determinism]
 // r[verify reconciliation.idempotency]
 // r[verify history.action-log.replay]
 #[test]

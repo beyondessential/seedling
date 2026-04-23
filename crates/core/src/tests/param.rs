@@ -67,6 +67,7 @@ fn on_change_registers_handler_in_app_def() {
 }
 
 // l[verify param.on-change]
+// l[verify param.on-change.old]
 #[test]
 fn on_change_two_arg_closure_registers() {
     let app = run_test_script_app(
@@ -98,6 +99,7 @@ fn on_change_different_params_each_register() {
 // -----------------------------------------------------------------------
 
 // l[verify param.on-change]
+// l[verify param.on-change.constraints]
 #[test]
 fn on_change_twice_on_same_param_throws() {
     let err = run_test_script_err(
@@ -253,6 +255,7 @@ fn param_used_in_closure_captures_injected_value() {
 }
 
 // l[verify param.on-change]
+// l[verify param.on-change.constraints]
 #[test]
 fn on_change_inside_action_closure_throws() {
     let (engine, mut scope, app, ast) = run_test_script(
@@ -382,4 +385,55 @@ fn param_schema_builder_methods_return_same_param_for_chaining() {
         .expect("param should be declared");
     assert_eq!(schema.description.as_deref(), Some("Site name"));
     assert!(schema.required);
+}
+
+// l[verify param.schema.secret]
+#[test]
+fn param_schema_secret_flag_sets_true() {
+    let app = run_test_script_app(r#"app.param("token").secret(true);"#);
+    let def = app.def.load();
+    let schema = def.params.get("token").expect("param declared");
+    assert!(schema.secret);
+    assert!(schema.is_secret());
+}
+
+// l[verify param.schema.secret]
+#[test]
+fn param_schema_secret_defaults_false_for_plain_text() {
+    let app = run_test_script_app(r#"app.param("hostname");"#);
+    let def = app.def.load();
+    let schema = def.params.get("hostname").expect("param declared");
+    assert!(!schema.secret);
+    assert!(!schema.is_secret());
+}
+
+// l[verify param.schema.secret-from-kind]
+#[test]
+fn param_schema_password_kind_implicitly_secret() {
+    let app = run_test_script_app(r#"app.param("password").kind("password");"#);
+    let def = app.def.load();
+    let schema = def.params.get("password").expect("param declared");
+    // The `secret` flag itself is not flipped by `kind`, but `is_secret()`
+    // must return true because the kind implies secrecy.
+    assert!(!schema.secret);
+    assert!(schema.is_secret());
+}
+
+// l[verify param.schema.secret-from-kind]
+#[test]
+fn param_schema_weak_password_kind_implicitly_secret() {
+    let app = run_test_script_app(r#"app.param("apikey").kind("weak-password");"#);
+    let def = app.def.load();
+    let schema = def.params.get("apikey").expect("param declared");
+    assert!(schema.is_secret());
+}
+
+// l[verify param.schema.secret]
+#[test]
+fn param_schema_text_kind_with_secret_true_is_secret() {
+    let app = run_test_script_app(r#"app.param("token").kind("text").secret(true);"#);
+    let def = app.def.load();
+    let schema = def.params.get("token").expect("param declared");
+    assert!(schema.secret);
+    assert!(schema.is_secret());
 }

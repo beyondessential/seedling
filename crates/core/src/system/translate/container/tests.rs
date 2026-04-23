@@ -109,6 +109,8 @@ fn podman_args_add_host_ipv6() {
     assert_eq!(args[host_pos + 1], "localmount:fd5e:ed12:3456:500::2");
 }
 
+// r[verify actuate.container.hardening]
+// r[verify actuate.container.journal-metadata]
 #[test]
 fn podman_args_hardening_defaults() {
     let spec = ContainerSpec {
@@ -149,6 +151,7 @@ fn podman_args_hardening_defaults() {
     assert!(!args.iter().any(|a| a.starts_with("--cpus")));
 }
 
+// r[verify actuate.container.hardening]
 #[test]
 fn podman_args_hardening_overrides() {
     let spec = ContainerSpec {
@@ -185,6 +188,72 @@ fn podman_args_hardening_overrides() {
     assert!(!args.iter().any(|a| a.starts_with("--workdir")));
 }
 
+// r[verify infra.pod.dns]
+#[test]
+fn podman_args_dns_servers_produce_dns_flags() {
+    use std::net::Ipv6Addr;
+    use std::str::FromStr;
+
+    let spec = ContainerSpec {
+        name: "n".to_string(),
+        image: "img".to_string(),
+        command: vec![],
+        entrypoint: vec![],
+        env: vec![],
+        mounts: vec![],
+        network: "net".to_string(),
+        labels: BTreeMap::new(),
+        health: None,
+        hosts: vec![],
+        dns_servers: vec![
+            Ipv6Addr::from_str("fd5e:ed12:3456:0500::1").unwrap(),
+            Ipv6Addr::from_str("fd5e:ed12:3456:0500::2").unwrap(),
+        ],
+        memory: None,
+        cpus: None,
+        extra_caps: vec![],
+        writable_rootfs: false,
+        pids_limit: 256,
+        workdir: None,
+    };
+
+    let args = podman_args(&spec);
+    let dns_positions: Vec<_> = args
+        .iter()
+        .enumerate()
+        .filter_map(|(i, a)| if a == "--dns" { Some(i) } else { None })
+        .collect();
+    assert_eq!(dns_positions.len(), 2);
+    assert_eq!(args[dns_positions[0] + 1], "fd5e:ed12:3456:500::1");
+    assert_eq!(args[dns_positions[1] + 1], "fd5e:ed12:3456:500::2");
+}
+
+// r[verify infra.pod.dns]
+#[test]
+fn podman_args_no_dns_flags_when_unset() {
+    let spec = ContainerSpec {
+        name: "n".to_string(),
+        image: "img".to_string(),
+        command: vec![],
+        entrypoint: vec![],
+        env: vec![],
+        mounts: vec![],
+        network: "net".to_string(),
+        labels: BTreeMap::new(),
+        health: None,
+        hosts: vec![],
+        dns_servers: vec![],
+        memory: None,
+        cpus: None,
+        extra_caps: vec![],
+        writable_rootfs: false,
+        pids_limit: 256,
+        workdir: None,
+    };
+    let args = podman_args(&spec);
+    assert!(!args.iter().any(|a| a == "--dns"));
+}
+
 // l[verify container.workdir]
 #[test]
 fn podman_args_workdir() {
@@ -209,6 +278,104 @@ fn podman_args_workdir() {
     };
     let args = podman_args(&spec);
     assert!(args.contains(&"--workdir=/app".to_string()));
+}
+
+fn bare_spec() -> ContainerSpec {
+    ContainerSpec {
+        name: "myapp-web".to_string(),
+        image: "docker.io/library/nginx:latest".to_string(),
+        command: vec![],
+        entrypoint: vec![],
+        env: vec![],
+        mounts: vec![],
+        network: "seedling-net".to_string(),
+        labels: BTreeMap::new(),
+        health: None,
+        hosts: vec![],
+        dns_servers: vec![],
+        memory: None,
+        cpus: None,
+        extra_caps: vec![],
+        writable_rootfs: false,
+        pids_limit: 256,
+        workdir: None,
+    }
+}
+
+// r[verify update.spec-hash]
+#[test]
+fn spec_hash_is_stable_for_same_spec() {
+    let spec = bare_spec();
+    let h1 = spec_hash(&spec);
+    let h2 = spec_hash(&spec);
+    assert_eq!(h1, h2);
+    assert_eq!(h1.len(), 64, "spec hash is SHA-256 hex");
+}
+
+// r[verify update.spec-hash]
+#[test]
+fn spec_hash_changes_when_image_changes() {
+    let mut a = bare_spec();
+    let mut b = bare_spec();
+    a.image = "docker.io/library/nginx:1.25".to_string();
+    b.image = "docker.io/library/nginx:1.26".to_string();
+    assert_ne!(spec_hash(&a), spec_hash(&b));
+}
+
+// r[verify update.spec-hash]
+#[test]
+fn spec_hash_changes_when_env_changes() {
+    use seedling_protocol::env::EnvVar;
+    let mut a = bare_spec();
+    let mut b = bare_spec();
+    a.env = vec![EnvVar::new("KEY", "old").unwrap()];
+    b.env = vec![EnvVar::new("KEY", "new").unwrap()];
+    assert_ne!(spec_hash(&a), spec_hash(&b));
+}
+
+// r[verify update.spec-hash]
+#[test]
+fn spec_hash_changes_when_memory_or_cpus_change() {
+    let mut a = bare_spec();
+    let mut b = bare_spec();
+    a.memory = Some("256m".to_string());
+    b.memory = Some("512m".to_string());
+    assert_ne!(spec_hash(&a), spec_hash(&b));
+
+    let mut c = bare_spec();
+    let mut d = bare_spec();
+    c.cpus = Some(1.0);
+    d.cpus = Some(2.0);
+    assert_ne!(spec_hash(&c), spec_hash(&d));
+}
+
+// r[verify update.spec-hash]
+#[test]
+fn spec_hash_ignores_self_label() {
+    // The stored `seedling.spec-hash` label is excluded from the hash input
+    // so that re-hashing a running container's observed spec (which includes
+    // its own hash label) does not produce a different result.
+    let mut a = bare_spec();
+    let mut b = bare_spec();
+    a.labels
+        .insert("seedling.spec-hash".to_string(), "old-hash".to_string());
+    b.labels.insert(
+        "seedling.spec-hash".to_string(),
+        "different-hash".to_string(),
+    );
+    assert_eq!(spec_hash(&a), spec_hash(&b));
+}
+
+// r[verify update.spec-hash]
+#[test]
+fn spec_hash_considers_other_labels() {
+    let mut a = bare_spec();
+    let mut b = bare_spec();
+    a.labels
+        .insert("seedling.app".to_string(), "alpha".to_string());
+    b.labels
+        .insert("seedling.app".to_string(), "beta".to_string());
+    assert_ne!(spec_hash(&a), spec_hash(&b));
 }
 
 #[test]

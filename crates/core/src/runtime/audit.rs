@@ -133,6 +133,7 @@ mod tests {
     }
 
     #[test]
+    // r[verify audit.log]
     // r[verify audit.log.path]
     fn open_creates_parent_dirs() {
         let tmp = TempDir::new().unwrap();
@@ -145,7 +146,9 @@ mod tests {
     }
 
     #[test]
+    // r[verify audit.log]
     // r[verify audit.log.format]
+    // r[verify audit.log.events]
     fn write_event_produces_json_line() {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("audit.log");
@@ -165,6 +168,7 @@ mod tests {
 
     #[test]
     // r[verify audit.log.rotation]
+    // r[verify audit.log.resilience]
     fn reopen_after_rotation() {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("audit.log");

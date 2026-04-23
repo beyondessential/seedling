@@ -93,6 +93,7 @@ pub mod collection;
 pub mod container;
 pub mod deployment;
 pub mod enums;
+pub mod export;
 pub mod ingress;
 pub mod install;
 pub mod job;
@@ -112,6 +113,7 @@ pub fn register(engine: &mut Engine) {
     engine.build_type::<service::HttpService>();
     engine.build_type::<service::HttpServiceRoute>();
     engine.build_type::<service::ServicePort>();
+    engine.build_type::<service::ExternalService>();
     engine.build_type::<ingress::Ingress>();
     engine.build_type::<action::Action>();
     engine.build_type::<deployment::Deployment>();

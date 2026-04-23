@@ -163,3 +163,43 @@ impl ClientIdentity {
         Ok(Arc::new(CertifiedKey::new(vec![cert], signing)))
     }
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    // r[verify infra.key.file-permissions]
+    // i[verify key.client.file-permissions]
+    #[test]
+    fn load_or_generate_creates_key_with_owner_only_perms() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("client.key");
+        let _ = load_or_generate(&path).expect("create key");
+        let mode = path.metadata().unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "new key file should be 0600, got 0{mode:o}");
+    }
+
+    // r[verify infra.key.file-permissions]
+    // i[verify key.client.file-permissions]
+    #[test]
+    fn load_or_generate_rejects_existing_key_with_group_perms() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("loose.key");
+        // Seed the file first with acceptable mode, then relax the mode.
+        let _ = load_or_generate(&path).expect("first create");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let err = load_or_generate(&path).expect_err("should refuse 0644 mode");
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn load_or_generate_roundtrips_key_content() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("rt.key");
+        let k1 = load_or_generate(&path).expect("create");
+        let k2 = load_or_generate(&path).expect("reload");
+        assert_eq!(k1.to_bytes(), k2.to_bytes());
+    }
+}
