@@ -82,7 +82,11 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
         add_allowed_registry(&db, TEST_REG).unwrap();
         assert!(remove_allowed_registry(&db, TEST_REG).unwrap());
-        assert!(!list_allowed_registries(&db).unwrap().contains(&TEST_REG.to_owned()));
+        assert!(
+            !list_allowed_registries(&db)
+                .unwrap()
+                .contains(&TEST_REG.to_owned())
+        );
     }
 
     // i[verify registry.remove]

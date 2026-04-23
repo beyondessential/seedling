@@ -180,25 +180,33 @@ mod tests {
     #[test]
     fn get_returns_none_for_unknown_name() {
         let db = Db::open_in_memory().unwrap();
-        assert!(get(&db, &BackupStrategyName::new("ghost").unwrap())
-            .unwrap()
-            .is_none());
+        assert!(
+            get(&db, &BackupStrategyName::new("ghost").unwrap())
+                .unwrap()
+                .is_none()
+        );
     }
 
     // i[verify backup.strategy.update]
     #[test]
     fn update_changes_schedule_and_volumes() {
         let db = Db::open_in_memory().unwrap();
-        create(&db, &strategy("updatable", "old-app", "every hour", &["v1"])).unwrap();
-        let new_via = AppName::new("new-app").unwrap();
-        assert!(update(
+        create(
             &db,
-            &BackupStrategyName::new("updatable").unwrap(),
-            Some(&new_via),
-            Some("every day"),
-            Some(&["v1".to_owned(), "v2".to_owned()]),
+            &strategy("updatable", "old-app", "every hour", &["v1"]),
         )
-        .unwrap());
+        .unwrap();
+        let new_via = AppName::new("new-app").unwrap();
+        assert!(
+            update(
+                &db,
+                &BackupStrategyName::new("updatable").unwrap(),
+                Some(&new_via),
+                Some("every day"),
+                Some(&["v1".to_owned(), "v2".to_owned()]),
+            )
+            .unwrap()
+        );
         let got = get(&db, &BackupStrategyName::new("updatable").unwrap())
             .unwrap()
             .unwrap();
@@ -211,14 +219,16 @@ mod tests {
     #[test]
     fn update_absent_returns_false() {
         let db = Db::open_in_memory().unwrap();
-        assert!(!update(
-            &db,
-            &BackupStrategyName::new("ghost").unwrap(),
-            None,
-            Some("every day"),
-            None,
-        )
-        .unwrap());
+        assert!(
+            !update(
+                &db,
+                &BackupStrategyName::new("ghost").unwrap(),
+                None,
+                Some("every day"),
+                None,
+            )
+            .unwrap()
+        );
     }
 
     // i[verify backup.strategy.delete]
@@ -227,9 +237,11 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
         create(&db, &strategy("gone", "via", "every day", &["a"])).unwrap();
         assert!(delete(&db, &BackupStrategyName::new("gone").unwrap()).unwrap());
-        assert!(get(&db, &BackupStrategyName::new("gone").unwrap())
-            .unwrap()
-            .is_none());
+        assert!(
+            get(&db, &BackupStrategyName::new("gone").unwrap())
+                .unwrap()
+                .is_none()
+        );
     }
 
     // i[verify backup.strategy.delete]

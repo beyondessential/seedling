@@ -431,9 +431,7 @@ fn param_schema_weak_password_kind_implicitly_secret() {
 // l[verify param.schema.secret]
 #[test]
 fn param_schema_text_kind_with_secret_true_is_secret() {
-    let app = run_test_script_app(
-        r#"app.param("token").kind("text").secret(true);"#,
-    );
+    let app = run_test_script_app(r#"app.param("token").kind("text").secret(true);"#);
     let def = app.def.load();
     let schema = def.params.get("token").expect("param declared");
     assert!(schema.secret);

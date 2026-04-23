@@ -234,7 +234,10 @@ mod tests {
 
         let rows = backup_strategies::list_all(&db).unwrap();
         let updated = rows.iter().find(|s| s.name == "nightly").unwrap();
-        assert_eq!(updated.last_fired_at.as_deref(), Some(now.to_string().as_str()));
+        assert_eq!(
+            updated.last_fired_at.as_deref(),
+            Some(now.to_string().as_str())
+        );
     }
 
     // r[verify backup.schedule.delay]

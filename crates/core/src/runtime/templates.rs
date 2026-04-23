@@ -134,7 +134,11 @@ mod tests {
     #[test]
     fn show_returns_none_for_unknown() {
         let db = Db::open_in_memory().unwrap();
-        assert!(get(&db, &TemplateName::new_unchecked("ghost")).unwrap().is_none());
+        assert!(
+            get(&db, &TemplateName::new_unchecked("ghost"))
+                .unwrap()
+                .is_none()
+        );
     }
 
     // i[verify template.remove]
@@ -143,7 +147,11 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
         create(&db, &template("gone", "b")).unwrap();
         assert!(delete(&db, &TemplateName::new_unchecked("gone")).unwrap());
-        assert!(get(&db, &TemplateName::new_unchecked("gone")).unwrap().is_none());
+        assert!(
+            get(&db, &TemplateName::new_unchecked("gone"))
+                .unwrap()
+                .is_none()
+        );
     }
 
     // i[verify template.remove]

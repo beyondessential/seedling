@@ -58,7 +58,7 @@ pub fn setup_language(limits: &ScriptLimits) -> (Engine, Scope<'static>, defs::a
 mod engine_limits_tests {
     use super::*;
 
-    fn eval<'a>(limits: ScriptLimits, src: &'a str) -> Result<(), Box<rhai::EvalAltResult>> {
+    fn eval(limits: ScriptLimits, src: &str) -> Result<(), Box<rhai::EvalAltResult>> {
         let (engine, mut scope, _app) = setup_language(&limits);
         let ast = engine.compile(src)?;
         engine.run_ast_with_scope(&mut scope, &ast)
@@ -115,15 +115,12 @@ mod engine_limits_tests {
             ..ScriptLimits::default()
         };
         // Ten nested parentheses comfortably exceeds depth 4.
-            let src = format!("let x = {}1{};", "(".repeat(10), ")".repeat(10));
+        let src = format!("let x = {}1{};", "(".repeat(10), ")".repeat(10));
         let err = eval(limits, &src).expect_err("should hit expr-depth limit");
         assert!(
             matches!(
                 *err,
-                rhai::EvalAltResult::ErrorParsing(
-                    rhai::ParseErrorType::ExprTooDeep,
-                    _,
-                ),
+                rhai::EvalAltResult::ErrorParsing(rhai::ParseErrorType::ExprTooDeep, _,),
             ),
             "expected ExprTooDeep, got {err:?}",
         );
@@ -183,10 +180,7 @@ mod engine_limits_tests {
         assert!(
             matches!(
                 *err,
-                rhai::EvalAltResult::ErrorParsing(
-                    rhai::ParseErrorType::LiteralTooLarge(..),
-                    _,
-                ),
+                rhai::EvalAltResult::ErrorParsing(rhai::ParseErrorType::LiteralTooLarge(..), _,),
             ),
             "expected ParseError LiteralTooLarge, got {err:?}",
         );

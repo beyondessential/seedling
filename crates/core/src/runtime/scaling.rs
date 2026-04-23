@@ -124,10 +124,7 @@ mod tests {
     fn save_then_load_round_trips() {
         let db = Db::open_in_memory().unwrap();
         save_scaling_decision(&db, &app(), "web", 5).unwrap();
-        assert_eq!(
-            load_scaling_decision(&db, &app(), "web").unwrap(),
-            Some(5),
-        );
+        assert_eq!(load_scaling_decision(&db, &app(), "web").unwrap(), Some(5),);
     }
 
     // r[verify scaling.decision]
@@ -136,10 +133,7 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
         save_scaling_decision(&db, &app(), "web", 3).unwrap();
         save_scaling_decision(&db, &app(), "web", 7).unwrap();
-        assert_eq!(
-            load_scaling_decision(&db, &app(), "web").unwrap(),
-            Some(7),
-        );
+        assert_eq!(load_scaling_decision(&db, &app(), "web").unwrap(), Some(7),);
     }
 
     // r[verify scaling.decision]
@@ -212,7 +206,11 @@ mod tests {
         let mut bounds = BTreeMap::new();
         bounds.insert("web".to_owned(), (1u16, 5u16));
         clamp_scaling_decisions(&db, &app(), &bounds).unwrap();
-        assert!(load_scaling_decision(&db, &app(), "ghost").unwrap().is_none());
+        assert!(
+            load_scaling_decision(&db, &app(), "ghost")
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(load_scaling_decision(&db, &app(), "web").unwrap(), Some(2));
     }
 }

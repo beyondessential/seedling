@@ -623,12 +623,16 @@ fn container_on_exit_strategy() {
     }
 }
 
-fn with_container<R>(app: &crate::defs::app::App, name: &str, f: impl FnOnce(&defs::container::ContainerDef) -> R) -> R {
+fn with_container<R>(
+    app: &crate::defs::app::App,
+    name: &str,
+    f: impl FnOnce(&defs::container::ContainerDef) -> R,
+) -> R {
     let def = app.def.load();
     let id = def
         .resources
         .keys()
-        .find(|id| id.kind == ResourceKind::Deployment && &*id.name == name)
+        .find(|id| id.kind == ResourceKind::Deployment && *id.name == *name)
         .expect("deployment not found");
     let defs::resource::Resource::Deployment(dep) = &def.resources[id] else {
         panic!("expected Deployment");
@@ -757,9 +761,8 @@ fn container_cap_add_deduplicates() {
 // l[verify container.writable-rootfs]
 #[test]
 fn container_writable_rootfs_defaults_false() {
-    let app = run_test_script_app(
-        r#"app.deployment("web").image("docker.io/library/nginx:latest");"#,
-    );
+    let app =
+        run_test_script_app(r#"app.deployment("web").image("docker.io/library/nginx:latest");"#);
     with_container(&app, "web", |c| {
         assert!(!c.writable_rootfs);
     });
