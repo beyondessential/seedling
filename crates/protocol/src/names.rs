@@ -264,6 +264,36 @@ bsl_name_newtype! {
 }
 
 bsl_name_newtype! {
+    /// Canonical name of an external-service slot declared by a BSL app.
+    ///
+    /// Names the *slot* the app declares in its script (e.g.
+    /// `app.external_service("db")`); the *target* service the operator
+    /// maps into that slot is represented by [`ServiceRef`].
+    ExternalServiceName
+}
+
+bsl_name_newtype! {
+    /// Canonical name of a site-level service.
+    ///
+    /// Site services are created and owned by the operator (via
+    /// `/services/site/create`), independent of any app. They're
+    /// referenced by name when mapping into an app's external service
+    /// slot, and carry one or more backing `(host, port, protocol)`
+    /// endpoints that traffic is distributed over.
+    SiteServiceName
+}
+
+bsl_name_newtype! {
+    /// Canonical name of a service declared inside an app's BSL script.
+    ///
+    /// This is the BSL-level identifier the app uses when calling
+    /// `app.service("api")`. Distinct from [`SiteServiceName`] (which
+    /// lives at the site level) and from [`ExternalServiceName`] (the
+    /// BSL-level *slot*).
+    AppServiceName
+}
+
+bsl_name_newtype! {
     /// Canonical name of a backup strategy.
     ///
     /// Backup strategies live at the site level (not inside an app) and are
@@ -384,6 +414,39 @@ pub enum VolumeRef {
 
 impl VolumeRef {
     /// The owning app, if this ref points at an app volume.
+    pub fn app(&self) -> Option<&AppName> {
+        match self {
+            Self::Site { .. } => None,
+            Self::App { app, .. } => Some(app),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ServiceRef — polymorphic reference to a named service
+// ---------------------------------------------------------------------------
+
+/// Reference to a named service in the system. A service lives either at
+/// the site level (managed by the operator) or inside an app (declared in
+/// its BSL script); a `ServiceRef` names exactly one of those.
+///
+/// The serialised form is a tagged object — `{"kind": "site", "name": ...}`
+/// or `{"kind": "app", "app": ..., "service": ...}` — so the discriminator
+/// is part of the payload and cannot drift.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ServiceRef {
+    /// A service owned by the site.
+    Site { name: SiteServiceName },
+    /// A service declared by a specific app.
+    App {
+        app: AppName,
+        service: AppServiceName,
+    },
+}
+
+impl ServiceRef {
+    /// The owning app, if this ref points at an app service.
     pub fn app(&self) -> Option<&AppName> {
         match self {
             Self::Site { .. } => None,
@@ -658,6 +721,67 @@ mod tests {
         assert_eq!(a.app().map(|n| n.as_str()), Some("myapp"));
         let s = VolumeRef::Site {
             name: SiteVolumeName::new("shared").unwrap(),
+        };
+        assert!(s.app().is_none());
+    }
+
+    #[test]
+    fn external_service_name_accepts_canonical() {
+        ExternalServiceName::new("api").unwrap();
+        ExternalServiceName::new("upstream-api").unwrap();
+    }
+
+    #[test]
+    fn site_service_name_accepts_canonical() {
+        SiteServiceName::new("postgres-prod").unwrap();
+    }
+
+    #[test]
+    fn app_service_name_accepts_canonical() {
+        AppServiceName::new("api").unwrap();
+    }
+
+    #[test]
+    fn service_names_are_distinct_types() {
+        let s = SiteServiceName::new("shared").unwrap();
+        let a = AppServiceName::new("shared").unwrap();
+        let e = ExternalServiceName::new("shared").unwrap();
+        assert_eq!(s.as_str(), a.as_str());
+        assert_eq!(a.as_str(), e.as_str());
+    }
+
+    #[test]
+    fn service_ref_site_round_trips() {
+        let r = ServiceRef::Site {
+            name: SiteServiceName::new("postgres-prod").unwrap(),
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        assert_eq!(json, r#"{"kind":"site","name":"postgres-prod"}"#);
+        let back: ServiceRef = serde_json::from_str(&json).unwrap();
+        assert_eq!(r, back);
+    }
+
+    #[test]
+    fn service_ref_app_round_trips() {
+        let r = ServiceRef::App {
+            app: AppName::new("myapp").unwrap(),
+            service: AppServiceName::new("api").unwrap(),
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        assert_eq!(json, r#"{"kind":"app","app":"myapp","service":"api"}"#);
+        let back: ServiceRef = serde_json::from_str(&json).unwrap();
+        assert_eq!(r, back);
+    }
+
+    #[test]
+    fn service_ref_app_returns_owner() {
+        let a = ServiceRef::App {
+            app: AppName::new("myapp").unwrap(),
+            service: AppServiceName::new("api").unwrap(),
+        };
+        assert_eq!(a.app().map(|n| n.as_str()), Some("myapp"));
+        let s = ServiceRef::Site {
+            name: SiteServiceName::new("shared").unwrap(),
         };
         assert!(s.app().is_none());
     }
