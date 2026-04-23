@@ -1205,11 +1205,23 @@ function ActionInvokeDialog({
 function InstallingSection({
   appName,
   faults,
+  onRefresh,
 }: {
   appName: string;
   faults: FaultRecord[];
+  onRefresh: () => void;
 }) {
   const installFaults = faults.filter((f) => f.kind === "operation_failed");
+  const { execute: executeCancel, loading: cancelling } = useOiAction();
+  const writeGuard = useGuard("write");
+  const handleCancel = async () => {
+    try {
+      await executeCancel("/apps/action/cancel", { app: appName });
+      onRefresh();
+    } catch {
+      // surfaced by useOiAction globally
+    }
+  };
   return (
     <Box
       sx={{
@@ -1229,14 +1241,28 @@ function InstallingSection({
       >
         Install in progress — the runtime is actuating your resources.
       </Typography>
-      <Button
-        size="small"
-        startIcon={<ArticleIcon />}
-        component={Link}
-        to={`/apps/${appName}/logs`}
-      >
-        View container logs
-      </Button>
+      <Box sx={{ display: "flex", gap: 1 }}>
+        <Button
+          size="small"
+          startIcon={<ArticleIcon />}
+          component={Link}
+          to={`/apps/${appName}/logs`}
+        >
+          View container logs
+        </Button>
+        <Tooltip title={writeGuard.reason ?? ""}>
+          <span>
+            <Button
+              size="small"
+              color="error"
+              onClick={() => void handleCancel()}
+              disabled={cancelling || !writeGuard.allowed}
+            >
+              {cancelling ? "Cancelling…" : "Cancel install"}
+            </Button>
+          </span>
+        </Tooltip>
+      </Box>
       {installFaults.length > 0 && (
         <Alert severity="error" sx={{ width: "100%", mt: 1 }}>
           <Typography variant="subtitle2" gutterBottom>
@@ -2583,7 +2609,11 @@ export default function AppDetail() {
               onRefresh={refetch}
             />
           ) : data.status === "installing" ? (
-            <InstallingSection appName={name!} faults={data.faults} />
+            <InstallingSection
+              appName={name!}
+              faults={data.faults}
+              onRefresh={refetch}
+            />
           ) : (
             <>
               {data.status === "uninstalling" && (
