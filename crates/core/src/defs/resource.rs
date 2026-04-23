@@ -84,7 +84,7 @@ impl Resource {
     pub fn name(&self) -> &ResourceName {
         match self {
             Self::Service(s) => &s.name,
-            Self::HttpService(h) => &h.service.name,
+            Self::HttpService(h) => h.service.name(),
             Self::Ingress(i) => &i.name,
             Self::Deployment(d) => &d.name,
             Self::Job(j) => &j.name,

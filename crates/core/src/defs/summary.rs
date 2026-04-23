@@ -177,7 +177,7 @@ impl Service {
 impl HttpService {
     pub fn summary(&self) -> HttpServiceSummary {
         HttpServiceSummary {
-            service: self.service.name.as_str().to_owned(),
+            service: self.service.name().as_str().to_owned(),
             port: self.port.get(),
         }
     }
@@ -251,7 +251,7 @@ impl PodDef {
         let mut service_mounts: Vec<String> = self
             .service_mounts
             .iter()
-            .map(|sp| format!("{}:{}", sp.service.name.as_str(), sp.port.get()))
+            .map(|sp| format!("{}:{}", sp.service.name().as_str(), sp.port.get()))
             .collect();
         service_mounts.sort();
 
@@ -290,7 +290,7 @@ impl HttpBinding {
         format!(
             "{} -> {} {}",
             self.pod_port.get(),
-            self.route.http.service.name.as_str(),
+            self.route.http.service.name().as_str(),
             self.route.prefix,
         )
     }
@@ -301,7 +301,7 @@ impl TcpUdpBinding {
         format!(
             "{} -> {}:{}",
             self.pod_port.get(),
-            self.service_port.service.name.as_str(),
+            self.service_port.service.name().as_str(),
             self.service_port.port.get(),
         )
     }

@@ -43,7 +43,7 @@ pub(super) fn build(
     for (id, resource) in &snapshot.resources {
         let svc_name = match resource {
             Resource::Service(s) => s.name.as_str(),
-            Resource::HttpService(h) => h.service.name.as_str(),
+            Resource::HttpService(h) => h.service.name().as_str(),
             _ => continue,
         };
 
@@ -112,7 +112,7 @@ pub(super) fn build(
                 if dr.desired != LifecycleState::Unscheduled {
                     continue;
                 }
-                let svc_name = h.service.name.as_str();
+                let svc_name = h.service.name().as_str();
                 let svc_instance = registry.get_or_create_singleton(
                     app_name,
                     ResourceKind::Service,
@@ -158,13 +158,13 @@ fn pod_backs_service(pod: &RunningPod, service_name: &str) -> bool {
 fn pod_def_backs_service(pod: &PodDef, service_name: &str) -> bool {
     pod.tcp_bindings
         .iter()
-        .any(|b| b.service_port.service.name.as_str() == service_name)
+        .any(|b| b.service_port.service.name().as_str() == service_name)
         || pod
             .udp_bindings
             .iter()
-            .any(|b| b.service_port.service.name.as_str() == service_name)
+            .any(|b| b.service_port.service.name().as_str() == service_name)
         || pod
             .http_bindings
             .iter()
-            .any(|b| b.route.http.service.name.as_str() == service_name)
+            .any(|b| b.route.http.service.name().as_str() == service_name)
 }

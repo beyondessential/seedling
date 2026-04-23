@@ -50,7 +50,7 @@ fn collect_service_backends(
         };
 
         for b in &http {
-            let svc_name = b.route.http.service.name.as_str().to_owned();
+            let svc_name = b.route.http.service.name().as_str().to_owned();
             let svc_port = b.route.http.port.get();
             backends
                 .entry((svc_name, svc_port, ForwardProto::Tcp))
@@ -59,7 +59,7 @@ fn collect_service_backends(
         }
 
         for b in &tcp {
-            let svc_name = b.service_port.service.name.as_str().to_owned();
+            let svc_name = b.service_port.service.name().as_str().to_owned();
             let svc_port = b.service_port.port.get();
             backends
                 .entry((svc_name, svc_port, ForwardProto::Tcp))
@@ -68,7 +68,7 @@ fn collect_service_backends(
         }
 
         for b in &udp {
-            let svc_name = b.service_port.service.name.as_str().to_owned();
+            let svc_name = b.service_port.service.name().as_str().to_owned();
             let svc_port = b.service_port.port.get();
             backends
                 .entry((svc_name, svc_port, ForwardProto::Udp))
@@ -178,7 +178,7 @@ pub(super) fn build_mount_rules(running_pods: &[RunningPod]) -> Vec<MountRule> {
         let mount_addr = crate::system::translate::proxy::node_mount_addr(&pod.pod_prefix);
 
         for sp in &service_mounts {
-            let svc_name = sp.service.name.as_str();
+            let svc_name = sp.service.name().as_str();
             // Emit a mount rule for each protocol that has backends for this
             // (service, port) pair.  Most mounts are TCP but UDP is valid too.
             for proto in [ForwardProto::Tcp, ForwardProto::Udp] {

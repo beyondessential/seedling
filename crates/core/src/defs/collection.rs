@@ -140,7 +140,7 @@ pub fn col(val: Dynamic) -> Collection {
     if let Some(h) = val.clone().try_cast::<HttpService>() {
         let id = ResourceId {
             kind: ResourceKind::HttpService,
-            name: h.service.name.clone(),
+            name: h.service.name().clone(),
         };
         return Collection::from_bag(Rc::new(ItemBag {
             id,

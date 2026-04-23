@@ -407,7 +407,8 @@ pub(crate) async fn open_shell_session(
                     let svc_instance = mount_registry.get_or_create_singleton(
                         &exec_target.app_name,
                         ResourceKind::Service,
-                        Some(sp.service.name.as_str()),
+                        Some(sp.service.name().as_str()),
+
                     )?;
                     let svc_ip = instance_ipv6(&state.node_prefix, &svc_instance);
                     Ok((sp.port.get(), svc_ip, sp.port.get()))
