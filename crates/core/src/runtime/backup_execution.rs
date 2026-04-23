@@ -167,6 +167,8 @@ mod tests {
     }
 
     // r[impl backup.schedule.catch-up]
+    // r[verify backup.schedule]
+    // r[verify backup.schedule.catch-up]
     // If the daemon was down through a scheduled fire time, the strategy fires
     // once to catch up instead of staying stuck on a past boundary forever.
     #[test]
@@ -198,6 +200,7 @@ mod tests {
         );
     }
 
+    // r[verify backup.schedule]
     #[test]
     fn fires_at_scheduled_boundary() {
         let db = Db::open_in_memory().expect("open in-memory db");
@@ -218,6 +221,7 @@ mod tests {
         assert_eq!(check_due_strategies(&db, after).len(), 1);
     }
 
+    // r[verify backup.schedule]
     #[test]
     fn no_refire_within_same_window() {
         let db = Db::open_in_memory().expect("open in-memory db");

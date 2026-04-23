@@ -345,6 +345,7 @@ fn barrier_deadline_zero_expires_on_second_pass() {
 }
 
 // r[verify barrier.replay]
+// r[verify barrier.replay.determinism]
 // r[verify reconciliation.idempotency]
 // r[verify history.action-log.replay]
 #[test]

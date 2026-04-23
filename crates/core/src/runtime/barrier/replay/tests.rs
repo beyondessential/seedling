@@ -131,6 +131,7 @@ fn db_action_log_barrier_suspends_then_resumes() {
 }
 
 // r[barrier.replay]
+// r[verify barrier.replay.determinism]
 #[test]
 fn db_action_log_sequential_barriers() {
     let (engine, mut scope, app, ast) = {

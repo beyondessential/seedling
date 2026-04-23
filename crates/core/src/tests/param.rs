@@ -67,6 +67,7 @@ fn on_change_registers_handler_in_app_def() {
 }
 
 // l[verify param.on-change]
+// l[verify param.on-change.old]
 #[test]
 fn on_change_two_arg_closure_registers() {
     let app = run_test_script_app(

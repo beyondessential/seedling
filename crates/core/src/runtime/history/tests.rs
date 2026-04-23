@@ -329,6 +329,7 @@ fn find_instances_for_group_returns_all_scaled() {
 // World observations
 // -----------------------------------------------------------------------
 
+// r[verify history.world]
 // r[verify history.world.entries]
 #[test]
 fn insert_and_retrieve_observation() {
@@ -387,7 +388,9 @@ fn observations_empty_for_unknown_instance() {
 // Autonomous operations
 // -----------------------------------------------------------------------
 
+// r[verify history.operations]
 // r[verify history.operations.entries]
+// r[verify history.operations.provenance]
 #[test]
 fn insert_and_retrieve_autonomous_operation() {
     let db = Db::open_in_memory().unwrap();
@@ -478,6 +481,7 @@ fn make_entry(
     }
 }
 
+// r[verify history.action-log]
 // r[verify history.action-log.entries]
 #[test]
 fn insert_and_load_action_log_entry_without_barrier() {

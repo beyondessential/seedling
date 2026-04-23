@@ -34,6 +34,9 @@ fn test_cipher() -> crate::runtime::secrets::Cipher {
     crate::runtime::secrets::Cipher::for_tests()
 }
 
+// r[verify generation.definition]
+// r[verify generation.bumps]
+// r[verify generation.monotonic]
 #[test]
 fn register_bumps_to_one() {
     let db = test_db();
@@ -42,6 +45,9 @@ fn register_bumps_to_one() {
     assert_eq!(current(&db, &app()).unwrap(), Some(1));
 }
 
+// r[verify generation.bumps]
+// r[verify generation.monotonic]
+// r[verify generation.script-storage]
 #[test]
 fn script_update_increments_generation_and_dedups_bodies() {
     let db = test_db();
@@ -57,6 +63,7 @@ fn script_update_increments_generation_and_dedups_bodies() {
     assert_eq!(count, 2, "identical script content should dedupe");
 }
 
+// r[verify generation.bumps]
 #[test]
 fn param_set_records_previous_value() {
     let db = test_db();
@@ -105,6 +112,7 @@ fn param_unset_records_previous_value_and_no_new() {
     assert!(!entry.previous_value_redacted);
 }
 
+// r[verify generation.reconstruction]
 #[test]
 fn param_map_at_walks_history() {
     let db = test_db();
@@ -138,6 +146,8 @@ fn param_map_at_walks_history() {
     assert_eq!(m_now.get("other").map(|s| s.as_str()), Some("x"));
 }
 
+// r[verify generation.reconstruction]
+// r[verify generation.previous]
 #[test]
 fn reconstruct_at_prior_generation_uses_old_script_and_params() {
     let db = test_db();
@@ -183,6 +193,7 @@ fn reconstruct_at_prior_generation_uses_old_script_and_params() {
     assert!(new_image.unwrap().contains("2.0"));
 }
 
+// r[verify generation.history]
 #[test]
 fn list_returns_descending_with_limit_and_before() {
     let db = test_db();
@@ -212,6 +223,8 @@ fn list_returns_descending_with_limit_and_before() {
     assert!(before_3.iter().all(|e| e.generation < 3));
 }
 
+// r[verify generation.deregister]
+// r[verify generation.script-storage]
 #[test]
 fn delete_for_app_wipes_history_and_orphan_bodies() {
     let db = test_db();
@@ -263,6 +276,7 @@ fn attach_operation_and_record_outcome() {
     assert_eq!(entry.outcome_error.as_deref(), Some("boom"));
 }
 
+// r[verify generation.reconstruction]
 #[test]
 fn reconstruct_unknown_generation_returns_not_found() {
     let db = test_db();
