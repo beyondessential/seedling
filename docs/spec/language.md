@@ -306,7 +306,7 @@ This is currently the only value.
 > Schema metadata describes how the parameter should be presented and validated in management interfaces. Defaults: `kind` is `"text"`, `required` is `false`, `default_value` is absent, `description` is absent, `secret` is `false` (unless implied by `kind`).
 
 > l[param.schema.kind]
-> `param.kind(kind: string)` sets the kind of the parameter. Valid values are the same as for [Install Action params](#l--action.install.requirements): `"text"`, `"email"`, `"password"`, `"weak-password"`. Providing an unknown kind must throw.
+> `param.kind(kind: string)` sets the kind of the parameter. Valid values are the same as for [Install Action params](#l--action.install.requirements): `"text"`, `"multiline"`, `"email"`, `"password"`, `"weak-password"`. Providing an unknown kind must throw.
 
 > l[param.schema.required]
 > `param.required(required: bool)` sets whether the parameter is required.
@@ -786,6 +786,11 @@ This is currently the only value.
 > l[action.install.requirements.kind-text]
 > A param kind of `"text"` is a free-form text field.
 > No validation is applied.
+
+> l[action.install.requirements.kind-multiline]
+> A param kind of `"multiline"` is a free-form text field that may contain multiple lines.
+> No validation is applied.
+> It is semantically equivalent to `"text"` but hints to presentation layers (such as a web UI) that a multi-line input control is appropriate.
 
 > l[action.install.requirements.kind-email]
 > A param kind of `"email"` is an email address field.

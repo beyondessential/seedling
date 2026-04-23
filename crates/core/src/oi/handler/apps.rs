@@ -306,6 +306,7 @@ pub(crate) fn validate_name(name: &str) -> Result<(), OiError> {
 pub(crate) fn install_requirement_kind_str(kind: ParamKind) -> &'static str {
     match kind {
         ParamKind::Text => "text",
+        ParamKind::Multiline => "multiline",
         ParamKind::Email => "email",
         ParamKind::Password => "password",
         ParamKind::WeakPassword => "weak-password",

@@ -209,6 +209,27 @@ fn install_requirement_kind_defaults_to_text() {
     assert!(matches!(req.kind, defs::install::ParamKind::Text));
 }
 
+// l[verify action.install.requirements.kind-multiline]
+#[test]
+fn install_requirement_kind_multiline() {
+    let app = run_test_script_app(
+        r#"
+        app.on_install(|rt, reqs| {}, #{
+            params: #{
+                "motd": #{
+                    kind: "multiline",
+                    description: "Message of the day",
+                },
+            },
+        });
+    "#,
+    );
+    let def = app.def.load();
+    let install = def.install.as_ref().unwrap();
+    let req = &install.requirements["motd"];
+    assert!(matches!(req.kind, defs::install::ParamKind::Multiline));
+}
+
 // l[verify action.install.requirements.kind-weak-password]
 #[test]
 fn install_requirement_kind_weak_password() {

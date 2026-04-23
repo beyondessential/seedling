@@ -77,7 +77,7 @@ pub(in crate::oi) fn validate_requirements(
                     errors.push(format!("{field_str}: password is too weak"));
                 }
             }
-            ParamKind::Text | ParamKind::WeakPassword => {}
+            ParamKind::Text | ParamKind::Multiline | ParamKind::WeakPassword => {}
         }
     }
 

@@ -820,12 +820,19 @@ function ParamsSection({
                       value={draft}
                       onChange={(e) => setDraft(e.target.value)}
                       onKeyDown={(e) => {
-                        if (e.key === "Enter") void save();
+                        if (e.key === "Enter" && p.kind !== "multiline")
+                          void save();
                         if (e.key === "Escape") cancel();
                       }}
                       autoFocus
+                      multiline={p.kind === "multiline"}
+                      minRows={p.kind === "multiline" ? 3 : undefined}
                       type={
-                        showPassword ? "text" : paramFieldType(p.kind, p.secret)
+                        p.kind === "multiline"
+                          ? undefined
+                          : showPassword
+                            ? "text"
+                            : paramFieldType(p.kind, p.secret)
                       }
                       error={
                         p.kind === "password" &&
@@ -1103,6 +1110,7 @@ function ActionInvokeDialog({
             paramEntries.map(([key, def]) => {
               const isPassword =
                 def.kind === "password" || def.kind === "weak-password";
+              const isMultiline = def.kind === "multiline";
               const val = values[key] ?? "";
               const weak =
                 def.kind === "password" &&
@@ -1127,7 +1135,15 @@ function ActionInvokeDialog({
                   }
                   helperText={helperText}
                   error={weak}
-                  type={showPasswords[key] ? "text" : paramFieldType(def.kind)}
+                  multiline={isMultiline}
+                  minRows={isMultiline ? 3 : undefined}
+                  type={
+                    isMultiline
+                      ? undefined
+                      : showPasswords[key]
+                        ? "text"
+                        : paramFieldType(def.kind)
+                  }
                   required={def.required}
                   slotProps={{
                     input: isPassword
@@ -1543,6 +1559,7 @@ function ShellOpenDialog({
           {paramEntries.map(([key, def]) => {
             const isPassword =
               def.kind === "password" || def.kind === "weak-password";
+            const isMultiline = def.kind === "multiline";
             const val = values[key] ?? "";
             const weak =
               def.kind === "password" &&
@@ -1567,7 +1584,15 @@ function ShellOpenDialog({
                 }
                 helperText={helperText}
                 error={weak}
-                type={showPasswords[key] ? "text" : paramFieldType(def.kind)}
+                multiline={isMultiline}
+                minRows={isMultiline ? 3 : undefined}
+                type={
+                  isMultiline
+                    ? undefined
+                    : showPasswords[key]
+                      ? "text"
+                      : paramFieldType(def.kind)
+                }
                 required={def.required}
                 slotProps={{
                   input: isPassword

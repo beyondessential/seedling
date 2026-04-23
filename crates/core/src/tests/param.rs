@@ -366,6 +366,18 @@ fn param_schema_kind_password() {
 
 // l[verify param.schema.kind]
 #[test]
+fn param_schema_kind_multiline() {
+    let app = run_test_script_app(r#"app.param("motd").kind("multiline");"#);
+    let def = app.def.load();
+    let schema = def.params.get("motd").unwrap();
+    assert!(matches!(
+        schema.kind,
+        crate::defs::install::ParamKind::Multiline
+    ));
+}
+
+// l[verify param.schema.kind]
+#[test]
 fn param_schema_kind_unknown_throws() {
     let _ = run_test_script_err(r#"app.param("field").kind("banana");"#);
 }

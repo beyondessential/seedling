@@ -31,6 +31,8 @@ pub enum ParamKind {
     // l[impl action.install.requirements.kind-text]
     #[default]
     Text,
+    // l[impl action.install.requirements.kind-multiline]
+    Multiline,
     // l[impl action.install.requirements.kind-email]
     Email,
     // l[impl action.install.requirements.kind-password]
@@ -45,6 +47,7 @@ impl std::str::FromStr for ParamKind {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "text" => Ok(Self::Text),
+            "multiline" => Ok(Self::Multiline),
             "email" => Ok(Self::Email),
             "password" => Ok(Self::Password),
             "weak-password" => Ok(Self::WeakPassword),
