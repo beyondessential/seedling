@@ -223,6 +223,8 @@ starts:
   local registry seeded from fixtures in the repo, or bind-mount a
   pre-populated podman storage. The first is cleaner; the second is
   faster.
+  - Answer: probably a registry, since that would also let us exercise
+    the image pulling mechanics.
 - **Interaction with the spec process.** Rules that currently say
   "the runtime must X" without saying "observable by Y" may need to
   have a verification surface added to the spec — otherwise a test
