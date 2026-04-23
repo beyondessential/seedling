@@ -175,11 +175,11 @@ pub fn scope() -> (Scope<'static>, app::App) {
     // l[impl const.cpu-architecture]
     scope.push_constant("CPU_ARCHITECTURE", std::env::consts::ARCH.to_owned());
 
-    // l[impl const.has-ipv4]
-    scope.push_constant("HAS_IPV4", facts.ipv4_egress);
+    // l[impl const.host-has-ipv4]
+    scope.push_constant("HOST_HAS_IPV4", facts.ipv4_egress);
 
-    // l[impl const.has-ipv6]
-    scope.push_constant("HAS_IPV6", facts.ipv6_egress);
+    // l[impl const.host-has-ipv6]
+    scope.push_constant("HOST_HAS_IPV6", facts.ipv6_egress);
 
     // l[impl const.nat64-active]
     scope.push_constant("NAT64_ACTIVE", facts.nat64_active);

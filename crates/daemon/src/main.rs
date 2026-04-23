@@ -310,13 +310,13 @@ async fn main() {
     }
 
     // r[impl infra.nat64.ipv6-egress]
-    // l[impl const.has-ipv4]
-    // l[impl const.has-ipv6]
+    // l[impl const.host-has-ipv4]
+    // l[impl const.host-has-ipv6]
     let ipv4_egress = detect_ipv4_egress().await;
     let ipv6_egress = detect_ipv6_egress().await;
 
-    // l[impl const.has-ipv4]
-    // l[impl const.has-ipv6]
+    // l[impl const.host-has-ipv4]
+    // l[impl const.host-has-ipv6]
     // l[impl const.nat64-active]
     // l[impl const.has-snapshots]
     // l[impl const.node-name]

@@ -57,25 +57,25 @@ fn cpu_architecture_is_nonempty_string() {
     );
 }
 
-// l[verify const.has-ipv4]
+// l[verify const.host-has-ipv4]
 #[test]
-fn has_ipv4_is_bool() {
+fn host_has_ipv4_is_bool() {
     run_test_script_app(
         r#"
-        if type_of(HAS_IPV4) != "bool" {
-            throw "HAS_IPV4 must be a bool";
+        if type_of(HOST_HAS_IPV4) != "bool" {
+            throw "HOST_HAS_IPV4 must be a bool";
         }
     "#,
     );
 }
 
-// l[verify const.has-ipv6]
+// l[verify const.host-has-ipv6]
 #[test]
-fn has_ipv6_is_bool() {
+fn host_has_ipv6_is_bool() {
     run_test_script_app(
         r#"
-        if type_of(HAS_IPV6) != "bool" {
-            throw "HAS_IPV6 must be a bool";
+        if type_of(HOST_HAS_IPV6) != "bool" {
+            throw "HOST_HAS_IPV6 must be a bool";
         }
     "#,
     );

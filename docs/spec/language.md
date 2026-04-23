@@ -121,14 +121,14 @@ These are not guaranteed to be constant forever, only for the duration of one sc
 > Common values include `x86_64`, `aarch64`, `arm`, and `riscv64`, but other values may appear as platforms evolve.
 > Scripts should treat unknown values as "unsupported" rather than error out.
 
-> l[const.has-ipv4]
-> `HAS_IPV4` is a boolean.
+> l[const.host-has-ipv4]
+> `HOST_HAS_IPV4` is a boolean.
 > It is `true` when the node has working IPv4 egress, and `false` otherwise.
 >
 > "Working egress" means a default IPv4 unicast route is configured. Source address selection is not inspected: an RFC1918 host behind NAT is considered to have egress.
 
-> l[const.has-ipv6]
-> `HAS_IPV6` is a boolean.
+> l[const.host-has-ipv6]
+> `HOST_HAS_IPV6` is a boolean.
 > It is `true` when the node has working IPv6 egress to the internet, and `false` otherwise.
 >
 > "Working egress" means both a default IPv6 unicast route and at least one globally-routable IPv6 source address. ULAs and link-local addresses do not qualify.
@@ -137,7 +137,7 @@ These are not guaranteed to be constant forever, only for the duration of one sc
 > `NAT64_ACTIVE` is a boolean.
 > It is `true` when the node itself is providing NAT64 translation for its workloads, and `false` otherwise.
 >
-> A `false` value does not imply that IPv4-only workloads cannot reach IPv4 destinations: an external NAT64+DNS64 infrastructure may still be in play. Scripts that need a definitive answer should combine `HAS_IPV4` and `NAT64_ACTIVE`.
+> A `false` value does not imply that IPv4-only workloads cannot reach IPv4 destinations: an external NAT64+DNS64 infrastructure may still be in play. Scripts that need a definitive answer should combine `HOST_HAS_IPV4` and `NAT64_ACTIVE`.
 
 > l[const.has-snapshots]
 > `HAS_SNAPSHOTS` is a boolean.

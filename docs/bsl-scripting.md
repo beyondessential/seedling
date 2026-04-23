@@ -168,8 +168,8 @@ col.select(#{ name_patterns: ["worker-*"] })
 | `AVAILABLE_THREADS` | int | Compute threads available |
 | `AVAILABLE_MEMORY` | int | Memory available to the application, in bytes |
 | `CPU_ARCHITECTURE` | string | CPU architecture of the node (e.g. `x86_64`, `aarch64`) |
-| `HAS_IPV4` | bool | Whether the node has working IPv4 egress |
-| `HAS_IPV6` | bool | Whether the node has working IPv6 egress |
+| `HOST_HAS_IPV4` | bool | Whether the node has working IPv4 egress |
+| `HOST_HAS_IPV6` | bool | Whether the node has working IPv6 egress |
 | `NAT64_ACTIVE` | bool | Whether the node itself is providing NAT64 translation |
 | `HAS_SNAPSHOTS` | bool | Whether volume storage supports copy-on-write snapshots |
 | `NODE_NAME` | string | Identifier of the node running the application |
