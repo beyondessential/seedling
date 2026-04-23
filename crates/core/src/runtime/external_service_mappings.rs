@@ -147,7 +147,12 @@ mod tests {
         Db::open_in_memory().expect("open in-memory db")
     }
 
-    fn mapping_app(app: &str, ext: &str, target_app: &str, target_svc: &str) -> ExternalServiceMapping {
+    fn mapping_app(
+        app: &str,
+        ext: &str,
+        target_app: &str,
+        target_svc: &str,
+    ) -> ExternalServiceMapping {
         ExternalServiceMapping {
             app: AppName::new(app).unwrap(),
             external_name: ExternalServiceName::new(ext).unwrap(),

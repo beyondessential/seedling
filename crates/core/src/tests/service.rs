@@ -132,9 +132,8 @@ fn service_exported_marks_service() {
 // l[verify service.exported]
 #[test]
 fn service_exported_with_description() {
-    let app = run_test_script_app(
-        r#"app.service("api").exported(#{ description: "main HTTP API" });"#,
-    );
+    let app =
+        run_test_script_app(r#"app.service("api").exported(#{ description: "main HTTP API" });"#);
     let def = app.def.load();
     let id = def
         .resources

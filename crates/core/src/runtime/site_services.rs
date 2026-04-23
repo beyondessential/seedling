@@ -155,10 +155,7 @@ pub fn delete(db: &Db, name: &SiteServiceName) -> rusqlite::Result<bool> {
         "DELETE FROM site_service_endpoints WHERE site_service = ?1",
         params![name],
     )?;
-    let count = tx.execute(
-        "DELETE FROM site_services WHERE name = ?1",
-        params![name],
-    )?;
+    let count = tx.execute("DELETE FROM site_services WHERE name = ?1", params![name])?;
     tx.commit()?;
     Ok(count > 0)
 }
@@ -263,7 +260,10 @@ mod tests {
             protocol: SiteServiceProtocol::Http,
         };
         add_endpoint(&db, &name, &ep).unwrap();
-        assert_eq!(get(&db, &name).unwrap().unwrap().endpoints, vec![ep.clone()]);
+        assert_eq!(
+            get(&db, &name).unwrap().unwrap().endpoints,
+            vec![ep.clone()]
+        );
 
         assert!(remove_endpoint(&db, &name, &ep).unwrap());
         assert!(get(&db, &name).unwrap().unwrap().endpoints.is_empty());

@@ -5,9 +5,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::oi::{handler::RequestCtx, state::OiState};
-use crate::runtime::site_services::{
-    SiteServiceDef, SiteServiceEndpoint, SiteServiceProtocol,
-};
+use crate::runtime::site_services::{SiteServiceDef, SiteServiceEndpoint, SiteServiceProtocol};
 
 /// List services that apps have marked with `service.exported()`.
 pub(crate) fn list_exported(state: &OiState) -> HandlerResult {
@@ -268,12 +266,7 @@ pub(crate) fn add_site_service_endpoint(
     state
         .db
         .call(move |db| crate::runtime::site_services::add_endpoint(db, &name, &ep_for_db))
-        .map_err(|e| {
-            OiError::new(
-                ErrorCode::Internal,
-                format!("failed to add endpoint: {e}"),
-            )
-        })?;
+        .map_err(|e| OiError::new(ErrorCode::Internal, format!("failed to add endpoint: {e}")))?;
 
     // r[impl service.site.lifecycle.events]
     ctx.events.site_service_endpoint_added(

@@ -10,10 +10,9 @@ CREATE TABLE IF NOT EXISTS site_services (
 
 -- r[service.site] Endpoints for a site service. The primary key is the
 -- full tuple so operators may add the same host under different ports or
--- protocols without collision. Cascade on delete is handled application-side
--- in site_services::delete (this DB does not enable PRAGMA foreign_keys).
+-- protocols without collision.
 CREATE TABLE IF NOT EXISTS site_service_endpoints (
-    site_service TEXT    NOT NULL,
+    site_service TEXT    NOT NULL REFERENCES site_services(name) ON DELETE CASCADE,
     host         TEXT    NOT NULL,
     port         INTEGER NOT NULL,
     protocol     TEXT    NOT NULL,
