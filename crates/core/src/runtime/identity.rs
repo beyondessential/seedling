@@ -249,6 +249,23 @@ mod tests {
         assert_eq!(a.display_name, "myapp-web");
     }
 
+    // r[verify identity.job]
+    #[test]
+    fn static_job_has_all_zero_instance_id() {
+        let j = ResourceInstance::new_singleton(name("myapp"), ResourceKind::Job, "worker");
+        assert_eq!(j.id, InstanceId(uuid::Uuid::nil()));
+        assert_eq!(j.display_name, "myapp-worker-00000000");
+    }
+
+    // r[verify identity.job]
+    #[test]
+    fn static_job_display_name_is_deterministic_across_constructions() {
+        let a = ResourceInstance::new_singleton(name("myapp"), ResourceKind::Job, "worker");
+        let b = ResourceInstance::new_singleton(name("myapp"), ResourceKind::Job, "worker");
+        assert_eq!(a.id, b.id);
+        assert_eq!(a.display_name, b.display_name);
+    }
+
     // r[verify identity.anonymous]
     #[test]
     fn anonymous_has_no_name() {
