@@ -400,6 +400,8 @@ mod tests {
     }
 
     // r[verify image.pin]
+    // i[verify image.pin.list]
+    // i[verify image.pin.clear]
     #[test]
     fn pin_upsert_and_clear() {
         let db = Db::open_in_memory().unwrap();

@@ -165,6 +165,26 @@ mod tests {
         assert_eq!(names, vec!["alpha", "zeta"]);
     }
 
+    // i[verify backup.strategy.show]
+    #[test]
+    fn get_returns_strategy_by_name() {
+        let db = Db::open_in_memory().unwrap();
+        create(&db, &strategy("shown", "via", "every hour", &["v"])).unwrap();
+        let got = get(&db, &BackupStrategyName::new("shown").unwrap())
+            .unwrap()
+            .expect("strategy exists");
+        assert_eq!(got.schedule, "every hour");
+    }
+
+    // i[verify backup.strategy.show]
+    #[test]
+    fn get_returns_none_for_unknown_name() {
+        let db = Db::open_in_memory().unwrap();
+        assert!(get(&db, &BackupStrategyName::new("ghost").unwrap())
+            .unwrap()
+            .is_none());
+    }
+
     // i[verify backup.strategy.update]
     #[test]
     fn update_changes_schedule_and_volumes() {
