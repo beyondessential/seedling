@@ -237,6 +237,8 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/templates/list" => templates::list_templates(state),
         // i[template.show]
         "/templates/show" => templates::show_template(state, parse_params(req.params)?),
+        // i[template.update]
+        "/templates/update" => templates::update_template(state, parse_params(req.params)?, ctx),
         // i[template.remove]
         "/templates/remove" => templates::remove_template(state, parse_params(req.params)?, ctx),
         // i[template.preview]

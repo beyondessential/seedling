@@ -899,6 +899,16 @@ Absent specification bugs, anything that is not defined here is either defined i
 > `/templates/show { name }` returns a single object with fields `name`, `body`, `description`, and `created_at`.
 > Returns `not_found` if no such template exists.
 
+> i[template.update]
+> `/templates/update { name, body?, description? }` updates an existing template.
+> Only provided fields are changed: omitting `body` leaves the stored body unchanged, and omitting `description` leaves the stored description unchanged.
+> To clear a description, pass `description: null`.
+> As with [template.create](#i--template.create), the body is not evaluated at update time.
+> Returns `not_found` if no template with the given name exists.
+> The template's `created_at` timestamp is not modified by update.
+> Apps already instantiated from the template are unaffected; the template's script body is copied at instantiation time and has no link to later edits.
+> On success a `TemplateUpdated` event is emitted.
+
 > i[template.remove]
 > `/templates/remove { name }` deletes a template.
 > Instantiated apps derived from the template are unaffected — their script body was copied at instantiation time.

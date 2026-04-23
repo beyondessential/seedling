@@ -385,6 +385,13 @@ pub enum OiEvent {
         actor: Option<Arc<Actor>>,
     },
     // r[impl audit.log.events]
+    TemplateUpdated {
+        timestamp: Timestamp,
+        name: TemplateName,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
+    // r[impl audit.log.events]
     TemplateRemoved {
         timestamp: Timestamp,
         name: TemplateName,
@@ -978,6 +985,15 @@ impl EventSender {
     }
 
     // r[impl audit.log.events]
+    pub fn template_updated(&self, name: &TemplateName, actor: Option<Arc<Actor>>) {
+        self.emit(OiEvent::TemplateUpdated {
+            timestamp: now(),
+            name: name.clone(),
+            actor,
+        });
+    }
+
+    // r[impl audit.log.events]
     pub fn template_removed(&self, name: &TemplateName, actor: Option<Arc<Actor>>) {
         self.emit(OiEvent::TemplateRemoved {
             timestamp: now(),
@@ -1289,6 +1305,12 @@ impl EventSenderWithActor {
     pub fn template_created(&self, name: &TemplateName) {
         self.inner
             .template_created(name, Some(Arc::clone(&self.actor)));
+    }
+
+    // r[impl audit.log.events]
+    pub fn template_updated(&self, name: &TemplateName) {
+        self.inner
+            .template_updated(name, Some(Arc::clone(&self.actor)));
     }
 
     // r[impl audit.log.events]

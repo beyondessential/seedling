@@ -44,6 +44,34 @@ pub(crate) struct InstantiateParams {
     pub app: AppName,
 }
 
+#[derive(Deserialize)]
+pub(crate) struct UpdateParams {
+    pub name: TemplateName,
+    #[serde(default)]
+    pub body: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_description")]
+    pub description: DescriptionUpdate,
+}
+
+#[derive(Default)]
+pub(crate) enum DescriptionUpdate {
+    #[default]
+    Unchanged,
+    Set(Option<String>),
+}
+
+fn deserialize_description<'de, D>(de: D) -> Result<DescriptionUpdate, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // serde_json represents `null` as `Option::None`; a missing field is handled by
+    // `#[serde(default)]` above. `Some(..)` means the caller provided `null` or a string
+    // explicitly, either of which should set the description. An absent field keeps the
+    // existing value.
+    let opt: Option<String> = Option::deserialize(de)?;
+    Ok(DescriptionUpdate::Set(opt))
+}
+
 // i[template.create]
 pub(crate) fn create_template(
     state: &OiState,
@@ -122,6 +150,44 @@ pub(crate) fn show_template(state: &OiState, params: NameParams) -> HandlerResul
         "description": row.description,
         "created_at": row.created_at,
     }))
+}
+
+// i[template.update]
+pub(crate) fn update_template(
+    state: &OiState,
+    params: UpdateParams,
+    ctx: &RequestCtx,
+) -> HandlerResult {
+    let name = params.name;
+
+    let body_owned = params.body;
+    let description_owned = match params.description {
+        DescriptionUpdate::Unchanged => None,
+        DescriptionUpdate::Set(s) => Some(s),
+    };
+
+    let name_for_db = name.clone();
+    let updated = state
+        .db
+        .call(move |db| {
+            runtime::templates::update(
+                db,
+                &name_for_db,
+                runtime::templates::UpdateFields {
+                    body: body_owned.as_deref(),
+                    description: description_owned.as_ref().map(|s| s.as_deref()),
+                },
+            )
+        })
+        .map_err(|e| OiError::new(ErrorCode::Internal, format!("db error: {e}")))?;
+    if !updated {
+        return Err(OiError::not_found(format!("template not found: {name}")));
+    }
+
+    tracing::info!(template = %name, "updated template");
+    ctx.events.template_updated(&name);
+
+    Ok(json!({ "updated": true }))
 }
 
 // i[template.remove]

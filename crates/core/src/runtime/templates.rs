@@ -50,6 +50,37 @@ pub fn get(db: &Db, name: &TemplateName) -> rusqlite::Result<Option<Template>> {
         .optional()
 }
 
+// i[impl template.update]
+pub struct UpdateFields<'a> {
+    pub body: Option<&'a str>,
+    pub description: Option<Option<&'a str>>,
+}
+
+// i[impl template.update]
+pub fn update(db: &Db, name: &TemplateName, fields: UpdateFields<'_>) -> rusqlite::Result<bool> {
+    let mut sets: Vec<&'static str> = Vec::new();
+    let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+    if let Some(body) = fields.body {
+        sets.push("body = ?");
+        values.push(Box::new(body.to_owned()));
+    }
+    if let Some(description) = fields.description {
+        sets.push("description = ?");
+        values.push(Box::new(description.map(str::to_owned)));
+    }
+
+    if sets.is_empty() {
+        return exists(db, name);
+    }
+
+    let sql = format!("UPDATE templates SET {} WHERE name = ?", sets.join(", "));
+    values.push(Box::new(name.clone()));
+    let params: Vec<&dyn rusqlite::ToSql> = values.iter().map(|b| b.as_ref()).collect();
+    let n = db.conn.execute(&sql, params.as_slice())?;
+    Ok(n > 0)
+}
+
 // i[impl template.remove]
 pub fn delete(db: &Db, name: &TemplateName) -> rusqlite::Result<bool> {
     let n = db
@@ -159,5 +190,112 @@ mod tests {
     fn remove_absent_returns_false() {
         let db = Db::open_in_memory().unwrap();
         assert!(!delete(&db, &TemplateName::new_unchecked("ghost")).unwrap());
+    }
+
+    // i[verify template.update]
+    #[test]
+    fn update_replaces_body_and_description() {
+        let db = Db::open_in_memory().unwrap();
+        create(
+            &db,
+            &Template {
+                name: TemplateName::new_unchecked("nginx-stack"),
+                body: "old body".to_owned(),
+                description: Some("old desc".to_owned()),
+                created_at: "2026-04-23T00:00:00Z".to_owned(),
+            },
+        )
+        .unwrap();
+        let ok = update(
+            &db,
+            &TemplateName::new_unchecked("nginx-stack"),
+            UpdateFields {
+                body: Some("new body"),
+                description: Some(Some("new desc")),
+            },
+        )
+        .unwrap();
+        assert!(ok);
+        let got = get(&db, &TemplateName::new_unchecked("nginx-stack"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.body, "new body");
+        assert_eq!(got.description.as_deref(), Some("new desc"));
+        assert_eq!(got.created_at, "2026-04-23T00:00:00Z");
+    }
+
+    // i[verify template.update]
+    #[test]
+    fn update_body_only_leaves_description_untouched() {
+        let db = Db::open_in_memory().unwrap();
+        create(
+            &db,
+            &Template {
+                name: TemplateName::new_unchecked("t"),
+                body: "b1".to_owned(),
+                description: Some("keep me".to_owned()),
+                created_at: "2026-04-23T00:00:00Z".to_owned(),
+            },
+        )
+        .unwrap();
+        update(
+            &db,
+            &TemplateName::new_unchecked("t"),
+            UpdateFields {
+                body: Some("b2"),
+                description: None,
+            },
+        )
+        .unwrap();
+        let got = get(&db, &TemplateName::new_unchecked("t"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.body, "b2");
+        assert_eq!(got.description.as_deref(), Some("keep me"));
+    }
+
+    // i[verify template.update]
+    #[test]
+    fn update_description_to_null_clears_it() {
+        let db = Db::open_in_memory().unwrap();
+        create(
+            &db,
+            &Template {
+                name: TemplateName::new_unchecked("t"),
+                body: "b".to_owned(),
+                description: Some("initial".to_owned()),
+                created_at: "2026-04-23T00:00:00Z".to_owned(),
+            },
+        )
+        .unwrap();
+        update(
+            &db,
+            &TemplateName::new_unchecked("t"),
+            UpdateFields {
+                body: None,
+                description: Some(None),
+            },
+        )
+        .unwrap();
+        let got = get(&db, &TemplateName::new_unchecked("t"))
+            .unwrap()
+            .unwrap();
+        assert!(got.description.is_none());
+    }
+
+    // i[verify template.update]
+    #[test]
+    fn update_absent_returns_false() {
+        let db = Db::open_in_memory().unwrap();
+        let ok = update(
+            &db,
+            &TemplateName::new_unchecked("ghost"),
+            UpdateFields {
+                body: Some("x"),
+                description: None,
+            },
+        )
+        .unwrap();
+        assert!(!ok);
     }
 }
