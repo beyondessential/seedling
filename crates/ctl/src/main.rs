@@ -15,6 +15,7 @@ mod forward;
 mod known_hosts;
 mod logs;
 mod op;
+mod services;
 mod shell;
 mod subscribe;
 mod templates;
@@ -55,6 +56,11 @@ enum Command {
     Volumes {
         #[command(subcommand)]
         command: volumes::VolumesCommand,
+    },
+    /// Service management (exported, app, site, external)
+    Services {
+        #[command(subcommand)]
+        command: services::ServicesCommand,
     },
     /// Proxy management
     Proxy {
@@ -307,6 +313,7 @@ async fn main() {
     match top_cmd {
         Command::Apps { command } => apps::dispatch(&client, command).await,
         Command::Volumes { command } => volumes::dispatch(&client, command).await,
+        Command::Services { command } => services::dispatch(&client, command).await,
         Command::Proxy { command } => op::dispatch_proxy(&client, command).await,
         Command::Dns { command } => op::dispatch_dns(&client, command).await,
         Command::Shells { command } => op::dispatch_shells(&client, command).await,

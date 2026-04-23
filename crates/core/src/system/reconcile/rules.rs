@@ -309,8 +309,10 @@ pub(super) fn resolve_external_backends(
 fn protocols_match(site_proto: SiteServiceProtocol, fwd_proto: ForwardProto) -> bool {
     matches!(
         (site_proto, fwd_proto),
-        (SiteServiceProtocol::Tcp | SiteServiceProtocol::Http, ForwardProto::Tcp)
-            | (SiteServiceProtocol::Udp, ForwardProto::Udp)
+        (
+            SiteServiceProtocol::Tcp | SiteServiceProtocol::Http,
+            ForwardProto::Tcp
+        ) | (SiteServiceProtocol::Udp, ForwardProto::Udp)
             | (_, ForwardProto::Both)
     )
 }
