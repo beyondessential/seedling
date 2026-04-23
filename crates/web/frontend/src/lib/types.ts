@@ -299,6 +299,52 @@ export type VolumeRef =
   | { kind: "app"; app: string; volume: string }
   | { kind: "held"; id: string };
 
+export type SiteServiceProtocol = "tcp" | "udp" | "http";
+
+export interface SiteServiceEndpoint {
+  service_port: number;
+  protocol: SiteServiceProtocol;
+  remote_host: string;
+  remote_port: number;
+}
+
+export interface SiteService {
+  name: string;
+  description?: string;
+  created_at: string;
+  endpoints: SiteServiceEndpoint[];
+}
+
+export interface ExportedService {
+  app: string;
+  service_name: string;
+  http: boolean;
+  description?: string;
+}
+
+export interface AppService {
+  app: string;
+  service_name: string;
+  http: boolean;
+  exported: boolean;
+  description?: string;
+}
+
+export interface DeclaredExternalService {
+  app: string;
+  name: string;
+}
+
+export type ServiceRef =
+  | { kind: "site"; name: string }
+  | { kind: "app"; app: string; service: string };
+
+export interface ExternalServiceMapping {
+  app: string;
+  external_name: string;
+  target: ServiceRef;
+}
+
 export interface BackupApp {
   app: string;
 }
