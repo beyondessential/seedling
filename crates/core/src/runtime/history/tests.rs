@@ -24,6 +24,7 @@ fn dep(app: &str, name: &str) -> ResourceInstance {
 // -----------------------------------------------------------------------
 
 // r[verify history.persistence]
+// r[verify operation.lifecycle.generations]
 #[test]
 fn save_and_load_current_operation() {
     use crate::runtime::secrets::Cipher;

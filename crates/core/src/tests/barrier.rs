@@ -43,6 +43,7 @@ fn registry() -> Arc<dyn crate::runtime::InstanceRegistry> {
     Arc::new(EphemeralInstanceRegistry::new())
 }
 
+// r[verify operation.lifecycle]
 // r[verify barrier.suspension]
 // r[verify barrier.condition]
 #[test]

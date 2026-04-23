@@ -92,6 +92,54 @@ fn all_tables_exist_after_migration() {
     }
 }
 
+// r[verify infra.db.file-permissions]
+#[test]
+fn open_creates_database_with_owner_only_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("seedling.db");
+    let _db = Db::open(&path).expect("open db");
+    let mode = path.metadata().unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "db file should be 0600, got 0{mode:o}");
+}
+
+// r[verify infra.db.file-permissions]
+#[test]
+fn open_rejects_database_with_group_readable_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("loose.db");
+    // Pre-create the file with permissive mode so open() refuses.
+    std::fs::write(&path, b"").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+    let err = match Db::open(&path) {
+        Ok(_) => panic!("should refuse 0640 mode"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(
+        msg.contains("insecure permissions"),
+        "error should mention permissions: {msg}",
+    );
+}
+
+// r[verify infra.db.busy-timeout]
+#[test]
+fn open_in_memory_sets_busy_timeout() {
+    let db = Db::open_in_memory().expect("open");
+    // sqlite exposes the busy timeout via PRAGMA busy_timeout.
+    let timeout_ms: i64 = db
+        .conn
+        .query_row("PRAGMA busy_timeout;", [], |r| r.get(0))
+        .expect("pragma succeeds");
+    assert!(
+        timeout_ms >= 5000,
+        "busy_timeout should be at least 5s, got {timeout_ms}ms",
+    );
+}
+
 // r[verify reconciliation.idempotency]
 #[test]
 fn action_log_has_unique_constraint() {
