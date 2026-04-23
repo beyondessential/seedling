@@ -1436,6 +1436,7 @@ function DiscoverSummary({ result }: { result: DiscoverResponse }) {
   );
 }
 
+// w[routes.images.app-detail]
 function AppImagesSection({
   appName,
   resources,
