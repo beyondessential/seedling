@@ -496,6 +496,14 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > is then set to the catch-up fire time, so subsequent cron boundaries are
 > evaluated from there.
 
+> r[backup.run.last-fired]
+> Both scheduled fires and manually triggered fires via `/backups/run` must
+> update the strategy's last-fired timestamp to the moment the fire was
+> initiated, before any per-volume work begins. This keeps the scheduler's
+> next-fire computation consistent across triggers (so an immediately-due
+> scheduled fire does not double-run right after a manual invocation) and
+> lets the operator surface see the most recent fire promptly.
+
 > r[backup.validation.fire-time]
 > Before executing a backup strategy, the runtime must verify:
 >
