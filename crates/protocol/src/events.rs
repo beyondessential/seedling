@@ -332,9 +332,10 @@ pub enum OiEvent {
     SiteServiceEndpointAdded {
         timestamp: Timestamp,
         name: String,
-        host: String,
-        port: u16,
+        service_port: u16,
         protocol: String,
+        remote_host: String,
+        remote_port: u16,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
@@ -342,9 +343,10 @@ pub enum OiEvent {
     SiteServiceEndpointRemoved {
         timestamp: Timestamp,
         name: String,
-        host: String,
-        port: u16,
+        service_port: u16,
         protocol: String,
+        remote_host: String,
+        remote_port: u16,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
@@ -781,39 +783,45 @@ impl EventSender {
     }
 
     // r[impl service.site.lifecycle.events]
+    #[allow(clippy::too_many_arguments)]
     pub fn site_service_endpoint_added(
         &self,
         name: &str,
-        host: &str,
-        port: u16,
+        service_port: u16,
         protocol: &str,
+        remote_host: &str,
+        remote_port: u16,
         actor: Option<Arc<Actor>>,
     ) {
         self.emit(OiEvent::SiteServiceEndpointAdded {
             timestamp: now(),
             name: name.to_owned(),
-            host: host.to_owned(),
-            port,
+            service_port,
             protocol: protocol.to_owned(),
+            remote_host: remote_host.to_owned(),
+            remote_port,
             actor,
         });
     }
 
     // r[impl service.site.lifecycle.events]
+    #[allow(clippy::too_many_arguments)]
     pub fn site_service_endpoint_removed(
         &self,
         name: &str,
-        host: &str,
-        port: u16,
+        service_port: u16,
         protocol: &str,
+        remote_host: &str,
+        remote_port: u16,
         actor: Option<Arc<Actor>>,
     ) {
         self.emit(OiEvent::SiteServiceEndpointRemoved {
             timestamp: now(),
             name: name.to_owned(),
-            host: host.to_owned(),
-            port,
+            service_port,
             protocol: protocol.to_owned(),
+            remote_host: remote_host.to_owned(),
+            remote_port,
             actor,
         });
     }
@@ -1202,23 +1210,39 @@ impl EventSenderWithActor {
     }
 
     // r[impl service.site.lifecycle.events]
-    pub fn site_service_endpoint_added(&self, name: &str, host: &str, port: u16, protocol: &str) {
+    pub fn site_service_endpoint_added(
+        &self,
+        name: &str,
+        service_port: u16,
+        protocol: &str,
+        remote_host: &str,
+        remote_port: u16,
+    ) {
         self.inner.site_service_endpoint_added(
             name,
-            host,
-            port,
+            service_port,
             protocol,
+            remote_host,
+            remote_port,
             Some(Arc::clone(&self.actor)),
         );
     }
 
     // r[impl service.site.lifecycle.events]
-    pub fn site_service_endpoint_removed(&self, name: &str, host: &str, port: u16, protocol: &str) {
+    pub fn site_service_endpoint_removed(
+        &self,
+        name: &str,
+        service_port: u16,
+        protocol: &str,
+        remote_host: &str,
+        remote_port: u16,
+    ) {
         self.inner.site_service_endpoint_removed(
             name,
-            host,
-            port,
+            service_port,
             protocol,
+            remote_host,
+            remote_port,
             Some(Arc::clone(&self.actor)),
         );
     }

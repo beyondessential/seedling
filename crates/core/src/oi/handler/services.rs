@@ -75,17 +75,19 @@ pub(crate) fn list_app_services(state: &OiState) -> HandlerResult {
 
 #[derive(Deserialize)]
 pub(crate) struct EndpointParams {
-    pub host: String,
-    pub port: u16,
+    pub service_port: u16,
     pub protocol: SiteServiceProtocol,
+    pub remote_host: String,
+    pub remote_port: u16,
 }
 
 impl From<EndpointParams> for SiteServiceEndpoint {
     fn from(p: EndpointParams) -> Self {
         Self {
-            host: p.host,
-            port: p.port,
+            service_port: p.service_port,
             protocol: p.protocol,
+            remote_host: p.remote_host,
+            remote_port: p.remote_port,
         }
     }
 }
@@ -130,9 +132,10 @@ pub(crate) fn create_site_service(
     for ep in &endpoints {
         ctx.events.site_service_endpoint_added(
             params.name.as_str(),
-            &ep.host,
-            ep.port,
+            ep.service_port,
             ep.protocol.as_str(),
+            &ep.remote_host,
+            ep.remote_port,
         );
     }
 
@@ -159,9 +162,10 @@ pub(crate) fn list_site_services(state: &OiState) -> HandlerResult {
                 .iter()
                 .map(|e| {
                     json!({
-                        "host": e.host,
-                        "port": e.port,
+                        "service_port": e.service_port,
                         "protocol": e.protocol.as_str(),
+                        "remote_host": e.remote_host,
+                        "remote_port": e.remote_port,
                     })
                 })
                 .collect();
@@ -245,9 +249,10 @@ pub(crate) fn delete_site_service(
 #[derive(Deserialize)]
 pub(crate) struct SiteServiceEndpointParams {
     pub name: SiteServiceName,
-    pub host: String,
-    pub port: u16,
+    pub service_port: u16,
     pub protocol: SiteServiceProtocol,
+    pub remote_host: String,
+    pub remote_port: u16,
 }
 
 // r[impl service.site.lifecycle]
@@ -258,9 +263,10 @@ pub(crate) fn add_site_service_endpoint(
 ) -> HandlerResult {
     let name = params.name.clone();
     let ep = SiteServiceEndpoint {
-        host: params.host.clone(),
-        port: params.port,
+        service_port: params.service_port,
         protocol: params.protocol,
+        remote_host: params.remote_host.clone(),
+        remote_port: params.remote_port,
     };
     let ep_for_db = ep.clone();
     state
@@ -271,9 +277,10 @@ pub(crate) fn add_site_service_endpoint(
     // r[impl service.site.lifecycle.events]
     ctx.events.site_service_endpoint_added(
         params.name.as_str(),
-        &params.host,
-        params.port,
+        params.service_port,
         params.protocol.as_str(),
+        &params.remote_host,
+        params.remote_port,
     );
 
     state.tick_notify.notify_one();
@@ -288,9 +295,10 @@ pub(crate) fn remove_site_service_endpoint(
 ) -> HandlerResult {
     let name = params.name.clone();
     let ep = SiteServiceEndpoint {
-        host: params.host.clone(),
-        port: params.port,
+        service_port: params.service_port,
         protocol: params.protocol,
+        remote_host: params.remote_host.clone(),
+        remote_port: params.remote_port,
     };
     let removed = state
         .db
@@ -306,10 +314,12 @@ pub(crate) fn remove_site_service_endpoint(
         return Err(OiError::new(
             ErrorCode::RequirementsInvalid,
             format!(
-                "no endpoint {:?}:{} ({}) on site service {:?}",
-                params.host,
-                params.port,
+                "no endpoint {}:{} ({}) -> {}:{} on site service {:?}",
+                params.name.as_str(),
+                params.service_port,
                 params.protocol,
+                params.remote_host,
+                params.remote_port,
                 params.name.as_str(),
             ),
         ));
@@ -318,9 +328,10 @@ pub(crate) fn remove_site_service_endpoint(
     // r[impl service.site.lifecycle.events]
     ctx.events.site_service_endpoint_removed(
         params.name.as_str(),
-        &params.host,
-        params.port,
+        params.service_port,
         params.protocol.as_str(),
+        &params.remote_host,
+        params.remote_port,
     );
 
     state.tick_notify.notify_one();

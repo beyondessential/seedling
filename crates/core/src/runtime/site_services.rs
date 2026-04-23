@@ -20,9 +20,10 @@ pub struct SiteServiceDef {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SiteServiceEndpoint {
-    pub host: String,
-    pub port: u16,
+    pub service_port: u16,
     pub protocol: SiteServiceProtocol,
+    pub remote_host: String,
+    pub remote_port: u16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -85,9 +86,16 @@ pub fn create(db: &Db, def: &SiteServiceDef) -> rusqlite::Result<()> {
     )?;
     for ep in &def.endpoints {
         tx.execute(
-            "INSERT INTO site_service_endpoints (site_service, host, port, protocol)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![def.name, ep.host, ep.port, ep.protocol],
+            "INSERT INTO site_service_endpoints
+                 (site_service, service_port, protocol, remote_host, remote_port)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                def.name,
+                ep.service_port,
+                ep.protocol,
+                ep.remote_host,
+                ep.remote_port
+            ],
         )?;
     }
     tx.commit()
@@ -164,9 +172,16 @@ pub fn add_endpoint(
     ep: &SiteServiceEndpoint,
 ) -> rusqlite::Result<()> {
     db.conn.execute(
-        "INSERT INTO site_service_endpoints (site_service, host, port, protocol)
-         VALUES (?1, ?2, ?3, ?4)",
-        params![name, ep.host, ep.port, ep.protocol],
+        "INSERT INTO site_service_endpoints
+             (site_service, service_port, protocol, remote_host, remote_port)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            name,
+            ep.service_port,
+            ep.protocol,
+            ep.remote_host,
+            ep.remote_port
+        ],
     )?;
     Ok(())
 }
@@ -178,22 +193,32 @@ pub fn remove_endpoint(
 ) -> rusqlite::Result<bool> {
     let count = db.conn.execute(
         "DELETE FROM site_service_endpoints
-         WHERE site_service = ?1 AND host = ?2 AND port = ?3 AND protocol = ?4",
-        params![name, ep.host, ep.port, ep.protocol],
+         WHERE site_service = ?1 AND service_port = ?2 AND protocol = ?3
+           AND remote_host = ?4 AND remote_port = ?5",
+        params![
+            name,
+            ep.service_port,
+            ep.protocol,
+            ep.remote_host,
+            ep.remote_port
+        ],
     )?;
     Ok(count > 0)
 }
 
 fn endpoints_for(db: &Db, name: &SiteServiceName) -> rusqlite::Result<Vec<SiteServiceEndpoint>> {
     let mut stmt = db.conn.prepare(
-        "SELECT host, port, protocol FROM site_service_endpoints
-         WHERE site_service = ?1 ORDER BY host, port, protocol",
+        "SELECT service_port, protocol, remote_host, remote_port
+         FROM site_service_endpoints
+         WHERE site_service = ?1
+         ORDER BY service_port, protocol, remote_host, remote_port",
     )?;
     let rows = stmt.query_map(params![name], |row| {
         Ok(SiteServiceEndpoint {
-            host: row.get(0)?,
-            port: row.get::<_, i64>(1)? as u16,
-            protocol: row.get(2)?,
+            service_port: row.get::<_, i64>(0)? as u16,
+            protocol: row.get(1)?,
+            remote_host: row.get(2)?,
+            remote_port: row.get::<_, i64>(3)? as u16,
         })
     })?;
     rows.collect()
@@ -211,21 +236,25 @@ mod tests {
         SiteServiceName::new(s).expect("valid name")
     }
 
-    fn tcp(host: &str, port: u16) -> SiteServiceEndpoint {
+    fn tcp(service_port: u16, remote_host: &str, remote_port: u16) -> SiteServiceEndpoint {
         SiteServiceEndpoint {
-            host: host.into(),
-            port,
+            service_port,
             protocol: SiteServiceProtocol::Tcp,
+            remote_host: remote_host.into(),
+            remote_port,
         }
     }
 
     #[test]
     fn create_with_endpoints_round_trips() {
         let db = mkdb();
+        // A service exposing 5432/tcp balanced across two backends that
+        // happen to listen on 15432. The schema keeps service_port and
+        // remote_port independent so this works end to end.
         let def = SiteServiceDef {
             name: mkname("postgres-prod"),
             description: Some("primary PG cluster".into()),
-            endpoints: vec![tcp("db1.corp", 5432), tcp("db2.corp", 5432)],
+            endpoints: vec![tcp(5432, "db1.corp", 15432), tcp(5432, "db2.corp", 15432)],
             created_at: "2026-04-23T00:00:00Z".into(),
         };
         create(&db, &def).unwrap();
@@ -253,9 +282,10 @@ mod tests {
         .unwrap();
 
         let ep = SiteServiceEndpoint {
-            host: "api.upstream".into(),
-            port: 443,
+            service_port: 443,
             protocol: SiteServiceProtocol::Http,
+            remote_host: "api.upstream".into(),
+            remote_port: 8443,
         };
         add_endpoint(&db, &name, &ep).unwrap();
         assert_eq!(
@@ -277,7 +307,7 @@ mod tests {
             &SiteServiceDef {
                 name: name.clone(),
                 description: None,
-                endpoints: vec![tcp("h1", 1), tcp("h2", 2)],
+                endpoints: vec![tcp(80, "h1", 80), tcp(80, "h2", 80)],
                 created_at: "2026-04-23T00:00:00Z".into(),
             },
         )
@@ -298,6 +328,36 @@ mod tests {
     }
 
     #[test]
+    fn endpoints_group_by_service_port() {
+        // A site service with two exposed ports, each with its own backend pool.
+        // Verify both pools are returned and grouping works.
+        let db = mkdb();
+        let name = mkname("multi-port");
+        create(
+            &db,
+            &SiteServiceDef {
+                name: name.clone(),
+                description: None,
+                endpoints: vec![
+                    tcp(3000, "1.2.3.4", 3000),
+                    tcp(3000, "1.2.3.5", 3000),
+                    tcp(4000, "1.2.3.4", 4000),
+                ],
+                created_at: "2026-04-23T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+
+        let eps = get(&db, &name).unwrap().unwrap().endpoints;
+
+        let port_3000: Vec<_> = eps.iter().filter(|e| e.service_port == 3000).collect();
+        assert_eq!(port_3000.len(), 2);
+        let port_4000: Vec<_> = eps.iter().filter(|e| e.service_port == 4000).collect();
+        assert_eq!(port_4000.len(), 1);
+        assert_eq!(port_4000[0].remote_host, "1.2.3.4");
+    }
+
+    #[test]
     fn endpoint_insert_for_unknown_site_service_is_rejected() {
         // With PRAGMA foreign_keys=ON, the REFERENCES clause on
         // site_service_endpoints.site_service must block orphan rows.
@@ -306,9 +366,10 @@ mod tests {
             &db,
             &mkname("ghost"),
             &SiteServiceEndpoint {
-                host: "h".into(),
-                port: 1,
+                service_port: 1,
                 protocol: SiteServiceProtocol::Tcp,
+                remote_host: "h".into(),
+                remote_port: 1,
             },
         );
         let err = res.expect_err("FK must reject orphan endpoint");
