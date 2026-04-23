@@ -374,3 +374,125 @@ fn registry_load_from_db_restores_params() {
         "param value should be restored into app.stored on startup"
     );
 }
+
+// -----------------------------------------------------------------------
+// AppRegistry — in-memory CRUD
+// -----------------------------------------------------------------------
+
+fn trivial_script() -> &'static str {
+    r#"app.deployment("web").image("docker.io/library/nginx:latest");"#
+}
+
+// i[verify app.register]
+#[test]
+fn register_adds_entry_and_makes_it_discoverable() {
+    let mut reg = AppRegistry::new();
+    let notify = Arc::new(Notify::new());
+    reg.register(
+        app("myapp"),
+        trivial_script().to_owned(),
+        Arc::clone(&notify),
+        &crate::ScriptLimits::default(),
+    )
+    .unwrap();
+    assert!(reg.is_registered("myapp"));
+    assert!(reg.get("myapp").is_some());
+}
+
+// i[verify app.register]
+#[test]
+fn register_persists_script_verbatim_for_later_replay() {
+    let mut reg = AppRegistry::new();
+    let notify = Arc::new(Notify::new());
+    reg.register(
+        app("myapp"),
+        trivial_script().to_owned(),
+        notify,
+        &crate::ScriptLimits::default(),
+    )
+    .unwrap();
+    let entry = reg.get("myapp").unwrap();
+    assert_eq!(entry.script, trivial_script());
+    assert_eq!(entry.current_generation, 0);
+}
+
+// i[verify app.deregister]
+#[test]
+fn deregister_removes_entry() {
+    let mut reg = AppRegistry::new();
+    let notify = Arc::new(Notify::new());
+    reg.register(
+        app("myapp"),
+        trivial_script().to_owned(),
+        notify,
+        &crate::ScriptLimits::default(),
+    )
+    .unwrap();
+    assert!(reg.deregister("myapp"));
+    assert!(!reg.is_registered("myapp"));
+    assert!(reg.get("myapp").is_none());
+}
+
+// i[verify app.deregister]
+#[test]
+fn deregister_unknown_returns_false() {
+    let mut reg = AppRegistry::new();
+    assert!(!reg.deregister("nonexistent"));
+}
+
+// i[verify app.list]
+#[test]
+fn list_returns_registered_apps_sorted() {
+    let mut reg = AppRegistry::new();
+    let notify = Arc::new(Notify::new());
+    for name in ["zeta-app", "alpha-app", "mu-app"] {
+        reg.register(
+            app(name),
+            trivial_script().to_owned(),
+            Arc::clone(&notify),
+            &crate::ScriptLimits::default(),
+        )
+        .unwrap();
+    }
+    let names: Vec<_> = reg.list().into_iter().map(|(n, _)| n).collect();
+    assert_eq!(names, vec!["alpha-app", "mu-app", "zeta-app"]);
+}
+
+// i[verify app.update]
+#[test]
+fn reload_replaces_script_on_existing_entry() {
+    let mut reg = AppRegistry::new();
+    let notify = Arc::new(Notify::new());
+    reg.register(
+        app("myapp"),
+        trivial_script().to_owned(),
+        notify,
+        &crate::ScriptLimits::default(),
+    )
+    .unwrap();
+
+    let new_script = r#"app.deployment("api").image("ghcr.io/acme/api:1.0");"#;
+    reg.reload(
+        &app("myapp"),
+        new_script.to_owned(),
+        &BTreeMap::new(),
+        &crate::ScriptLimits::default(),
+    );
+    let entry = reg.get("myapp").unwrap();
+    assert_eq!(entry.script, new_script);
+    assert!(entry.script_error.is_none());
+}
+
+// i[verify app.update]
+#[test]
+fn reload_of_unknown_app_is_noop() {
+    let mut reg = AppRegistry::new();
+    // No panic, no registration.
+    reg.reload(
+        &app("ghost"),
+        trivial_script().to_owned(),
+        &BTreeMap::new(),
+        &crate::ScriptLimits::default(),
+    );
+    assert!(!reg.is_registered("ghost"));
+}

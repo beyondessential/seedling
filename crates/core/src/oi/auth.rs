@@ -256,3 +256,69 @@ impl ClientCertVerifier for SeedlingClientVerifier {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // i[verify key.list]
+    #[test]
+    fn list_empty_on_fresh_db() {
+        let db = Db::open_in_memory().unwrap();
+        assert!(list_keys(&db).unwrap().is_empty());
+    }
+
+    // i[verify key.authorize]
+    // i[verify key.list]
+    #[test]
+    fn authorize_then_list_returns_inserted_key() {
+        let db = Db::open_in_memory().unwrap();
+        let trusted = new_trusted_keys();
+        authorize_key(&db, &trusted, "fp-1", "laptop").unwrap();
+        let list = list_keys(&db).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].0, "fp-1");
+        assert_eq!(list[0].1, "laptop");
+        assert!(trusted.read().contains("fp-1"));
+    }
+
+    // i[verify key.authorize]
+    #[test]
+    fn authorize_updates_label_on_conflict() {
+        let db = Db::open_in_memory().unwrap();
+        let trusted = new_trusted_keys();
+        authorize_key(&db, &trusted, "fp-1", "old-label").unwrap();
+        authorize_key(&db, &trusted, "fp-1", "new-label").unwrap();
+        let list = list_keys(&db).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].1, "new-label");
+    }
+
+    // i[verify key.revoke]
+    #[test]
+    fn revoke_removes_authorized_key() {
+        let db = Db::open_in_memory().unwrap();
+        let trusted = new_trusted_keys();
+        authorize_key(&db, &trusted, "fp-1", "laptop").unwrap();
+        assert!(revoke_key(&db, &trusted, "fp-1").unwrap());
+        assert!(list_keys(&db).unwrap().is_empty());
+        assert!(!trusted.read().contains("fp-1"));
+    }
+
+    // i[verify key.revoke]
+    #[test]
+    fn revoke_returns_false_for_unknown_fingerprint() {
+        let db = Db::open_in_memory().unwrap();
+        let trusted = new_trusted_keys();
+        assert!(!revoke_key(&db, &trusted, "unknown-fp").unwrap());
+    }
+
+    #[test]
+    fn get_label_roundtrips() {
+        let db = Db::open_in_memory().unwrap();
+        let trusted = new_trusted_keys();
+        authorize_key(&db, &trusted, "fp-x", "ci-bot").unwrap();
+        assert_eq!(get_label(&db, "fp-x").unwrap().as_deref(), Some("ci-bot"));
+        assert!(get_label(&db, "fp-other").unwrap().is_none());
+    }
+}
