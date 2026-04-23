@@ -833,7 +833,7 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > r[service.site]
 > A site service is a named service managed by operators, independent of any app. A site service carries a set of one or more backing endpoints, each identified by a `(host, port, protocol)` triple; the protocol is one of `tcp`, `udp`, or `http`.
 >
-> Having multiple endpoints on a single site service expresses a load-balanced or failover backend: traffic destined for the site service must be distributed across the endpoints as for any other multi-backend service (see [service.routing](language.md#l--service.routing)).
+> The `(port, protocol)` component of an endpoint groups endpoints into a backend pool: the service's exposed ports are the union of the `(port, protocol)` pairs across its endpoints, and traffic destined for `(service, port, protocol)` is distributed across the subset of endpoints whose `(port, protocol)` matches, as for any other multi-backend service (see [service.routing](language.md#l--service.routing)). Two endpoints that share a `(port, protocol)` are peers for that port's traffic; two endpoints that differ in `(port, protocol)` are backends for different exposed ports.
 
 > r[service.site.lifecycle]
 > Site services are created, retargeted, and deleted exclusively through operator commands. Creating a site service registers its name and an optional human-readable description; endpoints are added and removed independently so operators may adjust the backing set without recreating the service.
