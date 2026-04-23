@@ -20,8 +20,7 @@
 
 let version = app.param("version")
     .required(true)
-    .default_value("18")
-    .description("PostgreSQL image tag (docker.io/library/postgres:<tag>)");
+    .description("PostgreSQL image tag (docker.io/library/postgres:<tag>), e.g. 18.3");
 
 let bestool_psql_version = app.param("bestool-psql-version")
     .required(false)
@@ -38,6 +37,7 @@ let db_type = app.param("db-type")
     .description("Workload profile for tuning: web, oltp, dw, mixed, desktop");
 
 let extra_config = app.param("extra-config")
+    .kind("multiline")
     .required(false)
     .description("Extra postgresql.conf lines appended to the generated config");
 
