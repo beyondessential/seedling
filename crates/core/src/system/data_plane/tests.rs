@@ -217,6 +217,8 @@ fn dnat_lb_single_backend() {
 }
 
 // l[verify service.routing]
+// r[verify infra.dataplane.service-dnat]
+// r[verify infra.dataplane.mount-dnat]
 #[test]
 fn dnat_lb_multiple_backends_uniform_port() {
     let backends = vec![
@@ -244,6 +246,8 @@ fn dnat_lb_multiple_backends_uniform_port() {
 }
 
 // l[verify service.routing]
+// r[verify infra.dataplane.service-dnat]
+// r[verify infra.dataplane.mount-dnat]
 #[test]
 fn dnat_lb_multiple_backends_mixed_ports() {
     let backends = vec![
