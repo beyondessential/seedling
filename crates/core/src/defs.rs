@@ -130,13 +130,65 @@ pub fn register(engine: &mut Engine) {
     engine.register_fn("col", collection::col);
 }
 
+/// Read `MemTotal` from `/proc/meminfo` and return the value in bytes.
+///
+/// Falls back to `1` (the minimum positive value permitted by the spec)
+/// if the file cannot be read or parsed.
+fn read_mem_total_bytes() -> i64 {
+    let Ok(contents) = std::fs::read_to_string("/proc/meminfo") else {
+        return 1;
+    };
+    for line in contents.lines() {
+        let Some(rest) = line.strip_prefix("MemTotal:") else {
+            continue;
+        };
+        let mut parts = rest.split_whitespace();
+        let Some(num) = parts.next() else { continue };
+        let Some(unit) = parts.next() else { continue };
+        let Ok(value) = num.parse::<i64>() else {
+            continue;
+        };
+        let multiplier: i64 = match unit {
+            "B" => 1,
+            "kB" | "KB" => 1024,
+            "MB" => 1024 * 1024,
+            "GB" => 1024 * 1024 * 1024,
+            _ => continue,
+        };
+        return value.saturating_mul(multiplier).max(1);
+    }
+    1
+}
+
 // l[impl bsl.scope]
 // l[impl bsl.enums]
 pub fn scope() -> (Scope<'static>, app::App) {
     let mut scope = Scope::new();
+    let facts = crate::sysconst::get();
 
     // l[impl const.available-threads]
     scope.push_constant("AVAILABLE_THREADS", 16_i64);
+
+    // l[impl const.available-memory]
+    scope.push_constant("AVAILABLE_MEMORY", read_mem_total_bytes());
+
+    // l[impl const.cpu-architecture]
+    scope.push_constant("CPU_ARCHITECTURE", std::env::consts::ARCH.to_owned());
+
+    // l[impl const.has-ipv4]
+    scope.push_constant("HAS_IPV4", facts.ipv4_egress);
+
+    // l[impl const.has-ipv6]
+    scope.push_constant("HAS_IPV6", facts.ipv6_egress);
+
+    // l[impl const.nat64-active]
+    scope.push_constant("NAT64_ACTIVE", facts.nat64_active);
+
+    // l[impl const.has-snapshots]
+    scope.push_constant("HAS_SNAPSHOTS", facts.has_snapshots);
+
+    // l[impl const.node-name]
+    scope.push_constant("NODE_NAME", facts.node_name.clone());
 
     // l[impl const.default-deadline]
     scope.push_constant("DEFAULT_DEADLINE", 30_i64);

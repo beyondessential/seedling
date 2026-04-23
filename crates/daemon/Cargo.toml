@@ -21,4 +21,5 @@ serde_json.workspace = true
 rustls.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+whoami.workspace = true
 if-addrs.workspace = true

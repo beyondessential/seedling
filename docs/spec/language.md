@@ -110,6 +110,44 @@ These are not guaranteed to be constant forever, only for the duration of one sc
 > It is the amount of compute threads available to the application.
 > It may be thought of as the number of cores available on the node, but the exact value is a concern for the control plane.
 
+> l[const.available-memory]
+> `AVAILABLE_MEMORY` is a positive non-zero number.
+> It is the amount of memory, in bytes, available to the application.
+> It may be thought of as the total RAM on the node, but the exact value is a concern for the control plane.
+
+> l[const.cpu-architecture]
+> `CPU_ARCHITECTURE` is a non-empty string identifying the CPU architecture of the node.
+>
+> Common values include `x86_64`, `aarch64`, `arm`, and `riscv64`, but other values may appear as platforms evolve.
+> Scripts should treat unknown values as "unsupported" rather than error out.
+
+> l[const.has-ipv4]
+> `HAS_IPV4` is a boolean.
+> It is `true` when the node has working IPv4 egress, and `false` otherwise.
+>
+> "Working egress" means a default IPv4 unicast route is configured. Source address selection is not inspected: an RFC1918 host behind NAT is considered to have egress.
+
+> l[const.has-ipv6]
+> `HAS_IPV6` is a boolean.
+> It is `true` when the node has working IPv6 egress to the internet, and `false` otherwise.
+>
+> "Working egress" means both a default IPv6 unicast route and at least one globally-routable IPv6 source address. ULAs and link-local addresses do not qualify.
+
+> l[const.nat64-active]
+> `NAT64_ACTIVE` is a boolean.
+> It is `true` when the node itself is providing NAT64 translation for its workloads, and `false` otherwise.
+>
+> A `false` value does not imply that IPv4-only workloads cannot reach IPv4 destinations: an external NAT64+DNS64 infrastructure may still be in play. Scripts that need a definitive answer should combine `HAS_IPV4` and `NAT64_ACTIVE`.
+
+> l[const.has-snapshots]
+> `HAS_SNAPSHOTS` is a boolean.
+> It is `true` when the node's volume storage supports copy-on-write snapshots, and `false` otherwise.
+
+> l[const.node-name]
+> `NODE_NAME` is a string identifying the node the application runs on.
+>
+> The format is not specified. It may be empty in contexts where the node identity is not meaningful, such as when validating scripts outside of a running node.
+
 > l[const.default-deadline]
 > The default deadlines for `started.<state>()` barriers with no explicit `deadline` argument are:
 >

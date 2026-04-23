@@ -19,7 +19,8 @@ use seedling_core::{
     },
     system::{
         System,
-        nat64::{detect_ipv6_egress, should_activate_nat64},
+        nat64::should_activate_nat64,
+        netinfo::{detect_ipv4_egress, detect_ipv6_egress},
         node_prefix_from_machine_id,
         reconcile::Reconciler,
         resolver::{resolver_addr, resolver_gateway_addr, spawn_dns_forwarder},
@@ -309,11 +310,29 @@ async fn main() {
     }
 
     // r[impl infra.nat64.ipv6-egress]
+    // l[impl const.has-ipv4]
+    // l[impl const.has-ipv6]
+    let ipv4_egress = detect_ipv4_egress().await;
+    let ipv6_egress = detect_ipv6_egress().await;
+
+    // l[impl const.has-ipv4]
+    // l[impl const.has-ipv6]
+    // l[impl const.nat64-active]
+    // l[impl const.has-snapshots]
+    // l[impl const.node-name]
+    seedling_core::sysconst::set(seedling_core::sysconst::SystemFacts {
+        ipv4_egress,
+        ipv6_egress,
+        nat64_active,
+        has_snapshots: use_btrfs,
+        node_name: whoami::devicename().unwrap_or_default(),
+    });
+
     // r[impl infra.nat64.dns64.force-translation]
     // Force DNS64 to translate all names only when seedling is itself
     // providing NAT64 and the host cannot route native IPv6. If an external
     // NAT64+DNS64 setup is in play, trust its own policy.
-    let force_dns64_translation = nat64_active && !detect_ipv6_egress().await;
+    let force_dns64_translation = nat64_active && !ipv6_egress;
     tracing::info!(
         nat64_active,
         force_dns64_translation,

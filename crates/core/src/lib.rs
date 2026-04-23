@@ -3,6 +3,7 @@ use rhai::{Engine, Scope};
 pub mod defs;
 pub mod oi;
 pub mod runtime;
+pub mod sysconst;
 pub mod system;
 
 #[cfg(test)]

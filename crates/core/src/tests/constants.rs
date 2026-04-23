@@ -32,6 +32,91 @@ fn available_threads_usable_in_scale() {
     );
 }
 
+// l[verify const.available-memory]
+#[test]
+fn available_memory_is_positive() {
+    run_test_script_app(
+        r#"
+        if AVAILABLE_MEMORY <= 0 { throw "AVAILABLE_MEMORY must be positive non-zero"; }
+    "#,
+    );
+}
+
+// l[verify const.cpu-architecture]
+#[test]
+fn cpu_architecture_is_nonempty_string() {
+    run_test_script_app(
+        r#"
+        if type_of(CPU_ARCHITECTURE) != "string" {
+            throw "CPU_ARCHITECTURE must be a string";
+        }
+        if CPU_ARCHITECTURE == "" {
+            throw "CPU_ARCHITECTURE must not be empty";
+        }
+    "#,
+    );
+}
+
+// l[verify const.has-ipv4]
+#[test]
+fn has_ipv4_is_bool() {
+    run_test_script_app(
+        r#"
+        if type_of(HAS_IPV4) != "bool" {
+            throw "HAS_IPV4 must be a bool";
+        }
+    "#,
+    );
+}
+
+// l[verify const.has-ipv6]
+#[test]
+fn has_ipv6_is_bool() {
+    run_test_script_app(
+        r#"
+        if type_of(HAS_IPV6) != "bool" {
+            throw "HAS_IPV6 must be a bool";
+        }
+    "#,
+    );
+}
+
+// l[verify const.nat64-active]
+#[test]
+fn nat64_active_is_bool() {
+    run_test_script_app(
+        r#"
+        if type_of(NAT64_ACTIVE) != "bool" {
+            throw "NAT64_ACTIVE must be a bool";
+        }
+    "#,
+    );
+}
+
+// l[verify const.has-snapshots]
+#[test]
+fn has_snapshots_is_bool() {
+    run_test_script_app(
+        r#"
+        if type_of(HAS_SNAPSHOTS) != "bool" {
+            throw "HAS_SNAPSHOTS must be a bool";
+        }
+    "#,
+    );
+}
+
+// l[verify const.node-name]
+#[test]
+fn node_name_is_string() {
+    run_test_script_app(
+        r#"
+        if type_of(NODE_NAME) != "string" {
+            throw "NODE_NAME must be a string";
+        }
+    "#,
+    );
+}
+
 // l[verify const.on-update.rolling]
 #[test]
 fn on_update_rolling() {
