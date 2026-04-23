@@ -25,9 +25,20 @@ impl CustomType for Param {
         builder.with_fn(
             "value",
             |this: &mut Self| -> Result<String, Box<EvalAltResult>> {
-                this.value
-                    .clone()
-                    .ok_or_else(|| format!("param '{}' is not set", this.name).into())
+                if let Some(v) = &this.value {
+                    return Ok(v.clone());
+                }
+                if let Some(default) = this
+                    .app
+                    .def
+                    .load()
+                    .params
+                    .get(&this.name)
+                    .and_then(|def| def.default_value.clone())
+                {
+                    return Ok(default);
+                }
+                Err(format!("param '{}' is not set", this.name).into())
             },
         );
 

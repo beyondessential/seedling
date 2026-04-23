@@ -267,7 +267,10 @@ This is currently the only value.
 
 > l[param.value]
 > `param.value()` returns the parameter's current string value.
-> If no value has been stored, it throws.
+> If no value has been stored but a [default](#l--param.schema.default-value) has been declared on the `Param`, the default is returned.
+> If no value has been stored and no default is declared, it throws.
+>
+> `param.is_set()` is not affected by the default: it remains `false` while the default is the effective value, so scripts can distinguish "operator-provided" from "defaulted".
 
 > l[param.on-change]
 > `param.on_change(fn: closure)` registers a handler that is called when the parameter's value changes.

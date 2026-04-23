@@ -149,6 +149,66 @@ fn stored_param_is_set_returns_true() {
     );
 }
 
+// l[verify param.value]
+#[test]
+fn unset_param_value_falls_back_to_default_value() {
+    let (engine, mut scope, app) = crate::setup_language(&crate::ScriptLimits::default());
+    crate::tests::run_script(
+        &engine,
+        &mut scope,
+        r#"
+        let p = app.param("max-connections").default_value("100");
+        if p.is_set() { throw "expected is_set() == false when only a default is declared"; }
+        if p.value() != "100" { throw `expected default "100", got: ${p.value()}`; }
+        "#,
+    )
+    .expect("script should evaluate without error");
+
+    let def = app.def.load();
+    let schema = def.params.get("max-connections").unwrap();
+    assert_eq!(schema.default_value.as_deref(), Some("100"));
+}
+
+// l[verify param.value]
+#[test]
+fn stored_value_overrides_default_value() {
+    use std::collections::BTreeMap;
+
+    let (engine, mut scope, app) = crate::setup_language(&crate::ScriptLimits::default());
+    {
+        let mut stored = BTreeMap::new();
+        stored.insert("max-connections".to_owned(), "500".to_owned());
+        *app.stored.lock() = stored;
+    }
+    crate::tests::run_script(
+        &engine,
+        &mut scope,
+        r#"
+        let p = app.param("max-connections").default_value("100");
+        if p.value() != "500" { throw `stored value should win over default, got: ${p.value()}`; }
+        "#,
+    )
+    .expect("script should evaluate without error");
+}
+
+// l[verify param.value]
+#[test]
+fn unset_param_without_default_still_throws() {
+    let (engine, mut scope, _app) = crate::setup_language(&crate::ScriptLimits::default());
+    let res = crate::tests::run_script(
+        &engine,
+        &mut scope,
+        r#"
+        let p = app.param("hostname");
+        p.value();
+        "#,
+    );
+    assert!(
+        res.is_err(),
+        "value() should throw when unset and no default"
+    );
+}
+
 // i[verify param.store]
 #[test]
 fn unset_param_is_set_returns_false() {
