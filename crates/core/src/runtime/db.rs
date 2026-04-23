@@ -324,6 +324,11 @@ impl Db {
         }
 
         conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+        // Foreign keys are a connection-scoped pragma in SQLite and are off
+        // by default. Enable them so REFERENCES clauses (currently only on
+        // site-service tables; other tables will adopt them in a follow-up)
+        // are actually enforced.
+        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
         let db = Self { conn };
         db.migrate()?;
         Ok(db)
@@ -332,6 +337,7 @@ impl Db {
     pub fn open_in_memory() -> SqlResult<Self> {
         let conn = Connection::open_in_memory()?;
         conn.busy_timeout(Duration::from_secs(5))?;
+        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
         let db = Self { conn };
         db.migrate()?;
         Ok(db)

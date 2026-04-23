@@ -150,13 +150,11 @@ pub fn get(db: &Db, name: &SiteServiceName) -> rusqlite::Result<Option<SiteServi
 }
 
 pub fn delete(db: &Db, name: &SiteServiceName) -> rusqlite::Result<bool> {
-    let tx = db.conn.unchecked_transaction()?;
-    tx.execute(
-        "DELETE FROM site_service_endpoints WHERE site_service = ?1",
-        params![name],
-    )?;
-    let count = tx.execute("DELETE FROM site_services WHERE name = ?1", params![name])?;
-    tx.commit()?;
+    // Endpoints are cascaded by the `site_service_endpoints` FK (PRAGMA
+    // foreign_keys is enabled on every connection in Db::open*).
+    let count = db
+        .conn
+        .execute("DELETE FROM site_services WHERE name = ?1", params![name])?;
     Ok(count > 0)
 }
 
@@ -297,6 +295,28 @@ mod tests {
             )
             .unwrap();
         assert_eq!(orphan_count, 0);
+    }
+
+    #[test]
+    fn endpoint_insert_for_unknown_site_service_is_rejected() {
+        // With PRAGMA foreign_keys=ON, the REFERENCES clause on
+        // site_service_endpoints.site_service must block orphan rows.
+        let db = mkdb();
+        let res = add_endpoint(
+            &db,
+            &mkname("ghost"),
+            &SiteServiceEndpoint {
+                host: "h".into(),
+                port: 1,
+                protocol: SiteServiceProtocol::Tcp,
+            },
+        );
+        let err = res.expect_err("FK must reject orphan endpoint");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("FOREIGN KEY") || msg.contains("constraint"),
+            "unexpected error: {msg}"
+        );
     }
 
     #[test]
