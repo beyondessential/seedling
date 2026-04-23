@@ -830,6 +830,22 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > r[volume.external.mapping.events]
 > Creating, removing, or retargeting an operator-configured external volume mapping must emit an event identifying the app and external volume name, the new mapping target (or absence of one for removal), and — for retargeting — the previous target. These events feed both the event feed and the [audit log](#r--audit.log).
 
+> r[service.site]
+> A site service is a named service managed by operators, independent of any app. A site service carries a set of one or more backing endpoints, each identified by a `(host, port, protocol)` triple; the protocol is one of `tcp`, `udp`, or `http`.
+>
+> Having multiple endpoints on a single site service expresses a load-balanced or failover backend: traffic destined for the site service must be distributed across the endpoints as for any other multi-backend service (see [service.routing](language.md#l--service.routing)).
+
+> r[service.site.lifecycle]
+> Site services are created, retargeted, and deleted exclusively through operator commands. Creating a site service registers its name and an optional human-readable description; endpoints are added and removed independently so operators may adjust the backing set without recreating the service.
+>
+> Deleting a site service must be rejected while any [external service mapping](#r--service.external.mapping.events) still targets it; operators must unmap or remap those slots first. Deletion removes the service record and its endpoints; no held-resource mechanism applies because site services carry no persistent state.
+
+> r[service.site.lifecycle.events]
+> Site service creation and deletion, and endpoint add/remove operations, must emit events on the event feed and be recorded in the [audit log](#r--audit.log). Endpoint events identify the site service name and the `(host, port, protocol)` triple.
+
+> r[service.external.mapping.events]
+> Creating, removing, or retargeting an operator-configured external service mapping must emit an event identifying the app and external service name, the new mapping target (or absence of one for removal), and — for retargeting — the previous target. These events feed both the event feed and the [audit log](#r--audit.log).
+
 > r[actuate.volume.stop]
 > Stopping a Volume instance must remove the named volume.
 

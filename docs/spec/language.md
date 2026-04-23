@@ -321,6 +321,20 @@ This is currently the only value.
 >
 > Prefix-matching is done by length: for any given URL, the longest matching prefix is selected. If more complicated logic is required, an application should embed an HTTP "reverse proxy" container of its choice.
 
+> l[service.exported]
+> `service.exported(options?: #{ description?: string })` is a builder method which marks the service as exported. Exported services are advertised to the control plane and operators.
+>
+> Only named static services can be exported. Calling `exported()` on an anonymous service must throw.
+
+## External Service
+
+> l[service.external]
+> An External Service is a Service provided by the Seedling control plane to a BSL script, at a particular name.
+>
+> External Services are defined using the `app.external_service(name: string)` method, which returns an `ExternalService`.
+>
+> External Services can't be modified or configured further, only [mounted](#l--container.mount-service) or [bound](#l--pod.bind) like any other Service. The concrete endpoint the slot resolves to is supplied by the operator via a mapping; see the runtime spec [service.external.mapping.events](runtime.md#r--service.external.mapping.events) for the mapping lifecycle.
+
 # Ingress
 
 > l[ingress.type]
