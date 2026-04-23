@@ -173,6 +173,22 @@ mod tests {
         }
     }
 
+    /// Insert a bare site service row so site-targeted mappings satisfy the
+    /// v39 trigger that enforces referential integrity.
+    fn seed_site_service(db: &Db, name: &str) {
+        let n = SiteServiceName::new(name).unwrap();
+        crate::runtime::site_services::create(
+            db,
+            &crate::runtime::site_services::SiteServiceDef {
+                name: n,
+                description: None,
+                endpoints: vec![],
+                created_at: "2026-04-23T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+    }
+
     #[test]
     fn create_and_get_app_target() {
         let db = mkdb();
@@ -185,6 +201,7 @@ mod tests {
     #[test]
     fn create_and_get_site_target() {
         let db = mkdb();
+        seed_site_service(&db, "postgres-prod");
         let m = mapping_site("web-app", "postgres", "postgres-prod");
         create(&db, &m).unwrap();
         let got = get(&db, &m.app, &m.external_name).unwrap();
@@ -194,6 +211,7 @@ mod tests {
     #[test]
     fn update_switches_target() {
         let db = mkdb();
+        seed_site_service(&db, "redis-prod");
         let mut m = mapping_site("web-app", "cache", "redis-prod");
         create(&db, &m).unwrap();
 
@@ -210,6 +228,7 @@ mod tests {
     #[test]
     fn delete_reports_whether_row_existed() {
         let db = mkdb();
+        seed_site_service(&db, "redis-prod");
         let m = mapping_site("web-app", "cache", "redis-prod");
         create(&db, &m).unwrap();
 
@@ -221,6 +240,8 @@ mod tests {
     #[test]
     fn list_for_site_target_filters() {
         let db = mkdb();
+        seed_site_service(&db, "shared-db");
+        seed_site_service(&db, "shared-cache");
         create(&db, &mapping_site("app-a", "primary", "shared-db")).unwrap();
         create(&db, &mapping_site("app-b", "primary", "shared-db")).unwrap();
         create(&db, &mapping_site("app-a", "cache", "shared-cache")).unwrap();
@@ -232,8 +253,63 @@ mod tests {
     }
 
     #[test]
+    fn site_target_rejected_when_site_service_missing() {
+        // v39 trigger: inserting a mapping whose target_kind = 'site' must
+        // be rejected when the target site service doesn't exist.
+        let db = mkdb();
+        let m = mapping_site("web-app", "cache", "absent-service");
+        let err = create(&db, &m).expect_err("trigger must reject orphan mapping");
+        assert!(
+            format!("{err}").contains("site service"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn site_target_rejected_on_remap_to_missing() {
+        let db = mkdb();
+        seed_site_service(&db, "postgres-prod");
+        let m = mapping_site("web-app", "cache", "postgres-prod");
+        create(&db, &m).unwrap();
+
+        let retarget = ExternalServiceMapping {
+            app: m.app.clone(),
+            external_name: m.external_name.clone(),
+            target: ServiceRef::Site {
+                name: SiteServiceName::new("nowhere").unwrap(),
+            },
+        };
+        let err = update(&db, &retarget).expect_err("trigger must reject orphan remap");
+        assert!(
+            format!("{err}").contains("site service"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn site_service_delete_blocked_while_mapped() {
+        // v39 trigger: direct SQL deletion of a site service must be blocked
+        // while any external_service_mappings still target it. The OI
+        // handler has its own friendlier check; this asserts the DB-level
+        // defence in depth.
+        let db = mkdb();
+        seed_site_service(&db, "postgres-prod");
+        create(&db, &mapping_site("web-app", "cache", "postgres-prod")).unwrap();
+
+        let site_name = SiteServiceName::new("postgres-prod").unwrap();
+        let err = crate::runtime::site_services::delete(&db, &site_name)
+            .expect_err("trigger must block delete while mapped");
+        assert!(
+            format!("{err}").contains("external_service_mappings"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn list_for_app_and_list_all() {
         let db = mkdb();
+        seed_site_service(&db, "postgres-prod");
+        seed_site_service(&db, "redis-prod");
         create(&db, &mapping_site("web-app", "primary", "postgres-prod")).unwrap();
         create(&db, &mapping_site("web-app", "cache", "redis-prod")).unwrap();
         create(&db, &mapping_site("api-app", "primary", "postgres-prod")).unwrap();
