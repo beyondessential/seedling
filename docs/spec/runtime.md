@@ -830,6 +830,24 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > r[volume.external.mapping.events]
 > Creating, removing, or retargeting an operator-configured external volume mapping must emit an event identifying the app and external volume name, the new mapping target (or absence of one for removal), and — for retargeting — the previous target. These events feed both the event feed and the [audit log](#r--audit.log).
 
+> r[service.site]
+> A site service is a named service managed by operators, independent of any app. A site service carries a set of one or more endpoints, each a 4-tuple `(service_port, protocol, remote_host, remote_port)`.
+>
+> `service_port` is the port on which the site service exposes this backend; `remote_host` and `remote_port` are the address traffic is forwarded to. The two ports may differ (e.g. a site service exposes 80/tcp in front of backends listening on 8080). The protocol is one of `tcp`, `udp`, or `http`.
+>
+> The `(service_port, protocol)` pairs across a site service's endpoints define the ports the service exposes. Traffic destined for `(service, service_port, protocol)` is distributed across the `(remote_host, remote_port)` pairs of all endpoints whose `(service_port, protocol)` matches, as for any other multi-backend service (see [service.routing](language.md#l--service.routing)). Two endpoints sharing a `(service_port, protocol)` are peers for that port's traffic; endpoints differing in `(service_port, protocol)` back different exposed ports on the same site service.
+
+> r[service.site.lifecycle]
+> Site services are created, retargeted, and deleted exclusively through operator commands. Creating a site service registers its name and an optional human-readable description; endpoints are added and removed independently so operators may adjust the backing set without recreating the service.
+>
+> Deleting a site service must be rejected while any [external service mapping](#r--service.external.mapping.events) still targets it; operators must unmap or remap those slots first. Deletion removes the service record and its endpoints; no held-resource mechanism applies because site services carry no persistent state.
+
+> r[service.site.lifecycle.events]
+> Site service creation and deletion, and endpoint add/remove operations, must emit events on the event feed and be recorded in the [audit log](#r--audit.log). Endpoint events identify the site service name and the `(service_port, protocol, remote_host, remote_port)` tuple.
+
+> r[service.external.mapping.events]
+> Creating, removing, or retargeting an operator-configured external service mapping must emit an event identifying the app and external service name, the new mapping target (or absence of one for removal), and — for retargeting — the previous target. These events feed both the event feed and the [audit log](#r--audit.log).
+
 > r[actuate.volume.stop]
 > Stopping a Volume instance must remove the named volume.
 

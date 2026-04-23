@@ -2,7 +2,7 @@ use std::path::{Component, PathBuf};
 
 use rhai::{CustomType, EvalAltResult, Map, TypeBuilder};
 
-use super::{Freezable, Holder, resource::ResourceName};
+use super::{Freezable, Holder, export::ExportOptions, resource::ResourceName};
 
 // l[impl volume.write.validation]
 fn validate_volume_write_path(path: &str) -> Result<(), Box<EvalAltResult>> {
@@ -31,11 +31,6 @@ fn validate_volume_write_path(path: &str) -> Result<(), Box<EvalAltResult>> {
     }
 
     Ok(())
-}
-
-#[derive(Debug, Clone)]
-pub struct ExportOptions {
-    pub description: Option<String>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -139,18 +134,7 @@ impl CustomType for Volume {
                     if this.name.is_none() {
                         return Err("only named volumes can be exported".into());
                     }
-                    let description = if let Some(desc) = options.get("description") {
-                        Some(
-                            desc.clone()
-                                .into_string()
-                                .map_err(|e| -> Box<EvalAltResult> {
-                                    format!("export description must be a string: {e}").into()
-                                })?,
-                        )
-                    } else {
-                        None
-                    };
-                    this.def.lock().exported = Some(ExportOptions { description });
+                    this.def.lock().exported = Some(ExportOptions::from_rhai_map(options)?);
                     Ok(this.clone())
                 },
             );

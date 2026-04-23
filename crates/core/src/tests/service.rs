@@ -107,3 +107,66 @@ fn http_service_route_rejects_no_slash() {
     "#,
     );
 }
+
+// l[verify service.exported]
+#[test]
+fn service_exported_marks_service() {
+    let app = run_test_script_app(r#"app.service("web").exported();"#);
+    let def = app.def.load();
+    let id = def
+        .resources
+        .keys()
+        .find(|id| id.kind == ResourceKind::Service && &*id.name == "web")
+        .unwrap();
+    let defs::resource::Resource::Service(svc) = &def.resources[id] else {
+        panic!("expected Service");
+    };
+    let svc_def = svc.def.lock();
+    let opts = svc_def
+        .exported
+        .as_ref()
+        .expect("service should be exported");
+    assert!(opts.description.is_none());
+}
+
+// l[verify service.exported]
+#[test]
+fn service_exported_with_description() {
+    let app =
+        run_test_script_app(r#"app.service("api").exported(#{ description: "main HTTP API" });"#);
+    let def = app.def.load();
+    let id = def
+        .resources
+        .keys()
+        .find(|id| id.kind == ResourceKind::Service && &*id.name == "api")
+        .unwrap();
+    let defs::resource::Resource::Service(svc) = &def.resources[id] else {
+        panic!("expected Service");
+    };
+    let svc_def = svc.def.lock();
+    let desc = svc_def
+        .exported
+        .as_ref()
+        .and_then(|o| o.description.as_deref())
+        .unwrap();
+    assert_eq!(desc, "main HTTP API");
+}
+
+// l[verify service.external]
+#[test]
+fn external_service_creates_resource() {
+    let app = run_test_script_app(r#"let s = app.external_service("api");"#);
+    let def = app.def.load();
+    assert!(
+        def.resources
+            .keys()
+            .any(|id| id.kind == ResourceKind::ExternalService && &*id.name == "api")
+    );
+}
+
+// l[verify service.external]
+#[test]
+fn external_service_rejects_invalid_name() {
+    let _ = run_test_script_err(r#"app.external_service("_bad");"#);
+    let _ = run_test_script_err(r#"app.external_service("a");"#);
+}

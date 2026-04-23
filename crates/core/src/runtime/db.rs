@@ -90,6 +90,12 @@ const SQL_V35: &str = include_str!("db/migrations/v35.sql");
 const SQL_V36: &str = include_str!("db/migrations/v36.sql");
 // r[impl image.pin.expiry]
 const SQL_V37: &str = include_str!("db/migrations/v37.sql");
+// r[impl service.site] r[impl service.external.mapping.events]
+const SQL_V38: &str = include_str!("db/migrations/v38.sql");
+// r[impl service.external.mapping.events]
+const SQL_V39: &str = include_str!("db/migrations/v39.sql");
+// r[impl service.site]
+const SQL_V40: &str = include_str!("db/migrations/v40.sql");
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -272,6 +278,21 @@ const MIGRATIONS: &[Migration] = &[
         sql: SQL_V37,
         custom_run: None,
     },
+    Migration {
+        version: 38,
+        sql: SQL_V38,
+        custom_run: None,
+    },
+    Migration {
+        version: 39,
+        sql: SQL_V39,
+        custom_run: None,
+    },
+    Migration {
+        version: 40,
+        sql: SQL_V40,
+        custom_run: None,
+    },
 ];
 
 fn migration_hash(sql: &str) -> String {
@@ -317,6 +338,11 @@ impl Db {
         }
 
         conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+        // Foreign keys are a connection-scoped pragma in SQLite and are off
+        // by default. Enable them so REFERENCES clauses (currently only on
+        // site-service tables; other tables will adopt them in a follow-up)
+        // are actually enforced.
+        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
         let db = Self { conn };
         db.migrate()?;
         Ok(db)
@@ -325,6 +351,7 @@ impl Db {
     pub fn open_in_memory() -> SqlResult<Self> {
         let conn = Connection::open_in_memory()?;
         conn.busy_timeout(Duration::from_secs(5))?;
+        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
         let db = Self { conn };
         db.migrate()?;
         Ok(db)

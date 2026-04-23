@@ -187,6 +187,7 @@ fn kind_slug(kind: ResourceKind) -> &'static str {
         ResourceKind::Job => "job",
         ResourceKind::Volume => "volume",
         ResourceKind::ExternalVolume => "ext-volume",
+        ResourceKind::ExternalService => "ext-service",
         ResourceKind::Action => "action",
     }
 }
