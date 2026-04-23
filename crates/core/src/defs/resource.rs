@@ -7,7 +7,7 @@ use super::{
     deployment::Deployment,
     ingress::Ingress,
     job::Job,
-    service::{HttpService, Service},
+    service::{ExternalService, HttpService, Service},
     volume::{ExternalVolume, Volume},
 };
 
@@ -30,6 +30,7 @@ pub enum ResourceKind {
     Job,
     Volume,
     ExternalVolume,
+    ExternalService,
     Action,
 }
 
@@ -44,6 +45,10 @@ impl ResourceKind {
         map.insert("Job".into(), Dynamic::from(Self::Job));
         map.insert("Volume".into(), Dynamic::from(Self::Volume));
         map.insert("ExternalVolume".into(), Dynamic::from(Self::ExternalVolume));
+        map.insert(
+            "ExternalService".into(),
+            Dynamic::from(Self::ExternalService),
+        );
         map.insert("Action".into(), Dynamic::from(Self::Action));
         map
     }
@@ -59,6 +64,7 @@ pub enum Resource {
     Job(Job),
     Volume(Volume),
     ExternalVolume(ExternalVolume),
+    ExternalService(ExternalService),
 }
 
 impl Resource {
@@ -71,6 +77,7 @@ impl Resource {
             Self::Job(_) => ResourceKind::Job,
             Self::Volume(_) => ResourceKind::Volume,
             Self::ExternalVolume(_) => ResourceKind::ExternalVolume,
+            Self::ExternalService(_) => ResourceKind::ExternalService,
         }
     }
 
@@ -86,6 +93,7 @@ impl Resource {
                 .as_ref()
                 .expect("volumes stored in AppDef always have a name"),
             Self::ExternalVolume(v) => &v.name,
+            Self::ExternalService(s) => &s.name,
         }
     }
 
@@ -98,6 +106,7 @@ impl Resource {
             Self::Job(j) => Dynamic::from(j.clone()),
             Self::Volume(v) => Dynamic::from(v.clone()),
             Self::ExternalVolume(v) => Dynamic::from(v.clone()),
+            Self::ExternalService(s) => Dynamic::from(s.clone()),
         }
     }
 }

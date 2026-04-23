@@ -22,7 +22,7 @@ use super::{
     job::Job,
     pod::{HttpBinding, PodDef, TcpUdpBinding},
     resource::Resource,
-    service::{HttpService, Service},
+    service::{ExternalService, HttpService, Service},
     volume::{ExternalVolume, Volume},
 };
 
@@ -36,11 +36,14 @@ pub enum ResourceSummary {
     Job(JobSummary),
     Volume(VolumeSummary),
     ExternalVolume(ExternalVolumeSummary),
+    ExternalService(ExternalServiceSummary),
 }
 
 #[derive(Serialize, Debug, PartialEq)]
 pub struct ServiceSummary {
     pub http: bool,
+    pub exported: bool,
+    pub export_description: Option<String>,
 }
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -135,6 +138,9 @@ pub struct VolumeSummary {
 #[derive(Serialize, Debug, PartialEq)]
 pub struct ExternalVolumeSummary {}
 
+#[derive(Serialize, Debug, PartialEq)]
+pub struct ExternalServiceSummary {}
+
 // ---------------------------------------------------------------------------
 // Resource → Summary
 // ---------------------------------------------------------------------------
@@ -149,6 +155,7 @@ impl Resource {
             Self::Job(j) => ResourceSummary::Job(j.summary()),
             Self::Volume(v) => ResourceSummary::Volume(v.summary()),
             Self::ExternalVolume(v) => ResourceSummary::ExternalVolume(v.summary()),
+            Self::ExternalService(s) => ResourceSummary::ExternalService(s.summary()),
         }
     }
 }
@@ -158,6 +165,11 @@ impl Service {
         let def = self.def.lock();
         ServiceSummary {
             http: def.http.is_some(),
+            exported: def.exported.is_some(),
+            export_description: def
+                .exported
+                .as_ref()
+                .and_then(|opts| opts.description.clone()),
         }
     }
 }
@@ -366,6 +378,12 @@ impl Volume {
 impl ExternalVolume {
     pub fn summary(&self) -> ExternalVolumeSummary {
         ExternalVolumeSummary {}
+    }
+}
+
+impl ExternalService {
+    pub fn summary(&self) -> ExternalServiceSummary {
+        ExternalServiceSummary {}
     }
 }
 

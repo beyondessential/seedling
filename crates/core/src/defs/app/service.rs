@@ -4,7 +4,7 @@ use crate::runtime::barrier::runtime::{action_def, is_in_action_closure};
 
 use super::super::{
     resource::{Resource, ResourceId, ResourceKind, ResourceName},
-    service::Service,
+    service::{ExternalService, Service},
 };
 use super::App;
 
@@ -64,6 +64,33 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                 return Err("anonymous services can only be created inside action closures".into());
             }
             Ok(Service::new(ResourceName::new(String::new())))
+        },
+    );
+
+    // l[impl service.external]
+    builder.with_fn(
+        "external_service",
+        |this: &mut App, name: &str| -> Result<ExternalService, Box<EvalAltResult>> {
+            super::super::validate_name(name)?;
+            let rname = ResourceName::new(name.into());
+            let id = ResourceId {
+                kind: ResourceKind::ExternalService,
+                name: rname.clone(),
+            };
+            this.def.rcu(|d| {
+                let mut d = (**d).clone();
+                d.resources.entry(id.clone()).or_insert_with(|| {
+                    Resource::ExternalService(ExternalService {
+                        name: rname.clone(),
+                    })
+                });
+                d
+            });
+            let def = this.def.load();
+            match def.resources.get(&id) {
+                Some(Resource::ExternalService(s)) => Ok(s.clone()),
+                _ => unreachable!(),
+            }
         },
     );
 }

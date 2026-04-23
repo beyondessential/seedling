@@ -1,10 +1,11 @@
 use std::sync::Weak;
 
-use rhai::{CustomType, EvalAltResult, TypeBuilder};
+use rhai::{CustomType, EvalAltResult, Map, TypeBuilder};
 
 use super::{
     Freezable, Holder, Port,
     app::AppDef,
+    export::ExportOptions,
     ingress::Ingress,
     resource::{Resource, ResourceId, ResourceKind, ResourceName},
 };
@@ -13,6 +14,7 @@ use super::{
 #[derive(Debug, Default, Clone)]
 pub struct ServiceDef {
     pub http: Option<HttpServiceDef>,
+    pub exported: Option<ExportOptions>,
 }
 
 #[derive(Debug, Clone)]
@@ -92,6 +94,30 @@ impl CustomType for Service {
                         service: this.clone(),
                         port,
                     })
+                },
+            )
+            // l[impl service.exported]
+            .with_fn(
+                "exported",
+                |this: &mut Self| -> Result<Service, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
+                    if this.name.as_str().is_empty() {
+                        return Err("only named services can be exported".into());
+                    }
+                    this.def.lock().exported = Some(ExportOptions::default());
+                    Ok(this.clone())
+                },
+            )
+            // l[impl service.exported]
+            .with_fn(
+                "exported",
+                |this: &mut Self, options: Map| -> Result<Service, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
+                    if this.name.as_str().is_empty() {
+                        return Err("only named services can be exported".into());
+                    }
+                    this.def.lock().exported = Some(ExportOptions::from_rhai_map(options)?);
+                    Ok(this.clone())
                 },
             )
             .with_fn(
@@ -192,6 +218,18 @@ pub struct HttpServiceRoute {
 impl CustomType for HttpServiceRoute {
     fn build(mut builder: TypeBuilder<Self>) {
         builder.with_name("HttpServiceRoute");
+    }
+}
+
+// l[impl service.external]
+#[derive(Debug, Clone)]
+pub struct ExternalService {
+    pub name: ResourceName,
+}
+
+impl CustomType for ExternalService {
+    fn build(mut builder: TypeBuilder<Self>) {
+        builder.with_name("ExternalService");
     }
 }
 

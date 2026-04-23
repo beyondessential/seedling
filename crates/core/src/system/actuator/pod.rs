@@ -288,6 +288,7 @@ impl Actuator {
             ResourceKind::Job => "job",
             ResourceKind::Volume => "volume",
             ResourceKind::ExternalVolume => "external_volume",
+            ResourceKind::ExternalService => "external_service",
             ResourceKind::Action => "action",
         };
         let resource_name = instance.name.as_deref().unwrap_or(&instance.display_name);
