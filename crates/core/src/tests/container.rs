@@ -622,3 +622,191 @@ fn container_on_exit_strategy() {
         panic!("expected Deployment");
     }
 }
+
+fn with_container<R>(app: &crate::defs::app::App, name: &str, f: impl FnOnce(&defs::container::ContainerDef) -> R) -> R {
+    let def = app.def.load();
+    let id = def
+        .resources
+        .keys()
+        .find(|id| id.kind == ResourceKind::Deployment && &*id.name == name)
+        .expect("deployment not found");
+    let defs::resource::Resource::Deployment(dep) = &def.resources[id] else {
+        panic!("expected Deployment");
+    };
+    let dep_def = dep.def.lock();
+    let pod = dep_def.pod.lock();
+    let container = pod.container.lock();
+    f(&container)
+}
+
+// l[verify container.memory]
+#[test]
+fn container_memory_sets_limit() {
+    let app = run_test_script_app(
+        r#"
+        app.deployment("web")
+            .image("docker.io/library/nginx:latest")
+            .memory("512m");
+    "#,
+    );
+    with_container(&app, "web", |c| {
+        assert_eq!(c.memory.as_deref(), Some("512m"));
+    });
+}
+
+// l[verify container.memory]
+#[test]
+fn container_memory_case_insensitive_suffix() {
+    let app = run_test_script_app(
+        r#"app.deployment("web").image("docker.io/library/nginx:latest").memory("2G");"#,
+    );
+    with_container(&app, "web", |c| {
+        assert_eq!(c.memory.as_deref(), Some("2g"));
+    });
+}
+
+// l[verify container.memory]
+#[test]
+fn container_memory_rejects_missing_suffix() {
+    let _ = run_test_script_err(
+        r#"app.deployment("web").image("docker.io/library/nginx:latest").memory("1024");"#,
+    );
+}
+
+// l[verify container.memory]
+#[test]
+fn container_memory_rejects_unknown_suffix() {
+    let _ = run_test_script_err(
+        r#"app.deployment("web").image("docker.io/library/nginx:latest").memory("1t");"#,
+    );
+}
+
+// l[verify container.cpus]
+#[test]
+fn container_cpus_sets_limit() {
+    let app = run_test_script_app(
+        r#"
+        app.deployment("web")
+            .image("docker.io/library/nginx:latest")
+            .cpus(1.5);
+    "#,
+    );
+    with_container(&app, "web", |c| {
+        assert_eq!(c.cpus, Some(1.5));
+    });
+}
+
+// l[verify container.cpus]
+#[test]
+fn container_cpus_rejects_zero() {
+    let _ = run_test_script_err(
+        r#"app.deployment("web").image("docker.io/library/nginx:latest").cpus(0);"#,
+    );
+}
+
+// l[verify container.cpus]
+#[test]
+fn container_cpus_rejects_negative() {
+    let _ = run_test_script_err(
+        r#"app.deployment("web").image("docker.io/library/nginx:latest").cpus(-0.5);"#,
+    );
+}
+
+// l[verify container.cap-add]
+#[test]
+fn container_cap_add_appends_capability() {
+    let app = run_test_script_app(
+        r#"
+        app.deployment("web")
+            .image("docker.io/library/nginx:latest")
+            .cap_add("NET_BIND_SERVICE");
+    "#,
+    );
+    with_container(&app, "web", |c| {
+        assert_eq!(c.extra_caps, vec!["NET_BIND_SERVICE".to_owned()]);
+    });
+}
+
+// l[verify container.cap-add]
+#[test]
+fn container_cap_add_normalises_to_uppercase() {
+    let app = run_test_script_app(
+        r#"app.deployment("web").image("docker.io/library/nginx:latest").cap_add("net_raw");"#,
+    );
+    with_container(&app, "web", |c| {
+        assert_eq!(c.extra_caps, vec!["NET_RAW".to_owned()]);
+    });
+}
+
+// l[verify container.cap-add]
+#[test]
+fn container_cap_add_deduplicates() {
+    let app = run_test_script_app(
+        r#"
+        app.deployment("web")
+            .image("docker.io/library/nginx:latest")
+            .cap_add("NET_RAW")
+            .cap_add("net_raw");
+    "#,
+    );
+    with_container(&app, "web", |c| {
+        assert_eq!(c.extra_caps, vec!["NET_RAW".to_owned()]);
+    });
+}
+
+// l[verify container.writable-rootfs]
+#[test]
+fn container_writable_rootfs_defaults_false() {
+    let app = run_test_script_app(
+        r#"app.deployment("web").image("docker.io/library/nginx:latest");"#,
+    );
+    with_container(&app, "web", |c| {
+        assert!(!c.writable_rootfs);
+    });
+}
+
+// l[verify container.writable-rootfs]
+#[test]
+fn container_writable_rootfs_opts_in() {
+    let app = run_test_script_app(
+        r#"
+        app.deployment("web")
+            .image("docker.io/library/nginx:latest")
+            .writable_rootfs();
+    "#,
+    );
+    with_container(&app, "web", |c| {
+        assert!(c.writable_rootfs);
+    });
+}
+
+// l[verify container.pids-limit]
+#[test]
+fn container_pids_limit_sets_value() {
+    let app = run_test_script_app(
+        r#"
+        app.deployment("web")
+            .image("docker.io/library/nginx:latest")
+            .pids_limit(512);
+    "#,
+    );
+    with_container(&app, "web", |c| {
+        assert_eq!(c.pids_limit, Some(512));
+    });
+}
+
+// l[verify container.pids-limit]
+#[test]
+fn container_pids_limit_rejects_zero() {
+    let _ = run_test_script_err(
+        r#"app.deployment("web").image("docker.io/library/nginx:latest").pids_limit(0);"#,
+    );
+}
+
+// l[verify container.pids-limit]
+#[test]
+fn container_pids_limit_rejects_negative() {
+    let _ = run_test_script_err(
+        r#"app.deployment("web").image("docker.io/library/nginx:latest").pids_limit(-1);"#,
+    );
+}
