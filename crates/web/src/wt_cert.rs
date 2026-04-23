@@ -93,3 +93,88 @@ impl CertStore {
         self.current.identity.clone_identity()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // w[verify wt.cert]
+    #[test]
+    fn new_generates_current_cert_with_hash() {
+        let store = CertStore::new();
+        assert_eq!(store.cert_hashes().len(), 1);
+        assert_eq!(
+            store.cert_hashes()[0].len(),
+            64,
+            "cert hash is 32 bytes as hex"
+        );
+        assert!(store.next.is_none());
+    }
+
+    // w[verify wt.cert.rotation]
+    #[test]
+    fn rotate_if_needed_is_noop_for_fresh_cert() {
+        let mut store = CertStore::new();
+        let before = store.current.hash.clone();
+        assert!(!store.rotate_if_needed(), "fresh cert should not rotate");
+        assert_eq!(store.current.hash, before);
+        assert!(store.next.is_none(), "not yet in rotation window");
+    }
+
+    // w[verify wt.cert.rotation]
+    #[test]
+    fn rotate_if_needed_precomputes_next_when_in_rotation_window() {
+        let mut store = CertStore::new();
+        // Force the current cert into the rotation window by setting its
+        // not_after to just inside ROTATION_LOOKAHEAD from now.
+        store.current.not_after = SystemTime::now() + Duration::from_secs(60);
+        assert!(
+            !store.rotate_if_needed(),
+            "current still valid; should not swap yet",
+        );
+        assert!(
+            store.next.is_some(),
+            "should have pre-generated the next cert",
+        );
+        let next_hash = store.next.as_ref().unwrap().hash.clone();
+        assert_ne!(next_hash, store.current.hash, "next cert must be distinct");
+
+        // cert_hashes reflects both so clients in rotation window accept either.
+        let hashes = store.cert_hashes();
+        assert_eq!(hashes.len(), 2);
+        assert!(hashes.contains(&store.current.hash));
+        assert!(hashes.contains(&next_hash));
+    }
+
+    // w[verify wt.cert.rotation]
+    #[test]
+    fn rotate_if_needed_swaps_expired_current_to_pregenerated_next() {
+        let mut store = CertStore::new();
+        // Pre-populate a next cert by forcing the rotation window.
+        store.current.not_after = SystemTime::now() + Duration::from_secs(60);
+        let _ = store.rotate_if_needed();
+        let next_hash = store.next.as_ref().unwrap().hash.clone();
+
+        // Now expire the current cert.
+        store.current.not_after = SystemTime::now() - Duration::from_secs(1);
+        assert!(
+            store.rotate_if_needed(),
+            "expired current should have rotated",
+        );
+        assert_eq!(store.current.hash, next_hash, "next became current");
+        assert!(store.next.is_none(), "next slot cleared after promotion");
+    }
+
+    // w[verify wt.cert.rotation]
+    #[test]
+    fn rotate_if_needed_generates_new_current_if_next_missing() {
+        // If expiry was reached without a pre-generated `next` (e.g. system
+        // clock jumped, or the pre-gen was skipped), rotation must still
+        // succeed by generating a fresh cert.
+        let mut store = CertStore::new();
+        let old_hash = store.current.hash.clone();
+        store.current.not_after = SystemTime::now() - Duration::from_secs(1);
+        assert!(store.rotate_if_needed());
+        assert_ne!(store.current.hash, old_hash);
+    }
+}

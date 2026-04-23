@@ -50,6 +50,112 @@ pub fn consume_wt_token(tokens: &WtTokens, token: &str) -> Option<Arc<Actor>> {
     Some(Arc::clone(&entry.actor))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn tokens() -> WtTokens {
+        Mutex::new(HashMap::new())
+    }
+
+    fn test_actor() -> Arc<Actor> {
+        Arc::new(Actor {
+            kind: Some("password".to_owned()),
+            id: Some("admin".to_owned()),
+            display: Some("admin".to_owned()),
+            session: Some("session".to_owned()),
+        })
+    }
+
+    // w[verify wt.token]
+    #[test]
+    fn issue_and_consume_round_trip() {
+        let t = tokens();
+        let token = issue_wt_token(&t, test_actor());
+        let got = consume_wt_token(&t, &token).expect("valid token should consume");
+        assert_eq!(got.id.as_deref(), Some("admin"));
+    }
+
+    // w[verify wt.token]
+    #[test]
+    fn tokens_are_single_use() {
+        let t = tokens();
+        let token = issue_wt_token(&t, test_actor());
+        assert!(consume_wt_token(&t, &token).is_some(), "first consume ok");
+        assert!(
+            consume_wt_token(&t, &token).is_none(),
+            "second consume must fail — one-shot token",
+        );
+    }
+
+    // w[verify wt.token]
+    #[test]
+    fn unknown_token_returns_none() {
+        let t = tokens();
+        assert!(consume_wt_token(&t, "no-such-token").is_none());
+    }
+
+    // w[verify wt.token]
+    #[test]
+    fn expired_token_does_not_consume() {
+        let t = tokens();
+        let token = issue_wt_token(&t, test_actor());
+        // Force expire the entry by rewriting the stored deadline.
+        {
+            let mut map = t.lock();
+            let entry = map.get_mut(&token).unwrap();
+            entry.expires = Instant::now() - Duration::from_secs(1);
+        }
+        assert!(consume_wt_token(&t, &token).is_none());
+    }
+
+    // w[verify wt.token]
+    #[test]
+    fn issuing_prunes_expired_and_used_entries() {
+        let t = tokens();
+        // Issue two tokens: one we'll force-expire, one we'll consume.
+        // Populate both without pruning in between by bypassing the public
+        // issue fn for the second entry.
+        let stale = issue_wt_token(&t, test_actor());
+        let used = "used-token".to_owned();
+        {
+            let mut map = t.lock();
+            // Force the stale token into the past.
+            map.get_mut(&stale).unwrap().expires = Instant::now() - Duration::from_secs(1);
+            // Inject a used-flagged entry directly.
+            map.insert(
+                used.clone(),
+                WtTokenEntry {
+                    actor: test_actor(),
+                    expires: Instant::now() + Duration::from_secs(60),
+                    used: true,
+                },
+            );
+        }
+        assert_eq!(
+            t.lock().len(),
+            2,
+            "stale + used entries both present before next issue"
+        );
+
+        let _fresh = issue_wt_token(&t, test_actor());
+        let map = t.lock();
+        assert!(!map.contains_key(&stale), "expired entry pruned on issue");
+        assert!(!map.contains_key(&used), "used entry pruned on issue");
+        assert_eq!(map.len(), 1);
+    }
+
+    // w[verify wt.token]
+    #[test]
+    fn issued_tokens_are_unique() {
+        let t = tokens();
+        let a = issue_wt_token(&t, test_actor());
+        let b = issue_wt_token(&t, test_actor());
+        assert_ne!(a, b);
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub trust_tailscale: bool,

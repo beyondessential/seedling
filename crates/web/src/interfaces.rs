@@ -55,3 +55,59 @@ impl std::fmt::Display for InterfaceError {
 }
 
 impl std::error::Error for InterfaceError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // w[verify bind]
+    #[test]
+    fn empty_inputs_default_to_loopback() {
+        let got = resolve_bind_addrs(&[], &[], 8080).unwrap();
+        assert_eq!(got, vec!["127.0.0.1:8080".parse().unwrap()]);
+    }
+
+    // w[verify bind]
+    #[test]
+    fn explicit_addrs_are_passed_through() {
+        let explicit: Vec<SocketAddr> = vec![
+            "192.0.2.1:8080".parse().unwrap(),
+            "198.51.100.1:8080".parse().unwrap(),
+        ];
+        let got = resolve_bind_addrs(&[], &explicit, 8080).unwrap();
+        assert_eq!(got.len(), 2);
+        assert!(got.contains(&"192.0.2.1:8080".parse().unwrap()));
+        assert!(got.contains(&"198.51.100.1:8080".parse().unwrap()));
+    }
+
+    // w[verify bind]
+    #[test]
+    fn duplicate_addrs_across_sources_are_deduplicated() {
+        let explicit: Vec<SocketAddr> = vec![
+            "192.0.2.1:8080".parse().unwrap(),
+            "192.0.2.1:8080".parse().unwrap(),
+        ];
+        let got = resolve_bind_addrs(&[], &explicit, 8080).unwrap();
+        assert_eq!(got.len(), 1);
+    }
+
+    // w[verify bind]
+    #[test]
+    fn unknown_interface_name_is_warned_not_fatal() {
+        // An interface name that does not exist on any system is skipped
+        // (with a warning); if the remaining sources yield no addrs we must
+        // still return an empty list rather than error.
+        let got = resolve_bind_addrs(&["seedling-nonexistent-iface-0".to_owned()], &[], 8080)
+            .expect("unknown interface should not be fatal");
+        // May or may not include loopback depending on implementation — at
+        // minimum the call must succeed.
+        let _ = got;
+    }
+
+    #[test]
+    fn is_loopback_identifies_loopback_addresses() {
+        assert!(is_loopback(&"127.0.0.1:8080".parse().unwrap()));
+        assert!(is_loopback(&"[::1]:8080".parse().unwrap()));
+        assert!(!is_loopback(&"192.0.2.1:8080".parse().unwrap()));
+    }
+}

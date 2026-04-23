@@ -212,6 +212,8 @@ starts:
   root or specific caps. Rootless podman is a partial option. The
   harness likely ends up needing a root-owned sandbox, which pushes
   toward VM-based isolation rather than namespace-based.
+  - Answer here: we 100% need to test with rootful podman, as this is
+    what we're targetting in production.
 - **Kernel features on GHA.** `ubuntu-latest` has KVM-with-nested-virt
   available but not always enabled; some runners have btrfs-progs, some
   don't; Jool is not in-tree. We will need to either install missing
