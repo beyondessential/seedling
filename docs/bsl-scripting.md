@@ -47,6 +47,7 @@ In the dynamic context, `app.resource_method(name)` returns a _reference_ to an 
 |---|---|---|
 | `app.param(name)` | `Param` | Reads a value set by the control plane |
 | `app.service(name)` | Service builder | Network endpoint |
+| `app.external_service(name)` | `ExternalService` | Endpoint slot; the control plane maps it to a concrete address |
 | `app.deployment(name)` | Deployment builder | Long-running container workload |
 | `app.job(name?)` | Job builder | One-off container workload; `name` optional in dynamic context |
 | `app.volume(name?)` | Volume builder | Persistent directory; `name` optional |
@@ -59,7 +60,8 @@ In the dynamic context, `app.resource_method(name)` returns a _reference_ to an 
 ### Service
 
 ```rhai
-let svc = app.service("name");
+let svc = app.service("name")
+    .exported(#{ description: "Public API" });  // advertise to the control plane
 let http_svc = svc.http(80);          // specialise; port defaults to 80
 let route = http_svc.route("/api");   // HTTP path prefix routing
 
@@ -68,6 +70,9 @@ let ing = svc.ingress("host.example.com", 443)
     .redirect();                      // redirect port 80 → 443
 let ing2 = ing.http2();               // terminate HTTPS → HTTP/2 (h2c)
 let ing3 = svc.ingress("h.example.com", 443).tls();  // terminate TLS (non-HTTP)
+
+// External services are slots; the operator binds them to a concrete endpoint.
+let db = app.external_service("upstream-db");
 ```
 
 ### Deployment / Job (Container + Pod)
@@ -116,12 +121,14 @@ let vol = app.volume("data")
 
 ```rhai
 let version = app.param("version")
-    .kind("text")           // text | email | password | weak-password
+    .kind("text")           // text | multiline | email | password | weak-password
     .required(false)
     .default_value("latest")
+    .secret(false)          // password/weak-password imply secret=true
     .description("Docker image tag to deploy");
 
-if version.is_set() { version.value() } else { "latest" }
+version.value()             // "latest" when no operator value is stored
+version.is_set()            // false while only the default is in effect
 
 version.on_change(|rt, old| {
     // old is the App state at the previous generation
@@ -137,6 +144,7 @@ Available inside action closures:
 rt.start(resources)             // schedule resources, returns Started
 rt.stop(resources, deadline?)   // unschedule and block until terminated
 rt.query(resources)             // returns Started without scheduling
+rt.restart(deployment)          // rotate a Deployment's instances per on_update
 rt.warm_certs(resources)        // pre-provision TLS certs for ingresses
 rt.warm_images(resources)       // pre-pull container images without starting them
 
@@ -144,8 +152,9 @@ rt.warm_images(resources)       // pre-pull container images without starting th
 started.scheduled(deadline?)
 started.running(deadline?)
 started.ready(deadline?)
-started.terminated(deadline?)   // six-hour dealine, returns Termination
+started.terminated(deadline?)   // six-hour deadline, returns Termination
 started.terminated_eventually() // no deadline, returns Termination
+started.ready_eventually()      // no deadline, returns Started
 
 termination.ensure_success()    // throws if the resource failed
 ```
@@ -222,15 +231,24 @@ app.on_start(|rt, _param| {
 
 // Actions are available to operators via the UI or CLI.
 // The closure runs when an operator invokes the action.
-app.on_action("migrate", |rt, _param| {
+// `params` declares a validated schema; extra keys are passed through as-is.
+app.on_action("migrate", |rt, param| {
     // Jobs defined inside actions are dynamic: created fresh per invocation.
     let job = app.job()
         .image(image.call())
-        .command(["migrate", "--run"])
+        .command(["migrate", "--run", "--target", param.target])
         .mount("/data", data);
     rt.start(job).terminated().ensure_success();
 }, #{
     description: "Run database migrations",
+    params: #{
+        target: #{
+            kind: "text",
+            required: true,
+            default_value: "latest",
+            description: "Target schema revision to migrate to",
+        },
+    },
 });
 
 // Shells give operators an interactive terminal into the running app.
