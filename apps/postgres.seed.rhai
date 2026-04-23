@@ -22,6 +22,11 @@ let version = app.param("version")
     .required(true)
     .description("PostgreSQL image tag (docker.io/library/postgres:<tag>), e.g. 18.3");
 
+let password = app.param("password")
+    .kind("password")
+    .required(true)
+    .description("Password for the 'postgres' superuser; change to rotate");
+
 let bestool_psql_version = app.param("bestool-psql-version")
     .required(false)
     .description("Specific bestool-psql crate version to install; latest if unset");
@@ -192,8 +197,6 @@ let config_vol = app.volume("config");
 
 let bin = app.volume("bin");
 
-let secrets = app.volume("secrets");
-
 let pg_svc = app.service("postgres")
     .exported(#{ description: "PostgreSQL wire protocol (TCP 5432)" });
 
@@ -214,18 +217,14 @@ app.deployment("postgres")
     .cap_add("SETUID")
     .cap_add("SETGID")
     .pids_limit(pids_budget.call())
-    .env([
-        #{ name: "PGDATA", value: `/data/pg${pg_major.call()}` },
-        #{ name: "POSTGRES_USER", value: "postgres" },
-        #{ name: "POSTGRES_DB", value: "postgres" },
-        #{ name: "POSTGRES_PASSWORD_FILE", value: "/secrets/postgres-password" },
-        #{ name: "POSTGRES_INITDB_ARGS",
-           value: "--auth-local=trust --auth-host=scram-sha-256 --data-checksums" },
-    ])
+    // PGDATA is the only password-agnostic env the entrypoint needs. The
+    // cluster is initdb'd by a dedicated install job (see on_install) so no
+    // POSTGRES_PASSWORD* / POSTGRES_INITDB_ARGS leak into the long-running
+    // deployment's spec — the entrypoint sees PG_VERSION and skips init.
+    .env("PGDATA", `/data/pg${pg_major.call()}`)
     .mount("/data", data)
     .mount("/var/run/postgresql", socket)
     .mount("/config", config_vol)
-    .mount("/secrets", secrets)
     .arg([
         "postgres",
         "-c", "config_file=/config/postgresql.conf",
@@ -273,6 +272,38 @@ let build_bestool_psql = |rt| {
     ).terminated(3600).ensure_success();
 };
 
+// Initdb the data directory for the given major version if it doesn't yet
+// exist. The password is staged into a RAM-backed tmpfs volume for this one
+// invocation — the postgres cluster catalogues hold the hash afterwards, so
+// the password never lands in a persistent volume.
+let initdb_if_missing = |rt, major| {
+    let pwfile = app.volume().tmpfs();
+    pwfile.write("/pwfile", password.value());
+
+    rt.start(app.job()
+        .image(`docker.io/library/postgres:${major}`)
+        .writable_rootfs()
+        .cap_add("CHOWN")
+        .cap_add("DAC_OVERRIDE")
+        .cap_add("FOWNER")
+        .cap_add("SETUID")
+        .cap_add("SETGID")
+        .mount("/data", data)
+        .mount("/pw", pwfile)
+        .command(["sh", "-c", `
+set -e
+if [ ! -f /data/pg${major}/PG_VERSION ]; then
+  mkdir -p /data/pg${major}
+  chown ${postgres_uid}:${postgres_uid} /data/pg${major}
+  chmod 0700 /data/pg${major}
+  gosu postgres initdb -D /data/pg${major} -U postgres \
+    --auth-local=trust --auth-host=scram-sha-256 --data-checksums \
+    --pwfile=/pw/pwfile
+fi
+`])
+    ).terminated(900).ensure_success();
+};
+
 // Reload postgresql.conf without restarting.
 let reload_server = |rt| {
     rt.start(app.job()
@@ -287,37 +318,13 @@ let reload_server = |rt| {
 
 // ── Install ───────────────────────────────────────────────────────────────────
 
-app.on_install(|rt, param| {
-    // Stage the root password into the `secrets` named volume. The password is
-    // only consumed by initdb on the empty data directory; after the first run
-    // the entrypoint ignores POSTGRES_PASSWORD_FILE. The file is kept so later
-    // pg_upgrade initdb invocations can reuse it if necessary.
-    let pw_staging = app.volume().tmpfs();
-    pw_staging.write("/postgres-password", param["password"]);
-
-    rt.start(app.job()
-        .image(pg_image.call())
-        .writable_rootfs()
-        .mount("/staging", pw_staging)
-        .mount("/secrets", secrets)
-        .command(["sh", "-c",
-            "install -m 0600 /staging/postgres-password /secrets/postgres-password"
-        ])
-    ).terminated(60).ensure_success();
-
+app.on_install(|rt, _param| {
+    initdb_if_missing.call(rt, pg_major.call());
     render_config.call(rt);
     build_bestool_psql.call(rt);
 
     rt.start(app).ready();
-}, #{
-    params: #{
-        password: #{
-            kind: "password",
-            required: true,
-            description: "Password for the 'postgres' superuser",
-        },
-    },
-});
+}, #{});
 
 // ── Maintenance actions ───────────────────────────────────────────────────────
 
@@ -337,36 +344,6 @@ app.on_action("restart", |rt, _param| {
 app.on_action("build-bestool-psql", |rt, _param| {
     build_bestool_psql.call(rt);
 }, #{ description: "Rebuild bestool-psql from source into the app bin volume" });
-
-app.on_action("rotate-password", |rt, param| {
-    let escaped = param["password"].replace("'", "''");
-    let staging = app.volume().tmpfs();
-    staging.write("/alter.sql", `ALTER USER postgres WITH PASSWORD '${escaped}';`);
-    staging.write("/postgres-password", param["password"]);
-
-    rt.start(app.job()
-        .image(pg_image.call())
-        .writable_rootfs()
-        .mount("/var/run/postgresql", socket)
-        .mount("/staging", staging)
-        .mount("/secrets", secrets)
-        .env("PGHOST", "/var/run/postgresql")
-        .env("PGUSER", "postgres")
-        .command(["sh", "-c",
-            "psql -d postgres -f /staging/alter.sql && " +
-            "install -m 0600 /staging/postgres-password /secrets/postgres-password"
-        ])
-    ).terminated(60).ensure_success();
-}, #{
-    description: "Rotate the postgres superuser password and refresh the secrets file",
-    params: #{
-        password: #{
-            kind: "password",
-            required: true,
-            description: "New password for the 'postgres' superuser",
-        },
-    },
-});
 
 app.on_action("status", |rt, _param| {
     rt.start(app.job()
@@ -518,31 +495,11 @@ version.on_change(|rt, old| {
         while cur < new_major {
             let next = cur + 1;
 
-            // Initdb the new cluster inside the external data volume. Skips
-            // itself if /data/pg<next> already has a PG_VERSION file, which
-            // makes the upgrade safe to retry after a partial failure.
-            rt.start(app.job()
-                .image(`docker.io/library/postgres:${next}`)
-                .writable_rootfs()
-                .cap_add("CHOWN")
-                .cap_add("DAC_OVERRIDE")
-                .cap_add("FOWNER")
-                .cap_add("SETUID")
-                .cap_add("SETGID")
-                .mount("/data", data)
-                .mount("/secrets", secrets)
-                .command(["sh", "-c", `
-set -e
-if [ ! -f /data/pg${next}/PG_VERSION ]; then
-  mkdir -p /data/pg${next}
-  chown ${postgres_uid}:${postgres_uid} /data/pg${next}
-  chmod 0700 /data/pg${next}
-  gosu postgres initdb -D /data/pg${next} -U postgres \
-    --auth-local=trust --auth-host=scram-sha-256 --data-checksums \
-    --pwfile=/secrets/postgres-password
-fi
-`])
-            ).terminated(900).ensure_success();
+            // Initdb the new cluster inside the external data volume.
+            // pg_upgrade replaces the roles/passwords from the old cluster
+            // immediately after, so the pwfile passed in here is superseded
+            // before the cluster ever serves traffic.
+            initdb_if_missing.call(rt, next);
 
             // pg_upgrade in the tianon image, which ships both major binaries.
             // Workdir must be writable: pg_upgrade writes log files there.
@@ -606,4 +563,25 @@ db_type.on_change(|rt, _old| {
 extra_config.on_change(|rt, _old| {
     render_config.call(rt);
     rt.restart(app.deployment("postgres"));
+});
+
+// ── Password rotation ────────────────────────────────────────────────────────
+// Apply the new password via ALTER USER against the running cluster. The SQL
+// is staged into a RAM-backed tmpfs so the password isn't written to any
+// persistent volume. No deployment restart is needed since the password isn't
+// referenced by the deployment spec.
+password.on_change(|rt, _old| {
+    let escaped = password.value().replace("'", "''");
+    let staging = app.volume().tmpfs();
+    staging.write("/alter.sql", `ALTER USER postgres WITH PASSWORD '${escaped}';`);
+
+    rt.start(app.job()
+        .image(pg_image.call())
+        .writable_rootfs()
+        .mount("/var/run/postgresql", socket)
+        .mount("/staging", staging)
+        .env("PGHOST", "/var/run/postgresql")
+        .env("PGUSER", "postgres")
+        .command(["psql", "-d", "postgres", "-f", "/staging/alter.sql"])
+    ).terminated(60).ensure_success();
 });
