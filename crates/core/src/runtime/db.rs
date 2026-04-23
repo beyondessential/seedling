@@ -90,6 +90,8 @@ const SQL_V35: &str = include_str!("db/migrations/v35.sql");
 const SQL_V36: &str = include_str!("db/migrations/v36.sql");
 // r[impl image.pin.expiry]
 const SQL_V37: &str = include_str!("db/migrations/v37.sql");
+// r[impl service.site] r[impl service.external.mapping.events]
+const SQL_V38: &str = include_str!("db/migrations/v38.sql");
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -270,6 +272,11 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 37,
         sql: SQL_V37,
+        custom_run: None,
+    },
+    Migration {
+        version: 38,
+        sql: SQL_V38,
         custom_run: None,
     },
 ];
