@@ -24,7 +24,7 @@ use crate::{
         barrier::{
             CancelToken, OperationId, ReplayContext,
             oracle::TestWorldOracle,
-            runtime::{ActionClosureGuard, RuntimeInstance, clear_barrier_hit},
+            runtime::{ActionClosureGuard, ProbeGuard, RuntimeInstance, clear_barrier_hit},
         },
     },
 };
@@ -281,6 +281,8 @@ fn probe_handler(
     let action_def = Arc::new(arc_swap::ArcSwap::new(app.def.load_full()));
     let eval_result = {
         let _guard = ActionClosureGuard::new(action_def, op_id.0.clone(), HashMap::new());
+        // r[impl image.discover]
+        let _probe_guard = ProbeGuard::new();
         engine.compile(call_script).ok().and_then(|ast| {
             engine
                 .eval_ast_with_scope::<Dynamic>(&mut scope, &ast)
@@ -509,6 +511,93 @@ mod tests {
             .unwrap();
         assert!(deploy.error.is_some());
         assert!(deploy.skipped_reason.is_none());
+    }
+
+    // r[verify image.discover]
+    #[test]
+    fn handles_external_volume_with_unset_param_key() {
+        // Mirrors the kopia-style backup handler:
+        // `app.external_volume(param["output_volume"])` — `output_volume`
+        // isn't in the handler's declared schema (it's supplied by the
+        // runtime at real-invocation time), so in a probe it resolves to
+        // unit. The probe should not throw; it should still extract
+        // images from subsequent rt.start calls.
+        let (engine, ast, app) = setup_engine_and_app(
+            r#"
+            app.on_action("list-snapshots", |rt, param| {
+                let output = app.external_volume(param["output_volume"]);
+                rt.start(
+                    app.job()
+                        .image("ghcr.io/example/kopia:0.21.0")
+                        .mount("/output", output)
+                ).ready();
+            });
+        "#,
+        );
+
+        let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
+        let response =
+            probe_app(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
+
+        let handler = response
+            .per_handler
+            .iter()
+            .find(|h| h.name == "list-snapshots")
+            .expect("list-snapshots probed");
+        assert!(
+            handler.error.is_none(),
+            "expected clean probe, got error {:?}",
+            handler.error
+        );
+        assert!(response.all_images.contains("ghcr.io/example/kopia:0.21.0"));
+    }
+
+    // r[verify image.discover]
+    #[test]
+    fn surfaces_error_for_nested_param_indexing() {
+        // Kopia-like pattern: `backup["strategy"]` — `backup` is unset
+        // during probe so indexing fails. This isn't recoverable by
+        // probe stubs (we can't predict what structure the script
+        // expects), but the error should be reported cleanly rather than
+        // aborting the whole probe.
+        let (engine, ast, app) = setup_engine_and_app(
+            r#"
+            app.on_action("list-snapshots", |rt, param| {
+                let strategy = param["backup"]["strategy"];
+                rt.start(app.job().image("ghcr.io/example/kopia:0.21.0"));
+            });
+            app.on_action("harmless", |rt, _param| {
+                rt.start(app.job().image("ghcr.io/example/foo:1.0")).ready();
+            });
+        "#,
+        );
+
+        let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
+        let response = probe_app(
+            &engine,
+            &ast,
+            &app,
+            registry,
+            &ProbeRequest {
+                lenient: true,
+                ..Default::default()
+            },
+        )
+        .expect("probe");
+
+        let broken = response
+            .per_handler
+            .iter()
+            .find(|h| h.name == "list-snapshots")
+            .expect("probed");
+        assert!(
+            broken.error.is_some(),
+            "expected error for nested param access"
+        );
+        // The clean handler still shows up in all_images.
+        assert!(response.all_images.contains("ghcr.io/example/foo:1.0"));
+        // The broken handler's image must not pollute all_images.
+        assert!(!response.all_images.contains("ghcr.io/example/kopia:0.21.0"));
     }
 
     // r[verify image.discover]

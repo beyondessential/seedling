@@ -76,6 +76,49 @@ pub fn is_in_action_closure() -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Thread-local flag: set while a probe pass is evaluating a handler closure.
+// BSL-facing functions that need to be robust to probe-supplied stub values
+// (e.g. `app.external_volume(...)` called with an unset `param[...]` key)
+// consult this flag and fall back to returning stubs instead of errors.
+// ---------------------------------------------------------------------------
+
+// r[impl image.discover]
+thread_local! {
+    static IN_PROBE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub fn is_in_probe() -> bool {
+    IN_PROBE.with(|b| b.get())
+}
+
+pub fn set_in_probe(value: bool) {
+    IN_PROBE.with(|b| b.set(value));
+}
+
+/// RAII guard that sets the probe flag on construction and clears it on
+/// drop. Intended use: wrap the engine.eval call in `probe_handler`.
+pub struct ProbeGuard;
+
+impl ProbeGuard {
+    pub fn new() -> Self {
+        set_in_probe(true);
+        Self
+    }
+}
+
+impl Default for ProbeGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for ProbeGuard {
+    fn drop(&mut self) {
+        set_in_probe(false);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Thread-local: action-context AppDef, set while an action closure executes.
 // The App BSL methods read from this to enforce static/dynamic context rules.
 // ---------------------------------------------------------------------------
