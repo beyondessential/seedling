@@ -25,6 +25,20 @@ pub(super) enum TemplatesCommand {
         #[arg(long)]
         description: Option<String>,
     },
+    /// Update an existing template's body and/or description
+    Update {
+        /// Template name
+        name: TemplateName,
+        /// Path to a new BSL script file; omit to leave the body unchanged
+        #[arg(long)]
+        script_file: Option<PathBuf>,
+        /// Replacement description; use --clear-description to remove instead
+        #[arg(long, conflicts_with = "clear_description")]
+        description: Option<String>,
+        /// Clear the stored description
+        #[arg(long)]
+        clear_description: bool,
+    },
     /// Remove an uploaded template
     Remove {
         /// Template name
@@ -82,6 +96,31 @@ pub(super) async fn dispatch(client: &OiClient, cmd: TemplatesCommand) {
                             "description": description,
                         }),
                     )
+                    .await,
+            );
+        }
+        TemplatesCommand::Update {
+            name,
+            script_file,
+            description,
+            clear_description,
+        } => {
+            let mut req = serde_json::Map::new();
+            req.insert("name".to_owned(), serde_json::to_value(&name).unwrap());
+            if let Some(path) = script_file {
+                req.insert(
+                    "body".to_owned(),
+                    serde_json::Value::String(read_script_file(&path)),
+                );
+            }
+            if clear_description {
+                req.insert("description".to_owned(), serde_json::Value::Null);
+            } else if let Some(desc) = description {
+                req.insert("description".to_owned(), serde_json::Value::String(desc));
+            }
+            print_result(
+                client
+                    .request("/templates/update", serde_json::Value::Object(req))
                     .await,
             );
         }
