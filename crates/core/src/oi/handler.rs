@@ -19,6 +19,7 @@ mod images;
 mod key_mgmt;
 mod params;
 mod registries;
+mod services;
 mod status;
 mod templates;
 mod volumes;
@@ -178,6 +179,34 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
             volumes::list_external_mappings(state, parse_params(req.params)?)
         }
         "/volumes/external/declared" => volumes::list_declared_external_volumes(state),
+        "/services/exported/list" => services::list_exported(state),
+        "/services/app/list" => services::list_app_services(state),
+        "/services/site/create" => {
+            services::create_site_service(state, parse_params(req.params)?, ctx)
+        }
+        "/services/site/list" => services::list_site_services(state),
+        "/services/site/delete" => {
+            services::delete_site_service(state, parse_params(req.params)?, ctx)
+        }
+        "/services/site/endpoint/add" => {
+            services::add_site_service_endpoint(state, parse_params(req.params)?, ctx)
+        }
+        "/services/site/endpoint/remove" => {
+            services::remove_site_service_endpoint(state, parse_params(req.params)?, ctx)
+        }
+        "/services/external/map" => {
+            services::map_external_service(state, parse_params(req.params)?, ctx)
+        }
+        "/services/external/unmap" => {
+            services::unmap_external_service(state, parse_params(req.params)?, ctx)
+        }
+        "/services/external/remap" => {
+            services::remap_external_service(state, parse_params(req.params)?, ctx)
+        }
+        "/services/external/list" => {
+            services::list_external_mappings(state, parse_params(req.params)?)
+        }
+        "/services/external/declared" => services::list_declared_external_services(state),
         // i[backup.app.register]
         "/backups/apps/register" => backups::register_backup_app(state, parse_params(req.params)?),
         // i[backup.app.deregister]

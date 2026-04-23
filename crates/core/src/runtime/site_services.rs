@@ -77,8 +77,8 @@ impl FromSql for SiteServiceProtocol {
 }
 
 // r[impl service.site.lifecycle]
-pub fn create(db: &mut Db, def: &SiteServiceDef) -> rusqlite::Result<()> {
-    let tx = db.conn.transaction()?;
+pub fn create(db: &Db, def: &SiteServiceDef) -> rusqlite::Result<()> {
+    let tx = db.conn.unchecked_transaction()?;
     tx.execute(
         "INSERT INTO site_services (name, description, created_at) VALUES (?1, ?2, ?3)",
         params![def.name, def.description, def.created_at],
@@ -149,8 +149,8 @@ pub fn get(db: &Db, name: &SiteServiceName) -> rusqlite::Result<Option<SiteServi
     }
 }
 
-pub fn delete(db: &mut Db, name: &SiteServiceName) -> rusqlite::Result<bool> {
-    let tx = db.conn.transaction()?;
+pub fn delete(db: &Db, name: &SiteServiceName) -> rusqlite::Result<bool> {
+    let tx = db.conn.unchecked_transaction()?;
     tx.execute(
         "DELETE FROM site_service_endpoints WHERE site_service = ?1",
         params![name],
@@ -226,14 +226,14 @@ mod tests {
 
     #[test]
     fn create_with_endpoints_round_trips() {
-        let mut db = mkdb();
+        let db = mkdb();
         let def = SiteServiceDef {
             name: mkname("postgres-prod"),
             description: Some("primary PG cluster".into()),
             endpoints: vec![tcp("db1.corp", 5432), tcp("db2.corp", 5432)],
             created_at: "2026-04-23T00:00:00Z".into(),
         };
-        create(&mut db, &def).unwrap();
+        create(&db, &def).unwrap();
 
         let got = get(&db, &def.name).unwrap().expect("row present");
         assert_eq!(got, def);
@@ -244,10 +244,10 @@ mod tests {
 
     #[test]
     fn add_and_remove_endpoint() {
-        let mut db = mkdb();
+        let db = mkdb();
         let name = mkname("upstream-api");
         create(
-            &mut db,
+            &db,
             &SiteServiceDef {
                 name: name.clone(),
                 description: None,
@@ -272,10 +272,10 @@ mod tests {
 
     #[test]
     fn delete_cascades_endpoints() {
-        let mut db = mkdb();
+        let db = mkdb();
         let name = mkname("doomed");
         create(
-            &mut db,
+            &db,
             &SiteServiceDef {
                 name: name.clone(),
                 description: None,
@@ -285,7 +285,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(delete(&mut db, &name).unwrap());
+        assert!(delete(&db, &name).unwrap());
         assert!(get(&db, &name).unwrap().is_none());
 
         let orphan_count: i64 = db
