@@ -220,6 +220,141 @@ fn validate_capability(cap: &str) -> Result<String, Box<EvalAltResult>> {
     }
 }
 
+fn take_nonneg_secs(
+    map: &mut rhai::Map,
+    key: &str,
+    default: u64,
+) -> Result<u64, Box<EvalAltResult>> {
+    let Some(value) = map.remove(key) else {
+        return Ok(default);
+    };
+    let n = value
+        .as_int()
+        .map_err(|t| -> Box<EvalAltResult> {
+            format!("healthcheck `{key}` must be a non-negative integer number of seconds, got {t}")
+                .into()
+        })?;
+    if n < 0 {
+        return Err(format!("healthcheck `{key}` must not be negative, got {n}").into());
+    }
+    Ok(n as u64)
+}
+
+fn take_retries(map: &mut rhai::Map) -> Result<u32, Box<EvalAltResult>> {
+    let Some(value) = map.remove("retries") else {
+        return Ok(HEALTHCHECK_DEFAULT_RETRIES);
+    };
+    let n = value.as_int().map_err(|t| -> Box<EvalAltResult> {
+        format!("healthcheck `retries` must be a positive integer, got {t}").into()
+    })?;
+    if n <= 0 {
+        return Err(format!("healthcheck `retries` must be positive, got {n}").into());
+    }
+    if n > u32::MAX as i64 {
+        return Err(format!("healthcheck `retries` exceeds maximum {}", u32::MAX).into());
+    }
+    Ok(n as u32)
+}
+
+fn take_on_failure(map: &mut rhai::Map) -> Result<HealthcheckOnFailure, Box<EvalAltResult>> {
+    let Some(value) = map.remove("on_failure") else {
+        return Ok(HealthcheckOnFailure::None);
+    };
+    let s = value
+        .into_string()
+        .map_err(|t| -> Box<EvalAltResult> {
+            format!("healthcheck `on_failure` must be a string, got {t}").into()
+        })?;
+    match s.as_str() {
+        "none" => Ok(HealthcheckOnFailure::None),
+        "kill" => Ok(HealthcheckOnFailure::Kill),
+        "restart" => Ok(HealthcheckOnFailure::Restart),
+        "stop" => Ok(HealthcheckOnFailure::Stop),
+        other => Err(format!(
+            "healthcheck `on_failure` must be one of \"none\", \"kill\", \"restart\", \"stop\"; got '{other}'"
+        )
+        .into()),
+    }
+}
+
+fn take_command_cmd(map: &mut rhai::Map) -> Result<Vec<String>, Box<EvalAltResult>> {
+    let value = map.remove("cmd").ok_or_else(|| -> Box<EvalAltResult> {
+        "healthcheck of kind \"command\" requires a `cmd` field".into()
+    })?;
+    let cmd = if let Some(s) = value.clone().try_cast::<String>() {
+        if s.is_empty() {
+            return Err("healthcheck `cmd` must not be empty".into());
+        }
+        vec!["CMD-SHELL".to_string(), s]
+    } else if let Some(arr) = value.try_cast::<rhai::Array>() {
+        let parts: Vec<String> = arr
+            .into_iter()
+            .map(|v| v.into_string().unwrap_or_default())
+            .collect();
+        if parts.is_empty() || parts.iter().all(String::is_empty) {
+            return Err("healthcheck `cmd` must not be empty".into());
+        }
+        parts
+    } else {
+        return Err("healthcheck `cmd` must be a string or array of strings".into());
+    };
+    Ok(cmd)
+}
+
+// l[impl container.healthcheck]
+pub(super) fn parse_healthcheck(mut map: rhai::Map) -> Result<HealthcheckDef, Box<EvalAltResult>> {
+    // l[impl container.healthcheck.kind]
+    let kind_raw = map.remove("kind").ok_or_else(|| -> Box<EvalAltResult> {
+        "healthcheck requires a `kind` field (\"command\")".into()
+    })?;
+    let kind_str = kind_raw.into_string().map_err(|t| -> Box<EvalAltResult> {
+        format!("healthcheck `kind` must be a string, got {t}").into()
+    })?;
+    let kind = match kind_str.as_str() {
+        // l[impl container.healthcheck.command]
+        "command" => HealthcheckKind::Command {
+            cmd: take_command_cmd(&mut map)?,
+        },
+        "http" | "tcp" | "grpc" => {
+            return Err(format!(
+                "healthcheck kind '{kind_str}' is reserved for future use and not yet supported"
+            )
+            .into());
+        }
+        other => {
+            return Err(format!(
+                "healthcheck `kind` must be \"command\"; got '{other}'"
+            )
+            .into());
+        }
+    };
+
+    let interval_secs = take_nonneg_secs(&mut map, "interval", HEALTHCHECK_DEFAULT_INTERVAL_SECS)?;
+    let timeout_secs = take_nonneg_secs(&mut map, "timeout", HEALTHCHECK_DEFAULT_TIMEOUT_SECS)?;
+    let start_period_secs = take_nonneg_secs(
+        &mut map,
+        "start_period",
+        HEALTHCHECK_DEFAULT_START_PERIOD_SECS,
+    )?;
+    let retries = take_retries(&mut map)?;
+    // l[impl container.healthcheck.on-failure]
+    let on_failure = take_on_failure(&mut map)?;
+
+    if !map.is_empty() {
+        let extras: Vec<String> = map.keys().map(|k| k.to_string()).collect();
+        return Err(format!("healthcheck map contains unknown keys: {}", extras.join(", ")).into());
+    }
+
+    Ok(HealthcheckDef {
+        kind,
+        interval_secs,
+        timeout_secs,
+        retries,
+        start_period_secs,
+        on_failure,
+    })
+}
+
 // l[impl container.interface]
 #[derive(Debug, Default, Clone)]
 pub struct ContainerDef {
@@ -235,7 +370,49 @@ pub struct ContainerDef {
     pub writable_rootfs: bool,
     pub pids_limit: Option<u32>,
     pub workdir: Option<String>,
+    pub healthcheck: Option<HealthcheckDef>,
 }
+
+#[derive(Debug, Clone)]
+pub struct HealthcheckDef {
+    pub kind: HealthcheckKind,
+    pub interval_secs: u64,
+    pub timeout_secs: u64,
+    pub retries: u32,
+    pub start_period_secs: u64,
+    pub on_failure: HealthcheckOnFailure,
+}
+
+#[derive(Debug, Clone)]
+pub enum HealthcheckKind {
+    Command { cmd: Vec<String> },
+    // Reserved for future expansion: Http, Tcp, Grpc. Runtime currently
+    // rejects any kind other than Command at BSL-evaluation time.
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HealthcheckOnFailure {
+    None,
+    Kill,
+    Restart,
+    Stop,
+}
+
+impl HealthcheckOnFailure {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Kill => "kill",
+            Self::Restart => "restart",
+            Self::Stop => "stop",
+        }
+    }
+}
+
+const HEALTHCHECK_DEFAULT_INTERVAL_SECS: u64 = 30;
+const HEALTHCHECK_DEFAULT_TIMEOUT_SECS: u64 = 30;
+const HEALTHCHECK_DEFAULT_RETRIES: u32 = 3;
+const HEALTHCHECK_DEFAULT_START_PERIOD_SECS: u64 = 0;
 
 #[derive(Debug, Clone)]
 pub enum VolumeMount {
@@ -477,6 +654,17 @@ impl ContainerDef {
                     return Err(format!("workdir must be an absolute path, got '{path}'").into());
                 }
                 ext(this).lock().workdir = Some(path);
+                Ok(this.clone())
+            },
+        );
+
+        builder.with_fn(
+            "healthcheck",
+            move |this: &mut T, config: rhai::Map| -> Result<T, Box<EvalAltResult>> {
+                this.ensure_unfrozen()?;
+                // l[impl container.healthcheck]
+                let hc = parse_healthcheck(config)?;
+                ext(this).lock().healthcheck = Some(hc);
                 Ok(this.clone())
             },
         );
