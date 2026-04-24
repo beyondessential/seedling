@@ -7,12 +7,22 @@ use std::{
 use ipnet::Ipv6Net;
 use seedling_protocol::names::ExternalVolumeName;
 
+use std::time::Duration;
+
 use crate::{
-    defs::{container::VolumeMount, deployment::DeploymentDef, job::JobDef, pod::PodDef},
+    defs::{
+        container::{HealthcheckKind, HealthcheckOnFailure, VolumeMount},
+        deployment::DeploymentDef,
+        job::JobDef,
+        pod::PodDef,
+    },
     runtime::identity::{ResourceInstance, VolumeName},
     system::{
         translate::proxy::node_mount_addr,
-        types::{ContainerSpec, Mount, MountSource, ResolvedExternalMount},
+        types::{
+            ContainerSpec, HealthCheckOnFailure, HealthCheckSpec, Mount, MountSource,
+            ResolvedExternalMount,
+        },
     },
 };
 
@@ -175,6 +185,7 @@ pub fn podman_args(spec: &ContainerSpec) -> Vec<String> {
         args.push(dns.to_string());
     }
 
+    // l[impl container.healthcheck]
     if let Some(health) = &spec.health {
         args.push("--health-cmd".to_string());
         // Podman accepts a shell command string or a JSON array for health checks.
@@ -189,6 +200,9 @@ pub fn podman_args(spec: &ContainerSpec) -> Vec<String> {
         args.push(health.retries.to_string());
         args.push("--health-start-period".to_string());
         args.push(format!("{}s", health.start_period.as_secs()));
+        // l[impl container.healthcheck.on-failure]
+        args.push("--health-on-failure".to_string());
+        args.push(health.on_failure.podman_arg().to_string());
     }
 
     if !spec.entrypoint.is_empty() {
@@ -343,6 +357,23 @@ fn spec_from_pod(
         vec![("localmount".to_string(), IpAddr::V6(mount_endpoint))]
     };
 
+    let health = container.healthcheck.as_ref().map(|hc| {
+        let HealthcheckKind::Command { cmd } = &hc.kind;
+        HealthCheckSpec {
+            command: cmd.clone(),
+            interval: Duration::from_secs(hc.interval_secs),
+            timeout: Duration::from_secs(hc.timeout_secs),
+            retries: hc.retries,
+            start_period: Duration::from_secs(hc.start_period_secs),
+            on_failure: match hc.on_failure {
+                HealthcheckOnFailure::None => HealthCheckOnFailure::None,
+                HealthcheckOnFailure::Kill => HealthCheckOnFailure::Kill,
+                HealthcheckOnFailure::Restart => HealthCheckOnFailure::Restart,
+                HealthcheckOnFailure::Stop => HealthCheckOnFailure::Stop,
+            },
+        }
+    });
+
     let mut spec = ContainerSpec {
         name: instance.display_name.clone(),
         image,
@@ -352,7 +383,7 @@ fn spec_from_pod(
         mounts: sys_mounts,
         network: network.0.clone(),
         labels,
-        health: None,
+        health,
         hosts,
         dns_servers: dns_servers.to_vec(),
         memory: container.memory.clone(),

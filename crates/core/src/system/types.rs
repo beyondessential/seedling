@@ -163,6 +163,26 @@ pub struct HealthCheckSpec {
     pub timeout: Duration,
     pub retries: u32,
     pub start_period: Duration,
+    pub on_failure: HealthCheckOnFailure,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HealthCheckOnFailure {
+    None,
+    Kill,
+    Restart,
+    Stop,
+}
+
+impl HealthCheckOnFailure {
+    pub fn podman_arg(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Kill => "kill",
+            Self::Restart => "restart",
+            Self::Stop => "stop",
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -467,6 +487,8 @@ impl ObservationFact {
                 vec![("container_exited", json!({ "exit_code": exit_code }))]
             }
             ObservationFact::ContainerHealthy => vec![("health_check_pass", json!({}))],
+            // r[impl lifecycle.container.unhealthy-transition]
+            ObservationFact::ContainerUnhealthy => vec![("health_check_fail", json!({}))],
             ObservationFact::ContainerMissing => vec![("container_removed", json!({}))],
             // A present volume is both created and ready.
             ObservationFact::VolumePresent => {
@@ -489,8 +511,7 @@ impl ObservationFact {
             // Network observations are used only for pod actuation decisions.
             // The remaining unit facts are consumed only within a single tick
             // for actuation decisions and have no oracle mapping.
-            ObservationFact::ContainerUnhealthy
-            | ObservationFact::ContainerSpecHash(_)
+            ObservationFact::ContainerSpecHash(_)
             | ObservationFact::NetworkPresent
             | ObservationFact::NetworkMissing
             | ObservationFact::ProxyReachable
