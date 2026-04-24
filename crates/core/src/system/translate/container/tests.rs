@@ -451,3 +451,79 @@ fn volume_mount_uses_app_prefixed_display_name() {
         vol_mount.source,
     );
 }
+
+// r[verify healthcheck.on-failure]
+#[test]
+fn podman_args_emit_health_check_flags_when_declared() {
+    use std::time::Duration;
+
+    use crate::system::types::{HealthCheckOnFailure, HealthCheckSpec};
+
+    let spec = ContainerSpec {
+        name: "n".to_string(),
+        image: "img".to_string(),
+        command: vec![],
+        entrypoint: vec![],
+        env: vec![],
+        mounts: vec![],
+        network: "net".to_string(),
+        labels: BTreeMap::new(),
+        health: Some(HealthCheckSpec {
+            command: vec!["/bin/check".to_string()],
+            interval: Duration::from_secs(7),
+            timeout: Duration::from_secs(3),
+            retries: 2,
+            start_period: Duration::from_secs(15),
+            on_failure: HealthCheckOnFailure::Restart,
+        }),
+        hosts: vec![],
+        dns_servers: vec![],
+        memory: None,
+        cpus: None,
+        extra_caps: vec![],
+        writable_rootfs: false,
+        pids_limit: 256,
+        workdir: None,
+    };
+
+    let args = podman_args(&spec);
+    let find = |flag: &str| {
+        args.iter()
+            .position(|a| a == flag)
+            .map(|p| args[p + 1].clone())
+            .unwrap_or_else(|| panic!("flag not found: {flag}"))
+    };
+
+    assert_eq!(find("--health-cmd"), "[\"/bin/check\"]");
+    assert_eq!(find("--health-interval"), "7s");
+    assert_eq!(find("--health-timeout"), "3s");
+    assert_eq!(find("--health-retries"), "2");
+    assert_eq!(find("--health-start-period"), "15s");
+    assert_eq!(find("--health-on-failure"), "restart");
+}
+
+#[test]
+fn podman_args_omit_health_check_flags_when_absent() {
+    let spec = ContainerSpec {
+        name: "n".to_string(),
+        image: "img".to_string(),
+        command: vec![],
+        entrypoint: vec![],
+        env: vec![],
+        mounts: vec![],
+        network: "net".to_string(),
+        labels: BTreeMap::new(),
+        health: None,
+        hosts: vec![],
+        dns_servers: vec![],
+        memory: None,
+        cpus: None,
+        extra_caps: vec![],
+        writable_rootfs: false,
+        pids_limit: 256,
+        workdir: None,
+    };
+
+    let args = podman_args(&spec);
+    assert!(!args.iter().any(|a| a.starts_with("--health-")));
+}

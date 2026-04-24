@@ -524,3 +524,33 @@ impl ObservationFact {
         }
     }
 }
+
+#[cfg(test)]
+mod observation_fact_tests {
+    use super::*;
+
+    // r[verify lifecycle.container.unhealthy-transition]
+    #[test]
+    fn container_unhealthy_maps_to_health_check_fail() {
+        let kinds = ObservationFact::ContainerUnhealthy.to_obs_kinds();
+        assert_eq!(kinds.len(), 1);
+        assert_eq!(kinds[0].0, "health_check_fail");
+    }
+
+    // r[verify lifecycle.container]
+    #[test]
+    fn container_healthy_maps_to_health_check_pass() {
+        let kinds = ObservationFact::ContainerHealthy.to_obs_kinds();
+        assert_eq!(kinds.len(), 1);
+        assert_eq!(kinds[0].0, "health_check_pass");
+    }
+
+    // r[verify healthcheck.on-failure]
+    #[test]
+    fn on_failure_podman_strings_cover_all_variants() {
+        assert_eq!(HealthCheckOnFailure::None.podman_arg(), "none");
+        assert_eq!(HealthCheckOnFailure::Kill.podman_arg(), "kill");
+        assert_eq!(HealthCheckOnFailure::Restart.podman_arg(), "restart");
+        assert_eq!(HealthCheckOnFailure::Stop.podman_arg(), "stop");
+    }
+}

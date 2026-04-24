@@ -670,3 +670,6 @@ impl ContainerDef {
         );
     }
 }
+
+#[cfg(test)]
+mod tests;
