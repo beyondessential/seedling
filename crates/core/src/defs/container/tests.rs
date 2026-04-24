@@ -18,7 +18,10 @@ fn parse_command_healthcheck_with_defaults() {
         Dynamic::from("-fsS".to_string()),
         Dynamic::from("http://localhost/health".to_string()),
     ];
-    let m = map_with(&[("kind", Dynamic::from("command")), ("cmd", Dynamic::from(cmd))]);
+    let m = map_with(&[
+        ("kind", Dynamic::from("command")),
+        ("cmd", Dynamic::from(cmd)),
+    ]);
 
     let hc = parse_healthcheck(m).expect("parse");
     let HealthcheckKind::Command { cmd } = hc.kind;
@@ -39,7 +42,10 @@ fn parse_command_cmd_string_wraps_in_shell() {
     ]);
     let hc = parse_healthcheck(m).expect("parse");
     let HealthcheckKind::Command { cmd } = hc.kind;
-    assert_eq!(cmd, vec!["CMD-SHELL".to_string(), "curl -fsS /health".into()]);
+    assert_eq!(
+        cmd,
+        vec!["CMD-SHELL".to_string(), "curl -fsS /health".into()]
+    );
 }
 
 // r[verify healthcheck.timings]

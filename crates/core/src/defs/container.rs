@@ -228,12 +228,10 @@ fn take_nonneg_secs(
     let Some(value) = map.remove(key) else {
         return Ok(default);
     };
-    let n = value
-        .as_int()
-        .map_err(|t| -> Box<EvalAltResult> {
-            format!("healthcheck `{key}` must be a non-negative integer number of seconds, got {t}")
-                .into()
-        })?;
+    let n = value.as_int().map_err(|t| -> Box<EvalAltResult> {
+        format!("healthcheck `{key}` must be a non-negative integer number of seconds, got {t}")
+            .into()
+    })?;
     if n < 0 {
         return Err(format!("healthcheck `{key}` must not be negative, got {n}").into());
     }
@@ -260,11 +258,9 @@ fn take_on_failure(map: &mut rhai::Map) -> Result<HealthcheckOnFailure, Box<Eval
     let Some(value) = map.remove("on_failure") else {
         return Ok(HealthcheckOnFailure::None);
     };
-    let s = value
-        .into_string()
-        .map_err(|t| -> Box<EvalAltResult> {
-            format!("healthcheck `on_failure` must be a string, got {t}").into()
-        })?;
+    let s = value.into_string().map_err(|t| -> Box<EvalAltResult> {
+        format!("healthcheck `on_failure` must be a string, got {t}").into()
+    })?;
     match s.as_str() {
         "none" => Ok(HealthcheckOnFailure::None),
         "kill" => Ok(HealthcheckOnFailure::Kill),
@@ -322,10 +318,7 @@ pub(super) fn parse_healthcheck(mut map: rhai::Map) -> Result<HealthcheckDef, Bo
             .into());
         }
         other => {
-            return Err(format!(
-                "healthcheck `kind` must be \"command\"; got '{other}'"
-            )
-            .into());
+            return Err(format!("healthcheck `kind` must be \"command\"; got '{other}'").into());
         }
     };
 
@@ -342,7 +335,11 @@ pub(super) fn parse_healthcheck(mut map: rhai::Map) -> Result<HealthcheckDef, Bo
 
     if !map.is_empty() {
         let extras: Vec<String> = map.keys().map(|k| k.to_string()).collect();
-        return Err(format!("healthcheck map contains unknown keys: {}", extras.join(", ")).into());
+        return Err(format!(
+            "healthcheck map contains unknown keys: {}",
+            extras.join(", ")
+        )
+        .into());
     }
 
     Ok(HealthcheckDef {
