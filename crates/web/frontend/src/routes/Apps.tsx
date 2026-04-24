@@ -1,4 +1,5 @@
 import AddIcon from "@mui/icons-material/Add";
+import CancelIcon from "@mui/icons-material/Cancel";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import StopIcon from "@mui/icons-material/Stop";
 import {
@@ -53,6 +54,7 @@ export default function Apps() {
     useOiQuery<ConnectedClients>("/connected-clients/list", {});
   const { execute: stopShell } = useOiAction();
   const { execute: stopForward } = useOiAction();
+  const { execute: cancelOp, loading: cancelling } = useOiAction();
   const writeGuard = useGuard("write");
   const dangerGuard = useGuard("dangerous");
 
@@ -71,6 +73,15 @@ export default function Apps() {
   const handleStopForward = async (forwardId: string) => {
     await stopForward("/forwards/stop", { forward_id: forwardId });
     refetchClients();
+  };
+
+  const handleCancelOp = async (appName: string) => {
+    try {
+      await cancelOp("/apps/action/cancel", { app: appName });
+      refetchApps();
+    } catch {
+      // surfaced by useOiAction globally
+    }
   };
 
   const webSessions = clients?.web ?? [];
@@ -144,6 +155,24 @@ export default function Apps() {
                       />
                       {app.has_stopped_resources && (
                         <Chip label="partially running" size="small" color="warning" variant="outlined" />
+                      )}
+                      {(app.status === "installing" ||
+                        app.status === "operating") && (
+                        <Tooltip title={writeGuard.reason ?? "Cancel operation"}>
+                          <span>
+                            <IconButton
+                              size="small"
+                              color="error"
+                              disabled={cancelling || !writeGuard.allowed}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleCancelOp(app.name);
+                              }}
+                            >
+                              <CancelIcon sx={{ fontSize: 16 }} />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
                       )}
                     </Box>
                   </TableCell>
