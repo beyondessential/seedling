@@ -380,15 +380,46 @@ fn derive_lifecycle_with_ms(
 
 // r[impl lifecycle.container]
 fn derive_container_lifecycle(observations: &[WorldObservation]) -> (LifecycleState, Option<i64>) {
-    drive_observations(observations, |kind| match kind {
-        "container_created" | "image_pull_started" => Some(LifecycleState::Scheduled),
-        "container_running" => Some(LifecycleState::Running),
-        "health_check_pass" => Some(LifecycleState::Ready),
-        "stop_sent" => Some(LifecycleState::Terminating),
-        "container_exited" => Some(LifecycleState::Terminated),
-        "container_removed" => Some(LifecycleState::Unscheduled),
-        _ => None,
-    })
+    let mut state = LifecycleState::Pending;
+    let mut transition_ms: Option<i64> = None;
+
+    for obs in observations {
+        if state == LifecycleState::Terminated || state == LifecycleState::Unscheduled {
+            state = LifecycleState::Pending;
+            transition_ms = None;
+        }
+
+        // r[impl lifecycle.container.unhealthy-transition]
+        // Health demotion: Ready containers observed as unhealthy drop back to
+        // Running, and only to Running — other states are unaffected.
+        if obs.obs_kind == "health_check_fail" {
+            if state == LifecycleState::Ready {
+                state = LifecycleState::Running;
+                transition_ms = Some(obs.recorded_at);
+            }
+            continue;
+        }
+
+        let next = match obs.obs_kind.as_str() {
+            "container_created" | "image_pull_started" => LifecycleState::Scheduled,
+            "container_running" => LifecycleState::Running,
+            "health_check_pass" => LifecycleState::Ready,
+            "stop_sent" => LifecycleState::Terminating,
+            "container_exited" => LifecycleState::Terminated,
+            "container_removed" => LifecycleState::Unscheduled,
+            _ => continue,
+        };
+
+        if state.has_reached(next) {
+            continue;
+        }
+        if state.can_transition_to(next) {
+            state = next;
+            transition_ms = Some(obs.recorded_at);
+        }
+    }
+
+    (state, transition_ms)
 }
 
 // r[impl lifecycle.service]

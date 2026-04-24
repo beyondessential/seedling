@@ -94,6 +94,48 @@ fn health_check_pass_gives_ready() {
     assert_eq!(state, LifecycleState::Ready);
 }
 
+// r[verify lifecycle.container.unhealthy-transition]
+#[test]
+fn health_check_fail_demotes_ready_to_running() {
+    let resource = dep("app", "web");
+    let state = derive_lifecycle_state(
+        &resource,
+        &[
+            obs("container_running"),
+            obs("health_check_pass"),
+            obs("health_check_fail"),
+        ],
+    );
+    assert_eq!(state, LifecycleState::Running);
+}
+
+// r[verify lifecycle.container.unhealthy-transition]
+#[test]
+fn health_check_pass_after_fail_returns_to_ready() {
+    let resource = dep("app", "web");
+    let state = derive_lifecycle_state(
+        &resource,
+        &[
+            obs("container_running"),
+            obs("health_check_pass"),
+            obs("health_check_fail"),
+            obs("health_check_pass"),
+        ],
+    );
+    assert_eq!(state, LifecycleState::Ready);
+}
+
+// r[verify lifecycle.container.unhealthy-transition]
+#[test]
+fn health_check_fail_on_running_is_noop() {
+    let resource = dep("app", "web");
+    let state = derive_lifecycle_state(
+        &resource,
+        &[obs("container_running"), obs("health_check_fail")],
+    );
+    assert_eq!(state, LifecycleState::Running);
+}
+
 // r[verify lifecycle.container]
 // r[verify lifecycle.transitions]
 #[test]
