@@ -91,6 +91,17 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > The web interface exposes the full app management surface of the OI:
 > listing registered apps and their statuses; showing detailed app status including resources, faults, params, install requirements, and actions; registering new apps with a BSL script; updating an app's BSL script; deregistering apps; setting and unsetting parameters; scaling deployments; viewing generation history; planning proposed changes; invoking lifecycle actions; and invoking the install action with its requirements.
 
+> w[routes.apps.healthcheck-indicator]
+> When a container resource (Deployment or Job) has a declared [healthcheck](language.md#l--container.healthcheck), the app detail page must show a small indicator alongside the resource's lifecycle state.
+> The indicator must convey:
+>
+> - that a healthcheck is declared,
+> - the configured `on_failure` response,
+> - the current check state derived from recent observations: passing, failing, or in start-period.
+>
+> The indicator's colour must align with the existing status palette: a healthy state uses the success colour, a failing state uses the error colour, and the start-period state uses the warning or neutral colour.
+> Hovering or focusing the indicator must reveal the declared `kind`, `on_failure`, and (for `kind: "command"`) a truncated form of the `cmd`.
+
 > w[routes.logs]
 > The web interface exposes log streaming for app workload containers and infrastructure components.
 

@@ -178,8 +178,15 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > - **Scheduled**: the container image pull has been initiated and/or the container has been created.
 > - **Running**: the container process is executing.
-> - **Ready**: the container is running and any configured health checks are passing.
+> - **Ready**: the container is running and, if a [healthcheck](language.md#l--container.healthcheck) is declared, it is currently passing.
 > - **Terminated**: the container process has exited (with an exit code).
+>
+> A container with no declared healthcheck becomes Ready as soon as it is Running. A container with a declared healthcheck remains in Running until the first passing observation is recorded.
+
+> r[lifecycle.container.unhealthy-transition]
+> A container observed as unhealthy must transition from Ready back to Running.
+> A subsequent healthy observation must transition it forward to Ready again.
+> These transitions are derived from the [world observation history](#r--history.world) in the same manner as all other lifecycle state derivations and must not require an independent state machine.
 
 > r[lifecycle.service]
 > For Service resources:
@@ -924,6 +931,12 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > r[fault.cert-acquisition]
 > When TLS certificate acquisition for an ingress hostname fails persistently (after the proxy's own retry policy has been exhausted), the runtime must file a fault of kind `cert_acquisition_failed` associated with that ingress, identifying the hostname and the most recent acquisition error.
 > The fault is cleared automatically when a subsequent acquisition for the same hostname is observed as `valid`.
+
+> r[fault.healthcheck]
+> When a container instance has a declared [healthcheck](language.md#l--container.healthcheck) and has been continuously unhealthy for longer than its grace window (`start_period` plus `retries × interval`), the runtime must file a fault of kind `health_check_failed` associated with that instance.
+> The fault is cleared automatically when the instance is next observed as healthy, or when the instance is unscheduled.
+>
+> A container without a declared healthcheck, or one still within its grace window, must not cause this fault to be filed.
 
 > r[fault.surfacing]
 > Faults must be surfaced to operators through the operator interface (defined in a separate spec).
