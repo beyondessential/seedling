@@ -64,6 +64,7 @@ import type {
   ExternalMapping,
   FaultRecord,
   HandlerProbe,
+  HealthcheckSummary,
   ImagePin,
   ImageSummary,
   InstallRequirement,
@@ -78,6 +79,101 @@ function lifecycleColor(
   if (state === "failed") return "error";
   if (state === "excluded") return "warning";
   return "default";
+}
+
+type HealthcheckState = "passing" | "failing" | "starting" | "idle";
+
+function healthcheckState(
+  lifecycle: string,
+  instanceId: string,
+  faults: FaultRecord[],
+): HealthcheckState {
+  const failing = faults.some(
+    (f) => f.kind === "health_check_failed" && f.instance_id === instanceId,
+  );
+  if (failing) return "failing";
+  if (lifecycle === "ready") return "passing";
+  if (lifecycle === "running") return "starting";
+  return "idle";
+}
+
+function healthcheckChipColor(
+  state: HealthcheckState,
+): "success" | "warning" | "error" | "default" {
+  switch (state) {
+    case "passing":
+      return "success";
+    case "failing":
+      return "error";
+    case "starting":
+      return "warning";
+    case "idle":
+      return "default";
+  }
+}
+
+function HealthcheckIndicator({
+  hc,
+  lifecycle,
+  instanceId,
+  faults,
+}: {
+  hc: HealthcheckSummary;
+  lifecycle: string;
+  instanceId: string;
+  faults: FaultRecord[];
+}) {
+  const state = healthcheckState(lifecycle, instanceId, faults);
+  const cmdPreview =
+    hc.kind === "command" && hc.cmd ? hc.cmd.join(" ") : hc.kind;
+  const truncated =
+    cmdPreview.length > 80 ? `${cmdPreview.slice(0, 77)}…` : cmdPreview;
+  const tooltip = `healthcheck ${hc.kind} · on_failure=${hc.on_failure} · ${state}\n${truncated}`;
+  const label =
+    state === "failing"
+      ? "unhealthy"
+      : state === "starting"
+        ? "starting"
+        : state === "passing"
+          ? "healthy"
+          : "check";
+  return (
+    <Tooltip title={<span style={{ whiteSpace: "pre-line" }}>{tooltip}</span>}>
+      <Chip
+        label={label}
+        color={healthcheckChipColor(state)}
+        size="small"
+        variant="outlined"
+        sx={{
+          fontSize: "0.65rem",
+          height: 18,
+          "& .MuiChip-label": { px: 0.75 },
+        }}
+      />
+    </Tooltip>
+  );
+}
+
+function containerHealthcheck(def: ResourceDef | undefined): HealthcheckSummary | null {
+  if (!def) return null;
+  if (def.kind !== "deployment" && def.kind !== "job") return null;
+  return def.container.healthcheck ?? null;
+}
+
+function healthcheckTooltip(hc: HealthcheckSummary): string {
+  const lines: string[] = [];
+  lines.push(`kind: ${hc.kind}`);
+  if (hc.kind === "command" && hc.cmd) {
+    const joined = hc.cmd.join(" ");
+    lines.push(
+      `cmd: ${joined.length > 120 ? `${joined.slice(0, 117)}…` : joined}`,
+    );
+  }
+  lines.push(
+    `interval=${hc.interval_secs}s · timeout=${hc.timeout_secs}s · retries=${hc.retries} · start_period=${hc.start_period_secs}s`,
+  );
+  lines.push(`on_failure: ${hc.on_failure}`);
+  return lines.join("\n");
 }
 
 function FaultList({
@@ -234,6 +330,21 @@ function ResourceDefDetail({ def }: { def: ResourceDef }) {
             size="small"
             variant="outlined"
           />
+        )}
+        {def.container.healthcheck && (
+          <Tooltip
+            title={
+              <span style={{ whiteSpace: "pre-line" }}>
+                {healthcheckTooltip(def.container.healthcheck)}
+              </span>
+            }
+          >
+            <Chip
+              label={`healthcheck: ${def.container.healthcheck.kind} · ${def.container.healthcheck.on_failure}`}
+              size="small"
+              variant="outlined"
+            />
+          </Tooltip>
         )}
       </Box>
     );
@@ -548,12 +659,29 @@ function ResourcesSection({
                       >
                         {inst.display_name}
                       </TableCell>
-                      <TableCell width={120} align="right">
-                        <Chip
-                          label={inst.lifecycle.replace(/_/g, " ")}
-                          color={lifecycleColor(inst.lifecycle)}
-                          size="small"
-                        />
+                      <TableCell width={180} align="right">
+                        <Box
+                          sx={{
+                            display: "flex",
+                            gap: 0.5,
+                            justifyContent: "flex-end",
+                            alignItems: "center",
+                          }}
+                        >
+                          {containerHealthcheck(r.def) && (
+                            <HealthcheckIndicator
+                              hc={containerHealthcheck(r.def)!}
+                              lifecycle={inst.lifecycle}
+                              instanceId={inst.id}
+                              faults={r.faults}
+                            />
+                          )}
+                          <Chip
+                            label={inst.lifecycle.replace(/_/g, " ")}
+                            color={lifecycleColor(inst.lifecycle)}
+                            size="small"
+                          />
+                        </Box>
                       </TableCell>
                       <TableCell width={40} align="right" sx={{ px: 0.5 }}>
                         {(r.type === "deployment" || r.type === "job") && (

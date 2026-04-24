@@ -52,6 +52,17 @@ export interface ContainerSummary {
   writable_rootfs: boolean;
   pids_limit: number | null;
   workdir: string | null;
+  healthcheck: HealthcheckSummary | null;
+}
+
+export interface HealthcheckSummary {
+  kind: "command";
+  cmd: string[] | null;
+  interval_secs: number;
+  timeout_secs: number;
+  retries: number;
+  start_period_secs: number;
+  on_failure: "none" | "kill" | "restart" | "stop";
 }
 
 export interface PodSummary {
