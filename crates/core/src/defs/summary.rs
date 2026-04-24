@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use super::{
-    container::{ContainerDef, VolumeMount},
+    container::{ContainerDef, HealthcheckDef, HealthcheckKind, HealthcheckOnFailure, VolumeMount},
     deployment::Deployment,
     enums::{OnExit, OnTerminate, OnUpdate},
     ingress::{HttpTermination, Ingress, RedirectDef},
@@ -99,6 +99,42 @@ pub struct ContainerSummary {
     pub writable_rootfs: bool,
     pub pids_limit: Option<u32>,
     pub workdir: Option<String>,
+    pub healthcheck: Option<HealthcheckSummary>,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+pub struct HealthcheckSummary {
+    pub kind: &'static str,
+    /// Command argv for `kind = "command"`. `None` for reserved kinds.
+    pub cmd: Option<Vec<String>>,
+    pub interval_secs: u64,
+    pub timeout_secs: u64,
+    pub retries: u32,
+    pub start_period_secs: u64,
+    pub on_failure: &'static str,
+}
+
+impl HealthcheckDef {
+    pub fn summary(&self) -> HealthcheckSummary {
+        let (kind, cmd) = match &self.kind {
+            HealthcheckKind::Command { cmd } => ("command", Some(cmd.clone())),
+        };
+        let on_failure = match self.on_failure {
+            HealthcheckOnFailure::None => "none",
+            HealthcheckOnFailure::Kill => "kill",
+            HealthcheckOnFailure::Restart => "restart",
+            HealthcheckOnFailure::Stop => "stop",
+        };
+        HealthcheckSummary {
+            kind,
+            cmd,
+            interval_secs: self.interval_secs,
+            timeout_secs: self.timeout_secs,
+            retries: self.retries,
+            start_period_secs: self.start_period_secs,
+            on_failure,
+        }
+    }
 }
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -337,6 +373,7 @@ impl ContainerDef {
             writable_rootfs: self.writable_rootfs,
             pids_limit: self.pids_limit,
             workdir: self.workdir.clone(),
+            healthcheck: self.healthcheck.as_ref().map(HealthcheckDef::summary),
         }
     }
 }
