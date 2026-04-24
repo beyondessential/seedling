@@ -112,6 +112,7 @@ function healthcheckChipColor(
   }
 }
 
+// w[impl routes.apps.healthcheck-indicator]
 function HealthcheckIndicator({
   hc,
   lifecycle,
