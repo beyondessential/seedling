@@ -33,6 +33,10 @@ pub(super) struct PodActuationUpdate {
     pub unit_failures: Vec<ResourceInstance>,
     /// Instances whose backing unit was observed active/activating (clears prior failures).
     pub unit_healthy: Vec<ResourceInstance>,
+    /// Instances whose declared healthcheck was observed as failing this tick.
+    pub health_check_failures: Vec<ResourceInstance>,
+    /// Instances whose healthcheck was observed as passing this tick.
+    pub health_check_passes: Vec<ResourceInstance>,
     /// Instances whose registry lookup failed during start.
     pub registry_failures: Vec<ResourceInstance>,
     /// Instances blocked from starting because a required external volume has no mapping.
@@ -62,6 +66,8 @@ struct PodInstanceResult {
     image_pull_success: Option<(ResourceInstance, String)>,
     unit_failure: Option<ResourceInstance>,
     unit_healthy: Option<ResourceInstance>,
+    health_check_failure: Option<ResourceInstance>,
+    health_check_pass: Option<ResourceInstance>,
     registry_failure: Option<ResourceInstance>,
     external_volume_failure: Option<(ResourceInstance, String)>,
     start_failure: Option<(ResourceInstance, String)>,
@@ -87,6 +93,11 @@ struct ObservedInstance<'a> {
     /// was left behind), so the Unscheduled stop path must key on this instead
     /// of on container existence alone.
     network_exists: bool,
+    /// Podman reported the container's declared healthcheck as failing this tick.
+    observed_unhealthy: bool,
+    /// Podman reported the container as healthy (or running without a declared
+    /// healthcheck) this tick.
+    observed_healthy: bool,
     result: PodInstanceResult,
 }
 
@@ -105,6 +116,8 @@ async fn observe_one_pod<'a>(
         image_pull_success: None,
         unit_failure: None,
         unit_healthy: None,
+        health_check_failure: None,
+        health_check_pass: None,
         registry_failure: None,
         external_volume_failure: None,
         start_failure: None,
@@ -132,6 +145,8 @@ async fn observe_one_pod<'a>(
                 container_exists: false,
                 has_exited: false,
                 network_exists: false,
+                observed_unhealthy: false,
+                observed_healthy: false,
                 result,
             });
         }
@@ -179,6 +194,17 @@ async fn observe_one_pod<'a>(
     let unit_active = facts
         .iter()
         .any(|(f, _)| matches!(f, ObservationFact::UnitActive));
+    // r[impl fault.healthcheck]
+    // `ContainerUnhealthy` is only ever emitted when podman's own healthcheck
+    // state machine reports `Unhealthy`, i.e. after the container's configured
+    // `retries` and grace window have been exhausted. Podman owns the grace
+    // logic, so by the time we see this fact we are past the threshold.
+    let observed_unhealthy = facts
+        .iter()
+        .any(|(f, _)| matches!(f, ObservationFact::ContainerUnhealthy));
+    let observed_healthy = facts
+        .iter()
+        .any(|(f, _)| matches!(f, ObservationFact::ContainerHealthy));
     let container_exists = facts.iter().any(|(f, _)| {
         matches!(
             f,
@@ -232,6 +258,8 @@ async fn observe_one_pod<'a>(
         container_exists,
         has_exited,
         network_exists,
+        observed_unhealthy,
+        observed_healthy,
         result,
     })
 }
@@ -321,6 +349,16 @@ async fn actuate_one_pod(
         } else if obs.unit_failed || (obs.unit_active && !obs.is_running) {
             result.unit_failure = Some(dr.instance.clone());
         }
+    }
+
+    // r[impl fault.healthcheck]
+    // Separate from unit health: the unit can be active with the container
+    // running but the declared healthcheck failing. File/clear the
+    // health_check_failed fault independently from container_start_failed.
+    if obs.observed_unhealthy {
+        result.health_check_failure = Some(dr.instance.clone());
+    } else if obs.observed_healthy {
+        result.health_check_pass = Some(dr.instance.clone());
     }
 
     // r[impl autonomous.restart]
@@ -672,6 +710,8 @@ pub(super) async fn observe_and_actuate(
         image_pull_successes: Vec::new(),
         unit_failures: Vec::new(),
         unit_healthy: Vec::new(),
+        health_check_failures: Vec::new(),
+        health_check_passes: Vec::new(),
         registry_failures: Vec::new(),
         external_volume_failures: Vec::new(),
         start_failures: Vec::new(),
@@ -698,6 +738,12 @@ pub(super) async fn observe_and_actuate(
         }
         if let Some(h) = result.unit_healthy {
             update.unit_healthy.push(h);
+        }
+        if let Some(f) = result.health_check_failure {
+            update.health_check_failures.push(f);
+        }
+        if let Some(h) = result.health_check_pass {
+            update.health_check_passes.push(h);
         }
         if let Some(f) = result.registry_failure {
             update.registry_failures.push(f);

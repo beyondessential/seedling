@@ -749,6 +749,8 @@ impl Reconciler {
             self.file_image_pull_faults(&app_name, &pod_update);
             // r[fault.container-start]
             self.file_unit_failure_faults(&app_name, &pod_update);
+            // r[fault.healthcheck]
+            self.file_health_check_faults(&app_name, &pod_update);
             // r[fault.external-volume-unmapped]
             self.file_external_volume_faults(&app_name, &pod_update);
             self.file_instance_registry_faults(&app_name, &pod_update);

@@ -121,6 +121,63 @@ impl Reconciler {
         });
     }
 
+    // r[impl fault.healthcheck]
+    pub(super) fn file_health_check_faults(
+        &self,
+        app: &AppName,
+        update: &pods::PodActuationUpdate,
+    ) {
+        let app = app.clone();
+        let failures: Vec<ResourceInstance> = update.health_check_failures.to_vec();
+        let passes: Vec<ResourceInstance> = update.health_check_passes.to_vec();
+        self.db.call(move |db| {
+            for instance in &failures {
+                let inst_hex = instance.id.to_hex();
+                let kind_str = format!("{:?}", instance.kind).to_lowercase();
+                let already_filed = faults::list_active_faults(db, Some(&app))
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|f| {
+                        f.kind == "health_check_failed"
+                            && f.instance_id.as_deref() == Some(&inst_hex)
+                    });
+                if !already_filed {
+                    let desc = format!(
+                        "healthcheck for {} has been failing past its grace window",
+                        instance.display_name,
+                    );
+                    if let Err(e) = faults::file_fault(
+                        db,
+                        &app,
+                        Some(&kind_str),
+                        instance.name.as_deref(),
+                        Some(&inst_hex),
+                        "health_check_failed",
+                        &desc,
+                    ) {
+                        tracing::warn!(app = %app, instance = %inst_hex, "failed to file health_check_failed fault: {e}");
+                    }
+                }
+            }
+            for instance in &passes {
+                let inst_hex = instance.id.to_hex();
+                let cleared: Vec<_> = faults::list_active_faults(db, Some(&app))
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|f| {
+                        f.kind == "health_check_failed"
+                            && f.instance_id.as_deref() == Some(&inst_hex)
+                    })
+                    .collect();
+                for f in cleared {
+                    if let Err(e) = faults::clear_fault(db, &f.id, &app) {
+                        tracing::warn!(app = %app, fault_id = %f.id, "failed to clear health_check_failed fault: {e}");
+                    }
+                }
+            }
+        });
+    }
+
     // r[fault.container-start]
     pub(super) fn file_unit_failure_faults(
         &self,
