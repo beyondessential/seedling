@@ -939,6 +939,21 @@ This spec defines the semantics of the Runtime Instance as far as BSL is concern
 >
 > Anonymous container resources are supported: `rt.warm_images(app.job().image("registry/foo:1.2.3"))` warms the single image reference of a dynamic job without ever starting it, which is the idiomatic way to pre-load a future version of an image ahead of a deploy.
 
+> l[rt.signal]
+> The `rt.signal(target: Collection, signal: string)` method delivers the named POSIX signal to PID 1 of every running container instance in the selected Collection.
+>
+> The `signal` argument accepts the canonical `"SIGFOO"` form or its bare `"FOO"` shorthand; unknown signal names are a script-evaluation error.
+>
+> Selection rules:
+>
+> - Container instances that are not running are silently skipped (no error). This makes `rt.signal` safe to use against deployments where some replicas may be in transient states.
+> - Non-container resources in the collection are ignored.
+> - An empty selection is an error — typically a sign that the caller's collection expression resolved to nothing.
+>
+> The call is _at-most-once_ across replays: when the runtime restarts mid-operation and replays the action closure, a previously-delivered signal is not re-sent.
+>
+> Typical use cases: `SIGHUP` to reload configuration without restart (postgres, nginx), `SIGUSR1` to trigger log rotation, `SIGTERM`/`SIGINT` for cooperative shutdown when the deployment's `stop_signal` is not what the action wants for this one-off invocation.
+
 ## Waiting on resource state
 
 > l[rt.started.type]

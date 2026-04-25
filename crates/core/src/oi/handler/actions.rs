@@ -1,7 +1,8 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use seedling_protocol::error::{ErrorCode, OiError};
-use seedling_protocol::names::{ActionName, AppName};
+use seedling_protocol::names::{ActionName, AppName, ParamName};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -9,6 +10,7 @@ use self::install::validate_requirements;
 use self::lifecycle::spawn_accepted_operation;
 use super::HandlerResult;
 use crate::{
+    defs::install::{ParamDef, ParamKind},
     oi::{handler::RequestCtx, state::OiState},
     runtime::{
         AppPhase,
@@ -112,6 +114,68 @@ fn validate_action_params(
     Ok(())
 }
 
+// l[impl action.params.volume]
+/// Validate that every `kind: "volume"` param in the action schema has a
+/// matching string value in `params`, and that the referenced site volume
+/// exists. The check runs at invocation time so the caller sees a clear
+/// error before the operation is queued / dispatched, rather than a
+/// confusing failure mid-action.
+fn validate_volume_params(
+    state: &OiState,
+    schema: &BTreeMap<ParamName, ParamDef>,
+    params: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), OiError> {
+    use crate::runtime::site_volumes;
+    use seedling_protocol::names::SiteVolumeName;
+
+    let volume_names: Vec<&ParamName> = schema
+        .iter()
+        .filter_map(|(name, def)| (def.kind == ParamKind::Volume).then_some(name))
+        .collect();
+    if volume_names.is_empty() {
+        return Ok(());
+    }
+
+    for name in volume_names {
+        let key = name.as_str();
+        let val = match params.get(key) {
+            Some(serde_json::Value::String(s)) => s.clone(),
+            Some(_) => {
+                return Err(OiError::new(
+                    ErrorCode::RequirementsInvalid,
+                    format!("param {key:?}: volume reference must be a string"),
+                ));
+            }
+            None => {
+                let def = schema.get(name).expect("schema entry");
+                if def.required {
+                    return Err(OiError::new(
+                        ErrorCode::RequirementsInvalid,
+                        format!("param {key:?}: required volume reference is missing"),
+                    ));
+                }
+                continue;
+            }
+        };
+        let site_name = SiteVolumeName::new(&val).map_err(|e| {
+            OiError::new(
+                ErrorCode::RequirementsInvalid,
+                format!("param {key:?}: invalid site volume name {val:?}: {e}"),
+            )
+        })?;
+        let exists = state
+            .db
+            .call(move |db| site_volumes::get(db, &site_name).ok().flatten());
+        if exists.is_none() {
+            return Err(OiError::new(
+                ErrorCode::NotFound,
+                format!("param {key:?}: site volume {val:?} not found"),
+            ));
+        }
+    }
+    Ok(())
+}
+
 // i[action.invoke]
 fn apply_action_param_schema(
     action_params_schema: &std::collections::BTreeMap<
@@ -195,6 +259,8 @@ pub(crate) fn invoke_action(
 
         // i[action.invoke]
         apply_action_param_schema(&action_def.params, &mut action_params)?;
+        // l[impl action.params.volume]
+        validate_volume_params(state, &action_def.params, &action_params)?;
     }
 
     // Operator-invoked action: source and target generation are equal to the

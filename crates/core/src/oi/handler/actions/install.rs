@@ -78,6 +78,10 @@ pub(in crate::oi) fn validate_requirements(
                 }
             }
             ParamKind::Text | ParamKind::Multiline | ParamKind::WeakPassword => {}
+            // ParamKind::Volume is rejected at parse time for static schemas,
+            // but the validate_requirements helper is shared with action invocation;
+            // for action params, value validation is handled in the action handler.
+            ParamKind::Volume => {}
         }
     }
 

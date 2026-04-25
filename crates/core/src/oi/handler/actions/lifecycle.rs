@@ -33,6 +33,143 @@ fn open_operation_dbs(db_path: &Path, app_name: &AppName) -> Option<DbHandle> {
     }
 }
 
+// r[impl rt.signal]
+/// Adapter from the system actuator's async `signal_container` to the
+/// synchronous `ContainerSignaler` trait expected by the BSL runtime. The
+/// adapter is constructed in the OI layer so that language-only tests don't
+/// drag in a tokio runtime.
+struct OperationSignaler {
+    container: Arc<dyn crate::system::ContainerRuntime>,
+}
+
+impl crate::runtime::barrier::ContainerSignaler for OperationSignaler {
+    fn signal(&self, container_name: &str, signal: &str) -> Result<bool, String> {
+        let container = Arc::clone(&self.container);
+        let name = container_name.to_owned();
+        let sig = signal.to_owned();
+        // The operation loop runs inside `spawn_blocking`, so we can step
+        // back into the async runtime via `block_in_place` + the current
+        // handle to deliver the signal synchronously.
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async move { container.signal_container(&name, &sig).await })
+        });
+        result.map_err(|e| e.to_string())
+    }
+}
+
+fn make_container_signaler(
+    state: &OiState,
+) -> Option<Arc<dyn crate::runtime::barrier::ContainerSignaler>> {
+    Some(Arc::new(OperationSignaler {
+        container: Arc::clone(&state.driver.container),
+    }))
+}
+
+// l[impl action.params.volume]
+/// For every `kind: "volume"` param in the action's schema, look up the
+/// operator-supplied site volume name, build an
+/// [`OperationVolumeBinding`] keyed by a generated per-operation name, and
+/// rewrite the params map so the action closure sees `<key>_volume = <generated-name>`
+/// — matching the convention used by backups and consumed by
+/// `app.external_volume(param[...])`.
+///
+/// Volumes that have already been validated to exist by `invoke_action`'s
+/// pre-flight; here we only resolve to the host path and warn (instead of
+/// failing) if a volume disappeared between validation and dispatch — the
+/// closure will then see a missing `<key>_volume` and can fail gracefully.
+fn resolve_action_volume_params(
+    state: &OiState,
+    app: &App,
+    action_name: &ActionName,
+    mut params: serde_json::Map<String, serde_json::Value>,
+    operation_id: &str,
+) -> (
+    serde_json::Map<String, serde_json::Value>,
+    HashMap<String, OperationVolumeBinding>,
+) {
+    use crate::defs::install::ParamKind;
+    use crate::defs::volume::{VolumeParamSpec, build_operation_volume_params};
+    use crate::runtime::site_volumes;
+    use seedling_protocol::names::SiteVolumeName;
+
+    let def = app.def.load();
+    let schema = match def.actions.get(action_name.as_str()) {
+        Some(a) => a.params.clone(),
+        None => return (params, HashMap::new()),
+    };
+    drop(def);
+
+    let mut specs: Vec<(String, VolumeParamSpec)> = Vec::new();
+    let volume_keys: Vec<String> = schema
+        .iter()
+        .filter(|(_, p)| p.kind == ParamKind::Volume)
+        .map(|(name, _)| name.as_str().to_owned())
+        .collect();
+    for key in &volume_keys {
+        let val = match params.remove(key.as_str()) {
+            Some(serde_json::Value::String(s)) => s,
+            other => {
+                if other.is_some() {
+                    tracing::warn!(
+                        action = %action_name,
+                        key = %key,
+                        "volume param value is not a string; skipping binding",
+                    );
+                }
+                continue;
+            }
+        };
+        let site_name = match SiteVolumeName::new(&val) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(
+                    action = %action_name,
+                    key = %key,
+                    value = %val,
+                    "invalid site volume name; skipping binding: {e}",
+                );
+                continue;
+            }
+        };
+        let lookup_name = site_name.clone();
+        let resolved = state
+            .db
+            .call(move |db| site_volumes::get(db, &lookup_name).ok().flatten());
+        let Some(site_vol) = resolved else {
+            tracing::warn!(
+                action = %action_name,
+                key = %key,
+                value = %val,
+                "site volume not found at dispatch; skipping binding",
+            );
+            continue;
+        };
+        let host_path = match &site_vol.kind {
+            site_volumes::SiteVolumeKind::Bind { host_path } => std::path::PathBuf::from(host_path),
+            _ => state.driver.volume_store.site_path(site_name.as_str()),
+        };
+        let read_only = site_vol.is_read_only();
+        specs.push((
+            key.clone(),
+            VolumeParamSpec {
+                host_path,
+                read_only,
+                filename: None,
+            },
+        ));
+    }
+
+    if specs.is_empty() {
+        return (params, HashMap::new());
+    }
+    let (bindings, injected) = build_operation_volume_params(operation_id, specs);
+    for (k, v) in injected {
+        params.insert(k, v);
+    }
+    (params, bindings)
+}
+
 /// Run the operation loop synchronously until completion or failure.
 #[expect(
     clippy::too_many_arguments,
@@ -51,6 +188,7 @@ fn run_operation_loop(
     operation_volume_bindings: HashMap<String, OperationVolumeBinding>,
     persist_for_replay: bool,
     cancel_token: Arc<CancelToken>,
+    container_signaler: Option<Arc<dyn crate::runtime::barrier::ContainerSignaler>>,
 ) -> bool {
     let app_name = &op_ctx.app;
     let action_name = &op_ctx.action_name;
@@ -136,6 +274,7 @@ fn run_operation_loop(
                 cipher: Some(Arc::clone(&cipher)),
                 operation_volume_bindings: operation_volume_bindings.clone(),
                 cancel_token: Arc::clone(&cancel_token),
+                container_signaler: container_signaler.clone(),
             },
             &mut scope,
         );
@@ -573,6 +712,14 @@ pub fn spawn_accepted_operation(
             .map(|a| Arc::clone(&a.cancel_token))
             .unwrap_or_else(|| Arc::new(CancelToken::new()));
 
+        // l[impl action.params.volume]
+        // Resolve volume params: replace each `kind: "volume"` param with the
+        // operator-supplied volume reference, looked up to a host path and
+        // exposed to the action closure as a per-operation external volume
+        // binding via the standard `<key>_volume` convention.
+        let (params, operation_volume_bindings) =
+            resolve_action_volume_params(&state, &app, &action_name, params, &operation_id.0);
+
         let success = {
             let app_name = app_name.clone();
             let active_progress = Arc::clone(&active_progress);
@@ -582,6 +729,7 @@ pub fn spawn_accepted_operation(
             let cipher = Arc::clone(&cipher);
             let cancel_token = Arc::clone(&cancel_token);
 
+            let signaler = make_container_signaler(&state);
             tokio::task::spawn_blocking(move || {
                 let db = match open_operation_dbs(&db_path, &app_name) {
                     Some(d) => d,
@@ -597,9 +745,10 @@ pub fn spawn_accepted_operation(
                     &op_ctx,
                     &script_limits,
                     cipher,
-                    HashMap::new(),
+                    operation_volume_bindings,
                     true,
                     cancel_token,
+                    signaler,
                 )
             })
             .await
@@ -703,6 +852,7 @@ pub(crate) async fn run_operation_for_backup(
         let tick_notify_clone = Arc::clone(&tick_notify);
         let op_ctx = op_ctx.clone();
         let cancel_token = Arc::clone(&cancel_token);
+        let signaler = make_container_signaler(state);
         tokio::task::spawn_blocking(move || {
             let db = match open_operation_dbs(&db_path, &op_ctx.app) {
                 Some(d) => d,
@@ -724,6 +874,7 @@ pub(crate) async fn run_operation_for_backup(
                 // the spec exempts them from replay.
                 false,
                 cancel_token,
+                signaler,
             )
         })
         .await

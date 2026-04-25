@@ -305,6 +305,7 @@ fn param_used_in_closure_captures_injected_value() {
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: std::sync::Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
         },
         &mut scope,
     );
@@ -357,6 +358,7 @@ fn on_change_inside_action_closure_throws() {
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: std::sync::Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
         },
         &mut scope,
     );
@@ -440,6 +442,73 @@ fn param_schema_kind_multiline() {
 #[test]
 fn param_schema_kind_unknown_throws() {
     let _ = run_test_script_err(r#"app.param("field").kind("banana");"#);
+}
+
+// l[verify param.schema.kind]
+// l[verify action.params.volume]
+#[test]
+fn param_schema_kind_volume_rejected_on_static_param() {
+    let _ = run_test_script_err(r#"app.param("dst").kind("volume");"#);
+}
+
+// l[verify action.params.volume]
+#[test]
+fn install_param_kind_volume_rejected() {
+    let _ = run_test_script_err(
+        r#"
+        app.on_install(|rt, _param| {}, #{
+            params: #{
+                target: #{ kind: "volume" }
+            }
+        });
+    "#,
+    );
+}
+
+// l[verify action.params.volume]
+#[test]
+fn action_param_kind_volume_accepted() {
+    let app = run_test_script_app(
+        r#"
+        app.on_action("dump", |rt, _param| {}, #{
+            params: #{
+                output: #{ kind: "volume", description: "Where to write" }
+            }
+        });
+    "#,
+    );
+    let def = app.def.load();
+    let action = def.actions.get("dump").expect("dump action");
+    let param = action
+        .params
+        .get(&seedling_protocol::names::ParamName::new_unchecked(
+            "output".to_owned(),
+        ))
+        .expect("output param");
+    assert_eq!(param.kind, crate::defs::install::ParamKind::Volume);
+}
+
+// l[verify action.params.volume]
+#[test]
+fn shell_param_kind_volume_accepted() {
+    let app = run_test_script_app(
+        r#"
+        app.on_shell("inspect", |_rt, _shell, _param| {}, #{
+            params: #{
+                target: #{ kind: "volume" }
+            }
+        });
+    "#,
+    );
+    let def = app.def.load();
+    let shell = def.shells.get("inspect").expect("inspect shell");
+    let param = shell
+        .params
+        .get(&seedling_protocol::names::ParamName::new_unchecked(
+            "target".to_owned(),
+        ))
+        .expect("target param");
+    assert_eq!(param.kind, crate::defs::install::ParamKind::Volume);
 }
 
 // l[verify param.schema]

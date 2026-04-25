@@ -25,9 +25,14 @@ import {
   DialogContentText,
   DialogTitle,
   Divider,
+  FormControl,
+  FormHelperText,
   IconButton,
   InputAdornment,
+  InputLabel,
+  MenuItem,
   Paper,
+  Select,
   Stack,
   Table,
   TableBody,
@@ -71,6 +76,7 @@ import type {
   InstallRequirement,
   ResourceDef,
   SeedlingEvent,
+  SiteVolume,
 } from "../lib/types";
 
 function lifecycleColor(
@@ -1237,6 +1243,15 @@ function ActionInvokeDialog({
       !isStrongPassword(values[key]),
   );
 
+  // l[impl action.params.volume]
+  // The dialog opens on demand, so the extra round-trip when the action has
+  // no volume params is acceptable; the alternative is a conditional hook
+  // (which useOiQuery doesn't support).
+  const { data: siteVolumes } = useOiQuery<SiteVolume[]>(
+    "/volumes/site/list",
+    {},
+  );
+
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
       <DialogTitle sx={{ fontFamily: "monospace", pb: 1 }}>
@@ -1256,6 +1271,48 @@ function ActionInvokeDialog({
             </Typography>
           ) : (
             paramEntries.map(([key, def]) => {
+              if (def.kind === "volume") {
+                return (
+                  <FormControl
+                    key={key}
+                    size="small"
+                    required={def.required}
+                    fullWidth
+                  >
+                    <InputLabel id={`volume-${key}-label`}>{key}</InputLabel>
+                    <Select
+                      labelId={`volume-${key}-label`}
+                      label={key}
+                      value={values[key] ?? ""}
+                      onChange={(e) =>
+                        setValues((v) => ({
+                          ...v,
+                          [key]: e.target.value as string,
+                        }))
+                      }
+                    >
+                      {(siteVolumes ?? []).map((v) => (
+                        <MenuItem key={v.name} value={v.name}>
+                          <Box
+                            sx={{ fontFamily: "monospace", display: "inline" }}
+                          >
+                            {v.name}
+                          </Box>
+                          <Box
+                            component="span"
+                            sx={{ ml: 1, color: "text.secondary" }}
+                          >
+                            {v.kind}
+                          </Box>
+                        </MenuItem>
+                      ))}
+                    </Select>
+                    {def.description && (
+                      <FormHelperText>{def.description}</FormHelperText>
+                    )}
+                  </FormControl>
+                );
+              }
               const isPassword =
                 def.kind === "password" || def.kind === "weak-password";
               const isMultiline = def.kind === "multiline";

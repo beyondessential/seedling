@@ -27,7 +27,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                     .get("params")
                     .and_then(|v| v.read_lock::<Map>().map(|m| m.clone()))
                     .unwrap_or_default();
-                let reqs = parse_param_defs(&params_map)?;
+                let reqs = parse_param_defs(&params_map, false)?;
                 this.def.rcu(|d| {
                     let mut d = (**d).clone();
                     d.install = Some(InstallDef {
@@ -43,8 +43,10 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
 
 // l[impl action.install.requirements.kind-unknown]
 // l[impl action.option-params]
+// l[impl action.params.volume]
 pub(super) fn parse_param_defs(
     map: &Map,
+    allow_volume: bool,
 ) -> Result<BTreeMap<ParamName, ParamDef>, Box<EvalAltResult>> {
     let mut reqs = BTreeMap::new();
     for (key, value) in map {
@@ -58,6 +60,14 @@ pub(super) fn parse_param_defs(
                 })?,
                 None => ParamKind::default(),
             };
+            if !allow_volume && !kind.allowed_static() {
+                return Err(format!(
+                    "param '{key}' uses kind '{}', which is only valid in action or shell \
+                     param schemas; static params should use external_volume mappings instead",
+                    kind.as_str()
+                )
+                .into());
+            }
 
             let required = req_map
                 .get("required")

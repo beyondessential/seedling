@@ -88,6 +88,16 @@ impl CustomType for Param {
                         )
                         .into()
                     })?;
+                if !kind.allowed_static() {
+                    return Err(format!(
+                        "param kind '{}' is not allowed on the static parameter '{}'; \
+                         use it as an action or shell param instead, or declare an \
+                         external_volume for a permanent mapping",
+                        kind.as_str(),
+                        this.name
+                    )
+                    .into());
+                }
                 let name_clone = this.name.clone();
                 this.app.def.rcu(|d| {
                     let mut d = (**d).clone();

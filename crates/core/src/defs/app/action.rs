@@ -121,7 +121,7 @@ fn parse_action_params(
         .get("params")
         .and_then(|v| v.read_lock::<Map>().map(|m| m.clone()))
     {
-        Some(params_map) => super::install::parse_param_defs(&params_map),
+        Some(params_map) => super::install::parse_param_defs(&params_map, true),
         None => Ok(BTreeMap::new()),
     }
 }

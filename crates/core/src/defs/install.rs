@@ -39,6 +39,32 @@ pub enum ParamKind {
     Password,
     // l[impl action.install.requirements.kind-weak-password]
     WeakPassword,
+    /// A reference to a site volume; only valid in action and shell param
+    /// schemas. The runtime resolves the operator-supplied volume reference
+    /// to an operation-scoped binding before invoking the closure.
+    // l[impl action.params.volume]
+    Volume,
+}
+
+impl ParamKind {
+    /// Whether this kind may appear in static param schemas (`app.param`,
+    /// `app.on_install`'s requirements). `Volume` is rejected there because
+    /// its bindings are operation-scoped — the only sensible static
+    /// equivalent is a declared external_volume mapping.
+    pub fn allowed_static(self) -> bool {
+        !matches!(self, Self::Volume)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Multiline => "multiline",
+            Self::Email => "email",
+            Self::Password => "password",
+            Self::WeakPassword => "weak-password",
+            Self::Volume => "volume",
+        }
+    }
 }
 
 impl std::str::FromStr for ParamKind {
@@ -51,6 +77,7 @@ impl std::str::FromStr for ParamKind {
             "email" => Ok(Self::Email),
             "password" => Ok(Self::Password),
             "weak-password" => Ok(Self::WeakPassword),
+            "volume" => Ok(Self::Volume),
             _ => Err(()),
         }
     }
