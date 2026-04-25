@@ -8,6 +8,9 @@ use crate::runtime::db::DbHandle;
 use crate::runtime::history;
 use crate::runtime::identity::{InstanceVariant, ResourceInstance};
 
+#[cfg(test)]
+mod tests;
+
 /// Failure to look up or create an instance in the registry.
 #[derive(Debug)]
 pub struct RegistryError(Box<dyn std::error::Error + Send + Sync>);

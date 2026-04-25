@@ -52,12 +52,15 @@ pub(super) struct ServiceBackends {
 /// [`r[lifecycle.service.routing-pool]`] rule: per service, prefer healthy
 /// backends; if none are healthy, fall back to all running backends and flag
 /// the service as degraded.
+/// One tagged backend for a service: address + whether the source pod is
+/// currently healthy.
+type TaggedBackend = ((Ipv6Addr, u16), bool);
+
 // r[impl lifecycle.service.routing-pool]
 pub(super) fn collect_service_backends(running_pods: &[RunningPod]) -> ServiceBackends {
     // Tag each backend tuple with the source pod's health so we can apply the
     // prefer-healthy rule per (service, port, proto) group.
-    let mut tagged: HashMap<(String, u16, ForwardProto), Vec<((Ipv6Addr, u16), bool)>> =
-        HashMap::new();
+    let mut tagged: HashMap<(String, u16, ForwardProto), Vec<TaggedBackend>> = HashMap::new();
 
     for pod in running_pods {
         let (http, tcp, udp) = match &pod.resource {
@@ -115,26 +118,36 @@ pub(super) fn collect_service_backends(running_pods: &[RunningPod]) -> ServiceBa
         std::collections::BTreeSet::new();
 
     for ((svc_name, svc_port, proto), entries) in tagged {
-        let any_healthy = entries.iter().any(|(_, healthy)| *healthy);
-        let kept: Vec<(Ipv6Addr, u16)> = if any_healthy {
-            entries
-                .into_iter()
-                .filter_map(|(addr, healthy)| if healthy { Some(addr) } else { None })
-                .collect()
-        } else {
-            // r[impl fault.service-degraded]
-            // No healthy backend; fall back to "anything running" so traffic
-            // still has somewhere to go, and surface the degradation as a
-            // fault.
+        let (kept, degraded) = select_pool(entries);
+        if degraded {
             degraded_services.insert(svc_name.clone());
-            entries.into_iter().map(|(addr, _)| addr).collect()
-        };
+        }
         filtered.insert((svc_name, svc_port, proto), kept);
     }
 
     ServiceBackends {
         filtered,
         degraded_services,
+    }
+}
+
+/// Apply the prefer-healthy-fall-back rule to a single service's tagged
+/// backend list. Returns `(pool, degraded)` where `pool` is the backends to
+/// route to and `degraded` is true when no healthy backend was available and
+/// we fell back to running-but-unhealthy.
+// r[impl lifecycle.service.routing-pool]
+// r[impl fault.service-degraded]
+fn select_pool(entries: Vec<TaggedBackend>) -> (Vec<(Ipv6Addr, u16)>, bool) {
+    let any_healthy = entries.iter().any(|(_, healthy)| *healthy);
+    if any_healthy {
+        let kept = entries
+            .into_iter()
+            .filter_map(|(addr, healthy)| if healthy { Some(addr) } else { None })
+            .collect();
+        (kept, false)
+    } else {
+        let kept = entries.into_iter().map(|(addr, _)| addr).collect();
+        (kept, true)
     }
 }
 
@@ -561,6 +574,45 @@ mod tests {
             &HashMap::new(),
         );
         assert!(empty.is_empty());
+    }
+
+    // r[verify lifecycle.service.routing-pool]
+    #[test]
+    fn select_pool_keeps_only_healthy_when_any_healthy() {
+        let pool = super::select_pool(vec![
+            ((ipv6("fd5e::1"), 80), false),
+            ((ipv6("fd5e::2"), 80), true),
+            ((ipv6("fd5e::3"), 80), false),
+        ]);
+        assert_eq!(pool.0, vec![(ipv6("fd5e::2"), 80)]);
+        assert!(!pool.1, "not degraded when any healthy backend exists");
+    }
+
+    // r[verify lifecycle.service.routing-pool]
+    // r[verify fault.service-degraded]
+    #[test]
+    fn select_pool_falls_back_to_all_when_none_healthy() {
+        let pool = super::select_pool(vec![
+            ((ipv6("fd5e::1"), 80), false),
+            ((ipv6("fd5e::2"), 80), false),
+        ]);
+        let mut sorted = pool.0;
+        sorted.sort();
+        assert_eq!(sorted, vec![(ipv6("fd5e::1"), 80), (ipv6("fd5e::2"), 80)]);
+        assert!(pool.1, "degraded when no healthy backend");
+    }
+
+    // r[verify lifecycle.service.routing-pool]
+    #[test]
+    fn select_pool_keeps_all_when_all_healthy() {
+        let pool = super::select_pool(vec![
+            ((ipv6("fd5e::1"), 80), true),
+            ((ipv6("fd5e::2"), 80), true),
+        ]);
+        let mut sorted = pool.0;
+        sorted.sort();
+        assert_eq!(sorted, vec![(ipv6("fd5e::1"), 80), (ipv6("fd5e::2"), 80)]);
+        assert!(!pool.1);
     }
 
     #[test]
