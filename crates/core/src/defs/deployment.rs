@@ -4,7 +4,7 @@ use rhai::{CustomType, EvalAltResult, TypeBuilder};
 
 use super::{
     Freezable, Holder,
-    container::ContainerDef,
+    container::parse_healthcheck,
     enums::{OnTerminate, OnUpdate},
     pod::PodDef,
     resource::{ResourceId, ResourceKind, ResourceName},
@@ -54,12 +54,18 @@ impl CustomType for Deployment {
                 name: this.name.clone(),
             },
         );
-        // l[impl container.healthcheck]
-        ContainerDef::healthcheck_mixin(&mut builder, |this| {
-            this.def.lock().pod.lock().container.clone()
-        });
         builder
             .with_name("Deployment")
+            // l[impl deployment.healthcheck]
+            .with_fn(
+                "healthcheck",
+                |this: &mut Self, config: rhai::Map| -> Result<Deployment, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
+                    let hc = parse_healthcheck(config)?;
+                    this.def.lock().pod.lock().container.lock().healthcheck = Some(hc);
+                    Ok(this.clone())
+                },
+            )
             // l[impl deployment.scale]
             .with_fn(
                 "scale",

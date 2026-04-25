@@ -295,9 +295,9 @@ fn take_command_cmd(map: &mut rhai::Map) -> Result<Vec<String>, Box<EvalAltResul
     Ok(cmd)
 }
 
-// l[impl container.healthcheck]
+// l[impl deployment.healthcheck]
 pub(super) fn parse_healthcheck(mut map: rhai::Map) -> Result<HealthcheckDef, Box<EvalAltResult>> {
-    // l[impl container.healthcheck.kind]
+    // l[impl deployment.healthcheck.kind]
     let kind_raw = map.remove("kind").ok_or_else(|| -> Box<EvalAltResult> {
         "healthcheck requires a `kind` field (\"command\")".into()
     })?;
@@ -305,7 +305,7 @@ pub(super) fn parse_healthcheck(mut map: rhai::Map) -> Result<HealthcheckDef, Bo
         format!("healthcheck `kind` must be a string, got {t}").into()
     })?;
     let kind = match kind_str.as_str() {
-        // l[impl container.healthcheck.command]
+        // l[impl deployment.healthcheck.command]
         "command" => HealthcheckKind::Command {
             cmd: take_command_cmd(&mut map)?,
         },
@@ -328,7 +328,7 @@ pub(super) fn parse_healthcheck(mut map: rhai::Map) -> Result<HealthcheckDef, Bo
         HEALTHCHECK_DEFAULT_START_PERIOD_SECS,
     )?;
     let retries = take_retries(&mut map)?;
-    // l[impl container.healthcheck.on-failure]
+    // l[impl deployment.healthcheck.on-failure]
     let on_failure = take_on_failure(&mut map)?;
 
     if !map.is_empty() {
@@ -653,42 +653,6 @@ impl ContainerDef {
                 }
                 ext(this).lock().workdir = Some(path);
                 Ok(this.clone())
-            },
-        );
-    }
-
-    /// Register `.healthcheck(map)` on the builder. Called only from contexts
-    /// that allow a declared healthcheck — i.e. Deployments. Jobs use
-    /// [`ContainerDef::healthcheck_blocked_mixin`] instead so the call is
-    /// rejected at BSL evaluation with a clear error.
-    // l[impl container.healthcheck]
-    pub(super) fn healthcheck_mixin<T: Clone + Freezable + 'static>(
-        builder: &mut TypeBuilder<T>,
-        ext: impl Fn(&mut T) -> Holder<Self> + Copy + 'static,
-    ) {
-        builder.with_fn(
-            "healthcheck",
-            move |this: &mut T, config: rhai::Map| -> Result<T, Box<EvalAltResult>> {
-                this.ensure_unfrozen()?;
-                let hc = parse_healthcheck(config)?;
-                ext(this).lock().healthcheck = Some(hc);
-                Ok(this.clone())
-            },
-        );
-    }
-
-    /// Register `.healthcheck(map)` as an explicit error. Called from Jobs so
-    /// that authors get a clear message instead of rhai's generic "function not
-    /// found".
-    // l[impl container.healthcheck.deployment-only]
-    pub(super) fn healthcheck_blocked_mixin<T: Clone + Freezable + 'static>(
-        builder: &mut TypeBuilder<T>,
-        kind: &'static str,
-    ) {
-        builder.with_fn(
-            "healthcheck",
-            move |_this: &mut T, _config: rhai::Map| -> Result<T, Box<EvalAltResult>> {
-                Err(format!("healthcheck cannot be declared on {kind}; healthchecks are only valid on deployments").into())
             },
         );
     }

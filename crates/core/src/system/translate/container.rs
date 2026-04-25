@@ -182,7 +182,7 @@ pub fn podman_args(spec: &ContainerSpec) -> Vec<String> {
         args.push(dns.to_string());
     }
 
-    // l[impl container.healthcheck]
+    // l[impl deployment.healthcheck]
     if let Some(health) = &spec.health {
         args.push("--health-cmd".to_string());
         // Podman accepts a shell command string or a JSON array for health checks.

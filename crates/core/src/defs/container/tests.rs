@@ -10,7 +10,7 @@ fn map_with(entries: &[(&str, Dynamic)]) -> Map {
     m
 }
 
-// r[verify healthcheck.kind]
+// r[verify deployment.healthcheck.kind]
 #[test]
 fn parse_command_healthcheck_with_defaults() {
     let cmd: rhai::Array = vec![
@@ -33,7 +33,7 @@ fn parse_command_healthcheck_with_defaults() {
     assert_eq!(hc.on_failure, HealthcheckOnFailure::Replace);
 }
 
-// r[verify healthcheck.command]
+// r[verify deployment.healthcheck.command]
 #[test]
 fn parse_command_cmd_string_wraps_in_shell() {
     let m = map_with(&[
@@ -48,8 +48,8 @@ fn parse_command_cmd_string_wraps_in_shell() {
     );
 }
 
-// r[verify healthcheck.timings]
-// r[verify healthcheck.on-failure]
+// r[verify deployment.healthcheck.timings]
+// r[verify deployment.healthcheck.on-failure]
 #[test]
 fn parse_explicit_timings_and_on_failure_monitor() {
     let cmd: rhai::Array = vec![Dynamic::from("/bin/ok".to_string())];
@@ -70,7 +70,7 @@ fn parse_explicit_timings_and_on_failure_monitor() {
     assert_eq!(hc.on_failure, HealthcheckOnFailure::Monitor);
 }
 
-// r[verify healthcheck.on-failure]
+// r[verify deployment.healthcheck.on-failure]
 #[test]
 fn parse_on_failure_replace_explicit() {
     let cmd: rhai::Array = vec![Dynamic::from("/bin/ok".to_string())];
@@ -83,7 +83,7 @@ fn parse_on_failure_replace_explicit() {
     assert_eq!(hc.on_failure, HealthcheckOnFailure::Replace);
 }
 
-// r[verify healthcheck.kind]
+// r[verify deployment.healthcheck.kind]
 #[test]
 fn parse_missing_kind_errors() {
     let cmd: rhai::Array = vec![Dynamic::from("/bin/ok".to_string())];
@@ -95,7 +95,7 @@ fn parse_missing_kind_errors() {
     );
 }
 
-// r[verify healthcheck.kind]
+// r[verify deployment.healthcheck.kind]
 #[test]
 fn parse_reserved_kind_is_rejected() {
     let m = map_with(&[("kind", Dynamic::from("http"))]);
@@ -103,7 +103,7 @@ fn parse_reserved_kind_is_rejected() {
     assert!(err.to_string().contains("reserved for future use"));
 }
 
-// r[verify healthcheck.kind]
+// r[verify deployment.healthcheck.kind]
 #[test]
 fn parse_unknown_kind_is_rejected() {
     let m = map_with(&[("kind", Dynamic::from("shellout"))]);
@@ -111,7 +111,7 @@ fn parse_unknown_kind_is_rejected() {
     assert!(err.to_string().contains("shellout"));
 }
 
-// r[verify healthcheck.command]
+// r[verify deployment.healthcheck.command]
 #[test]
 fn parse_missing_cmd_is_rejected() {
     let m = map_with(&[("kind", Dynamic::from("command"))]);
@@ -119,7 +119,7 @@ fn parse_missing_cmd_is_rejected() {
     assert!(err.to_string().contains("cmd"));
 }
 
-// r[verify healthcheck.command]
+// r[verify deployment.healthcheck.command]
 #[test]
 fn parse_empty_cmd_string_is_rejected() {
     let m = map_with(&[
@@ -130,7 +130,7 @@ fn parse_empty_cmd_string_is_rejected() {
     assert!(err.to_string().contains("empty"));
 }
 
-// r[verify healthcheck.on-failure]
+// r[verify deployment.healthcheck.on-failure]
 #[test]
 fn parse_unknown_on_failure_is_rejected() {
     let cmd: rhai::Array = vec![Dynamic::from("/bin/ok".to_string())];
@@ -143,7 +143,7 @@ fn parse_unknown_on_failure_is_rejected() {
     assert!(err.to_string().contains("explode"));
 }
 
-// r[verify healthcheck.on-failure]
+// r[verify deployment.healthcheck.on-failure]
 // The previous podman-verb values are no longer valid — only replace/monitor.
 #[test]
 fn parse_old_podman_verb_on_failure_is_rejected() {
@@ -162,7 +162,7 @@ fn parse_old_podman_verb_on_failure_is_rejected() {
     }
 }
 
-// r[verify healthcheck.timings]
+// r[verify deployment.healthcheck.timings]
 #[test]
 fn parse_negative_interval_is_rejected() {
     let cmd: rhai::Array = vec![Dynamic::from("/bin/ok".to_string())];
@@ -175,7 +175,7 @@ fn parse_negative_interval_is_rejected() {
     assert!(err.to_string().contains("negative"));
 }
 
-// r[verify healthcheck.timings]
+// r[verify deployment.healthcheck.timings]
 #[test]
 fn parse_zero_retries_is_rejected() {
     let cmd: rhai::Array = vec![Dynamic::from("/bin/ok".to_string())];

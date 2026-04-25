@@ -178,7 +178,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > - **Scheduled**: the container image pull has been initiated and/or the container has been created.
 > - **Running**: the container process is executing.
-> - **Ready**: the container is running and, if a [healthcheck](language.md#l--container.healthcheck) is declared, it is currently passing.
+> - **Ready**: the container is running and, if a [healthcheck](language.md#l--deployment.healthcheck) is declared, it is currently passing.
 > - **Terminated**: the container process has exited (with an exit code).
 >
 > A container with no declared healthcheck becomes Ready as soon as it is Running. A container with a declared healthcheck remains in Running until the first passing observation is recorded.
@@ -198,7 +198,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[lifecycle.service.routing-pool]
 > The routing pool for a Service is the set of backend pod instances eligible to receive traffic. The runtime selects the pool from the running backends as follows:
 >
-> - A backend pod enters the pool only after it has been observed [healthy](language.md#l--container.healthcheck) at least once. Pods still in start-period or that have never been observed healthy are not in the pool. A pod with no declared healthcheck is treated as healthy as soon as it is Running.
+> - A backend pod enters the pool only after it has been observed [healthy](language.md#l--deployment.healthcheck) at least once. Pods still in start-period or that have never been observed healthy are not in the pool. A pod with no declared healthcheck is treated as healthy as soon as it is Running.
 > - Once in the pool, a backend that is observed unhealthy is removed from the pool **only if** at least one other backend in the same Service is currently healthy. If no healthy alternative exists, all running backends remain in the pool (degraded mode) and the runtime files a fault per [fault.service-degraded](#r--fault.service-degraded).
 > - When all backends are stopped, the pool is empty and the Service is no longer Ready.
 >
@@ -655,7 +655,7 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > When a Deployment resource's observed running instance count differs from its declared scale, the reconciler must start or stop instances to converge on the declared count.
 
 > r[autonomous.healthcheck-replace]
-> When a Deployment instance with [`on_failure: "replace"`](language.md#l--container.healthcheck.on-failure) is observed unhealthy, the reconciler must:
+> When a Deployment instance with [`on_failure: "replace"`](language.md#l--deployment.healthcheck.on-failure) is observed unhealthy, the reconciler must:
 >
 > - Spawn a replacement instance for the same Deployment so that the unhealthy instance has a healthy sibling-in-progress.
 > - Inhibit any stop of the unhealthy instance while the replacement is starting; the unhealthy instance must keep its routing-pool membership in degraded mode (per [lifecycle.service.routing-pool](#r--lifecycle.service.routing-pool)) until the replacement is observed healthy.
@@ -978,7 +978,7 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > The fault is cleared automatically when a subsequent acquisition for the same hostname is observed as `valid`.
 
 > r[fault.healthcheck]
-> When a container instance has a declared [healthcheck](language.md#l--container.healthcheck) and has been continuously unhealthy for longer than its grace window (`start_period` plus `retries × interval`), the runtime must file a fault of kind `health_check_failed` associated with that instance.
+> When a container instance has a declared [healthcheck](language.md#l--deployment.healthcheck) and has been continuously unhealthy for longer than its grace window (`start_period` plus `retries × interval`), the runtime must file a fault of kind `health_check_failed` associated with that instance.
 > The fault is cleared automatically when the instance is next observed as healthy, or when the instance is unscheduled.
 >
 > A container without a declared healthcheck, or one still within its grace window, must not cause this fault to be filed.

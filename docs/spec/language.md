@@ -472,6 +472,49 @@ This is currently the only value.
 > The `deployment.on_terminate(strategy: OnTerminate)` builder method defines the strategy used when the controlled container terminates within a Deployment.
 > The default is [`OnTerminate.Recreate`](#l--const.on-terminate.recreate).
 
+> l[deployment.healthcheck]
+> The `deployment.healthcheck(config: map)` builder method declares a periodic health check for the Deployment's container.
+> The `config` map must contain a `kind` key identifying the check variety, plus zero or more common timing fields and zero or more kind-specific fields.
+>
+> Healthchecks are only valid on Deployments. The method is not registered on [Jobs](#l--job.type), so calling it on a Job is a BSL evaluation error.
+>
+> Common fields (all optional):
+>
+> - `interval`: seconds between successive checks. Default 30.
+> - `timeout`: seconds a single check may run before being considered a failure. Default 30.
+> - `retries`: consecutive failures required to transition from healthy to unhealthy. Default 3.
+> - `start_period`: seconds of grace after the container starts during which failures do not count against `retries`. Default 0.
+> - `on_failure`: response to sustained unhealth, one of `"replace"` or `"monitor"`. Default `"replace"`.
+>
+> All timing fields must be non-negative. `retries` must be a positive integer.
+>
+> If `healthcheck` is not called, the Deployment has no declared health check. A running container with no declared check is treated as healthy.
+
+> l[deployment.healthcheck.kind]
+> The `kind` field is required.
+>
+> In the current spec, the only accepted value is `"command"`. The values `"http"`, `"tcp"`, and `"grpc"` are reserved for future use and must be rejected by the current implementation with an error identifying the kind as unsupported.
+>
+> Any other value must cause the method to throw.
+
+> l[deployment.healthcheck.command]
+> When `kind` is `"command"`, the `config.cmd` field is required and defines the probe command run inside the container. The command is considered passing when it exits with code zero, and failing otherwise.
+>
+> `cmd` may be:
+>
+> - A string: run through a shell (equivalent to `["CMD-SHELL", cmd]`).
+> - A string array: run directly, the first element being the executable.
+>
+> An empty `cmd` must cause the method to throw.
+
+> l[deployment.healthcheck.on-failure]
+> The `on_failure` response determines how the runtime reacts to a Deployment instance that has been unhealthy long enough to exceed the grace window:
+>
+> - `"replace"` (default): the runtime spawns a replacement instance alongside the unhealthy one and lets the unhealthy instance keep serving traffic until the replacement is healthy. When the replacement is healthy, traffic shifts to it and the unhealthy instance is retired. If the replacement also fails to become healthy, the runtime stops the cycle, leaves the original running (degraded), and files a hard fault per [fault.healthcheck-replace-failed](runtime.md#r--fault.healthcheck-replace-failed). See [autonomous.healthcheck-replace](runtime.md#r--autonomous.healthcheck-replace).
+> - `"monitor"`: no automatic replacement. The container is observed and routing decisions account for its health (see [lifecycle.service](runtime.md#r--lifecycle.service)), but the runtime does not spawn replacements. Recovery is operator-driven.
+>
+> `on_failure` does not affect whether the container is considered Ready — an unhealthy container is not Ready regardless of the policy.
+
 # Job
 
 > l[job.type]
@@ -588,51 +631,6 @@ This is currently the only value.
 > The `container.workdir(path: string)` builder method sets the working directory of the container process.
 > The `path` must be an absolute path.
 > If not set, the working directory is determined by the container image.
-
-> l[container.healthcheck]
-> The `container.healthcheck(config: map)` builder method declares a periodic health check for the container.
-> The `config` map must contain a `kind` key identifying the check variety, plus zero or more common timing fields and zero or more kind-specific fields.
->
-> Common fields (all optional):
->
-> - `interval`: seconds between successive checks. Default 30.
-> - `timeout`: seconds a single check may run before being considered a failure. Default 30.
-> - `retries`: consecutive failures required to transition from healthy to unhealthy. Default 3.
-> - `start_period`: seconds of grace after the container starts during which failures do not count against `retries`. Default 0.
-> - `on_failure`: response to sustained unhealth, one of `"none"`, `"kill"`, `"restart"`, `"stop"`. Default `"none"`.
->
-> All timing fields must be non-negative. `retries` must be a positive integer.
->
-> If `healthcheck` is not called, the container has no declared health check. A running container with no declared check is treated as healthy.
-
-> l[container.healthcheck.kind]
-> The `kind` field is required.
->
-> In the current spec, the only accepted value is `"command"`. The values `"http"`, `"tcp"`, and `"grpc"` are reserved for future use and must be rejected by the current implementation with an error identifying the kind as unsupported.
->
-> Any other value must cause the method to throw.
-
-> l[container.healthcheck.command]
-> When `kind` is `"command"`, the `config.cmd` field is required and defines the probe command run inside the container. The command is considered passing when it exits with code zero, and failing otherwise.
->
-> `cmd` may be:
->
-> - A string: run through a shell (equivalent to `["CMD-SHELL", cmd]`).
-> - A string array: run directly, the first element being the executable.
->
-> An empty `cmd` must cause the method to throw.
-
-> l[container.healthcheck.on-failure]
-> The `on_failure` response determines how the runtime reacts to a container that has been unhealthy long enough to exceed the grace window:
->
-> - `"replace"` (default): the runtime spawns a replacement instance alongside the unhealthy one and lets the unhealthy instance keep serving traffic until the replacement is healthy. When the replacement is healthy, traffic shifts to it and the unhealthy instance is retired. If the replacement also fails to become healthy, the runtime stops the cycle, leaves the original running (degraded), and files a hard fault per [fault.healthcheck-replace-failed](runtime.md#r--fault.healthcheck-replace-failed). See [autonomous.healthcheck-replace](runtime.md#r--autonomous.healthcheck-replace).
-> - `"monitor"`: no automatic replacement. The container is observed and routing decisions account for its health (see [lifecycle.service](runtime.md#r--lifecycle.service)), but the runtime does not spawn replacements. Recovery is operator-driven.
->
-> `on_failure` does not affect whether the container is considered Ready — an unhealthy container is not Ready regardless of the policy.
-
-> l[container.healthcheck.deployment-only]
-> A healthcheck must not be declared on a [Job](#l--job.type). One-shot Jobs do not have well-defined replacement semantics, and the `on_failure` policies do not apply to terminating workloads.
-> Calling `.healthcheck(...)` on a Job must throw at BSL evaluation time.
 
 # Pod
 

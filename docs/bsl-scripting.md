@@ -100,7 +100,12 @@ app.deployment("worker")
     .scale(2)                         // fixed replicas (Deployment only)
     .scale(1..8)                      // scalable range (Deployment only)
     .on_update(OnUpdate.Rolling)      // default; or OnUpdate.Replace
-    .on_exit(OnExit.Restart);         // default for Deployment; Terminate for Job
+    .on_exit(OnExit.Restart)          // default for Deployment; Terminate for Job
+    .healthcheck(#{                   // see "Healthchecks" below — Deployment only
+        kind: "command",
+        cmd: ["curl", "-fsS", "http://localhost:8080/healthz"],
+        interval: 10,
+    });
 
 app.job("migrate")
     .image("ghcr.io/example/app:v1.2.3")
@@ -294,6 +299,44 @@ version.on_change(|rt, old| {
     rt.start(app).ready();
 });
 ```
+
+## Healthchecks
+
+A Deployment can declare a healthcheck so seedling knows when its container is actually ready to serve, and what to do when it stops being ready.
+
+```rhai
+app.deployment("api")
+    .image("ghcr.io/example/api:v1")
+    .http(8080, web.route("/"))
+    .healthcheck(#{
+        kind: "command",
+        cmd: ["curl", "-fsS", "http://localhost:8080/healthz"],
+        interval: 10,         // seconds between checks (default 30)
+        timeout: 3,           // seconds before a check is considered failed (default 30)
+        retries: 3,           // consecutive failures before transitioning to unhealthy (default 3)
+        start_period: 15,     // seconds of grace after start before failures count (default 0)
+        on_failure: "replace",// "replace" (default) or "monitor"
+    });
+```
+
+Healthchecks are only valid on Deployments — calling `.healthcheck(...)` on a Job is a BSL error.
+
+**What the platform does with the result:**
+
+- A backend pod is only added to the service routing pool once it has been observed healthy at least once. Pods still in `start_period`, or that have never been observed healthy, do not receive traffic. Once in the pool, an unhealthy pod is dropped only if a sibling is still healthy; if not, it stays in the pool (degraded) and seedling files a `service_degraded` fault so the operator can see it.
+- A pod with no declared healthcheck is treated as healthy as soon as it's running.
+
+**`on_failure` policies:**
+
+- **`"replace"` (default).** When an instance has been unhealthy past its grace window, seedling spawns a fresh replacement *alongside* it. The unhealthy original keeps serving (possibly partial) traffic until the replacement is observed healthy; then traffic shifts to the replacement and the original is retired. If the replacement also fails to become healthy, seedling stops the cycle, leaves the original running in degraded mode, and files a `health_check_replace_failed` fault. This is reset when the operator pushes a new generation of the script.
+- **`"monitor"`.** No automatic replacement. The check still gates routing (so unhealthy pods don't receive traffic when a healthy sibling exists), but seedling does not spawn replacements. Recovery is operator-driven. Use this for stateful workloads where replacement is risky.
+
+**Probe kinds:**
+
+- **`kind: "command"`.** Requires `cmd`. The command is run inside the container; exit code zero means healthy. `cmd` may be a single string (run through a shell) or an array (executed directly).
+- `kind: "http"`, `kind: "tcp"`, and `kind: "grpc"` are reserved names for future expansion.
+
+**Choosing timings.** `start_period + retries × interval` is the grace window before seedling considers the workload unhealthy. Set `start_period` to your typical cold-start time, and pick `interval` and `retries` so that one transient failure doesn't trigger a swap.
 
 ## Common patterns
 

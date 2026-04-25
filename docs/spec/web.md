@@ -92,7 +92,7 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > listing registered apps and their statuses; showing detailed app status including resources, faults, params, install requirements, and actions; registering new apps with a BSL script; updating an app's BSL script; deregistering apps; setting and unsetting parameters; scaling deployments; viewing generation history; planning proposed changes; invoking lifecycle actions; and invoking the install action with its requirements.
 
 > w[routes.apps.healthcheck-indicator]
-> When a container resource (Deployment or Job) has a declared [healthcheck](language.md#l--container.healthcheck), the app detail page must show a small indicator alongside the resource's lifecycle state.
+> When a container resource (Deployment or Job) has a declared [healthcheck](language.md#l--deployment.healthcheck), the app detail page must show a small indicator alongside the resource's lifecycle state.
 > The indicator must convey:
 >
 > - that a healthcheck is declared,
