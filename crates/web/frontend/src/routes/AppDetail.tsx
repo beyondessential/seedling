@@ -129,7 +129,11 @@ function HealthcheckIndicator({
     hc.kind === "command" && hc.cmd ? hc.cmd.join(" ") : hc.kind;
   const truncated =
     cmdPreview.length > 80 ? `${cmdPreview.slice(0, 77)}…` : cmdPreview;
-  const tooltip = `healthcheck ${hc.kind} · on_failure=${hc.on_failure} · ${state}\n${truncated}`;
+  const tooltip = [
+    `healthcheck (${hc.kind}): ${state}`,
+    `on_failure: ${hc.on_failure}`,
+    truncated,
+  ].join("\n");
   const label =
     state === "failing"
       ? "unhealthy"
@@ -175,6 +179,20 @@ function healthcheckTooltip(hc: HealthcheckSummary): string {
   );
   lines.push(`on_failure: ${hc.on_failure}`);
   return lines.join("\n");
+}
+
+function healthcheckChipLabel(hc: HealthcheckSummary): string {
+  const base = `healthcheck (${hc.kind})`;
+  switch (hc.on_failure) {
+    case "none":
+      return base;
+    case "restart":
+      return `${base}, restart on failure`;
+    case "kill":
+      return `${base}, kill on failure`;
+    case "stop":
+      return `${base}, stop on failure`;
+  }
 }
 
 function FaultList({
@@ -341,7 +359,7 @@ function ResourceDefDetail({ def }: { def: ResourceDef }) {
             }
           >
             <Chip
-              label={`healthcheck: ${def.container.healthcheck.kind} · ${def.container.healthcheck.on_failure}`}
+              label={healthcheckChipLabel(def.container.healthcheck)}
               size="small"
               variant="outlined"
             />

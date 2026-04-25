@@ -182,13 +182,30 @@ Unit / integration:
 End-to-end in a local run:
 
 1. `just run` (or repo's equivalent) to boot the daemon.
-2. Install an app with `.healthcheck(#{ cmd: ["true"] })` — verify the instance reaches Ready and the app status chip is `Running`.
-3. Flip to `.healthcheck(#{ cmd: ["false"] })` — verify:
-   - Instance transitions Ready → Running after the grace window.
+2. Install an app whose deployment declares a passing healthcheck:
+
+   ```rhai
+   app.deployment("svc")
+       .image("docker.io/library/busybox:latest")
+       .arg(["sh", "-c", "while true; do sleep 60; done"])
+       .healthcheck(#{
+           kind: "command",
+           cmd: ["true"],
+           interval: 5,
+           timeout: 2,
+           retries: 2,
+           start_period: 2,
+       });
+   ```
+
+   Verify the instance reaches Ready, the app status chip is `Running`, and the indicator pill shows `healthy`.
+3. Edit the script to `cmd: ["false"]` and let the runtime reconverge — verify:
+   - The pill flips through `starting` to `unhealthy`.
+   - Resource lifecycle demotes Ready → Running.
    - A `health_check_failed` fault appears in `/faults` and inline on the app detail page.
    - App status chip flips to `Faulted`.
 4. Flip back to `cmd: ["true"]` — verify fault auto-clears and Ready returns.
-5. With `on_failure: "restart"`, verify podman restarts the container on sustained failure and the `on_terminate` policy governs the subsequent recreate.
+5. Add `on_failure: "restart"` to the still-failing variant and verify podman restarts the container on sustained failure; the `on_terminate` policy governs the subsequent recreate.
 
 ## Follow-up work (not in this plan)
 
