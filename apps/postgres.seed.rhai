@@ -231,6 +231,24 @@ app.deployment("postgres")
         "-c", "config_file=/config/postgresql.conf",
         "-c", "hba_file=/config/pg_hba.conf",
     ])
+    // Postgres maps SIGTERM to "smart shutdown" — wait indefinitely for
+    // clients to disconnect — and SIGINT to "fast shutdown" — terminate
+    // active sessions and checkpoint cleanly. Without this override systemd
+    // sends SIGTERM and, when the deadline expires, SIGKILLs postgres
+    // mid-checkpoint, leaving the WAL in a state the next startup can't
+    // recover from. Pair with stop_timeout so the kill window is wide
+    // enough for the fast-shutdown checkpoint to complete on a busy cluster.
+    .stop_signal("SIGINT")
+    .stop_timeout(120)
+    .healthcheck(#{
+        kind: "command",
+        cmd: ["pg_isready", "-h", "/var/run/postgresql", "-U", "postgres"],
+        interval: 10,
+        timeout: 5,
+        retries: 3,
+        start_period: 30,
+        on_failure: "monitor",
+    })
     .tcp(5432, pg_svc);
 
 // ── Helper closures (dynamic) ─────────────────────────────────────────────────
@@ -467,24 +485,18 @@ app.on_shell("psql", |_rt, shell, _param| {
         .command(["psql", "-d", "postgres"]));
 }, #{ description: "psql shell connected to the local instance over the unix socket" });
 
-app.on_shell("bestool-psql", |_rt, shell, param| {
-    let default_url = "postgresql://postgres@/postgres?host=/var/run/postgresql";
-    let db_url = if "url" in param { param["url"] } else { default_url };
+app.on_shell("bestool-psql", |_rt, shell, _param| {
     shell.attach(app.job()
         .image(pg_image.call())
         .writable_rootfs()
         .mount("/var/run/postgresql", socket)
         .mount("/app/bin", bin)
-        .command(["/app/bin/bin/bestool-psql", db_url]));
+        .command([
+            "/app/bin/bin/bestool-psql",
+            "postgresql://postgres@/postgres?host=/var/run/postgresql",
+        ]));
 }, #{
-    description: "bestool-psql shell; defaults to the local unix socket",
-    params: #{
-        url: #{
-            kind: "text",
-            required: false,
-            description: "Database URL (defaults to the local unix socket as postgres)",
-        },
-    },
+    description: "bestool-psql shell against the local unix socket",
 });
 
 // ── Version changes ───────────────────────────────────────────────────────────
