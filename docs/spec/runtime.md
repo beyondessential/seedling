@@ -664,13 +664,13 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > Instances with `on_failure: "monitor"` must not trigger this behaviour. Their routing-pool membership still follows the prefer-healthy rule, but no replacement is spawned.
 
 > r[autonomous.healthcheck-replace.guard]
-> A replacement instance spawned by [autonomous.healthcheck-replace](#r--autonomous.healthcheck-replace) must itself become healthy within its declared `start_period + retries × interval`. If it does not, the reconciler must:
+> A fresh instance brought up by either a [rolling update](#r--update.rolling) or by [autonomous.healthcheck-replace](#r--autonomous.healthcheck-replace) must itself become healthy within its declared `start_period + retries × interval`. If it does not, the reconciler must:
 >
-> - Stop the failed replacement so it does not accumulate a permanent footprint.
+> - Stop the failed instance so it does not accumulate a permanent footprint.
 > - File a fault per [fault.healthcheck-replace-failed](#r--fault.healthcheck-replace-failed).
-> - Refuse to spawn further replacements for this Deployment until the AppDef generation changes (i.e. the operator pushes new code) or the operator clears the fault.
+> - Refuse to spawn further replacement attempts for this Deployment — whether rolling-driven or healthcheck-driven — until the AppDef generation changes (i.e. the operator pushes new code) or the operator clears the fault.
 >
-> The original unhealthy instance must continue to run in degraded mode. The runtime must not allow the replace-loop guard to trigger an indefinite churn of replacement attempts; the guard exists precisely to bound the cost of a permanently-broken workload.
+> The pre-existing instance must continue to run in degraded mode (under its old spec hash if it was a rolling-update target). The runtime must not allow the guard to trigger an indefinite churn of replacement attempts; the guard exists precisely to bound the cost of a permanently-broken workload — whether the breakage was introduced by a script change or arose spontaneously.
 
 > r[scaling.decision]
 > The runtime maintains a persistent record of operator-chosen scale for each Deployment that has been explicitly scaled.

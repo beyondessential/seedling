@@ -398,18 +398,28 @@ impl Reconciler {
         });
         let mut scales = EffectiveScales::new();
         for (dep_name, low, high, mut effective) in scale_data {
-            if self
-                .rolling_updates
-                .contains(&(app_name.clone(), dep_name.clone()))
-            {
-                effective = effective.saturating_add(1);
-            }
-            // r[impl autonomous.healthcheck-replace]
-            if self
-                .unhealthy_replace_deployments
-                .contains(&(app_name.clone(), dep_name.clone()))
-            {
-                effective = effective.saturating_add(1);
+            // r[impl autonomous.healthcheck-replace.guard]
+            // The replace-loop guard suppresses BOTH rolling and
+            // healthcheck-driven bumps once it trips. Otherwise a deployment
+            // with a permanently-broken healthcheck would keep spawning
+            // doomed replacement instances on every tick.
+            let suppressed = self
+                .replace_failed
+                .contains(&(app_name.clone(), dep_name.clone()));
+            if !suppressed {
+                if self
+                    .rolling_updates
+                    .contains(&(app_name.clone(), dep_name.clone()))
+                {
+                    effective = effective.saturating_add(1);
+                }
+                // r[impl autonomous.healthcheck-replace]
+                if self
+                    .unhealthy_replace_deployments
+                    .contains(&(app_name.clone(), dep_name.clone()))
+                {
+                    effective = effective.saturating_add(1);
+                }
             }
             scales.insert(dep_name, (low, high, effective));
         }
@@ -832,6 +842,30 @@ impl Reconciler {
             .retain(|app, _| active.contains(app));
         self.replace_failed.retain(|(app, _)| active.contains(app));
 
+        // r[impl autonomous.healthcheck-replace.guard]
+        // The guard is in-memory but its truth lives in the persisted fault
+        // table. Re-derive each tick so the suppression survives daemon
+        // restarts (and so an operator clearing the fault has its effect
+        // picked up immediately, ahead of the future fault-clear UI).
+        let persisted_failed: std::collections::HashSet<(AppName, String)> = self.db.call(|db| {
+            let mut out = std::collections::HashSet::new();
+            let active = match crate::runtime::faults::list_active_faults(db, None) {
+                Ok(v) => v,
+                Err(_) => return out,
+            };
+            for f in active {
+                if f.kind == "health_check_replace_failed"
+                    && let Some(dep) = f.resource_name.clone()
+                {
+                    out.insert((f.app, dep));
+                }
+            }
+            out
+        });
+        for entry in persisted_failed {
+            self.replace_failed.insert(entry);
+        }
+
         for app in apps {
             let prior = self.last_seen_generation.get(&app.name).copied();
             if prior.map(|p| app.current_generation > p).unwrap_or(false) {
@@ -908,19 +942,19 @@ impl Reconciler {
         }
 
         // r[impl autonomous.healthcheck-replace.guard]
-        // Check each deployment that's currently being replaced: has its
-        // youngest scaled instance gone past grace without ever being healthy?
-        // If yes, declare the replacement failed, file the hard fault, and
-        // suppress further bumps until the AppDef generation advances.
-        let candidates: Vec<((AppName, String), i64)> = self
-            .unhealthy_replace_deployments
-            .iter()
-            .filter_map(|key| {
-                grace_secs_by_dep
-                    .get(key)
-                    .copied()
-                    .map(|g| (key.clone(), g))
-            })
+        // Check each deployment that's currently bringing up a fresh instance —
+        // whether the bump is from a rolling update (operator pushed new code)
+        // or from healthcheck-driven replace (existing instance went sour).
+        // Both paths spawn a "youngest" scaled instance that we expect to
+        // become healthy within the grace window. If it doesn't, declare the
+        // replacement failed, file the hard fault, and suppress further bumps
+        // (of either kind) until the AppDef generation advances.
+        let mut candidate_keys: std::collections::HashSet<(AppName, String)> =
+            self.unhealthy_replace_deployments.iter().cloned().collect();
+        candidate_keys.extend(self.rolling_updates.iter().cloned());
+        let candidates: Vec<((AppName, String), i64)> = candidate_keys
+            .into_iter()
+            .filter_map(|key| grace_secs_by_dep.get(&key).copied().map(|g| (key, g)))
             .collect();
         let now_ms = jiff::Timestamp::now().as_millisecond();
         let failed: Vec<(AppName, String, String)> = self.db.call(move |db| {
