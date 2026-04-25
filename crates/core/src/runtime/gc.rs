@@ -171,21 +171,28 @@ fn gc_unscheduled_instances(db: &Db, retain: Duration) -> rusqlite::Result<usize
         return Ok(0);
     }
 
+    // r[impl gc.instances.atomic]
+    // One transaction across observations + faults + the registry row per
+    // instance, so a mid-sequence error can't leave one of the three in a
+    // state the GC will never see again (observation history empty means the
+    // selecting query above stops matching the instance).
+    let tx = db.conn.unchecked_transaction()?;
     let mut total = 0;
     for id in &ids {
-        total += db.conn.execute(
+        total += tx.execute(
             "DELETE FROM world_observations WHERE instance_id = ?1",
             rusqlite::params![id],
         )?;
-        total += db.conn.execute(
+        total += tx.execute(
             "DELETE FROM faults WHERE instance_id = ?1",
             rusqlite::params![id],
         )?;
-        total += db.conn.execute(
+        total += tx.execute(
             "DELETE FROM resource_instances WHERE id = ?1",
             rusqlite::params![id],
         )?;
     }
+    tx.commit()?;
 
     Ok(total)
 }

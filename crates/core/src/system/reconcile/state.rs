@@ -199,12 +199,15 @@ impl Reconciler {
                     continue;
                 }
                 let instance = dr.instance.clone();
-                let state = self.db.call(move |db| {
+                let (state, has_observations) = self.db.call(move |db| {
                     let obs = query_observations(db, &instance).unwrap_or_default();
-                    derive_lifecycle_state(&instance, &obs)
+                    let has_obs = !obs.is_empty();
+                    (derive_lifecycle_state(&instance, &obs), has_obs)
                 });
                 match state {
                     LifecycleState::Unscheduled => {}
+                    // r[impl gc.instances.never-actuated]
+                    LifecycleState::Pending if !has_observations => {}
                     LifecycleState::Terminating | LifecycleState::Terminated => {
                         self.written_obs.retain(|(id, _)| *id != dr.instance.id);
                         tracing::debug!(
@@ -223,7 +226,8 @@ impl Reconciler {
                         tracing::debug!(
                             app = %app.name,
                             instance = %dr.instance.display_name,
-                            "retired unscheduled excess instance"
+                            ?state,
+                            "retired excess instance"
                         );
                     }
                     Err(e) => {
@@ -231,7 +235,7 @@ impl Reconciler {
                             app = %app.name,
                             instance = %dr.instance.display_name,
                             error = %e,
-                            "failed to retire unscheduled excess instance"
+                            "failed to retire excess instance"
                         );
                     }
                 }

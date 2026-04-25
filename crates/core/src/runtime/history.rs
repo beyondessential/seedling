@@ -122,16 +122,17 @@ pub fn find_instances_for_group(
 }
 
 // r[impl gc.instances]
+// r[impl gc.instances.atomic]
 pub fn delete_instance(db: &Db, id: InstanceId) -> rusqlite::Result<()> {
     let hex = id.to_hex();
-    db.conn.execute(
+    let tx = db.conn.unchecked_transaction()?;
+    tx.execute(
         "DELETE FROM world_observations WHERE instance_id = ?1",
         params![hex],
     )?;
-    db.conn
-        .execute("DELETE FROM faults WHERE instance_id = ?1", params![hex])?;
-    db.conn
-        .execute("DELETE FROM resource_instances WHERE id = ?1", params![hex])?;
+    tx.execute("DELETE FROM faults WHERE instance_id = ?1", params![hex])?;
+    tx.execute("DELETE FROM resource_instances WHERE id = ?1", params![hex])?;
+    tx.commit()?;
     Ok(())
 }
 
