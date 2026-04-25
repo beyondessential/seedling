@@ -436,7 +436,7 @@ app.on_action("dump", |rt, param| {
         .command(["sh", "-c", "pg_dumpall --clean --if-exists > /output/postgres.sql"])
     ).terminated_eventually().ensure_success();
 }, #{
-    description: "pg_dumpall the cluster into a chosen site volume (postgres.sql)",
+    description: "pg_dumpall the cluster into a chosen site volume (into postgres.sql)",
     params: #{
         output: #{
             kind: "volume",
