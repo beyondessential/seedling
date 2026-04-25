@@ -100,6 +100,8 @@ pub struct ContainerSummary {
     pub pids_limit: Option<u32>,
     pub workdir: Option<String>,
     pub healthcheck: Option<HealthcheckSummary>,
+    pub stop_signal: Option<String>,
+    pub stop_timeout_secs: Option<u32>,
 }
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -369,6 +371,8 @@ impl ContainerDef {
             pids_limit: self.pids_limit,
             workdir: self.workdir.clone(),
             healthcheck: self.healthcheck.as_ref().map(HealthcheckDef::summary),
+            stop_signal: self.stop_signal.clone(),
+            stop_timeout_secs: self.stop_timeout_secs,
         }
     }
 }

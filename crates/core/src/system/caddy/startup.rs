@@ -291,6 +291,8 @@ async fn start_slot(
             ],
             restart: TransientRestart::Always,
             log_extra_fields: vec![("SEEDLING_INFRA".to_owned(), "proxy".to_owned())],
+            kill_signal: None,
+            timeout_stop_secs: None,
         })
         .await
         .context(ProcessSnafu)

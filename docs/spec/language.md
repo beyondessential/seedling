@@ -632,6 +632,17 @@ This is currently the only value.
 > The `path` must be an absolute path.
 > If not set, the working directory is determined by the container image.
 
+> l[container.stop-signal]
+> The `container.stop_signal(name: string)` builder method declares the POSIX signal sent to the container's main process when the runtime stops the container.
+> Accepted forms are the canonical `"SIGFOO"` (e.g. `"SIGINT"`, `"SIGQUIT"`, `"SIGTERM"`) and the bare `"FOO"` shorthand; unknown signal names must be rejected at script-evaluation time.
+> When unset, the default signal applied by the runtime is `SIGTERM`.
+> Use cases: stateful workloads whose semantics require a specific signal — for example, PostgreSQL maps `SIGINT` to "fast shutdown" and `SIGTERM` to "smart shutdown" (which waits for clients to disconnect and may exceed the stop deadline).
+
+> l[container.stop-timeout]
+> The `container.stop_timeout(seconds: int)` builder method sets how long the runtime waits between sending the stop signal and sending `SIGKILL`.
+> `seconds` must be a positive integer.
+> When unset, the runtime applies its default (currently 90 seconds, matching systemd's `TimeoutStopSec` default).
+
 # Pod
 
 > l[pod.interface]

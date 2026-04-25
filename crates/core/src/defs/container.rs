@@ -366,6 +366,15 @@ pub struct ContainerDef {
     pub pids_limit: Option<u32>,
     pub workdir: Option<String>,
     pub healthcheck: Option<HealthcheckDef>,
+    /// Signal sent to the container's PID 1 when systemd stops the unit. When
+    /// unset, podman/systemd defaults apply (typically SIGTERM forwarded
+    /// directly). Stateful workloads (postgres, etcd) often need SIGINT or
+    /// SIGQUIT for fast shutdown rather than SIGTERM's "smart shutdown" wait.
+    pub stop_signal: Option<String>,
+    /// Seconds systemd waits between sending the stop signal and SIGKILL.
+    /// Maps to `TimeoutStopSec` on the transient unit. Defaults to systemd's
+    /// own default (90s) when unset.
+    pub stop_timeout_secs: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -655,7 +664,56 @@ impl ContainerDef {
                 Ok(this.clone())
             },
         );
+
+        // l[impl container.stop-signal]
+        builder.with_fn(
+            "stop_signal",
+            move |this: &mut T, signal: String| -> Result<T, Box<EvalAltResult>> {
+                this.ensure_unfrozen()?;
+                let normalised = normalise_signal(&signal)?;
+                ext(this).lock().stop_signal = Some(normalised);
+                Ok(this.clone())
+            },
+        );
+
+        // l[impl container.stop-timeout]
+        builder.with_fn(
+            "stop_timeout",
+            move |this: &mut T, secs: i64| -> Result<T, Box<EvalAltResult>> {
+                this.ensure_unfrozen()?;
+                if secs <= 0 {
+                    return Err(
+                        format!("stop_timeout must be a positive integer, got {secs}").into(),
+                    );
+                }
+                ext(this).lock().stop_timeout_secs = Some(secs as u32);
+                Ok(this.clone())
+            },
+        );
     }
+}
+
+/// Validate and normalise a stop signal name. Accepts the canonical
+/// uppercase `SIGFOO` form or its bare `FOO` shorthand; returns the
+/// canonical `SIGFOO` form. Rejects anything else with a clear message
+/// rather than silently passing through to systemd, which accepts
+/// numeric forms but not arbitrary strings.
+fn normalise_signal(input: &str) -> Result<String, Box<EvalAltResult>> {
+    const KNOWN: &[&str] = &[
+        "HUP", "INT", "QUIT", "ILL", "TRAP", "ABRT", "BUS", "FPE", "KILL", "USR1", "SEGV", "USR2",
+        "PIPE", "ALRM", "TERM", "STKFLT", "CHLD", "CONT", "STOP", "TSTP", "TTIN", "TTOU", "URG",
+        "XCPU", "XFSZ", "VTALRM", "PROF", "WINCH", "IO", "PWR", "SYS",
+    ];
+    let trimmed = input.trim();
+    let upper = trimmed.to_ascii_uppercase();
+    let bare = upper.strip_prefix("SIG").unwrap_or(&upper);
+    if !KNOWN.contains(&bare) {
+        return Err(format!(
+            "stop_signal {input:?} is not a recognised POSIX signal name; expected something like \"SIGINT\" or \"INT\""
+        )
+        .into());
+    }
+    Ok(format!("SIG{bare}"))
 }
 
 #[cfg(test)]

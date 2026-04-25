@@ -260,6 +260,11 @@ impl Actuator {
     }
 
     // r[impl actuate.deployment.anon-volume.start]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "single internal helper that fans out the per-instance start; \
+                  packing into a config struct would just relocate the parameter list"
+    )]
     pub(crate) async fn start_pod_instance(
         &self,
         instance: &ResourceInstance,
@@ -267,6 +272,8 @@ impl Actuator {
         raw_mounts: &[ServicePort],
         restart: TransientRestart,
         volumes: &[ContainerVolume],
+        kill_signal: Option<String>,
+        timeout_stop_secs: Option<u32>,
         build_argv: impl FnOnce(String, Ipv6Net, &[(u16, std::net::Ipv6Addr, u16)]) -> Vec<String>,
     ) -> Result<Option<String>, ActuateError> {
         self.ensure_image_available(image).await?;
@@ -337,6 +344,8 @@ impl Actuator {
                 description: format!("seedling container {}", instance.display_name),
                 exec_start: argv,
                 restart,
+                kill_signal,
+                timeout_stop_secs,
                 log_extra_fields: vec![
                     ("SEEDLING_APP".to_owned(), instance.app.as_str().to_owned()),
                     (

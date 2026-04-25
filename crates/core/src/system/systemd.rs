@@ -229,6 +229,32 @@ impl SystemdManager {
                 value: Value::from("inactive-or-failed"),
             },
         ];
+
+        // l[impl container.stop-signal]
+        // Override systemd's default SIGTERM stop signal so that workloads
+        // whose semantics need a different signal (postgres → SIGINT for
+        // fast shutdown rather than SIGTERM smart-shutdown that waits for
+        // clients) get clean termination. The systemd D-Bus API takes
+        // KillSignal as a signal number (int32), not the canonical name.
+        if let Some(sig) = &spec.kill_signal {
+            let n = signal_name_to_number(sig).ok_or_else(|| {
+                ProtocolSnafu {
+                    message: format!("unknown kill_signal {sig:?}"),
+                }
+                .build()
+            })?;
+            props.push(UnitProperty {
+                name: "KillSignal",
+                value: Value::from(n),
+            });
+        }
+        // l[impl container.stop-timeout]
+        if let Some(secs) = spec.timeout_stop_secs {
+            props.push(UnitProperty {
+                name: "TimeoutStopUSec",
+                value: Value::from(u64::from(secs) * 1_000_000),
+            });
+        }
         // r[impl actuate.container.journal-metadata]
         // r[impl actuate.infra.journal-metadata]
         if !spec.log_extra_fields.is_empty() {
@@ -424,6 +450,47 @@ impl SystemdManager {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Map a canonical signal name (`"SIGINT"`, etc.) to its Linux signal number.
+/// systemd's `KillSignal=` D-Bus property is typed as a 32-bit int, so the
+/// caller must convert from the BSL-facing string form.
+fn signal_name_to_number(name: &str) -> Option<i32> {
+    let bare = name.strip_prefix("SIG").unwrap_or(name);
+    Some(match bare {
+        "HUP" => 1,
+        "INT" => 2,
+        "QUIT" => 3,
+        "ILL" => 4,
+        "TRAP" => 5,
+        "ABRT" => 6,
+        "BUS" => 7,
+        "FPE" => 8,
+        "KILL" => 9,
+        "USR1" => 10,
+        "SEGV" => 11,
+        "USR2" => 12,
+        "PIPE" => 13,
+        "ALRM" => 14,
+        "TERM" => 15,
+        "STKFLT" => 16,
+        "CHLD" => 17,
+        "CONT" => 18,
+        "STOP" => 19,
+        "TSTP" => 20,
+        "TTIN" => 21,
+        "TTOU" => 22,
+        "URG" => 23,
+        "XCPU" => 24,
+        "XFSZ" => 25,
+        "VTALRM" => 26,
+        "PROF" => 27,
+        "WINCH" => 28,
+        "IO" | "POLL" => 29,
+        "PWR" => 30,
+        "SYS" => 31,
+        _ => return None,
+    })
+}
 
 fn restart_str(r: TransientRestart) -> &'static str {
     match r {

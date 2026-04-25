@@ -134,6 +134,8 @@ pub struct ContainerSpec {
     pub writable_rootfs: bool,
     pub pids_limit: u32,
     pub workdir: Option<String>,
+    pub stop_signal: Option<String>,
+    pub stop_timeout_secs: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -207,6 +209,13 @@ pub struct TransientUnitSpec {
     /// Structured journal fields attached to every log entry from this unit.
     /// Each pair is `(KEY, VALUE)`, emitted as `KEY=VALUE`.
     pub log_extra_fields: Vec<(String, String)>,
+    /// Signal systemd sends to the unit's main process on stop. When `None`,
+    /// systemd's default applies (`SIGTERM`). Maps to the `KillSignal=`
+    /// property of the transient unit.
+    pub kill_signal: Option<String>,
+    /// Seconds systemd waits between sending `kill_signal` and `SIGKILL`.
+    /// Maps to `TimeoutStopSec`. `None` leaves systemd's default (90s).
+    pub timeout_stop_secs: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

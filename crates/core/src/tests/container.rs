@@ -813,3 +813,55 @@ fn container_pids_limit_rejects_negative() {
         r#"app.deployment("web").image("docker.io/library/nginx:latest").pids_limit(-1);"#,
     );
 }
+
+// l[verify container.stop-signal]
+#[test]
+fn container_stop_signal_canonicalises_signal_name() {
+    let app = run_test_script_app(
+        r#"
+        app.deployment("web")
+            .image("docker.io/library/nginx:latest")
+            .stop_signal("SIGINT");
+        app.deployment("api")
+            .image("docker.io/library/nginx:latest")
+            .stop_signal("int");
+    "#,
+    );
+    with_container(&app, "web", |c| {
+        assert_eq!(c.stop_signal.as_deref(), Some("SIGINT"));
+    });
+    with_container(&app, "api", |c| {
+        assert_eq!(c.stop_signal.as_deref(), Some("SIGINT"));
+    });
+}
+
+// l[verify container.stop-signal]
+#[test]
+fn container_stop_signal_rejects_unknown() {
+    let _ = run_test_script_err(
+        r#"app.deployment("web").image("docker.io/library/nginx:latest").stop_signal("DESTRUCT");"#,
+    );
+}
+
+// l[verify container.stop-timeout]
+#[test]
+fn container_stop_timeout_sets_value() {
+    let app = run_test_script_app(
+        r#"
+        app.deployment("web")
+            .image("docker.io/library/nginx:latest")
+            .stop_timeout(60);
+    "#,
+    );
+    with_container(&app, "web", |c| {
+        assert_eq!(c.stop_timeout_secs, Some(60));
+    });
+}
+
+// l[verify container.stop-timeout]
+#[test]
+fn container_stop_timeout_rejects_zero() {
+    let _ = run_test_script_err(
+        r#"app.deployment("web").image("docker.io/library/nginx:latest").stop_timeout(0);"#,
+    );
+}

@@ -546,15 +546,14 @@ impl RuntimeInstance {
         {
             use crate::defs::app::App;
             use crate::defs::collection::{Collection, col};
-            let collection: Option<Collection> = if let Some(c) =
-                resources.clone().try_cast::<Collection>()
-            {
-                Some(c)
-            } else if resources.clone().try_cast::<App>().is_some() {
-                Some(col(resources.clone()))
-            } else {
-                None
-            };
+            let collection: Option<Collection> =
+                if let Some(c) = resources.clone().try_cast::<Collection>() {
+                    Some(c)
+                } else if resources.clone().try_cast::<App>().is_some() {
+                    Some(col(resources.clone()))
+                } else {
+                    None
+                };
             if let Some(collection) = collection {
                 let mut out = Vec::new();
                 for handle in collection.resolve() {

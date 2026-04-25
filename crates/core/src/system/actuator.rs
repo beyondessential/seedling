@@ -220,12 +220,20 @@ impl Actuator {
                         restart_gens::load_restart_gen(db, &app_name, &dep_name).unwrap_or(0)
                     })
                 };
+                let (kill_signal, timeout_stop_secs) = {
+                    let def = dep.def.lock();
+                    let pod = def.pod.lock();
+                    let c = pod.container.lock();
+                    (c.stop_signal.clone(), c.stop_timeout_secs)
+                };
                 self.start_pod_instance(
                     instance,
                     &image,
                     &raw_mounts,
                     restart,
                     &vols,
+                    kill_signal,
+                    timeout_stop_secs,
                     |net_name, net_prefix, mounts| {
                         let guard = dep.def.lock();
                         let spec = deployment_spec(
@@ -285,12 +293,20 @@ impl Actuator {
                         return Err(ExternalVolumeNotMappedSnafu { name: name.clone() }.build());
                     }
                 }
+                let (kill_signal, timeout_stop_secs) = {
+                    let def = job.def.lock();
+                    let pod = def.pod.lock();
+                    let c = pod.container.lock();
+                    (c.stop_signal.clone(), c.stop_timeout_secs)
+                };
                 self.start_pod_instance(
                     instance,
                     &image,
                     &raw_mounts,
                     restart,
                     &vols,
+                    kill_signal,
+                    timeout_stop_secs,
                     |net_name, net_prefix, mounts| {
                         let guard = job.def.lock();
                         let spec = job_spec(

@@ -28,6 +28,8 @@ fn podman_args_basic_shape() {
         writable_rootfs: false,
         pids_limit: 256,
         workdir: None,
+        stop_signal: None,
+        stop_timeout_secs: None,
     };
 
     let args = podman_args(&spec);
@@ -73,6 +75,8 @@ fn podman_args_volume_mount() {
         writable_rootfs: false,
         pids_limit: 256,
         workdir: None,
+        stop_signal: None,
+        stop_timeout_secs: None,
     };
 
     let args = podman_args(&spec);
@@ -102,6 +106,8 @@ fn podman_args_add_host_ipv6() {
         writable_rootfs: false,
         pids_limit: 256,
         workdir: None,
+        stop_signal: None,
+        stop_timeout_secs: None,
     };
 
     let args = podman_args(&spec);
@@ -131,6 +137,8 @@ fn podman_args_hardening_defaults() {
         writable_rootfs: false,
         pids_limit: 256,
         workdir: None,
+        stop_signal: None,
+        stop_timeout_secs: None,
     };
 
     let args = podman_args(&spec);
@@ -172,6 +180,8 @@ fn podman_args_hardening_overrides() {
         writable_rootfs: true,
         pids_limit: 1024,
         workdir: None,
+        stop_signal: None,
+        stop_timeout_secs: None,
     };
 
     let args = podman_args(&spec);
@@ -215,6 +225,8 @@ fn podman_args_dns_servers_produce_dns_flags() {
         writable_rootfs: false,
         pids_limit: 256,
         workdir: None,
+        stop_signal: None,
+        stop_timeout_secs: None,
     };
 
     let args = podman_args(&spec);
@@ -249,6 +261,8 @@ fn podman_args_no_dns_flags_when_unset() {
         writable_rootfs: false,
         pids_limit: 256,
         workdir: None,
+        stop_signal: None,
+        stop_timeout_secs: None,
     };
     let args = podman_args(&spec);
     assert!(!args.iter().any(|a| a == "--dns"));
@@ -275,6 +289,8 @@ fn podman_args_workdir() {
         writable_rootfs: false,
         pids_limit: 256,
         workdir: Some("/app".to_string()),
+        stop_signal: None,
+        stop_timeout_secs: None,
     };
     let args = podman_args(&spec);
     assert!(args.contains(&"--workdir=/app".to_string()));
@@ -299,6 +315,8 @@ fn bare_spec() -> ContainerSpec {
         writable_rootfs: false,
         pids_limit: 256,
         workdir: None,
+        stop_signal: None,
+        stop_timeout_secs: None,
     }
 }
 
@@ -483,6 +501,8 @@ fn podman_args_emit_health_check_flags_when_declared() {
         writable_rootfs: false,
         pids_limit: 256,
         workdir: None,
+        stop_signal: None,
+        stop_timeout_secs: None,
     };
 
     let args = podman_args(&spec);
@@ -522,6 +542,8 @@ fn podman_args_omit_health_check_flags_when_absent() {
         writable_rootfs: false,
         pids_limit: 256,
         workdir: None,
+        stop_signal: None,
+        stop_timeout_secs: None,
     };
 
     let args = podman_args(&spec);

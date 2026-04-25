@@ -392,6 +392,8 @@ fn spec_from_pod(
         writable_rootfs: container.writable_rootfs,
         pids_limit: container.pids_limit.unwrap_or(256),
         workdir: container.workdir.clone(),
+        stop_signal: container.stop_signal.clone(),
+        stop_timeout_secs: container.stop_timeout_secs,
     };
     let hash = spec_hash(&spec);
     spec.labels.insert("seedling.spec-hash".to_string(), hash);
