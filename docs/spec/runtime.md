@@ -346,6 +346,15 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Resource instance records that have remained in the Unscheduled lifecycle state for longer than a configurable retention period (default: 10 minutes) must be deleted, along with their associated world observation rows.
 > Instances that are part of the active desired state (i.e. in the `keep` set of a scaled group or a singleton) must never be deleted regardless of their lifecycle state.
 
+> r[gc.instances.atomic]
+> The deletion of an instance's records must be atomic across the world observation rows, fault rows, and the resource instance row.
+> A partial deletion that leaves any of these three out of sync with the others is a defect: it allows orphan faults and registry rows to linger indefinitely, since subsequent garbage-collection passes select instances by observation history that no longer exists.
+
+> r[gc.instances.never-actuated]
+> A scaled instance that the desired state has demoted to Unscheduled but for which no world observation has ever been recorded must be retired immediately by the reconciler.
+> Such an instance has no real-world footprint to clean up — no systemd unit, no container, no network — and waiting for it to reach the Unscheduled lifecycle state is unreachable: the lifecycle is derived from observations, of which there are none.
+> Without this rule the registry slot lingers forever, along with any faults filed against the instance during its brief actuation attempt.
+
 # Lifecycle Operations
 
 > r[operation.lifecycle]
