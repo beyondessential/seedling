@@ -562,11 +562,18 @@ fn compute_stop_inhibitions(
                 .copied()
                 .collect();
 
-            let current_running = current_ready.iter().filter(|o| o.is_running).count();
-            let current_pending = current_ready.len() - current_running;
+            // The spec requires "wait until the new instance is running and
+            // healthy before proceeding". Use observed_healthy so a container
+            // that's process-up but still in start-period (or actively
+            // failing its declared healthcheck) doesn't count as ready to
+            // absorb traffic. For deployments without a healthcheck the
+            // observer emits implicit-healthy as soon as the container is
+            // running, so the existing behaviour is preserved.
+            let current_healthy = current_ready.iter().filter(|o| o.observed_healthy).count();
+            let current_pending = current_ready.len() - current_healthy;
 
-            if current_running == 0 {
-                // No current-hash instance is running yet. Keep all stale
+            if current_healthy == 0 {
+                // No current-hash instance is healthy yet. Keep all stale
                 // instances alive (they're serving traffic). Signal that a
                 // rolling update is active so the reconciler bumps scale.
                 debug!(
@@ -581,10 +588,11 @@ fn compute_stop_inhibitions(
             } else if current_pending > 0 {
                 // At least one current-hash instance is healthy, but another
                 // is still starting up (a previous replacement). Wait for it
-                // to be confirmed running before retiring more stale instances.
+                // to be confirmed healthy before retiring more stale
+                // instances.
                 debug!(
                     deployment = deployment_name,
-                    current_running,
+                    current_healthy,
                     current_pending,
                     stale_count = stale_running.len(),
                     "rolling: replacement still starting, inhibiting all stale stops"
@@ -593,7 +601,7 @@ fn compute_stop_inhibitions(
                     stale_running.iter().map(|s| (*s).to_owned()).collect();
                 (inhibited, true)
             } else {
-                // All current-hash instances are running. Safe to retire
+                // All current-hash instances are healthy. Safe to retire
                 // exactly one stale instance; inhibit the rest.
                 let mut inhibited: HashSet<String> =
                     stale_running.iter().map(|s| (*s).to_owned()).collect();
