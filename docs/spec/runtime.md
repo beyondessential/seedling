@@ -351,8 +351,13 @@ Absent specification bugs, anything that is not defined here is either defined i
 > A partial deletion that leaves any of these three out of sync with the others is a defect: it allows orphan faults and registry rows to linger indefinitely, since subsequent garbage-collection passes select instances by observation history that no longer exists.
 
 > r[gc.instances.never-actuated]
-> A scaled instance that the desired state has demoted to Unscheduled but for which no world observation has ever been recorded must be retired immediately by the reconciler.
-> Such an instance has no real-world footprint to clean up — no systemd unit, no container, no network — and waiting for it to reach the Unscheduled lifecycle state is unreachable: the lifecycle is derived from observations, of which there are none.
+> A scaled instance that the desired state has demoted to Unscheduled must be retired immediately by the reconciler in any of the following cases:
+>
+> - The instance's lifecycle state, as derived from observations, is Unscheduled.
+> - The instance has no observations at all (it was never actuated).
+> - The instance has at least one terminal observation (`container_removed` or `network_cleaned_up`) in its history, even if the derived lifecycle state is something else.
+>
+> The third case is required because multiple observations recorded within the same tick may share a timestamp, and the lifecycle derivation is order-sensitive: a non-deterministic ordering can leave the derived state at `Pending` even though terminal observations exist. The presence of any terminal observation is sufficient evidence that the actuator successfully tore the instance down at some point, and waiting for the lifecycle derivation to "agree" would leave the registry slot occupied indefinitely.
 > Without this rule the registry slot lingers forever, along with any faults filed against the instance during its brief actuation attempt.
 
 # Lifecycle Operations

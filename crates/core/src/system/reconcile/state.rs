@@ -199,25 +199,42 @@ impl Reconciler {
                     continue;
                 }
                 let instance = dr.instance.clone();
-                let (state, has_observations) = self.db.call(move |db| {
+                let (state, has_observations, has_terminal_obs) = self.db.call(move |db| {
                     let obs = query_observations(db, &instance).unwrap_or_default();
                     let has_obs = !obs.is_empty();
-                    (derive_lifecycle_state(&instance, &obs), has_obs)
-                });
-                match state {
-                    LifecycleState::Unscheduled => {}
                     // r[impl gc.instances.never-actuated]
-                    LifecycleState::Pending if !has_observations => {}
-                    LifecycleState::Terminating | LifecycleState::Terminated => {
+                    // Multiple observations recorded in a single tick may share
+                    // a timestamp, in which case `query_observations` returns
+                    // them in undefined order and `derive_lifecycle_state` can
+                    // wedge at Pending even though terminal observations exist.
+                    // Treat the presence of any terminal observation as proof
+                    // that the actuator successfully tore the instance down.
+                    let has_terminal = obs.iter().any(|o| {
+                        matches!(
+                            o.obs_kind.as_str(),
+                            "container_removed" | "network_cleaned_up"
+                        )
+                    });
+                    (
+                        derive_lifecycle_state(&instance, &obs),
+                        has_obs,
+                        has_terminal,
+                    )
+                });
+                let eligible = retire_eligible(state, has_observations, has_terminal_obs);
+                if !eligible {
+                    if matches!(
+                        state,
+                        LifecycleState::Terminating | LifecycleState::Terminated
+                    ) {
                         self.written_obs.retain(|(id, _)| *id != dr.instance.id);
                         tracing::debug!(
                             app = %app.name,
                             instance = %dr.instance.display_name,
                             "clearing written_obs for stuck-terminating excess instance"
                         );
-                        continue;
                     }
-                    _ => continue,
+                    continue;
                 }
                 let instance_id = dr.instance.id;
                 match self.db.call(move |db| delete_instance(db, instance_id)) {
@@ -227,6 +244,8 @@ impl Reconciler {
                             app = %app.name,
                             instance = %dr.instance.display_name,
                             ?state,
+                            has_observations,
+                            has_terminal_obs,
                             "retired excess instance"
                         );
                     }
@@ -272,5 +291,54 @@ impl Reconciler {
                 );
             }
         }
+    }
+}
+
+// r[impl gc.instances.never-actuated]
+fn retire_eligible(state: LifecycleState, has_observations: bool, has_terminal_obs: bool) -> bool {
+    matches!(state, LifecycleState::Unscheduled) || !has_observations || has_terminal_obs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // r[verify gc.instances.never-actuated]
+    #[test]
+    fn unscheduled_state_is_eligible() {
+        assert!(retire_eligible(LifecycleState::Unscheduled, true, false));
+    }
+
+    // r[verify gc.instances.never-actuated]
+    #[test]
+    fn no_observations_is_eligible() {
+        assert!(retire_eligible(LifecycleState::Pending, false, false));
+    }
+
+    // r[verify gc.instances.never-actuated]
+    #[test]
+    fn pending_with_terminal_observation_is_eligible() {
+        // The observation-derivation can wedge at Pending when same-tick
+        // observations have ambiguous ordering. A terminal observation is the
+        // ground-truth signal that actuation completed.
+        assert!(retire_eligible(LifecycleState::Pending, true, true));
+    }
+
+    #[test]
+    fn pending_with_only_partial_observations_is_not_eligible() {
+        // Instance still actuating: observations exist but none terminal yet.
+        assert!(!retire_eligible(LifecycleState::Pending, true, false));
+    }
+
+    #[test]
+    fn running_is_not_eligible() {
+        // An excess instance currently observed running needs its actuator
+        // pass first; retiring before stop would orphan the unit.
+        assert!(!retire_eligible(LifecycleState::Running, true, false));
+    }
+
+    #[test]
+    fn ready_is_not_eligible() {
+        assert!(!retire_eligible(LifecycleState::Ready, true, false));
     }
 }
