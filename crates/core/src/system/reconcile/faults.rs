@@ -121,6 +121,48 @@ impl Reconciler {
         });
     }
 
+    // r[impl fault.healthcheck-replace-failed]
+    pub(super) fn file_replace_failed_fault(
+        &self,
+        app: &AppName,
+        deployment: &str,
+        replacement_instance: &str,
+        replacement_display: &str,
+    ) {
+        let app = app.clone();
+        let deployment = deployment.to_owned();
+        let replacement_instance = replacement_instance.to_owned();
+        let replacement_display = replacement_display.to_owned();
+        self.db.call(move |db| {
+            // Dedupe: only file once per deployment until the fault is cleared
+            // (e.g. by a generation bump that resets replace_failed).
+            let already = faults::list_active_faults(db, Some(&app))
+                .unwrap_or_default()
+                .iter()
+                .any(|f| {
+                    f.kind == "health_check_replace_failed"
+                        && f.resource_name.as_deref() == Some(deployment.as_str())
+                });
+            if already {
+                return;
+            }
+            let desc = format!(
+                "automatic replacement {replacement_display} for deployment '{deployment}' failed to become healthy; original instance kept running in degraded mode pending operator action"
+            );
+            if let Err(e) = faults::file_fault(
+                db,
+                &app,
+                Some("deployment"),
+                Some(deployment.as_str()),
+                Some(replacement_instance.as_str()),
+                "health_check_replace_failed",
+                &desc,
+            ) {
+                tracing::warn!(app = %app, deployment = %deployment, "failed to file health_check_replace_failed fault: {e}");
+            }
+        });
+    }
+
     // r[impl fault.service-degraded]
     /// File a `service_degraded` fault per service whose routing pool has
     /// fallen back to "anything running" because no healthy backend exists,

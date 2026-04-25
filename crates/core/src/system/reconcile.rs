@@ -110,10 +110,6 @@ fn seed_written_obs(db: &DbHandle) -> HashSet<(InstanceId, &'static str)> {
 /// assigned and will appear in routes only on the next tick. This one-tick
 /// lag is intentional and idempotent; the next tick will pick it up.
 pub(crate) struct RunningPod {
-    #[expect(
-        dead_code,
-        reason = "set by pods phase; will be used by the replacement spawning path"
-    )]
     pub instance: crate::runtime::identity::ResourceInstance,
     pub pod_prefix: Ipv6Net,
     pub pod_ip: std::net::Ipv6Addr,
@@ -138,6 +134,11 @@ struct AppSnapshot {
     /// `OperationProgress`, if any.
     // r[impl actuate.ingress.warm-certs]
     warm_cert_hostnames: std::collections::BTreeSet<String>,
+    /// Generation number of the app definition this snapshot was taken from.
+    /// Used to detect operator-pushed updates that should reset transient
+    /// per-deployment state such as the replace-loop guard.
+    // r[impl autonomous.healthcheck-replace.guard]
+    current_generation: u64,
 }
 
 /// Single global reconciler that processes all installed apps each tick.
@@ -166,6 +167,24 @@ pub struct Reconciler {
     /// the effective instance count by one during rollouts.
     // r[impl update.rolling.over-provision]
     rolling_updates: HashSet<(AppName, String)>,
+    /// Deployments needing a healthcheck-driven replacement, keyed by
+    /// (app, deployment_name). Populated each tick from observed pod health:
+    /// any deployment with `on_failure: replace` whose healthy backend count
+    /// is below its target gets bumped by one effective instance, so
+    /// `ensure_scaled_group` provisions a fresh replacement alongside the
+    /// existing (unhealthy) one.
+    // r[impl autonomous.healthcheck-replace]
+    unhealthy_replace_deployments: HashSet<(AppName, String)>,
+    /// Deployments whose latest replacement attempt itself failed to become
+    /// healthy. While present, the runtime suppresses further bumps
+    /// (`autonomous.healthcheck-replace.guard`). Cleared when the AppDef
+    /// generation for the app changes (operator-pushed update).
+    // r[impl autonomous.healthcheck-replace.guard]
+    replace_failed: HashSet<(AppName, String)>,
+    /// Last `current_generation` we saw for each app; a higher value on a
+    /// subsequent tick triggers a reset of `replace_failed` for that app.
+    // r[impl autonomous.healthcheck-replace.guard]
+    last_seen_generation: HashMap<AppName, u64>,
     /// Whether seedling is providing its own NAT64 translator.
     nat64_active: bool,
     /// Whether the jool translator instance is currently installed on
@@ -247,6 +266,9 @@ impl Reconciler {
             event_tx,
             prev_states: BTreeMap::new(),
             rolling_updates: HashSet::new(),
+            unhealthy_replace_deployments: HashSet::new(),
+            replace_failed: HashSet::new(),
+            last_seen_generation: HashMap::new(),
             nat64_active,
             // Daemon startup has already called `setup_nat64` iff
             // `nat64_active`; mirror that in our tracking flag.
@@ -328,6 +350,7 @@ impl Reconciler {
                 .as_ref()
                 .map(|p| p.warm_cert_hostnames.clone())
                 .unwrap_or_default();
+            let current_generation = entry.current_generation;
             snapshots.push(AppSnapshot {
                 name,
                 desired,
@@ -335,6 +358,7 @@ impl Reconciler {
                 phase,
                 phase_handle: Arc::clone(&entry.phase),
                 warm_cert_hostnames,
+                current_generation,
             });
         }
         snapshots
@@ -376,6 +400,13 @@ impl Reconciler {
         for (dep_name, low, high, mut effective) in scale_data {
             if self
                 .rolling_updates
+                .contains(&(app_name.clone(), dep_name.clone()))
+            {
+                effective = effective.saturating_add(1);
+            }
+            // r[impl autonomous.healthcheck-replace]
+            if self
+                .unhealthy_replace_deployments
                 .contains(&(app_name.clone(), dep_name.clone()))
             {
                 effective = effective.saturating_add(1);
@@ -781,8 +812,163 @@ impl Reconciler {
                 .extend(pod_update.completed_job_instances.iter().copied());
             running_pods_by_app.insert(app_name, pod_update.running);
         }
-        let _ = apps;
+        self.update_replace_state(apps, &running_pods_by_app);
         running_pods_by_app
+    }
+
+    // r[impl autonomous.healthcheck-replace]
+    // r[impl autonomous.healthcheck-replace.guard]
+    fn update_replace_state(
+        &mut self,
+        apps: &[AppSnapshot],
+        running_pods_by_app: &HashMap<AppName, Vec<RunningPod>>,
+    ) {
+        // Reset the replace-loop guard for any app whose generation increased
+        // (operator pushed new code). Simultaneously prune entries for apps
+        // that no longer exist.
+        let active: std::collections::HashSet<AppName> =
+            apps.iter().map(|a| a.name.clone()).collect();
+        self.last_seen_generation
+            .retain(|app, _| active.contains(app));
+        self.replace_failed.retain(|(app, _)| active.contains(app));
+
+        for app in apps {
+            let prior = self.last_seen_generation.get(&app.name).copied();
+            if prior.map(|p| app.current_generation > p).unwrap_or(false) {
+                // r[impl autonomous.healthcheck-replace.guard]
+                // Operator changed the AppDef — give the workload a fresh
+                // chance to converge.
+                self.replace_failed.retain(|(a, _)| a != &app.name);
+            }
+            self.last_seen_generation
+                .insert(app.name.clone(), app.current_generation);
+        }
+
+        // Recompute the bump set from scratch each tick. A deployment is bumped
+        // when (a) it has any unhealthy running instance with on_failure=replace,
+        // (b) the count of healthy running instances is below the declared
+        // target, and (c) the replace-loop guard for it has not tripped.
+        self.unhealthy_replace_deployments.clear();
+        // Per-deployment grace window in seconds, used downstream to detect
+        // replacement-failure from observation history.
+        let mut grace_secs_by_dep: HashMap<(AppName, String), i64> = HashMap::new();
+        for app in apps {
+            let pods = match running_pods_by_app.get(&app.name) {
+                Some(p) => p.as_slice(),
+                None => continue,
+            };
+            for (id, resource) in &app.app_def.resources {
+                let crate::defs::resource::Resource::Deployment(dep) = resource else {
+                    continue;
+                };
+                let dep_def = dep.def.lock();
+                let target = dep_def.scale.start;
+                let pod_def = dep_def.pod.lock();
+                let container = pod_def.container.lock();
+                let (policy, grace_secs) = match &container.healthcheck {
+                    Some(hc) => (
+                        Some(hc.on_failure),
+                        (hc.start_period_secs + hc.retries as u64 * hc.interval_secs) as i64,
+                    ),
+                    None => (None, 0),
+                };
+                drop(container);
+                drop(pod_def);
+                drop(dep_def);
+                if !matches!(
+                    policy,
+                    Some(crate::defs::container::HealthcheckOnFailure::Replace)
+                ) {
+                    continue;
+                }
+                let dep_name = id.name.as_str();
+                grace_secs_by_dep.insert((app.name.clone(), dep_name.to_owned()), grace_secs);
+                if self
+                    .replace_failed
+                    .contains(&(app.name.clone(), dep_name.to_owned()))
+                {
+                    continue;
+                }
+                let dep_pods: Vec<&RunningPod> = pods
+                    .iter()
+                    .filter(|p| {
+                        p.instance.kind == crate::defs::resource::ResourceKind::Deployment
+                            && p.instance.name.as_deref() == Some(dep_name)
+                    })
+                    .collect();
+                let healthy = dep_pods.iter().filter(|p| p.observed_healthy).count();
+                let any_unhealthy = dep_pods.iter().any(|p| !p.observed_healthy);
+                if any_unhealthy && healthy < usize::from(target) {
+                    self.unhealthy_replace_deployments
+                        .insert((app.name.clone(), dep_name.to_owned()));
+                }
+            }
+        }
+
+        // r[impl autonomous.healthcheck-replace.guard]
+        // Check each deployment that's currently being replaced: has its
+        // youngest scaled instance gone past grace without ever being healthy?
+        // If yes, declare the replacement failed, file the hard fault, and
+        // suppress further bumps until the AppDef generation advances.
+        let candidates: Vec<((AppName, String), i64)> = self
+            .unhealthy_replace_deployments
+            .iter()
+            .filter_map(|key| {
+                grace_secs_by_dep
+                    .get(key)
+                    .copied()
+                    .map(|g| (key.clone(), g))
+            })
+            .collect();
+        let now_ms = jiff::Timestamp::now().as_millisecond();
+        let failed: Vec<(AppName, String, String, String)> = self.db.call(move |db| {
+            let mut out = Vec::new();
+            for ((app, dep_name), grace_secs) in candidates {
+                let group = match crate::runtime::history::find_instances_for_group(
+                    db,
+                    &app,
+                    crate::defs::resource::ResourceKind::Deployment,
+                    Some(dep_name.as_str()),
+                ) {
+                    Ok(g) => g,
+                    Err(_) => continue,
+                };
+                // find_instances_for_group returns oldest first; the youngest
+                // is the most likely replacement attempt.
+                let Some(youngest) = group.last() else {
+                    continue;
+                };
+                let obs = match crate::runtime::history::query_observations(db, youngest) {
+                    Ok(o) => o,
+                    Err(_) => continue,
+                };
+                let any_healthy = obs.iter().any(|o| o.obs_kind == "health_check_pass");
+                if any_healthy {
+                    continue;
+                }
+                let Some(first) = obs.first() else {
+                    continue;
+                };
+                let age_secs = (now_ms - first.recorded_at) / 1000;
+                // Allow some slack: 2× grace before declaring failed, so a
+                // replacement that's marginally slow doesn't trip the guard.
+                if age_secs > grace_secs.saturating_mul(2) {
+                    out.push((
+                        app.clone(),
+                        dep_name.clone(),
+                        youngest.id.to_hex(),
+                        youngest.display_name.clone(),
+                    ));
+                }
+            }
+            out
+        });
+        for (app, dep_name, replacement_hex, replacement_display) in failed {
+            self.replace_failed.insert((app.clone(), dep_name.clone()));
+            self.unhealthy_replace_deployments
+                .remove(&(app.clone(), dep_name.clone()));
+            self.file_replace_failed_fault(&app, &dep_name, &replacement_hex, &replacement_display);
+        }
     }
 
     fn ingest_volume_results(

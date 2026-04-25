@@ -216,6 +216,7 @@ impl InstanceRegistry for DbInstanceRegistry {
             .call(move |db| history::get_or_create_singleton(db, &app, kind, name.as_deref()))?)
     }
 
+    // r[impl autonomous.healthcheck-replace]
     fn ensure_scaled_group(
         &self,
         app: &AppName,
@@ -246,6 +247,30 @@ impl InstanceRegistry for DbInstanceRegistry {
                 history::insert_instance(db, &instance)?;
                 scaled.push(instance);
             }
+
+            // Sort the scaled instances by (currently-Ready desc, original
+            // order asc) so that the keep set prefers healthy instances. Ties
+            // (e.g. all healthy or all not-yet-healthy) fall back to creation
+            // order, which is the existing behaviour.
+            //
+            // The original order produced by `find_instances_for_group` is
+            // ASC by `created_at`, so a stable sort_by_key preserves that as
+            // the secondary criterion when the primary is tied.
+            let mut tagged: Vec<(ResourceInstance, bool)> = scaled
+                .into_iter()
+                .map(|inst| {
+                    let obs = history::query_observations(db, &inst).unwrap_or_default();
+                    let state =
+                        crate::runtime::barrier::oracle::derive_lifecycle_state(&inst, &obs);
+                    let is_ready =
+                        matches!(state, crate::runtime::lifecycle::LifecycleState::Ready);
+                    (inst, is_ready)
+                })
+                .collect();
+            // Stable sort: false (not ready) > true (ready) in usize, so
+            // negate by sorting on `!is_ready`.
+            tagged.sort_by_key(|(_, is_ready)| !*is_ready);
+            let scaled: Vec<ResourceInstance> = tagged.into_iter().map(|(i, _)| i).collect();
 
             let keep = scaled[..count].to_vec();
             let mut excess = scaled[count..].to_vec();
