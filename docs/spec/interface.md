@@ -656,6 +656,12 @@ Absent specification bugs, anything that is not defined here is either defined i
 > They clear automatically when the condition that caused them no longer holds.
 > No acknowledgement mechanism is provided; fault resolution and incident tracking are left to external consumers of the event feed.
 
+> i[fault.clear-app]
+> `/faults/clear { app }` clears every currently active fault for the named app.
+> Returns `{ app, cleared }` where `cleared` is the number of fault rows that transitioned from active to cleared.
+> Faults derived from observable conditions (e.g. `image_pull_failed`, `health_check_failed`) will be re-filed on the next reconciliation tick if the underlying condition still holds. Hard faults that require operator action (e.g. `health_check_replace_failed`, `script_error`) are cleared definitively until the underlying issue recurs.
+> The endpoint is intended for operators stuck behind a fault that the runtime cannot itself resolve, including the case where a not-installed app's faults are blocking a script update.
+
 # Event Feed
 
 > i[event.subscribe]

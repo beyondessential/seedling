@@ -131,6 +131,8 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         }
         // i[fault.list]
         "/faults/list" => faults::list_faults(state, parse_params(req.params)?),
+        // i[fault.clear-app]
+        "/faults/clear" => faults::clear_app_faults(state, parse_params(req.params)?),
         // i[registry.list]
         "/registries/list" => registries::list_registries(state),
         // i[registry.add]

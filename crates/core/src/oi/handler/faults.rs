@@ -35,3 +35,31 @@ pub(crate) fn list_faults(state: &OiState, params: ListFaultsParams) -> HandlerR
         .collect();
     Ok(json!(result))
 }
+
+#[derive(Deserialize)]
+pub(crate) struct ClearAppFaultsParams {
+    pub app: AppName,
+}
+
+// i[fault.clear-app]
+/// Clear every active fault for the given app. Returns the number of faults
+/// cleared. The runtime never re-files cleared faults that were derived
+/// observationally (e.g. `image_pull_failed`) — they will be re-filed on the
+/// next tick if the underlying condition is still present.
+pub(crate) fn clear_app_faults(state: &OiState, params: ClearAppFaultsParams) -> HandlerResult {
+    let app = params.app.clone();
+    let app_name = app.clone();
+    let cleared = state
+        .db
+        .call(move |db| -> rusqlite::Result<usize> {
+            let active = faults::list_active_faults(db, Some(&app_name))?;
+            let mut count = 0;
+            for f in active {
+                faults::clear_fault(db, &f.id, &app_name)?;
+                count += 1;
+            }
+            Ok(count)
+        })
+        .map_err(|e| OiError::new(ErrorCode::Internal, format!("clear faults: {e}")))?;
+    Ok(json!({ "app": app, "cleared": cleared }))
+}

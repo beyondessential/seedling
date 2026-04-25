@@ -114,6 +114,8 @@ enum Command {
         #[arg(long)]
         app: Option<String>,
     },
+    /// Clear all active faults for an app
+    ClearFaults { app: String },
     /// Subscribe to event feed (streams JSON to stdout)
     Events,
     /// Client info (fingerprint)
@@ -334,6 +336,13 @@ async fn main() {
             print_result(
                 client
                     .request("/faults/list", serde_json::json!({ "app": app }))
+                    .await,
+            );
+        }
+        Command::ClearFaults { app } => {
+            print_result(
+                client
+                    .request("/faults/clear", serde_json::json!({ "app": app }))
                     .await,
             );
         }

@@ -22,6 +22,7 @@ import {
   Dialog,
   DialogActions,
   DialogContent,
+  DialogContentText,
   DialogTitle,
   Divider,
   IconButton,
@@ -2293,18 +2294,127 @@ function AppImagesSection({
   );
 }
 
+function ClearFaultsButton({
+  appName,
+  status,
+  onCleared,
+}: {
+  appName: string;
+  status: AppStatus;
+  onCleared: () => void;
+}) {
+  // i[impl fault.clear-app]
+  // Clearing faults from a not-installed app is write-level; from any other
+  // phase it's danger-level because the operator may be silencing live signal
+  // about a running workload's problems.
+  const tier = status === "not_installed" ? "write" : "dangerous";
+  const guard = useGuard(tier);
+  const { execute, loading, error, clearError } = useOiAction();
+  const [confirming, setConfirming] = useState(false);
+  return (
+    <>
+      <Tooltip
+        title={
+          guard.allowed
+            ? `Clear all active faults for this app (${tier} action)`
+            : (guard.reason ?? "")
+        }
+      >
+        <span>
+          <Button
+            size="small"
+            color={tier === "dangerous" ? "error" : "primary"}
+            variant="outlined"
+            disabled={!guard.allowed || loading}
+            onClick={() => setConfirming(true)}
+          >
+            Clear all
+          </Button>
+        </span>
+      </Tooltip>
+      <Dialog
+        open={confirming}
+        onClose={() => {
+          setConfirming(false);
+          clearError();
+        }}
+      >
+        <DialogTitle>Clear all faults?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            This clears every active fault for <strong>{appName}</strong>.
+            Faults derived from observable conditions (image pull failures,
+            healthcheck failures, etc.) will be re-filed on the next
+            reconciliation tick if the underlying problem still exists.
+            {tier === "dangerous" && (
+              <>
+                {" "}
+                This is a danger-level action because the app is currently
+                {" "}<strong>{status}</strong> — clearing live signal can
+                obscure problems that operators need to see.
+              </>
+            )}
+          </DialogContentText>
+          {error && (
+            <Alert severity="error" sx={{ mt: 2 }}>
+              {error.message}
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => {
+              setConfirming(false);
+              clearError();
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            color={tier === "dangerous" ? "error" : "primary"}
+            variant="contained"
+            disabled={loading}
+            onClick={async () => {
+              try {
+                await execute("/faults/clear", { app: appName });
+                setConfirming(false);
+                onCleared();
+              } catch {
+                // error state is set by useOiAction; dialog stays open
+              }
+            }}
+          >
+            Clear faults
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </>
+  );
+}
+
 function Section({
   title,
+  action,
   children,
 }: {
   title: string;
+  action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <Box>
-      <Typography variant="h6" sx={{ mb: 1 }}>
-        {title}
-      </Typography>
+      <Box
+        sx={{
+          mb: 1,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 1,
+        }}
+      >
+        <Typography variant="h6">{title}</Typography>
+        {action}
+      </Box>
       {children}
     </Box>
   );
@@ -2626,7 +2736,16 @@ export default function AppDetail() {
           )}
 
           {data.faults.length > 0 && (
-            <Section title="Faults">
+            <Section
+              title="Faults"
+              action={
+                <ClearFaultsButton
+                  appName={name!}
+                  status={data.status}
+                  onCleared={refetch}
+                />
+              }
+            >
               <FaultList faults={data.faults} />
             </Section>
           )}
