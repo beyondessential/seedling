@@ -850,39 +850,45 @@ impl RuntimeInstance {
 
         let now = (g.now_secs)();
 
-        // r[impl barrier.deadline]
-        // r[impl barrier.replay.rt-stop]
-        // Enforce the stop deadline against the earliest unsatisfied record
-        // for these resources. Mirrors the check in check_barrier so
-        // rt.stop() participates in the same suspension semantics as the
-        // Started barrier methods; before this, the deadline was stored but
-        // never read.
-        let started_at = g
-            .committed
-            .iter()
-            .chain(g.pending.iter())
-            .find(|e| {
-                e.resources == resources
-                    && e.barrier.as_ref().is_some_and(|b| {
-                        b.required_state == LifecycleState::Terminated && !b.satisfied
-                    })
-            })
-            .and_then(|e| e.barrier.as_ref()?.started_at_secs);
-        if let (Some(d), Some(started_at)) = (deadline_secs, started_at)
-            && now.saturating_sub(started_at) >= d
-        {
-            return Err(Box::new(EvalAltResult::ErrorRuntime(
-                format!("Barrier deadline of {d}s exceeded waiting for Terminated (rt.stop)")
-                    .into(),
-                rhai::Position::NONE,
-            )));
-        }
-
+        // Always consult the oracle BEFORE the deadline check: if the world
+        // says these resources are already terminated, the call must succeed
+        // even when more than `deadline_secs` have elapsed. See the matching
+        // comment in check_barrier — the committed log can lag the world.
         let all_terminated = resources.iter().all(|r| {
             g.world
                 .lifecycle_state(r)
                 .has_reached(LifecycleState::Terminated)
         });
+
+        if !all_terminated {
+            // r[impl barrier.deadline]
+            // r[impl barrier.replay.rt-stop]
+            // Enforce the stop deadline against the earliest unsatisfied record
+            // for these resources. Mirrors the check in check_barrier so
+            // rt.stop() participates in the same suspension semantics as the
+            // Started barrier methods; before this, the deadline was stored but
+            // never read.
+            let started_at = g
+                .committed
+                .iter()
+                .chain(g.pending.iter())
+                .find(|e| {
+                    e.resources == resources
+                        && e.barrier.as_ref().is_some_and(|b| {
+                            b.required_state == LifecycleState::Terminated && !b.satisfied
+                        })
+                })
+                .and_then(|e| e.barrier.as_ref()?.started_at_secs);
+            if let (Some(d), Some(started_at)) = (deadline_secs, started_at)
+                && now.saturating_sub(started_at) >= d
+            {
+                return Err(Box::new(EvalAltResult::ErrorRuntime(
+                    format!("Barrier deadline of {d}s exceeded waiting for Terminated (rt.stop)")
+                        .into(),
+                    rhai::Position::NONE,
+                )));
+            }
+        }
 
         if all_terminated {
             // If replaying, call_index was already incremented above; use index - 1.
@@ -1135,29 +1141,6 @@ impl Started {
             return Ok(self.clone());
         }
 
-        // Check deadline: find when we first started waiting.
-        let started_at = g
-            .committed
-            .iter()
-            .chain(g.pending.iter())
-            .find(|e| {
-                e.resources == self.resources
-                    && e.barrier
-                        .as_ref()
-                        .is_some_and(|b| b.required_state == required && !b.satisfied)
-            })
-            .and_then(|e| e.barrier.as_ref()?.started_at_secs);
-
-        // r[impl barrier.deadline]
-        if let (Some(d), Some(started_at)) = (deadline_secs, started_at)
-            && now.saturating_sub(started_at) >= d
-        {
-            return Err(Box::new(EvalAltResult::ErrorRuntime(
-                format!("Barrier deadline of {d}s exceeded waiting for {required:?}").into(),
-                rhai::Position::NONE,
-            )));
-        }
-
         // Check if condition is currently satisfied. Warm variants swap out
         // the predicate for `.ready()`:
         //
@@ -1192,6 +1175,13 @@ impl Started {
         };
 
         // r[impl barrier.resume]
+        // Always consult the oracle BEFORE the deadline check: a barrier that
+        // is currently satisfied must succeed even if more than `deadline_secs`
+        // have elapsed since the original suspension. The committed log can
+        // lag the world (e.g. a short-lived job that completed during a
+        // replay where the satisfied=true update never landed in committed),
+        // so deadline-then-oracle would spuriously time out a barrier whose
+        // resources have actually reached the required state.
         if all_reached {
             // Mark the relevant pending entry's barrier as satisfied.
             for e in g.pending.iter_mut() {
@@ -1203,6 +1193,29 @@ impl Started {
                 }
             }
             return Ok(self.clone());
+        }
+
+        // Not yet reached — check deadline: find when we first started waiting.
+        let started_at = g
+            .committed
+            .iter()
+            .chain(g.pending.iter())
+            .find(|e| {
+                e.resources == self.resources
+                    && e.barrier
+                        .as_ref()
+                        .is_some_and(|b| b.required_state == required && !b.satisfied)
+            })
+            .and_then(|e| e.barrier.as_ref()?.started_at_secs);
+
+        // r[impl barrier.deadline]
+        if let (Some(d), Some(started_at)) = (deadline_secs, started_at)
+            && now.saturating_sub(started_at) >= d
+        {
+            return Err(Box::new(EvalAltResult::ErrorRuntime(
+                format!("Barrier deadline of {d}s exceeded waiting for {required:?}").into(),
+                rhai::Position::NONE,
+            )));
         }
 
         // Not satisfied: attach/update barrier record in pending, then throw.

@@ -273,6 +273,110 @@ fn sequential_barriers() {
     assert!(matches!(r, OperationResult::Completed));
 }
 
+// Reproducer for the postgres-tamanu install hang: a job whose container
+// is auto-removed before the observer ever caught it Running has lifecycle
+// Unscheduled, which `has_reached(Terminated)`, so the barrier should
+// succeed. The committed log still records `barrier_satisfied=false`
+// from the original suspension, however, and earlier code consulted the
+// deadline before the oracle. With deadline=0, this caused a spurious
+// timeout the moment the second pass ran. The fix consults the oracle
+// first, so a barrier whose world state has reached the required level
+// completes regardless of how much time has elapsed.
+#[test]
+fn barrier_succeeds_after_deadline_when_oracle_reached() {
+    use crate::defs::resource::ResourceKind;
+    use crate::runtime::lifecycle::LifecycleState;
+
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let bin = app.volume("bin");
+        app.on_install(|rt, _param| {
+            rt.start(app.job().image("docker.io/library/debian:bookworm-slim")
+                .mount("/app/bin", bin)
+                .command(["true"])
+            ).terminated(0).ensure_success();
+        });
+    "#,
+    );
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    let log = InMemoryActionLog::new();
+    let op = OperationId::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
+
+    // Pass 1: oracle says Pending → barrier suspends.
+    let r = run_operation(
+        OperationContext {
+            engine: &engine,
+            script_ast: &ast,
+            operation_id: op.clone(),
+            app: &app,
+            action_name: "install",
+            log: &log,
+            world: Arc::clone(&oracle),
+            registry: Arc::clone(&reg),
+            active_progress: None,
+            tick_notify: None,
+            params: serde_json::Map::new(),
+            is_shell: false,
+            db: None,
+            source_generation: 0,
+            target_generation: 0,
+            script_limits: None,
+            cipher: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+        },
+        &mut scope,
+    );
+    assert!(matches!(r, OperationResult::Suspended(_)));
+
+    // Tell the oracle the job has terminated successfully (mirrors the
+    // observed pattern: container_removed → running → health_check_pass →
+    // container_removed, which derive_container_lifecycle resolves to
+    // Unscheduled).
+    let entries = <InMemoryActionLog as crate::runtime::barrier::replay::ActionLog>::load(&log)
+        .expect("load");
+    let instance = entries
+        .iter()
+        .find_map(|e| e.resources.first().cloned())
+        .expect("resource");
+    assert_eq!(instance.kind, ResourceKind::Job);
+    oracle.set(instance.clone(), LifecycleState::Unscheduled);
+    oracle.set_exit_code(instance, 0);
+
+    // Pass 2: deadline=0 has trivially elapsed since pass 1 committed the
+    // unsatisfied barrier, but the oracle says reached. Must complete.
+    let r = run_operation(
+        OperationContext {
+            engine: &engine,
+            script_ast: &ast,
+            operation_id: op,
+            app: &app,
+            action_name: "install",
+            log: &log,
+            world: Arc::clone(&oracle),
+            registry: Arc::clone(&reg),
+            active_progress: None,
+            tick_notify: None,
+            params: serde_json::Map::new(),
+            is_shell: false,
+            db: None,
+            source_generation: 0,
+            target_generation: 0,
+            script_limits: None,
+            cipher: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+        },
+        &mut scope,
+    );
+    assert!(
+        matches!(r, OperationResult::Completed),
+        "expected Completed, got {r:?}",
+    );
+}
+
 // r[verify barrier.deadline]
 #[test]
 fn barrier_deadline_zero_expires_on_second_pass() {

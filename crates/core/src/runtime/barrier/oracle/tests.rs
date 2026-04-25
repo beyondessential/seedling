@@ -192,6 +192,27 @@ fn duplicate_running_observations_do_not_regress() {
     assert_eq!(state, LifecycleState::Running);
 }
 
+// Reproducer for the postgres-tamanu install hang: a job that exits and is
+// auto-removed before the observer caught the Exited state. The observer
+// sees container_removed before container_running on the first poll cycle
+// (initial state is "no container"), then container_running once the
+// container starts, then container_removed again after the container is
+// auto-removed by podman on exit.
+#[test]
+fn auto_removed_short_lived_job_reaches_unscheduled() {
+    let resource = dep("app", "web");
+    let state = derive_lifecycle_state(
+        &resource,
+        &[
+            obs("container_removed"),
+            obs("container_running"),
+            obs("health_check_pass"),
+            obs("container_removed"),
+        ],
+    );
+    assert_eq!(state, LifecycleState::Unscheduled);
+}
+
 // r[verify lifecycle.derivation]
 #[test]
 fn unknown_obs_kind_is_ignored() {

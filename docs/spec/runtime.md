@@ -610,6 +610,7 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > Each barrier has an optional deadline.
 > When a deadline is set and the barrier condition is not satisfied within it, the barrier must throw an exception within the action closure.
 > When the deadline is absent (as it is for `.terminated_eventually()` and `.ready_eventually()`), the barrier waits indefinitely; it resumes only when the condition becomes satisfied or when the operation is [cancelled](#r--operation.cancel).
+> The condition check takes precedence over the deadline: a barrier whose condition is currently satisfied resumes successfully even if the deadline has elapsed since the original suspension. Otherwise, a short-lived resource that completed during a replay window where the satisfied flag never landed in the action log could be spuriously timed out on the next replay.
 
 > r[barrier.suspension.poll-backoff]
 > The cadence at which the runtime re-evaluates a suspended barrier (replaying the action closure up to the suspend point) may vary with how long the barrier has been waiting.
@@ -649,6 +650,7 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > A Job instance that has naturally reached the Terminated lifecycle state must not be restarted by the reconciler.
 > The reconciler must clean up any lingering container or unit state for such an instance but must not start a replacement.
 > This applies both while a lifecycle operation is in progress (the job completed during the operation) and in steady state.
+> A Job that the reconciler asked systemd to start in a prior tick and that the reconciler currently observes as gone counts as "naturally terminated" for the purposes of this rule, even when no `container_running` observation was ever recorded — short-lived jobs may complete and be auto-removed faster than the observer's poll interval, and forcing a re-start in that case would loop indefinitely.
 
 > r[autonomous.job-terminal.defense]
 > The reconciler must remember which Job instances have completed within the current process lifetime.
