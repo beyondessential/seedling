@@ -535,7 +535,40 @@ impl RuntimeInstance {
             return Ok(vec![(instance, Some(Resource::Ingress(ing)))]);
         }
 
-        // Unknown / Collection stub — no resources to track.
+        // l[impl rt.start]
+        // l[impl collection.col]
+        // App or Collection (e.g. `rt.start(app)` or `rt.start(col(app).except(...))`):
+        // expand into the underlying resource handles via the standard
+        // collection coercion, then recurse for each handle. The recursive
+        // call hits the per-kind branches above (Deployment / Service /
+        // Volume / Ingress / Job) and produces a flat list of resource
+        // instances suitable for the action log.
+        {
+            use crate::defs::app::App;
+            use crate::defs::collection::{Collection, col};
+            let collection: Option<Collection> = if let Some(c) =
+                resources.clone().try_cast::<Collection>()
+            {
+                Some(c)
+            } else if resources.clone().try_cast::<App>().is_some() {
+                Some(col(resources.clone()))
+            } else {
+                None
+            };
+            if let Some(collection) = collection {
+                let mut out = Vec::new();
+                for handle in collection.resolve() {
+                    let dyn_val = handle.fetch();
+                    if dyn_val.is_unit() {
+                        continue;
+                    }
+                    out.extend(self.extract_instances(dyn_val)?);
+                }
+                return Ok(out);
+            }
+        }
+
+        // Unknown — language-only / stub context.
         Ok(vec![])
     }
 
