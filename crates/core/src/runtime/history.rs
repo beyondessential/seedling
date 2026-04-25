@@ -229,6 +229,7 @@ pub fn insert_observation(
 }
 
 // r[impl history.world.state-derivation]
+// r[impl history.world.ordering]
 pub fn query_observations(
     db: &Db,
     instance: &ResourceInstance,
@@ -237,7 +238,7 @@ pub fn query_observations(
         "SELECT id, recorded_at, obs_kind, payload
          FROM world_observations
          WHERE instance_id = ?1
-         ORDER BY recorded_at ASC",
+         ORDER BY recorded_at ASC, id ASC",
     )?;
     let rows = stmt.query_map(params![instance.id.to_hex()], |row| {
         Ok(WorldObservation {
@@ -319,7 +320,7 @@ pub fn query_autonomous_operations(
         "SELECT id, recorded_at, operation, provenance, outcome, completed_at
          FROM autonomous_operations
          WHERE instance_id = ?1
-         ORDER BY recorded_at ASC",
+         ORDER BY recorded_at ASC, id ASC",
     )?;
     let rows = stmt.query_map(params![resource_id.to_hex()], |row| {
         Ok(AutonomousOperation {

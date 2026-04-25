@@ -249,6 +249,10 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[history.world.state-derivation]
 > The runtime must be able to derive a resource's current [lifecycle state](#r--lifecycle.states) and the time of its last state transition from the world observation history alone.
 
+> r[history.world.ordering]
+> When multiple observations are emitted within the same tick they may share a timestamp. Queries that return observations for derivation must use a stable secondary ordering — insertion order — so that consumers see them in the order they were emitted, not in storage-engine-defined order.
+> Without this, lifecycle derivation becomes non-deterministic for any resource that produces multiple observations per tick (e.g. a container that observes both `stop_sent` and `container_removed` in the same reconciliation pass).
+
 ## Autonomous Operations Log
 
 > r[history.operations]

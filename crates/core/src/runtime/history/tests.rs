@@ -358,6 +358,37 @@ fn observations_ordered_by_recorded_at() {
     assert_eq!(obs[1].obs_kind, "container_running");
 }
 
+// r[verify history.world.ordering]
+#[test]
+fn observations_with_tied_timestamp_return_in_insertion_order() {
+    let db = Db::open_in_memory().unwrap();
+    let resource = dep("app", "web");
+    let kinds = [
+        "container_created",
+        "container_running",
+        "health_check_pass",
+        "health_check_fail",
+        "stop_sent",
+        "container_exited",
+        "container_removed",
+    ];
+    // Insert in this exact order, then force every row to share the same
+    // recorded_at so the secondary id ordering is the only signal.
+    for k in kinds {
+        insert_observation(&db, &resource, k, &serde_json::json!({})).unwrap();
+    }
+    db.conn
+        .execute(
+            "UPDATE world_observations SET recorded_at = 1 WHERE instance_id = ?1",
+            [resource.id.to_hex()],
+        )
+        .unwrap();
+
+    let obs = query_observations(&db, &resource).unwrap();
+    let observed_kinds: Vec<&str> = obs.iter().map(|o| o.obs_kind.as_str()).collect();
+    assert_eq!(observed_kinds, kinds);
+}
+
 // r[verify history.world.entries]
 #[test]
 fn observations_scoped_to_instance_id() {
