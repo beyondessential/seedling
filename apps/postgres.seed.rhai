@@ -357,16 +357,11 @@ fi
     ).terminated(900).ensure_success();
 };
 
-// Reload postgresql.conf without restarting.
+// Reload postgresql.conf without restarting. Postgres maps SIGHUP to
+// "reread configuration", and rt.signal is cheaper than spawning a psql
+// job just to issue pg_reload_conf().
 let reload_server = |rt| {
-    rt.start(app.job()
-        .image(pg_image.call())
-        .writable_rootfs()
-        .mount("/var/run/postgresql", socket)
-        .env("PGHOST", "/var/run/postgresql")
-        .env("PGUSER", "postgres")
-        .command(["psql", "-d", "postgres", "-c", "SELECT pg_reload_conf();"])
-    ).terminated(30).ensure_success();
+    rt.signal(app.deployment("postgres"), "SIGHUP");
 };
 
 // ── Install ───────────────────────────────────────────────────────────────────
@@ -423,13 +418,14 @@ app.on_action("vacuum", |rt, _param| {
 }, #{ description: "VACUUM ANALYZE all databases" })
     .on_schedule("H 4 * * *");
 
-// pg_dumpall of the whole cluster into the given output volume. Structured
-// with the reserved `_volume` / `_filename` params so it plays nicely with
-// future backup-app wiring; operators can also invoke it against any external
-// volume they pass in.
+// pg_dumpall of the whole cluster into the given output site volume. The
+// `output` param is declared with `kind: "volume"`, which prompts the
+// runtime to ask the operator (UI dropdown / CLI) for a site volume, mount
+// it operation-scoped, and inject the binding name as
+// `param["output_volume"]` so the closure can pass it to
+// `app.external_volume`.
 app.on_action("dump", |rt, param| {
     let output = app.external_volume(param["output_volume"]);
-    let filename = if "output_filename" in param { param["output_filename"] } else { "postgres.sql" };
     rt.start(app.job()
         .image(pg_image.call())
         .writable_rootfs()
@@ -437,9 +433,17 @@ app.on_action("dump", |rt, param| {
         .mount("/output", output)
         .env("PGHOST", "/var/run/postgresql")
         .env("PGUSER", "postgres")
-        .command(["sh", "-c", `pg_dumpall --clean --if-exists > '/output/${filename}'`])
+        .command(["sh", "-c", "pg_dumpall --clean --if-exists > /output/postgres.sql"])
     ).terminated_eventually().ensure_success();
-}, #{ description: "pg_dumpall the cluster into an external volume" });
+}, #{
+    description: "pg_dumpall the cluster into a chosen site volume (postgres.sql)",
+    params: #{
+        output: #{
+            kind: "volume",
+            description: "Site volume that receives postgres.sql",
+        },
+    },
+});
 
 app.on_action("create-database", |rt, param| {
     let dbname = param["name"];
