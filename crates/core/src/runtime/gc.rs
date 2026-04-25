@@ -466,8 +466,11 @@ mod tests {
     }
 
     // r[verify gc.instances]
+    // r[verify gc.instances]
+    // r[verify gc.instances.atomic]
     #[test]
     fn gc_unscheduled_instances_removes_old() {
+        ensure_faults_init();
         let db = Db::open_in_memory().unwrap();
 
         let unscheduled = dep("app", "old-web");
@@ -484,6 +487,19 @@ mod tests {
             &unscheduled,
             "container_removed",
             &serde_json::json!({}),
+        )
+        .unwrap();
+        // File a fault tied to this instance so we exercise the full atomic
+        // sweep across observations + faults + registry.
+        let inst_hex = unscheduled.id.to_hex();
+        crate::runtime::faults::file_fault(
+            &db,
+            &app_name("app"),
+            Some("Deployment"),
+            Some("old-web"),
+            Some(&inst_hex),
+            "health_check_failed",
+            "stale",
         )
         .unwrap();
 
@@ -518,6 +534,16 @@ mod tests {
             )
             .unwrap();
         assert_eq!(obs_remaining, 0);
+
+        let fault_remaining: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM faults WHERE instance_id = ?1",
+                params![unscheduled.id.to_hex()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(fault_remaining, 0);
     }
 
     #[test]

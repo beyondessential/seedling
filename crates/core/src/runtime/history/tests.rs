@@ -612,3 +612,67 @@ fn action_log_scoped_to_operation_id() {
     assert_eq!(loaded2.len(), 1);
     assert!(matches!(loaded2[0].call_kind, CallKind::Stop));
 }
+
+fn ensure_faults_init() {
+    use std::sync::Once;
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::runtime::faults::init(seedling_protocol::events::new_event_channel());
+        }));
+    });
+}
+
+// r[verify gc.instances.atomic]
+#[test]
+fn delete_instance_clears_observations_and_faults_atomically() {
+    ensure_faults_init();
+    let db = Db::open_in_memory().unwrap();
+    let inst = dep("app", "web");
+
+    insert_instance(&db, &inst).unwrap();
+    insert_observation(&db, &inst, "container_running", &serde_json::json!({})).unwrap();
+    insert_observation(&db, &inst, "container_removed", &serde_json::json!({})).unwrap();
+    let inst_hex = inst.id.to_hex();
+    crate::runtime::faults::file_fault(
+        &db,
+        &app_name("app"),
+        Some("Deployment"),
+        Some("web"),
+        Some(&inst_hex),
+        "health_check_failed",
+        "boom",
+    )
+    .unwrap();
+
+    delete_instance(&db, inst.id).unwrap();
+
+    let registry_count: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM resource_instances WHERE id = ?1",
+            [&inst_hex],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let obs_count: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM world_observations WHERE instance_id = ?1",
+            [&inst_hex],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let fault_count: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM faults WHERE instance_id = ?1",
+            [&inst_hex],
+            |r| r.get(0),
+        )
+        .unwrap();
+
+    assert_eq!(registry_count, 0, "registry row deleted");
+    assert_eq!(obs_count, 0, "observations deleted");
+    assert_eq!(fault_count, 0, "faults deleted");
+}
