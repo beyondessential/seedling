@@ -275,6 +275,7 @@ pub(crate) async fn open_shell_session(
                     // Shell sessions don't participate in operator-initiated
                     // cancellation; an inert token never fires.
                     cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+                    container_signaler: None,
                 },
                 &mut scope,
             );

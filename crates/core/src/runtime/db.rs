@@ -96,6 +96,8 @@ const SQL_V38: &str = include_str!("db/migrations/v38.sql");
 const SQL_V39: &str = include_str!("db/migrations/v39.sql");
 // r[impl service.site]
 const SQL_V40: &str = include_str!("db/migrations/v40.sql");
+// r[impl rt.signal]
+const SQL_V41: &str = include_str!("db/migrations/v41.sql");
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -291,6 +293,11 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 40,
         sql: SQL_V40,
+        custom_run: None,
+    },
+    Migration {
+        version: 41,
+        sql: SQL_V41,
         custom_run: None,
     },
 ];

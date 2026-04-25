@@ -371,8 +371,8 @@ pub fn insert_action_log_entry(
         "INSERT OR REPLACE INTO action_log
              (recorded_at, operation_id, app, action_name, call_index, call_kind,
               resources, barrier_state, barrier_deadline, barrier_satisfied,
-              barrier_started_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+              barrier_started_at, extra)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             now_ms(),
             operation_id.0,
@@ -385,6 +385,7 @@ pub fn insert_action_log_entry(
             barrier_deadline,
             barrier_satisfied,
             barrier_started_at,
+            entry.extra,
         ],
     )?;
     Ok(())
@@ -397,7 +398,7 @@ pub fn load_action_log(
 ) -> rusqlite::Result<Vec<ActionLogEntry>> {
     let mut stmt = db.conn.prepare(
         "SELECT call_index, call_kind, resources, barrier_state, barrier_deadline,
-                barrier_satisfied, barrier_started_at
+                barrier_satisfied, barrier_started_at, extra
          FROM action_log
          WHERE operation_id = ?1
          ORDER BY call_index ASC",
@@ -411,6 +412,7 @@ pub fn load_action_log(
         let barrier_deadline: Option<i64> = row.get(4)?;
         let barrier_satisfied: Option<i32> = row.get(5)?;
         let barrier_started_at: Option<i64> = row.get(6)?;
+        let extra: Option<String> = row.get(7)?;
 
         let call_kind = match call_kind_str.as_str() {
             "Start" => CallKind::Start,
@@ -418,6 +420,7 @@ pub fn load_action_log(
             "Query" => CallKind::Query,
             "WarmCerts" => CallKind::WarmCerts,
             "WarmImages" => CallKind::WarmImages,
+            "Signal" => CallKind::Signal,
             other => {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
                     1,
@@ -454,6 +457,7 @@ pub fn load_action_log(
             call_kind,
             resources,
             barrier,
+            extra,
         })
     })?;
 

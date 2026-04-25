@@ -328,6 +328,7 @@ fn run_action_with_volumes(
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
         },
         &mut scope,
     );
@@ -580,6 +581,7 @@ fn external_volume_in_action_picks_up_operation_binding() {
             cipher: None,
             operation_volume_bindings: bindings,
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
         },
         &mut scope,
     );
@@ -744,6 +746,7 @@ fn frozen_static_volume_cannot_be_modified_in_action() {
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
         },
         &mut scope,
     );

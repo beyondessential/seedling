@@ -83,6 +83,7 @@ fn barrier_satisfied_on_first_pass() {
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
         },
         &mut scope,
     );
@@ -130,6 +131,7 @@ fn barrier_suspends_then_resumes() {
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
         },
         &mut scope,
     );
@@ -160,6 +162,7 @@ fn barrier_suspends_then_resumes() {
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
         },
         &mut scope,
     );
@@ -209,6 +212,7 @@ fn sequential_barriers() {
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
         },
         &mut scope,
     );
@@ -238,6 +242,7 @@ fn sequential_barriers() {
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
         },
         &mut scope,
     );
@@ -267,6 +272,7 @@ fn sequential_barriers() {
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
         },
         &mut scope,
     );
@@ -326,6 +332,7 @@ fn barrier_succeeds_after_deadline_when_oracle_reached() {
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
         },
         &mut scope,
     );
@@ -368,6 +375,7 @@ fn barrier_succeeds_after_deadline_when_oracle_reached() {
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
         },
         &mut scope,
     );
@@ -416,6 +424,7 @@ fn barrier_deadline_zero_expires_on_second_pass() {
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
         },
         &mut scope,
     );
@@ -443,6 +452,7 @@ fn barrier_deadline_zero_expires_on_second_pass() {
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
         },
         &mut scope,
     );
@@ -493,6 +503,7 @@ fn replay_idempotency() {
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
         },
         &mut scope,
     );
@@ -522,6 +533,7 @@ fn replay_idempotency() {
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
         },
         &mut scope,
     );
@@ -585,6 +597,7 @@ fn rt_stop_acts_as_barrier() {
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
         },
         &mut scope,
     );
@@ -614,6 +627,7 @@ fn rt_stop_acts_as_barrier() {
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
         },
         &mut scope,
     );
@@ -663,6 +677,7 @@ fn warm_certs_barrier_uses_cert_oracle() {
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
         },
         &mut scope,
     );
@@ -711,6 +726,7 @@ fn warm_certs_barrier_suspends_when_cert_not_valid() {
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
         },
         &mut scope,
     );
@@ -762,6 +778,7 @@ fn warm_images_barrier_uses_image_oracle() {
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
         },
         &mut scope,
     );
@@ -809,6 +826,7 @@ fn warm_images_barrier_suspends_when_image_absent() {
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
         },
         &mut scope,
     );
@@ -877,6 +895,7 @@ fn terminated_eventually_never_times_out() {
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
         },
         &mut scope,
     );
@@ -927,6 +946,7 @@ fn terminated_eventually_never_times_out() {
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
         },
         &mut scope,
     );
@@ -976,6 +996,7 @@ fn cancel_aborts_with_cancelled_result() {
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token,
+            container_signaler: None,
         },
         &mut scope,
     );
@@ -1054,6 +1075,7 @@ fn rt_stop_deadline_is_enforced() {
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
         },
         &mut scope,
     );
@@ -1081,6 +1103,7 @@ fn rt_stop_deadline_is_enforced() {
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
         },
         &mut scope,
     );

@@ -261,6 +261,10 @@ pub struct OperationContext<'a, W: WorldStateOracle + 'static> {
     /// deadline.
     // r[impl operation.cancel]
     pub cancel_token: Arc<CancelToken>,
+    /// Hook for `rt.signal()`. `None` in language-only test contexts where
+    /// no real container runtime exists.
+    // r[impl rt.signal]
+    pub container_signaler: Option<std::sync::Arc<dyn crate::runtime::barrier::ContainerSignaler>>,
 }
 
 /// The `log` carries committed entries across calls; pass the same `log`
@@ -291,6 +295,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         cipher,
         operation_volume_bindings,
         cancel_token,
+        container_signaler,
     } = op;
 
     // Save the operation ID string before it is moved into the replay context.
@@ -312,6 +317,8 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         world as Arc<dyn WorldStateOracle>,
         Arc::clone(&cancel_token),
     )));
+    // r[impl rt.signal]
+    ctx.lock().container_signaler = container_signaler;
 
     // Clear the thread-local barrier-hit flag at the start of each pass.
     clear_barrier_hit();

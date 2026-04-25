@@ -227,6 +227,7 @@ mod tests {
             call_kind: CallKind::Start,
             resources: vec![dep("app", "web")],
             barrier: None,
+            extra: None,
         }
     }
 

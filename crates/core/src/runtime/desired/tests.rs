@@ -72,6 +72,7 @@ fn log_entry(call_kind: CallKind, resources: Vec<ResourceInstance>) -> ActionLog
         call_kind,
         resources,
         barrier: None,
+        extra: None,
     }
 }
 

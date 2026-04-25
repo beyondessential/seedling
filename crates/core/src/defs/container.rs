@@ -695,25 +695,32 @@ impl ContainerDef {
 
 /// Validate and normalise a stop signal name. Accepts the canonical
 /// uppercase `SIGFOO` form or its bare `FOO` shorthand; returns the
-/// canonical `SIGFOO` form. Rejects anything else with a clear message
-/// rather than silently passing through to systemd, which accepts
-/// numeric forms but not arbitrary strings.
-fn normalise_signal(input: &str) -> Result<String, Box<EvalAltResult>> {
+/// canonical `SIGFOO` form on success. Returns `None` for any
+/// unrecognised name. Used by both the `stop_signal` BSL builder and
+/// `rt.signal()` to keep signal name handling consistent across the
+/// runtime.
+pub fn canonicalise_signal_name(input: &str) -> Option<String> {
     const KNOWN: &[&str] = &[
         "HUP", "INT", "QUIT", "ILL", "TRAP", "ABRT", "BUS", "FPE", "KILL", "USR1", "SEGV", "USR2",
         "PIPE", "ALRM", "TERM", "STKFLT", "CHLD", "CONT", "STOP", "TSTP", "TTIN", "TTOU", "URG",
-        "XCPU", "XFSZ", "VTALRM", "PROF", "WINCH", "IO", "PWR", "SYS",
+        "XCPU", "XFSZ", "VTALRM", "PROF", "WINCH", "IO", "POLL", "PWR", "SYS",
     ];
     let trimmed = input.trim();
     let upper = trimmed.to_ascii_uppercase();
     let bare = upper.strip_prefix("SIG").unwrap_or(&upper);
     if !KNOWN.contains(&bare) {
-        return Err(format!(
+        return None;
+    }
+    Some(format!("SIG{bare}"))
+}
+
+fn normalise_signal(input: &str) -> Result<String, Box<EvalAltResult>> {
+    canonicalise_signal_name(input).ok_or_else(|| {
+        format!(
             "stop_signal {input:?} is not a recognised POSIX signal name; expected something like \"SIGINT\" or \"INT\""
         )
-        .into());
-    }
-    Ok(format!("SIG{bare}"))
+        .into()
+    })
 }
 
 #[cfg(test)]

@@ -448,6 +448,25 @@ impl PodmanRuntime {
             .collect())
     }
 
+    // r[impl rt.signal]
+    async fn signal_container_impl(&self, name: &str, signal: &str) -> Result<bool, PodmanError> {
+        use podman_rest_client::v5::params::ContainerKillLibpod;
+        let params = ContainerKillLibpod {
+            signal: Some(signal),
+        };
+        match self
+            .client
+            .v5()
+            .containers()
+            .container_kill_libpod(name, Some(params))
+            .await
+        {
+            Ok(_) => Ok(true),
+            Err(ref e) if is_not_found(e) => Ok(false),
+            Err(e) => Err(map_api_err(e)),
+        }
+    }
+
     async fn remove_container_impl(&self, name: &str, force: bool) -> Result<(), PodmanError> {
         let params = ContainerDeleteLibpod {
             force: Some(force),
@@ -956,5 +975,17 @@ impl ContainerRuntime for PodmanRuntime {
 
     fn exec<'a>(&'a self, spec: ContainerSpec) -> BoxFuture<'a, Result<ExecHandle, BoxError>> {
         Box::pin(async move { self.exec_impl(spec).await.map_err(Into::into) })
+    }
+
+    fn signal_container<'a>(
+        &'a self,
+        name: &'a str,
+        signal: &'a str,
+    ) -> BoxFuture<'a, Result<bool, BoxError>> {
+        Box::pin(async move {
+            self.signal_container_impl(name, signal)
+                .await
+                .map_err(Into::into)
+        })
     }
 }

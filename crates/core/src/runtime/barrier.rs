@@ -55,6 +55,11 @@ pub enum CallKind {
     /// at call time, which is what the reconciler and barrier consult.
     // r[impl actuate.image.warm]
     WarmImages,
+    /// `rt.signal(...)` — deliver a POSIX signal to one or more container
+    /// instances. The signal name is stored separately on the entry; on
+    /// replay, an already-committed signal is not re-sent.
+    // r[impl rt.signal]
+    Signal,
 }
 
 // r[impl history.action-log.entries]
@@ -64,6 +69,11 @@ pub struct ActionLogEntry {
     pub call_kind: CallKind,
     pub resources: Vec<ResourceInstance>,
     pub barrier: Option<BarrierRecord>,
+    /// Per-call_kind metadata. For `CallKind::Signal` this carries the
+    /// canonical signal name (e.g. `"SIGHUP"`). Other kinds leave it `None`.
+    // r[impl rt.signal]
+    #[serde(default)]
+    pub extra: Option<String>,
 }
 
 // r[impl barrier.deadline]
@@ -108,6 +118,23 @@ pub struct ReplayContext {
     /// inspect it directly — it uses [`probe_mode`](Self::probe_mode) instead.
     // r[impl image.discover]
     pub probe_images: Option<Arc<Mutex<std::collections::BTreeSet<String>>>>,
+    /// Hook for `rt.signal()`. The runtime calls this synchronously to deliver
+    /// a POSIX signal to a running container. `None` in test / stub contexts
+    /// where no real container runtime is present.
+    // r[impl rt.signal]
+    pub container_signaler: Option<Arc<dyn ContainerSignaler>>,
+}
+
+/// Synchronous side-effect handle the BSL `rt.signal` call uses to actually
+/// deliver a signal to a running container. Implemented in the operation
+/// loop (`oi/handler/actions/lifecycle.rs`) on top of the system actuator;
+/// stubbed out in language-only tests where no real runtime exists.
+// r[impl rt.signal]
+pub trait ContainerSignaler: Send + Sync {
+    /// Deliver `signal` to the named container's PID 1.
+    /// Returns `Ok(true)` when the signal was sent, `Ok(false)` when the
+    /// container was already gone (no error condition for replay safety).
+    fn signal(&self, container_name: &str, signal: &str) -> Result<bool, String>;
 }
 
 impl fmt::Debug for ReplayContext {
@@ -151,6 +178,7 @@ impl ReplayContext {
             dynamic_defs: std::collections::HashMap::new(),
             anon_counter: 0,
             probe_images: None,
+            container_signaler: None,
         }
     }
 

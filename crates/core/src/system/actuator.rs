@@ -402,6 +402,24 @@ impl Actuator {
         }
     }
 
+    // r[impl rt.signal]
+    /// Send a POSIX signal to the running container's PID 1. Used to wire
+    /// `rt.signal` in the BSL runtime to the underlying container runtime.
+    /// Non-fatal if the container is already gone — caller can decide whether
+    /// that constitutes failure.
+    #[tracing::instrument(skip_all, fields(instance = %instance.display_name, signal))]
+    pub async fn signal(
+        &self,
+        instance: &ResourceInstance,
+        signal: &str,
+    ) -> Result<bool, ActuateError> {
+        self.driver
+            .container
+            .signal_container(&instance.display_name, signal)
+            .await
+            .map_err(|e| ContainerSnafu.into_error(e))
+    }
+
     // r[impl actuate.deployment.stop]
     // r[impl actuate.volume.stop]
     /// Stop and remove all primitives for this instance.

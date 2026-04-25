@@ -4,6 +4,7 @@ use rhai::{CustomType, Dynamic, EvalAltResult, Map, TypeBuilder};
 use seedling_protocol::names::AppName;
 
 use crate::defs::app::AppDef;
+use crate::defs::container::canonicalise_signal_name;
 use crate::defs::volume::OperationVolumeBinding;
 use crate::runtime::barrier::{
     ActionLogEntry, BarrierCondition, BarrierRecord, CallKind, SharedContext,
@@ -648,6 +649,7 @@ impl RuntimeInstance {
                     call_kind: CallKind::Start,
                     resources: resources.clone(),
                     barrier: None,
+                    extra: None,
                 });
                 g.call_index += 1;
             }
@@ -730,6 +732,7 @@ impl RuntimeInstance {
                     call_kind: CallKind::WarmCerts,
                     resources: resources.clone(),
                     barrier: None,
+                    extra: None,
                 });
                 g.call_index += 1;
             }
@@ -820,6 +823,7 @@ impl RuntimeInstance {
                     call_kind: CallKind::WarmImages,
                     resources: resources.clone(),
                     barrier: None,
+                    extra: None,
                 });
                 g.call_index += 1;
             }
@@ -830,6 +834,130 @@ impl RuntimeInstance {
             resources,
             warm: WarmMode::Images(refs),
         })
+    }
+
+    // l[impl rt.signal]
+    // r[impl rt.signal]
+    /// Deliver a POSIX signal to one or more running container instances.
+    /// Replay-safe: an entry committed in a prior pass is skipped on the
+    /// next replay so the signal is sent at most once. The actual signal
+    /// delivery goes through the operation's `container_signaler` hook
+    /// (set by the operation loop in `oi/handler/actions/lifecycle.rs`),
+    /// which calls into the system actuator.
+    fn do_signal(
+        &mut self,
+        resources: Vec<ResourceInstance>,
+        signal: &str,
+    ) -> Result<(), Box<EvalAltResult>> {
+        use crate::defs::resource::ResourceKind;
+        let canonical = canonicalise_signal_name(signal).ok_or_else(|| {
+            Box::<EvalAltResult>::from(format!(
+                "rt.signal: unknown signal {signal:?}; expected something like \"SIGHUP\" or \"HUP\""
+            ))
+        })?;
+
+        if resources.is_empty() {
+            return Err(
+                format!("rt.signal: target resolved to no instances (signal={canonical})").into(),
+            );
+        }
+
+        // Expand each named container target to all of its currently-existing
+        // instances so a scaled deployment receives the signal on every
+        // replica, not the placeholder singleton that extract_instances
+        // returns. Anonymous targets (e.g. a Job created inside an action
+        // closure) keep their deterministic UUID.
+        let mut expanded: Vec<ResourceInstance> = Vec::new();
+        for r in &resources {
+            let needs_lookup =
+                matches!(r.kind, ResourceKind::Deployment | ResourceKind::Job) && r.name.is_some();
+            if needs_lookup {
+                match self
+                    .registry
+                    .find_all_instances(&r.app, r.kind, r.name.as_deref())
+                {
+                    Ok(found) if !found.is_empty() => {
+                        for inst in found {
+                            if !expanded.iter().any(|e| e.id == inst.id) {
+                                expanded.push(inst);
+                            }
+                        }
+                        continue;
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!(
+                            target = %r.display_name,
+                            "rt.signal: registry lookup failed; falling back to literal target: {e}",
+                        );
+                    }
+                }
+            }
+            if !expanded.iter().any(|e| e.id == r.id) {
+                expanded.push(r.clone());
+            }
+        }
+
+        if let Some(ctx) = &self.ctx
+            && ctx.lock().probe_mode()
+        {
+            return Ok(());
+        }
+
+        if is_barrier_hit_pending()
+            && let Some(ctx) = &self.ctx
+            && let Some(cond) = ctx.lock().pending_barrier.clone()
+        {
+            return Err(make_barrier_error(cond));
+        }
+
+        let ctx = match &self.ctx {
+            None => return Ok(()),
+            Some(c) => Arc::clone(c),
+        };
+
+        {
+            let mut g = ctx.lock();
+            let already = g.committed.iter().any(|e| {
+                matches!(e.call_kind, CallKind::Signal)
+                    && e.resources == expanded
+                    && e.extra.as_deref() == Some(canonical.as_str())
+            });
+            if already {
+                if g.is_replaying() {
+                    g.call_index += 1;
+                }
+                return Ok(());
+            }
+        }
+
+        let signaler = ctx.lock().container_signaler.clone();
+        if let Some(signaler) = signaler {
+            for r in &expanded {
+                if let Err(e) = signaler.signal(&r.display_name, canonical.as_str()) {
+                    tracing::warn!(
+                        instance = %r.display_name,
+                        signal = %canonical,
+                        "rt.signal: signal delivery failed: {e}",
+                    );
+                }
+            }
+        }
+
+        {
+            let mut g = ctx.lock();
+            let idx = g.call_index;
+            g.pending.push(ActionLogEntry {
+                call_index: idx,
+                call_kind: CallKind::Signal,
+                resources: expanded.clone(),
+                barrier: None,
+                extra: Some(canonical.clone()),
+            });
+            g.call_index += 1;
+        }
+
+        Ok(())
     }
 
     // r[impl barrier.replay.rt-stop]
@@ -943,6 +1071,7 @@ impl RuntimeInstance {
                     satisfied: true,
                     started_at_secs: Some(now),
                 }),
+                extra: None,
             });
             Ok(())
         } else {
@@ -963,6 +1092,7 @@ impl RuntimeInstance {
                     satisfied: false,
                     started_at_secs: Some(now),
                 }),
+                extra: None,
             });
             g.pending_barrier = Some(condition.clone());
             drop(g);
@@ -1092,6 +1222,24 @@ impl CustomType for RuntimeInstance {
                         ))
                     })?;
                     this.do_warm_images(resources_with_defs)
+                },
+            )
+            // l[impl rt.signal]
+            .with_fn(
+                "signal",
+                |this: &mut Self,
+                 target: Dynamic,
+                 signal: &str|
+                 -> Result<(), Box<EvalAltResult>> {
+                    let resources_with_defs = this.extract_instances(target).map_err(|e| {
+                        Box::new(EvalAltResult::ErrorRuntime(
+                            e.to_string().into(),
+                            rhai::Position::NONE,
+                        ))
+                    })?;
+                    let resources: Vec<ResourceInstance> =
+                        resources_with_defs.into_iter().map(|(r, _)| r).collect();
+                    this.do_signal(resources, signal)
                 },
             );
     }
@@ -1284,6 +1432,7 @@ impl Started {
                     satisfied: false,
                     started_at_secs: Some(now),
                 }),
+                extra: None,
             });
         }
         g.pending_barrier = Some(condition.clone());
