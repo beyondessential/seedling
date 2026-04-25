@@ -16,7 +16,15 @@ pub struct FiredSchedule {
 
 // r[impl schedule.tick]
 // r[impl schedule.fire]
+// r[impl schedule.fire.installed-only]
 // r[impl schedule.catch-up]
+///
+/// `app_generations` returns `Some(generation)` for apps in the `Installed`
+/// phase and `None` for any other state (NotInstalled, Installing,
+/// Uninstalling, or unknown app). This is the gate for
+/// `r[schedule.fire.installed-only]`: a schedule is only fired when the
+/// callback returns a generation, so that stuck install attempts and
+/// in-progress uninstalls don't keep monopolising the scheduler slot.
 pub fn check_due_schedules(
     db: &Db,
     scheduler: &mut Scheduler,
@@ -76,7 +84,15 @@ pub fn check_due_schedules(
         // on fire, find_next() on the next tick returns the next future
         // boundary, so we do not fire repeatedly for older missed windows.
         if next_fire <= now {
-            let generation = app_generations(&row.app).unwrap_or(0);
+            // r[impl schedule.fire.installed-only]
+            let Some(generation) = app_generations(&row.app) else {
+                tracing::debug!(
+                    app = %row.app,
+                    action = %row.action,
+                    "schedule fire skipped (app is not in Installed phase)"
+                );
+                continue;
+            };
             let result = scheduler.request(
                 &row.app,
                 &row.action,

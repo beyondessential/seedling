@@ -909,12 +909,24 @@ async fn main() {
                 // Snapshot generations before acquiring the DB to maintain
                 // consistent lock order (registry → db) across the codebase.
                 if let Some(now) = schedule_ticker.maybe_tick() {
+                    // r[impl schedule.fire.installed-only]
+                    // Only Installed apps' schedules may fire. Apps still
+                    // installing, uninstalling, or never installed are
+                    // excluded — otherwise a permanently-failing install
+                    // whose schedule keeps re-acquiring the scheduler slot
+                    // would block operator updates.
                     let app_generations: std::collections::HashMap<AppName, u64> = {
                         let reg = schedule_registry.read();
                         reg.list()
                             .into_iter()
                             .filter_map(|(name, _)| {
-                                reg.get(name.as_str()).map(|e| (name, e.current_generation))
+                                let entry = reg.get(name.as_str())?;
+                                let phase = entry.phase.lock().clone();
+                                if matches!(phase, seedling_core::runtime::AppPhase::Installed) {
+                                    Some((name, entry.current_generation))
+                                } else {
+                                    None
+                                }
                             })
                             .collect()
                     };
