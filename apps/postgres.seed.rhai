@@ -418,14 +418,42 @@ app.on_action("vacuum", |rt, _param| {
 }, #{ description: "VACUUM ANALYZE all databases" })
     .on_schedule("H 4 * * *");
 
-// pg_dumpall of the whole cluster into the given output site volume. The
-// `output` param is declared with `kind: "volume"`, which prompts the
-// runtime to ask the operator (UI dropdown / CLI) for a site volume, mount
-// it operation-scoped, and inject the binding name as
-// `param["output_volume"]` so the closure can pass it to
-// `app.external_volume`.
+// Dump the cluster into the given output site volume. Format follows
+// pg_dump: `sql` (default) writes a single postgres.sql via pg_dumpall;
+// the other formats run pg_dumpall --globals-only into globals.sql and
+// then pg_dump per database in the requested format alongside it.
+// The `output` param uses `kind: "volume"` so the runtime asks the
+// operator for a site volume, mounts it operation-scoped, and injects
+// its binding name as `param["output_volume"]` for the closure to pass
+// to `app.external_volume`.
 app.on_action("dump", |rt, param| {
     let output = app.external_volume(param["output_volume"]);
+    let format = if "format" in param && param["format"] != "" {
+        param["format"]
+    } else {
+        "sql"
+    };
+
+    let cmd = if format == "sql" {
+        "pg_dumpall --clean --if-exists > /output/postgres.sql"
+    } else if format == "custom" || format == "directory" || format == "tar" {
+        let pg_flag = if format == "custom" { "-Fc" }
+            else if format == "directory" { "-Fd" }
+            else { "-Ft" };
+        let suffix = if format == "custom" { ".dump" }
+            else if format == "tar" { ".tar" }
+            else { "" };
+        `set -e
+pg_dumpall --globals-only --clean --if-exists > /output/globals.sql
+psql -At -d postgres -c "SELECT datname FROM pg_database WHERE datistemplate = false AND datname <> 'postgres'" |
+while IFS= read -r db; do
+  [ -n "$db" ] || continue
+  pg_dump ${pg_flag} --clean --if-exists "$db" -f "/output/$db${suffix}"
+done`
+    } else {
+        throw `unknown dump format "${format}"; expected one of: sql, custom, directory, tar`
+    };
+
     rt.start(app.job()
         .image(pg_image.call())
         .writable_rootfs()
@@ -433,14 +461,20 @@ app.on_action("dump", |rt, param| {
         .mount("/output", output)
         .env("PGHOST", "/var/run/postgresql")
         .env("PGUSER", "postgres")
-        .command(["sh", "-c", "pg_dumpall --clean --if-exists > /output/postgres.sql"])
+        .command(["sh", "-c", cmd])
     ).terminated_eventually().ensure_success();
 }, #{
-    description: "pg_dumpall the cluster into a chosen site volume (into postgres.sql)",
+    description: "Dump the cluster into a chosen site volume (sql / custom / directory / tar)",
     params: #{
         output: #{
             kind: "volume",
-            description: "Site volume that receives postgres.sql",
+            description: "Site volume that receives the dump",
+        },
+        format: #{
+            kind: "text",
+            required: false,
+            default_value: "sql",
+            description: "Dump format: sql (single postgres.sql via pg_dumpall), custom (pg_dump -Fc per database, single file), directory (pg_dump -Fd per database, directory tree), or tar (pg_dump -Ft per database). Non-sql formats also write a globals.sql alongside.",
         },
     },
 });
