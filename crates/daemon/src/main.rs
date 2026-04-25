@@ -1155,6 +1155,23 @@ fn replay_interrupted_operation(
         });
         return;
     }
+    // r[impl schedule.fire.installed-only]
+    // A non-install operation only makes sense on an Installed app. If a
+    // crash interrupted a scheduled action that fired in a window before the
+    // installed-phase gate landed, the persisted row would otherwise replay
+    // forever, monopolising the scheduler slot and blocking script updates.
+    if !is_install && !matches!(phase, AppPhase::Installed) {
+        tracing::warn!(
+            app = %app_name,
+            ?phase,
+            action = %action_name,
+            "interrupted non-install operation but app is not Installed; clearing row"
+        );
+        state.db.call(|db| {
+            let _ = clear_current_operation(db);
+        });
+        return;
+    }
 
     // Register with the scheduler so concurrency gates report "in progress"
     // for the duration of the replay.
