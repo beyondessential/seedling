@@ -324,17 +324,18 @@ install -m 0755 bestool-psql-audit /app/bin/bin/bestool-psql-audit
 // invocation — the postgres cluster catalogues hold the hash afterwards, so
 // the password never lands in a persistent volume.
 //
-// Locale: postgres ≥ 18 uses the builtin `unicode_fast` locale, which gives
-// proper Unicode case-folding without paying for libc's per-comparison
-// strcoll() round-trip; older majors fall back to the C locale (byte-wise
-// collation) since `unicode_fast` only exists from 18 onwards. UTF-8 is
-// always the cluster encoding regardless of locale.
+// Locale: postgres ≥ 18 uses the builtin `PG_UNICODE_FAST` collation (new
+// in 18), which gives proper Unicode case-folding without paying for
+// libc's per-comparison strcoll() round-trip. Older majors fall back to
+// the C locale (byte-wise collation) since `PG_UNICODE_FAST` doesn't
+// exist before 18. UTF-8 is always the cluster encoding regardless of
+// locale.
 let initdb_if_missing = |rt, major| {
     let pwfile = app.volume().tmpfs();
     pwfile.write("/pwfile", password.value());
 
     let locale_args = if major >= 18 {
-        "--locale-provider=builtin --builtin-locale=unicode_fast"
+        "--locale-provider=builtin --builtin-locale=PG_UNICODE_FAST"
     } else {
         "--locale=C"
     };
@@ -524,19 +525,25 @@ app.on_shell("bash", |_rt, shell, _param| {
         .env("PGHOST", "/var/run/postgresql")
         .env("PGUSER", "postgres")
         .command("bash"));
-}, #{ description: "Bash shell in the PostgreSQL container with socket and data mounted" });
+}, #{ description: "Bash shell in the PostgreSQL context" });
 
-app.on_shell("psql", |_rt, shell, _param| {
+app.on_shell("psql", |_rt, shell, param| {
     shell.attach(app.job()
         .image(pg_image.call())
         .writable_rootfs()
         .mount("/var/run/postgresql", socket)
         .env("PGHOST", "/var/run/postgresql")
-        .env("PGUSER", "postgres")
-        .command(["psql", "-d", "postgres"]));
-}, #{ description: "psql shell connected to the local instance over the unix socket" });
+        .env("PGUSER", param["user"])
+        .command(["psql", "-d", param["database"]]));
+}, #{
+    description: "Native psql shell",
+    params: #{
+        user: #{ kind: "text", default_value: "postgres", description: "PostgreSQL user to connect as" }
+        database: #{ kind: "text", default_value: "postgres", description: "PostgreSQL database to connect to" }
+    }
+});
 
-app.on_shell("bestool-psql", |_rt, shell, _param| {
+app.on_shell("bestool-psql", |_rt, shell, param| {
     shell.attach(app.job()
         .image(pg_image.call())
         .writable_rootfs()
@@ -544,10 +551,14 @@ app.on_shell("bestool-psql", |_rt, shell, _param| {
         .mount("/app/bin", bin)
         .command([
             "/app/bin/bin/bestool-psql",
-            "postgresql:///postgres?host=/var/run/postgresql",
+            `postgres://${param["user"]}@%2Fvar%2Frun%2Fpostgresql/${param["database"]}`,
         ]));
 }, #{
-    description: "bestool-psql shell against the local unix socket",
+    description: "BES psql shell",
+    params: #{
+        user: #{ kind: "text", default_value: "postgres", description: "PostgreSQL user to connect as" }
+        database: #{ kind: "text", default_value: "postgres", description: "PostgreSQL database to connect to" }
+    }
 });
 
 // ── Version changes ───────────────────────────────────────────────────────────
