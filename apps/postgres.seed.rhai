@@ -12,9 +12,9 @@
 //     /data/pgN within the external data volume; old data directories are kept
 //     after upgrade for rollback.
 //
-// The shell actions include a `bestool-psql` shell backed by a binary that
-// `cargo install`s from source at install time (and via a standalone action)
-// into an app volume.
+// The shell actions include a `bestool-psql` shell backed by binaries fetched
+// from the upstream GitHub release at install time (and via a standalone
+// action) into an app volume.
 
 // ── Params ────────────────────────────────────────────────────────────────────
 
@@ -29,7 +29,8 @@ let password = app.param("password")
 
 let bestool_psql_version = app.param("bestool-psql-version")
     .required(false)
-    .description("Specific bestool-psql crate version to install; latest if unset");
+    .default_value("1.4.2")
+    .description("bestool-psql release version to fetch from github.com/beyondessential/bestool");
 
 let max_connections = app.param("max-connections")
     .required(false)
@@ -49,7 +50,7 @@ let extra_config = app.param("extra-config")
 // ── Images ────────────────────────────────────────────────────────────────────
 
 let pg_image = || `docker.io/library/postgres:${version.value()}`;
-let rust_image = "docker.io/library/rust:1-bookworm";
+let fetch_image = "docker.io/library/debian:bookworm-slim";
 
 let postgres_uid = 999;
 
@@ -254,22 +255,36 @@ let render_config = |rt| {
     ).terminated(60).ensure_success();
 };
 
-// Build bestool-psql from crates.io and deposit the binary at
-// /app/bin/bin/bestool-psql inside the `bin` app volume. Compiled against
-// glibc on Debian bookworm, which matches the postgres image family, so the
-// binary runs inside the shell jobs.
+// Fetch the bestool-psql release archive from GitHub and deposit the
+// `bestool-psql` and `bestool-psql-audit` binaries at /app/bin/bin/ inside
+// the `bin` app volume. The gnu/glibc tarball is selected to match the
+// Debian-family postgres image the shell jobs run inside.
 let build_bestool_psql = |rt| {
-    let install_cmd = if bestool_psql_version.is_set() {
-        `cargo install --force --root /app/bin bestool-psql --version '${bestool_psql_version.value()}'`
-    } else {
-        `cargo install --force --root /app/bin bestool-psql`
-    };
     rt.start(app.job()
-        .image(rust_image)
+        .image(fetch_image)
         .writable_rootfs()
+        .env("BESTOOL_PSQL_VERSION", bestool_psql_version.value())
         .mount("/app/bin", bin)
-        .command(["sh", "-c", `mkdir -p /app/bin && ${install_cmd}`])
-    ).terminated(3600).ensure_success();
+        .command(["sh", "-c", `
+set -eu
+apt-get update -qq
+apt-get install -y --no-install-recommends curl ca-certificates zstd
+arch=$(uname -m)
+case "$arch" in
+  x86_64) target=x86_64-unknown-linux-gnu ;;
+  aarch64) target=aarch64-unknown-linux-gnu ;;
+  *) echo "unsupported architecture: $arch" >&2; exit 1 ;;
+esac
+v=$BESTOOL_PSQL_VERSION
+url="https://github.com/beyondessential/bestool/releases/download/bestool-psql-v$v/bestool-psql-$v-$target.tar.zst"
+mkdir -p /app/bin/bin
+cd /tmp
+curl -fL --retry 3 -o bp.tar.zst "$url"
+tar --zstd -xf bp.tar.zst
+install -m 0755 bestool-psql /app/bin/bin/bestool-psql
+install -m 0755 bestool-psql-audit /app/bin/bin/bestool-psql-audit
+`])
+    ).terminated(600).ensure_success();
 };
 
 // Initdb the data directory for the given major version if it doesn't yet
@@ -343,7 +358,7 @@ app.on_action("restart", |rt, _param| {
 
 app.on_action("build-bestool-psql", |rt, _param| {
     build_bestool_psql.call(rt);
-}, #{ description: "Rebuild bestool-psql from source into the app bin volume" });
+}, #{ description: "Re-fetch bestool-psql binaries into the app bin volume" });
 
 app.on_action("status", |rt, _param| {
     rt.start(app.job()
@@ -563,6 +578,13 @@ db_type.on_change(|rt, _old| {
 extra_config.on_change(|rt, _old| {
     render_config.call(rt);
     rt.restart(app.deployment("postgres"));
+});
+
+// Re-fetch the bestool-psql binaries on version change. No deployment
+// restart needed: the binaries live in an app volume and are only invoked
+// from on-demand shell jobs.
+bestool_psql_version.on_change(|rt, _old| {
+    build_bestool_psql.call(rt);
 });
 
 // ── Password rotation ────────────────────────────────────────────────────────
