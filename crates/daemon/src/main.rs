@@ -569,6 +569,30 @@ async fn main() {
         }
     }
 
+    // r[impl actuate.volume.tmpfs]
+    // Reset the tmpfs-volume bind-mount root on startup. /run is tmpfs so
+    // contents are already gone after a host reboot, but a daemon restart
+    // alone leaves the directory tree intact — clear it so each fresh run
+    // starts from an empty slate, matching the spec's "tmpfs contents do not
+    // survive" guarantee.
+    {
+        let tmpfs_root = std::path::Path::new(seedling_core::system::actuator::TMPFS_VOLUMES_DIR);
+        if tmpfs_root.exists()
+            && let Err(e) = std::fs::remove_dir_all(tmpfs_root)
+        {
+            tracing::warn!(
+                path = %tmpfs_root.display(),
+                "failed to clear tmpfs-volumes root on startup: {e}"
+            );
+        }
+        if let Err(e) = std::fs::create_dir_all(tmpfs_root) {
+            tracing::warn!(
+                path = %tmpfs_root.display(),
+                "failed to (re)create tmpfs-volumes root on startup: {e}"
+            );
+        }
+    }
+
     // Podman-level scan for orphaned shell-session containers.
     //
     // Shell sessions (both regular shells labelled "seedling.session=shell"

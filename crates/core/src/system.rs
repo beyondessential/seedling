@@ -27,7 +27,7 @@ pub mod resolver;
 pub(crate) mod systemd;
 pub mod volume_store;
 
-pub use actuator::{ActuateError, Actuator};
+pub use actuator::{ActuateError, Actuator, TMPFS_VOLUMES_DIR};
 pub use observer::{ObserveError, Observer};
 pub use types::{
     ActiveState, ContainerHealth, ContainerStatus, DataPlaneRules as SystemDataPlaneRules,

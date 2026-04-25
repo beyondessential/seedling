@@ -36,7 +36,8 @@ use crate::{
 mod pod;
 mod pull;
 
-use pod::{collect_container_volumes, map_on_exit};
+pub use pod::TMPFS_VOLUMES_DIR;
+use pod::{ContainerVolume, collect_container_volumes, map_on_exit};
 use pull::PullState;
 
 // ---------------------------------------------------------------------------
@@ -396,7 +397,7 @@ impl Actuator {
     ) -> Result<(), ActuateError> {
         match resource {
             Resource::Deployment(dep) => {
-                let anon_names: Vec<String> = {
+                let anon_volumes: Vec<ContainerVolume> = {
                     let def = dep.def.lock();
                     let pod = def.pod.lock();
                     collect_container_volumes(
@@ -406,13 +407,12 @@ impl Actuator {
                     )
                     .into_iter()
                     .filter(|v| v.remove_on_stop)
-                    .map(|v| v.name)
                     .collect()
                 };
-                self.stop_pod_instance(instance, &anon_names).await
+                self.stop_pod_instance(instance, &anon_volumes).await
             }
             Resource::Job(job) => {
-                let anon_names: Vec<String> = {
+                let anon_volumes: Vec<ContainerVolume> = {
                     let def = job.def.lock();
                     let pod = def.pod.lock();
                     collect_container_volumes(
@@ -422,10 +422,9 @@ impl Actuator {
                     )
                     .into_iter()
                     .filter(|v| v.remove_on_stop)
-                    .map(|v| v.name)
                     .collect()
                 };
-                self.stop_pod_instance(instance, &anon_names).await
+                self.stop_pod_instance(instance, &anon_volumes).await
             }
             Resource::Volume(vol) => {
                 let tmpfs = vol.def.lock().tmpfs;

@@ -59,6 +59,12 @@ pub(crate) struct ContainerVolume {
     pub(super) host_path: Option<std::path::PathBuf>,
 }
 
+/// Host path under which tmpfs volumes are bind-mounted. /run is tmpfs-backed
+/// on systemd hosts, so volumes here satisfy the BSL spec's "RAM-based
+/// filesystem" semantic without seedling having to mount its own tmpfs.
+// r[impl actuate.volume.tmpfs]
+pub const TMPFS_VOLUMES_DIR: &str = "/run/seedling/tmpfs-volumes";
+
 /// Collect all volumes declared in the pod's container mounts.
 ///
 /// Anonymous volumes (`v.name.is_none()`) get a deterministic podman name
@@ -77,21 +83,35 @@ pub(super) fn collect_container_volumes(
         .values()
         .filter_map(|vm| match vm {
             VolumeMount::Volume(v) => {
+                let tmpfs = v.def.lock().tmpfs;
                 let (name, bind_name, remove_on_stop, host_path) = match &v.name {
                     None => {
                         let vol_name = v
                             .anon_id
                             .clone()
                             .expect("anonymous volume must have an anon_id");
-                        (vol_name, None, true, None)
+                        // r[impl actuate.volume.tmpfs]
+                        // Anonymous tmpfs volumes get a host bind path under
+                        // /run so that `volume.write` declarations actually
+                        // propagate into the container — podman's own tmpfs
+                        // volume driver creates a fresh tmpfs at every mount,
+                        // wiping any data we'd written to its host _data path.
+                        let host_path = if tmpfs {
+                            Some(std::path::PathBuf::from(TMPFS_VOLUMES_DIR).join(&vol_name))
+                        } else {
+                            None
+                        };
+                        (vol_name, None, true, host_path)
                     }
                     Some(n) => {
                         let vol_name = VolumeName::for_app(instance.app.as_str(), n.as_str());
-                        let tmpfs = v.def.lock().tmpfs;
-                        let host_path = if !tmpfs {
-                            volumes_dir.map(|dir| dir.join(vol_name.as_str()))
+                        let host_path = if tmpfs {
+                            // r[impl actuate.volume.tmpfs]
+                            Some(
+                                std::path::PathBuf::from(TMPFS_VOLUMES_DIR).join(vol_name.as_str()),
+                            )
                         } else {
-                            None
+                            volumes_dir.map(|dir| dir.join(vol_name.as_str()))
                         };
                         (
                             vol_name.as_str().to_owned(),
@@ -121,10 +141,28 @@ pub(super) fn collect_container_volumes(
 async fn ensure_volumes(driver: &System, volumes: &[ContainerVolume]) -> Result<(), ActuateError> {
     for vol in volumes {
         if let Some(host_path) = &vol.host_path {
-            // r[impl actuate.volume.storage]
-            // Named non-tmpfs volume managed by VolumeStore; ensure the
-            // host directory/subvolume exists.
-            if !host_path.exists() {
+            if vol.def.tmpfs {
+                // r[impl actuate.volume.tmpfs]
+                // Tmpfs volumes are bind-mounted from a tmpfs-backed host
+                // path under /run/seedling/tmpfs-volumes. Ensure the path
+                // exists and re-apply declared writes every time the volume
+                // is materialised — tmpfs contents do not survive a reboot
+                // (the entire /run/seedling/tmpfs-volumes tree is recreated
+                // by the daemon at startup), and even within a single boot
+                // the directory may have been removed when an earlier
+                // container exited.
+                tokio::fs::create_dir_all(host_path)
+                    .await
+                    .context(super::VolumeWriteSnafu {
+                        path: host_path.clone(),
+                    })?;
+                for (path, contents) in &vol.def.writes {
+                    safe_volume_write(host_path, path, contents).await?;
+                }
+            } else if !host_path.exists() {
+                // r[impl actuate.volume.storage]
+                // Named non-tmpfs volume managed by VolumeStore; ensure the
+                // host directory/subvolume exists.
                 let bind_name = vol
                     .bind_name
                     .as_ref()
@@ -135,10 +173,11 @@ async fn ensure_volumes(driver: &System, volumes: &[ContainerVolume]) -> Result<
                     }
                     .into_error(e)
                 })?;
+                // Named volumes only get writes on first creation.
+                // (The reconciler handles their lifecycle.)
             }
-            // Named volumes only get writes on first creation.
-            // (The reconciler handles their lifecycle.)
         } else {
+            // Anonymous non-tmpfs volume: managed by the container runtime.
             let just_created = if !driver
                 .container
                 .volume_exists(&vol.name)
@@ -147,16 +186,14 @@ async fn ensure_volumes(driver: &System, volumes: &[ContainerVolume]) -> Result<
             {
                 driver
                     .container
-                    .create_volume(&vol.name, vol.def.tmpfs)
+                    .create_volume(&vol.name, false)
                     .await
                     .context(ContainerSnafu)?;
                 true
             } else {
                 false
             };
-            // r[impl actuate.volume.tmpfs]
-            let needs_writes = just_created || vol.def.tmpfs;
-            if needs_writes && !vol.def.writes.is_empty() {
+            if just_created && !vol.def.writes.is_empty() {
                 let mountpoint = driver
                     .container
                     .volume_mountpoint(&vol.name)
@@ -323,7 +360,7 @@ impl Actuator {
     pub(crate) async fn stop_pod_instance(
         &self,
         instance: &ResourceInstance,
-        anon_volume_names: &[String],
+        anon_volumes: &[ContainerVolume],
     ) -> Result<(), ActuateError> {
         let unit = unit_name(instance);
 
@@ -375,17 +412,29 @@ impl Actuator {
                 .context(ContainerSnafu)?;
         }
 
-        for vol_name in anon_volume_names {
-            if self
+        for vol in anon_volumes {
+            if let Some(host_path) = &vol.host_path {
+                // Tmpfs anonymous volume: bind-mounted from /run. Remove the
+                // host directory; the tmpfs backing under /run is reclaimed
+                // automatically when the directory empties.
+                if host_path.exists()
+                    && let Err(e) = tokio::fs::remove_dir_all(host_path).await
+                {
+                    tracing::warn!(
+                        path = %host_path.display(),
+                        "failed to remove tmpfs volume directory: {e}"
+                    );
+                }
+            } else if self
                 .driver
                 .container
-                .volume_exists(vol_name)
+                .volume_exists(&vol.name)
                 .await
                 .context(ContainerSnafu)?
             {
                 self.driver
                     .container
-                    .remove_volume(vol_name)
+                    .remove_volume(&vol.name)
                     .await
                     .context(ContainerSnafu)?;
             }

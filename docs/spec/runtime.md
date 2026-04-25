@@ -839,10 +839,11 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > Starting a Volume instance must create the named volume if it does not already exist, then apply any declared file writes to the volume.
 
 > r[actuate.volume.tmpfs]
-> When starting a tmpfs-backed Volume, the runtime must create the volume with the tmpfs driver. Because tmpfs contents do not survive a host reboot, any declared file writes must be re-applied unconditionally — not only when the volume is first created.
+> Tmpfs-backed Volumes (named or anonymous) must be materialised as a host-managed directory under a tmpfs-backed location and bind-mounted into containers. The runtime must not delegate tmpfs storage to the container runtime's own tmpfs volume driver, because such drivers create a fresh tmpfs at every container mount and so silently drop any declared file writes that were applied to the volume's host backing.
+> Because tmpfs contents do not survive a host reboot, any declared file writes must be re-applied unconditionally each time the volume is materialised — not only when the volume is first created.
 
 > r[actuate.volume.storage]
-> Named non-tmpfs volumes are stored as host-managed directories under the data directory and bind-mounted into containers. Anonymous volumes remain managed by the container runtime.
+> Named non-tmpfs volumes are stored as host-managed directories under the data directory and bind-mounted into containers. Anonymous non-tmpfs volumes remain managed by the container runtime.
 
 > r[actuate.volume.btrfs]
 > When the data directory resides on a BTRFS filesystem, named non-tmpfs volumes must be created as BTRFS subvolumes.
