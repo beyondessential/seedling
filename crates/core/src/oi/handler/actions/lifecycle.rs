@@ -445,7 +445,7 @@ async fn cleanup_dynamic_resources(
 /// acquires registry.read(), so registry.write() + db.lock() in either order
 /// deadlocks with it.
 // i[impl event.types]
-fn set_phase_and_persist(state: &OiState, app_name: &AppName, new_phase: AppPhase) {
+pub fn set_phase_and_persist(state: &OiState, app_name: &AppName, new_phase: AppPhase) {
     use crate::oi::handler::apps::{extract_persist_fields, persist_app_fields};
     let phase_str = phase_event_name(&new_phase);
     {

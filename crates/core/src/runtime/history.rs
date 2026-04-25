@@ -599,6 +599,17 @@ pub fn clear_current_operation(db: &Db) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Returns the number of `resource_instances` rows owned by `app`. Used by
+/// the daemon's startup recovery sweep to detect apps left with stale
+/// resources by a previous run.
+pub fn app_resource_instance_count(db: &Db, app: &AppName) -> rusqlite::Result<i64> {
+    db.conn.query_row(
+        "SELECT COUNT(*) FROM resource_instances WHERE app = ?1",
+        params![app],
+        |row| row.get::<_, i64>(0),
+    )
+}
+
 /// Mark the currently-persisted operation row as cancel-requested, provided
 /// its operation_id matches. Returns `Ok(true)` when a row was updated and
 /// `Ok(false)` when no matching row was found (op already completed, or a

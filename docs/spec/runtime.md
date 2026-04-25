@@ -430,6 +430,15 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > The persisted cancel flag is scoped to a single `operation_id`. A later operation — whether resumed after completion of the current one or spawned fresh — must not inherit a cancel from a stale row.
 
+> r[operation.cancel.stuck-recovery]
+> An app whose persisted phase is `Installing` but for which no `current_operation` row matches must be recoverable: the operator must always have a path to an actionable state.
+>
+> The runtime must implement this in two places. On daemon startup, after loading apps and the persisted current operation, any app stuck in `Installing` with no matching current_operation must be transitioned to `Uninstalling`. The cancel-action endpoint must, when called on an app in this state, perform the same transition and return success rather than failing with "no active operation".
+>
+> The transition target is `Uninstalling` rather than `NotInstalled` because a partially-installed app may already have running containers or units from `rt.start()` calls the previous operation made before its interruption. The reconciler skips `NotInstalled` apps, so a direct revert would strand those resources. `Uninstalling` engages the normal teardown path; the reconciler converges to `NotInstalled` once the teardown completes.
+>
+> Stuck states arise from a previous run whose cancel cleanup cleared `current_operation` but whose phase-revert persist was interrupted by crash or restart, or from a daemon that died between persisting the phase and persisting the operation row.
+
 > r[operation.params]
 > When a lifecycle operation is dispatched with params, the params must be persisted alongside the operation record. On replay, the persisted params must be restored and passed to the action closure.
 > Params may contain secret values, so the persisted form must be encrypted with the same cipher used for stored secret params.

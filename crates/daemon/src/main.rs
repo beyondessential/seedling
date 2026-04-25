@@ -881,8 +881,69 @@ async fn main() {
     // r[impl operation.lifecycle.events] r[impl barrier.replay]
     // ---------------------------------------------------------------------------
 
+    let persisted_op_app = persisted_operation.as_ref().map(|op| op.app.clone());
     if let Some(op) = persisted_operation {
         replay_interrupted_operation(Arc::clone(&oi_state), op);
+    }
+
+    // r[impl operation.cancel.stuck-recovery]
+    // Recover apps left in inconsistent state by a previous run:
+    //
+    // 1. `Installing` phase with no matching current_operation. Causes: a
+    //    previous run cancelled an op and cleared current_operation but its
+    //    phase-revert persist was interrupted by crash/restart; or the daemon
+    //    died between persisting the phase and persisting current_operation.
+    //    Without this sweep, the operator can neither cancel nor uninstall
+    //    such an app — both gates check phase.
+    //
+    // 2. `NotInstalled` phase but resource_instances still exist for the
+    //    app. Causes: a previous recovery dropped Installing → NotInstalled
+    //    directly (older code path), or DB-level surgery. The reconciler
+    //    skips NotInstalled apps so the orphaned resources never get torn
+    //    down through normal reconciliation.
+    //
+    // Both stuck apps transition to Uninstalling so the reconciler runs the
+    // teardown loop; it converges to NotInstalled once teardown completes.
+    {
+        use seedling_core::runtime::apps::AppPhase;
+        let stuck: Vec<seedling_protocol::names::AppName> = {
+            let reg = oi_state.registry.read();
+            reg.iter()
+                .filter(|e| {
+                    if persisted_op_app.as_ref() == Some(&e.name) {
+                        return false;
+                    }
+                    let phase = e.phase.lock();
+                    if matches!(*phase, AppPhase::Installing) {
+                        return true;
+                    }
+                    if matches!(*phase, AppPhase::NotInstalled) {
+                        let app_for_query = e.name.clone();
+                        let count: i64 = db.call(move |db| {
+                            seedling_core::runtime::history::app_resource_instance_count(
+                                db,
+                                &app_for_query,
+                            )
+                            .unwrap_or(0)
+                        });
+                        return count > 0;
+                    }
+                    false
+                })
+                .map(|e| e.name.clone())
+                .collect()
+        };
+        for app_name in stuck {
+            tracing::warn!(
+                app = %app_name,
+                "app in stuck state at startup; transitioning to Uninstalling for teardown"
+            );
+            seedling_core::oi::handler::actions::lifecycle::set_phase_and_persist(
+                &oi_state,
+                &app_name,
+                AppPhase::Uninstalling,
+            );
+        }
     }
 
     // Pre-pull the ubuntu image used by volume shells so it is warm before

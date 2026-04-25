@@ -62,9 +62,35 @@ pub(crate) fn cancel_action(state: &Arc<OiState>, params: CancelActionParams) ->
             tracing::info!(app = %app_name, operation_id = %op_id.0, "operation cancel requested");
             Ok(json!({ "cancelled": true }))
         }
-        CancelOutcome::NoActiveOp => Err(OiError::not_found(format!(
-            "no active operation to cancel for app: {app_name}"
-        ))),
+        CancelOutcome::NoActiveOp => {
+            // r[impl operation.cancel.stuck-recovery]
+            // The scheduler has no live operation, but the app's persisted
+            // phase may be Installing from a prior run that crashed or whose
+            // post-cancel cleanup failed to revert the phase. Without a
+            // recovery path the operator can neither cancel nor uninstall
+            // such an app — both gates check phase. Treat cancel as "unstick
+            // the phase": drop into Uninstalling so the reconciler tears
+            // down any half-installed resources (the reconciler skips
+            // NotInstalled apps and would otherwise strand containers and
+            // units that the previous install had already created).
+            let stuck_phase = {
+                let reg = state.registry.read();
+                reg.get(app_name.as_str()).map(|e| e.phase.lock().clone())
+            };
+            match stuck_phase {
+                Some(AppPhase::Installing) => {
+                    lifecycle::set_phase_and_persist(state, app_name, AppPhase::Uninstalling);
+                    tracing::warn!(
+                        app = %app_name,
+                        "no active operation but phase was Installing; transitioning to Uninstalling for teardown"
+                    );
+                    Ok(json!({ "cancelled": true, "recovered_stuck_phase": "installing" }))
+                }
+                _ => Err(OiError::not_found(format!(
+                    "no active operation to cancel for app: {app_name}"
+                ))),
+            }
+        }
     }
 }
 
