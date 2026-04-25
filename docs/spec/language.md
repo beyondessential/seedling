@@ -623,14 +623,16 @@ This is currently the only value.
 > An empty `cmd` must cause the method to throw.
 
 > l[container.healthcheck.on-failure]
-> The `on_failure` response determines what the runtime (via the container runtime) does when the container has been unhealthy long enough to exceed the grace window:
+> The `on_failure` response determines how the runtime reacts to a container that has been unhealthy long enough to exceed the grace window:
 >
-> - `"none"`: no automatic action. The container remains running but is not [Ready](runtime.md#r--lifecycle.container). This is the default.
-> - `"kill"`: send `SIGKILL` to the container. Subsequent behaviour is governed by [on_exit](#l--container.on-exit).
-> - `"restart"`: stop the container cleanly and recreate it.
-> - `"stop"`: stop the container cleanly and leave it stopped for the current reconciliation tick.
+> - `"replace"` (default): the runtime spawns a replacement instance alongside the unhealthy one and lets the unhealthy instance keep serving traffic until the replacement is healthy. When the replacement is healthy, traffic shifts to it and the unhealthy instance is retired. If the replacement also fails to become healthy, the runtime stops the cycle, leaves the original running (degraded), and files a hard fault per [fault.healthcheck-replace-failed](runtime.md#r--fault.healthcheck-replace-failed). See [autonomous.healthcheck-replace](runtime.md#r--autonomous.healthcheck-replace).
+> - `"monitor"`: no automatic replacement. The container is observed and routing decisions account for its health (see [lifecycle.service](runtime.md#r--lifecycle.service)), but the runtime does not spawn replacements. Recovery is operator-driven.
 >
-> `on_failure` does not affect whether the container is considered Ready — an unhealthy container is not Ready regardless of the response.
+> `on_failure` does not affect whether the container is considered Ready — an unhealthy container is not Ready regardless of the policy.
+
+> l[container.healthcheck.deployment-only]
+> A healthcheck must not be declared on a [Job](#l--job.type). One-shot Jobs do not have well-defined replacement semantics, and the `on_failure` policies do not apply to terminating workloads.
+> Calling `.healthcheck(...)` on a Job must throw at BSL evaluation time.
 
 # Pod
 

@@ -192,8 +192,17 @@ Absent specification bugs, anything that is not defined here is either defined i
 > For Service resources:
 >
 > - **Scheduled**: the internal network plumbing exists.
-> - **Ready**: at least one backend is healthy and traffic can be routed.
+> - **Ready**: at least one backend is in the routing pool and traffic can be routed.
 > - **Terminated**: the network plumbing has been torn down.
+
+> r[lifecycle.service.routing-pool]
+> The routing pool for a Service is the set of backend pod instances eligible to receive traffic. The runtime selects the pool from the running backends as follows:
+>
+> - A backend pod enters the pool only after it has been observed [healthy](language.md#l--container.healthcheck) at least once. Pods still in start-period or that have never been observed healthy are not in the pool. A pod with no declared healthcheck is treated as healthy as soon as it is Running.
+> - Once in the pool, a backend that is observed unhealthy is removed from the pool **only if** at least one other backend in the same Service is currently healthy. If no healthy alternative exists, all running backends remain in the pool (degraded mode) and the runtime files a fault per [fault.service-degraded](#r--fault.service-degraded).
+> - When all backends are stopped, the pool is empty and the Service is no longer Ready.
+>
+> The intent is "prefer healthy, fall back to anything running": a single-server platform should never reduce serving capacity below what's currently available, but should always prefer healthy capacity when it exists.
 
 > r[lifecycle.ingress]
 > For Ingress resources:
@@ -645,6 +654,24 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > r[autonomous.scale]
 > When a Deployment resource's observed running instance count differs from its declared scale, the reconciler must start or stop instances to converge on the declared count.
 
+> r[autonomous.healthcheck-replace]
+> When a Deployment instance with [`on_failure: "replace"`](language.md#l--container.healthcheck.on-failure) is observed unhealthy, the reconciler must:
+>
+> - Spawn a replacement instance for the same Deployment so that the unhealthy instance has a healthy sibling-in-progress.
+> - Inhibit any stop of the unhealthy instance while the replacement is starting; the unhealthy instance must keep its routing-pool membership in degraded mode (per [lifecycle.service.routing-pool](#r--lifecycle.service.routing-pool)) until the replacement is observed healthy.
+> - Once the replacement is observed healthy, retire the unhealthy instance through the normal scale-down path so the routing pool converges on the healthy backend.
+>
+> Instances with `on_failure: "monitor"` must not trigger this behaviour. Their routing-pool membership still follows the prefer-healthy rule, but no replacement is spawned.
+
+> r[autonomous.healthcheck-replace.guard]
+> A replacement instance spawned by [autonomous.healthcheck-replace](#r--autonomous.healthcheck-replace) must itself become healthy within its declared `start_period + retries × interval`. If it does not, the reconciler must:
+>
+> - Stop the failed replacement so it does not accumulate a permanent footprint.
+> - File a fault per [fault.healthcheck-replace-failed](#r--fault.healthcheck-replace-failed).
+> - Refuse to spawn further replacements for this Deployment until the AppDef generation changes (i.e. the operator pushes new code) or the operator clears the fault.
+>
+> The original unhealthy instance must continue to run in degraded mode. The runtime must not allow the replace-loop guard to trigger an indefinite churn of replacement attempts; the guard exists precisely to bound the cost of a permanently-broken workload.
+
 > r[scaling.decision]
 > The runtime maintains a persistent record of operator-chosen scale for each Deployment that has been explicitly scaled.
 > When present, this record determines the effective scale used by the reconciler instead of the lower bound default.
@@ -955,6 +982,15 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > The fault is cleared automatically when the instance is next observed as healthy, or when the instance is unscheduled.
 >
 > A container without a declared healthcheck, or one still within its grace window, must not cause this fault to be filed.
+
+> r[fault.healthcheck-replace-failed]
+> When the replace-loop guard ([autonomous.healthcheck-replace.guard](#r--autonomous.healthcheck-replace.guard)) trips for a Deployment, the runtime must file a fault of kind `health_check_replace_failed` associated with that Deployment, identifying the failed replacement instance and the persistently-unhealthy original.
+> The fault is cleared automatically when the AppDef generation changes for the app, or manually by the operator.
+> While the fault is active, the runtime must not spawn further replacements for this Deployment.
+
+> r[fault.service-degraded]
+> When a Service's routing pool contains only unhealthy backends (i.e. the prefer-healthy rule has fallen back to "anything running" per [lifecycle.service.routing-pool](#r--lifecycle.service.routing-pool)), the runtime must file a fault of kind `service_degraded` associated with that Service.
+> The fault is cleared automatically when at least one backend in the pool becomes healthy or when the Service is unscheduled.
 
 > r[fault.surfacing]
 > Faults must be surfaced to operators through the operator interface (defined in a separate spec).
