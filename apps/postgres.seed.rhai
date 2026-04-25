@@ -243,14 +243,20 @@ let render_config = |rt| {
     staging.write("/postgresql.conf", pg_conf_content.call());
     staging.write("/pg_hba.conf", pg_hba_content.call());
 
+    // chown to postgres because seedling writes the staging files as root
+    // with mode 0640 (no per-file ownership/mode in volume.write yet), and
+    // the postgres process inside the deployment container runs as uid 999.
     rt.start(app.job()
         .image(pg_image.call())
         .writable_rootfs()
+        .cap_add("CHOWN")
+        .cap_add("DAC_OVERRIDE")
+        .cap_add("FOWNER")
         .mount("/staging", staging)
         .mount("/config", config_vol)
         .command(["sh", "-c",
-            "install -m 0640 /staging/postgresql.conf /config/postgresql.conf && " +
-            "install -m 0640 /staging/pg_hba.conf /config/pg_hba.conf"
+            `install -m 0640 -o ${postgres_uid} -g ${postgres_uid} /staging/postgresql.conf /config/postgresql.conf && ` +
+            `install -m 0640 -o ${postgres_uid} -g ${postgres_uid} /staging/pg_hba.conf /config/pg_hba.conf`
         ])
     ).terminated(60).ensure_success();
 };
@@ -263,6 +269,14 @@ let build_bestool_psql = |rt| {
     rt.start(app.job()
         .image(fetch_image)
         .writable_rootfs()
+        // apt's privilege-drop dance (setuid to _apt for HTTP fetches,
+        // setgroups, etc.) needs the standard set of POSIX capabilities
+        // that seedling drops by default per actuate.container.hardening.
+        .cap_add("CHOWN")
+        .cap_add("DAC_OVERRIDE")
+        .cap_add("FOWNER")
+        .cap_add("SETUID")
+        .cap_add("SETGID")
         .env("BESTOOL_PSQL_VERSION", bestool_psql_version.value())
         .mount("/app/bin", bin)
         .command(["sh", "-c", `
@@ -311,6 +325,12 @@ if [ ! -f /data/pg${major}/PG_VERSION ]; then
   mkdir -p /data/pg${major}
   chown ${postgres_uid}:${postgres_uid} /data/pg${major}
   chmod 0700 /data/pg${major}
+  # The pwfile is written by seedling as root with mode 0640 (volume.write
+  # has no way to specify per-file ownership/mode yet), so postgres can't
+  # read it after gosu drops privileges. Make it world-readable for this
+  # one-shot job; the file lives only on the per-instance tmpfs volume
+  # /run/seedling/tmpfs-volumes/<id> which is removed when the job exits.
+  chmod 0644 /pw/pwfile
   gosu postgres initdb -D /data/pg${major} -U postgres \
     --auth-local=trust --auth-host=scram-sha-256 --data-checksums \
     --pwfile=/pw/pwfile
@@ -338,7 +358,10 @@ app.on_install(|rt, _param| {
     render_config.call(rt);
     build_bestool_psql.call(rt);
 
-    rt.start(app).ready();
+    // Generous deadline: a fresh postgres startup that needs to validate
+    // config and warm caches takes longer than the 30s default, especially
+    // on first install where the image was just pulled.
+    rt.start(app).ready(120);
 }, #{});
 
 // ── Maintenance actions ───────────────────────────────────────────────────────
