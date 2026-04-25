@@ -323,9 +323,21 @@ install -m 0755 bestool-psql-audit /app/bin/bin/bestool-psql-audit
 // exist. The password is staged into a RAM-backed tmpfs volume for this one
 // invocation — the postgres cluster catalogues hold the hash afterwards, so
 // the password never lands in a persistent volume.
+//
+// Locale: postgres ≥ 18 uses the builtin `unicode_fast` locale, which gives
+// proper Unicode case-folding without paying for libc's per-comparison
+// strcoll() round-trip; older majors fall back to the C locale (byte-wise
+// collation) since `unicode_fast` only exists from 18 onwards. UTF-8 is
+// always the cluster encoding regardless of locale.
 let initdb_if_missing = |rt, major| {
     let pwfile = app.volume().tmpfs();
     pwfile.write("/pwfile", password.value());
+
+    let locale_args = if major >= 18 {
+        "--locale-provider=builtin --builtin-locale=unicode_fast"
+    } else {
+        "--locale=C"
+    };
 
     rt.start(app.job()
         .image(`docker.io/library/postgres:${major}`)
@@ -350,6 +362,7 @@ if [ ! -f /data/pg${major}/PG_VERSION ]; then
   # /run/seedling/tmpfs-volumes/<id> which is removed when the job exits.
   chmod 0644 /pw/pwfile
   gosu postgres initdb -D /data/pg${major} -U postgres \
+    --encoding=UTF8 ${locale_args} \
     --auth-local=trust --auth-host=scram-sha-256 --data-checksums \
     --pwfile=/pw/pwfile
 fi
@@ -531,7 +544,7 @@ app.on_shell("bestool-psql", |_rt, shell, _param| {
         .mount("/app/bin", bin)
         .command([
             "/app/bin/bin/bestool-psql",
-            "postgresql://postgres@/postgres?host=/var/run/postgresql",
+            "postgresql:///postgres?host=/var/run/postgresql",
         ]));
 }, #{
     description: "bestool-psql shell against the local unix socket",
