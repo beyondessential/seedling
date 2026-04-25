@@ -126,16 +126,14 @@ impl Reconciler {
         &self,
         app: &AppName,
         deployment: &str,
-        replacement_instance: &str,
         replacement_display: &str,
     ) {
         let app = app.clone();
         let deployment = deployment.to_owned();
-        let replacement_instance = replacement_instance.to_owned();
         let replacement_display = replacement_display.to_owned();
         self.db.call(move |db| {
             // Dedupe: only file once per deployment until the fault is cleared
-            // (e.g. by a generation bump that resets replace_failed).
+            // (by a generation bump that resets replace_failed).
             let already = faults::list_active_faults(db, Some(&app))
                 .unwrap_or_default()
                 .iter()
@@ -149,16 +147,41 @@ impl Reconciler {
             let desc = format!(
                 "automatic replacement {replacement_display} for deployment '{deployment}' failed to become healthy; original instance kept running in degraded mode pending operator action"
             );
+            // Scope the fault to the deployment, not the failed instance. The
+            // failed replacement gets retired shortly after this fires, and
+            // instance-scoped faults are auto-cleared by
+            // `retire_unscheduled_excess` / `clear_faults_for_instance` —
+            // which would silently remove our hard fault. The fault must
+            // outlive the instance that triggered it; it clears only when the
+            // AppDef generation advances (see `clear_replace_failed_faults`).
             if let Err(e) = faults::file_fault(
                 db,
                 &app,
                 Some("deployment"),
                 Some(deployment.as_str()),
-                Some(replacement_instance.as_str()),
+                None,
                 "health_check_replace_failed",
                 &desc,
             ) {
                 tracing::warn!(app = %app, deployment = %deployment, "failed to file health_check_replace_failed fault: {e}");
+            }
+        });
+    }
+
+    // r[impl autonomous.healthcheck-replace.guard]
+    /// Clear all `health_check_replace_failed` faults for the named app. Called
+    /// when the AppDef generation advances so a freshly-shipped script gets a
+    /// clean slate.
+    pub(super) fn clear_replace_failed_faults(&self, app: &AppName) {
+        let app = app.clone();
+        self.db.call(move |db| {
+            let active = faults::list_active_faults(db, Some(&app)).unwrap_or_default();
+            for f in active {
+                if f.kind == "health_check_replace_failed"
+                    && let Err(e) = faults::clear_fault(db, &f.id, &app)
+                {
+                    tracing::warn!(app = %app, fault_id = %f.id, "failed to clear health_check_replace_failed fault: {e}");
+                }
             }
         });
     }

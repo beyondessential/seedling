@@ -837,8 +837,10 @@ impl Reconciler {
             if prior.map(|p| app.current_generation > p).unwrap_or(false) {
                 // r[impl autonomous.healthcheck-replace.guard]
                 // Operator changed the AppDef — give the workload a fresh
-                // chance to converge.
+                // chance to converge. Clear both the in-memory bump
+                // suppression and the persisted hard fault.
                 self.replace_failed.retain(|(a, _)| a != &app.name);
+                self.clear_replace_failed_faults(&app.name);
             }
             self.last_seen_generation
                 .insert(app.name.clone(), app.current_generation);
@@ -921,7 +923,7 @@ impl Reconciler {
             })
             .collect();
         let now_ms = jiff::Timestamp::now().as_millisecond();
-        let failed: Vec<(AppName, String, String, String)> = self.db.call(move |db| {
+        let failed: Vec<(AppName, String, String)> = self.db.call(move |db| {
             let mut out = Vec::new();
             for ((app, dep_name), grace_secs) in candidates {
                 let group = match crate::runtime::history::find_instances_for_group(
@@ -953,21 +955,16 @@ impl Reconciler {
                 // Allow some slack: 2× grace before declaring failed, so a
                 // replacement that's marginally slow doesn't trip the guard.
                 if age_secs > grace_secs.saturating_mul(2) {
-                    out.push((
-                        app.clone(),
-                        dep_name.clone(),
-                        youngest.id.to_hex(),
-                        youngest.display_name.clone(),
-                    ));
+                    out.push((app.clone(), dep_name.clone(), youngest.display_name.clone()));
                 }
             }
             out
         });
-        for (app, dep_name, replacement_hex, replacement_display) in failed {
+        for (app, dep_name, replacement_display) in failed {
             self.replace_failed.insert((app.clone(), dep_name.clone()));
             self.unhealthy_replace_deployments
                 .remove(&(app.clone(), dep_name.clone()));
-            self.file_replace_failed_fault(&app, &dep_name, &replacement_hex, &replacement_display);
+            self.file_replace_failed_fault(&app, &dep_name, &replacement_display);
         }
     }
 
