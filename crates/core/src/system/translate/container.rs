@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use crate::{
     defs::{
-        container::{HealthcheckKind, HealthcheckOnFailure, VolumeMount},
+        container::{HealthcheckKind, VolumeMount},
         deployment::DeploymentDef,
         job::JobDef,
         pod::PodDef,
@@ -19,10 +19,7 @@ use crate::{
     runtime::identity::{ResourceInstance, VolumeName},
     system::{
         translate::proxy::node_mount_addr,
-        types::{
-            ContainerSpec, HealthCheckOnFailure, HealthCheckSpec, Mount, MountSource,
-            ResolvedExternalMount,
-        },
+        types::{ContainerSpec, HealthCheckSpec, Mount, MountSource, ResolvedExternalMount},
     },
 };
 
@@ -200,9 +197,11 @@ pub fn podman_args(spec: &ContainerSpec) -> Vec<String> {
         args.push(health.retries.to_string());
         args.push("--health-start-period".to_string());
         args.push(format!("{}s", health.start_period.as_secs()));
-        // l[impl container.healthcheck.on-failure]
+        // r[impl autonomous.healthcheck-replace]
+        // Seedling owns the response to a failing healthcheck (replace flow).
+        // Tell podman to never act on its own — never kill, never restart.
         args.push("--health-on-failure".to_string());
-        args.push(health.on_failure.podman_arg().to_string());
+        args.push("none".to_string());
     }
 
     if !spec.entrypoint.is_empty() {
@@ -365,12 +364,6 @@ fn spec_from_pod(
             timeout: Duration::from_secs(hc.timeout_secs),
             retries: hc.retries,
             start_period: Duration::from_secs(hc.start_period_secs),
-            on_failure: match hc.on_failure {
-                HealthcheckOnFailure::None => HealthCheckOnFailure::None,
-                HealthcheckOnFailure::Kill => HealthCheckOnFailure::Kill,
-                HealthcheckOnFailure::Restart => HealthCheckOnFailure::Restart,
-                HealthcheckOnFailure::Stop => HealthCheckOnFailure::Stop,
-            },
         }
     });
 

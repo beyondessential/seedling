@@ -30,7 +30,7 @@ fn parse_command_healthcheck_with_defaults() {
     assert_eq!(hc.timeout_secs, 30);
     assert_eq!(hc.retries, 3);
     assert_eq!(hc.start_period_secs, 0);
-    assert_eq!(hc.on_failure, HealthcheckOnFailure::None);
+    assert_eq!(hc.on_failure, HealthcheckOnFailure::Replace);
 }
 
 // r[verify healthcheck.command]
@@ -51,7 +51,7 @@ fn parse_command_cmd_string_wraps_in_shell() {
 // r[verify healthcheck.timings]
 // r[verify healthcheck.on-failure]
 #[test]
-fn parse_explicit_timings_and_on_failure() {
+fn parse_explicit_timings_and_on_failure_monitor() {
     let cmd: rhai::Array = vec![Dynamic::from("/bin/ok".to_string())];
     let m = map_with(&[
         ("kind", Dynamic::from("command")),
@@ -60,14 +60,27 @@ fn parse_explicit_timings_and_on_failure() {
         ("timeout", Dynamic::from(2_i64)),
         ("retries", Dynamic::from(4_i64)),
         ("start_period", Dynamic::from(60_i64)),
-        ("on_failure", Dynamic::from("restart")),
+        ("on_failure", Dynamic::from("monitor")),
     ]);
     let hc = parse_healthcheck(m).expect("parse");
     assert_eq!(hc.interval_secs, 5);
     assert_eq!(hc.timeout_secs, 2);
     assert_eq!(hc.retries, 4);
     assert_eq!(hc.start_period_secs, 60);
-    assert_eq!(hc.on_failure, HealthcheckOnFailure::Restart);
+    assert_eq!(hc.on_failure, HealthcheckOnFailure::Monitor);
+}
+
+// r[verify healthcheck.on-failure]
+#[test]
+fn parse_on_failure_replace_explicit() {
+    let cmd: rhai::Array = vec![Dynamic::from("/bin/ok".to_string())];
+    let m = map_with(&[
+        ("kind", Dynamic::from("command")),
+        ("cmd", Dynamic::from(cmd)),
+        ("on_failure", Dynamic::from("replace")),
+    ]);
+    let hc = parse_healthcheck(m).expect("parse");
+    assert_eq!(hc.on_failure, HealthcheckOnFailure::Replace);
 }
 
 // r[verify healthcheck.kind]
@@ -128,6 +141,25 @@ fn parse_unknown_on_failure_is_rejected() {
     ]);
     let err = parse_healthcheck(m).expect_err("explode is not valid");
     assert!(err.to_string().contains("explode"));
+}
+
+// r[verify healthcheck.on-failure]
+// The previous podman-verb values are no longer valid — only replace/monitor.
+#[test]
+fn parse_old_podman_verb_on_failure_is_rejected() {
+    for old in ["kill", "restart", "stop", "none"] {
+        let cmd: rhai::Array = vec![Dynamic::from("/bin/ok".to_string())];
+        let m = map_with(&[
+            ("kind", Dynamic::from("command")),
+            ("cmd", Dynamic::from(cmd)),
+            ("on_failure", Dynamic::from(old)),
+        ]);
+        let err = parse_healthcheck(m).expect_err("podman verb no longer valid");
+        assert!(
+            err.to_string().contains(old),
+            "error mentions '{old}': {err}",
+        );
+    }
 }
 
 // r[verify healthcheck.timings]

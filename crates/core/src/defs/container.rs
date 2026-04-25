@@ -256,18 +256,16 @@ fn take_retries(map: &mut rhai::Map) -> Result<u32, Box<EvalAltResult>> {
 
 fn take_on_failure(map: &mut rhai::Map) -> Result<HealthcheckOnFailure, Box<EvalAltResult>> {
     let Some(value) = map.remove("on_failure") else {
-        return Ok(HealthcheckOnFailure::None);
+        return Ok(HealthcheckOnFailure::Replace);
     };
     let s = value.into_string().map_err(|t| -> Box<EvalAltResult> {
         format!("healthcheck `on_failure` must be a string, got {t}").into()
     })?;
     match s.as_str() {
-        "none" => Ok(HealthcheckOnFailure::None),
-        "kill" => Ok(HealthcheckOnFailure::Kill),
-        "restart" => Ok(HealthcheckOnFailure::Restart),
-        "stop" => Ok(HealthcheckOnFailure::Stop),
+        "replace" => Ok(HealthcheckOnFailure::Replace),
+        "monitor" => Ok(HealthcheckOnFailure::Monitor),
         other => Err(format!(
-            "healthcheck `on_failure` must be one of \"none\", \"kill\", \"restart\", \"stop\"; got '{other}'"
+            "healthcheck `on_failure` must be \"replace\" or \"monitor\"; got '{other}'"
         )
         .into()),
     }
@@ -389,19 +387,22 @@ pub enum HealthcheckKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HealthcheckOnFailure {
-    None,
-    Kill,
-    Restart,
-    Stop,
+    /// Reconciler-managed swap-then-retire. Default. The runtime spawns a
+    /// replacement instance, lets the unhealthy original keep serving until
+    /// the replacement is healthy, then retires the original. If the
+    /// replacement also fails, the runtime files a hard fault and stops
+    /// attempting further replacements.
+    Replace,
+    /// No automatic replacement. Routing still gates on health, but recovery
+    /// is operator-driven.
+    Monitor,
 }
 
 impl HealthcheckOnFailure {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::None => "none",
-            Self::Kill => "kill",
-            Self::Restart => "restart",
-            Self::Stop => "stop",
+            Self::Replace => "replace",
+            Self::Monitor => "monitor",
         }
     }
 }
@@ -654,15 +655,40 @@ impl ContainerDef {
                 Ok(this.clone())
             },
         );
+    }
 
+    /// Register `.healthcheck(map)` on the builder. Called only from contexts
+    /// that allow a declared healthcheck — i.e. Deployments. Jobs use
+    /// [`ContainerDef::healthcheck_blocked_mixin`] instead so the call is
+    /// rejected at BSL evaluation with a clear error.
+    // l[impl container.healthcheck]
+    pub(super) fn healthcheck_mixin<T: Clone + Freezable + 'static>(
+        builder: &mut TypeBuilder<T>,
+        ext: impl Fn(&mut T) -> Holder<Self> + Copy + 'static,
+    ) {
         builder.with_fn(
             "healthcheck",
             move |this: &mut T, config: rhai::Map| -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
-                // l[impl container.healthcheck]
                 let hc = parse_healthcheck(config)?;
                 ext(this).lock().healthcheck = Some(hc);
                 Ok(this.clone())
+            },
+        );
+    }
+
+    /// Register `.healthcheck(map)` as an explicit error. Called from Jobs so
+    /// that authors get a clear message instead of rhai's generic "function not
+    /// found".
+    // l[impl container.healthcheck.deployment-only]
+    pub(super) fn healthcheck_blocked_mixin<T: Clone + Freezable + 'static>(
+        builder: &mut TypeBuilder<T>,
+        kind: &'static str,
+    ) {
+        builder.with_fn(
+            "healthcheck",
+            move |_this: &mut T, _config: rhai::Map| -> Result<T, Box<EvalAltResult>> {
+                Err(format!("healthcheck cannot be declared on {kind}; healthchecks are only valid on deployments").into())
             },
         );
     }

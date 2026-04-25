@@ -452,12 +452,12 @@ fn volume_mount_uses_app_prefixed_display_name() {
     );
 }
 
-// r[verify healthcheck.on-failure]
+// r[verify autonomous.healthcheck-replace]
 #[test]
 fn podman_args_emit_health_check_flags_when_declared() {
     use std::time::Duration;
 
-    use crate::system::types::{HealthCheckOnFailure, HealthCheckSpec};
+    use crate::system::types::HealthCheckSpec;
 
     let spec = ContainerSpec {
         name: "n".to_string(),
@@ -474,7 +474,6 @@ fn podman_args_emit_health_check_flags_when_declared() {
             timeout: Duration::from_secs(3),
             retries: 2,
             start_period: Duration::from_secs(15),
-            on_failure: HealthCheckOnFailure::Restart,
         }),
         hosts: vec![],
         dns_servers: vec![],
@@ -499,7 +498,8 @@ fn podman_args_emit_health_check_flags_when_declared() {
     assert_eq!(find("--health-timeout"), "3s");
     assert_eq!(find("--health-retries"), "2");
     assert_eq!(find("--health-start-period"), "15s");
-    assert_eq!(find("--health-on-failure"), "restart");
+    // Seedling always tells podman not to act; replace logic is reconciler-driven.
+    assert_eq!(find("--health-on-failure"), "none");
 }
 
 #[test]

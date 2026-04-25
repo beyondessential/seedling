@@ -163,26 +163,6 @@ pub struct HealthCheckSpec {
     pub timeout: Duration,
     pub retries: u32,
     pub start_period: Duration,
-    pub on_failure: HealthCheckOnFailure,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HealthCheckOnFailure {
-    None,
-    Kill,
-    Restart,
-    Stop,
-}
-
-impl HealthCheckOnFailure {
-    pub fn podman_arg(self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::Kill => "kill",
-            Self::Restart => "restart",
-            Self::Stop => "stop",
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -543,14 +523,5 @@ mod observation_fact_tests {
         let kinds = ObservationFact::ContainerHealthy.to_obs_kinds();
         assert_eq!(kinds.len(), 1);
         assert_eq!(kinds[0].0, "health_check_pass");
-    }
-
-    // r[verify healthcheck.on-failure]
-    #[test]
-    fn on_failure_podman_strings_cover_all_variants() {
-        assert_eq!(HealthCheckOnFailure::None.podman_arg(), "none");
-        assert_eq!(HealthCheckOnFailure::Kill.podman_arg(), "kill");
-        assert_eq!(HealthCheckOnFailure::Restart.podman_arg(), "restart");
-        assert_eq!(HealthCheckOnFailure::Stop.podman_arg(), "stop");
     }
 }

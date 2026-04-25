@@ -2,6 +2,7 @@ use rhai::{CustomType, EvalAltResult, TypeBuilder};
 
 use super::{
     Freezable, Holder,
+    container::ContainerDef,
     pod::PodDef,
     resource::{ResourceId, ResourceKind, ResourceName},
 };
@@ -38,6 +39,8 @@ impl CustomType for Job {
                 name: this.name.clone(),
             },
         );
+        // l[impl container.healthcheck.deployment-only]
+        ContainerDef::healthcheck_blocked_mixin(&mut builder, "jobs");
         // l[impl job.deadline]
         builder.with_fn(
             "deadline",

@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use super::{
-    container::{ContainerDef, HealthcheckDef, HealthcheckKind, HealthcheckOnFailure, VolumeMount},
+    container::{ContainerDef, HealthcheckDef, HealthcheckKind, VolumeMount},
     deployment::Deployment,
     enums::{OnExit, OnTerminate, OnUpdate},
     ingress::{HttpTermination, Ingress, RedirectDef},
@@ -119,12 +119,7 @@ impl HealthcheckDef {
         let (kind, cmd) = match &self.kind {
             HealthcheckKind::Command { cmd } => ("command", Some(cmd.clone())),
         };
-        let on_failure = match self.on_failure {
-            HealthcheckOnFailure::None => "none",
-            HealthcheckOnFailure::Kill => "kill",
-            HealthcheckOnFailure::Restart => "restart",
-            HealthcheckOnFailure::Stop => "stop",
-        };
+        let on_failure = self.on_failure.as_str();
         HealthcheckSummary {
             kind,
             cmd,
