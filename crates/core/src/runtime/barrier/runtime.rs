@@ -422,14 +422,23 @@ impl RuntimeInstance {
                 };
                 return Ok(vec![(instance, Some(Resource::Deployment(dep)))]);
             }
-            return Ok(vec![(
-                self.registry.get_or_create_singleton(
-                    &self.app_name,
-                    ResourceKind::Deployment,
-                    Some(&dep.name),
-                )?,
-                None,
-            )]);
+            // r[impl identity.deployment]
+            // Named deployments resolve through the scaled-group API: the
+            // steady-state reconciler keeps every replica as `is_scaled=1`,
+            // so creating a singleton here would only produce a transient
+            // placeholder that the next reconciliation tick has to retire.
+            // The group's declared scale (low end of the range, default 1)
+            // determines how many instances exist; an action that needs to
+            // refer to all of them — `rt.signal`, `rt.stop`, `rt.query` —
+            // gets every replica back from this single call.
+            let scale = dep.def.lock().scale.start.max(1);
+            let group = self.registry.ensure_scaled_group(
+                &self.app_name,
+                ResourceKind::Deployment,
+                Some(&dep.name),
+                scale,
+            )?;
+            return Ok(group.keep.into_iter().map(|inst| (inst, None)).collect());
         }
 
         if let Some(job) = resources.clone().try_cast::<Job>() {
