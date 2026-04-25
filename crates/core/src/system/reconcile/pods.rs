@@ -230,11 +230,18 @@ async fn observe_one_pod<'a>(
             Ok(Some(state)) => {
                 if let Some(pod_ip) = state.pod_addr {
                     let pod_prefix = pod_network_prefix(node_prefix, &dr.instance);
+                    // r[impl lifecycle.service.routing-pool]
+                    // observed_unhealthy + observed_healthy are derived above
+                    // from this tick's facts. A pod that's running but in
+                    // start-period (no health fact yet) is reported as
+                    // not-healthy here so the routing layer can keep it out of
+                    // the pool until podman confirms.
                     result.running = Some(RunningPod {
                         instance: dr.instance.clone(),
                         pod_prefix,
                         pod_ip,
                         resource: dr.definition.clone(),
+                        observed_healthy: observed_healthy && !observed_unhealthy,
                     });
                 }
             }

@@ -33,16 +33,31 @@ pub(super) fn collect_backends_by_app(
 ) -> HashMap<AppName, AppBackendMap> {
     running_pods_by_app
         .iter()
-        .map(|(app, pods)| (app.clone(), collect_service_backends(pods)))
+        .map(|(app, pods)| (app.clone(), collect_service_backends(pods).filtered))
         .collect()
 }
 
-/// Collects backends from running pods' bindings.
-/// Returns a map from `(service_name, service_port, proto)` to `Vec<(pod_ip, pod_port)>`.
-fn collect_service_backends(
-    running_pods: &[RunningPod],
-) -> HashMap<(String, u16, ForwardProto), Vec<(Ipv6Addr, u16)>> {
-    let mut backends: HashMap<(String, u16, ForwardProto), Vec<(Ipv6Addr, u16)>> = HashMap::new();
+/// Result of resolving the routing pool for an app's services.
+pub(super) struct ServiceBackends {
+    /// Backends after applying the prefer-healthy-fall-back rule. This is what
+    /// the proxy / DNAT layer should see.
+    pub filtered: AppBackendMap,
+    /// Service names that fell back to "all running" because no healthy
+    /// backend was available — these warrant a `service_degraded` fault per
+    /// `r[fault.service-degraded]`.
+    pub degraded_services: std::collections::BTreeSet<String>,
+}
+
+/// Collects backends from running pods' bindings, applying the
+/// [`r[lifecycle.service.routing-pool]`] rule: per service, prefer healthy
+/// backends; if none are healthy, fall back to all running backends and flag
+/// the service as degraded.
+// r[impl lifecycle.service.routing-pool]
+pub(super) fn collect_service_backends(running_pods: &[RunningPod]) -> ServiceBackends {
+    // Tag each backend tuple with the source pod's health so we can apply the
+    // prefer-healthy rule per (service, port, proto) group.
+    let mut tagged: HashMap<(String, u16, ForwardProto), Vec<((Ipv6Addr, u16), bool)>> =
+        HashMap::new();
 
     for pod in running_pods {
         let (http, tcp, udp) = match &pod.resource {
@@ -70,32 +85,57 @@ fn collect_service_backends(
         for b in &http {
             let svc_name = b.route.http.service.name().as_str().to_owned();
             let svc_port = b.route.http.port.get();
-            backends
+            tagged
                 .entry((svc_name, svc_port, ForwardProto::Tcp))
                 .or_default()
-                .push((pod.pod_ip, b.pod_port.get()));
+                .push(((pod.pod_ip, b.pod_port.get()), pod.observed_healthy));
         }
 
         for b in &tcp {
             let svc_name = b.service_port.service.name().as_str().to_owned();
             let svc_port = b.service_port.port.get();
-            backends
+            tagged
                 .entry((svc_name, svc_port, ForwardProto::Tcp))
                 .or_default()
-                .push((pod.pod_ip, b.pod_port.get()));
+                .push(((pod.pod_ip, b.pod_port.get()), pod.observed_healthy));
         }
 
         for b in &udp {
             let svc_name = b.service_port.service.name().as_str().to_owned();
             let svc_port = b.service_port.port.get();
-            backends
+            tagged
                 .entry((svc_name, svc_port, ForwardProto::Udp))
                 .or_default()
-                .push((pod.pod_ip, b.pod_port.get()));
+                .push(((pod.pod_ip, b.pod_port.get()), pod.observed_healthy));
         }
     }
 
-    backends
+    let mut filtered: AppBackendMap = HashMap::new();
+    let mut degraded_services: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
+
+    for ((svc_name, svc_port, proto), entries) in tagged {
+        let any_healthy = entries.iter().any(|(_, healthy)| *healthy);
+        let kept: Vec<(Ipv6Addr, u16)> = if any_healthy {
+            entries
+                .into_iter()
+                .filter_map(|(addr, healthy)| if healthy { Some(addr) } else { None })
+                .collect()
+        } else {
+            // r[impl fault.service-degraded]
+            // No healthy backend; fall back to "anything running" so traffic
+            // still has somewhere to go, and surface the degradation as a
+            // fault.
+            degraded_services.insert(svc_name.clone());
+            entries.into_iter().map(|(addr, _)| addr).collect()
+        };
+        filtered.insert((svc_name, svc_port, proto), kept);
+    }
+
+    ServiceBackends {
+        filtered,
+        degraded_services,
+    }
 }
 
 // r[autonomous.ingress]
@@ -143,6 +183,15 @@ pub(super) fn build_ingress_rules(
     rules
 }
 
+/// Result of computing DNAT rules: the rules themselves, plus the set of
+/// services that are running entirely on unhealthy backends per
+/// `r[lifecycle.service.routing-pool]`. Callers file a `service_degraded` fault
+/// for each name in the set.
+pub(super) struct ServiceDnatBuild {
+    pub rules: Vec<ServiceDnatRule>,
+    pub degraded_services: std::collections::BTreeSet<String>,
+}
+
 // r[impl infra.dataplane.service-dnat]
 pub(super) fn build_service_dnat_rules(
     node_prefix: &Ipv6Net,
@@ -151,8 +200,11 @@ pub(super) fn build_service_dnat_rules(
     app_name: &AppName,
     snapshot: &ExternalServiceSnapshot,
     backends_by_app: &HashMap<AppName, AppBackendMap>,
-) -> Result<Vec<ServiceDnatRule>, RegistryError> {
-    let backends = collect_service_backends(running_pods);
+) -> Result<ServiceDnatBuild, RegistryError> {
+    let ServiceBackends {
+        filtered: backends,
+        degraded_services,
+    } = collect_service_backends(running_pods);
     let mut rules = Vec::new();
 
     for ((svc_name, svc_port, proto), backend_list) in &backends {
@@ -192,7 +244,10 @@ pub(super) fn build_service_dnat_rules(
         });
     }
 
-    Ok(rules)
+    Ok(ServiceDnatBuild {
+        rules,
+        degraded_services,
+    })
 }
 
 /// Walk a running app's pods and collect its external-service bindings as
@@ -319,7 +374,7 @@ fn protocols_match(site_proto: SiteServiceProtocol, fwd_proto: ForwardProto) -> 
 
 // r[impl infra.dataplane.mount-dnat]
 pub(super) fn build_mount_rules(running_pods: &[RunningPod]) -> Vec<MountRule> {
-    let backend_map = collect_service_backends(running_pods);
+    let backend_map = collect_service_backends(running_pods).filtered;
     let mut rules = Vec::new();
 
     for pod in running_pods {

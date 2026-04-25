@@ -115,6 +115,14 @@ pub(super) fn compute_routes(
     (all_routes, all_obs)
 }
 
+/// Output of [`compute_nftables_rules`]: the rule set and the per-app set of
+/// services that fell back to "anything running" because no healthy backend
+/// was available. Callers file `service_degraded` faults from the latter.
+pub(super) struct NftablesBuild {
+    pub rules: DataPlaneRules,
+    pub degraded_services_by_app: HashMap<AppName, std::collections::BTreeSet<String>>,
+}
+
 pub(super) fn compute_nftables_rules(
     apps: &[AppSnapshot],
     running_pods_by_app: &HashMap<AppName, Vec<RunningPod>>,
@@ -123,12 +131,13 @@ pub(super) fn compute_nftables_rules(
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
     ext_snapshot: &ExternalServiceSnapshot,
-) -> DataPlaneRules {
+) -> NftablesBuild {
     let backends_by_app = rules::collect_backends_by_app(running_pods_by_app);
 
     let mut all_ingress = Vec::new();
     let mut all_mounts = Vec::new();
     let mut all_service_dnat = Vec::new();
+    let mut degraded_by_app: HashMap<AppName, std::collections::BTreeSet<String>> = HashMap::new();
     for app in apps {
         if app.phase == AppPhase::Uninstalling {
             continue;
@@ -151,17 +160,25 @@ pub(super) fn compute_nftables_rules(
             ext_snapshot,
             &backends_by_app,
         ) {
-            Ok(dnat) => all_service_dnat.extend(dnat),
+            Ok(dnat) => {
+                all_service_dnat.extend(dnat.rules);
+                if !dnat.degraded_services.is_empty() {
+                    degraded_by_app.insert(app.name.clone(), dnat.degraded_services);
+                }
+            }
             Err(e) => {
                 tracing::warn!(app = %app.name, error = %e, "nftables: registry lookup failed for app; skipping");
                 continue;
             }
         }
     }
-    DataPlaneRules {
-        ingress: all_ingress,
-        mounts: all_mounts,
-        service_dnat: all_service_dnat,
+    NftablesBuild {
+        rules: DataPlaneRules {
+            ingress: all_ingress,
+            mounts: all_mounts,
+            service_dnat: all_service_dnat,
+        },
+        degraded_services_by_app: degraded_by_app,
     }
 }
 

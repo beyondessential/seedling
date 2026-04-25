@@ -112,7 +112,7 @@ fn seed_written_obs(db: &DbHandle) -> HashSet<(InstanceId, &'static str)> {
 pub(crate) struct RunningPod {
     #[expect(
         dead_code,
-        reason = "set by pods phase; available for future consumers"
+        reason = "set by pods phase; will be used by the replacement spawning path"
     )]
     pub instance: crate::runtime::identity::ResourceInstance,
     pub pod_prefix: Ipv6Net,
@@ -120,6 +120,11 @@ pub(crate) struct RunningPod {
     /// The Deployment or Job resource definition, kept for binding lookups in
     /// phases 4 and 5.
     pub resource: crate::defs::resource::Resource,
+    /// True if podman last reported the container as healthy, or if no
+    /// healthcheck is declared (running implies healthy in that case). Used by
+    /// the routing layer to prefer healthy backends in the service pool.
+    /// r[impl lifecycle.service.routing-pool]
+    pub observed_healthy: bool,
 }
 
 /// Point-in-time snapshot of a single app's state, taken at tick start.
@@ -554,7 +559,7 @@ impl Reconciler {
         let nft_and_proxy = caddy_addrs.map(|addrs| {
             let caddy_ip = addrs.v6;
 
-            let dp_rules = phases::compute_nftables_rules(
+            let nft_build = phases::compute_nftables_rules(
                 &apps,
                 &running_pods_by_app,
                 caddy_ip,
@@ -567,12 +572,18 @@ impl Reconciler {
             let proxy_build =
                 phases::compute_proxy_config(&apps, &self.node_prefix, &*self.registry);
 
-            (dp_rules, proxy_build, caddy_ip)
+            (nft_build, proxy_build, caddy_ip)
         });
 
         // --- Apply phase: concurrent network-plane writes ---
         match nft_and_proxy {
-            Some((dp_rules, proxy_build, caddy_ip)) => {
+            Some((nft_build, proxy_build, caddy_ip)) => {
+                let phases::NftablesBuild {
+                    rules: dp_rules,
+                    degraded_services_by_app,
+                } = nft_build;
+                // r[impl fault.service-degraded]
+                self.file_service_degraded_faults(&apps, &degraded_services_by_app);
                 let phases::ProxyBuildResult {
                     config: proxy_config,
                     caddy_json,

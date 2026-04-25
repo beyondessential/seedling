@@ -121,6 +121,68 @@ impl Reconciler {
         });
     }
 
+    // r[impl fault.service-degraded]
+    /// File a `service_degraded` fault per service whose routing pool has
+    /// fallen back to "anything running" because no healthy backend exists,
+    /// and clear the fault for any service that isn't in the degraded set
+    /// this tick.
+    pub(super) fn file_service_degraded_faults(
+        &self,
+        apps: &[super::AppSnapshot],
+        degraded_by_app: &std::collections::HashMap<AppName, std::collections::BTreeSet<String>>,
+    ) {
+        // Snapshot what we need into owned data so the closure can move.
+        let updates: Vec<(AppName, std::collections::BTreeSet<String>)> = apps
+            .iter()
+            .map(|app| {
+                (
+                    app.name.clone(),
+                    degraded_by_app.get(&app.name).cloned().unwrap_or_default(),
+                )
+            })
+            .collect();
+        self.db.call(move |db| {
+            for (app, degraded) in &updates {
+                // File new degraded faults that aren't already active.
+                for svc in degraded {
+                    let already = faults::list_active_faults(db, Some(app))
+                        .unwrap_or_default()
+                        .iter()
+                        .any(|f| {
+                            f.kind == "service_degraded"
+                                && f.resource_name.as_deref() == Some(svc.as_str())
+                        });
+                    if !already
+                        && let Err(e) = faults::file_fault(
+                            db,
+                            app,
+                            Some("service"),
+                            Some(svc.as_str()),
+                            None,
+                            "service_degraded",
+                            &format!(
+                                "service '{svc}' has no healthy backend; routing to running-but-unhealthy backends"
+                            ),
+                        )
+                    {
+                        tracing::warn!(app = %app, service = %svc, "failed to file service_degraded fault: {e}");
+                    }
+                }
+                // Clear degraded faults for services no longer in the set.
+                let active = faults::list_active_faults(db, Some(app)).unwrap_or_default();
+                for f in active {
+                    if f.kind == "service_degraded"
+                        && let Some(svc) = f.resource_name.as_deref()
+                        && !degraded.contains(svc)
+                        && let Err(e) = faults::clear_fault(db, &f.id, app)
+                    {
+                        tracing::warn!(app = %app, fault_id = %f.id, "failed to clear service_degraded fault: {e}");
+                    }
+                }
+            }
+        });
+    }
+
     // r[impl fault.healthcheck]
     pub(super) fn file_health_check_faults(
         &self,
