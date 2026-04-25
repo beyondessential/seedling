@@ -154,6 +154,12 @@ pub struct Reconciler {
     registry: Arc<dyn InstanceRegistry>,
     app_registry: Arc<RwLock<AppRegistry>>,
     written_obs: HashSet<(InstanceId, &'static str)>,
+    /// Job instance IDs the reconciler has asked systemd to start during this
+    /// process lifetime. Acts as a "previously ran" indicator for the job
+    /// terminal-detection logic when the job completed faster than the
+    /// observer's poll interval (so no `container_running` observation was
+    /// ever recorded). Cleared when the instance is replaced/retired.
+    started_jobs: HashSet<InstanceId>,
     // r[impl autonomous.job-terminal.defense]
     /// Job instance IDs known to have completed during this process lifetime.
     /// If these appear running on a subsequent tick they are stopped immediately.
@@ -262,6 +268,7 @@ impl Reconciler {
             registry,
             app_registry,
             written_obs,
+            started_jobs: HashSet::new(),
             completed_jobs: HashSet::new(),
             event_tx,
             prev_states: BTreeMap::new(),
@@ -482,6 +489,7 @@ impl Reconciler {
                 &apps,
                 &self.node_prefix,
                 &self.written_obs,
+                &self.started_jobs,
                 &self.completed_jobs,
             ),
             phases::run_volumes_phase(&self.observer, &self.actuator, &self.db, &apps),
@@ -816,10 +824,19 @@ impl Reconciler {
                 self.written_obs.retain(|(id, _)| *id != instance.id);
                 // r[impl autonomous.job-terminal.defense]
                 self.completed_jobs.remove(&instance.id);
+                // Track that this Job was started by the reconciler so that
+                // a fast-completing job (which exits before the observer's
+                // poll catches a `container_running` observation) is still
+                // recognised as having "previously ran" on the next tick.
+                if instance.kind == crate::defs::resource::ResourceKind::Job {
+                    self.started_jobs.insert(instance.id);
+                }
             }
             // r[impl autonomous.job-terminal.defense]
-            self.completed_jobs
-                .extend(pod_update.completed_job_instances.iter().copied());
+            for completed in &pod_update.completed_job_instances {
+                self.completed_jobs.insert(*completed);
+                self.started_jobs.remove(completed);
+            }
             running_pods_by_app.insert(app_name, pod_update.running);
         }
         self.update_replace_state(apps, &running_pods_by_app);

@@ -282,6 +282,7 @@ async fn actuate_one_pod(
     mut obs: ObservedInstance<'_>,
     inhibit_stop: bool,
     written_obs: &HashSet<(InstanceId, &'static str)>,
+    started_jobs: &HashSet<InstanceId>,
     completed_jobs: &HashSet<InstanceId>,
 ) -> Option<PodInstanceResult> {
     let dr = obs.dr;
@@ -289,13 +290,19 @@ async fn actuate_one_pod(
 
     // r[impl autonomous.job-terminal]
     // r[impl autonomous.job-terminal.defense]
-    // Jobs that have completed naturally are not restarted. Two detection paths:
+    // Jobs that have completed naturally are not restarted. Three detection paths:
     // 1. Primary: container was previously seen running (written_obs) but is now
     //    gone — works even when Podman's --rm removes it instantly on exit.
-    // 2. Defense in depth: if this instance ID was recorded as completed in a
+    // 2. Started-but-never-observed-running: the reconciler asked systemd to
+    //    start the unit on a prior tick (started_jobs) but the container has
+    //    since gone away. This covers jobs that complete faster than the
+    //    observer's poll interval, where no container_running observation is
+    //    ever recorded.
+    // 3. Defense in depth: if this instance ID was recorded as completed in a
     //    prior tick (completed_jobs), kill any container that somehow restarted.
     if matches!(dr.definition, Resource::Job(_)) && dr.desired == LifecycleState::Ready {
-        let previously_ran = written_obs.contains(&(dr.instance.id, "container_running"));
+        let previously_ran = written_obs.contains(&(dr.instance.id, "container_running"))
+            || started_jobs.contains(&dr.instance.id);
         let already_completed = completed_jobs.contains(&dr.instance.id);
         let is_done = obs.has_exited
             || (!obs.container_exists && !obs.is_running && previously_ran)
@@ -640,6 +647,7 @@ pub(super) async fn observe_and_actuate(
     desired: &DesiredState,
     node_prefix: &Ipv6Net,
     written_obs: &HashSet<(InstanceId, &'static str)>,
+    started_jobs: &HashSet<InstanceId>,
     completed_jobs: &HashSet<InstanceId>,
 ) -> PodActuationUpdate {
     // Phase 1: observe all instances concurrently.
@@ -712,6 +720,7 @@ pub(super) async fn observe_and_actuate(
             obs,
             inhibit,
             written_obs,
+            started_jobs,
             completed_jobs,
         ));
     }

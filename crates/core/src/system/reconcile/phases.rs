@@ -30,6 +30,7 @@ pub(super) async fn run_pods_phase(
     apps: &[AppSnapshot],
     node_prefix: &Ipv6Net,
     written_obs: &HashSet<(InstanceId, &'static str)>,
+    started_jobs: &HashSet<InstanceId>,
     completed_jobs: &HashSet<InstanceId>,
 ) -> Vec<(AppName, pods::PodActuationUpdate)> {
     let futures: Vec<_> = apps
@@ -43,6 +44,7 @@ pub(super) async fn run_pods_phase(
                 &app.desired,
                 node_prefix,
                 written_obs,
+                started_jobs,
                 completed_jobs,
             )
             .await;
