@@ -133,6 +133,9 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > Clicking the button immediately opens a volume shell session (via `/volumes/shell`) for that single volume, using the existing shell sidebar.
 > The tab label is the volume's display name.
 
+> w[volumes.shell-ui.read-only]
+> Volume shells are available regardless of the current safety mode. When the UI is in read mode the shell session is opened with `read_only: true` so every bind mount is forced read-only inside the container, and the tab label carries a visible read-only marker (such as a `(ro)` suffix). In write or dangerous mode the shell is opened read-write as before. The selected mode is captured at the moment the operator opens the shell; switching modes afterwards does not change the shell's mount flags.
+
 > w[shells.ui]
 > The app detail page exposes each shell defined in the app (from `/apps/show`'s `actions[].kind=="shell"`) as an "Open shell" button.
 > If the shell declares `params`, clicking the button first shows a params dialog (identical in structure to the action invoke dialog) to collect param values before opening the session.

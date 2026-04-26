@@ -82,7 +82,12 @@ function ShellInstance({ tab, active }: { tab: ShellTab; active: boolean }) {
 
     const openPromise = tab.kind === "volume"
       ? session.client.openVolumeShell(
-          { volumes: tab.volumes, rows: term.rows, cols: term.cols },
+          {
+            volumes: tab.volumes,
+            rows: term.rows,
+            cols: term.cols,
+            read_only: tab.readOnly,
+          },
           uniRouter,
         )
       : session.client.openShell(
@@ -284,7 +289,11 @@ export function ShellsSidebar() {
               key={tab.id}
               label={
                 <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-                  <span>{tab.kind === "volume" ? tab.label : `${tab.app}/${tab.shellName}`}</span>
+                  <span>
+                    {tab.kind === "volume"
+                      ? `${tab.label}${tab.readOnly ? " (ro)" : ""}`
+                      : `${tab.app}/${tab.shellName}`}
+                  </span>
                   <IconButton
                     size="small"
                     onClick={(e) => { e.stopPropagation(); closeShell(tab.id); }}

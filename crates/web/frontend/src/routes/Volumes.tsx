@@ -49,7 +49,7 @@ import { Link } from "react-router-dom";
 import { MapVolumeDialog } from "../components/MapVolumeDialog";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { PromoteSnapshotDialog } from "../components/PromoteSnapshotDialog";
-import { useGuard } from "../components/SafetyModeProvider";
+import { useGuard, useSafetyMode } from "../components/SafetyModeProvider";
 import { useSessionContext } from "../components/SessionProvider";
 import { SnapshotVolumeDialog } from "../components/SnapshotVolumeDialog";
 import { useOiAction } from "../hooks/useOiAction";
@@ -387,7 +387,8 @@ function MultiVolumeShellDialog({
   heldVols: HeldVolume[];
   onOpen: (volumes: VolumeRef[], label: string) => void;
 }) {
-  const writeGuard = useGuard("write");
+  const { mode } = useSafetyMode();
+  const shellReadOnly = mode === "read";
   // Selection is keyed by a stable identifier string — "site:<name>",
   // "app:<app>/<vol>", "held:<id>" — so a selected entry survives a
   // re-render that reorders the lists.
@@ -568,18 +569,16 @@ function MultiVolumeShellDialog({
       </DialogContent>
       <DialogActions>
         <Button onClick={handleClose}>Cancel</Button>
-        <Tooltip title={writeGuard.reason ?? ""}>
-          <span>
-            <Button
-              variant="contained"
-              startIcon={<TerminalIcon />}
-              onClick={handleOpen}
-              disabled={refs.length === 0 || !writeGuard.allowed}
-            >
-              Open shell {refs.length > 0 ? `(${refs.length})` : ""}
-            </Button>
-          </span>
-        </Tooltip>
+        {/* w[impl volumes.shell-ui.read-only] */}
+        <Button
+          variant="contained"
+          startIcon={<TerminalIcon />}
+          onClick={handleOpen}
+          disabled={refs.length === 0}
+        >
+          Open shell{shellReadOnly ? " (read-only)" : ""}
+          {refs.length > 0 ? ` (${refs.length})` : ""}
+        </Button>
       </DialogActions>
     </Dialog>
   );
@@ -625,8 +624,11 @@ export default function Volumes() {
 
   const { execute, error: actionError } = useOiAction();
   const { openVolumeShell } = useSessionContext();
+  const { mode } = useSafetyMode();
   const writeGuard = useGuard("write");
   const dangerGuard = useGuard("dangerous");
+  // w[impl volumes.shell-ui.read-only]
+  const shellReadOnly = mode === "read";
 
   const [createOpen, setCreateOpen] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
@@ -689,23 +691,19 @@ export default function Volumes() {
         <Typography variant="h5" sx={{ flexGrow: 1 }}>
           Volumes
         </Typography>
-        <Tooltip title={writeGuard.reason ?? ""}>
-          <span>
-            <Button
-              size="small"
-              startIcon={<TerminalIcon />}
-              onClick={() => setShellPickerOpen(true)}
-              disabled={
-                !writeGuard.allowed ||
-                ((siteVols?.length ?? 0) === 0 &&
-                  (exportedVols?.length ?? 0) === 0 &&
-                  (heldVols?.length ?? 0) === 0)
-              }
-            >
-              Open shell…
-            </Button>
-          </span>
-        </Tooltip>
+        {/* w[impl volumes.shell-ui.read-only] */}
+        <Button
+          size="small"
+          startIcon={<TerminalIcon />}
+          onClick={() => setShellPickerOpen(true)}
+          disabled={
+            (siteVols?.length ?? 0) === 0 &&
+            (exportedVols?.length ?? 0) === 0 &&
+            (heldVols?.length ?? 0) === 0
+          }
+        >
+          Open shell…
+        </Button>
         <Tooltip title="Refresh">
           <span>
             <IconButton onClick={refreshAll} disabled={anyLoading} size="small">
@@ -778,13 +776,21 @@ export default function Volumes() {
                           {new Date(v.created_at).toLocaleString()}
                         </TableCell>
                         {/* w[volumes.shell-ui] */}
+                        {/* w[impl volumes.shell-ui.read-only] */}
                         <TableCell align="right" sx={{ px: 0.5, whiteSpace: "nowrap" }}>
-                          <Tooltip title={writeGuard.reason ?? "Open shell"}>
+                          <Tooltip
+                            title={shellReadOnly ? "Open shell (read-only)" : "Open shell"}
+                          >
                             <span>
                               <IconButton
                                 size="small"
-                                onClick={() => openVolumeShell([{ kind: "site", name: v.name }], v.name)}
-                                disabled={!writeGuard.allowed}
+                                onClick={() =>
+                                  openVolumeShell(
+                                    [{ kind: "site", name: v.name }],
+                                    v.name,
+                                    { readOnly: shellReadOnly },
+                                  )
+                                }
                               >
                                 <TerminalIcon sx={{ fontSize: 16 }} />
                               </IconButton>
@@ -879,7 +885,10 @@ export default function Volumes() {
                           {v.description ?? "—"}
                         </TableCell>
                         <TableCell align="right" sx={{ px: 0.5, whiteSpace: "nowrap" }}>
-                          <Tooltip title={writeGuard.reason ?? "Open shell"}>
+                          {/* w[impl volumes.shell-ui.read-only] */}
+                          <Tooltip
+                            title={shellReadOnly ? "Open shell (read-only)" : "Open shell"}
+                          >
                             <span>
                               <IconButton
                                 size="small"
@@ -887,9 +896,9 @@ export default function Volumes() {
                                   openVolumeShell(
                                     [{ kind: "app", app: v.app, volume: v.volume_name }],
                                     `${v.app}/${v.volume_name}`,
+                                    { readOnly: shellReadOnly },
                                   )
                                 }
-                                disabled={!writeGuard.allowed}
                               >
                                 <TerminalIcon sx={{ fontSize: 16 }} />
                               </IconButton>
@@ -1087,7 +1096,10 @@ export default function Volumes() {
                           {new Date(h.held_at).toLocaleString()}
                         </TableCell>
                         <TableCell align="right" sx={{ px: 0.5, whiteSpace: "nowrap" }}>
-                          <Tooltip title={writeGuard.reason ?? "Open shell"}>
+                          {/* w[impl volumes.shell-ui.read-only] */}
+                          <Tooltip
+                            title={shellReadOnly ? "Open shell (read-only)" : "Open shell"}
+                          >
                             <span>
                               <IconButton
                                 size="small"
@@ -1095,9 +1107,9 @@ export default function Volumes() {
                                   openVolumeShell(
                                     [{ kind: "held", id: h.id }],
                                     `held: ${h.app}/${h.display_name}`,
+                                    { readOnly: shellReadOnly },
                                   )
                                 }
-                                disabled={!writeGuard.allowed}
                               >
                                 <TerminalIcon sx={{ fontSize: 16 }} />
                               </IconButton>
@@ -1140,7 +1152,9 @@ export default function Volumes() {
         siteVols={siteVols ?? []}
         appVols={appVols ?? []}
         heldVols={heldVols ?? []}
-        onOpen={(volumes, label) => openVolumeShell(volumes, label)}
+        onOpen={(volumes, label) =>
+          openVolumeShell(volumes, label, { readOnly: shellReadOnly })
+        }
       />
       {snapshotTarget && (
         <SnapshotVolumeDialog

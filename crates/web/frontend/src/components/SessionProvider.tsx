@@ -13,7 +13,7 @@ const DEFAULT_SHELLS_SIDEBAR_WIDTH = 600;
 
 export type ShellTab =
   | { kind: "shell"; id: string; app: string; shellName: string; params: Record<string, string> }
-  | { kind: "volume"; id: string; volumes: VolumeRef[]; label: string };
+  | { kind: "volume"; id: string; volumes: VolumeRef[]; label: string; readOnly: boolean };
 
 interface SessionCtx {
   session: Session | null;
@@ -30,7 +30,7 @@ interface SessionCtx {
   activeShellId: string | null;
   setActiveShellId: (id: string | null) => void;
   openShell: (app: string, shellName: string, params: Record<string, string>) => void;
-  openVolumeShell: (volumes: VolumeRef[], label: string) => void;
+  openVolumeShell: (volumes: VolumeRef[], label: string, opts?: { readOnly?: boolean }) => void;
   closeShell: (id: string) => void;
   shellsSidebarWidth: number;
   setShellsSidebarWidth: (w: number) => void;
@@ -119,12 +119,21 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setActiveShellId(id);
   }, []);
 
-  const openVolumeShell = useCallback((volumes: VolumeRef[], label: string) => {
-    const id = String(++tabIdCounter);
-    const tab: ShellTab = { kind: "volume", id, volumes, label };
-    setShellTabs((prev) => [...prev, tab]);
-    setActiveShellId(id);
-  }, []);
+  const openVolumeShell = useCallback(
+    (volumes: VolumeRef[], label: string, opts?: { readOnly?: boolean }) => {
+      const id = String(++tabIdCounter);
+      const tab: ShellTab = {
+        kind: "volume",
+        id,
+        volumes,
+        label,
+        readOnly: opts?.readOnly ?? false,
+      };
+      setShellTabs((prev) => [...prev, tab]);
+      setActiveShellId(id);
+    },
+    [],
+  );
 
   const closeShell = useCallback((id: string) => {
     setShellTabs((prev) => {

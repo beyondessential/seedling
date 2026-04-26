@@ -63,6 +63,11 @@ pub(crate) async fn open_volume_shell_session(
         volumes: Vec<VolumeShellMount>,
         rows: u16,
         cols: u16,
+        // i[impl volumes.shell] — when true, every resolved bind mount is
+        // forced read-only inside the shell container, regardless of whether
+        // the underlying volume is inherently writable.
+        #[serde(default)]
+        read_only: bool,
     }
     #[derive(serde::Deserialize)]
     struct Request {
@@ -296,12 +301,16 @@ pub(crate) async fn open_volume_shell_session(
         Some("/mnt".to_owned())
     };
 
+    let force_ro = params.read_only;
     let mounts: Vec<Mount> = resolved
         .into_iter()
         .map(|r| Mount {
             source: MountSource::Bind(r.source),
             target: r.target,
-            read_only: r.read_only,
+            // i[impl volumes.shell] — `force_ro` overrides the per-volume
+            // default; the inherent read-only flag still wins for snapshot
+            // site volumes when `force_ro` is false.
+            read_only: r.read_only || force_ro,
         })
         .collect();
 

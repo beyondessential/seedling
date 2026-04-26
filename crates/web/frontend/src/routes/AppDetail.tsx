@@ -52,7 +52,7 @@ import {
 } from "../components/ImageReferences";
 import { MapVolumeDialog } from "../components/MapVolumeDialog";
 import { OiErrorAlert } from "../components/OiErrorAlert";
-import { useGuard } from "../components/SafetyModeProvider";
+import { useGuard, useSafetyMode } from "../components/SafetyModeProvider";
 import { useSessionContext } from "../components/SessionProvider";
 import { SnapshotVolumeDialog } from "../components/SnapshotVolumeDialog";
 import { useOiAction } from "../hooks/useOiAction";
@@ -410,7 +410,10 @@ function ResourcesSection({
   const { execute: executeRestart, loading: restarting } = useOiAction();
   const { execute: executeStop, loading: stopping } = useOiAction();
   const { openVolumeShell } = useSessionContext();
+  const { mode } = useSafetyMode();
   const writeGuard = useGuard("write");
+  // w[impl volumes.shell-ui.read-only]
+  const shellReadOnly = mode === "read";
   const [snapshotTarget, setSnapshotTarget] = useState<{
     source: string;
     label: string;
@@ -594,9 +597,12 @@ function ResourcesSection({
               </Tooltip>
             )}
             {/* w[volumes.shell-ui] */}
+            {/* w[impl volumes.shell-ui.read-only] */}
             {r.type === "volume" && (
               <>
-                <Tooltip title={writeGuard.reason ?? "Open shell"}>
+                <Tooltip
+                  title={shellReadOnly ? "Open shell (read-only)" : "Open shell"}
+                >
                   <span>
                     <IconButton
                       size="small"
@@ -604,9 +610,9 @@ function ResourcesSection({
                         openVolumeShell(
                           [{ kind: "app", app: appName, volume: r.name }],
                           `${appName}.${r.name}`,
+                          { readOnly: shellReadOnly },
                         )
                       }
-                      disabled={!writeGuard.allowed}
                     >
                       <TerminalIcon sx={{ fontSize: 14 }} />
                     </IconButton>

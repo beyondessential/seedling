@@ -13,6 +13,13 @@ export interface OpenVolumeShellParams {
   volumes: VolumeRef[];
   rows: number;
   cols: number;
+  /**
+   * When true, every bind mount inside the shell container is forced
+   * read-only regardless of whether the underlying volume is inherently
+   * writable. Used by the UI to honour read-mode safety without disabling
+   * the shell button entirely.
+   */
+  read_only?: boolean;
 }
 
 export interface OpenShellResult {
