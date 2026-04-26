@@ -12,6 +12,23 @@ use crate::defs::{
 
 use super::apps::{install_requirement_kind_str, serialize_param_schema};
 
+/// JSON entries for an action's declared schedules with no live timing data.
+/// Used directly by template previews (no associated app means no DB rows to
+/// look up); the `/apps/show` handler post-processes the same entries to fill
+/// in `last_fired_at` and `next_fire_at` from the schedule table.
+fn schedule_entries_json(schedules: &[String]) -> Vec<Value> {
+    schedules
+        .iter()
+        .map(|expr| {
+            json!({
+                "cronexpr": expr,
+                "last_fired_at": Value::Null,
+                "next_fire_at": Value::Null,
+            })
+        })
+        .collect()
+}
+
 /// Declared scale bounds for a deployment resource. Returns `None` for
 /// every other kind, which is all that any caller needs: scaling applies
 /// only to deployments.
@@ -77,16 +94,13 @@ pub(crate) fn action_entry_json(a: &ActionDef) -> Value {
     } else {
         "action"
     };
-    let mut obj = json!({
+    json!({
         "name": a.name,
         "description": a.description,
         "kind": kind,
         "params": serialize_param_schema(&a.params),
-    });
-    if !a.schedules.is_empty() {
-        obj["schedules"] = json!(a.schedules);
-    }
-    obj
+        "schedules": schedule_entries_json(&a.schedules),
+    })
 }
 
 pub(crate) fn shell_entry_json(s: &ShellDef) -> Value {
@@ -95,6 +109,7 @@ pub(crate) fn shell_entry_json(s: &ShellDef) -> Value {
         "description": s.description,
         "kind": "shell",
         "params": serialize_param_schema(&s.params),
+        "schedules": Value::Array(Vec::new()),
     })
 }
 
@@ -104,5 +119,6 @@ pub(crate) fn install_entry_json(install: &InstallDef) -> Value {
         "description": null,
         "kind": "install",
         "params": serialize_param_schema(&install.requirements),
+        "schedules": Value::Array(Vec::new()),
     })
 }

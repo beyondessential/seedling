@@ -107,12 +107,18 @@ export interface AppParam {
   default_value: string | null;
 }
 
+export interface ActionSchedule {
+  cronexpr: string;
+  last_fired_at: string | null;
+  next_fire_at: string | null;
+}
+
 export interface AppAction {
   name: string;
   description: string | null;
   kind: "action" | "shell" | "install" | "lifecycle";
   params: Record<string, InstallRequirement>;
-  schedules?: string[];
+  schedules: ActionSchedule[];
 }
 
 export interface CurrentOperation {

@@ -278,6 +278,79 @@ fn sync_action_schedules(state: &OiState, app_name: &AppName) {
     });
 }
 
+// i[impl app.describe] — fills in `last_fired_at` and `next_fire_at` on each
+// action's `schedules` entries. Schedules whose cronexpr is no longer present
+// in the AppDef are ignored (they will be pruned by `sync_action_schedules`).
+fn enrich_action_schedules(state: &OiState, app: &AppName, actions_json: &mut [Value]) {
+    let app_owned = app.clone();
+    let rows = state
+        .db
+        .call(move |db| crate::runtime::db::list_schedules(db, &app_owned).unwrap_or_default());
+    if rows.is_empty() {
+        return;
+    }
+
+    let now = jiff::Timestamp::now();
+    let mut last_fired: std::collections::HashMap<(String, String), Option<String>> =
+        std::collections::HashMap::new();
+    for row in &rows {
+        last_fired.insert(
+            (row.action.to_string(), row.cronexpr.clone()),
+            row.last_fired_at.clone(),
+        );
+    }
+
+    for action in actions_json.iter_mut() {
+        let Some(action_name) = action
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+        else {
+            continue;
+        };
+        let Some(schedules) = action.get_mut("schedules").and_then(|v| v.as_array_mut()) else {
+            continue;
+        };
+        for schedule in schedules.iter_mut() {
+            let Some(cronexpr) = schedule
+                .get("cronexpr")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+            else {
+                continue;
+            };
+            let last = last_fired
+                .get(&(action_name.clone(), cronexpr.clone()))
+                .cloned()
+                .unwrap_or(None);
+            let next = compute_next_fire(app, &action_name, &cronexpr, last.as_deref(), now);
+            schedule["last_fired_at"] = match &last {
+                Some(s) => Value::String(s.clone()),
+                None => Value::Null,
+            };
+            schedule["next_fire_at"] = match next {
+                Some(ts) => Value::String(ts.to_string()),
+                None => Value::Null,
+            };
+        }
+    }
+}
+
+fn compute_next_fire(
+    app: &AppName,
+    action_name: &str,
+    cronexpr: &str,
+    last_fired_at: Option<&str>,
+    now: jiff::Timestamp,
+) -> Option<jiff::Timestamp> {
+    let action = ActionName::new(action_name).ok()?;
+    let crontab = crate::defs::action::parse_cron_expr(cronexpr, app, &action).ok()?;
+    let base_time = last_fired_at
+        .and_then(|s| s.parse::<jiff::Timestamp>().ok())
+        .unwrap_or(now);
+    crontab.find_next(base_time).ok().map(jiff::Timestamp::from)
+}
+
 pub(crate) fn validate_name(name: &str) -> Result<(), OiError> {
     if name.starts_with('_') {
         return Err(OiError::new(
@@ -521,6 +594,13 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     if let Some(inst) = &def.install {
         actions_json.push(install_entry_json(inst));
     }
+
+    // i[impl app.describe] — overlay live schedule timing onto each action's
+    // `schedules` array. The bare entries from `action_entry_json` carry
+    // `last_fired_at` and `next_fire_at` set to null; here we replace those
+    // with the values stored in the schedule table and a freshly computed
+    // next-fire timestamp.
+    enrich_action_schedules(state, &params.app, &mut actions_json);
 
     // resources — with instance lifecycle state from DB observations.
     // Only query instances for Installed/Uninstalling apps; NotInstalled

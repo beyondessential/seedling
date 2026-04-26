@@ -246,9 +246,10 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[app.describe.param-secret]
 > When a param's effective `secret` flag is `true`, its `value` must be `null` in the response regardless of whether a value is stored. Clients must use `is_set` to distinguish an unset secret from a set-but-redacted secret.
 > - `unknown_params`: array of objects with fields `name` and `value`, listing parameters that have a stored value in the database but whose name does not appear in the app's current script evaluation. This is informational only; these values have no effect until the script is updated to reference them.
-> - `actions`: array of objects with fields `name`, `description`, `kind`, and `params`.
+> - `actions`: array of objects with fields `name`, `description`, `kind`, `params`, and `schedules`.
 >   `kind` is one of `action`, `shell`, `install`, or `lifecycle`. The `lifecycle` kind is used for the Start Action, which is driven autonomously and cannot be manually invoked.
 >   `params` is an object map of param key to `{ kind, required, description, default_value }`, as defined in the language spec. Empty for actions with no declared param schema.
+>   `schedules` is an array of objects with fields `cronexpr`, `last_fired_at`, and `next_fire_at`, listing every cron schedule attached to the action via [action.schedule](language.md#l--action.schedule). The array is empty for actions with no declared schedule. `last_fired_at` is the RFC 3339 timestamp at which the runtime last fired this schedule, or `null` if it has never fired (or the app is not yet installed). `next_fire_at` is the RFC 3339 timestamp at which the schedule is next expected to fire, computed from `last_fired_at` (or the current time if never fired); it is `null` only when the cron expression cannot be evaluated.
 > - `current_operation`: present only when status is `Operating`.
 >   Has fields `action_name`, `barrier`, `source_generation`, and `target_generation`.
 >   `barrier` is either `null` (operation is running but not yet at a barrier, or the barrier has already been satisfied and the closure is about to resume) or an object with fields `resources`, `required_state`, `deadline_secs`, and `elapsed_secs`.
@@ -932,7 +933,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > - `resources`: array of objects with fields `name`, `type`, and `def` — the same shapes defined in [app.describe](#i--app.describe). Instance state and faults are not included because a template has none.
 > - `params`: array of objects with fields `name`, `kind`, `required`, `description`, `default_value`, and `secret`, matching the param schema defined in [app.describe](#i--app.describe).
-> - `actions`: array of objects with fields `name`, `description`, `kind`, and `params`, matching the shape defined in [app.describe](#i--app.describe).
+> - `actions`: array of objects with fields `name`, `description`, `kind`, `params`, and `schedules`, matching the shape defined in [app.describe](#i--app.describe). For a template preview the timing fields of each schedule (`last_fired_at`, `next_fire_at`) are `null`, because the template is not associated with any registered app.
 > - `script_error`: a string describing a script evaluation failure, or `null` when evaluation succeeded. When `script_error` is non-null the other fields reflect whatever partial state the engine produced before the error.
 
 > i[template.instantiate]

@@ -61,6 +61,7 @@ import { useEventRefresh } from "../hooks/useEventRefresh";
 import { isStrongPassword, passwordScore } from "../lib/passwordStrength";
 import { statusColor, statusLabel } from "../lib/status";
 import type {
+  ActionSchedule,
   AppAction,
   AppDetail,
   AppParam,
@@ -1589,6 +1590,59 @@ function InstallSection({
   );
 }
 
+type ActionScheduleRow = ActionSchedule & { action: string };
+
+function collectActionSchedules(actions: AppAction[]): ActionScheduleRow[] {
+  const rows: ActionScheduleRow[] = [];
+  for (const a of actions) {
+    for (const s of a.schedules) {
+      rows.push({ action: a.name, ...s });
+    }
+  }
+  return rows;
+}
+
+function SchedulesSection({ actions }: { actions: AppAction[] }) {
+  const rows = useMemo(() => collectActionSchedules(actions), [actions]);
+  if (rows.length === 0) return null;
+  return (
+    <TableContainer component={Paper} variant="outlined">
+      <Table size="small">
+        <TableHead>
+          <TableRow>
+            <TableCell>Action</TableCell>
+            <TableCell>Schedule</TableCell>
+            <TableCell>Last fire</TableCell>
+            <TableCell>Next fire</TableCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {rows.map((r) => (
+            <TableRow key={`${r.action}::${r.cronexpr}`}>
+              <TableCell sx={{ fontFamily: "monospace" }}>{r.action}</TableCell>
+              <TableCell sx={{ fontFamily: "monospace" }}>{r.cronexpr}</TableCell>
+              <TableCell
+                sx={{ color: r.last_fired_at ? undefined : "text.disabled" }}
+              >
+                {r.last_fired_at
+                  ? new Date(r.last_fired_at).toLocaleString()
+                  : "never"}
+              </TableCell>
+              <TableCell
+                sx={{ color: r.next_fire_at ? undefined : "text.disabled" }}
+              >
+                {r.next_fire_at
+                  ? new Date(r.next_fire_at).toLocaleString()
+                  : "—"}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </TableContainer>
+  );
+}
+
 function ActionsSection({
   appName,
   actions,
@@ -1650,7 +1704,42 @@ function ActionsSection({
               return (
                 <TableRow key={a.name}>
                   <TableCell sx={{ fontFamily: "monospace" }}>
-                    {a.name}
+                    <Box
+                      sx={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 0.5,
+                      }}
+                    >
+                      <span>{a.name}</span>
+                      {a.schedules.length > 0 && (
+                        <Tooltip
+                          title={
+                            <span style={{ whiteSpace: "pre-line" }}>
+                              {a.schedules
+                                .map((s) => `schedule: ${s.cronexpr}`)
+                                .join("\n")}
+                            </span>
+                          }
+                        >
+                          <Chip
+                            label={
+                              a.schedules.length === 1
+                                ? "scheduled"
+                                : `scheduled ×${a.schedules.length}`
+                            }
+                            size="small"
+                            variant="outlined"
+                            color="info"
+                            sx={{
+                              fontSize: "0.65rem",
+                              height: 18,
+                              "& .MuiChip-label": { px: 0.75 },
+                            }}
+                          />
+                        </Tooltip>
+                      )}
+                    </Box>
                   </TableCell>
                   <TableCell>
                     <Chip label={a.kind} size="small" variant="outlined" />
@@ -2965,6 +3054,15 @@ export default function AppDetail() {
                     onRefresh={refetch}
                   />
                 </Section>
+
+                {data.actions.some((a) => a.schedules.length > 0) && (
+                  <>
+                    <Divider sx={{ my: 3 }} />
+                    <Section title="Schedules">
+                      <SchedulesSection actions={data.actions} />
+                    </Section>
+                  </>
+                )}
 
                 <Divider sx={{ my: 3 }} />
 
