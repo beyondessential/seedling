@@ -320,6 +320,7 @@ pub(super) fn parse_healthcheck(mut map: rhai::Map) -> Result<HealthcheckDef, Bo
         }
     };
 
+    // l[impl deployment.healthcheck.timings]
     let interval_secs = take_nonneg_secs(&mut map, "interval", HEALTHCHECK_DEFAULT_INTERVAL_SECS)?;
     let timeout_secs = take_nonneg_secs(&mut map, "timeout", HEALTHCHECK_DEFAULT_TIMEOUT_SECS)?;
     let start_period_secs = take_nonneg_secs(
