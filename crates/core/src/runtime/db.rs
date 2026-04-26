@@ -98,6 +98,12 @@ const SQL_V39: &str = include_str!("db/migrations/v39.sql");
 const SQL_V40: &str = include_str!("db/migrations/v40.sql");
 // l[impl rt.signal]
 const SQL_V41: &str = include_str!("db/migrations/v41.sql");
+// r[impl tls.dns-provider.lifecycle]
+// r[impl tls.csr.flow]
+// r[impl tls.strategy.manual]
+// r[impl tls.strategy.acme-dns]
+// r[impl tls.policy.apply]
+const SQL_V42: &str = include_str!("db/migrations/v42.sql");
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -298,6 +304,11 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 41,
         sql: SQL_V41,
+        custom_run: None,
+    },
+    Migration {
+        version: 42,
+        sql: SQL_V42,
         custom_run: None,
     },
 ];
