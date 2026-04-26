@@ -39,31 +39,55 @@ pub async fn open_shell(
     name: String,
     params: serde_json::Map<String, serde_json::Value>,
 ) -> i32 {
-    // 1. Current terminal dimensions.
     let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+    let mut shell_params = serde_json::json!({
+        "app": app, "name": name, "rows": rows, "cols": cols,
+    });
+    if !params.is_empty() {
+        shell_params["params"] = serde_json::Value::Object(params);
+    }
+    run_shell(client, "/shells/start", shell_params).await
+}
 
-    // 2. Open the session bidi stream (kept open for stdin after the handshake).
+/// Open a volume shell session against `/volumes/shell`. `read_only` forces
+/// every mount into the container as read-only regardless of the underlying
+/// volume kind.
+// i[impl volumes.shell]
+pub async fn open_volume_shell(
+    client: &OiClient,
+    volumes: Vec<serde_json::Value>,
+    read_only: bool,
+) -> i32 {
+    let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+    let params = serde_json::json!({
+        "volumes": volumes,
+        "rows": rows,
+        "cols": cols,
+        "read_only": read_only,
+    });
+    run_shell(client, "/volumes/shell", params).await
+}
+
+/// Drives the shared shell wire protocol: open a bidi, send the start request,
+/// parse the handshake, accept the two uni streams, switch the local terminal
+/// into raw mode, and pump bytes until the server emits its exit frame.
+async fn run_shell(client: &OiClient, method: &str, request_params: serde_json::Value) -> i32 {
+    // 1. Open the session bidi stream (kept open for stdin after the handshake).
     let (mut session_send, mut session_recv) = client.open_bi().await.unwrap_or_else(|e| {
         eprintln!("error opening shell stream: {e}");
         std::process::exit(1);
     });
 
-    // 3. Send the /shells/start request (newline-terminated JSON).
+    // 2. Send the start request (newline-terminated JSON).
     {
-        let mut shell_params = serde_json::json!({
-            "app": app, "name": name, "rows": rows, "cols": cols,
-        });
-        if !params.is_empty() {
-            shell_params["params"] = serde_json::Value::Object(params.clone());
-        }
         let mut req = serde_json::to_vec(&serde_json::json!({
-            "method": "/shells/start",
-            "params": shell_params,
+            "method": method,
+            "params": request_params,
         }))
         .expect("serialisation never fails");
         req.push(b'\n');
         if let Err(e) = session_send.write_all(&req).await {
-            eprintln!("error sending /shells/start: {e}");
+            eprintln!("error sending {method}: {e}");
             return 1;
         }
     }

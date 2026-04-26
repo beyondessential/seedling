@@ -2,6 +2,7 @@ use clap::Subcommand;
 use seedling_protocol::client::OiClient;
 
 use super::print_result;
+use crate::shell::open_volume_shell;
 
 #[derive(Subcommand)]
 pub(super) enum VolumesCommand {
@@ -14,6 +15,23 @@ pub(super) enum VolumesCommand {
     Site {
         #[command(subcommand)]
         command: SiteCommand,
+    },
+    /// Open an interactive shell with one or more volumes mounted side-by-side.
+    ///
+    /// Each VOLUME argument is parsed as one of:
+    ///
+    ///   _site/NAME    a site volume
+    ///
+    ///   APP/VOLUME    a volume owned by APP
+    ///
+    ///   held:ID       a held volume (id from `volumes held list`)
+    Shell {
+        /// Mount every volume read-only regardless of its underlying kind.
+        #[arg(short = 'r', long)]
+        read_only: bool,
+        /// Volumes to mount. At least one is required.
+        #[arg(required = true)]
+        volumes: Vec<String>,
     },
 }
 
@@ -69,8 +87,98 @@ pub(super) enum SiteCommand {
     },
 }
 
+/// Parse one of the volume spec strings accepted by `volumes shell` into the
+/// JSON object the OI endpoint expects.
+// i[impl volumes.shell]
+fn parse_volume_spec(spec: &str) -> Result<serde_json::Value, String> {
+    if let Some(id) = spec.strip_prefix("held:") {
+        if id.is_empty() {
+            return Err(format!("missing held id after 'held:': {spec:?}"));
+        }
+        return Ok(serde_json::json!({ "kind": "held", "id": id }));
+    }
+    let Some((left, right)) = spec.split_once('/') else {
+        return Err(format!(
+            "invalid volume spec {spec:?}: expected _site/NAME, APP/VOLUME, or held:ID"
+        ));
+    };
+    if left == "_site" {
+        if right.is_empty() {
+            return Err(format!("missing site volume name after '_site/': {spec:?}"));
+        }
+        return Ok(serde_json::json!({ "kind": "site", "name": right }));
+    }
+    if left.is_empty() || right.is_empty() {
+        return Err(format!(
+            "invalid volume spec {spec:?}: expected _site/NAME, APP/VOLUME, or held:ID"
+        ));
+    }
+    Ok(serde_json::json!({
+        "kind": "app",
+        "app": left,
+        "volume": right,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_volume_spec;
+    use serde_json::json;
+
+    #[test]
+    fn parses_site_volume() {
+        assert_eq!(
+            parse_volume_spec("_site/data").unwrap(),
+            json!({ "kind": "site", "name": "data" })
+        );
+    }
+
+    #[test]
+    fn parses_app_volume() {
+        assert_eq!(
+            parse_volume_spec("postgres/pg18").unwrap(),
+            json!({ "kind": "app", "app": "postgres", "volume": "pg18" })
+        );
+    }
+
+    #[test]
+    fn parses_held_volume() {
+        assert_eq!(
+            parse_volume_spec("held:abc-123").unwrap(),
+            json!({ "kind": "held", "id": "abc-123" })
+        );
+    }
+
+    #[test]
+    fn rejects_bare_word() {
+        assert!(parse_volume_spec("just-a-name").is_err());
+    }
+
+    #[test]
+    fn rejects_empty_held_id() {
+        assert!(parse_volume_spec("held:").is_err());
+    }
+
+    #[test]
+    fn rejects_empty_site_name() {
+        assert!(parse_volume_spec("_site/").is_err());
+    }
+}
+
 pub(super) async fn dispatch(client: &OiClient, cmd: VolumesCommand) {
     match cmd {
+        VolumesCommand::Shell { read_only, volumes } => {
+            let parsed: Result<Vec<_>, _> = volumes.iter().map(|s| parse_volume_spec(s)).collect();
+            let refs = match parsed {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(2);
+                }
+            };
+            let exit = open_volume_shell(client, refs, read_only).await;
+            std::process::exit(exit);
+        }
         VolumesCommand::Held { command } => match command {
             HeldCommand::List => {
                 print_result(
