@@ -163,6 +163,7 @@ let kopia_job = || {
         .writable_rootfs()
         .cap_add("DAC_READ_SEARCH")
         .cap_add("DAC_OVERRIDE")
+        .cap_add("FOWNER")
         .mount("/app/config", config)
         .mount("/app/cache", cache)
 };
@@ -308,7 +309,7 @@ app.on_action("apply-policy", |rt, _param| {
 
 // Drops the operator into a shell with the Kopia repository already connected,
 // so they can run arbitrary kopia commands to inspect or repair the repository.
-app.on_shell("kopia", |_rt, shell, _param| {
+app.on_shell("kopia", |rt, shell, _param| {
     shell.attach(kopia_job.call()
         .command("bash")
     );
