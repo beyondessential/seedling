@@ -860,7 +860,7 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > When the data directory resides on a BTRFS filesystem, named non-tmpfs volumes must be created as BTRFS subvolumes.
 
 > r[actuate.volume.hold]
-> When a named non-tmpfs volume or a managed or snapshot site volume would be removed — either because the volume name has been removed from the app definition, because the volume's storage backend cannot be updated in-place, or because an operator has requested deletion of a managed or snapshot site volume — the runtime must preserve the volume's data in a held state instead of deleting it. The held volume remains linked to the originating context: app volumes to their app, and site volumes to the site (reported as app name `_site`). If the app still requires a volume under the same name, a fresh volume is created and the old one is held alongside it.
+> When a named non-tmpfs volume or a managed site volume would be removed — either because the volume name has been removed from the app definition, because the volume's storage backend cannot be updated in-place, or because an operator has requested deletion of a managed site volume — the runtime must preserve the volume's data in a held state instead of deleting it. The held volume remains linked to the originating context: app volumes to their app, and site volumes to the site (reported as app name `_site`). If the app still requires a volume under the same name, a fresh volume is created and the old one is held alongside it. Snapshot site volumes are excluded from the hold mechanism (see [volume.site.snapshot.delete](#r--volume.site.snapshot.delete)).
 
 > r[actuate.volume.hold.confirm]
 > An operator must explicitly confirm deletion of a held volume before its data is removed.
@@ -877,7 +877,7 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > Site volumes may be read-write or read-only. Tmpfs site volumes are not supported.
 
 > r[volume.site.lifecycle]
-> Site volumes are created and deleted exclusively through operator commands. The runtime must create the backing storage for managed site volumes at creation time. When a managed or snapshot site volume is deleted, its backing storage must be routed through the [held volume](#r--actuate.volume.hold) mechanism so that an operator must explicitly confirm final removal. Deleting a bind site volume must only drop the runtime's reference and must not affect the operator-provided host path.
+> Site volumes are created and deleted exclusively through operator commands. The runtime must create the backing storage for managed site volumes at creation time. When a managed site volume is deleted, its backing storage must be routed through the [held volume](#r--actuate.volume.hold) mechanism so that an operator must explicitly confirm final removal. Deleting a snapshot site volume removes its backing storage directly without routing through the hold mechanism (see [volume.site.snapshot.delete](#r--volume.site.snapshot.delete)). Deleting a bind site volume must only drop the runtime's reference and must not affect the operator-provided host path.
 
 > r[volume.site.lifecycle.events]
 > Site volume creation and deletion must emit events on the event feed and be recorded in the [audit log](#r--audit.log). Deletion events must identify the site volume's kind and, when the deletion routed through the held-volume mechanism, the resulting held volume identifier.
@@ -887,6 +887,9 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 
 > r[volume.site.snapshot.events]
 > Creating a snapshot site volume must emit an event identifying the new snapshot and the source volume (app-scoped or site-scoped).
+
+> r[volume.site.snapshot.delete]
+> Deletion of a snapshot site volume removes the backing storage directly and does not route through the [held volume](#r--actuate.volume.hold) mechanism. Snapshots are read-only by construction (which prevents the rename used by the hold path) and the source volume is unaffected by snapshot deletion, so there is no data the operator could meaningfully recover from a held copy of a snapshot. The corresponding [site volume deletion event](#r--volume.site.lifecycle.events) must therefore record no held volume identifier for the snapshot kind.
 
 > r[volume.site.promote]
 > An operator may promote a snapshot site volume to a fresh managed site volume with an operator-chosen name. The runtime must materialise the new volume as a writable copy seeded from the snapshot's contents and record it as a managed site volume. The source snapshot is not modified and remains available; operators may independently delete it afterwards if they wish. Promotion is only supported on BTRFS-backed installations because it relies on the same snapshotting primitive as `volume.site.snapshot`.

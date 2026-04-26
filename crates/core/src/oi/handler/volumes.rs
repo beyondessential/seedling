@@ -293,24 +293,22 @@ pub(crate) fn delete_site_volume(
     })?;
 
     // r[impl actuate.volume.hold]
-    // Managed and snapshot kinds carry data the runtime owns; route their
-    // deletion through the held-volume mechanism so an operator must
-    // explicitly confirm the final removal. Bind kinds only reference an
-    // operator-provided host path — dropping the row leaves the host path
-    // untouched and no hold is created.
+    // r[impl volume.site.snapshot.delete]
+    // Managed kinds carry runtime-owned data and route through the held-volume
+    // mechanism so an operator must explicitly confirm the final removal.
+    // Snapshot kinds are deleted directly: snapshots are read-only BTRFS
+    // subvolumes (so the rename used by the hold path returns EROFS), and
+    // their source volume remains intact so there is nothing to recover from
+    // a held copy. Bind kinds only reference an operator-provided host path,
+    // so dropping the row is sufficient.
     let held_meta = match def.kind {
-        SiteVolumeKind::Managed | SiteVolumeKind::Snapshot { .. } => {
-            let reason = match def.kind {
-                SiteVolumeKind::Managed => "site volume deleted by operator",
-                SiteVolumeKind::Snapshot { .. } => "site snapshot deleted by operator",
-                SiteVolumeKind::Bind { .. } => unreachable!(),
-            };
+        SiteVolumeKind::Managed => {
             let meta = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {
                     state
                         .driver
                         .volume_store
-                        .hold_site(params.name.as_str(), reason)
+                        .hold_site(params.name.as_str(), "site volume deleted by operator")
                         .await
                         .map_err(|e| {
                             OiError::new(
@@ -321,6 +319,24 @@ pub(crate) fn delete_site_volume(
                 })
             })?;
             Some(meta)
+        }
+        SiteVolumeKind::Snapshot { .. } => {
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    state
+                        .driver
+                        .volume_store
+                        .remove_site(params.name.as_str())
+                        .await
+                        .map_err(|e| {
+                            OiError::new(
+                                ErrorCode::Internal,
+                                format!("failed to remove site snapshot: {e}"),
+                            )
+                        })
+                })
+            })?;
+            None
         }
         SiteVolumeKind::Bind { .. } => None,
     };
