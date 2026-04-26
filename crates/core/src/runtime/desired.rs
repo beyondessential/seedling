@@ -131,7 +131,7 @@ impl OperationProgress {
                 // pin rows written at call time drive pull reconciliation;
                 // no resources need to be marked Ready for it.
                 CallKind::WarmImages => {}
-                // r[impl rt.signal]
+                // l[impl rt.signal]
                 // Signal is a transient side-effect; it does not affect the
                 // computed desired state.
                 CallKind::Signal => {}

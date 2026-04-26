@@ -402,7 +402,7 @@ impl Actuator {
         }
     }
 
-    // r[impl rt.signal]
+    // l[impl rt.signal]
     /// Send a POSIX signal to the running container's PID 1. Used to wire
     /// `rt.signal` in the BSL runtime to the underlying container runtime.
     /// Non-fatal if the container is already gone — caller can decide whether

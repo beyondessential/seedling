@@ -128,7 +128,7 @@ pub trait ContainerRuntime: Send + Sync + 'static {
     // Interactive shell sessions — runs a fresh ephemeral container with a PTY.
     fn exec<'a>(&'a self, spec: ContainerSpec) -> BoxFuture<'a, Result<ExecHandle, BoxError>>;
 
-    // r[impl rt.signal]
+    // l[impl rt.signal]
     /// Send a POSIX signal to the running container's PID 1.
     /// Returns `Ok(true)` when the signal was delivered, `Ok(false)` when the
     /// container did not exist (already terminated). Other errors propagate.

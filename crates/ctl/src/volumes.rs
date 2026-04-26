@@ -120,51 +120,6 @@ fn parse_volume_spec(spec: &str) -> Result<serde_json::Value, String> {
     }))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::parse_volume_spec;
-    use serde_json::json;
-
-    #[test]
-    fn parses_site_volume() {
-        assert_eq!(
-            parse_volume_spec("_site/data").unwrap(),
-            json!({ "kind": "site", "name": "data" })
-        );
-    }
-
-    #[test]
-    fn parses_app_volume() {
-        assert_eq!(
-            parse_volume_spec("postgres/pg18").unwrap(),
-            json!({ "kind": "app", "app": "postgres", "volume": "pg18" })
-        );
-    }
-
-    #[test]
-    fn parses_held_volume() {
-        assert_eq!(
-            parse_volume_spec("held:abc-123").unwrap(),
-            json!({ "kind": "held", "id": "abc-123" })
-        );
-    }
-
-    #[test]
-    fn rejects_bare_word() {
-        assert!(parse_volume_spec("just-a-name").is_err());
-    }
-
-    #[test]
-    fn rejects_empty_held_id() {
-        assert!(parse_volume_spec("held:").is_err());
-    }
-
-    #[test]
-    fn rejects_empty_site_name() {
-        assert!(parse_volume_spec("_site/").is_err());
-    }
-}
-
 pub(super) async fn dispatch(client: &OiClient, cmd: VolumesCommand) {
     match cmd {
         VolumesCommand::Shell { read_only, volumes } => {
@@ -276,5 +231,50 @@ pub(super) async fn dispatch(client: &OiClient, cmd: VolumesCommand) {
                 );
             }
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_volume_spec;
+    use serde_json::json;
+
+    #[test]
+    fn parses_site_volume() {
+        assert_eq!(
+            parse_volume_spec("_site/data").unwrap(),
+            json!({ "kind": "site", "name": "data" })
+        );
+    }
+
+    #[test]
+    fn parses_app_volume() {
+        assert_eq!(
+            parse_volume_spec("postgres/pg18").unwrap(),
+            json!({ "kind": "app", "app": "postgres", "volume": "pg18" })
+        );
+    }
+
+    #[test]
+    fn parses_held_volume() {
+        assert_eq!(
+            parse_volume_spec("held:abc-123").unwrap(),
+            json!({ "kind": "held", "id": "abc-123" })
+        );
+    }
+
+    #[test]
+    fn rejects_bare_word() {
+        assert!(parse_volume_spec("just-a-name").is_err());
+    }
+
+    #[test]
+    fn rejects_empty_held_id() {
+        assert!(parse_volume_spec("held:").is_err());
+    }
+
+    #[test]
+    fn rejects_empty_site_name() {
+        assert!(parse_volume_spec("_site/").is_err());
     }
 }

@@ -33,7 +33,7 @@ fn open_operation_dbs(db_path: &Path, app_name: &AppName) -> Option<DbHandle> {
     }
 }
 
-// r[impl rt.signal]
+// l[impl rt.signal]
 /// Adapter from the system actuator's async `signal_container` to the
 /// synchronous `ContainerSignaler` trait expected by the BSL runtime. The
 /// adapter is constructed in the OI layer so that language-only tests don't

@@ -338,7 +338,7 @@ pub(crate) async fn open_volume_shell_session(
         // listing or editing files owned by other UIDs (e.g. postgres's
         // `0700 999:999` data dir) fails. Grant the four caps needed for
         // root to actually behave like root over the filesystem.
-        // r[impl shell.volume.caps]
+        // i[impl volumes.shell.caps]
         extra_caps: vec![
             "DAC_OVERRIDE".to_owned(),
             "DAC_READ_SEARCH".to_owned(),

@@ -422,7 +422,7 @@ impl RuntimeInstance {
                 };
                 return Ok(vec![(instance, Some(Resource::Deployment(dep)))]);
             }
-            // r[impl identity.deployment]
+            // r[impl identity.scaled]
             // Named deployments resolve through the scaled-group API: the
             // steady-state reconciler keeps every replica as `is_scaled=1`,
             // so creating a singleton here would only produce a transient
@@ -846,7 +846,7 @@ impl RuntimeInstance {
     }
 
     // l[impl rt.signal]
-    // r[impl rt.signal]
+    // l[impl rt.signal]
     /// Deliver a POSIX signal to one or more running container instances.
     /// Replay-safe: an entry committed in a prior pass is skipped on the
     /// next replay so the signal is sent at most once. The actual signal

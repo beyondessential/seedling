@@ -263,7 +263,7 @@ pub struct OperationContext<'a, W: WorldStateOracle + 'static> {
     pub cancel_token: Arc<CancelToken>,
     /// Hook for `rt.signal()`. `None` in language-only test contexts where
     /// no real container runtime exists.
-    // r[impl rt.signal]
+    // l[impl rt.signal]
     pub container_signaler: Option<std::sync::Arc<dyn crate::runtime::barrier::ContainerSignaler>>,
 }
 
@@ -317,7 +317,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         world as Arc<dyn WorldStateOracle>,
         Arc::clone(&cancel_token),
     )));
-    // r[impl rt.signal]
+    // l[impl rt.signal]
     ctx.lock().container_signaler = container_signaler;
 
     // Clear the thread-local barrier-hit flag at the start of each pass.

@@ -58,7 +58,7 @@ pub enum CallKind {
     /// `rt.signal(...)` — deliver a POSIX signal to one or more container
     /// instances. The signal name is stored separately on the entry; on
     /// replay, an already-committed signal is not re-sent.
-    // r[impl rt.signal]
+    // l[impl rt.signal]
     Signal,
 }
 
@@ -71,7 +71,7 @@ pub struct ActionLogEntry {
     pub barrier: Option<BarrierRecord>,
     /// Per-call_kind metadata. For `CallKind::Signal` this carries the
     /// canonical signal name (e.g. `"SIGHUP"`). Other kinds leave it `None`.
-    // r[impl rt.signal]
+    // l[impl rt.signal]
     #[serde(default)]
     pub extra: Option<String>,
 }
@@ -121,7 +121,7 @@ pub struct ReplayContext {
     /// Hook for `rt.signal()`. The runtime calls this synchronously to deliver
     /// a POSIX signal to a running container. `None` in test / stub contexts
     /// where no real container runtime is present.
-    // r[impl rt.signal]
+    // l[impl rt.signal]
     pub container_signaler: Option<Arc<dyn ContainerSignaler>>,
 }
 
@@ -129,7 +129,7 @@ pub struct ReplayContext {
 /// deliver a signal to a running container. Implemented in the operation
 /// loop (`oi/handler/actions/lifecycle.rs`) on top of the system actuator;
 /// stubbed out in language-only tests where no real runtime exists.
-// r[impl rt.signal]
+// l[impl rt.signal]
 pub trait ContainerSignaler: Send + Sync {
     /// Deliver `signal` to the named container's PID 1.
     /// Returns `Ok(true)` when the signal was sent, `Ok(false)` when the

@@ -507,6 +507,16 @@ This is currently the only value.
 >
 > An empty `cmd` must cause the method to throw.
 
+> l[deployment.healthcheck.timings]
+> The timing fields control how often the probe runs and how quickly a failing probe transitions the container from healthy to unhealthy:
+>
+> - `interval`: seconds between successive checks. Default 30.
+> - `timeout`: seconds a single check may run before being considered a failure. Default 30.
+> - `retries`: consecutive failures required to transition from healthy to unhealthy. Default 3.
+> - `start_period`: seconds of grace after the container starts during which failures do not count against `retries`. Default 0.
+>
+> All timing values must be non-negative; `retries` must be a positive integer. The grace window before a starting container is treated as unhealthy is `start_period + retries × interval`.
+
 > l[deployment.healthcheck.on-failure]
 > The `on_failure` response determines how the runtime reacts to a Deployment instance that has been unhealthy long enough to exceed the grace window:
 >
@@ -865,6 +875,11 @@ This is currently the only value.
 
 > l[action.install.requirements.kind-unknown]
 > If a param `kind` is provided but does not match any of the defined kinds, `on_install()` must throw.
+
+> l[action.params.volume]
+> Action and shell param schemas accept an additional kind, `"volume"`, that the static schemas (`app.param`, install requirements) must reject. When an action or shell schema declares a param with `kind: "volume"`, the runtime asks the operator to pick a site volume at invocation time, validates that the chosen volume exists, and at dispatch time builds an operation-scoped binding under the reserved key `<param-name>_volume` per [operation.volume-param](runtime.md#r--operation.volume-param). The closure consumes it via `app.external_volume(param["<param-name>_volume"])`.
+>
+> The static schemas reject this kind because their bindings outlive any single operation; the equivalent for static configuration is a declared `external_volume` mapping wired up by the operator.
 
 # Runtime Instance
 

@@ -448,7 +448,7 @@ impl PodmanRuntime {
             .collect())
     }
 
-    // r[impl rt.signal]
+    // l[impl rt.signal]
     async fn signal_container_impl(&self, name: &str, signal: &str) -> Result<bool, PodmanError> {
         use podman_rest_client::v5::params::ContainerKillLibpod;
         let params = ContainerKillLibpod {

@@ -305,6 +305,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[history.action-log.replay]
 > The action execution log must contain enough information to replay an interrupted lifecycle operation from the beginning and fast-forward to the interruption point.
 
+> r[rt.signal]
+> The runtime persists each [`rt.signal`](language.md#l--rt.signal) invocation to the action execution log so the call is not re-delivered when an interrupted operation replays. The persisted entry records the target instances and the signal name. On replay, the runtime treats a signal entry as already delivered and does not re-issue it; this is the at-most-once-across-replays guarantee from `l[rt.signal]`.
+
 # Audit Log
 
 > r[audit.log]
