@@ -1274,3 +1274,62 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 
 > r[secret.migration]
 > When a parameter transitions from non-secret to secret (because the BSL script is updated or the `secret` flag is changed), the runtime must move the existing stored value from non-secret storage to secret storage at the next opportunity, without requiring operator intervention.
+
+# TLS Certificate Strategy
+
+The runtime obtains and serves TLS certificates for hostnames declared by [TLS-terminating ingresses](language.md#l--ingress.tls).
+Operators may, via the operator interface, override how a given hostname's certificate is obtained on a per-hostname basis.
+This section defines the available strategies and their contracts.
+The BSL surface is intentionally strategy-agnostic: scripts declare only that an ingress wants TLS for a hostname, never how the certificate is acquired.
+
+> r[tls.strategy.default]
+> When no operator-defined strategy applies to a hostname declared by a TLS-terminating ingress, the runtime must request a public ACME certificate using the HTTP-01 challenge.
+> This is the default and applies to any hostname not bound to a different strategy.
+
+> r[tls.strategy.acme-dns]
+> Operators may bind a hostname to a [DNS provider](#r--tls.dns-provider.lifecycle); the runtime must drive ACME for that hostname using the DNS-01 challenge against the bound provider.
+> Provider credentials must be supplied to the proxy in such a way that the proxy can authenticate to the provider and complete the challenge without operator intervention per renewal.
+
+> r[tls.strategy.manual]
+> Operators may upload a PEM-encoded certificate chain and matching private key for a hostname; the runtime must cause the proxy to serve that exact pair for TLS handshakes whose SNI matches the hostname.
+> Manual certificates are not auto-renewed; replacement requires another upload.
+> A wildcard manual certificate (`*.example.com`) may be bound to a concrete hostname (`foo.example.com`) provided the certificate's [SAN coverage](#r--tls.cert.validation.san-coverage) admits that hostname.
+
+> r[tls.csr.flow]
+> Operators may instruct the runtime to generate a keypair and a Certificate Signing Request for a hostname.
+> The runtime must:
+>
+> - Generate the keypair on the server, store the private key encrypted at rest using the [secret key](#r--secret.key), and never expose it via any operator interface.
+> - Produce a PEM-encoded CSR whose Subject Alternative Name set covers the target hostname, and make the CSR retrievable via the operator interface for as long as the request is pending.
+> - Accept a signed certificate uploaded later, verify it matches the stored private key and satisfies [SAN coverage](#r--tls.cert.validation.san-coverage), and on success transition the hostname's strategy to manual using the uploaded certificate paired with the held private key.
+> - Permit cancellation of a pending CSR by the operator, which must destroy the stored private key.
+
+> r[tls.dns-provider.lifecycle]
+> The runtime must provide named, separately addressable DNS-provider entries that hold the credentials needed for DNS-01 challenges.
+> Provider credentials must be stored encrypted at rest using the [secret key](#r--secret.key).
+> Multiple hostnames may reference the same provider entry.
+> Deletion of a provider entry must be refused while any hostname's strategy references it.
+
+> r[tls.cert.metadata]
+> For every hostname declared by a TLS-terminating ingress, the runtime must surface to the operator interface: the active strategy, the certificate's issuer (when known), `notBefore`, `notAfter`, and the acquisition status as defined in [observe.ingress.certs](#r--observe.ingress.certs).
+> Metadata for ACME-issued certificates is derived from the proxy's certificate cache; metadata for manual and CSR-derived certificates is derived from the uploaded certificate at upload time.
+
+> r[tls.cert.validation.san-coverage]
+> Whenever the runtime accepts an operator-supplied certificate (manual upload or CSR cert upload), it must validate that the leaf certificate's Subject Alternative Name DNS entries either contain the target hostname literally or contain a wildcard entry that covers it under RFC 6125.
+> A wildcard SAN `*.example.com` covers exactly one additional left-most label (it covers `foo.example.com` but not `example.com` and not `a.b.example.com`).
+> Uploads that fail this check must be rejected and must not alter any existing policy or certificate.
+
+> r[tls.cert.validation.self-signed]
+> The runtime must accept a self-signed leaf certificate (issuer DN equal to subject DN, no chain) on operator upload, but must annotate the stored certificate so that the operator interface can flag it.
+
+> r[tls.cert.validation.expired]
+> The runtime must reject an operator-supplied certificate whose `notAfter` is already in the past at upload time, and must accept (with annotation) a certificate whose `notBefore` is in the future.
+
+> r[tls.fault.expiring]
+> For certificates that the runtime cannot autonomously renew (manual uploads and CSR-derived certificates), if `notAfter` is within fourteen days, the runtime must file a fault of kind `cert_expiring_soon` against each ingress that uses the affected hostname, identifying the hostname, the strategy, and the expiry timestamp.
+> ACME-issued certificates are exempt — the proxy is responsible for autonomous renewal.
+> The fault is cleared automatically when a non-expiring certificate replaces the expiring one, or when no ingress references the hostname.
+
+> r[tls.policy.apply]
+> Changes to operator-defined TLS policy (binding a hostname to a strategy, changing its parameters, or clearing it) must take effect on a subsequent reconciliation tick without operator-initiated apply steps.
+> The runtime must rebuild the proxy configuration accordingly.
