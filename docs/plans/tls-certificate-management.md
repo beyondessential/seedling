@@ -3,19 +3,21 @@
 ## Goal
 
 Give operators control over how TLS certificates are obtained for ingress
-hostnames, and visibility into their state. Three issuance modes:
+hostnames, and visibility into their state. Four issuance modes:
 
-1. **Caddy ACME with DNS-01 challenge** — for hostnames that can't or shouldn't
-   be reachable on :80 (private ingresses, wildcard certs, multi-IP setups).
-   Route 53 first; provider list is extensible.
-2. **Manual cert + key upload** — operator brings a PEM cert chain and private
-   key obtained out of band.
-3. **CSR flow** — server generates a keypair, hands the operator a CSR to take
-   to whatever CA they use, and accepts the signed cert back later. The private
-   key never leaves the server.
-
-Caddy's default HTTP-01 ACME continues to be the fallback for any hostname
-without an explicit policy, exactly as today.
+1. **Caddy ACME with HTTP-01 challenge** — the default for any hostname
+   without an explicit policy. Unchanged from today.
+2. **Caddy ACME with DNS-01 challenge** — for hostnames that can't or
+   shouldn't be reachable on :80 (private ingresses, multi-IP setups).
+   Route 53 first; provider list is designed to be extensible.
+3. **Manual cert + key upload** — operator brings a PEM cert chain and
+   private key obtained out of band. Wildcard certs are permitted in
+   this mode (an app *requesting* a wildcard via BSL is not yet
+   supported).
+4. **CSR flow** — server generates a keypair, hands the operator a CSR
+   to take to whatever CA they use, and accepts the signed cert back
+   later. The private key never leaves the server. On upload the
+   hostname's policy transitions to manual.
 
 Per-app visibility: every ingress's certificate state (mode, issuer,
 notBefore/notAfter, status) shows up in app detail and on a dedicated
@@ -256,11 +258,56 @@ hostname.
 
 New deps in `crates/core/Cargo.toml`:
 
-- `rcgen` — keypair + CSR generation.
-- `x509-parser` — parsing uploaded certs for issuer/notBefore/notAfter.
+- `rcgen` (0.14.x) — keypair + CSR generation.
+- `x509-parser` — parsing uploaded certs for issuer/notBefore/notAfter
+  and SAN inspection.
 - `pem` — PEM block encode/decode.
 
-(Or alternatives if there's a clear preference — see open questions.)
+## Key types
+
+Only ECDSA P-256 is offered initially. The `key_type` enum is shaped
+so adding ML-DSA (FIPS 204) later is a single-variant + match-arm
+change:
+
+```rust
+pub enum KeyType {
+    EcdsaP256,
+    // Future: MlDsa65, MlDsa87 — gated on rcgen's
+    // `aws_lc_rs_unstable` feature, public-CA acceptance, and Caddy /
+    // rustls cert-loading support. Not viable today (Caddy 2.11 +
+    // rustls do not currently serve ML-DSA leaf certs and no public
+    // CA issues them).
+}
+```
+
+RSA is intentionally not offered — there's no need for it given
+ECDSA-P256 is universally supported by ACME, browsers, and Caddy, and
+RSA-4096 keys are large and slow.
+
+## Cert validation rules
+
+On manual-cert upload (`/tls/certificates/upload-manual`) and on
+CSR-cert upload (`/tls/certificates/csr/upload-cert`):
+
+- **Key match** (manual only): the leaf cert's subject public key must
+  equal the public key of the supplied private key. CSR uploads check
+  against the stored key.
+- **SAN coverage**: the leaf cert's SubjectAlternativeName (DNS) entries
+  must contain the target hostname, *or* a wildcard SAN that covers it
+  (`*.example.com` covers `foo.example.com` but not `example.com` or
+  `a.b.example.com`, per RFC 6125). Reject the upload otherwise.
+- **Self-signed**: detected when issuer DN equals subject DN and chain
+  length is 1. Allowed, but the response includes a `warnings` array
+  containing `"self_signed"` and the row is marked accordingly so the
+  UI can flag it.
+- **Validity dates**: parsed and stored. An already-expired cert is
+  rejected (`not_after < now()`); a not-yet-valid cert is accepted but
+  a `warnings` entry is added.
+
+For wildcard manual certs (`*.example.com`), the operator binds the
+cert to a specific concrete hostname like `foo.example.com`; the policy
+table still keys on the concrete hostname declared by an app's
+ingress. SAN coverage validation accepts the wildcard.
 
 ## Phasing
 
@@ -278,29 +325,19 @@ New deps in `crates/core/Cargo.toml`:
 Each phase lands behind its own commit set; spec → migration →
 implementation → tests within a phase.
 
-## Open questions for the user before implementation
+## Decisions confirmed
 
-- **DNS provider list**: start with Route 53 only as requested; OK to
-  design the storage to make future providers (Cloudflare, etc.) a
-  config-only addition? Yes assumed.
-- **Crypto crate choices**: `rcgen` for keypair+CSR and `x509-parser`
-  for parsing are the obvious picks but pull in a fair bit of code;
-  acceptable, or do you want to lean on `openssl`/`rustcrypto` more
-  directly?
-- **CSR key types**: ECDSA P-256, RSA 2048, RSA 4096 default to
-  ECDSA P-256?
-- **Cert chain handling on manual upload**: accept full chain,
-  validate that leaf matches key and chain order is leaf→intermediate;
-  reject self-signed unless `--allow-self-signed` flag? Or accept
-  anything and let Caddy serve it?
-- **Should the BSL `tls()` ingress builder gain a hint** (e.g.
-  `.tls_strategy("dns:route53")`) so app authors can express a
-  preference, or is this strictly operator-side? Defaulting to
-  strictly operator-side per the architectural decision above.
-- **Policy override during operations**: changing a hostname's strategy
-  triggers a Caddy config rebuild on the next tick. Acceptable, or do
-  we want an explicit "apply" step?
-- **Wildcard certs**: a Route 53 + DNS-01 setup naturally enables
-  `*.example.com`. Should the policy table support wildcard hostnames
-  matching multiple ingresses, or one row per concrete hostname? Start
-  with concrete only; add wildcard later if needed.
+- Four modes, with default-HTTP-01 explicitly retained as one of them.
+- `rcgen` for keypair+CSR, `x509-parser` for parsing.
+- ECDSA P-256 only at first; data model leaves a hole for ML-DSA later.
+  PQC is a "no" today: Caddy 2.11 + rustls don't serve ML-DSA leaves,
+  no public CA issues them, and rcgen's ML-DSA support is behind an
+  unstable feature flag. Revisit when at least Caddy and one public CA
+  are ready.
+- No BSL surface — strategy is strictly operator-side.
+- Manual wildcard certs allowed; no wildcard *issuance* (ACME) yet; no
+  BSL wildcard-ingress support yet.
+- SAN-coverage check on every cert upload; self-signed allowed with a
+  warning.
+- Policy changes apply on the next reconciler tick; no explicit "apply"
+  step.
