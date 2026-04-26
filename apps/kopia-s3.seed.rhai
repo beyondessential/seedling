@@ -148,11 +148,21 @@ let policy_sh = || {
 
 // Base job for every Kopia task. Writable rootfs covers any stray writes
 // (e.g. to /tmp); the repository config and cache live in the state volumes.
+//
+// Capabilities: kopia runs as root inside the container but seedling's
+// default `--cap-drop=ALL` would still subject it to DAC checks. Source
+// volumes mounted in by save-snapshot routinely contain files owned by
+// service-specific UIDs (postgres at uid 999 with `0700` perms on its
+// data dir, etc.), so the backup must hold DAC_READ_SEARCH to traverse
+// them. DAC_OVERRIDE covers the rare case of directories not even
+// readable by world.
 let kopia_job = || {
     app.job()
         .image(image.call())
         .env(kopia_env.call())
         .writable_rootfs()
+        .cap_add("DAC_READ_SEARCH")
+        .cap_add("DAC_OVERRIDE")
         .mount("/app/config", config)
         .mount("/app/cache", cache)
 };
