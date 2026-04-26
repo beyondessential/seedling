@@ -44,5 +44,11 @@ zxcvbn = "3.1.0"
 whoami.workspace = true
 orion = "0.17.13"
 secrecy = "0.10.3"
+instant-acme = "0.8.5"
+rcgen = "0.14.7"
+pem = "3.0.6"
+x509-parser = "0.18.1"
+aws-sdk-route53 = "1.111.0"
+aws-config = "1.8.16"
 
 [dev-dependencies]
