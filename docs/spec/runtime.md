@@ -1288,7 +1288,16 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 
 > r[tls.strategy.acme-dns]
 > Operators may bind a hostname to a [DNS provider](#r--tls.dns-provider.lifecycle); the runtime must drive ACME for that hostname using the DNS-01 challenge against the bound provider.
-> Provider credentials must be supplied to the proxy in such a way that the proxy can authenticate to the provider and complete the challenge without operator intervention per renewal.
+> The runtime must perform the ACME flow itself rather than configuring the proxy to do so, so that DNS-provider credentials are not exposed to the proxy or its persistent configuration.
+
+> r[tls.acme.account.persist]
+> The runtime must persist ACME account state — at minimum the account private key and the URL returned by the directory's newAccount endpoint — for each `(directory_url, contact_email)` pair, encrypted at rest using the [secret key](#r--secret.key).
+> Subsequent orders against the same directory and contact must reuse the persisted account rather than creating a new one.
+
+> r[tls.acme.renewal.auto]
+> The runtime must autonomously renew certificates it has issued via ACME (DNS-01 strategy) before they expire.
+> Renewal must be attempted while the certificate is still valid, with sufficient lead time that a transient failure does not cause expiry.
+> Successful renewal must replace the prior certificate atomically so that in-flight TLS handshakes are unaffected.
 
 > r[tls.strategy.manual]
 > Operators may upload a PEM-encoded certificate chain and matching private key for a hostname; the runtime must cause the proxy to serve that exact pair for TLS handshakes whose SNI matches the hostname.
@@ -1312,7 +1321,11 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 
 > r[tls.cert.metadata]
 > For every hostname declared by a TLS-terminating ingress, the runtime must surface to the operator interface: the active strategy, the certificate's issuer (when known), `notBefore`, `notAfter`, and the acquisition status as defined in [observe.ingress.certs](#r--observe.ingress.certs).
-> Metadata for ACME-issued certificates is derived from the proxy's certificate cache; metadata for manual and CSR-derived certificates is derived from the uploaded certificate at upload time.
+> Metadata for default-strategy (ACME HTTP-01) certificates is derived from the proxy's certificate cache; metadata for runtime-managed certificates (ACME DNS-01, manual, CSR) is derived from the runtime's own certificate store.
+
+> r[tls.cert.serve]
+> For runtime-managed certificates (ACME DNS-01, manual, and CSR-derived), the runtime must deliver certificate and key material to the ingress proxy through a mechanism that does not require including private key material in the proxy's persistent configuration or its restart-replay cache.
+> The proxy must be able to obtain the appropriate certificate by SNI hostname at TLS handshake time.
 
 > r[tls.cert.validation.san-coverage]
 > Whenever the runtime accepts an operator-supplied certificate (manual upload or CSR cert upload), it must validate that the leaf certificate's Subject Alternative Name DNS entries either contain the target hostname literally or contain a wildcard entry that covers it under RFC 6125.
