@@ -240,6 +240,13 @@ async fn main() {
     // Spawn cert rotation background task.
     tokio::spawn(wt::run_cert_rotation(Arc::clone(&cert_store), rotation_tx));
 
+    // w[impl sessions.stale-cutoff]
+    // Spawn the stale-session reaper.
+    tokio::spawn(wt::run_session_reaper(
+        Arc::clone(&state.web_sessions),
+        Arc::clone(&state.event_broker),
+    ));
+
     // Spawn the event broker — maintains a single daemon subscription and fans
     // out to all connected web clients.
     tokio::spawn(run_event_broker(event_broker, daemon));

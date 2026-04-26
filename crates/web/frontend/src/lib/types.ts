@@ -234,6 +234,12 @@ export interface Actor {
 export interface WebSession {
   id: string;
   connected_at: string;
+  /**
+   * RFC 3339 timestamp of the most recent heartbeat from this session.
+   * Defaults to `connected_at` when no heartbeat has arrived yet. Sessions
+   * older than the stale cutoff are reaped server-side and never appear here.
+   */
+  last_seen: string;
   actor_kind: string | null;
   actor_id: string | null;
   actor_display: string | null;

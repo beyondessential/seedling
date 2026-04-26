@@ -243,6 +243,39 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return () => abort.abort();
   }, [session]);
 
+  // w[impl sessions.heartbeat]
+  // Ping the server every two minutes so the session's last_seen stays fresh.
+  // The 10-minute stale cutoff tolerates four missed heartbeats before
+  // reaping; with a single missed heartbeat being the common transient case,
+  // a healthy session never ages out.
+  //
+  // The pagehide handler additionally attempts a deliberate WT close so
+  // navigating away or closing the tab does not leave a session waiting for
+  // the cutoff. Best-effort — the browser may have already torn down the
+  // transport.
+  useEffect(() => {
+    if (!session) return;
+    const sendHeartbeat = () => {
+      void session.client
+        .request("/connected-clients/heartbeat", {})
+        .catch(() => undefined);
+    };
+    sendHeartbeat();
+    const id = window.setInterval(sendHeartbeat, 2 * 60 * 1000);
+    const onPagehide = () => {
+      try {
+        session.wt.close();
+      } catch {
+        /* ignore */
+      }
+    };
+    window.addEventListener("pagehide", onPagehide);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener("pagehide", onPagehide);
+    };
+  }, [session]);
+
   return (
     <SessionContext.Provider value={{
       session, probing, reconnecting, setSession,

@@ -20,6 +20,19 @@ import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useOiQuery } from "../hooks/useOi";
 import type { ConnectedClients } from "../lib/types";
 
+function formatRelative(ts: string): string {
+  const delta = Date.now() - new Date(ts).getTime();
+  if (delta < 0) return "in the future";
+  const secs = Math.floor(delta / 1000);
+  if (secs < 60) return `${secs}s ago`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
 export default function Sessions() {
   const { data, loading, error, refetch } =
     useOiQuery<ConnectedClients>("/connected-clients/list", {});
@@ -68,9 +81,11 @@ export default function Sessions() {
                       <TableCell>ID</TableCell>
                       <TableCell>User</TableCell>
                       <TableCell>Connected</TableCell>
+                      <TableCell>Last seen</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
+                    {/* w[impl routes.sessions] */}
                     {data.web.map((s) => (
                       <TableRow key={s.id}>
                         <TableCell sx={{ fontFamily: "monospace" }}>
@@ -81,6 +96,12 @@ export default function Sessions() {
                         </TableCell>
                         <TableCell sx={{ color: "text.secondary" }}>
                           {new Date(s.connected_at).toLocaleString()}
+                        </TableCell>
+                        <TableCell
+                          sx={{ color: "text.secondary" }}
+                          title={new Date(s.last_seen).toLocaleString()}
+                        >
+                          {formatRelative(s.last_seen)}
                         </TableCell>
                       </TableRow>
                     ))}

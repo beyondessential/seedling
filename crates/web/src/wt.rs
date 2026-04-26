@@ -8,6 +8,7 @@ use uuid::Uuid;
 use wtransport::tls::server::build_default_tls_config;
 use wtransport::{Endpoint, ServerConfig, VarInt};
 
+use crate::EventBroker;
 use crate::state::AppState;
 use crate::web_sessions::WebSessionEntry;
 use crate::{proxy, state};
@@ -104,6 +105,8 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
     state.web_sessions.insert(WebSessionEntry {
         id: session_id,
         connected_at,
+        // w[impl sessions.stale-cutoff]
+        last_seen: connected_at,
         actor: Arc::clone(&actor),
     });
     state
@@ -135,6 +138,20 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
                     return;
                 }
             };
+
+            // w[impl sessions.heartbeat]
+            if peeked.method == "/connected-clients/heartbeat" {
+                let now = jiff::Timestamp::now();
+                let alive = state3.web_sessions.touch(&session_id, now);
+                let response = json!({
+                    "result": { "alive": alive, "now": now.to_string() }
+                });
+                let _ = wt_send
+                    .write_all((response.to_string() + "\n").as_bytes())
+                    .await;
+                let _ = wt_send.shutdown().await;
+                return;
+            }
 
             // w[impl routes.sessions]
             if peeked.method == "/connected-clients/list" {
@@ -251,6 +268,39 @@ fn extract_query_param(path_with_query: &str, key: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Background task: drop web sessions whose `last_seen` has aged past the
+/// stale cutoff and emit `WebSessionStopped` events for each so other clients
+/// see the change without polling.
+// w[impl sessions.stale-cutoff]
+pub async fn run_session_reaper(
+    sessions: Arc<crate::web_sessions::WebSessionRegistry>,
+    event_broker: Arc<EventBroker>,
+) {
+    let mut ticker = tokio::time::interval(crate::web_sessions::REAPER_TICK);
+    // Skip the immediate first tick — fresh sessions can never be stale at
+    // startup and the message is just noise.
+    ticker.tick().await;
+    loop {
+        ticker.tick().await;
+        let now = jiff::Timestamp::now();
+        let stale = sessions.reap_stale(now);
+        for id in stale {
+            tracing::info!(session_id = %id, "reaped stale web session");
+            event_broker
+                .publish(Arc::from(
+                    json!({
+                        "type": "WebSessionStopped",
+                        "timestamp": now.to_string(),
+                        "session_id": id.to_string(),
+                    })
+                    .to_string()
+                    .as_str(),
+                ))
+                .await;
+        }
+    }
 }
 
 /// Background task: check for cert rotation every hour.
