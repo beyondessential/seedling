@@ -846,7 +846,7 @@ impl RuntimeInstance {
     }
 
     // l[impl rt.signal]
-    // l[impl rt.signal]
+    // r[impl rt.signal]
     /// Deliver a POSIX signal to one or more running container instances.
     /// Replay-safe: an entry committed in a prior pass is skipped on the
     /// next replay so the signal is sent at most once. The actual signal

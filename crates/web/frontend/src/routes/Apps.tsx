@@ -47,6 +47,19 @@ function actorLabel(actor?: Actor): string {
   return actor.display ?? actor.id ?? actor.kind ?? "—";
 }
 
+function formatRelative(ts: string): string {
+  const delta = Date.now() - new Date(ts).getTime();
+  if (delta < 0) return "in the future";
+  const secs = Math.floor(delta / 1000);
+  if (secs < 60) return `${secs}s ago`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
 export default function Apps() {
   const { data: apps, loading: appsLoading, error: appsError, refetch: refetchApps } =
     useOiQuery<AppSummary[]>("/apps/list", {});
@@ -87,6 +100,7 @@ export default function Apps() {
   const webSessions = clients?.web ?? [];
   const shells = clients?.shells ?? [];
   const forwards = clients?.forwards ?? [];
+  const actors = clients?.actors ?? [];
 
   return (
     <Box sx={{ p: 3, maxWidth: 900, mx: "auto" }}>
@@ -183,7 +197,7 @@ export default function Apps() {
         </TableContainer>
       )}
       {/* Sessions */}
-      {(webSessions.length > 0 || shells.length > 0 || forwards.length > 0) && (
+      {(webSessions.length > 0 || shells.length > 0 || forwards.length > 0 || actors.length > 0) && (
         <>
           <Divider sx={{ my: 4 }} />
           <Box sx={{ display: "flex", alignItems: "center", mb: 2, gap: 1 }}>
@@ -198,6 +212,7 @@ export default function Apps() {
           </Box>
           {clientsError && <OiErrorAlert error={clientsError} />}
           <Stack spacing={3}>
+            {/* w[impl routes.sessions] */}
             {webSessions.length > 0 && (
               <Box>
                 <Typography variant="subtitle1" sx={{ mb: 1, fontWeight: 600 }}>
@@ -209,6 +224,7 @@ export default function Apps() {
                       <TableRow>
                         <TableCell>User</TableCell>
                         <TableCell>Connected</TableCell>
+                        <TableCell>Last seen</TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
@@ -219,6 +235,61 @@ export default function Apps() {
                           </TableCell>
                           <TableCell sx={{ color: "text.secondary" }}>
                             {new Date(s.connected_at).toLocaleString()}
+                          </TableCell>
+                          <TableCell
+                            sx={{ color: "text.secondary" }}
+                            title={new Date(s.last_seen).toLocaleString()}
+                          >
+                            {formatRelative(s.last_seen)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </Box>
+            )}
+
+            {/* w[impl sessions.actor-activity] */}
+            {actors.length > 0 && (
+              <Box>
+                <Typography variant="subtitle1" sx={{ mb: 1, fontWeight: 600 }}>
+                  Active operators ({actors.length})
+                </Typography>
+                <Typography
+                  variant="caption"
+                  sx={{ color: "text.secondary", display: "block", mb: 1 }}
+                >
+                  Operators with attributed activity in the last 10 minutes.
+                  Includes web users and direct CLI users (seedling-ctl).
+                </Typography>
+                <TableContainer component={Paper} variant="outlined">
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>User</TableCell>
+                        <TableCell>Via</TableCell>
+                        <TableCell>Last action</TableCell>
+                        <TableCell>Last seen</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {actors.map((a) => (
+                        <TableRow key={`${a.actor_kind}:${a.actor_id}`}>
+                          <TableCell sx={{ fontFamily: "monospace" }}>
+                            {a.actor_display ?? a.actor_id}
+                          </TableCell>
+                          <TableCell>
+                            <Chip label={a.actor_kind} size="small" variant="outlined" />
+                          </TableCell>
+                          <TableCell sx={{ color: "text.secondary" }}>
+                            {a.last_action}
+                          </TableCell>
+                          <TableCell
+                            sx={{ color: "text.secondary" }}
+                            title={new Date(a.last_seen).toLocaleString()}
+                          >
+                            {formatRelative(a.last_seen)}
                           </TableCell>
                         </TableRow>
                       ))}
