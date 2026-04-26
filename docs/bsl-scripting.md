@@ -92,6 +92,8 @@ app.deployment("worker")
     .workdir("/app")
     .writable_rootfs()                // opt out of read-only root
     .cap_add("NET_BIND_SERVICE")
+    .stop_signal("SIGINT")            // signal sent on stop (default SIGTERM)
+    .stop_timeout(30)                 // seconds before SIGKILL (default 90)
     .mount("/data", vol)              // bind volume into container
     .mount(svc.port(5432))            // bind service port into network namespace
     .http(8080, http_svc.route("/"))  // expose pod port to HTTP route
@@ -127,7 +129,7 @@ let vol = app.volume("data")
 ```rhai
 let version = app.param("version")
     .kind("text")           // text | multiline | email | password | weak-password
-    .required(false)
+    .required(false)        // (action params can also use kind "volume" — see below)
     .default_value("latest")
     .secret(false)          // password/weak-password imply secret=true
     .description("Docker image tag to deploy");
@@ -150,6 +152,7 @@ rt.start(resources)             // schedule resources, returns Started
 rt.stop(resources, deadline?)   // unschedule and block until terminated
 rt.query(resources)             // returns Started without scheduling
 rt.restart(deployment)          // rotate a Deployment's instances per on_update
+rt.signal(target, "SIGHUP")     // deliver a POSIX signal to PID 1 of every running instance
 rt.warm_certs(resources)        // pre-provision TLS certs for ingresses
 rt.warm_images(resources)       // pre-pull container images without starting them
 
@@ -337,6 +340,68 @@ Healthchecks are only valid on Deployments — calling `.healthcheck(...)` on a 
 - `kind: "http"`, `kind: "tcp"`, and `kind: "grpc"` are reserved names for future expansion.
 
 **Choosing timings.** `start_period + retries × interval` is the grace window before seedling considers the workload unhealthy. Set `start_period` to your typical cold-start time, and pick `interval` and `retries` so that one transient failure doesn't trigger a swap.
+
+## Stop semantics: `stop_signal` and `stop_timeout`
+
+By default seedling stops a container with `SIGTERM` and waits up to 90 seconds before sending `SIGKILL`. Override these per container when the workload's shutdown semantics require it:
+
+```rhai
+app.deployment("postgres")
+    .image("postgres:18")
+    .stop_signal("SIGINT")    // postgres maps SIGINT → fast shutdown
+    .stop_timeout(30);        // hard kill after 30s
+```
+
+`stop_signal` accepts canonical (`"SIGTERM"`) or bare (`"TERM"`) forms; unknown signal names are a script-evaluation error. `stop_timeout` is in whole seconds and must be positive. The defaults match systemd's `TimeoutStopSec`.
+
+A common pairing: PostgreSQL with `SIGINT` (fast shutdown) — the default `SIGTERM` triggers smart shutdown which waits for clients to disconnect and frequently exceeds the stop deadline.
+
+## Sending signals: `rt.signal`
+
+When an action needs to nudge a running container without restarting it — reload config, rotate logs, dump state — use `rt.signal`:
+
+```rhai
+app.on_action("reload", |rt, _p| {
+    rt.signal(app.select(#{ names: ["postgres"] }), "SIGHUP");
+}, #{ description: "Ask postgres to reload its config" });
+```
+
+Behaviour:
+
+- Targets PID 1 of every running container instance in the selected Collection.
+- Containers in transient states (starting, terminated) are silently skipped — safe to use against a deployment with multiple replicas.
+- Non-container resources in the collection are ignored.
+- An empty selection is a script error (usually a sign the selector matched nothing).
+- The call is at-most-once across replays: if the runtime restarts mid-action and replays the closure, a previously-delivered signal is not re-sent.
+
+Common signals: `SIGHUP` (reload config — postgres, nginx), `SIGUSR1` (log rotation), `SIGINT`/`SIGTERM` for cooperative shutdown when the deployment's declared `stop_signal` isn't right for this one-off invocation.
+
+## Action params with `kind: "volume"`
+
+Action and shell param schemas accept a special `kind: "volume"` that asks the operator to pick a site volume at invocation time. The runtime resolves the operator's choice into an operation-scoped binding and delivers the binding's name in `param["<name>_volume"]` (the same convention the backup actions use). The closure consumes it via `app.external_volume(...)`:
+
+```rhai
+app.on_action("dump", |rt, param| {
+    let dest = app.external_volume(param["destination_volume"]);
+    let job = app.job()
+        .image(image.call())
+        .command(["pg_dump", "--file=/dump/db.sql", "--format=custom"])
+        .mount("/dump", dest);
+    rt.start(job).terminated().ensure_success();
+}, #{
+    description: "Dump the database to a chosen volume",
+    params: #{
+        destination: #{
+            kind: "volume",
+            description: "Site volume to write the dump into",
+        },
+    },
+});
+```
+
+The operator picks the volume from the action invocation dialog (web UI) or via `seedling-ctl apps action invoke`. The binding lives only for the operation; nothing in the script needs a stable external_volume name.
+
+`kind: "volume"` is valid only on action and shell schemas. `app.param(...)` and `on_install` requirements reject it because their bindings outlive any single operation; for those, declare an `app.external_volume(name)` and have the operator wire it up via the UI's external volume mappings.
 
 ## Common patterns
 
