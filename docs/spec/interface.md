@@ -522,6 +522,10 @@ Absent specification bugs, anything that is not defined here is either defined i
 > They are registered in the shell session registry with `app = "_volumes"` and `name` set to the comma-separated list of display names; they appear in `/shells/list`, support `/shells/resize` and `/shells/stop`, and emit `ShellStarted`/`ShellExited` events identically to regular shell sessions.
 > Returns `not_found` if any referenced volume does not exist.
 
+> i[volumes.shell.caps]
+> The shell container holds enough Linux capabilities for root inside the container to behave as root over the bind-mounted volumes — at minimum `CAP_DAC_OVERRIDE`, `CAP_DAC_READ_SEARCH`, `CAP_CHOWN`, and `CAP_FOWNER`.
+> Without them, the seedling-default `--cap-drop=ALL` would leave shell-root unable to traverse or edit files owned by service-specific UIDs (e.g. PostgreSQL's `0700 999:999` data directory), which defeats the point of opening the shell.
+
 # Port Forwards
 
 > i[forward.request]

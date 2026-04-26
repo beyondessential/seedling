@@ -323,7 +323,19 @@ pub(crate) async fn open_volume_shell_session(
         dns_servers: state.dns_servers.clone(),
         memory: None,
         cpus: None,
-        extra_caps: vec![],
+        // The operator opens a volume shell to inspect or fix files on the
+        // mounted volume(s). With seedling's default `--cap-drop=ALL`,
+        // root inside the container is still subject to DAC checks, so
+        // listing or editing files owned by other UIDs (e.g. postgres's
+        // `0700 999:999` data dir) fails. Grant the four caps needed for
+        // root to actually behave like root over the filesystem.
+        // r[impl shell.volume.caps]
+        extra_caps: vec![
+            "DAC_OVERRIDE".to_owned(),
+            "DAC_READ_SEARCH".to_owned(),
+            "CHOWN".to_owned(),
+            "FOWNER".to_owned(),
+        ],
         writable_rootfs: true,
         pids_limit: 1024,
         workdir,
