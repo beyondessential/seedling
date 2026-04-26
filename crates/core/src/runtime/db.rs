@@ -104,6 +104,9 @@ const SQL_V41: &str = include_str!("db/migrations/v41.sql");
 // r[impl tls.strategy.acme-dns]
 // r[impl tls.policy.apply]
 const SQL_V42: &str = include_str!("db/migrations/v42.sql");
+// r[impl tls.acme.account.persist]
+// r[impl tls.cert.metadata]
+const SQL_V43: &str = include_str!("db/migrations/v43.sql");
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -309,6 +312,11 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 42,
         sql: SQL_V42,
+        custom_run: None,
+    },
+    Migration {
+        version: 43,
+        sql: SQL_V43,
         custom_run: None,
     },
 ];
