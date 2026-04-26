@@ -136,6 +136,14 @@ function ConfirmDeleteSiteDialog({
 }) {
   const dangerGuard = useGuard("dangerous");
   const isBind = volume.kind === "bind";
+  const isSnapshot = volume.kind === "snapshot";
+  const buttonLabel = loading
+    ? "Deleting…"
+    : isBind
+      ? "Delete reference"
+      : isSnapshot
+        ? "Delete snapshot"
+        : "Move to held";
   return (
     <Dialog open onClose={loading ? undefined : onCancel} maxWidth="xs" fullWidth>
       <DialogTitle>Delete site volume?</DialogTitle>
@@ -152,6 +160,11 @@ function ConfirmDeleteSiteDialog({
             This is a bind-mount reference. Deleting it only drops the
             runtime's reference; the operator-provided host path is left
             untouched.
+          </Alert>
+        ) : isSnapshot ? (
+          <Alert severity="warning">
+            The snapshot's data will be permanently deleted. The source volume
+            is unaffected.
           </Alert>
         ) : (
           <Alert severity="warning">
@@ -173,7 +186,7 @@ function ConfirmDeleteSiteDialog({
               onClick={onConfirm}
               disabled={loading || !dangerGuard.allowed}
             >
-              {loading ? "Deleting…" : isBind ? "Delete reference" : "Move to held"}
+              {buttonLabel}
             </Button>
           </span>
         </Tooltip>
