@@ -402,6 +402,13 @@ implementation → tests within a phase.
   copes with arbitrary lifetimes (it renews at remaining-third), so
   the cost is roughly: a `profile` field on `tls_acme_accounts` or per
   policy, plus passing `profile` through `instant-acme`'s order params.
+- **IP-address certs**: Let's Encrypt now issues certs for public IPv4
+  and IPv6 addresses. Adds a parallel "policy by IP" path next to
+  "policy by hostname" — the data model would extend to use a
+  `subject` enum (DNS name / IPv4 / IPv6) instead of a bare `hostname`
+  column. SAN-coverage validation already needs to learn iPAddress
+  SAN entries. Worth a small follow-on plan once the DNS-name path
+  is solid.
 - **Additional DNS providers**: Cloudflare, RFC 2136, etc. — each is
   a Rust crate + a `DnsProvider` trait impl, no Caddy rebuild.
 - **Internal CA / private PKI**: a strategy where the daemon issues
