@@ -54,6 +54,7 @@ let secret_key = app.param("secret-key")
 
 let hostname = app.param("hostname")
     .required(true)
+    .default_value(NODE_NAME)
     .description("Kopia hostname label associated with snapshots (any stable, unique name for this node)");
 
 let passphrase = app.param("passphrase")
