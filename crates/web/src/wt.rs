@@ -154,6 +154,7 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
             }
 
             // w[impl routes.sessions]
+            // w[impl sessions.actor-activity]
             if peeked.method == "/connected-clients/list" {
                 let web = state3.web_sessions.list();
                 let shells = match state3.daemon.request("/shells/list", json!({})).await {
@@ -164,8 +165,14 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
                     Ok(v) => v.get("forwards").cloned().unwrap_or(json!([])),
                     Err(_) => json!([]),
                 };
+                let actors = state3.actor_activity.list_recent();
                 let response = json!({
-                    "result": { "web": web, "shells": shells, "forwards": forwards }
+                    "result": {
+                        "web": web,
+                        "shells": shells,
+                        "forwards": forwards,
+                        "actors": actors,
+                    }
                 });
                 let _ = wt_send
                     .write_all((response.to_string() + "\n").as_bytes())

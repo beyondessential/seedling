@@ -6,6 +6,7 @@ use std::time::Duration;
 use clap::Parser;
 use parking_lot::{Mutex, RwLock};
 
+mod actor_activity;
 mod auth;
 mod config;
 mod daemon;
@@ -20,6 +21,7 @@ mod web_sessions;
 mod wt;
 mod wt_cert;
 
+use actor_activity::ActorActivityRegistry;
 use config::Config;
 use daemon::DaemonConn;
 use event_broker::{EventBroker, run_event_broker};
@@ -220,7 +222,8 @@ async fn main() {
 
     let (rotation_tx, rotation_rx) = tokio::sync::watch::channel(());
 
-    let event_broker = EventBroker::new();
+    let actor_activity = Arc::new(ActorActivityRegistry::new());
+    let event_broker = EventBroker::new(Arc::clone(&actor_activity));
 
     let state = AppState {
         trust_tailscale: args.trust_tailscale_headers,
@@ -235,6 +238,7 @@ async fn main() {
         daemon: Arc::clone(&daemon),
         event_broker: Arc::clone(&event_broker),
         web_sessions: Arc::new(WebSessionRegistry::new()),
+        actor_activity,
     };
 
     // Spawn cert rotation background task.

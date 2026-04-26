@@ -183,6 +183,9 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > w[sessions.stale-cutoff]
 > The web frontend must consider a web session stale when its `last_seen` is older than ten minutes (matching the write-mode elevation window). The server must drop stale sessions from `/connected-clients/list` and emit a `WebSessionStopped` event when it does so, so other operators see the same staleness without polling. A session with no observed heartbeat yet (the WebTransport session has just opened) is not stale; its `last_seen` defaults to its `connected_at` so the cutoff measurement is well-defined.
 
+> w[sessions.actor-activity]
+> `/connected-clients/list` must additionally return an `actors` array surfacing operators (web *or* CLI) that have caused at least one event with an attributed actor identity within the past ten minutes. Each entry has `actor_kind`, `actor_id`, `actor_display`, `last_seen` (RFC 3339), and `last_action` (a short human-readable summary of the most recent attributed event). Entries are deduplicated by `(actor_kind, actor_id)`, with the most recent event's display name and action winning. Operators using `seedling-ctl` directly do not appear in the `web` section of the response — this surface is the only way they show up in the connected-clients view.
+
 > w[routes.volumes]
 > The web interface exposes volume management: listing, creating, and deleting site volumes (managed, bind-mount, and snapshot kinds); listing volumes exported by apps; listing, adding, remapping, and removing external volume mappings; and listing and confirming deletion of held volumes.
 

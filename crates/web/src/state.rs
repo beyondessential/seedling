@@ -6,6 +6,7 @@ use seedling_protocol::actor::Actor;
 
 use crate::daemon::DaemonConn;
 use crate::event_broker::EventBroker;
+use crate::actor_activity::ActorActivityRegistry;
 use crate::web_sessions::WebSessionRegistry;
 use crate::wt_cert::CertStore;
 
@@ -171,4 +172,5 @@ pub struct AppState {
     pub daemon: Arc<DaemonConn>,
     pub event_broker: Arc<EventBroker>,
     pub web_sessions: Arc<WebSessionRegistry>,
+    pub actor_activity: Arc<ActorActivityRegistry>,
 }

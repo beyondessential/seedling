@@ -263,10 +263,21 @@ export interface ForwardSession {
   actor?: Actor;
 }
 
+export interface ActorActivity {
+  actor_kind: string;
+  actor_id: string;
+  actor_display: string | null;
+  /** RFC 3339 timestamp of the most recent attributed event for this actor. */
+  last_seen: string;
+  /** Short human-readable summary of the most recent attributed event. */
+  last_action: string;
+}
+
 export interface ConnectedClients {
   web: WebSession[];
   shells: ShellSession[];
   forwards: ForwardSession[];
+  actors: ActorActivity[];
 }
 
 export interface AuthorizedKey {

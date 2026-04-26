@@ -5,6 +5,7 @@ use tokio::{
     sync::{Mutex, broadcast},
 };
 
+use crate::actor_activity::ActorActivityRegistry;
 use crate::daemon::DaemonConn;
 
 const CACHE_SIZE: usize = 200;
@@ -13,18 +14,22 @@ const BROADCAST_CAPACITY: usize = 512;
 pub struct EventBroker {
     recent: Mutex<VecDeque<Arc<str>>>,
     tx: broadcast::Sender<Arc<str>>,
+    actor_activity: Arc<ActorActivityRegistry>,
 }
 
 impl EventBroker {
-    pub fn new() -> Arc<Self> {
+    pub fn new(actor_activity: Arc<ActorActivityRegistry>) -> Arc<Self> {
         let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         Arc::new(Self {
             recent: Mutex::new(VecDeque::with_capacity(CACHE_SIZE)),
             tx,
+            actor_activity,
         })
     }
 
+    // w[impl sessions.actor-activity]
     pub async fn publish(&self, line: Arc<str>) {
+        self.actor_activity.record_from_event_line(&line);
         let mut recent = self.recent.lock().await;
         if recent.len() >= CACHE_SIZE {
             recent.pop_front();
