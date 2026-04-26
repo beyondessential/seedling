@@ -538,9 +538,9 @@ app.on_shell("psql", |_rt, shell, param| {
 }, #{
     description: "Native psql shell",
     params: #{
-        user: #{ kind: "text", default_value: "postgres", description: "PostgreSQL user to connect as" }
-        database: #{ kind: "text", default_value: "postgres", description: "PostgreSQL database to connect to" }
-    }
+        user: #{ kind: "text", default_value: "postgres", description: "PostgreSQL user to connect as" },
+        database: #{ kind: "text", default_value: "postgres", description: "PostgreSQL database to connect to" },
+    },
 });
 
 app.on_shell("bestool-psql", |_rt, shell, param| {
@@ -556,9 +556,9 @@ app.on_shell("bestool-psql", |_rt, shell, param| {
 }, #{
     description: "BES psql shell",
     params: #{
-        user: #{ kind: "text", default_value: "postgres", description: "PostgreSQL user to connect as" }
-        database: #{ kind: "text", default_value: "postgres", description: "PostgreSQL database to connect to" }
-    }
+        user: #{ kind: "text", default_value: "postgres", description: "PostgreSQL user to connect as" },
+        database: #{ kind: "text", default_value: "postgres", description: "PostgreSQL database to connect to" },
+    },
 });
 
 // ── Version changes ───────────────────────────────────────────────────────────
