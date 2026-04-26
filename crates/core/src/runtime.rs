@@ -32,6 +32,7 @@ pub mod site_services;
 pub mod site_volumes;
 pub mod stopped;
 pub mod templates;
+pub mod tls;
 
 pub use apps::{AppEntry, AppPhase, AppRegistry, AppStatus, ScriptError, transition_phase};
 pub use barrier::oracle::{DbWorldOracle, TestWorldOracle, WorldStateOracle};
