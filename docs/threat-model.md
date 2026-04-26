@@ -5,11 +5,6 @@ not, and the mechanisms it currently uses. It is descriptive, not normative:
 the authoritative requirements live under `docs/spec/`. Where a mitigation is
 mentioned, the relevant spec rule is cross-referenced.
 
-The threat model is the lens we use when reviewing changes. New features
-should be assessed against the trust boundaries below. New mitigations should
-either close a gap from the "Known gaps" section or be justified by a new
-threat that this document does not yet cover.
-
 ## Audience
 
 - Operators evaluating whether seedling fits their deployment model.
@@ -235,7 +230,7 @@ open".
 - **WebTransport handshake tokens.** Short-lived single-use tokens bridge
   `POST /connect` and the WebTransport handshake; they cannot be replayed
   (`docs/spec/web.md#w--wt.token`).
-- **Self-signed WebTransport certs with rotation.** 14-day max validity,
+- **Pinned WebTransport certs with rotation.** 14-day max validity,
   rotation with a 24-hour overlap window, fingerprints surfaced in
   `/connect` responses for `serverCertificateHashes`
   (`docs/spec/web.md#w--wt.cert`, `#w--wt.cert.rotation`).
@@ -347,107 +342,6 @@ operator confusing themselves into a destructive action:
 - **Plan-then-apply** for parameter changes
   (`docs/spec/interface.md#i--plan.dry-run`) so an operator can preview
   what an update will trigger before committing.
-
-## Known gaps
-
-These are areas where seedling's posture is weaker than the threat model
-above implies, or where additional defence in depth would be valuable.
-Listed without proposed fixes; each is a candidate for its own design
-discussion.
-
-### G1. Unrestricted `cap_add` from BSL
-
-`container.cap_add(...)` accepts any string and forwards it to podman. A
-BSL script can request `SYS_ADMIN`, `SYS_PTRACE`, etc. Today this is
-visible on the operator's generation diff but not gated separately. A
-well-meaning operator skimming the diff could miss it.
-
-Possible directions: an explicit allowlist with a "dangerous capabilities"
-class that requires `dangerous`-tier confirmation; a per-cap rationale
-field in BSL.
-
-### G2. No image digest verification
-
-Seedling pulls by tag and records the digest podman returns. There is no
-expected-digest mechanism, no signature verification (cosign / sigstore /
-Notary), and no automatic refusal to start a container whose image digest
-does not match what was last seen.
-
-### G3. Secrets in container environments
-
-Secret parameters are passed to containers as environment variables (the
-common pattern). Anyone who can `cat /proc/<pid>/environ` inside the same
-namespace, or read the systemd unit fragment on disk, can recover them.
-Today this is implicitly accepted because (a) the workload is the
-intended consumer and (b) other principals on the host fall under T1/N1.
-Worth reconsidering if we ever want secrets that the workload itself
-should not be able to exfiltrate.
-
-### G4. No per-actor or per-app authorisation
-
-Every authenticated operator can do everything. There is no notion of
-"this key may only invoke actions on app X" or "this key is read-only".
-The audit log can describe who did what after the fact, but not refuse a
-request.
-
-### G5. No rate limiting on authentication
-
-`POST /connect` and the QUIC TLS handshake do not rate-limit failed
-attempts. An attacker who reaches the listener can attempt password
-guesses or key brute-forcing as fast as the network allows, bounded only
-by Argon2id's compute cost.
-
-### G6. Bind site volumes are unbounded
-
-`volume.site.create kind=bind host_path=/...` accepts any absolute host
-path. By N1 this is accepted ("operator is root"), but a sub-tier of
-operator authorisation (G4) would naturally want to constrain bind paths
-to a configured prefix list.
-
-### G7. `unknown_params` retention
-
-A parameter whose name has been removed from the script keeps its stored
-value in the DB until an operator explicitly clears it. For a secret
-parameter this means the encrypted value persists past its intended
-lifetime. The describe surface labels these as `unknown_params` for
-operator awareness, but there is no automatic expiry.
-
-### G8. Workload egress is uncontrolled
-
-Pods can reach any IP/port their network configuration permits. Seedling
-constrains DNS through its resolver but does not enforce egress firewall
-rules. A compromised workload that resolves a hardcoded IP can phone
-home. (Mitigated to a degree by the per-pod network, but only against
-*lateral* traffic, not external egress.)
-
-### G9. Backup-app credentials are operator parameters
-
-A backup app's S3 credentials live in app params (encrypted at rest, per
-G3 the workload sees them in env). There is no separate "backup credential
-vault" nor a way to scope a credential to a single backup app's lifetime.
-
-### G10. Web session token storage
-
-The browser stores the session token in `sessionStorage`. An XSS in any
-JS the SPA loads (today: only first-party assets, but a future bundle
-update could pull in a third-party dependency) would lift the token. The
-token's bounded lifetime mitigates this but does not eliminate it.
-
-### G11. No quota across apps
-
-Memory and CPU limits are per-container (`container.memory()`,
-`container.cpus()`); pids and nofile are bounded by hardening defaults.
-There is no global quota that prevents one app from declaring a 100 GiB
-memory limit and starving everything else. Operator review is the only
-control.
-
-### G12. No detection of host file tampering
-
-If an attacker with host root rewrites the database file, the secret-key
-file, or a volume's contents directly on disk, seedling has no integrity
-check that would detect the tampering at startup. This is consistent with
-N3 (host trust) but is worth flagging for deployments where the host
-itself is multi-tenant.
 
 ## Reviewing changes against this model
 
