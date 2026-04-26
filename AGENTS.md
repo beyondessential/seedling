@@ -32,4 +32,5 @@
 - When we log errors to tracing in the server, we should consider also filing a fault. Also the reverse: wherever we file a fault, we probably also want to log an error.
 - There are agent skills available in docs/skill.
 - NEVER edit or delete an existing migration block in `crates/core/src/runtime/db.rs`. Once a migration has shipped, its schema_version row exists in real databases and that block will never run again. Editing it silently diverges the live schema from what the version number promises. Always add a new `version < N` block at the bottom.
+- Unless explicitly excluded, everything available in the OI and the web UI should have a CLI command.
 </llm-rules>
