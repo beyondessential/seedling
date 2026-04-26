@@ -162,9 +162,9 @@ function ConfirmDeleteSiteDialog({
             untouched.
           </Alert>
         ) : isSnapshot ? (
-          <Alert severity="warning">
-            The snapshot's data will be permanently deleted. The source volume
-            is unaffected.
+          <Alert severity="error">
+            The snapshot's data will be permanently deleted and cannot be
+            recovered. The source volume is unaffected.
           </Alert>
         ) : (
           <Alert severity="warning">
@@ -182,7 +182,7 @@ function ConfirmDeleteSiteDialog({
           <span>
             <Button
               variant="contained"
-              color={isBind ? "primary" : "warning"}
+              color={isBind ? "primary" : isSnapshot ? "error" : "warning"}
               onClick={onConfirm}
               disabled={loading || !dangerGuard.allowed}
             >
