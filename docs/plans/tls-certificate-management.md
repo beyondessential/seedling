@@ -43,16 +43,42 @@ Multiple ingresses may share a hostname (uncommon in practice but
 allowed). Caddy's TLS automation is per-subject anyway, so hostname is
 the natural key.
 
-### Caddy is the cert store; we are the policy store
+### Caddy owns HTTP-01 only; the daemon owns everything else
 
-For ACME (HTTP-01 and DNS-01), Caddy continues to acquire, persist, and
-renew certs in its own data volume. We don't try to inspect or copy
-those certs.
+For the **default ACME-HTTP-01** strategy, Caddy continues to acquire,
+persist, and renew certs in its own data volume. Unchanged from today.
 
-For manual/CSR certs we do hold the cert+key (encrypted, in our DB) and
-inject them into Caddy's config via `tls.certificates.load_pem`. Caddy
-reads them on each config reload and serves them directly — no renewal
-side, no ACME involved.
+For **every other strategy** (ACME-DNS, manual, CSR-derived), the
+daemon owns the cert. It either acquires the cert itself (running an
+ACME client + DNS provider client) or stores the operator-uploaded
+cert. In all cases the cert+key live in `tls_certificates` (encrypted
+key) and are served to Caddy via Caddy's `tls.certificates.get_certificate`
+HTTP module, which calls back into a daemon-hosted endpoint per TLS
+handshake (cached by Caddy, so per-handshake hits don't actually
+happen for repeat traffic).
+
+The cached Caddy JSON contains only the URL of that endpoint plus the
+list of subjects it should answer for — never any cert or key bytes,
+never any DNS-provider credentials. The blue/green replay cache stays
+fully functional in every strategy.
+
+### Why daemon-owned ACME
+
+Owning the ACME flow ourselves (rather than configuring a Caddy DNS
+plugin) means:
+
+- AWS / DNS-provider credentials never leave the daemon. No env-var
+  hand-off to Caddy, no creds in the proxy config or its cache.
+- Adding new DNS providers is a Rust dep + trait impl, not an xcaddy
+  rebuild. (Caddy is rebuilt rarely and the rebuild is slow.)
+- One renewal scheduler we control, surfaced via the existing
+  observation/fault layer.
+- Future possibilities go beyond what Caddy's automation supports
+  (custom CAs, internal PKI integrations, etc.).
+
+Cost: we own an ACME client integration (`instant-acme`) and a Route 53
+client (`aws-sdk-route53`). Renewal correctness is on us — needs
+careful testing.
 
 ### Reuse existing secret cipher
 
@@ -94,7 +120,21 @@ New section after the existing ingress-cert observation rules:
   multiple hostnames; deleting a provider must be refused while
   hostnames reference it.
 
-## Database schema (migration `v42.sql`)
+## Database schema (migrations `v42.sql` shipped, `v43.sql` to add)
+
+`v42.sql` is already in place. `v43.sql` (added in phase 2) introduces:
+
+- `tls_acme_accounts(id, directory_url, contact_email,
+  account_key_ciphertext, account_url, created_at, updated_at)` —
+  persists ACME account state so renewal works across daemon restarts
+  without re-bootstrapping the account.
+- `tls_certificates.origin TEXT NOT NULL DEFAULT 'manual'` — `'manual'`
+  | `'csr'` | `'acme_dns'`. Drives whether the renewal task picks the
+  cert up.
+- `tls_certificates.acme_account_id INTEGER REFERENCES tls_acme_accounts(id)` —
+  for `acme_dns` rows only, identifies the account that issued.
+
+Original v42 schema (already shipped to this branch):
 
 ```sql
 -- r[impl tls.dns-provider.lifecycle]
@@ -150,35 +190,56 @@ CREATE TABLE IF NOT EXISTS tls_policies (
 
 ## Caddy build
 
-`Containerfile.caddy` and the embedded `CADDY_CONTAINERFILE` constant in
-`crates/core/src/system/caddy/startup.rs` both add:
+Unchanged from today: `Containerfile.caddy` keeps only the `caddy-l4`
+plugin. We do not need `caddy-dns/route53` because the daemon performs
+DNS-01 itself and serves the resulting cert via `get_certificate`.
 
-```
---with github.com/caddy-dns/route53
-```
+## Daemon-owned issuance and serving
 
-Caddy is rebuilt the next time the daemon notices the image is missing
-or outdated. The blue/green upgrade path already handles the rollover.
+A new module `runtime/tls/` holds:
+
+- **`store.rs`** — DB CRUD over `tls_dns_providers`, `tls_certificates`,
+  `tls_policies`, plus a new `tls_acme_accounts` table (one row per
+  `(directory_url, contact_email)` with the encrypted account key and
+  the persisted account URL).
+- **`acme.rs`** — drives `instant-acme` for ACME-DNS issuance: account
+  bootstrap, order creation, dispatching DNS-01 challenges to a
+  provider trait impl, polling, finalize, parse cert metadata,
+  insert into `tls_certificates` with `state='active'`.
+- **`dns/route53.rs`** — implements the `DnsProvider` trait
+  (`set_txt`, `clear_txt`) using `aws-sdk-route53`. Reads creds from a
+  `tls_dns_providers` row.
+- **`renewal.rs`** — background task that wakes hourly, queries certs
+  with `not_after - now() < threshold` (default: 1/3 of total
+  lifetime), and re-runs the issuance flow. Sleep schedule capped so
+  we don't burn through ACME rate limits.
+- **`serve.rs`** — implements the `tls.certificates.get_certificate.http`
+  endpoint contract: receives an SNI hostname, returns PEM cert+key.
+
+### get_certificate endpoint transport
+
+The daemon exposes the endpoint on a Unix socket bind-mounted into
+Caddy's container, alongside the existing admin socket. Path:
+`{data_dir}/caddy-cert/{slot}/cert.sock`. Caddy's
+`tls.certificates.get_certificate.http` module accepts URLs whose
+host portion is a Unix socket via standard Caddy URL conventions
+(verify before commit; if not, fall back to a local TCP listener on
+the proxy bridge gateway).
+
+The endpoint is read-only (lookup by SNI hostname) and authenticated
+by socket file permissions: only Caddy's container can connect.
 
 ## Caddy config changes
 
 `crates/core/src/system/caddy/config.rs` `build_caddy_config` gains a
-`tls_policies` parameter and:
+single optional addition: when at least one hostname has a non-default
+strategy, emit a `tls.certificates.get_certificate` array with one
+entry of module `http`, URL pointing at the daemon socket, and the
+list of those hostnames as `subjects`. No automation-policy fan-out,
+no `load_pem`, no DNS-provider issuer config — Caddy is just a fetcher.
 
-- Builds **multiple** automation policies grouped by strategy:
-  - One policy per DNS provider (subjects = hostnames using that
-    provider, issuer module set with the provider's config).
-  - One default policy (subjects = everything else with `tls_acme`).
-- Adds `tls.certificates.load_pem` entries for each manual cert.
-- For `manual`-strategy hostnames, omits them from the automation
-  policies (Caddy will match the loaded cert by SNI).
-
-Provider config secrets are decrypted just before the JSON is rendered.
-The cached `caddy_proxy_config` row continues to hold the full rendered
-JSON, so credentials end up at rest in two places (the encrypted DNS
-provider table and the cached JSON blob). Acceptable: the cache is
-node-local and already at the same trust level as the daemon's running
-process. Documented as such.
+The cached Caddy JSON contains only the URL + subject list, no
+secrets. The cache continues to function in every strategy.
 
 ## Operator interface (new `oi/handler/tls.rs`)
 
@@ -258,9 +319,14 @@ hostname.
 
 New deps in `crates/core/Cargo.toml`:
 
-- `rcgen` (0.14.x) — keypair + CSR generation.
-- `x509-parser` — parsing uploaded certs for issuer/notBefore/notAfter
-  and SAN inspection.
+- `instant-acme` — async ACME (RFC 8555) client.
+- `aws-sdk-route53` — Route 53 API client. Heavy, but the canonical
+  choice; can swap for a hand-rolled SigV4 + REST shim later if size
+  is a concern.
+- `rcgen` (0.14.x) — keypair + CSR generation (for both phase 4 and
+  ACME orders).
+- `x509-parser` — parsing certs for issuer/notBefore/notAfter and SAN
+  inspection.
 - `pem` — PEM block encode/decode.
 
 ## Key types
@@ -311,19 +377,40 @@ ingress. SAN coverage validation accepts the wildcard.
 
 ## Phasing
 
-1. **Foundation**: spec changes, migration v42, Containerfile + builder
-   for Route 53, no behaviour change yet.
-2. **DNS provider + ACME-DNS strategy**: storage, OI, CLI, Caddy config
-   integration, web UI for providers and policy assignment.
-3. **Manual cert upload**: cert validation, cert storage, Caddy
-   `load_pem` plumbing, OI/CLI/UI for upload + delete.
-4. **CSR flow**: keypair/CSR generation, OI/CLI/UI to begin/get/upload,
-   transition to manual.
+1. **Foundation**: spec changes, migration v42 for tls tables, no
+   behaviour change yet. Done.
+2. **DNS provider + daemon-owned ACME-DNS**: storage CRUD, ACME client
+   integration, Route 53 provider impl, renewal background task,
+   `get_certificate` endpoint, Caddy config integration, OI, CLI, web
+   UI for providers and policy assignment. Largest phase by far.
+3. **Manual cert upload**: cert validation (key match, SAN coverage,
+   self-signed warning), encrypted key storage. Reuses phase 2's
+   `get_certificate` endpoint and the `tls_certificates` table.
+   Adds OI/CLI/UI for upload + delete.
+4. **CSR flow**: keypair/CSR generation via rcgen, OI/CLI/UI to
+   begin/get/upload-cert/cancel. Reuses phase 2's serving path.
 5. **Visibility**: hostname list joining policies + observed cert
    metadata; AppDetail integration; expiry fault.
 
 Each phase lands behind its own commit set; spec → migration →
 implementation → tests within a phase.
+
+## Future enhancements (out of scope for this plan)
+
+- **Short-lived certs**: opt-in 6-day Let's Encrypt cert profile per
+  hostname or globally per ACME account. The renewal task already
+  copes with arbitrary lifetimes (it renews at remaining-third), so
+  the cost is roughly: a `profile` field on `tls_acme_accounts` or per
+  policy, plus passing `profile` through `instant-acme`'s order params.
+- **Additional DNS providers**: Cloudflare, RFC 2136, etc. — each is
+  a Rust crate + a `DnsProvider` trait impl, no Caddy rebuild.
+- **Internal CA / private PKI**: a strategy where the daemon issues
+  its own certs from a configured root.
+- **Wildcard ACME issuance**: requires DNS-01 (already supported), but
+  needs BSL-side support for wildcard ingresses first.
+- **HTTP-01 ownership migration**: optional later move of HTTP-01 into
+  the daemon too, freeing Caddy to be a pure proxy. Requires
+  `/.well-known/acme-challenge/*` reverse-proxying.
 
 ## Decisions confirmed
 
