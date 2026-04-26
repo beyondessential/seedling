@@ -4,15 +4,25 @@
 
 Seedling is a lightweight high-level container app management system.
 
-Lightweight: it's designed to run easily on single servers with few resources, and does not require setting up Kubernetes or complicated networking. You get three binaries and one kernel module ([jool](https://nicmx.github.io/Jool/), for NAT64) — and you don't even need to set up Jool, Seedling does it for you.
+## Goals
 
-High-level: you write app definitions which include high level concerns such as parameters, secret management, HTTPS and certificates, advanced upgrade and maintenance workflows, custom shells, volumes, snapshots, and backups... in a friendly and simple syntax that doesn't make you want to die (ie not YAML). A web UI and full CLI is included.
+**Lightweight:** it's designed to run easily on single servers with few resources, and does not require setting up Kubernetes or complicated networking. You get three binaries and one kernel module ([jool](https://nicmx.github.io/Jool/), for NAT64) — and you don't even need to set up Jool, Seedling does it for you.
 
-Container: everything except for Seedling itself (for bootstrapping reasons) is container-based. HTTP traffic routes through Caddy, which is itself containerised. DNS traffic uses CoreDNS, also containerised.
+**High-level:** you write app definitions which include high level concerns such as parameters, secret management, HTTPS and certificates, advanced upgrade and maintenance workflows, custom shells, volumes, snapshots, and backups... in a friendly and simple syntax that doesn't make you want to die (ie not YAML). A web UI and full CLI is included.
 
-Reasonably good performance: it's Podman containers and almost all the networking is in the kernel. Seedling configures things but otherwise gets out of the way.
+**Container:** everything except for Seedling itself (for bootstrapping reasons) is container-based. HTTP traffic routes through Caddy, which is itself containerised. DNS traffic uses CoreDNS, also containerised.
 
-Easy to upgrade: your workloads keep running even if Seedling isn't, and won't be torn down when it comes back up. This makes it trivial to upgrade: install the new binary, restart the service. The web UI will reconnect and you probably won't even notice.
+**Reasonably good performance:** it's Podman containers and almost all the networking is in the kernel. Seedling configures things but otherwise gets out of the way.
+
+**Easy to upgrade:** your workloads keep running even if Seedling isn't, and won't be torn down when it comes back up. This makes it trivial to upgrade: install the new binary, restart the service. The web UI will reconnect and you probably won't even notice.
+
+## Non-goals
+
+Seedling is opinionated. It won't be everything for everyone. It was also written for our (BES) purposes, which necessarily informs its design.
+
+Running untrusted workloads or defending against malicious operators. [See our threat model](./docs/threat-model.md).
+
+Cross-platform workloads. We rely on Linux features. That said, the CLI can run cross-platform and the web UI is accessible from any modern browser, and we're looking to integrate first-party support for WSL2 to run on Windows Server.
 
 ## Use it
 
