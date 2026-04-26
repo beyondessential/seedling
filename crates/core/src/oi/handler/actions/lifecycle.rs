@@ -282,7 +282,17 @@ fn run_operation_loop(
             OperationResult::Completed => {
                 let app_name_owned = app_name.clone();
                 db.call(move |db| {
-                    faults::clear_faults_by_kind(db, &app_name_owned, "operation_failed").ok();
+                    // Clear stale "the previous attempt didn't run to
+                    // completion" faults for this app: a fresh successful
+                    // operation supersedes both prior `operation_failed`
+                    // (a previous attempt errored out) and
+                    // `operation_cancelled` (a previous attempt was
+                    // operator-cancelled). Without this, a successful
+                    // retry leaves the app stuck in `Faulted` even though
+                    // its current state is fine.
+                    for kind in ["operation_failed", "operation_cancelled"] {
+                        faults::clear_faults_by_kind(db, &app_name_owned, kind).ok();
+                    }
                     let _ = clear_current_operation(db);
                 });
                 op_ctx.completed();
