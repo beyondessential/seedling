@@ -191,13 +191,16 @@ col.select(#{ name_patterns: ["worker-*"] })
 | `HAS_SNAPSHOTS` | bool | Whether volume storage supports copy-on-write snapshots |
 | `NODE_NAME` | string | Identifier of the node running the application |
 | `DEFAULT_DEADLINE` | int | Default deadline in seconds |
-| `OnUpdate.Rolling` | enum | Start new, stop old (default) |
-| `OnUpdate.Replace` | enum | Stop all old first, then start new |
-| `OnTerminate.Recreate` | enum | Always recreate terminated containers |
-| `OnExit.Restart` | enum | Always restart on exit |
-| `OnExit.Terminate` | enum | Stop container on exit |
-| `OnExit.RestartOnFailure` | enum | Restart on non-zero exit, terminate otherwise |
-| `ResourceType.{Parameter,Service,HttpService,Ingress,Deployment,Job,Volume,ExternalVolume,Action}` | enum | For use with `col.select()` |
+
+### Enum constants
+
+- `OnUpdate.Rolling`: Start new, stop old (default)
+- `OnUpdate.Replace`: Stop all old first, then start new
+- `OnTerminate.Recreate`: Always recreate terminated containers
+- `OnExit.Restart`: Always restart on exit
+- `OnExit.Terminate`: Stop container on exit
+- `OnExit.RestartOnFailure`: Restart on non-zero exit, terminate otherwise
+- `ResourceType.{Parameter,Service,HttpService,Ingress,Deployment,Job,Volume,ExternalVolume,Action}`: For use with `col.select()`
 
 ## Annotated example
 
