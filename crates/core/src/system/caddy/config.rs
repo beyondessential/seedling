@@ -100,10 +100,15 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
 
     if !all_subjects.is_empty() {
         // r[impl actuate.ingress.warm-certs]
+        // r[impl tls.strategy.default]
         // l[impl ingress.certificates]
         // For routed subjects, Caddy acquires the cert lazily on first
         // request to the matching server; for warm-only subjects, no server
         // matches and Caddy must be told explicitly via certificates.automate.
+        // The empty automation policy here selects Caddy's default ACME issuer
+        // (HTTP-01 against Let's Encrypt), which is the runtime default per
+        // tls.strategy.default. Per-hostname overrides (acme-dns, manual) are
+        // layered in by later phases.
         let mut tls = json!({
             "automation": {
                 "policies": [{

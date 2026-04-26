@@ -4,9 +4,9 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 use seedling_protocol::actor::Actor;
 
+use crate::actor_activity::ActorActivityRegistry;
 use crate::daemon::DaemonConn;
 use crate::event_broker::EventBroker;
-use crate::actor_activity::ActorActivityRegistry;
 use crate::web_sessions::WebSessionRegistry;
 use crate::wt_cert::CertStore;
 

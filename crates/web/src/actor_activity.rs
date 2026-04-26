@@ -65,13 +65,11 @@ impl ActorActivityRegistry {
         let last_action = render_action(&event_type, obj);
 
         let mut guard = self.inner.lock();
-        let entry = guard
-            .entry((kind, id))
-            .or_insert_with(|| ActivityEntry {
-                last_seen: timestamp,
-                actor_display: display.clone(),
-                last_action: last_action.clone(),
-            });
+        let entry = guard.entry((kind, id)).or_insert_with(|| ActivityEntry {
+            last_seen: timestamp,
+            actor_display: display.clone(),
+            last_action: last_action.clone(),
+        });
         if timestamp >= entry.last_seen {
             entry.last_seen = timestamp;
             entry.last_action = last_action;
