@@ -150,11 +150,11 @@ async fn handle(
             )
                 .into_response()
         }
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            "no runtime-managed cert for hostname",
-        )
-            .into_response(),
+        // 204 No Content is Caddy's contract for "no cert; fall through to
+        // the policy's regular issuer". A 404 (or any other non-2xx) would
+        // be treated as an error by the http cert getter rather than a
+        // fall-through signal.
+        Ok(None) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => {
             tracing::warn!(%hostname, error = %e, "cert serve lookup failed");
             (StatusCode::INTERNAL_SERVER_ERROR, "lookup failed").into_response()
@@ -351,7 +351,10 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn server_returns_404_for_unknown_hostname() {
+    async fn server_returns_204_for_unknown_hostname() {
+        // Caddy's http cert getter treats 204 as "no cert; fall through".
+        // Any other non-2xx (e.g. 404) would be an error, breaking the
+        // intended HTTP-01 fallback for hostnames without a stored cert.
         let (db, cipher) = fresh().await;
         let token = "deadbeef".to_owned();
         let (addr, _handle) = spawn_server(
@@ -366,7 +369,7 @@ mod tests {
         let url =
             format!("http://{addr}/cert/{token}/get-certificate?server_name=missing.example.com");
         let resp = reqwest::get(&url).await.unwrap();
-        assert_eq!(resp.status().as_u16(), 404);
+        assert_eq!(resp.status().as_u16(), 204);
     }
 
     #[tokio::test(flavor = "multi_thread")]

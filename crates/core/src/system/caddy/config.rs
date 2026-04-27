@@ -108,12 +108,19 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
         // matches and Caddy must be told explicitly via certificates.automate.
         //
         // The single automation policy here covers every TLS-terminating
-        // hostname. Its issuer defaults to Caddy's ACME-HTTP-01 against
-        // Let's Encrypt (tls.strategy.default). When the daemon's cert
-        // endpoint is set, we add `get_certificate` to the same policy so
-        // Caddy first asks the daemon by SNI: a 200 returns the
-        // runtime-managed cert (acme-dns / manual / CSR-derived); a 404
-        // falls through to the policy's regular issuer.
+        // hostname. The chain is:
+        //
+        //   1. `get_certificate` (when cert_endpoint_url is set): Caddy
+        //      asks the daemon by SNI. A 200 returns the runtime-managed
+        //      cert (acme-dns / manual / CSR-derived); a 204 (no content)
+        //      tells Caddy to fall through.
+        //   2. `issuers`: ACME (HTTP-01 against Let's Encrypt by default),
+        //      so any hostname not served by the daemon still gets a cert
+        //      autonomously per tls.strategy.default.
+        //
+        // We name the issuer explicitly (rather than relying on Caddy's
+        // built-in default) so the rendered config makes the fallback
+        // contract obvious to any operator reading it.
         let mut policy = serde_json::Map::new();
         policy.insert("subjects".to_string(), json!(all_subjects));
         if let Some(url) = &config.cert_endpoint_url {
@@ -125,6 +132,7 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
                 }]),
             );
         }
+        policy.insert("issuers".to_string(), json!([{ "module": "acme" }]));
 
         let mut tls = json!({
             "automation": {
