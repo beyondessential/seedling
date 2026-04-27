@@ -30,6 +30,34 @@ pub(super) enum TlsCommand {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+    /// Cert-issuance attempt log (success and failures)
+    Attempts {
+        /// Filter by hostname
+        #[arg(long)]
+        hostname: Option<String>,
+        /// Maximum number of entries (newest first)
+        #[arg(long, default_value_t = 100)]
+        limit: i64,
+    },
+    /// Retry blocks: per-hostname pauses on automatic ACME-DNS issuance
+    RetryBlocks {
+        #[command(subcommand)]
+        command: RetryBlocksCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub(super) enum RetryBlocksCommand {
+    /// List active retry blocks
+    List,
+    /// Pause on-demand issuance for a hostname
+    Set {
+        hostname: String,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Resume on-demand issuance for a hostname
+    Clear { hostname: String },
 }
 
 #[derive(Subcommand)]
@@ -118,6 +146,40 @@ pub(super) async fn dispatch(client: &OiClient, cmd: TlsCommand) {
         TlsCommand::Policies { command } => dispatch_policies(client, command).await,
         TlsCommand::Certs { command } => dispatch_certs(client, command).await,
         TlsCommand::Config { command } => dispatch_config(client, command).await,
+        TlsCommand::Attempts { hostname, limit } => {
+            let mut params = json!({ "limit": limit });
+            if let Some(h) = hostname {
+                params["hostname"] = json!(h);
+            }
+            print_result(
+                client
+                    .request("/tls/certificates/attempts/list", params)
+                    .await,
+            );
+        }
+        TlsCommand::RetryBlocks { command } => dispatch_retry_blocks(client, command).await,
+    }
+}
+
+async fn dispatch_retry_blocks(client: &OiClient, cmd: RetryBlocksCommand) {
+    match cmd {
+        RetryBlocksCommand::List => {
+            print_result(client.request("/tls/retry-blocks/list", json!({})).await);
+        }
+        RetryBlocksCommand::Set { hostname, reason } => {
+            let mut params = json!({ "hostname": hostname });
+            if let Some(r) = reason {
+                params["reason"] = json!(r);
+            }
+            print_result(client.request("/tls/retry-blocks/set", params).await);
+        }
+        RetryBlocksCommand::Clear { hostname } => {
+            print_result(
+                client
+                    .request("/tls/retry-blocks/clear", json!({ "hostname": hostname }))
+                    .await,
+            );
+        }
     }
 }
 

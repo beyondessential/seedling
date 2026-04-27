@@ -1306,6 +1306,18 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > The setting must be readable and writable through the operator interface, take effect on the next renewal pass without restart, and default to empty.
 > Issuance and renewal that need to register a new ACME account must fail with a clear error when no contact email is configured.
 
+> r[tls.cert.attempt-log]
+> The runtime must record every certificate-issuance attempt — successful or failed — in a durable log, scoped per hostname.
+> Each entry must capture the hostname, the trigger (`on_demand`, `manual`, or `renewal`), start and finish timestamps, the outcome (`pending`, `success`, or `failure`), the resulting certificate id (on success), and the error string (on failure).
+> The operator interface must expose this log so that an unsuccessful issuance is visible without having to inspect daemon logs.
+
+> r[tls.cert.retry-block]
+> When an on-demand or operator-triggered ACME-DNS issuance attempt fails, the runtime must set a per-hostname retry block.
+> While a retry block is set, on-demand issuance for that hostname must be skipped (the cert-serving endpoint must signal fall-through to the proxy as if no policy applied), so a permanent failure cause does not produce a tight retry loop driven by repeat handshakes.
+> Operator-driven manual issuance must clear the block on entry and proceed; the autonomous renewal task must not auto-clear it.
+> A successful issuance must clear the block.
+> Operators must be able to set, list, and clear retry blocks through the operator interface; an operator-set block must persist across restarts and across automatic clears until explicitly cleared.
+
 > r[tls.acme.account.persist]
 > The runtime must persist ACME account state — at minimum the account private key and the URL returned by the directory's newAccount endpoint — for each `(directory_url, contact_email)` pair, encrypted at rest using the [secret key](#r--secret.key).
 > Subsequent orders against the same directory and contact must reuse the persisted account rather than creating a new one.

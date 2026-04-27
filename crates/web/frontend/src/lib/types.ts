@@ -597,3 +597,34 @@ export interface TlsSettings {
   contact_email: string;
   updated_at: number;
 }
+
+export type TlsAttemptTrigger = "on_demand" | "manual" | "renewal";
+export type TlsAttemptOutcome = "pending" | "success" | "failure";
+
+export interface TlsCertAttempt {
+  id: number;
+  hostname: string;
+  triggered_by: TlsAttemptTrigger;
+  started_at: number;
+  finished_at: number | null;
+  outcome: TlsAttemptOutcome;
+  cert_id: number | null;
+  error: string | null;
+}
+
+export interface TlsCertAttemptsResponse {
+  attempts: TlsCertAttempt[];
+}
+
+export type TlsRetryBlockSource = "auto" | "operator";
+
+export interface TlsRetryBlock {
+  hostname: string;
+  set_at: number;
+  set_by: TlsRetryBlockSource;
+  reason: string | null;
+}
+
+export interface TlsRetryBlocksResponse {
+  blocks: TlsRetryBlock[];
+}

@@ -220,6 +220,119 @@ pub struct TlsSettings {
     pub updated_at: i64,
 }
 
+/// What triggered a cert-issuance attempt. Drives both the attempt log and
+/// the renewal task's accounting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttemptTrigger {
+    /// Caddy hit `get_certificate` and we ran issuance synchronously.
+    OnDemand,
+    /// An operator called `/tls/certificates/issue-acme-dns`.
+    Manual,
+    /// The autonomous renewal task ran issuance.
+    Renewal,
+}
+
+impl AttemptTrigger {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OnDemand => "on_demand",
+            Self::Manual => "manual",
+            Self::Renewal => "renewal",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "on_demand" => Some(Self::OnDemand),
+            "manual" => Some(Self::Manual),
+            "renewal" => Some(Self::Renewal),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttemptOutcome {
+    Pending,
+    Success,
+    Failure,
+}
+
+impl AttemptOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Success => "success",
+            Self::Failure => "failure",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "pending" => Some(Self::Pending),
+            "success" => Some(Self::Success),
+            "failure" => Some(Self::Failure),
+            _ => None,
+        }
+    }
+}
+
+/// One row of the cert-attempt log. Covers every issuance attempt (success
+/// or failure) with the trigger that initiated it.
+// r[impl tls.cert.attempt-log]
+#[derive(Debug, Clone)]
+pub struct TlsCertAttempt {
+    pub id: i64,
+    pub hostname: String,
+    pub triggered_by: AttemptTrigger,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+    pub outcome: AttemptOutcome,
+    pub cert_id: Option<i64>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetryBlockSource {
+    /// Set by the runtime after a failed issuance attempt to prevent Caddy
+    /// from re-triggering on every handshake. Cleared by manual retry.
+    Auto,
+    /// Set by an operator via the operator interface. Persists until the
+    /// operator clears it.
+    Operator,
+}
+
+impl RetryBlockSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Operator => "operator",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "auto" => Some(Self::Auto),
+            "operator" => Some(Self::Operator),
+            _ => None,
+        }
+    }
+}
+
+/// A retry-block row. While present, on-demand issuance for the hostname
+/// is skipped; manual issuance ignores the block (and clears it on entry).
+// r[impl tls.cert.retry-block]
+#[derive(Debug, Clone)]
+pub struct TlsCertRetryBlock {
+    pub hostname: String,
+    pub set_at: i64,
+    pub set_by: RetryBlockSource,
+    pub reason: Option<String>,
+}
+
 /// Returns whether `pattern` matches `hostname`. Patterns are:
 ///
 /// - `*` — catch-all, matches any hostname.

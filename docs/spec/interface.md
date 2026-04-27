@@ -1006,6 +1006,30 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 > Failure returns `internal` with a message identifying the stage that failed.
 > The newly-issued certificate supersedes any prior active certificate for the same hostname.
 
+## Cert attempt log
+
+> i[tls.cert.attempts.list]
+> `/tls/certificates/attempts/list { hostname?, limit? }` returns the recent issuance-attempt log.
+> Newest first; capped at `limit` (default 100).
+> Each entry has `id`, `hostname`, `triggered_by` (`on_demand` | `manual` | `renewal`), `started_at`, `finished_at` (null while pending), `outcome` (`pending` | `success` | `failure`), `cert_id` (set on success), and `error` (set on failure).
+> When `hostname` is supplied, scopes the result to that hostname.
+
+## Retry blocks
+
+> i[tls.retry-block.list]
+> `/tls/retry-blocks/list` returns the current per-hostname retry blocks.
+> Response `result.blocks` is an array of `{ hostname, set_at, set_by, reason }`.
+> `set_by` is `auto` for runtime-imposed blocks following an issuance failure, and `operator` for blocks set explicitly via [`tls.retry-block.set`](#i--tls.retry-block.set).
+
+> i[tls.retry-block.set]
+> `/tls/retry-blocks/set { hostname, reason? }` sets an operator retry block for `hostname`.
+> While the block is set, on-demand ACME-DNS issuance for the hostname is skipped per [tls.cert.retry-block](runtime.md#r--tls.cert.retry-block).
+> An operator block is not auto-cleared; only a manual call to [`tls.retry-block.clear`](#i--tls.retry-block.clear) (or a successful manual issuance via [`tls.cert.issue-acme-dns`](#i--tls.cert.issue-acme-dns)) removes it.
+
+> i[tls.retry-block.clear]
+> `/tls/retry-blocks/clear { hostname }` removes the retry block for `hostname` if any.
+> Returns `{ cleared: bool }` indicating whether a block was removed.
+
 ## Settings
 
 > i[tls.settings.get]

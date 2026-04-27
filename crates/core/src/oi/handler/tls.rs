@@ -21,7 +21,7 @@ use seedling_protocol::error::{ErrorCode, OiError};
 use super::HandlerResult;
 use crate::oi::state::OiState;
 use crate::runtime::tls::{
-    DnsProviderKind, TlsPolicy,
+    AttemptOutcome, AttemptTrigger, DnsProviderKind, RetryBlockSource, TlsPolicy,
     acme::{self, IssueParams},
     store,
 };
@@ -376,6 +376,22 @@ pub(crate) fn issue_acme_dns(state: &OiState, params: IssueAcmeDnsParams) -> Han
         .directory_url
         .unwrap_or_else(acme::default_directory_url);
 
+    // Manual issuance always clears any prior auto retry-block: the
+    // operator is explicitly retrying. The block will be re-set if this
+    // attempt also fails.
+    let host_for_clear = params.hostname.clone();
+    let _ = state
+        .db
+        .call(move |db| store::clear_retry_block(db, &host_for_clear));
+
+    // Open the attempt row before running so a panic mid-flight still
+    // leaves a trace.
+    let host_for_attempt = params.hostname.clone();
+    let attempt_id = state
+        .db
+        .call(move |db| store::insert_attempt(db, &host_for_attempt, AttemptTrigger::Manual))
+        .map_err(db_error)?;
+
     // Run the async ACME flow on the current Tokio runtime, blocking the OI
     // worker for the duration. ACME-DNS issuance takes tens of seconds; we
     // accept that for the sync UX.
@@ -398,15 +414,139 @@ pub(crate) fn issue_acme_dns(state: &OiState, params: IssueAcmeDnsParams) -> Han
     });
 
     match result {
-        Ok(issued) => Ok(json!({
-            "cert_id": issued.cert_id,
-            "not_after": issued.not_after,
-        })),
-        Err(e) => Err(OiError::new(
-            ErrorCode::Internal,
-            format!("acme-dns issuance failed: {e}"),
-        )),
+        Ok(issued) => {
+            let cert_id = issued.cert_id;
+            let _ = state.db.call(move |db| {
+                store::finalize_attempt(
+                    db,
+                    attempt_id,
+                    AttemptOutcome::Success,
+                    Some(cert_id),
+                    None,
+                )
+            });
+            Ok(json!({
+                "cert_id": issued.cert_id,
+                "not_after": issued.not_after,
+            }))
+        }
+        Err(e) => {
+            let err_msg = format!("acme-dns issuance failed: {e}");
+            // Finalise the attempt + set a fresh auto retry-block so
+            // Caddy doesn't immediately re-trigger from a handshake.
+            let host_for_block = params.hostname.clone();
+            let err_for_attempt = err_msg.clone();
+            let err_for_block = err_msg.clone();
+            let _ = state.db.call(move |db| -> rusqlite::Result<()> {
+                store::finalize_attempt(
+                    db,
+                    attempt_id,
+                    AttemptOutcome::Failure,
+                    None,
+                    Some(&err_for_attempt),
+                )?;
+                store::set_retry_block(
+                    db,
+                    &host_for_block,
+                    RetryBlockSource::Auto,
+                    Some(&err_for_block),
+                )?;
+                Ok(())
+            });
+            Err(OiError::new(ErrorCode::Internal, err_msg))
+        }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Cert attempt log
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub(crate) struct ListAttemptsParams {
+    #[serde(default)]
+    pub hostname: Option<String>,
+    #[serde(default = "default_attempts_limit")]
+    pub limit: i64,
+}
+
+fn default_attempts_limit() -> i64 {
+    100
+}
+
+// i[tls.cert.attempts.list]
+pub(crate) fn list_attempts(state: &OiState, params: ListAttemptsParams) -> HandlerResult {
+    let ListAttemptsParams { hostname, limit } = params;
+    let rows = state
+        .db
+        .call(move |db| store::list_attempts(db, hostname.as_deref(), limit))
+        .map_err(db_error)?;
+    let result: Vec<Value> = rows
+        .into_iter()
+        .map(|a| {
+            json!({
+                "id": a.id,
+                "hostname": a.hostname,
+                "triggered_by": a.triggered_by.as_str(),
+                "started_at": a.started_at,
+                "finished_at": a.finished_at,
+                "outcome": a.outcome.as_str(),
+                "cert_id": a.cert_id,
+                "error": a.error,
+            })
+        })
+        .collect();
+    Ok(json!({ "attempts": result }))
+}
+
+// ---------------------------------------------------------------------------
+// Retry blocks
+// ---------------------------------------------------------------------------
+
+// i[tls.retry-block.list]
+pub(crate) fn list_retry_blocks(state: &OiState) -> HandlerResult {
+    let rows = state.db.call(store::list_retry_blocks).map_err(db_error)?;
+    let result: Vec<Value> = rows
+        .into_iter()
+        .map(|r| {
+            json!({
+                "hostname": r.hostname,
+                "set_at": r.set_at,
+                "set_by": r.set_by.as_str(),
+                "reason": r.reason,
+            })
+        })
+        .collect();
+    Ok(json!({ "blocks": result }))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct SetRetryBlockParams {
+    pub hostname: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+// i[tls.retry-block.set]
+pub(crate) fn set_retry_block(state: &OiState, params: SetRetryBlockParams) -> HandlerResult {
+    let SetRetryBlockParams { hostname, reason } = params;
+    state
+        .db
+        .call(move |db| {
+            store::set_retry_block(db, &hostname, RetryBlockSource::Operator, reason.as_deref())
+        })
+        .map_err(db_error)?;
+    Ok(json!({ "ok": true }))
+}
+
+// i[tls.retry-block.clear]
+pub(crate) fn clear_retry_block(state: &OiState, params: HostnameParams) -> HandlerResult {
+    let HostnameParams { hostname } = params;
+    let cleared = state
+        .db
+        .call(move |db| store::clear_retry_block(db, &hostname))
+        .map_err(db_error)?;
+    Ok(json!({ "ok": true, "cleared": cleared }))
 }
 
 // ---------------------------------------------------------------------------

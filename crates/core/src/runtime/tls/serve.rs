@@ -32,7 +32,7 @@ use snafu::{ResultExt, Snafu};
 use subtle::ConstantTimeEq;
 
 use super::{
-    TlsCertOrigin, TlsCertState, TlsPolicy,
+    AttemptOutcome, AttemptTrigger, RetryBlockSource, TlsCertOrigin, TlsCertState, TlsPolicy,
     acme::{self, IssueParams},
     store,
 };
@@ -203,6 +203,22 @@ async fn attempt_on_demand_issue(state: &ServeState, hostname: &str) -> IssueOut
         _ => return IssueOutcome::FallThrough,
     };
 
+    // Honour any retry block before queuing: a previous failure or
+    // operator-set pause should keep Caddy from triggering repeated ACME
+    // orders that hit the same wall.
+    let host_for_block = hostname.to_owned();
+    let blocked = state
+        .db
+        .call(move |db| store::is_retry_blocked(db, &host_for_block))
+        .unwrap_or(false);
+    if blocked {
+        tracing::info!(
+            %hostname,
+            "on-demand issuance suppressed by retry block; clear via /tls/certificates/issue-acme-dns or /tls/retry-blocks/clear"
+        );
+        return IssueOutcome::FallThrough;
+    }
+
     // Queue behind any in-flight issuance. Handlers behind us re-check the
     // cert store after acquiring the lock, so a second handshake for the
     // same SNI returns the freshly-issued cert without re-issuing.
@@ -215,16 +231,43 @@ async fn attempt_on_demand_issue(state: &ServeState, hostname: &str) -> IssueOut
             return IssueOutcome::FallThrough;
         }
     }
+    // Re-check retry block: a parallel failure may have just set one.
+    let host_for_block = hostname.to_owned();
+    if state
+        .db
+        .call(move |db| store::is_retry_blocked(db, &host_for_block))
+        .unwrap_or(false)
+    {
+        return IssueOutcome::FallThrough;
+    }
 
+    issue_and_record(
+        state,
+        hostname,
+        &dns_provider_name,
+        AttemptTrigger::OnDemand,
+    )
+    .await
+}
+
+/// Run an issuance, write an attempt-log row covering the full lifecycle,
+/// and on failure set an auto retry-block so a subsequent on-demand
+/// handshake doesn't immediately repeat the failed flow.
+async fn issue_and_record(
+    state: &ServeState,
+    hostname: &str,
+    dns_provider_name: &str,
+    trigger: AttemptTrigger,
+) -> IssueOutcome {
     // Need the global contact email to register an ACME account.
     let settings = match state.db.call(store::get_settings) {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!(%hostname, error = %e, "settings lookup failed");
-            file_cert_fault(
-                &state.db,
+            record_failure(
+                state,
                 hostname,
-                "cert_issue_failed",
+                None,
                 &format!("settings lookup failed: {e}"),
             );
             return IssueOutcome::FallThrough;
@@ -236,43 +279,55 @@ async fn attempt_on_demand_issue(state: &ServeState, hostname: &str) -> IssueOut
              set one via /tls/settings/set"
         );
         tracing::warn!("{msg}");
-        file_cert_fault(&state.db, hostname, "cert_issue_failed", &msg);
+        record_failure(state, hostname, None, &msg);
         return IssueOutcome::FallThrough;
     }
+
+    // Open the attempt row before running the flow so a panic mid-flight
+    // still leaves a trace.
+    let host_for_attempt = hostname.to_owned();
+    let attempt_id = match state
+        .db
+        .call(move |db| store::insert_attempt(db, &host_for_attempt, trigger))
+    {
+        Ok(id) => Some(id),
+        Err(e) => {
+            tracing::warn!(%hostname, error = %e, "could not open attempt row; proceeding anyway");
+            None
+        }
+    };
 
     tracing::info!(
         %hostname,
         provider = %dns_provider_name,
-        "on-demand ACME-DNS issuance triggered by Caddy handshake"
+        ?trigger,
+        "ACME-DNS issuance starting"
     );
-    match acme::issue(
+    let result = acme::issue(
         &state.db,
         &state.cipher,
         IssueParams {
             hostname,
             contact_email: &settings.contact_email,
             directory_url: &acme::default_directory_url(),
-            dns_provider_name: &dns_provider_name,
+            dns_provider_name,
         },
     )
-    .await
-    {
+    .await;
+
+    match result {
         Ok(issued) => {
+            finalize_ok(state, attempt_id, hostname, issued.cert_id);
             tracing::info!(
                 %hostname,
                 cert_id = issued.cert_id,
                 not_after = issued.not_after,
-                "on-demand issuance succeeded"
+                "ACME-DNS issuance succeeded"
             );
-            // Clear any prior cert_issue_failed fault for this hostname.
-            clear_cert_fault(&state.db, hostname, "cert_issue_failed");
             match lookup(&state.db, &state.cipher, hostname).await {
                 Ok(Some(bundle)) => IssueOutcome::Served(bundle),
                 Ok(None) => {
-                    tracing::warn!(
-                        %hostname,
-                        "issuance succeeded but cert lookup returned none"
-                    );
+                    tracing::warn!(%hostname, "issuance succeeded but cert lookup returned none");
                     IssueOutcome::FallThrough
                 }
                 Err(e) => {
@@ -282,12 +337,47 @@ async fn attempt_on_demand_issue(state: &ServeState, hostname: &str) -> IssueOut
             }
         }
         Err(e) => {
-            let msg = format!("on-demand ACME-DNS issuance for {hostname} failed: {e}");
+            let msg = format!("ACME-DNS issuance for {hostname} failed: {e}");
             tracing::warn!("{msg}");
-            file_cert_fault(&state.db, hostname, "cert_issue_failed", &msg);
+            record_failure(state, hostname, attempt_id, &msg);
             IssueOutcome::FallThrough
         }
     }
+}
+
+/// Finalise the attempt as success, clear the cert_issue_failed fault, and
+/// drop any auto retry-block so Caddy can fetch the new cert next handshake.
+fn finalize_ok(state: &ServeState, attempt_id: Option<i64>, hostname: &str, cert_id: i64) {
+    if let Some(id) = attempt_id {
+        let _ = state.db.call(move |db| {
+            store::finalize_attempt(db, id, AttemptOutcome::Success, Some(cert_id), None)
+        });
+    }
+    let host_for_clear = hostname.to_owned();
+    let _ = state
+        .db
+        .call(move |db| store::clear_retry_block(db, &host_for_clear));
+    clear_cert_fault(&state.db, hostname, "cert_issue_failed");
+}
+
+/// Finalise the attempt as failure, set an auto retry-block, and file a
+/// fault. The retry block is what stops Caddy from re-triggering issuance
+/// on every handshake when a permanent failure (DNS misconfig, bad creds,
+/// etc.) is the underlying cause; manual retry via
+/// /tls/certificates/issue-acme-dns clears the block.
+fn record_failure(state: &ServeState, hostname: &str, attempt_id: Option<i64>, error: &str) {
+    if let Some(id) = attempt_id {
+        let err_owned = error.to_owned();
+        let _ = state.db.call(move |db| {
+            store::finalize_attempt(db, id, AttemptOutcome::Failure, None, Some(&err_owned))
+        });
+    }
+    let host_for_block = hostname.to_owned();
+    let reason = error.to_owned();
+    let _ = state.db.call(move |db| {
+        store::set_retry_block(db, &host_for_block, RetryBlockSource::Auto, Some(&reason))
+    });
+    file_cert_fault(&state.db, hostname, "cert_issue_failed", error);
 }
 
 fn cert_ok(bundle: &CertBundle) -> impl IntoResponse {

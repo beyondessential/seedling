@@ -109,6 +109,9 @@ const SQL_V42: &str = include_str!("db/migrations/v42.sql");
 const SQL_V43: &str = include_str!("db/migrations/v43.sql");
 // r[impl tls.settings.contact-email]
 const SQL_V44: &str = include_str!("db/migrations/v44.sql");
+// r[impl tls.cert.attempt-log]
+// r[impl tls.cert.retry-block]
+const SQL_V45: &str = include_str!("db/migrations/v45.sql");
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -324,6 +327,11 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 44,
         sql: SQL_V44,
+        custom_run: None,
+    },
+    Migration {
+        version: 45,
+        sql: SQL_V45,
         custom_run: None,
     },
 ];

@@ -9,9 +9,10 @@ use rusqlite::{OptionalExtension, params};
 use secrecy::{ExposeSecret, SecretString};
 
 use super::{
-    AcmeAccount, DnsProviderEntry, DnsProviderKind, DnsProviderSummary, KeyType, TlsCertOrigin,
-    TlsCertState, TlsCertificate, TlsPolicy, TlsPolicyRow, TlsSettings, pattern_matches,
-    pattern_specificity,
+    AcmeAccount, AttemptOutcome, AttemptTrigger, DnsProviderEntry, DnsProviderKind,
+    DnsProviderSummary, KeyType, RetryBlockSource, TlsCertAttempt, TlsCertOrigin,
+    TlsCertRetryBlock, TlsCertState, TlsCertificate, TlsPolicy, TlsPolicyRow, TlsSettings,
+    pattern_matches, pattern_specificity,
 };
 use crate::runtime::{db::Db, secrets::Cipher};
 
@@ -594,6 +595,156 @@ fn row_to_acme_account(row: &rusqlite::Row<'_>) -> rusqlite::Result<AcmeAccount>
 }
 
 // ---------------------------------------------------------------------------
+// Cert attempts log
+// ---------------------------------------------------------------------------
+
+// r[impl tls.cert.attempt-log]
+pub fn insert_attempt(
+    db: &Db,
+    hostname: &str,
+    triggered_by: AttemptTrigger,
+) -> rusqlite::Result<i64> {
+    let now = now_secs();
+    db.conn.execute(
+        "INSERT INTO tls_cert_attempts (hostname, triggered_by, started_at, outcome)
+         VALUES (?1, ?2, ?3, 'pending')",
+        params![hostname, triggered_by.as_str(), now],
+    )?;
+    Ok(db.conn.last_insert_rowid())
+}
+
+// r[impl tls.cert.attempt-log]
+pub fn finalize_attempt(
+    db: &Db,
+    id: i64,
+    outcome: AttemptOutcome,
+    cert_id: Option<i64>,
+    error: Option<&str>,
+) -> rusqlite::Result<()> {
+    let now = now_secs();
+    db.conn.execute(
+        "UPDATE tls_cert_attempts SET
+            outcome     = ?1,
+            cert_id     = ?2,
+            error       = ?3,
+            finished_at = ?4
+         WHERE id = ?5",
+        params![outcome.as_str(), cert_id, error, now, id],
+    )?;
+    Ok(())
+}
+
+/// List recent attempts. When `hostname` is `Some`, scopes to that
+/// hostname; otherwise returns all attempts. Newest first.
+pub fn list_attempts(
+    db: &Db,
+    hostname: Option<&str>,
+    limit: i64,
+) -> rusqlite::Result<Vec<TlsCertAttempt>> {
+    let (sql, params) = if let Some(host) = hostname {
+        (
+            "SELECT id, hostname, triggered_by, started_at, finished_at, outcome, cert_id, error
+             FROM tls_cert_attempts
+             WHERE hostname = ?1
+             ORDER BY id DESC LIMIT ?2"
+                .to_owned(),
+            rusqlite::params_from_iter::<Vec<Box<dyn rusqlite::ToSql>>>(vec![
+                Box::new(host.to_owned()),
+                Box::new(limit),
+            ]),
+        )
+    } else {
+        (
+            "SELECT id, hostname, triggered_by, started_at, finished_at, outcome, cert_id, error
+             FROM tls_cert_attempts
+             ORDER BY id DESC LIMIT ?1"
+                .to_owned(),
+            rusqlite::params_from_iter::<Vec<Box<dyn rusqlite::ToSql>>>(vec![Box::new(limit)]),
+        )
+    };
+    let mut stmt = db.conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(params, |row| {
+            let trig: String = row.get(2)?;
+            let outc: String = row.get(5)?;
+            Ok(TlsCertAttempt {
+                id: row.get(0)?,
+                hostname: row.get(1)?,
+                triggered_by: AttemptTrigger::parse(&trig).ok_or(rusqlite::Error::InvalidQuery)?,
+                started_at: row.get(3)?,
+                finished_at: row.get(4)?,
+                outcome: AttemptOutcome::parse(&outc).ok_or(rusqlite::Error::InvalidQuery)?,
+                cert_id: row.get(6)?,
+                error: row.get(7)?,
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
+// ---------------------------------------------------------------------------
+// Retry blocks
+// ---------------------------------------------------------------------------
+
+// r[impl tls.cert.retry-block]
+pub fn set_retry_block(
+    db: &Db,
+    hostname: &str,
+    set_by: RetryBlockSource,
+    reason: Option<&str>,
+) -> rusqlite::Result<()> {
+    let now = now_secs();
+    db.conn.execute(
+        "INSERT INTO tls_cert_retry_blocks (hostname, set_at, set_by, reason)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(hostname) DO UPDATE SET
+             set_at = excluded.set_at,
+             set_by = excluded.set_by,
+             reason = excluded.reason",
+        params![hostname, now, set_by.as_str(), reason],
+    )?;
+    Ok(())
+}
+
+// r[impl tls.cert.retry-block]
+pub fn clear_retry_block(db: &Db, hostname: &str) -> rusqlite::Result<bool> {
+    let n = db.conn.execute(
+        "DELETE FROM tls_cert_retry_blocks WHERE hostname = ?1",
+        [hostname],
+    )?;
+    Ok(n > 0)
+}
+
+pub fn is_retry_blocked(db: &Db, hostname: &str) -> rusqlite::Result<bool> {
+    let n: i64 = db.conn.query_row(
+        "SELECT COUNT(*) FROM tls_cert_retry_blocks WHERE hostname = ?1",
+        [hostname],
+        |r| r.get(0),
+    )?;
+    Ok(n > 0)
+}
+
+pub fn list_retry_blocks(db: &Db) -> rusqlite::Result<Vec<TlsCertRetryBlock>> {
+    let mut stmt = db.conn.prepare(
+        "SELECT hostname, set_at, set_by, reason
+         FROM tls_cert_retry_blocks ORDER BY hostname",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            let set_by_str: String = row.get(2)?;
+            Ok(TlsCertRetryBlock {
+                hostname: row.get(0)?,
+                set_at: row.get(1)?,
+                set_by: RetryBlockSource::parse(&set_by_str)
+                    .ok_or(rusqlite::Error::InvalidQuery)?,
+                reason: row.get(3)?,
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1071,6 +1222,85 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    // r[verify tls.cert.attempt-log]
+    #[test]
+    fn attempt_lifecycle_round_trips() {
+        let (db, _) = fresh_db();
+        let id = insert_attempt(&db, "host.example.com", AttemptTrigger::OnDemand).unwrap();
+        let rows = list_attempts(&db, Some("host.example.com"), 10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].outcome, AttemptOutcome::Pending);
+        assert!(rows[0].finished_at.is_none());
+
+        finalize_attempt(
+            &db,
+            id,
+            AttemptOutcome::Failure,
+            None,
+            Some("dns provider error"),
+        )
+        .unwrap();
+        let rows = list_attempts(&db, Some("host.example.com"), 10).unwrap();
+        assert_eq!(rows[0].outcome, AttemptOutcome::Failure);
+        assert!(rows[0].finished_at.is_some());
+        assert_eq!(rows[0].error.as_deref(), Some("dns provider error"));
+    }
+
+    #[test]
+    fn list_attempts_returns_newest_first_and_obeys_limit() {
+        let (db, _) = fresh_db();
+        let mut ids = Vec::new();
+        for _ in 0..5 {
+            let id = insert_attempt(&db, "h.example.com", AttemptTrigger::Manual).unwrap();
+            finalize_attempt(&db, id, AttemptOutcome::Success, None, None).unwrap();
+            ids.push(id);
+        }
+        let rows = list_attempts(&db, None, 3).unwrap();
+        assert_eq!(rows.len(), 3);
+        // Newest first: attempt id descending.
+        assert_eq!(rows[0].id, ids[4]);
+        assert_eq!(rows[1].id, ids[3]);
+        assert_eq!(rows[2].id, ids[2]);
+    }
+
+    // r[verify tls.cert.retry-block]
+    #[test]
+    fn retry_block_set_check_clear() {
+        let (db, _) = fresh_db();
+        assert!(!is_retry_blocked(&db, "host.example.com").unwrap());
+
+        set_retry_block(
+            &db,
+            "host.example.com",
+            RetryBlockSource::Auto,
+            Some("dns 5xx"),
+        )
+        .unwrap();
+        assert!(is_retry_blocked(&db, "host.example.com").unwrap());
+
+        let rows = list_retry_blocks(&db).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].set_by, RetryBlockSource::Auto);
+        assert_eq!(rows[0].reason.as_deref(), Some("dns 5xx"));
+
+        // Setting again with the operator source replaces in place.
+        set_retry_block(
+            &db,
+            "host.example.com",
+            RetryBlockSource::Operator,
+            Some("paused for migration"),
+        )
+        .unwrap();
+        let rows = list_retry_blocks(&db).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].set_by, RetryBlockSource::Operator);
+        assert_eq!(rows[0].reason.as_deref(), Some("paused for migration"));
+
+        assert!(clear_retry_block(&db, "host.example.com").unwrap());
+        assert!(!is_retry_blocked(&db, "host.example.com").unwrap());
+        assert!(!clear_retry_block(&db, "host.example.com").unwrap());
     }
 
     // r[verify tls.settings.contact-email]

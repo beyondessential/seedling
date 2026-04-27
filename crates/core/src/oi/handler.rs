@@ -272,6 +272,14 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/tls/settings/get" => tls::get_settings(state),
         // i[tls.settings.set]
         "/tls/settings/set" => tls::set_settings(state, parse_params(req.params)?),
+        // i[tls.cert.attempts.list]
+        "/tls/certificates/attempts/list" => tls::list_attempts(state, parse_params(req.params)?),
+        // i[tls.retry-block.list]
+        "/tls/retry-blocks/list" => tls::list_retry_blocks(state),
+        // i[tls.retry-block.set]
+        "/tls/retry-blocks/set" => tls::set_retry_block(state, parse_params(req.params)?),
+        // i[tls.retry-block.clear]
+        "/tls/retry-blocks/clear" => tls::clear_retry_block(state, parse_params(req.params)?),
         other => Err(OiError::not_found(format!("unknown method: {other}"))),
     };
 
