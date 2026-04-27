@@ -138,7 +138,6 @@ export default function Certificates() {
           loading={settingsLoading}
           error={settingsError}
           onSaved={refetchSettings}
-          execute={execute}
           writeAllowed={writeGuard.allowed}
           writeReason={writeGuard.reason}
         />
@@ -236,7 +235,6 @@ export default function Certificates() {
           refetchPolicies();
           setProviderDialog(false);
         }}
-        execute={execute}
       />
       <SetAcmeDnsPolicyDialog
         open={policyDialog}
@@ -246,7 +244,6 @@ export default function Certificates() {
           refetchPolicies();
           setPolicyDialog(false);
         }}
-        execute={execute}
       />
       <UploadManualCertDialog
         open={uploadDialog}
@@ -255,7 +252,6 @@ export default function Certificates() {
           refetchCerts();
           setUploadDialog(false);
         }}
-        execute={execute}
       />
       <CsrBeginDialog
         open={csrBeginDialog}
@@ -265,7 +261,6 @@ export default function Certificates() {
           setCsrBeginDialog(false);
           setCsrShow({ id: result.id, csrPem: result.csr_pem });
         }}
-        execute={execute}
       />
       <CsrShowDialog
         open={csrShow !== null}
@@ -281,7 +276,6 @@ export default function Certificates() {
           refetchCerts();
           setCsrUpload(null);
         }}
-        execute={execute}
       />
       <ConfirmDialog
         open={deletingCert !== null}
@@ -364,7 +358,6 @@ interface SettingsSectionProps {
   loading: boolean;
   error: OiQueryError | null;
   onSaved: () => void;
-  execute: (path: string, params: unknown) => Promise<unknown>;
   writeAllowed: boolean;
   writeReason: string | null;
 }
@@ -374,17 +367,23 @@ function SettingsSection({
   loading,
   error,
   onSaved,
-  execute,
   writeAllowed,
   writeReason,
 }: SettingsSectionProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
+  const { execute, error: submitError, clearError } = useOiAction();
 
   const startEdit = () => {
     setDraft(settings?.contact_email ?? "");
+    clearError();
     setEditing(true);
+  };
+
+  const closeEdit = () => {
+    clearError();
+    setEditing(false);
   };
 
   const submit = async () => {
@@ -393,6 +392,8 @@ function SettingsSection({
       await execute("/tls/settings/set", { contact_email: draft.trim() });
       onSaved();
       setEditing(false);
+    } catch {
+      // surfaced inline via `submitError`
     } finally {
       setSaving(false);
     }
@@ -438,22 +439,28 @@ function SettingsSection({
           </Tooltip>
         </Stack>
       </Paper>
-      <Dialog open={editing} onClose={() => setEditing(false)} fullWidth maxWidth="sm">
+      <Dialog open={editing} onClose={closeEdit} fullWidth maxWidth="sm">
         <DialogTitle>Update contact email</DialogTitle>
         <DialogContent>
-          <TextField
-            autoFocus
-            label="Contact email"
-            placeholder="ops@example.com"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            fullWidth
-            sx={{ mt: 1 }}
-            helperText="Leave blank to clear. New value applies on the next renewal pass."
-          />
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            {submitError && (
+              <Alert severity="error" onClose={clearError}>
+                {submitError.message}
+              </Alert>
+            )}
+            <TextField
+              autoFocus
+              label="Contact email"
+              placeholder="ops@example.com"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              fullWidth
+              helperText="Leave blank to clear. New value applies on the next renewal pass."
+            />
+          </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setEditing(false)} disabled={saving}>
+          <Button onClick={closeEdit} disabled={saving}>
             Cancel
           </Button>
           <Button onClick={submit} variant="contained" disabled={saving}>
@@ -865,26 +872,26 @@ interface UpsertProviderDialogProps {
   open: boolean;
   onClose: () => void;
   onSubmitted: () => void;
-  execute: (path: string, params: unknown) => Promise<unknown>;
 }
 
 function UpsertProviderDialog({
   open,
   onClose,
   onSubmitted,
-  execute,
 }: UpsertProviderDialogProps) {
   const [name, setName] = useState("");
   const [accessKeyId, setAccessKeyId] = useState("");
   const [secretAccessKey, setSecretAccessKey] = useState("");
   const [region, setRegion] = useState("us-east-1");
   const [submitting, setSubmitting] = useState(false);
+  const { execute, error, clearError } = useOiAction();
 
   const reset = () => {
     setName("");
     setAccessKeyId("");
     setSecretAccessKey("");
     setRegion("us-east-1");
+    clearError();
   };
 
   const close = () => {
@@ -910,6 +917,8 @@ function UpsertProviderDialog({
       });
       reset();
       onSubmitted();
+    } catch {
+      // surfaced inline via `error`
     } finally {
       setSubmitting(false);
     }
@@ -920,6 +929,11 @@ function UpsertProviderDialog({
       <DialogTitle>Add DNS provider</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
+          {error && (
+            <Alert severity="error" onClose={clearError}>
+              {error.message}
+            </Alert>
+          )}
           <TextField
             label="Name"
             placeholder="e.g. primary, ops-account"
@@ -974,7 +988,6 @@ interface SetAcmeDnsPolicyDialogProps {
   providers: TlsDnsProvider[];
   onClose: () => void;
   onSubmitted: () => void;
-  execute: (path: string, params: unknown) => Promise<unknown>;
 }
 
 function SetAcmeDnsPolicyDialog({
@@ -982,11 +995,11 @@ function SetAcmeDnsPolicyDialog({
   providers,
   onClose,
   onSubmitted,
-  execute,
 }: SetAcmeDnsPolicyDialogProps) {
   const [hostname, setHostname] = useState("");
   const [provider, setProvider] = useState(providers[0]?.name ?? "");
   const [submitting, setSubmitting] = useState(false);
+  const { execute, error, clearError } = useOiAction();
 
   // Keep provider selection in sync with the available list when it loads.
   if (provider === "" && providers.length > 0) {
@@ -995,6 +1008,7 @@ function SetAcmeDnsPolicyDialog({
 
   const reset = () => {
     setHostname("");
+    clearError();
   };
 
   const close = () => {
@@ -1015,6 +1029,8 @@ function SetAcmeDnsPolicyDialog({
       });
       reset();
       onSubmitted();
+    } catch {
+      // surfaced inline via `error`
     } finally {
       setSubmitting(false);
     }
@@ -1025,6 +1041,11 @@ function SetAcmeDnsPolicyDialog({
       <DialogTitle>Bind hostname to ACME-DNS</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
+          {error && (
+            <Alert severity="error" onClose={clearError}>
+              {error.message}
+            </Alert>
+          )}
           <TextField
             label="Hostname or wildcard"
             placeholder="e.g. example.com, *.example.com, *"
@@ -1086,14 +1107,12 @@ interface UploadManualCertDialogProps {
   open: boolean;
   onClose: () => void;
   onSubmitted: () => void;
-  execute: (path: string, params: unknown) => Promise<unknown>;
 }
 
 function UploadManualCertDialog({
   open,
   onClose,
   onSubmitted,
-  execute,
 }: UploadManualCertDialogProps) {
   const [certPem, setCertPem] = useState("");
   const [keyPem, setKeyPem] = useState("");
@@ -1102,12 +1121,17 @@ function UploadManualCertDialog({
   const [result, setResult] = useState<
     { primary_san?: string; san_dns_names?: string[]; warnings: string[] } | null
   >(null);
+  // Owned action state — keeps errors visible inside the dialog
+  // rather than letting them propagate to the page-level toast that
+  // sits behind the open modal.
+  const { execute, error, clearError } = useOiAction();
 
   const reset = () => {
     setCertPem("");
     setKeyPem("");
     setNote("");
     setResult(null);
+    clearError();
   };
 
   const close = () => {
@@ -1142,6 +1166,8 @@ function UploadManualCertDialog({
           warnings: warns,
         });
       }
+    } catch {
+      // surfaced inline via `error` from useOiAction
     } finally {
       setSubmitting(false);
     }
@@ -1157,6 +1183,11 @@ function UploadManualCertDialog({
       <DialogTitle>Upload manual certificate</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
+          {error && (
+            <Alert severity="error" onClose={clearError}>
+              {error.message}
+            </Alert>
+          )}
           <PemField
             label="Certificate PEM"
             placeholder="-----BEGIN CERTIFICATE-----..."
@@ -1301,15 +1332,16 @@ interface CsrBeginDialogProps {
   open: boolean;
   onClose: () => void;
   onSubmitted: (result: TlsCsrBeginResponse) => void;
-  execute: (path: string, params: unknown) => Promise<unknown>;
 }
 
-function CsrBeginDialog({ open, onClose, onSubmitted, execute }: CsrBeginDialogProps) {
+function CsrBeginDialog({ open, onClose, onSubmitted }: CsrBeginDialogProps) {
   const [hostname, setHostname] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const { execute, error, clearError } = useOiAction();
 
   const close = () => {
     setHostname("");
+    clearError();
     onClose();
   };
 
@@ -1322,6 +1354,8 @@ function CsrBeginDialog({ open, onClose, onSubmitted, execute }: CsrBeginDialogP
       })) as TlsCsrBeginResponse;
       setHostname("");
       onSubmitted(result);
+    } catch {
+      // surfaced inline via `error`
     } finally {
       setSubmitting(false);
     }
@@ -1335,6 +1369,11 @@ function CsrBeginDialog({ open, onClose, onSubmitted, execute }: CsrBeginDialogP
       <DialogTitle>Generate CSR</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
+          {error && (
+            <Alert severity="error" onClose={clearError}>
+              {error.message}
+            </Alert>
+          )}
           <TextField
             autoFocus
             label="Hostname"
@@ -1434,7 +1473,6 @@ interface CsrUploadCertDialogProps {
   cert: TlsCertificate | null;
   onClose: () => void;
   onSubmitted: () => void;
-  execute: (path: string, params: unknown) => Promise<unknown>;
 }
 
 function CsrUploadCertDialog({
@@ -1442,15 +1480,16 @@ function CsrUploadCertDialog({
   cert,
   onClose,
   onSubmitted,
-  execute,
 }: CsrUploadCertDialogProps) {
   const [certPem, setCertPem] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [warnings, setWarnings] = useState<string[] | null>(null);
+  const { execute, error, clearError } = useOiAction();
 
   const reset = () => {
     setCertPem("");
     setWarnings(null);
+    clearError();
   };
 
   const close = () => {
@@ -1474,6 +1513,8 @@ function CsrUploadCertDialog({
         reset();
         onSubmitted();
       }
+    } catch {
+      // surfaced inline via `error`
     } finally {
       setSubmitting(false);
     }
@@ -1493,6 +1534,11 @@ function CsrUploadCertDialog({
       </DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
+          {error && (
+            <Alert severity="error" onClose={clearError}>
+              {error.message}
+            </Alert>
+          )}
           <PemField
             label="Signed certificate PEM"
             placeholder="-----BEGIN CERTIFICATE-----..."
