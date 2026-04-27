@@ -55,6 +55,7 @@ import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useGuard, useSafetyMode } from "../components/SafetyModeProvider";
 import { useSessionContext } from "../components/SessionProvider";
 import { SnapshotVolumeDialog } from "../components/SnapshotVolumeDialog";
+import { TlsHostnamesTable } from "../components/TlsHostnamesTable";
 import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
 import { useEventRefresh } from "../hooks/useEventRefresh";
@@ -3079,6 +3080,17 @@ export default function AppDetail() {
                     onRefresh={refetch}
                   />
                 </Section>
+
+                {data.resources.some(
+                  (r) => r.def?.kind === "ingress" && r.def.tls,
+                ) && (
+                  <>
+                    <Divider sx={{ my: 3 }} />
+                    <Section title="TLS certificates">
+                      <TlsHostnamesTable app={name!} hideAppsColumn hideTitle />
+                    </Section>
+                  </>
+                )}
 
                 <Divider sx={{ my: 3 }} />
 

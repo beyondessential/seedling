@@ -26,52 +26,24 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useState } from "react";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useGuard } from "../components/SafetyModeProvider";
+import { TlsHostnamesTable } from "../components/TlsHostnamesTable";
 import type { OiQueryError } from "../hooks/useOi";
 import { useOiQuery } from "../hooks/useOi";
 import { useOiAction } from "../hooks/useOiAction";
 import type {
-  TlsCertAttempt,
-  TlsCertAttemptsResponse,
-  TlsCertificate,
-  TlsCertificatesResponse,
   TlsDnsProvider,
   TlsDnsProvidersResponse,
   TlsPoliciesResponse,
   TlsPolicy,
-  TlsRetryBlock,
-  TlsRetryBlocksResponse,
   TlsSettings,
 } from "../lib/types";
-
-// 14-day expiring window matches the runtime's tls.fault.expiring threshold.
-const EXPIRING_WINDOW_S = 14 * 24 * 60 * 60;
 
 function formatTime(unix: number | null): string {
   if (!unix) return "—";
   return new Date(unix * 1000).toLocaleString();
-}
-
-function expiryChip(notAfter: number | null) {
-  if (!notAfter) return null;
-  const remaining = notAfter - Math.floor(Date.now() / 1000);
-  if (remaining <= 0) {
-    return <Chip label="expired" size="small" color="error" />;
-  }
-  if (remaining < EXPIRING_WINDOW_S) {
-    const days = Math.max(1, Math.ceil(remaining / 86400));
-    return (
-      <Chip
-        label={`expires in ${days}d`}
-        size="small"
-        color="warning"
-        variant="outlined"
-      />
-    );
-  }
-  return null;
 }
 
 // w[impl routes.certificates]
@@ -89,31 +61,11 @@ export default function Certificates() {
     refetch: refetchPolicies,
   } = useOiQuery<TlsPoliciesResponse>("/tls/policies/list", {});
   const {
-    data: certs,
-    loading: certsLoading,
-    error: certsError,
-    refetch: refetchCerts,
-  } = useOiQuery<TlsCertificatesResponse>("/tls/certificates/list", {});
-  const {
     data: settings,
     loading: settingsLoading,
     error: settingsError,
     refetch: refetchSettings,
   } = useOiQuery<TlsSettings>("/tls/settings/get", {});
-  const {
-    data: blocks,
-    loading: blocksLoading,
-    refetch: refetchBlocks,
-  } = useOiQuery<TlsRetryBlocksResponse>("/tls/retry-blocks/list", {});
-  const {
-    data: attempts,
-    loading: attemptsLoading,
-    error: attemptsError,
-    refetch: refetchAttempts,
-  } = useOiQuery<TlsCertAttemptsResponse>(
-    "/tls/certificates/attempts/list",
-    { limit: 50 },
-  );
 
   const { execute, error: actionError, clearError } = useOiAction();
   const writeGuard = useGuard("write");
@@ -127,67 +79,10 @@ export default function Certificates() {
   const refreshAll = () => {
     refetchProviders();
     refetchPolicies();
-    refetchCerts();
     refetchSettings();
-    refetchBlocks();
-    refetchAttempts();
   };
 
-  const anyLoading =
-    providersLoading
-    || policiesLoading
-    || certsLoading
-    || settingsLoading
-    || blocksLoading
-    || attemptsLoading;
-
-  const certById = useMemo(() => {
-    const map = new Map<number, TlsCertificate>();
-    for (const c of certs?.certificates ?? []) {
-      map.set(c.id, c);
-    }
-    return map;
-  }, [certs]);
-
-  const blocksByHostname = useMemo(() => {
-    const m = new Map<string, TlsRetryBlock>();
-    for (const b of blocks?.blocks ?? []) m.set(b.hostname, b);
-    return m;
-  }, [blocks]);
-
-  // Poll the volatile views (attempts + blocks) so a freshly-failed
-  // on-demand issuance shows up without the operator hitting refresh. Five
-  // seconds is small enough to feel live and large enough to be cheap.
-  // Providers/policies/certs/settings change only on operator action so
-  // we leave them out of the auto-poll.
-  useEffect(() => {
-    const interval = setInterval(() => {
-      refetchAttempts();
-      refetchBlocks();
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [refetchAttempts, refetchBlocks]);
-
-  const onClearBlock = async (hostname: string) => {
-    clearError();
-    try {
-      await execute("/tls/retry-blocks/clear", { hostname });
-      refetchBlocks();
-    } catch {
-      // surfaced via actionError
-    }
-  };
-
-  const onRetry = async (hostname: string) => {
-    clearError();
-    try {
-      await execute("/tls/certificates/retry", { hostname });
-      refetchBlocks();
-      refetchAttempts();
-    } catch {
-      // surfaced via actionError
-    }
-  };
+  const anyLoading = providersLoading || policiesLoading || settingsLoading;
 
   return (
     <Box sx={{ p: 3, maxWidth: 1100, mx: "auto" }}>
@@ -207,9 +102,9 @@ export default function Certificates() {
         variant="body2"
         sx={{ color: "text.secondary", mb: 2 }}
       >
-        Manage TLS certificate strategies for ingress hostnames. Hostnames
-        without an explicit policy use the default ACME-HTTP-01 issuance
-        Caddy provides automatically.
+        Per-hostname rollup of every TLS-terminating ingress in the system.
+        Hostnames without an explicit policy use the default ACME-HTTP-01
+        issuance Caddy provides automatically.
       </Typography>
 
       {actionError && (
@@ -219,6 +114,8 @@ export default function Certificates() {
       )}
 
       <Stack spacing={4}>
+        <TlsHostnamesTable />
+
         <SettingsSection
           settings={settings ?? null}
           loading={settingsLoading}
@@ -234,8 +131,6 @@ export default function Certificates() {
           loading={policiesLoading}
           error={policiesError}
           providers={providers?.providers ?? []}
-          certById={certById}
-          blocksByHostname={blocksByHostname}
           onAdd={() => {
             clearError();
             setPolicyDialog(true);
@@ -244,31 +139,8 @@ export default function Certificates() {
             clearError();
             setRemovingPolicy(hostname);
           }}
-          onClearBlock={onClearBlock}
-          onRetry={onRetry}
           writeAllowed={writeGuard.allowed}
           writeReason={writeGuard.reason}
-        />
-
-        <RetryBlocksSection
-          blocks={blocks?.blocks ?? []}
-          loading={blocksLoading}
-          onClearBlock={onClearBlock}
-          onRetry={onRetry}
-          writeAllowed={writeGuard.allowed}
-          writeReason={writeGuard.reason}
-        />
-
-        <AttemptsSection
-          attempts={attempts?.attempts ?? []}
-          loading={attemptsLoading}
-          error={attemptsError}
-        />
-
-        <CertificatesSection
-          certs={certs?.certificates ?? []}
-          loading={certsLoading}
-          error={certsError}
         />
 
         <DnsProvidersSection
@@ -299,7 +171,6 @@ export default function Certificates() {
           // refresh the policies + certs lists too rather than requiring
           // an operator reload.
           refetchPolicies();
-          refetchCerts();
           setProviderDialog(false);
         }}
         execute={execute}
@@ -310,7 +181,6 @@ export default function Certificates() {
         onClose={() => setPolicyDialog(false)}
         onSubmitted={() => {
           refetchPolicies();
-          refetchCerts();
           setPolicyDialog(false);
         }}
         execute={execute}
@@ -355,7 +225,6 @@ export default function Certificates() {
           try {
             await execute("/tls/policies/clear", { hostname: removingPolicy });
             refetchPolicies();
-            refetchCerts();
             setRemovingPolicy(null);
           } catch {
             // surfaced via actionError
@@ -485,12 +354,8 @@ interface PoliciesSectionProps {
   loading: boolean;
   error: OiQueryError | null;
   providers: TlsDnsProvider[];
-  certById: Map<number, TlsCertificate>;
-  blocksByHostname: Map<string, TlsRetryBlock>;
   onAdd: () => void;
   onClear: (hostname: string) => void;
-  onClearBlock: (hostname: string) => void;
-  onRetry: (hostname: string) => void;
   writeAllowed: boolean;
   writeReason: string | null;
 }
@@ -500,12 +365,8 @@ function PoliciesSection({
   loading,
   error,
   providers,
-  certById,
-  blocksByHostname,
   onAdd,
   onClear,
-  onClearBlock,
-  onRetry,
   writeAllowed,
   writeReason,
 }: PoliciesSectionProps) {
@@ -542,467 +403,55 @@ function PoliciesSection({
           <Table size="small">
             <TableHead>
               <TableRow>
-                <TableCell>Hostname</TableCell>
+                <TableCell>Hostname pattern</TableCell>
                 <TableCell>Strategy</TableCell>
                 <TableCell>Source</TableCell>
-                <TableCell>Status</TableCell>
                 <TableCell>Updated</TableCell>
                 <TableCell align="right" />
               </TableRow>
             </TableHead>
             <TableBody>
-              {policies.map((p) => {
-                const cert =
-                  p.strategy === "manual" ? certById.get(p.cert_id) : undefined;
-                const block = blocksByHostname.get(p.hostname);
-                return (
-                  <TableRow key={p.hostname} hover>
-                    <TableCell sx={{ fontFamily: "monospace" }}>
-                      {p.hostname}
-                    </TableCell>
-                    <TableCell>
-                      <Chip
-                        label={p.strategy === "acme_dns" ? "acme-dns" : "manual"}
-                        size="small"
-                        color={p.strategy === "acme_dns" ? "primary" : "default"}
-                        variant="outlined"
-                      />
-                    </TableCell>
-                    <TableCell sx={{ fontFamily: "monospace", fontSize: "0.85rem" }}>
-                      {p.strategy === "acme_dns"
-                        ? `provider: ${p.dns_provider}`
-                        : `cert #${p.cert_id}`}
-                    </TableCell>
-                    <TableCell>
-                      <Stack
-                        direction="row"
-                        spacing={1}
-                        sx={{ alignItems: "center", flexWrap: "wrap" }}
-                      >
-                        {cert && (
-                          <>
-                            <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                              {formatTime(cert.not_after)}
-                            </Typography>
-                            {expiryChip(cert.not_after)}
-                            {cert.self_signed && (
-                              <Chip
-                                label="self-signed"
-                                size="small"
-                                color="warning"
-                                variant="outlined"
-                              />
-                            )}
-                          </>
-                        )}
-                        {!cert && !block && (
-                          <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                            —
-                          </Typography>
-                        )}
-                        {block && (
-                          <Tooltip
-                            title={block.reason ?? "issuance is currently paused"}
-                          >
-                            <Chip
-                              label={
-                                block.set_by === "auto"
-                                  ? "blocked (auto)"
-                                  : "blocked (operator)"
-                              }
-                              size="small"
-                              color="error"
-                              variant="outlined"
-                              onDelete={
-                                writeAllowed
-                                  ? () => onClearBlock(block.hostname)
-                                  : undefined
-                              }
-                              deleteIcon={<RefreshIcon fontSize="small" />}
-                            />
-                          </Tooltip>
-                        )}
-                      </Stack>
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                        {formatTime(p.updated_at)}
-                      </Typography>
-                    </TableCell>
-                    <TableCell align="right">
-                      {p.strategy === "acme_dns" && !p.hostname.includes("*") && (
-                        <Tooltip title={writeReason ?? "Retry issuance"}>
-                          <span>
-                            <IconButton
-                              size="small"
-                              disabled={!writeAllowed}
-                              onClick={() => onRetry(p.hostname)}
-                            >
-                              <RefreshIcon fontSize="small" />
-                            </IconButton>
-                          </span>
-                        </Tooltip>
-                      )}
-                      <Tooltip title={writeReason ?? "Clear policy"}>
-                        <span>
-                          <IconButton
-                            size="small"
-                            disabled={!writeAllowed}
-                            onClick={() => onClear(p.hostname)}
-                          >
-                            <DeleteOutlineIcon fontSize="small" />
-                          </IconButton>
-                        </span>
-                      </Tooltip>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      )}
-    </Box>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Retry blocks section
-// ---------------------------------------------------------------------------
-
-interface RetryBlocksSectionProps {
-  blocks: TlsRetryBlock[];
-  loading: boolean;
-  onClearBlock: (hostname: string) => void;
-  onRetry: (hostname: string) => void;
-  writeAllowed: boolean;
-  writeReason: string | null;
-}
-
-function RetryBlocksSection({
-  blocks,
-  loading,
-  onClearBlock,
-  onRetry,
-  writeAllowed,
-  writeReason,
-}: RetryBlocksSectionProps) {
-  // Stick to the last non-empty list while a poll is in flight so the
-  // section doesn't collapse-then-reappear when the underlying useOiQuery
-  // momentarily reports the new fetch's pre-response state.
-  const stableRef = useRef<TlsRetryBlock[]>(blocks);
-  if (blocks.length > 0 || !loading) {
-    stableRef.current = blocks;
-  }
-  const visible = stableRef.current;
-  if (visible.length === 0) {
-    return null;
-  }
-  return (
-    <Box>
-      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>
-        Retry blocks
-      </Typography>
-      <Typography
-        variant="caption"
-        sx={{ color: "text.secondary", mb: 1, display: "block" }}
-      >
-        Per-hostname pauses on automatic ACME-DNS issuance. Auto blocks are
-        set after a failed attempt; clear one to retry on the next handshake.
-        Operator blocks persist until cleared explicitly.
-      </Typography>
-      <TableContainer component={Paper} variant="outlined">
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Hostname</TableCell>
-              <TableCell>Source</TableCell>
-              <TableCell>Set at</TableCell>
-              <TableCell>Reason</TableCell>
-              <TableCell align="right" />
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {visible.map((b) => (
-              <TableRow key={b.hostname} hover>
-                <TableCell sx={{ fontFamily: "monospace" }}>{b.hostname}</TableCell>
-                <TableCell>
-                  <Chip
-                    label={b.set_by}
-                    size="small"
-                    color={b.set_by === "auto" ? "warning" : "default"}
-                    variant="outlined"
-                  />
-                </TableCell>
-                <TableCell sx={{ fontSize: "0.85rem" }}>
-                  {formatTime(b.set_at)}
-                </TableCell>
-                <TableCell
-                  sx={{
-                    fontFamily: "monospace",
-                    fontSize: "0.75rem",
-                    maxWidth: 480,
-                    whiteSpace: "normal",
-                    wordBreak: "break-word",
-                  }}
-                >
-                  {b.reason ?? "—"}
-                </TableCell>
-                <TableCell align="right">
-                  <Tooltip title={writeReason ?? "Retry issuance now"}>
-                    <span>
-                      <IconButton
-                        size="small"
-                        disabled={!writeAllowed}
-                        onClick={() => onRetry(b.hostname)}
-                      >
-                        <RefreshIcon fontSize="small" />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                  <Tooltip
-                    title={
-                      writeReason
-                      ?? "Clear block without retrying (issuance stays paused)"
-                    }
-                  >
-                    <span>
-                      <IconButton
-                        size="small"
-                        disabled={!writeAllowed}
-                        onClick={() => onClearBlock(b.hostname)}
-                      >
-                        <DeleteOutlineIcon fontSize="small" />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
-    </Box>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Attempts section
-// ---------------------------------------------------------------------------
-
-interface AttemptsSectionProps {
-  attempts: TlsCertAttempt[];
-  loading: boolean;
-  error: OiQueryError | null;
-}
-
-function AttemptsSection({ attempts, loading, error }: AttemptsSectionProps) {
-  return (
-    <Box>
-      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>
-        Recent issuance attempts
-      </Typography>
-      <Typography
-        variant="caption"
-        sx={{ color: "text.secondary", mb: 1, display: "block" }}
-      >
-        Newest first. Failed attempts set an automatic retry block on the
-        hostname; clear the block (or run a manual issue) to retry.
-      </Typography>
-      {error && <OiErrorAlert error={error} />}
-      {loading && !attempts.length && <CircularProgress size={20} />}
-      {attempts.length === 0 ? (
-        <Typography variant="body2" sx={{ color: "text.secondary" }}>
-          No issuance attempts yet.
-        </Typography>
-      ) : (
-        <TableContainer component={Paper} variant="outlined">
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>Hostname</TableCell>
-                <TableCell>Trigger</TableCell>
-                <TableCell>Outcome</TableCell>
-                <TableCell>Started</TableCell>
-                <TableCell>Duration</TableCell>
-                <TableCell>Detail</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {attempts.map((a) => {
-                const elapsed =
-                  a.finished_at != null
-                    ? `${Math.max(1, a.finished_at - a.started_at)}s`
-                    : "…";
-                return (
-                  <TableRow key={a.id} hover>
-                    <TableCell sx={{ fontFamily: "monospace" }}>
-                      {a.hostname}
-                    </TableCell>
-                    <TableCell>
-                      <Chip
-                        label={a.triggered_by.replace("_", " ")}
-                        size="small"
-                        variant="outlined"
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <Chip
-                        label={a.outcome}
-                        size="small"
-                        color={
-                          a.outcome === "success"
-                            ? "success"
-                            : a.outcome === "failure"
-                              ? "error"
-                              : "default"
-                        }
-                        variant={a.outcome === "success" ? "filled" : "outlined"}
-                      />
-                    </TableCell>
-                    <TableCell sx={{ fontSize: "0.85rem" }}>
-                      {formatTime(a.started_at)}
-                    </TableCell>
-                    <TableCell sx={{ fontSize: "0.85rem" }}>{elapsed}</TableCell>
-                    <TableCell
-                      sx={{
-                        fontFamily: "monospace",
-                        fontSize: "0.75rem",
-                        maxWidth: 480,
-                        whiteSpace: "normal",
-                        wordBreak: "break-word",
-                      }}
-                    >
-                      {a.outcome === "success"
-                        ? a.cert_id != null
-                          ? `cert #${a.cert_id}`
-                          : ""
-                        : (a.error ?? "")}
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      )}
-    </Box>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Certificates section
-// ---------------------------------------------------------------------------
-
-interface CertificatesSectionProps {
-  certs: TlsCertificate[];
-  loading: boolean;
-  error: OiQueryError | null;
-}
-
-function CertificatesSection({
-  certs,
-  loading,
-  error,
-}: CertificatesSectionProps) {
-  const grouped = useMemo(() => {
-    const m = new Map<string, TlsCertificate[]>();
-    for (const c of certs) {
-      const arr = m.get(c.hostname) ?? [];
-      arr.push(c);
-      m.set(c.hostname, arr);
-    }
-    // active first, then newest superseded
-    for (const arr of m.values()) {
-      arr.sort((a, b) => {
-        if (a.state === "active" && b.state !== "active") return -1;
-        if (b.state === "active" && a.state !== "active") return 1;
-        return b.created_at - a.created_at;
-      });
-    }
-    return Array.from(m.entries()).sort(([a], [b]) => a.localeCompare(b));
-  }, [certs]);
-
-  return (
-    <Box>
-      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>
-        Stored certificates
-      </Typography>
-      {error && <OiErrorAlert error={error} />}
-      {loading && <CircularProgress size={20} />}
-      {certs.length === 0 ? (
-        <Typography variant="body2" sx={{ color: "text.secondary" }}>
-          No stored certificates yet. ACME-DNS issuance, manual upload, or the
-          CSR flow will populate this list.
-        </Typography>
-      ) : (
-        <Stack spacing={1}>
-          {grouped.map(([hostname, rows]) => (
-            <Paper key={hostname} variant="outlined" sx={{ p: 2 }}>
-              <Typography sx={{ fontFamily: "monospace", fontWeight: 500, mb: 1 }}>
-                {hostname}
-              </Typography>
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    <TableCell>State</TableCell>
-                    <TableCell>Origin</TableCell>
-                    <TableCell>Issuer</TableCell>
-                    <TableCell>Not after</TableCell>
-                    <TableCell>Serial</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {rows.map((c) => (
-                    <TableRow key={c.id}>
-                      <TableCell>
-                        <Stack
-                          direction="row"
-                          spacing={1}
-                          sx={{ alignItems: "center" }}
+              {policies.map((p) => (
+                <TableRow key={p.hostname} hover>
+                  <TableCell sx={{ fontFamily: "monospace" }}>
+                    {p.hostname}
+                  </TableCell>
+                  <TableCell>
+                    <Chip
+                      label={p.strategy === "acme_dns" ? "acme-dns" : "manual"}
+                      size="small"
+                      color={p.strategy === "acme_dns" ? "primary" : "default"}
+                      variant="outlined"
+                    />
+                  </TableCell>
+                  <TableCell sx={{ fontFamily: "monospace", fontSize: "0.85rem" }}>
+                    {p.strategy === "acme_dns"
+                      ? `provider: ${p.dns_provider}`
+                      : `cert #${p.cert_id}`}
+                  </TableCell>
+                  <TableCell>
+                    <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                      {formatTime(p.updated_at)}
+                    </Typography>
+                  </TableCell>
+                  <TableCell align="right">
+                    <Tooltip title={writeReason ?? "Clear policy"}>
+                      <span>
+                        <IconButton
+                          size="small"
+                          disabled={!writeAllowed}
+                          onClick={() => onClear(p.hostname)}
                         >
-                          <Chip
-                            label={c.state.replace("_", " ")}
-                            size="small"
-                            color={
-                              c.state === "active"
-                                ? "success"
-                                : c.state === "failed"
-                                  ? "error"
-                                  : "default"
-                            }
-                            variant={c.state === "active" ? "filled" : "outlined"}
-                          />
-                          {expiryChip(c.not_after)}
-                          {c.self_signed && (
-                            <Chip
-                              label="self-signed"
-                              size="small"
-                              color="warning"
-                              variant="outlined"
-                            />
-                          )}
-                        </Stack>
-                      </TableCell>
-                      <TableCell>
-                        <Chip label={c.origin} size="small" variant="outlined" />
-                      </TableCell>
-                      <TableCell sx={{ fontFamily: "monospace", fontSize: "0.8rem" }}>
-                        {c.issuer ?? "—"}
-                      </TableCell>
-                      <TableCell sx={{ fontSize: "0.85rem" }}>
-                        {formatTime(c.not_after)}
-                      </TableCell>
-                      <TableCell sx={{ fontFamily: "monospace", fontSize: "0.8rem" }}>
-                        {c.serial ?? "—"}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </Paper>
-          ))}
-        </Stack>
+                          <DeleteOutlineIcon fontSize="small" />
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
       )}
     </Box>
   );

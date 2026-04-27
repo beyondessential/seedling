@@ -625,6 +625,79 @@ export interface TlsRetryBlock {
   reason: string | null;
 }
 
+export type TlsHostnameStatus =
+  | "active"
+  | "expired"
+  | "error"
+  | "pending"
+  | "blocked"
+  | "no_cert"
+  | "default";
+
+export type TlsHostnamePolicy =
+  | { strategy: "default" }
+  | {
+    strategy: "acme_dns";
+    dns_provider: string;
+    pattern: string;
+    is_wildcard_match: boolean;
+  }
+  | {
+    strategy: "manual";
+    cert_id: number;
+    pattern: string;
+    is_wildcard_match: boolean;
+  };
+
+export interface TlsHostnameActiveCert {
+  id: number;
+  origin: TlsCertOrigin;
+  issuer: string | null;
+  not_before: number | null;
+  not_after: number | null;
+  self_signed: boolean;
+  ari_window_start: number | null;
+  ari_window_end: number | null;
+}
+
+export type TlsHostnameLastIssuance =
+  | {
+    kind: "manual";
+    at: number;
+    cert_id: number | null;
+  }
+  | {
+    kind: "acme_dns";
+    at: number;
+    cert_id: number | null;
+    provider: string | null;
+  }
+  | {
+    kind: "csr";
+    at: number;
+    cert_id: number | null;
+  };
+
+export type TlsNextIssuanceSource = "ari" | "fallback" | "immediate";
+
+export interface TlsHostnameView {
+  hostname: string;
+  apps: string[];
+  policy: TlsHostnamePolicy;
+  status: TlsHostnameStatus;
+  active_cert: TlsHostnameActiveCert | null;
+  last_issuance: TlsHostnameLastIssuance | null;
+  last_error: string | null;
+  retry_block: { set_at: number; reason: string | null } | null;
+  force_retry_at: number | null;
+  next_issuance_at: number | null;
+  next_issuance_source: TlsNextIssuanceSource | null;
+}
+
+export interface TlsHostnamesResponse {
+  hostnames: TlsHostnameView[];
+}
+
 export interface TlsRetryBlocksResponse {
   blocks: TlsRetryBlock[];
 }
