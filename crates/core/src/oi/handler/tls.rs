@@ -10,7 +10,7 @@
 //!
 //! Manual cert upload and the CSR flow are added in phases 3/4.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use secrecy::SecretString;
@@ -23,8 +23,7 @@ use super::HandlerResult;
 use crate::defs::resource::Resource;
 use crate::oi::state::OiState;
 use crate::runtime::tls::{
-    self, AttemptOutcome, DnsProviderKind, RetryBlockSource, TlsCertAttempt, TlsCertOrigin,
-    TlsCertState, TlsCertificate, TlsPolicy, TlsPolicyRow, store,
+    AttemptOutcome, DnsProviderKind, RetryBlockSource, TlsCertOrigin, TlsPolicy, state, store,
 };
 
 // ---------------------------------------------------------------------------
@@ -358,204 +357,158 @@ pub(crate) fn list_hostnames(state: &OiState, params: ListHostnamesParams) -> Ha
         }
     }
 
-    // Single DB call collects everything we need to roll up per hostname.
-    let snapshot = state
-        .db
-        .call(|db| -> rusqlite::Result<HostnameSnapshot> {
-            Ok(HostnameSnapshot {
-                policies: store::list_policies(db)?,
-                certificates: store::list_certificates(db)?,
-                attempts: store::list_attempts(db, None, 1000)?,
-                retry_blocks: store::list_retry_blocks(db)?,
-                force_retries: store::list_force_retries(db)?,
-            })
-        })
-        .map_err(db_error)?;
+    // Load the unified snapshot once. The OI then asks the same
+    // `compute_state` function the issuance coordinator uses, projecting
+    // the result into the JSON shape the operator UI expects. Because
+    // both call sites read from the same function, what the operator
+    // sees here is exactly what the runtime will do.
+    let snapshot = state.db.call(state::Snapshot::load).map_err(db_error)?;
 
-    let block_by_host: HashMap<&str, &_> = snapshot
-        .retry_blocks
-        .iter()
-        .map(|b| (b.hostname.as_str(), b))
-        .collect();
-    let force_by_host: HashMap<&str, i64> = snapshot
-        .force_retries
-        .iter()
-        .map(|f| (f.hostname.as_str(), f.requested_at))
-        .collect();
-
-    // Most-recent active cert per hostname.
-    let mut active_cert_by_host: HashMap<&str, &TlsCertificate> = HashMap::new();
-    for cert in &snapshot.certificates {
-        if cert.state == TlsCertState::Active {
-            active_cert_by_host
-                .entry(cert.hostname.as_str())
-                .and_modify(|existing| {
-                    if cert.created_at > existing.created_at {
-                        *existing = cert;
-                    }
-                })
-                .or_insert(cert);
-        }
-    }
-    let cert_by_id: HashMap<i64, &TlsCertificate> =
-        snapshot.certificates.iter().map(|c| (c.id, c)).collect();
-
-    // First (newest) attempt per hostname; first success per hostname.
-    // `list_attempts` returns newest-first, so the first hit is the most
-    // recent.
-    let mut last_attempt_by_host: HashMap<&str, &TlsCertAttempt> = HashMap::new();
-    let mut last_success_by_host: HashMap<&str, &TlsCertAttempt> = HashMap::new();
-    for att in &snapshot.attempts {
-        last_attempt_by_host
-            .entry(att.hostname.as_str())
-            .or_insert(att);
-        if att.outcome == AttemptOutcome::Success {
-            last_success_by_host
-                .entry(att.hostname.as_str())
-                .or_insert(att);
-        }
-    }
-
-    let now = jiff::Timestamp::now().as_second();
     let result: Vec<Value> = hostname_apps
         .into_iter()
         .map(|(hostname, apps)| {
-            let resolved = resolve_policy_view(&hostname, &snapshot.policies);
-            let active_cert = active_cert_by_host.get(hostname.as_str()).copied();
-            let last_attempt = last_attempt_by_host.get(hostname.as_str()).copied();
-            let last_success = last_success_by_host.get(hostname.as_str()).copied();
-            let block = block_by_host.get(hostname.as_str()).copied();
-            let force_retry_at = force_by_host.get(hostname.as_str()).copied();
-
-            let policy_json = match &resolved {
-                None => json!({ "strategy": "default" }),
-                Some(r) => match &r.row.policy {
-                    TlsPolicy::AcmeDns { dns_provider } => json!({
-                        "strategy": "acme_dns",
-                        "dns_provider": dns_provider,
-                        "pattern": r.row.hostname,
-                        "is_wildcard_match": r.row.hostname != hostname,
-                    }),
-                    TlsPolicy::Manual { cert_id } => json!({
-                        "strategy": "manual",
-                        "cert_id": cert_id,
-                        "pattern": r.row.hostname,
-                        "is_wildcard_match": r.row.hostname != hostname,
-                    }),
-                },
-            };
-
-            let active_cert_json =
-                resolve_active_cert(active_cert, &resolved, &cert_by_id).map_or(Value::Null, |c| {
-                    json!({
-                        "id": c.id,
-                        "origin": c.origin.as_str(),
-                        "issuer": c.issuer,
-                        "not_before": c.not_before,
-                        "not_after": c.not_after,
-                        "self_signed": c.self_signed,
-                        "ari_window_start": c.ari_window_start,
-                        "ari_window_end": c.ari_window_end,
-                    })
-                });
-
-            let last_issuance_json = build_last_issuance(
-                resolve_active_cert(active_cert, &resolved, &cert_by_id),
-                last_success,
-                resolved.as_ref(),
-            );
-
-            let last_error = last_attempt
-                .filter(|a| a.outcome == AttemptOutcome::Failure)
-                .and_then(|a| a.error.clone());
-
-            let status = compute_status(
-                &resolved,
-                resolve_active_cert(active_cert, &resolved, &cert_by_id),
-                last_attempt,
-                block.is_some(),
-                force_retry_at.is_some(),
-                now,
-            );
-
-            let (next_issuance_at, next_issuance_source) = compute_next_issuance(
-                &resolved,
-                resolve_active_cert(active_cert, &resolved, &cert_by_id),
-            );
-
-            let block_json = block.map_or(
-                Value::Null,
-                |b| json!({ "set_at": b.set_at, "reason": b.reason }),
-            );
-
-            json!({
-                "hostname": hostname,
-                "apps": apps.into_iter().collect::<Vec<_>>(),
-                "policy": policy_json,
-                "status": status,
-                "active_cert": active_cert_json,
-                "last_issuance": last_issuance_json,
-                "last_error": last_error,
-                "retry_block": block_json,
-                "force_retry_at": force_retry_at,
-                "next_issuance_at": next_issuance_at,
-                "next_issuance_source": next_issuance_source,
-            })
+            let st = state::compute_state(&snapshot, &hostname);
+            project_hostname_state(&hostname, &apps, &st)
         })
         .collect();
 
     Ok(json!({ "hostnames": result }))
 }
 
-struct HostnameSnapshot {
-    policies: Vec<TlsPolicyRow>,
-    certificates: Vec<TlsCertificate>,
-    attempts: Vec<TlsCertAttempt>,
-    retry_blocks: Vec<crate::runtime::tls::TlsCertRetryBlock>,
-    force_retries: Vec<crate::runtime::tls::TlsCertForceRetry>,
+/// Render a [`state::HostnameState`] as the JSON the OI rollup serves.
+fn project_hostname_state(
+    hostname: &str,
+    apps: &BTreeSet<String>,
+    st: &state::HostnameState<'_>,
+) -> Value {
+    let policy_json = match st.policy.map(|p| (&p.policy, p.hostname.as_str())) {
+        None => json!({ "strategy": "default" }),
+        Some((TlsPolicy::AcmeDns { dns_provider }, pattern)) => json!({
+            "strategy": "acme_dns",
+            "dns_provider": dns_provider,
+            "pattern": pattern,
+            "is_wildcard_match": pattern != hostname,
+        }),
+        Some((TlsPolicy::Manual { cert_id }, pattern)) => json!({
+            "strategy": "manual",
+            "cert_id": cert_id,
+            "pattern": pattern,
+            "is_wildcard_match": pattern != hostname,
+        }),
+    };
+
+    let active_cert_json = st.active_cert.map_or(Value::Null, |c| {
+        json!({
+            "id": c.id,
+            "origin": c.origin.as_str(),
+            "issuer": c.issuer,
+            "not_before": c.not_before,
+            "not_after": c.not_after,
+            "self_signed": c.self_signed,
+            "ari_window_start": c.ari_window_start,
+            "ari_window_end": c.ari_window_end,
+        })
+    });
+
+    let last_issuance_json = build_last_issuance(st);
+    let last_error = st
+        .last_attempt
+        .filter(|a| a.outcome == AttemptOutcome::Failure)
+        .and_then(|a| a.error.clone());
+    let status = decision_status(st);
+    let (next_issuance_at, next_issuance_source) = decision_next_issuance(st);
+    let block_json = st.retry_block.map_or(
+        Value::Null,
+        |b| json!({ "set_at": b.set_at, "reason": b.reason }),
+    );
+
+    json!({
+        "hostname": hostname,
+        "apps": apps.iter().cloned().collect::<Vec<_>>(),
+        "policy": policy_json,
+        "status": status,
+        "active_cert": active_cert_json,
+        "last_issuance": last_issuance_json,
+        "last_error": last_error,
+        "retry_block": block_json,
+        "force_retry_at": st.force_retry_at,
+        "next_issuance_at": next_issuance_at,
+        "next_issuance_source": next_issuance_source,
+    })
 }
 
-struct ResolvedPolicy {
-    row: TlsPolicyRow,
-}
-
-/// Pick the most-specific policy that matches `hostname` from the supplied
-/// list. Mirrors `store::resolve_policy` without re-querying.
-fn resolve_policy_view(hostname: &str, policies: &[TlsPolicyRow]) -> Option<ResolvedPolicy> {
-    let mut best: Option<(u32, &TlsPolicyRow)> = None;
-    for row in policies {
-        if tls::pattern_matches(&row.hostname, hostname) {
-            let score = tls::pattern_specificity(&row.hostname);
-            if best.as_ref().is_none_or(|(s, _)| score > *s) {
-                best = Some((score, row));
+/// Map the unified [`state::Decision`] to a status label for the UI.
+/// The label is a *projection* of the decision, not a re-computation —
+/// when the decision says "Issue now (renewal)" but the existing cert is
+/// still valid, status is `"active"` because the operator's mental model
+/// of the cert is "it's serving".
+fn decision_status(st: &state::HostnameState<'_>) -> &'static str {
+    use state::Decision::*;
+    use state::IssueReason as R;
+    match &st.decision {
+        Default => "default",
+        Manual { expired: true, .. } => "expired",
+        Manual {
+            cert_id,
+            expired: false,
+        } => {
+            if cert_id.is_some() && st.active_cert.is_some() {
+                "active"
+            } else {
+                "no_cert"
+            }
+        }
+        Blocked { .. } => "blocked",
+        NoContactEmail | Debounced { .. } => "error",
+        Scheduled { .. } => "active",
+        IssueNow {
+            reason: R::First | R::ForceRetry,
+        } => "pending",
+        IssueNow {
+            reason: R::Renewal { .. },
+        } => {
+            // Cert is past its renewal trigger. If it's also past expiry
+            // (which can happen if every retry has failed), surface that
+            // instead of pretending it's still active.
+            if st
+                .active_cert
+                .and_then(|c| c.not_after)
+                .is_some_and(|na| na < jiff::Timestamp::now().as_second())
+            {
+                "expired"
+            } else {
+                "active"
             }
         }
     }
-    best.map(|(_, row)| ResolvedPolicy { row: row.clone() })
 }
 
-/// For a manual policy, the active cert is the one referenced by the
-/// policy regardless of hostname column. For ACME-DNS / default, fall
-/// through to the "active cert with this hostname" lookup.
-fn resolve_active_cert<'a>(
-    by_host: Option<&'a TlsCertificate>,
-    resolved: &Option<ResolvedPolicy>,
-    by_id: &HashMap<i64, &'a TlsCertificate>,
-) -> Option<&'a TlsCertificate> {
-    if let Some(r) = resolved
-        && let TlsPolicy::Manual { cert_id } = &r.row.policy
-    {
-        return by_id.get(cert_id).copied();
+/// Map the unified decision to `(next_issuance_at, source)`.
+fn decision_next_issuance(st: &state::HostnameState<'_>) -> (Option<i64>, Option<&'static str>) {
+    use state::Decision::*;
+    use state::IssueReason as R;
+    match &st.decision {
+        Default | Manual { .. } | Blocked { .. } | NoContactEmail => (None, None),
+        Debounced { until } => (Some(*until), Some("immediate")),
+        Scheduled { next_at, source } => (Some(*next_at), Some(source.as_str())),
+        IssueNow {
+            reason: R::First | R::ForceRetry,
+        } => (None, Some("immediate")),
+        IssueNow {
+            reason: R::Renewal {
+                scheduled_at,
+                source,
+            },
+        } => (Some(*scheduled_at), Some(source.as_str())),
     }
-    by_host
 }
 
-fn build_last_issuance(
-    active: Option<&TlsCertificate>,
-    last_success: Option<&TlsCertAttempt>,
-    resolved: Option<&ResolvedPolicy>,
-) -> Value {
-    if let Some(cert) = active
+/// Build the `last_issuance` object: prefer the active cert's metadata
+/// for manual uploads (which never go through the attempt log), fall
+/// back to the latest successful attempt for ACME-DNS, then to the
+/// active cert's bare creation timestamp.
+fn build_last_issuance(st: &state::HostnameState<'_>) -> Value {
+    if let Some(cert) = st.active_cert
         && cert.origin == TlsCertOrigin::Manual
     {
         return json!({
@@ -564,8 +517,8 @@ fn build_last_issuance(
             "cert_id": cert.id,
         });
     }
-    if let Some(att) = last_success {
-        let provider = resolved.and_then(|r| match &r.row.policy {
+    if let Some(att) = st.last_success {
+        let provider = st.policy.and_then(|p| match &p.policy {
             TlsPolicy::AcmeDns { dns_provider } => Some(dns_provider.clone()),
             TlsPolicy::Manual { .. } => None,
         });
@@ -576,7 +529,7 @@ fn build_last_issuance(
             "provider": provider,
         });
     }
-    if let Some(cert) = active {
+    if let Some(cert) = st.active_cert {
         return json!({
             "kind": cert.origin.as_str(),
             "at": cert.created_at,
@@ -584,78 +537,6 @@ fn build_last_issuance(
         });
     }
     Value::Null
-}
-
-fn compute_status(
-    resolved: &Option<ResolvedPolicy>,
-    active: Option<&TlsCertificate>,
-    last_attempt: Option<&TlsCertAttempt>,
-    has_block: bool,
-    force_retry: bool,
-    now: i64,
-) -> &'static str {
-    if has_block {
-        return "blocked";
-    }
-    if let Some(cert) = active {
-        if let Some(na) = cert.not_after
-            && now > na
-        {
-            return "expired";
-        }
-        return "active";
-    }
-    if force_retry {
-        return "pending";
-    }
-    if let Some(att) = last_attempt {
-        return match att.outcome {
-            AttemptOutcome::Success => "active",
-            AttemptOutcome::Failure => "error",
-            AttemptOutcome::Pending => "pending",
-        };
-    }
-    match resolved.as_ref().map(|r| &r.row.policy) {
-        None => "default",
-        Some(TlsPolicy::AcmeDns { .. }) => "pending",
-        Some(TlsPolicy::Manual { .. }) => "no_cert",
-    }
-}
-
-/// Compute the expected next issuance date for the hostname.
-///
-/// - ACME-DNS with active cert + ARI window → window start, source `ari`.
-/// - ACME-DNS with active cert, no ARI → 1/3-of-lifetime mark, source `fallback`.
-/// - ACME-DNS with no active cert → `None` ts, source `immediate`.
-/// - Manual / default → `None`, source `None`.
-fn compute_next_issuance(
-    resolved: &Option<ResolvedPolicy>,
-    active: Option<&TlsCertificate>,
-) -> (Option<i64>, Option<&'static str>) {
-    let is_acme_dns = matches!(
-        resolved.as_ref().map(|r| &r.row.policy),
-        Some(TlsPolicy::AcmeDns { .. })
-    );
-    if !is_acme_dns {
-        return (None, None);
-    }
-    match active {
-        None => (None, Some("immediate")),
-        Some(cert) => {
-            if let Some(start) = cert.ari_window_start {
-                return (Some(start), Some("ari"));
-            }
-            let (Some(nb), Some(na)) = (cert.not_before, cert.not_after) else {
-                return (None, Some("fallback"));
-            };
-            // Fallback matches the issuance-coordinator threshold: renew
-            // when remaining lifetime drops below 1/3 of total. Equivalent
-            // to firing at not_before + 2/3 * lifetime.
-            let lifetime = na - nb;
-            let due = nb + (lifetime * 2 / 3);
-            (Some(due), Some("fallback"))
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

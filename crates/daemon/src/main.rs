@@ -867,16 +867,15 @@ async fn main() {
 
     // r[impl tls.acme.renewal.auto]
     // Spawn the ACME-DNS renewal task. Each tick (default hourly) it
-    // scans for active acme_dns certs whose remaining validity is past
-    // the renewal threshold, and re-runs the issuance flow.
+    // asks the issuance coordinator to ensure every hostname whose
+    // unified state says "issue now" — same decision function the
+    // reconciler and the OI use.
     {
-        let cipher_for_renewal = Arc::clone(&cipher);
         let db_for_renewal = db.clone();
-        let renewal_config = seedling_core::runtime::tls::renewal::RenewalConfig::default();
+        let coord_for_renewal = Arc::clone(&tls_coordinator);
         let _renewal_handle = seedling_core::runtime::tls::renewal::spawn(
             db_for_renewal,
-            cipher_for_renewal,
-            renewal_config,
+            coord_for_renewal,
             seedling_core::runtime::tls::renewal::DEFAULT_TICK,
         );
     }

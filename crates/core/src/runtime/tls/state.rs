@@ -345,7 +345,8 @@ pub fn next_renewal_at(cert: &TlsCertificate) -> (i64, NextSource) {
         return (i64::MAX, NextSource::Fallback);
     }
     let lifetime = na - nb;
-    let due = nb + lifetime * (RENEW_AT_FRACTION_DEN - RENEW_AT_FRACTION_NUM) / RENEW_AT_FRACTION_DEN;
+    let due =
+        nb + lifetime * (RENEW_AT_FRACTION_DEN - RENEW_AT_FRACTION_NUM) / RENEW_AT_FRACTION_DEN;
     (due, NextSource::Fallback)
 }
 
@@ -592,12 +593,7 @@ mod tests {
     fn cert_within_first_two_thirds_of_lifetime_is_scheduled() {
         let now = 1_000_000;
         // 90-day cert, 80 days remain → well below 1/3 mark, just renewed.
-        let cert = fake_cert(
-            "host.example.com",
-            1,
-            now - 10 * 86400,
-            now + 80 * 86400,
-        );
+        let cert = fake_cert("host.example.com", 1, now - 10 * 86400, now + 80 * 86400);
         let s = snap(
             vec![policy_acme("host.example.com", "p")],
             vec![cert],
@@ -621,12 +617,7 @@ mod tests {
     fn cert_past_one_third_remaining_is_due_for_renewal() {
         let now = 1_000_000;
         // 90-day cert, 25 days remain → past the 1/3 mark, renew.
-        let cert = fake_cert(
-            "host.example.com",
-            1,
-            now - 65 * 86400,
-            now + 25 * 86400,
-        );
+        let cert = fake_cert("host.example.com", 1, now - 65 * 86400, now + 25 * 86400);
         let s = snap(
             vec![policy_acme("host.example.com", "p")],
             vec![cert],
@@ -651,12 +642,7 @@ mod tests {
     fn ari_window_takes_precedence_over_fallback() {
         let now = 1_000_000;
         // ARI says renew at now+1 day even though the cert is fresh.
-        let mut cert = fake_cert(
-            "host.example.com",
-            1,
-            now - 1 * 86400,
-            now + 89 * 86400,
-        );
+        let mut cert = fake_cert("host.example.com", 1, now - 1 * 86400, now + 89 * 86400);
         cert.ari_window_start = Some(now + 86400);
         let s = snap(
             vec![policy_acme("host.example.com", "p")],

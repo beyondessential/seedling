@@ -30,40 +30,10 @@ use snafu::Snafu;
 use super::{
     AttemptOutcome, AttemptTrigger, TlsPolicy,
     acme::{self, IssueParams, Issued},
+    state::{self, Decision},
     store,
 };
 use crate::runtime::{db::DbHandle, faults, secrets::Cipher};
-
-/// Default minimum interval between auto-retries of a failed background
-/// issuance for the same hostname. Operator-triggered retries
-/// ([`Coordinator::issue_now`]) bypass this completely.
-const AUTO_RETRY_DEBOUNCE_SECS: i64 = 60 * 60; // 1 hour
-
-/// Fixed-fraction renewal threshold used when the CA hasn't supplied
-/// ARI advice. Renew when remaining lifetime drops below this fraction
-/// of the total lifetime — copes equally with 90-day and 6-day
-/// certificate profiles.
-const RENEW_AT_FRACTION: f64 = 1.0 / 3.0;
-
-/// Decide whether `cert` is past its renewal trigger. Prefers the CA's
-/// ARI suggested-window start when present; falls back to the fixed
-/// fraction-of-lifetime threshold.
-// r[impl tls.cert.ari]
-fn is_due_for_renewal(cert: &super::TlsCertificate) -> bool {
-    let now = jiff::Timestamp::now().as_second();
-    if let Some(start) = cert.ari_window_start {
-        return now >= start;
-    }
-    let (Some(nb), Some(na)) = (cert.not_before, cert.not_after) else {
-        return false;
-    };
-    if na <= nb {
-        return false;
-    }
-    let total = (na - nb) as f64;
-    let remaining = (na - now) as f64;
-    remaining <= 0.0 || (remaining / total) <= RENEW_AT_FRACTION
-}
 
 #[derive(Debug, Snafu)]
 pub enum CoordinatorError {
@@ -176,129 +146,56 @@ impl Coordinator {
         outcome
     }
 
-    /// Core issuance flow. Runs all the gating + the actual ACME order
-    /// while holding the global issue lock.
+    /// Core issuance flow. Loads the unified hostname state, branches on
+    /// the resulting [`Decision`], and runs the ACME flow when the
+    /// decision says to.
     async fn run(self: &Arc<Self>, hostname: &str, trigger: AttemptTrigger) -> Result<Issued> {
         let _guard = self.issue_lock.lock().await;
 
-        // 1. Look up any existing cert. For renewals (the cert is past its
-        //    ARI window or the operator forced a retry), we keep the PEM
-        //    around so we can pass it as `replaces` in the new order; for
-        //    first-issuance there's nothing to pass.
-        let host_for_lookup = hostname.to_owned();
-        let existing = self
+        // Single source of truth for the decision; the OI rollup and the
+        // renewal scheduler call the same function over the same DB
+        // snapshot. Mutating side-effects (taking force-retry, opening
+        // the attempt row) happen below this point and only when the
+        // decision says to issue.
+        let host_for_state = hostname.to_owned();
+        let owned = self
             .db
-            .call(move |db| store::find_active_for_hostname(db, &host_for_lookup))
-            .map_err(|source| CoordinatorError::Storage { source })?;
-        let mut previous_cert_pem: Option<String> = None;
-        if let Some(ref ex) = existing {
-            // For background runs we treat an existing cert as "nothing
-            // to do" — the renewal task is the path that flips through
-            // here once the cert is past its renewal window. Manual
-            // operator retries skip this short-circuit.
-            let due_for_renewal = is_due_for_renewal(ex);
-            if !due_for_renewal && trigger != AttemptTrigger::Manual {
-                return Ok(Issued {
-                    cert_id: ex.id,
-                    not_after: ex.not_after.unwrap_or(0),
-                });
-            }
-            previous_cert_pem = ex.cert_pem.clone();
-        }
-
-        // 2. Operator pause.
-        let host_for_pause = hostname.to_owned();
-        let pause = self
-            .db
-            .call(store::list_retry_blocks)
-            .map_err(|source| CoordinatorError::Storage { source })?
-            .into_iter()
-            .find(|b| b.hostname == host_for_pause);
-        if let Some(p) = pause {
-            return Err(CoordinatorError::Paused {
-                hostname: hostname.to_owned(),
-                reason: p.reason.unwrap_or_else(|| "no reason given".to_owned()),
-            });
-        }
-
-        // 3. Resolve policy.
-        let host_for_policy = hostname.to_owned();
-        let policy = self
-            .db
-            .call(move |db| store::resolve_policy(db, &host_for_policy))
-            .map_err(|source| CoordinatorError::Storage { source })?;
-        let dns_provider_name = match policy.map(|p| p.policy) {
-            Some(TlsPolicy::AcmeDns { dns_provider }) => dns_provider,
-            Some(TlsPolicy::Manual { .. }) => {
-                return Err(CoordinatorError::NotAcmeDns {
-                    hostname: hostname.to_owned(),
-                    strategy: "manual",
-                });
-            }
-            None => {
-                return Err(CoordinatorError::NoPolicy {
-                    hostname: hostname.to_owned(),
-                });
-            }
-        };
-
-        // 4. Force-retry signal: an operator (or some other path) has
-        //    asked for a fresh attempt regardless of recent failures.
-        //    Take the row atomically so a single retry request is
-        //    consumed exactly once, even if multiple ticks race.
-        let host_for_force = hostname.to_owned();
-        let forced = self
-            .db
-            .call(move |db| store::take_force_retry(db, &host_for_force))
+            .call(move |db| -> rusqlite::Result<OwnedState> {
+                let snap = state::Snapshot::load(db)?;
+                Ok(OwnedState::from_snapshot(
+                    &snap,
+                    &state::compute_state(&snap, &host_for_state),
+                ))
+            })
             .map_err(|source| CoordinatorError::Storage { source })?;
 
-        // 5. Recent-failure debounce (skipped when force-retry is set, or
-        //    when the caller is the synchronous CLI/OI path).
-        let bypass_debounce = forced || trigger == AttemptTrigger::Manual;
-        if !bypass_debounce {
-            let host_for_attempts = hostname.to_owned();
-            let recent = self
-                .db
-                .call(move |db| store::list_attempts(db, Some(&host_for_attempts), 1))
-                .map_err(|source| CoordinatorError::Storage { source })?;
-            if let Some(last) = recent.first()
-                && last.outcome == AttemptOutcome::Failure
-            {
-                let now = jiff::Timestamp::now().as_second();
-                let since = now - last.finished_at.unwrap_or(last.started_at);
-                if since < AUTO_RETRY_DEBOUNCE_SECS {
-                    let remaining_s = AUTO_RETRY_DEBOUNCE_SECS - since;
-                    tracing::debug!(
-                        %hostname,
-                        debounce_remaining_s = remaining_s,
-                        "background issuance debounced after recent failure"
-                    );
-                    return Err(CoordinatorError::Debounced {
-                        hostname: hostname.to_owned(),
-                        remaining_s,
-                    });
-                }
-            }
-        }
-
-        // 5. Need the global contact email to register an account.
-        let settings = self
-            .db
-            .call(store::get_settings)
-            .map_err(|source| CoordinatorError::Storage { source })?;
-        if settings.contact_email.is_empty() {
-            // Surface as a fault so the operator sees it without trawling logs.
+        // For `NoContactEmail` we want a fault visible to the operator,
+        // which the pure decision function can't emit. File it here
+        // before mapping to the error.
+        if matches!(owned.decision, Decision::NoContactEmail) {
             file_cert_fault(
                 &self.db,
                 hostname,
                 "cert_issue_failed",
                 "no contact email is configured; set one via /tls/settings/set",
             );
-            return Err(CoordinatorError::NoContactEmail);
         }
 
-        // 6. Open the attempt row before running so a panic mid-flight
-        //    still leaves a trace.
+        let dns_provider_name = match handle_non_issuing(hostname, trigger, &owned)? {
+            ProceedKind::Skip(issued) => return Ok(issued),
+            ProceedKind::Issue(provider) => provider,
+        };
+
+        // Take the force-retry row atomically so a single retry request is
+        // consumed exactly once even if multiple ticks race.
+        let host_for_force = hostname.to_owned();
+        let _ = self
+            .db
+            .call(move |db| store::take_force_retry(db, &host_for_force))
+            .map_err(|source| CoordinatorError::Storage { source })?;
+
+        // Open the attempt row before running so a panic mid-flight still
+        // leaves a trace.
         let host_for_open = hostname.to_owned();
         let attempt_id = self
             .db
@@ -316,10 +213,10 @@ impl Coordinator {
             &self.cipher,
             IssueParams {
                 hostname,
-                contact_email: &settings.contact_email,
+                contact_email: &owned.contact_email,
                 directory_url: &acme::default_directory_url(),
                 dns_provider_name: &dns_provider_name,
-                previous_cert_pem: previous_cert_pem.as_deref(),
+                previous_cert_pem: owned.previous_cert_pem.as_deref(),
             },
         )
         .await;
@@ -363,6 +260,103 @@ impl Coordinator {
             }
         }
     }
+}
+
+/// Fields lifted out of a [`state::HostnameState`] so the coordinator can
+/// own them past the borrow on the snapshot. `compute_state` returns a
+/// borrowed view; everything that survives the DB-call closure goes here.
+struct OwnedState {
+    decision: Decision,
+    dns_provider_name: Option<String>,
+    contact_email: String,
+    active_cert_id: Option<i64>,
+    active_cert_not_after: Option<i64>,
+    previous_cert_pem: Option<String>,
+    retry_block_reason: Option<String>,
+}
+
+impl OwnedState {
+    fn from_snapshot(snap: &state::Snapshot, s: &state::HostnameState<'_>) -> Self {
+        let dns_provider_name = s.policy.and_then(|p| match &p.policy {
+            TlsPolicy::AcmeDns { dns_provider } => Some(dns_provider.clone()),
+            TlsPolicy::Manual { .. } => None,
+        });
+        Self {
+            decision: s.decision.clone(),
+            dns_provider_name,
+            contact_email: snap.settings.contact_email.clone(),
+            active_cert_id: s.active_cert.map(|c| c.id),
+            active_cert_not_after: s.active_cert.and_then(|c| c.not_after),
+            previous_cert_pem: s.active_cert.and_then(|c| c.cert_pem.clone()),
+            retry_block_reason: s.retry_block.and_then(|b| b.reason.clone()),
+        }
+    }
+}
+
+enum ProceedKind {
+    /// The decision is to skip the ACME flow. Return this `Issued` (when
+    /// an active cert exists) or an error to the caller.
+    Skip(Issued),
+    /// The decision is to issue; continue with the named DNS provider.
+    Issue(String),
+}
+
+/// Map a [`Decision`] to either an early return (skip / error) or a
+/// "proceed with this provider" continuation. Pulls the manual-trigger
+/// override here so the early-return logic stays declarative.
+fn handle_non_issuing(
+    hostname: &str,
+    trigger: AttemptTrigger,
+    owned: &OwnedState,
+) -> Result<ProceedKind> {
+    match &owned.decision {
+        Decision::Default => Err(CoordinatorError::NoPolicy {
+            hostname: hostname.to_owned(),
+        }),
+        Decision::Manual { .. } => Err(CoordinatorError::NotAcmeDns {
+            hostname: hostname.to_owned(),
+            strategy: "manual",
+        }),
+        Decision::Blocked { reason } => Err(CoordinatorError::Paused {
+            hostname: hostname.to_owned(),
+            reason: reason
+                .clone()
+                .or_else(|| owned.retry_block_reason.clone())
+                .unwrap_or_else(|| "no reason given".to_owned()),
+        }),
+        Decision::NoContactEmail => Err(CoordinatorError::NoContactEmail),
+        Decision::Debounced { until } => {
+            // Manual trigger bypasses debounce; otherwise refuse with the
+            // remaining time so the caller can surface it.
+            if trigger == AttemptTrigger::Manual {
+                proceed(owned)
+            } else {
+                let now = jiff::Timestamp::now().as_second();
+                Err(CoordinatorError::Debounced {
+                    hostname: hostname.to_owned(),
+                    remaining_s: (until - now).max(0),
+                })
+            }
+        }
+        Decision::Scheduled { .. } => {
+            // Cert is current; only the manual operator path proceeds.
+            if trigger == AttemptTrigger::Manual {
+                proceed(owned)
+            } else {
+                Ok(ProceedKind::Skip(Issued {
+                    cert_id: owned.active_cert_id.unwrap_or(0),
+                    not_after: owned.active_cert_not_after.unwrap_or(0),
+                }))
+            }
+        }
+        Decision::IssueNow { .. } => proceed(owned),
+    }
+}
+
+fn proceed(owned: &OwnedState) -> Result<ProceedKind> {
+    Ok(ProceedKind::Issue(owned.dns_provider_name.clone().expect(
+        "non-issuing decision must have an acme-dns policy",
+    )))
 }
 
 /// File a non-app-scoped fault under the `_system` sentinel app. Idempotent

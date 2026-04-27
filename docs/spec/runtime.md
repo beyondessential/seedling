@@ -1368,7 +1368,8 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 
 > r[tls.cert.hostname-view]
 > The runtime must expose a per-hostname rollup, keyed by the set of TLS-terminating ingress hostnames currently declared by registered apps, that combines for each hostname the originating app(s), the resolved policy, the active certificate (if any), the latest issuance attempt's outcome and error, any operator retry block or queued operator retry, and an expected next-issuance time.
-> The next-issuance time must be derived from the RFC 9773 ARI suggested window when present (see [tls.cert.ari](#r--tls.cert.ari)), otherwise from the same lifetime-fraction fallback the issuance coordinator applies, so the operator surface and the actual scheduling never diverge.
+> The rollup must be a *projection* of the same per-hostname decision the issuance coordinator and renewal scheduler use to decide what to act on; the operator interface, the reconciler-driven coordinator, and the renewal task must all consult one decision function over one DB snapshot, so what the operator sees and what the runtime does are structurally identical rather than separately maintained.
+> The next-issuance time accordingly follows the ARI suggested window when present (see [tls.cert.ari](#r--tls.cert.ari)), otherwise the same lifetime-fraction fallback the coordinator applies.
 > The rollup must support filtering to a single app so the same view can be embedded on per-app surfaces without re-implementing the rollup logic.
 
 > r[tls.cert.serve]
