@@ -138,6 +138,25 @@ pub(super) enum PoliciesCommand {
 pub(super) enum CertsCommand {
     /// List all stored certificates
     List,
+    /// Upload an operator-supplied certificate and matching private key.
+    ///
+    /// Both `--cert` and `--key` accept a PEM file path (or `-` to read
+    /// from stdin). On success the cert is stored and the new row id is
+    /// printed; bind the cert to a hostname with `tls policies set-manual`.
+    UploadManual {
+        hostname: String,
+        /// PEM-encoded certificate chain (leaf + optional intermediates),
+        /// or `-` for stdin.
+        #[arg(long)]
+        cert: String,
+        /// PEM-encoded PKCS#8 private key, or `-` for stdin.
+        #[arg(long)]
+        key: String,
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Delete a stored certificate by id.
+    Delete { id: i64 },
     /// Run ACME-DNS issuance now for a hostname covered by an acme_dns policy.
     ///
     /// Blocks until the flow completes (typically tens of seconds). For a
@@ -291,6 +310,47 @@ async fn dispatch_certs(client: &OiClient, cmd: CertsCommand) {
         CertsCommand::List => {
             print_result(client.request("/tls/certificates/list", json!({})).await);
         }
+        CertsCommand::UploadManual {
+            hostname,
+            cert,
+            key,
+            note,
+        } => {
+            let cert_pem = match read_pem_arg(&cert) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("error reading --cert: {e}");
+                    std::process::exit(1);
+                }
+            };
+            let key_pem = match read_pem_arg(&key) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("error reading --key: {e}");
+                    std::process::exit(1);
+                }
+            };
+            let mut params = json!({
+                "hostname": hostname,
+                "cert_pem": cert_pem,
+                "key_pem": key_pem,
+            });
+            if let Some(n) = note {
+                params["note"] = json!(n);
+            }
+            print_result(
+                client
+                    .request("/tls/certificates/upload-manual", params)
+                    .await,
+            );
+        }
+        CertsCommand::Delete { id } => {
+            print_result(
+                client
+                    .request("/tls/certificates/delete", json!({ "id": id }))
+                    .await,
+            );
+        }
         CertsCommand::IssueAcmeDns { hostname } => {
             print_result(
                 client
@@ -308,6 +368,20 @@ async fn dispatch_certs(client: &OiClient, cmd: CertsCommand) {
                     .await,
             );
         }
+    }
+}
+
+/// Read a PEM blob from a path, or from stdin when `s` is `-`.
+fn read_pem_arg(s: &str) -> Result<String, String> {
+    if s == "-" {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .map_err(|e| format!("read stdin: {e}"))?;
+        Ok(buf)
+    } else {
+        std::fs::read_to_string(s).map_err(|e| format!("read {s}: {e}"))
     }
 }
 

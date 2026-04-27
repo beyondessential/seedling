@@ -22,6 +22,7 @@ pub mod renewal;
 pub mod serve;
 pub mod state;
 pub mod store;
+pub mod validate;
 
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};

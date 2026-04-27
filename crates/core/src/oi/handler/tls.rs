@@ -23,7 +23,10 @@ use super::HandlerResult;
 use crate::defs::resource::Resource;
 use crate::oi::state::OiState;
 use crate::runtime::tls::{
-    AttemptOutcome, DnsProviderKind, RetryBlockSource, TlsCertOrigin, TlsPolicy, state, store,
+    AttemptOutcome, DnsProviderKind, RetryBlockSource, TlsCertOrigin, TlsCertState, TlsPolicy,
+    state, store,
+    store::CertMetadata,
+    validate::{self, ValidateError},
 };
 
 // ---------------------------------------------------------------------------
@@ -286,6 +289,143 @@ pub(crate) fn issue_acme_dns(state: &OiState, params: IssueAcmeDnsParams) -> Han
             format!("acme-dns issuance failed: {e}"),
         )),
     }
+}
+
+#[derive(Deserialize)]
+pub(crate) struct UploadManualParams {
+    pub hostname: String,
+    pub cert_pem: String,
+    pub key_pem: String,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+/// Upload an operator-supplied (cert, key) pair for `hostname`. The
+/// cert is validated against the SAN coverage / self-signed / expiry
+/// rules in [`tls.cert.validation.*`] and the supplied key is
+/// confirmed to match the leaf cert's public key. The pair is stored
+/// (key encrypted at rest), any prior active cert with the same
+/// hostname is superseded, and the new row id plus any non-fatal
+/// `warnings` (e.g. `self_signed`, `not_yet_valid`) come back to the
+/// caller.
+///
+/// Note: this endpoint registers the cert in storage; the operator
+/// still needs to bind a hostname to it via `tls.policy.set-manual`
+/// for the runtime to start serving it.
+// i[tls.cert.upload-manual]
+// r[impl tls.strategy.manual]
+pub(crate) fn upload_manual(state: &OiState, params: UploadManualParams) -> HandlerResult {
+    let UploadManualParams {
+        hostname,
+        cert_pem,
+        key_pem,
+        note,
+    } = params;
+
+    if hostname.trim().is_empty() {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            "hostname must not be empty",
+        ));
+    }
+
+    let key_secret = SecretString::new(key_pem.into());
+    let validated = validate::validate_manual_upload(&hostname, &cert_pem, &key_secret)
+        .map_err(map_validate_error)?;
+
+    let chain_pem = validated.parsed.chain_pem.clone();
+    let metadata = CertMetadata {
+        issuer: validated.parsed.metadata.issuer.clone(),
+        not_before: validated.parsed.metadata.not_before,
+        not_after: validated.parsed.metadata.not_after,
+        serial: validated.parsed.metadata.serial.clone(),
+        self_signed: validated.parsed.metadata.self_signed,
+    };
+    let key_type = validated.key_type;
+
+    let cipher = Arc::clone(&state.cipher);
+    let key_ciphertext = cipher.encrypt(&key_secret).map_err(|e| {
+        OiError::new(
+            ErrorCode::Internal,
+            format!("private key encryption failed: {e}"),
+        )
+    })?;
+
+    let host_for_insert = hostname.clone();
+    let note_for_insert = note;
+    let id = state
+        .db
+        .call(move |db| -> rusqlite::Result<i64> {
+            let id = store::insert_certificate(
+                db,
+                &host_for_insert,
+                TlsCertState::Active,
+                TlsCertOrigin::Manual,
+                Some(&chain_pem),
+                None,
+                &key_ciphertext,
+                key_type,
+                metadata,
+                note_for_insert.as_deref(),
+                None,
+            )?;
+            // Replace any prior active cert for the same hostname so
+            // serving picks up the new one immediately. Leaves the old
+            // row in `superseded` state for history.
+            store::supersede_other_active_for_hostname(db, &host_for_insert, id)?;
+            Ok(id)
+        })
+        .map_err(db_error)?;
+
+    Ok(json!({
+        "id": id,
+        "warnings": validated.warnings,
+    }))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct CertIdParams {
+    pub id: i64,
+}
+
+/// Delete a stored certificate. Refused with a clear precondition
+/// error when a policy still references the row, so the operator
+/// gets pointed at the correct unbinding step.
+// i[tls.cert.delete]
+pub(crate) fn delete_certificate(state: &OiState, params: CertIdParams) -> HandlerResult {
+    let CertIdParams { id } = params;
+    let removed = state
+        .db
+        .call(move |db| store::delete_certificate(db, id))
+        .map_err(|e| {
+            if e.to_string().contains("FOREIGN KEY") {
+                OiError::new(
+                    ErrorCode::RequirementsInvalid,
+                    format!(
+                        "certificate {id} is referenced by a manual policy; clear the policy first"
+                    ),
+                )
+            } else {
+                db_error(e)
+            }
+        })?;
+    if !removed {
+        return Err(OiError::not_found(format!("certificate not found: {id}")));
+    }
+    Ok(json!({ "ok": true }))
+}
+
+fn map_validate_error(e: ValidateError) -> OiError {
+    let msg = e.to_string();
+    let code = match e {
+        ValidateError::ParseCert { .. } | ValidateError::ParseKey { .. } => {
+            ErrorCode::RequirementsInvalid
+        }
+        ValidateError::SanCoverage { .. } => ErrorCode::RequirementsInvalid,
+        ValidateError::Expired { .. } => ErrorCode::RequirementsInvalid,
+        ValidateError::KeyMismatch => ErrorCode::RequirementsInvalid,
+    };
+    OiError::new(code, msg)
 }
 
 #[derive(Deserialize)]

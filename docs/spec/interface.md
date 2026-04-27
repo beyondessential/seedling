@@ -997,6 +997,19 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 > Response `result.certificates` is an array of objects each with `id`, `hostname`, `state` (`"csr_pending"`, `"active"`, `"superseded"`, or `"failed"`), `origin` (`"manual"`, `"csr"`, or `"acme_dns"`), `key_type`, `issuer`, `not_before`, `not_after`, `serial`, `self_signed`, `note`, `acme_account_id`, `created_at`, `updated_at`.
 > Private key material is never returned.
 
+> i[tls.cert.upload-manual]
+> `/tls/certificates/upload-manual { hostname, cert_pem, key_pem, note? }` registers an operator-supplied certificate-and-key pair under `hostname` and returns `{ id, warnings }`.
+> The `cert_pem` may carry a leaf with optional intermediates in any PEM order (the runtime re-emits the chain leaf-first); the `key_pem` is a PKCS#8 PEM private key.
+> The runtime validates the upload per [tls.cert.validation.san-coverage](runtime.md#r--tls.cert.validation.san-coverage), [tls.cert.validation.self-signed](runtime.md#r--tls.cert.validation.self-signed), and [tls.cert.validation.expired](runtime.md#r--tls.cert.validation.expired), and additionally rejects the upload when the supplied private key's public key does not match the leaf certificate's `SubjectPublicKeyInfo`.
+> Validation rejections return `requirements_invalid` with a message describing the failed rule (key mismatch, expired, SAN-coverage failure, or PEM parse error).
+> On success the cert is stored with the private key encrypted at rest using the [secret key](runtime.md#r--secret.key); the response `warnings` array contains `"self_signed"` when the leaf is self-signed and/or `"not_yet_valid"` when `not_before` is in the future.
+> The new row supersedes any prior active certificate for the same `hostname`.
+> Registering a cert does not automatically bind it; the operator must additionally call [`tls.policy.set-manual`](#i--tls.policy.set-manual) for the runtime to start serving it.
+
+> i[tls.cert.delete]
+> `/tls/certificates/delete { id }` removes a stored certificate.
+> Refused with `requirements_invalid` when a manual policy still references the row, so the operator unbinds the policy first; returns `not_found` when the id is unknown.
+
 > i[tls.cert.issue-acme-dns]
 > `/tls/certificates/issue-acme-dns { hostname }` synchronously runs the ACME-DNS-01 issuance flow for `hostname` via the issuance coordinator.
 > The hostname must resolve (per [tls.policy.wildcard](runtime.md#r--tls.policy.wildcard)) to an `acme_dns` policy with a configured DNS provider; otherwise the call returns `internal` with a descriptive message.
