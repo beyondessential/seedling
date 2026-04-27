@@ -1011,6 +1011,27 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 > The actual ACME flow runs in the background; the cert appears in [`tls.cert.list`](#i--tls.cert.list) once issuance completes.
 > Survives a daemon restart: if the daemon dies between this call and the coordinator picking it up, the next reconciler tick after restart still processes it.
 
+## Hostname view
+
+> i[tls.hostname.list]
+> `/tls/hostnames/list { app? }` returns a per-hostname rollup covering every TLS-terminating ingress hostname currently declared by a registered app.
+> When `app` is supplied, only hostnames declared by that app are returned.
+> Response `result.hostnames` is an array; each entry has:
+>
+> - `hostname`
+> - `apps`: array of app names declaring this hostname (multiple when several apps share an ingress)
+> - `policy`: `{ strategy: "default" | "acme_dns" | "manual", dns_provider?, cert_id?, pattern?, is_wildcard_match? }` — `default` means no policy is bound and the proxy handles issuance directly; `pattern` is the matched policy pattern (which may be a wildcard), `is_wildcard_match` is true when the resolved policy was a wildcard rather than an exact match
+> - `status`: `"active" | "expired" | "error" | "pending" | "blocked" | "no_cert" | "default"` — derived from policy, active certificate, last attempt, and any retry block or queued retry
+> - `active_cert`: `{ id, origin, issuer, not_before, not_after, self_signed, ari_window_start, ari_window_end }` or null
+> - `last_issuance`: `{ kind, at, cert_id?, provider? }` describing when and how the active certificate was last obtained, or null when no issuance has run; `kind` is `"manual"` for uploads or `"acme_dns"` for runtime-driven issuance
+> - `last_error`: error message from the most recent failed attempt for this hostname, when the latest attempt was a failure, otherwise null
+> - `retry_block`: `{ set_at, reason }` when an operator pause is set, otherwise null
+> - `force_retry_at`: timestamp of a queued operator-driven retry awaiting the coordinator, otherwise null
+> - `next_issuance_at`: expected next issuance time in Unix seconds, or null
+> - `next_issuance_source`: `"ari" | "fallback" | "immediate"` describing how `next_issuance_at` was derived (RFC 9773 ARI window, the runtime's lifetime-fraction fallback, or "as soon as the coordinator runs"), or null when the strategy is manual or default
+>
+> The view is the canonical operator surface for what TLS hostnames exist and what state they are in; it deliberately replaces the older "list every stored cert" and "list every recent attempt" views, which exposed implementation rather than per-hostname state.
+
 ## Cert attempt log
 
 > i[tls.cert.attempts.list]

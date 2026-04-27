@@ -274,6 +274,8 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/tls/settings/get" => tls::get_settings(state),
         // i[tls.settings.set]
         "/tls/settings/set" => tls::set_settings(state, parse_params(req.params)?),
+        // i[tls.hostname.list]
+        "/tls/hostnames/list" => tls::list_hostnames(state, parse_params(req.params)?),
         // i[tls.cert.attempts.list]
         "/tls/certificates/attempts/list" => tls::list_attempts(state, parse_params(req.params)?),
         // i[tls.retry-block.list]

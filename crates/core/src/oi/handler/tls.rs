@@ -10,6 +10,7 @@
 //!
 //! Manual cert upload and the CSR flow are added in phases 3/4.
 
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use secrecy::SecretString;
@@ -19,8 +20,12 @@ use serde_json::{Value, json};
 use seedling_protocol::error::{ErrorCode, OiError};
 
 use super::HandlerResult;
+use crate::defs::resource::Resource;
 use crate::oi::state::OiState;
-use crate::runtime::tls::{DnsProviderKind, RetryBlockSource, TlsPolicy, store};
+use crate::runtime::tls::{
+    self, AttemptOutcome, DnsProviderKind, RetryBlockSource, TlsCertAttempt, TlsCertOrigin,
+    TlsCertState, TlsCertificate, TlsPolicy, TlsPolicyRow, store,
+};
 
 // ---------------------------------------------------------------------------
 // DNS providers
@@ -309,6 +314,348 @@ pub(crate) fn retry(state: &OiState, params: RetryParams) -> HandlerResult {
         .map_err(db_error)?;
     state.tls_coordinator.ensure(&hostname);
     Ok(json!({ "ok": true }))
+}
+
+// ---------------------------------------------------------------------------
+// Hostname view (consolidated per-hostname rollup)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub(crate) struct ListHostnamesParams {
+    /// Optional app filter; when set, only TLS-terminating hostnames
+    /// declared by this app's ingresses are returned.
+    #[serde(default)]
+    pub app: Option<String>,
+}
+
+// i[tls.hostname.list]
+// r[impl tls.cert.hostname-view]
+pub(crate) fn list_hostnames(state: &OiState, params: ListHostnamesParams) -> HandlerResult {
+    // Walk the registry to discover every TLS-terminating ingress hostname
+    // and the apps declaring it. Multiple apps may declare the same
+    // hostname (e.g. shared ingress); collect them all.
+    let mut hostname_apps: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    {
+        let reg = state.registry.read();
+        for entry in reg.iter() {
+            if let Some(filter) = params.app.as_deref()
+                && entry.name.as_str() != filter
+            {
+                continue;
+            }
+            let def = entry.app.def.load();
+            for resource in def.resources.values() {
+                if let Resource::Ingress(ing) = resource {
+                    let ing_def = ing.def.lock();
+                    if ing_def.tls {
+                        hostname_apps
+                            .entry(ing_def.hostname.clone())
+                            .or_default()
+                            .insert(entry.name.as_str().to_owned());
+                    }
+                }
+            }
+        }
+    }
+
+    // Single DB call collects everything we need to roll up per hostname.
+    let snapshot = state
+        .db
+        .call(|db| -> rusqlite::Result<HostnameSnapshot> {
+            Ok(HostnameSnapshot {
+                policies: store::list_policies(db)?,
+                certificates: store::list_certificates(db)?,
+                attempts: store::list_attempts(db, None, 1000)?,
+                retry_blocks: store::list_retry_blocks(db)?,
+                force_retries: store::list_force_retries(db)?,
+            })
+        })
+        .map_err(db_error)?;
+
+    let block_by_host: HashMap<&str, &_> = snapshot
+        .retry_blocks
+        .iter()
+        .map(|b| (b.hostname.as_str(), b))
+        .collect();
+    let force_by_host: HashMap<&str, i64> = snapshot
+        .force_retries
+        .iter()
+        .map(|f| (f.hostname.as_str(), f.requested_at))
+        .collect();
+
+    // Most-recent active cert per hostname.
+    let mut active_cert_by_host: HashMap<&str, &TlsCertificate> = HashMap::new();
+    for cert in &snapshot.certificates {
+        if cert.state == TlsCertState::Active {
+            active_cert_by_host
+                .entry(cert.hostname.as_str())
+                .and_modify(|existing| {
+                    if cert.created_at > existing.created_at {
+                        *existing = cert;
+                    }
+                })
+                .or_insert(cert);
+        }
+    }
+    let cert_by_id: HashMap<i64, &TlsCertificate> =
+        snapshot.certificates.iter().map(|c| (c.id, c)).collect();
+
+    // First (newest) attempt per hostname; first success per hostname.
+    // `list_attempts` returns newest-first, so the first hit is the most
+    // recent.
+    let mut last_attempt_by_host: HashMap<&str, &TlsCertAttempt> = HashMap::new();
+    let mut last_success_by_host: HashMap<&str, &TlsCertAttempt> = HashMap::new();
+    for att in &snapshot.attempts {
+        last_attempt_by_host
+            .entry(att.hostname.as_str())
+            .or_insert(att);
+        if att.outcome == AttemptOutcome::Success {
+            last_success_by_host
+                .entry(att.hostname.as_str())
+                .or_insert(att);
+        }
+    }
+
+    let now = jiff::Timestamp::now().as_second();
+    let result: Vec<Value> = hostname_apps
+        .into_iter()
+        .map(|(hostname, apps)| {
+            let resolved = resolve_policy_view(&hostname, &snapshot.policies);
+            let active_cert = active_cert_by_host.get(hostname.as_str()).copied();
+            let last_attempt = last_attempt_by_host.get(hostname.as_str()).copied();
+            let last_success = last_success_by_host.get(hostname.as_str()).copied();
+            let block = block_by_host.get(hostname.as_str()).copied();
+            let force_retry_at = force_by_host.get(hostname.as_str()).copied();
+
+            let policy_json = match &resolved {
+                None => json!({ "strategy": "default" }),
+                Some(r) => match &r.row.policy {
+                    TlsPolicy::AcmeDns { dns_provider } => json!({
+                        "strategy": "acme_dns",
+                        "dns_provider": dns_provider,
+                        "pattern": r.row.hostname,
+                        "is_wildcard_match": r.row.hostname != hostname,
+                    }),
+                    TlsPolicy::Manual { cert_id } => json!({
+                        "strategy": "manual",
+                        "cert_id": cert_id,
+                        "pattern": r.row.hostname,
+                        "is_wildcard_match": r.row.hostname != hostname,
+                    }),
+                },
+            };
+
+            let active_cert_json =
+                resolve_active_cert(active_cert, &resolved, &cert_by_id).map_or(Value::Null, |c| {
+                    json!({
+                        "id": c.id,
+                        "origin": c.origin.as_str(),
+                        "issuer": c.issuer,
+                        "not_before": c.not_before,
+                        "not_after": c.not_after,
+                        "self_signed": c.self_signed,
+                        "ari_window_start": c.ari_window_start,
+                        "ari_window_end": c.ari_window_end,
+                    })
+                });
+
+            let last_issuance_json = build_last_issuance(
+                resolve_active_cert(active_cert, &resolved, &cert_by_id),
+                last_success,
+                resolved.as_ref(),
+            );
+
+            let last_error = last_attempt
+                .filter(|a| a.outcome == AttemptOutcome::Failure)
+                .and_then(|a| a.error.clone());
+
+            let status = compute_status(
+                &resolved,
+                resolve_active_cert(active_cert, &resolved, &cert_by_id),
+                last_attempt,
+                block.is_some(),
+                force_retry_at.is_some(),
+                now,
+            );
+
+            let (next_issuance_at, next_issuance_source) = compute_next_issuance(
+                &resolved,
+                resolve_active_cert(active_cert, &resolved, &cert_by_id),
+            );
+
+            let block_json = block.map_or(
+                Value::Null,
+                |b| json!({ "set_at": b.set_at, "reason": b.reason }),
+            );
+
+            json!({
+                "hostname": hostname,
+                "apps": apps.into_iter().collect::<Vec<_>>(),
+                "policy": policy_json,
+                "status": status,
+                "active_cert": active_cert_json,
+                "last_issuance": last_issuance_json,
+                "last_error": last_error,
+                "retry_block": block_json,
+                "force_retry_at": force_retry_at,
+                "next_issuance_at": next_issuance_at,
+                "next_issuance_source": next_issuance_source,
+            })
+        })
+        .collect();
+
+    Ok(json!({ "hostnames": result }))
+}
+
+struct HostnameSnapshot {
+    policies: Vec<TlsPolicyRow>,
+    certificates: Vec<TlsCertificate>,
+    attempts: Vec<TlsCertAttempt>,
+    retry_blocks: Vec<crate::runtime::tls::TlsCertRetryBlock>,
+    force_retries: Vec<crate::runtime::tls::TlsCertForceRetry>,
+}
+
+struct ResolvedPolicy {
+    row: TlsPolicyRow,
+}
+
+/// Pick the most-specific policy that matches `hostname` from the supplied
+/// list. Mirrors `store::resolve_policy` without re-querying.
+fn resolve_policy_view(hostname: &str, policies: &[TlsPolicyRow]) -> Option<ResolvedPolicy> {
+    let mut best: Option<(u32, &TlsPolicyRow)> = None;
+    for row in policies {
+        if tls::pattern_matches(&row.hostname, hostname) {
+            let score = tls::pattern_specificity(&row.hostname);
+            if best.as_ref().is_none_or(|(s, _)| score > *s) {
+                best = Some((score, row));
+            }
+        }
+    }
+    best.map(|(_, row)| ResolvedPolicy { row: row.clone() })
+}
+
+/// For a manual policy, the active cert is the one referenced by the
+/// policy regardless of hostname column. For ACME-DNS / default, fall
+/// through to the "active cert with this hostname" lookup.
+fn resolve_active_cert<'a>(
+    by_host: Option<&'a TlsCertificate>,
+    resolved: &Option<ResolvedPolicy>,
+    by_id: &HashMap<i64, &'a TlsCertificate>,
+) -> Option<&'a TlsCertificate> {
+    if let Some(r) = resolved
+        && let TlsPolicy::Manual { cert_id } = &r.row.policy
+    {
+        return by_id.get(cert_id).copied();
+    }
+    by_host
+}
+
+fn build_last_issuance(
+    active: Option<&TlsCertificate>,
+    last_success: Option<&TlsCertAttempt>,
+    resolved: Option<&ResolvedPolicy>,
+) -> Value {
+    if let Some(cert) = active
+        && cert.origin == TlsCertOrigin::Manual
+    {
+        return json!({
+            "kind": "manual",
+            "at": cert.created_at,
+            "cert_id": cert.id,
+        });
+    }
+    if let Some(att) = last_success {
+        let provider = resolved.and_then(|r| match &r.row.policy {
+            TlsPolicy::AcmeDns { dns_provider } => Some(dns_provider.clone()),
+            TlsPolicy::Manual { .. } => None,
+        });
+        return json!({
+            "kind": "acme_dns",
+            "at": att.started_at,
+            "cert_id": att.cert_id,
+            "provider": provider,
+        });
+    }
+    if let Some(cert) = active {
+        return json!({
+            "kind": cert.origin.as_str(),
+            "at": cert.created_at,
+            "cert_id": cert.id,
+        });
+    }
+    Value::Null
+}
+
+fn compute_status(
+    resolved: &Option<ResolvedPolicy>,
+    active: Option<&TlsCertificate>,
+    last_attempt: Option<&TlsCertAttempt>,
+    has_block: bool,
+    force_retry: bool,
+    now: i64,
+) -> &'static str {
+    if has_block {
+        return "blocked";
+    }
+    if let Some(cert) = active {
+        if let Some(na) = cert.not_after
+            && now > na
+        {
+            return "expired";
+        }
+        return "active";
+    }
+    if force_retry {
+        return "pending";
+    }
+    if let Some(att) = last_attempt {
+        return match att.outcome {
+            AttemptOutcome::Success => "active",
+            AttemptOutcome::Failure => "error",
+            AttemptOutcome::Pending => "pending",
+        };
+    }
+    match resolved.as_ref().map(|r| &r.row.policy) {
+        None => "default",
+        Some(TlsPolicy::AcmeDns { .. }) => "pending",
+        Some(TlsPolicy::Manual { .. }) => "no_cert",
+    }
+}
+
+/// Compute the expected next issuance date for the hostname.
+///
+/// - ACME-DNS with active cert + ARI window → window start, source `ari`.
+/// - ACME-DNS with active cert, no ARI → 1/3-of-lifetime mark, source `fallback`.
+/// - ACME-DNS with no active cert → `None` ts, source `immediate`.
+/// - Manual / default → `None`, source `None`.
+fn compute_next_issuance(
+    resolved: &Option<ResolvedPolicy>,
+    active: Option<&TlsCertificate>,
+) -> (Option<i64>, Option<&'static str>) {
+    let is_acme_dns = matches!(
+        resolved.as_ref().map(|r| &r.row.policy),
+        Some(TlsPolicy::AcmeDns { .. })
+    );
+    if !is_acme_dns {
+        return (None, None);
+    }
+    match active {
+        None => (None, Some("immediate")),
+        Some(cert) => {
+            if let Some(start) = cert.ari_window_start {
+                return (Some(start), Some("ari"));
+            }
+            let (Some(nb), Some(na)) = (cert.not_before, cert.not_after) else {
+                return (None, Some("fallback"));
+            };
+            // Fallback matches the issuance-coordinator threshold: renew
+            // when remaining lifetime drops below 1/3 of total. Equivalent
+            // to firing at not_before + 2/3 * lifetime.
+            let lifetime = na - nb;
+            let due = nb + (lifetime * 2 / 3);
+            (Some(due), Some("fallback"))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

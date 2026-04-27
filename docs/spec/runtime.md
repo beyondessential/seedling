@@ -1366,6 +1366,11 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > For every hostname declared by a TLS-terminating ingress, the runtime must surface to the operator interface: the active strategy, the certificate's issuer (when known), `notBefore`, `notAfter`, and the acquisition status as defined in [observe.ingress.certs](#r--observe.ingress.certs).
 > Metadata for default-strategy (ACME HTTP-01) certificates is derived from the proxy's certificate cache; metadata for runtime-managed certificates (ACME DNS-01, manual, CSR) is derived from the runtime's own certificate store.
 
+> r[tls.cert.hostname-view]
+> The runtime must expose a per-hostname rollup, keyed by the set of TLS-terminating ingress hostnames currently declared by registered apps, that combines for each hostname the originating app(s), the resolved policy, the active certificate (if any), the latest issuance attempt's outcome and error, any operator retry block or queued operator retry, and an expected next-issuance time.
+> The next-issuance time must be derived from the RFC 9773 ARI suggested window when present (see [tls.cert.ari](#r--tls.cert.ari)), otherwise from the same lifetime-fraction fallback the issuance coordinator applies, so the operator surface and the actual scheduling never diverge.
+> The rollup must support filtering to a single app so the same view can be embedded on per-app surfaces without re-implementing the rollup logic.
+
 > r[tls.cert.serve]
 > For runtime-managed certificates (ACME DNS-01, manual, and CSR-derived), the runtime must deliver certificate and key material to the ingress proxy through a mechanism that does not require including private key material in the proxy's persistent configuration or its restart-replay cache.
 > The proxy must be able to obtain the appropriate certificate by SNI hostname at TLS handshake time.

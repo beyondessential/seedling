@@ -30,6 +30,16 @@ pub(super) enum TlsCommand {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+    /// Per-hostname rollup of TLS state for every TLS-terminating ingress.
+    ///
+    /// Combines policy, active certificate, latest attempt outcome, retry
+    /// blocks, and expected next issuance into a single view. Optionally
+    /// filtered to a single app's ingresses.
+    Hostnames {
+        /// Filter to a single app's ingress hostnames
+        #[arg(long)]
+        app: Option<String>,
+    },
     /// Cert-issuance attempt log (success and failures)
     Attempts {
         /// Filter by hostname
@@ -149,6 +159,13 @@ pub(super) async fn dispatch(client: &OiClient, cmd: TlsCommand) {
         TlsCommand::Policies { command } => dispatch_policies(client, command).await,
         TlsCommand::Certs { command } => dispatch_certs(client, command).await,
         TlsCommand::Config { command } => dispatch_config(client, command).await,
+        TlsCommand::Hostnames { app } => {
+            let mut params = json!({});
+            if let Some(a) = app {
+                params["app"] = json!(a);
+            }
+            print_result(client.request("/tls/hostnames/list", params).await);
+        }
         TlsCommand::Attempts { hostname, limit } => {
             let mut params = json!({ "limit": limit });
             if let Some(h) = hostname {
