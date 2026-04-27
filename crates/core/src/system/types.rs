@@ -351,6 +351,14 @@ pub struct ProxyConfig {
     /// acquires the certs eagerly, not lazily on first request.
     // r[impl actuate.ingress.warm-certs]
     pub warm_cert_hostnames: std::collections::BTreeSet<String>,
+    /// URL of the daemon's `get_certificate` endpoint. When set,
+    /// emitted into the Caddy config as a `tls.certificates.get_certificate`
+    /// entry so Caddy fetches runtime-managed certs (acme-dns, manual,
+    /// CSR-derived) by SNI at handshake time. The daemon's endpoint
+    /// returns 404 for hostnames without a stored cert, causing Caddy
+    /// to fall back to its default ACME-HTTP-01 automation.
+    // r[impl tls.cert.serve]
+    pub cert_endpoint_url: Option<String>,
 }
 
 /// A layer-4 (TCP/UDP) proxy route for non-HTTP ingresses.

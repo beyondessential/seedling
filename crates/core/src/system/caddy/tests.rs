@@ -48,6 +48,7 @@ fn http_only_vhost_goes_in_http_server() {
         virtual_hosts: vec![http_vhost("example.com", "[fd5e::1]:3000")],
         l4_routes: vec![],
         warm_cert_hostnames: Default::default(),
+        cert_endpoint_url: None,
     };
     let json = build_caddy_config(&config);
     let servers = &json["apps"]["http"]["servers"];
@@ -71,6 +72,7 @@ fn https_vhost_goes_in_https_server_redirect_in_http() {
         virtual_hosts: vec![https_vhost("example.com", "[fd5e::1]:3000")],
         l4_routes: vec![],
         warm_cert_hostnames: Default::default(),
+        cert_endpoint_url: None,
     };
     let json = build_caddy_config(&config);
     let servers = &json["apps"]["http"]["servers"];
@@ -109,6 +111,7 @@ fn tls_acme_subjects_appear_in_automation() {
         }],
         l4_routes: vec![],
         warm_cert_hostnames: Default::default(),
+        cert_endpoint_url: None,
     };
     let json = build_caddy_config(&config);
     let subjects = &json["apps"]["tls"]["automation"]["policies"][0]["subjects"];
@@ -157,6 +160,7 @@ fn warm_cert_skipped_when_already_routed() {
         }],
         l4_routes: vec![],
         warm_cert_hostnames: Default::default(),
+        cert_endpoint_url: None,
     };
     // Asking to warm a hostname that's already routed should be a no-op
     // (the hostname is already covered by lazy acquisition via the server block).
@@ -200,6 +204,7 @@ fn dial_strips_http_scheme() {
         }],
         l4_routes: vec![],
         warm_cert_hostnames: Default::default(),
+        cert_endpoint_url: None,
     };
     let json = build_caddy_config(&config);
     let dial = &json["apps"]["http"]["servers"]["seedling_https"]["routes"][0]["handle"][0]["upstreams"]
@@ -231,6 +236,7 @@ fn https_server_includes_quic_listener() {
         }],
         l4_routes: vec![],
         warm_cert_hostnames: Default::default(),
+        cert_endpoint_url: None,
     };
     let json = build_caddy_config(&config);
     let listen = &json["apps"]["http"]["servers"]["seedling_https"]["listen"];
@@ -246,4 +252,49 @@ fn https_server_includes_quic_listener() {
         1,
         "QUIC port duplicates HTTPS port, dedup should collapse them"
     );
+}
+
+// r[verify tls.cert.serve]
+#[test]
+fn cert_endpoint_url_is_emitted_as_get_certificate() {
+    let config = ProxyConfig {
+        listeners: vec![ProxyListener {
+            port: 443,
+            proto: ProxyListenerProto::Https,
+        }],
+        virtual_hosts: vec![https_vhost("example.com", "[fd5e::1]:3000")],
+        l4_routes: vec![],
+        warm_cert_hostnames: Default::default(),
+        cert_endpoint_url: Some("http://[fd5e::ff:1]:8443/get".to_string()),
+    };
+    let json = build_caddy_config(&config);
+    let getters = &json["apps"]["tls"]["certificates"]["get_certificate"];
+    let arr = getters
+        .as_array()
+        .expect("get_certificate must be an array");
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["via"], "http");
+    assert_eq!(arr[0]["url"], "http://[fd5e::ff:1]:8443/get");
+    // Default automation policy still present.
+    assert!(json["apps"]["tls"]["automation"]["policies"].is_array());
+}
+
+#[test]
+fn cert_endpoint_url_alone_emits_tls_app_without_automation() {
+    // No TLS-terminating vhosts: the default-strategy policy is empty, but
+    // the get_certificate endpoint must still be emitted so Caddy can
+    // serve runtime-managed certs for any future SNI hits.
+    let config = ProxyConfig {
+        listeners: vec![],
+        virtual_hosts: vec![],
+        l4_routes: vec![],
+        warm_cert_hostnames: Default::default(),
+        cert_endpoint_url: Some("http://[fd5e::ff:1]:8443/get".to_string()),
+    };
+    let json = build_caddy_config(&config);
+    assert_eq!(
+        json["apps"]["tls"]["certificates"]["get_certificate"][0]["url"],
+        "http://[fd5e::ff:1]:8443/get"
+    );
+    assert!(json["apps"]["tls"]["automation"].is_null());
 }

@@ -98,7 +98,8 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
 
     let mut apps = json!({ "http": { "servers": servers } });
 
-    if !all_subjects.is_empty() {
+    let needs_tls = !all_subjects.is_empty() || config.cert_endpoint_url.is_some();
+    if needs_tls {
         // r[impl actuate.ingress.warm-certs]
         // r[impl tls.strategy.default]
         // l[impl ingress.certificates]
@@ -107,18 +108,39 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
         // matches and Caddy must be told explicitly via certificates.automate.
         // The empty automation policy here selects Caddy's default ACME issuer
         // (HTTP-01 against Let's Encrypt), which is the runtime default per
-        // tls.strategy.default. Per-hostname overrides (acme-dns, manual) are
-        // layered in by later phases.
-        let mut tls = json!({
-            "automation": {
-                "policies": [{
-                    "subjects": all_subjects,
-                }]
-            }
-        });
+        // tls.strategy.default. Per-hostname overrides (acme-dns, manual,
+        // CSR-derived) are served via tls.certificates.get_certificate
+        // below: Caddy queries the daemon by SNI before falling through
+        // to automation.
+        let mut tls = if all_subjects.is_empty() {
+            json!({})
+        } else {
+            json!({
+                "automation": {
+                    "policies": [{
+                        "subjects": all_subjects,
+                    }]
+                }
+            })
+        };
+
+        let mut certificates = serde_json::Map::new();
         if !warm_subjects.is_empty() {
             let warm_list: Vec<&str> = warm_subjects.iter().copied().collect();
-            tls["certificates"] = json!({ "automate": warm_list });
+            certificates.insert("automate".to_string(), json!(warm_list));
+        }
+        // r[impl tls.cert.serve]
+        if let Some(url) = &config.cert_endpoint_url {
+            certificates.insert(
+                "get_certificate".to_string(),
+                json!([{
+                    "via": "http",
+                    "url": url,
+                }]),
+            );
+        }
+        if !certificates.is_empty() {
+            tls["certificates"] = Value::Object(certificates);
         }
         apps["tls"] = tls;
     }

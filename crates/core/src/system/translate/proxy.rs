@@ -149,6 +149,7 @@ pub fn build_proxy_config(ingresses: &[(IngressDef, ServiceUpstream)]) -> ProxyC
         virtual_hosts: vhosts.into_values().collect(),
         l4_routes: vec![],
         warm_cert_hostnames: BTreeSet::new(),
+        cert_endpoint_url: None,
     }
 }
 
