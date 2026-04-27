@@ -103,7 +103,7 @@ export default function Certificates() {
         sx={{ color: "text.secondary", mb: 2 }}
       >
         Per-hostname rollup of every TLS-terminating ingress in the system.
-        Hostnames without an explicit policy use the default ACME-HTTP-01
+        Hostnames without an explicit policy use the default (TLS/HTTP/internal)
         issuance Caddy provides automatically.
       </Typography>
 
@@ -214,7 +214,7 @@ export default function Certificates() {
         title="Clear policy"
         body={
           removingPolicy
-            ? `Clear the policy for "${removingPolicy}"? The hostname will revert to the default ACME-HTTP-01 strategy.`
+            ? `Clear the policy for "${removingPolicy}"? The hostname will revert to the default caddy issuance strategy.`
             : ""
         }
         confirmLabel="Clear"
@@ -390,13 +390,13 @@ function PoliciesSection({
         </Tooltip>
       </Box>
       <Typography variant="caption" sx={{ color: "text.secondary", mb: 1, display: "block" }}>
-        Hostnames absent here use the default Caddy ACME-HTTP-01 strategy.
+        Hostnames absent here use the default Caddy issuance strategy (TLS/HTTP/internal).
       </Typography>
       {error && <OiErrorAlert error={error} />}
       {loading && <CircularProgress size={20} />}
       {policies.length === 0 ? (
         <Typography variant="body2" sx={{ color: "text.secondary" }}>
-          No operator policies — every TLS-terminating hostname uses the default ACME-HTTP-01.
+          No operator policies — every TLS-terminating hostname uses the caddy default.
         </Typography>
       ) : (
         <TableContainer component={Paper} variant="outlined">
