@@ -212,6 +212,11 @@ export default function Certificates() {
         onClose={() => setProviderDialog(false)}
         onSubmitted={() => {
           refetchProviders();
+          // The first provider upsert can auto-create a `*` policy, so
+          // refresh the policies + certs lists too rather than requiring
+          // an operator reload.
+          refetchPolicies();
+          refetchCerts();
           setProviderDialog(false);
         }}
         execute={execute}
