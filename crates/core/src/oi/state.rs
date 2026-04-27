@@ -42,4 +42,9 @@ pub struct OiState {
     /// force-retry signal.
     // r[impl tls.cert.eager-issuance]
     pub tls_coordinator: Arc<crate::runtime::tls::issuance::Coordinator>,
+    /// Host-filesystem path of the Caddy data volume. Resolved lazily on
+    /// the first OI request that needs to inspect Caddy's certificate
+    /// cache (i.e. the TLS hostname rollup).
+    // r[impl tls.cert.hostname-view]
+    pub caddy_data_path: tokio::sync::OnceCell<PathBuf>,
 }

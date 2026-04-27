@@ -650,8 +650,14 @@ export type TlsHostnamePolicy =
   };
 
 export interface TlsHostnameActiveCert {
-  id: number;
-  origin: TlsCertOrigin;
+  /** Null when the cert is owned by Caddy rather than the runtime DB. */
+  id: number | null;
+  /** `caddy` for certs Caddy manages itself; runtime-owned certs use the
+   * narrower {@link TlsCertOrigin} values. */
+  origin: TlsCertOrigin | "caddy";
+  /** Caddy's issuer-subdir name for `origin: "caddy"`: e.g. `local`
+   * (internal CA) or `acme-v02.api.letsencrypt.org-directory`. */
+  caddy_issuer?: string;
   issuer: string | null;
   not_before: number | null;
   not_after: number | null;
@@ -676,6 +682,13 @@ export type TlsHostnameLastIssuance =
     kind: "csr";
     at: number;
     cert_id: number | null;
+  }
+  | {
+    kind: "caddy";
+    at: number | null;
+    cert_id: null;
+    /** Caddy's issuer-subdir name. */
+    provider: string;
   };
 
 export type TlsNextIssuanceSource = "ari" | "fallback" | "immediate";

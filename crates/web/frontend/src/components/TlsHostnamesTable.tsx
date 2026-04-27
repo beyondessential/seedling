@@ -23,7 +23,6 @@ import { useOiAction } from "../hooks/useOiAction";
 import { OiErrorAlert } from "./OiErrorAlert";
 import type {
   TlsHostnameLastIssuance,
-  TlsHostnamePolicy,
   TlsHostnameStatus,
   TlsHostnameView,
   TlsHostnamesResponse,
@@ -79,10 +78,14 @@ function relative(unix: number, now: number): string {
   return fmt(Math.round(abs / 86400), "d");
 }
 
-function policySummary(policy: TlsHostnamePolicy): string {
+function policySummary(view: TlsHostnameView): string {
+  const policy = view.policy;
   switch (policy.strategy) {
-    case "default":
-      return "default (Caddy ACME-HTTP-01)";
+    case "default": {
+      const caddy = view.active_cert?.caddy_issuer;
+      if (caddy) return `default — ${caddyIssuerLabel(caddy)}`;
+      return "default — Caddy automatic TLS";
+    }
     case "acme_dns":
       return policy.is_wildcard_match
         ? `ACME-DNS via ${policy.dns_provider} (${policy.pattern})`
@@ -94,17 +97,28 @@ function policySummary(policy: TlsHostnamePolicy): string {
   }
 }
 
+function caddyIssuerLabel(issuer: string): string {
+  if (issuer === "local") return "Caddy internal CA";
+  if (issuer.startsWith("acme-")) return `Caddy ACME (${issuer})`;
+  return `Caddy (${issuer})`;
+}
+
 function lastIssuanceLabel(
   last: TlsHostnameLastIssuance | null,
   now: number,
 ): { primary: string; secondary: string | null } {
   if (!last) return { primary: "—", secondary: null };
-  const when = `${formatTime(last.at)} (${relative(last.at, now)})`;
+  const when = last.at
+    ? `${formatTime(last.at)} (${relative(last.at, now)})`
+    : null;
   if (last.kind === "manual") {
     return { primary: "manual upload", secondary: when };
   }
   if (last.kind === "csr") {
     return { primary: "CSR-derived", secondary: when };
+  }
+  if (last.kind === "caddy") {
+    return { primary: caddyIssuerLabel(last.provider), secondary: when };
   }
   const provider = last.provider ?? "unknown provider";
   return { primary: `ACME-DNS via ${provider}`, secondary: when };
@@ -250,7 +264,7 @@ export function TlsHostnamesTable({
                         variant="caption"
                         sx={{ color: "text.secondary", display: "block" }}
                       >
-                        {policySummary(row.policy)}
+                        {policySummary(row)}
                       </Typography>
                     </TableCell>
                     <TableCell>

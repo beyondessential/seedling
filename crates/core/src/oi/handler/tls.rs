@@ -616,9 +616,13 @@ fn build_last_issuance(
         });
     }
     if let Some(cc) = caddy_cert {
+        // Use the cert's own not_before as the issuance timestamp: it's
+        // what the CA stamped on the cert, so it survives certmagic
+        // rewriting the file for unrelated reasons (restart, metadata
+        // refresh, …).
         return json!({
             "kind": "caddy",
-            "at": cc.issued_at,
+            "at": cc.not_before,
             "cert_id": null,
             "provider": cc.issuer_kind,
         });

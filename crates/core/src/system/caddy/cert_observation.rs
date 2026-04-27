@@ -51,10 +51,6 @@ pub struct CaddyCertView {
     pub not_before: Option<i64>,
     pub not_after: Option<i64>,
     pub self_signed: bool,
-    /// File mtime of the `.crt` blob — best proxy for "when did Caddy
-    /// last issue or renew this", since certmagic rewrites the file on
-    /// every successful order.
-    pub issued_at: Option<i64>,
 }
 
 /// Read and parse the Caddy-managed cert for `hostname` from disk.
@@ -63,18 +59,12 @@ pub fn read_cert(caddy_data_path: &Path, hostname: &str) -> Option<CaddyCertView
     let (issuer_kind, cert_path) = cert_path_for(caddy_data_path, hostname)?;
     let pem = std::fs::read_to_string(&cert_path).ok()?;
     let parsed = crate::runtime::tls::parse::parse_chain(&pem).ok()?;
-    let issued_at = std::fs::metadata(&cert_path)
-        .ok()
-        .and_then(|m| m.modified().ok())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64);
     Some(CaddyCertView {
         issuer_kind,
         issuer: parsed.metadata.issuer,
         not_before: parsed.metadata.not_before,
         not_after: parsed.metadata.not_after,
         self_signed: parsed.metadata.self_signed,
-        issued_at,
     })
 }
 

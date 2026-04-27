@@ -1021,9 +1021,9 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 > - `hostname`
 > - `apps`: array of app names declaring this hostname (multiple when several apps share an ingress)
 > - `policy`: `{ strategy: "default" | "acme_dns" | "manual", dns_provider?, cert_id?, pattern?, is_wildcard_match? }` — `default` means no policy is bound and the proxy handles issuance directly; `pattern` is the matched policy pattern (which may be a wildcard), `is_wildcard_match` is true when the resolved policy was a wildcard rather than an exact match
-> - `status`: `"active" | "expired" | "error" | "pending" | "blocked" | "no_cert" | "default"` — derived from policy, active certificate, last attempt, and any retry block or queued retry
-> - `active_cert`: `{ id, origin, issuer, not_before, not_after, self_signed, ari_window_start, ari_window_end }` or null
-> - `last_issuance`: `{ kind, at, cert_id?, provider? }` describing when and how the active certificate was last obtained, or null when no issuance has run; `kind` is `"manual"` for uploads or `"acme_dns"` for runtime-driven issuance
+> - `status`: `"active" | "expired" | "error" | "pending" | "blocked" | "no_cert" | "default"` — derived from policy, active certificate, last attempt, and any retry block or queued retry. For `default`-strategy hostnames, `status` reflects the proxy's on-disk certificate when one is available (so a Caddy-served cert near expiry surfaces as `expired` rather than indistinguishably as `default`).
+> - `active_cert`: `{ id, origin, caddy_issuer?, issuer, not_before, not_after, self_signed, ari_window_start, ari_window_end }` or null. `id` is null for proxy-managed certs; `origin` is `"caddy"` for those, with `caddy_issuer` naming the proxy's issuer subdir (`local` for its internal CA, otherwise the host of the ACME directory).
+> - `last_issuance`: `{ kind, at, cert_id?, provider? }` describing when and how the active certificate was last obtained, or null when no issuance has run; `kind` is `"manual"` for uploads, `"acme_dns"` for runtime-driven issuance, or `"caddy"` for proxy-managed certs (with `provider` set to the issuer subdir).
 > - `last_error`: error message from the most recent failed attempt for this hostname, when the latest attempt was a failure, otherwise null
 > - `retry_block`: `{ set_at, reason }` when an operator pause is set, otherwise null
 > - `force_retry_at`: timestamp of a queued operator-driven retry awaiting the coordinator, otherwise null

@@ -939,6 +939,7 @@ async fn main() {
         dns_servers,
         cipher,
         tls_coordinator: Arc::clone(&tls_coordinator),
+        caddy_data_path: tokio::sync::OnceCell::new(),
     });
 
     // ---------------------------------------------------------------------------
