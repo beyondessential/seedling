@@ -114,11 +114,29 @@ impl Coordinator {
             let result = me.run(&host, AttemptTrigger::OnDemand).await;
             me.in_flight.lock().remove(&host);
             if let Err(e) = result {
-                tracing::warn!(
-                    hostname = %host,
-                    error = %e,
-                    "background issuance attempt did not complete"
+                // The reconciler hands every TLS-terminating ingress
+                // hostname to ensure() each tick, including the ones
+                // the runtime is intentionally not driving. NoPolicy
+                // (default-strategy hostnames — caddy-internal names,
+                // hostnames not covered by an acme_dns wildcard),
+                // Paused (operator pause), and Debounced (recent
+                // failure) are by-design no-ops; logging them at warn
+                // amounts to per-tick noise. Demote to debug.
+                let expected_no_op = matches!(
+                    e,
+                    CoordinatorError::NoPolicy { .. }
+                        | CoordinatorError::Paused { .. }
+                        | CoordinatorError::Debounced { .. }
                 );
+                if expected_no_op {
+                    tracing::debug!(hostname = %host, "issuance no-op: {e}");
+                } else {
+                    tracing::warn!(
+                        hostname = %host,
+                        error = %e,
+                        "background issuance attempt did not complete"
+                    );
+                }
             }
         });
     }
