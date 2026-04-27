@@ -13,6 +13,7 @@
 //! contact email, so that the renewal task can drive issuance without
 //! re-bootstrapping the account on every restart.
 
+pub mod dns;
 pub mod store;
 
 use secrecy::SecretString;

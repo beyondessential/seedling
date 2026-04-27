@@ -4375,6 +4375,7 @@ version = "0.1.0"
 dependencies = [
  "arc-swap",
  "aws-config",
+ "aws-credential-types",
  "aws-sdk-route53",
  "clap",
  "cronexpr",

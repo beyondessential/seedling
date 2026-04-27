@@ -50,5 +50,6 @@ pem = "3.0.6"
 x509-parser = "0.18.1"
 aws-sdk-route53 = "1.111.0"
 aws-config = "1.8.16"
+aws-credential-types = "1.2.14"
 
 [dev-dependencies]
