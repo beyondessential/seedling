@@ -7,12 +7,67 @@
 use aws_config::{BehaviorVersion, Region};
 use aws_credential_types::Credentials;
 use aws_sdk_route53 as route53;
+use route53::error::{ProvideErrorMetadata, SdkError};
+use route53::operation::RequestId;
 use route53::types::{
     Change, ChangeAction, ChangeBatch, ResourceRecord, ResourceRecordSet, RrType,
 };
 use serde::Deserialize;
 
 use super::{ApiSnafu, DnsError, DnsFuture, DnsProvider, NoZoneSnafu};
+
+/// Format an AWS SDK error with the detail Route 53 actually surfaces:
+/// the SDK-level kind (timeout, dispatch, construction, response, or
+/// service), and for service errors the AWS error code (e.g.
+/// `AccessDenied`, `Throttling`, `InvalidChangeBatch`), the message,
+/// the HTTP status, and the request id.
+///
+/// The default `Display` for `SdkError` produces "service error" for
+/// the most common case; that's almost never enough to triage the
+/// failure (IAM denial vs throttle vs unknown zone all collapse to the
+/// same string), hence this helper.
+fn format_sdk_error<E>(operation: &str, err: SdkError<E>) -> String
+where
+    E: ProvideErrorMetadata + std::fmt::Debug,
+{
+    let request_id = err.request_id().map(str::to_owned);
+    match err {
+        SdkError::ConstructionFailure(_) => {
+            format!("{operation}: request construction failure (likely a client bug, not the API)")
+        }
+        SdkError::TimeoutError(_) => format!("{operation}: request timed out before a response"),
+        SdkError::DispatchFailure(d) => {
+            // Network / DNS / TLS failure — the request never made it
+            // to the service.
+            let kind = if d.is_io() {
+                "io error"
+            } else if d.is_timeout() {
+                "dispatch timeout"
+            } else if d.is_user() {
+                "user error"
+            } else {
+                "dispatch failure"
+            };
+            format!("{operation}: {kind} reaching AWS endpoint: {d:?}")
+        }
+        SdkError::ResponseError(r) => format!(
+            "{operation}: AWS returned an unparseable response (status={}): {:?}",
+            r.raw().status().as_u16(),
+            r
+        ),
+        SdkError::ServiceError(svc) => {
+            let inner = svc.err();
+            let status = svc.raw().status().as_u16();
+            let code = inner.code().unwrap_or("(no code)");
+            let message = inner.message().unwrap_or("(no message)");
+            let req_id = request_id.as_deref().unwrap_or("(no request id)");
+            format!("{operation}: {code}: {message} (http={status}, request_id={req_id})")
+        }
+        // SdkError is non-exhaustive — future variants get a generic
+        // fallback that still includes Debug detail.
+        other => format!("{operation}: {other:?}"),
+    }
+}
 
 /// JSON shape stored in `tls_dns_providers.config_ciphertext` for
 /// `kind = 'route53'`.
@@ -72,7 +127,7 @@ impl Route53Provider {
         while let Some(page) = paginator.next().await {
             let page = page.map_err(|e| {
                 ApiSnafu {
-                    message: format!("list_hosted_zones: {e}"),
+                    message: format_sdk_error("list_hosted_zones", e),
                 }
                 .build()
             })?;
@@ -159,7 +214,7 @@ impl Route53Provider {
             .await
             .map_err(|e| {
                 ApiSnafu {
-                    message: format!("change_resource_record_sets: {e}"),
+                    message: format_sdk_error("change_resource_record_sets", e),
                 }
                 .build()
             })?;
