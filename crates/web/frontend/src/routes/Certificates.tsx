@@ -431,46 +431,56 @@ function SettingsSection({
         Settings
       </Typography>
       {error && <OiErrorAlert error={error} />}
-      {loading && !settings && <CircularProgress size={20} />}
-      <Paper variant="outlined" sx={{ p: 2 }}>
-        <Stack
-          direction="row"
-          spacing={2}
-          sx={{ alignItems: "flex-start", flexWrap: "wrap" }}
-        >
-          <Box sx={{ flexGrow: 1, minWidth: 240 }}>
-            <Typography variant="caption" sx={{ color: "text.secondary" }}>
-              ACME contact email
-            </Typography>
-            <Typography sx={{ fontFamily: "monospace" }}>
-              {settings?.contact_email
-                ? settings.contact_email
-                : <em style={{ color: "var(--mui-palette-text-secondary)" }}>not set</em>}
-            </Typography>
-            <Typography variant="caption" sx={{ color: "text.secondary", mb: 1, display: "block" }}>
-              Used by every ACME account registration. Required before the
-              runtime can issue certificates against a public CA.
-            </Typography>
-            <Typography variant="caption" sx={{ color: "text.secondary" }}>
-              Cert profile
-            </Typography>
-            <Typography sx={{ fontFamily: "monospace" }}>
-              {profileSummary}
-            </Typography>
-          </Box>
-          <Tooltip title={writeReason ?? ""}>
-            <span>
-              <Button
-                size="small"
-                onClick={startEdit}
-                disabled={!writeAllowed || loading}
-              >
-                Edit
-              </Button>
-            </span>
-          </Tooltip>
-        </Stack>
-      </Paper>
+      {!settings ? (
+        // Don't render the Paper with defaulted-out values while
+        // loading — an operator who lands here mid-fetch could mistake
+        // an empty contact email and "default" cert profile for the
+        // actually-stored state and start reconfiguring on top of it.
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, color: "text.secondary" }}>
+          <CircularProgress size={16} />
+          <Typography variant="body2">Loading TLS settings…</Typography>
+        </Box>
+      ) : (
+        <Paper variant="outlined" sx={{ p: 2 }}>
+          <Stack
+            direction="row"
+            spacing={2}
+            sx={{ alignItems: "flex-start", flexWrap: "wrap" }}
+          >
+            <Box sx={{ flexGrow: 1, minWidth: 240 }}>
+              <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                ACME contact email
+              </Typography>
+              <Typography sx={{ fontFamily: "monospace" }}>
+                {settings.contact_email
+                  ? settings.contact_email
+                  : <em style={{ color: "var(--mui-palette-text-secondary)" }}>not set</em>}
+              </Typography>
+              <Typography variant="caption" sx={{ color: "text.secondary", mb: 1, display: "block" }}>
+                Used by every ACME account registration. Required before the
+                runtime can issue certificates against a public CA.
+              </Typography>
+              <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                Cert profile
+              </Typography>
+              <Typography sx={{ fontFamily: "monospace" }}>
+                {profileSummary}
+              </Typography>
+            </Box>
+            <Tooltip title={writeReason ?? ""}>
+              <span>
+                <Button
+                  size="small"
+                  onClick={startEdit}
+                  disabled={!writeAllowed || loading}
+                >
+                  Edit
+                </Button>
+              </span>
+            </Tooltip>
+          </Stack>
+        </Paper>
+      )}
       <Dialog open={editing} onClose={closeEdit} fullWidth maxWidth="sm">
         <DialogTitle>TLS settings</DialogTitle>
         <DialogContent>

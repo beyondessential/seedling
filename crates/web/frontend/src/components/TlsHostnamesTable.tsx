@@ -132,9 +132,11 @@ function nextIssuanceLabel(view: TlsHostnameView, now: number): React.ReactNode 
     return (
       <>
         {when}{" "}
+        (
         <abbr title="ACME Renewal Information (RFC 9773): the issuing CA told us when to renew this cert.">
-          (ARI)
+          ARI
         </abbr>
+        )
       </>
     );
   }
