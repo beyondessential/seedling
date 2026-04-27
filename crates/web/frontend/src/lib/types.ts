@@ -592,3 +592,8 @@ export interface TlsCertificate {
 export interface TlsCertificatesResponse {
   certificates: TlsCertificate[];
 }
+
+export interface TlsSettings {
+  contact_email: string;
+  updated_at: number;
+}

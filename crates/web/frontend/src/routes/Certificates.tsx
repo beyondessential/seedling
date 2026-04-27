@@ -39,6 +39,7 @@ import type {
   TlsDnsProvidersResponse,
   TlsPoliciesResponse,
   TlsPolicy,
+  TlsSettings,
 } from "../lib/types";
 
 // 14-day expiring window matches the runtime's tls.fault.expiring threshold.
@@ -89,6 +90,12 @@ export default function Certificates() {
     error: certsError,
     refetch: refetchCerts,
   } = useOiQuery<TlsCertificatesResponse>("/tls/certificates/list", {});
+  const {
+    data: settings,
+    loading: settingsLoading,
+    error: settingsError,
+    refetch: refetchSettings,
+  } = useOiQuery<TlsSettings>("/tls/settings/get", {});
 
   const { execute, error: actionError, clearError } = useOiAction();
   const writeGuard = useGuard("write");
@@ -103,9 +110,11 @@ export default function Certificates() {
     refetchProviders();
     refetchPolicies();
     refetchCerts();
+    refetchSettings();
   };
 
-  const anyLoading = providersLoading || policiesLoading || certsLoading;
+  const anyLoading =
+    providersLoading || policiesLoading || certsLoading || settingsLoading;
 
   const certById = useMemo(() => {
     const map = new Map<number, TlsCertificate>();
@@ -145,6 +154,16 @@ export default function Certificates() {
       )}
 
       <Stack spacing={4}>
+        <SettingsSection
+          settings={settings ?? null}
+          loading={settingsLoading}
+          error={settingsError}
+          onSaved={refetchSettings}
+          execute={execute}
+          writeAllowed={writeGuard.allowed}
+          writeReason={writeGuard.reason}
+        />
+
         <PoliciesSection
           policies={policies?.policies ?? []}
           loading={policiesLoading}
@@ -255,6 +274,116 @@ export default function Certificates() {
           }
         }}
       />
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Settings section
+// ---------------------------------------------------------------------------
+
+interface SettingsSectionProps {
+  settings: TlsSettings | null;
+  loading: boolean;
+  error: OiQueryError | null;
+  onSaved: () => void;
+  execute: (path: string, params: unknown) => Promise<unknown>;
+  writeAllowed: boolean;
+  writeReason: string | null;
+}
+
+function SettingsSection({
+  settings,
+  loading,
+  error,
+  onSaved,
+  execute,
+  writeAllowed,
+  writeReason,
+}: SettingsSectionProps) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const startEdit = () => {
+    setDraft(settings?.contact_email ?? "");
+    setEditing(true);
+  };
+
+  const submit = async () => {
+    setSaving(true);
+    try {
+      await execute("/tls/settings/set", { contact_email: draft.trim() });
+      onSaved();
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Box>
+      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>
+        Settings
+      </Typography>
+      {error && <OiErrorAlert error={error} />}
+      {loading && !settings && <CircularProgress size={20} />}
+      <Paper variant="outlined" sx={{ p: 2 }}>
+        <Stack
+          direction="row"
+          spacing={2}
+          sx={{ alignItems: "center", flexWrap: "wrap" }}
+        >
+          <Box sx={{ flexGrow: 1, minWidth: 240 }}>
+            <Typography variant="caption" sx={{ color: "text.secondary" }}>
+              ACME contact email
+            </Typography>
+            <Typography sx={{ fontFamily: "monospace" }}>
+              {settings?.contact_email
+                ? settings.contact_email
+                : <em style={{ color: "var(--mui-palette-text-secondary)" }}>not set</em>}
+            </Typography>
+            <Typography variant="caption" sx={{ color: "text.secondary" }}>
+              Used by every ACME account registration. Required before the
+              runtime can issue certificates against a public CA.
+            </Typography>
+          </Box>
+          <Tooltip title={writeReason ?? ""}>
+            <span>
+              <Button
+                size="small"
+                onClick={startEdit}
+                disabled={!writeAllowed || loading}
+              >
+                Edit
+              </Button>
+            </span>
+          </Tooltip>
+        </Stack>
+      </Paper>
+      <Dialog open={editing} onClose={() => setEditing(false)} fullWidth maxWidth="sm">
+        <DialogTitle>Update contact email</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            label="Contact email"
+            placeholder="ops@example.com"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            fullWidth
+            sx={{ mt: 1 }}
+            helperText="Leave blank to clear. New value applies on the next renewal pass."
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEditing(false)} disabled={saving}>
+            Cancel
+          </Button>
+          <Button onClick={submit} variant="contained" disabled={saving}>
+            Save
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }
@@ -748,7 +877,6 @@ function SetAcmeDnsPolicyDialog({
 }: SetAcmeDnsPolicyDialogProps) {
   const [hostname, setHostname] = useState("");
   const [provider, setProvider] = useState(providers[0]?.name ?? "");
-  const [contact, setContact] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   // Keep provider selection in sync with the available list when it loads.
@@ -758,7 +886,6 @@ function SetAcmeDnsPolicyDialog({
 
   const reset = () => {
     setHostname("");
-    setContact("");
   };
 
   const close = () => {
@@ -767,24 +894,16 @@ function SetAcmeDnsPolicyDialog({
   };
 
   const trimmedHost = hostname.trim();
-  const trimmedContact = contact.trim();
+  const isExact = trimmedHost.length > 0 && !trimmedHost.includes("*");
   const valid = trimmedHost.length > 0 && provider.length > 0;
 
   const submit = async () => {
     setSubmitting(true);
     try {
-      const params: {
-        hostname: string;
-        dns_provider: string;
-        contact_email?: string;
-      } = {
+      await execute("/tls/policies/set-acme-dns", {
         hostname: trimmedHost,
         dns_provider: provider,
-      };
-      if (trimmedContact.length > 0) {
-        params.contact_email = trimmedContact;
-      }
-      await execute("/tls/policies/set-acme-dns", params);
+      });
       reset();
       onSubmitted();
     } finally {
@@ -798,12 +917,19 @@ function SetAcmeDnsPolicyDialog({
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
           <TextField
-            label="Hostname"
-            placeholder="e.g. example.com"
+            label="Hostname or wildcard"
+            placeholder="e.g. example.com, *.example.com, *"
             value={hostname}
             onChange={(e) => setHostname(e.target.value)}
             fullWidth
             slotProps={{ htmlInput: { style: { fontFamily: "monospace" } } }}
+            helperText={
+              <span>
+                Exact (<code>example.com</code>), single-asterisk wildcard
+                (<code>*.example.com</code>), or catch-all (<code>*</code>).
+                Most-specific match wins.
+              </span>
+            }
           />
           <TextField
             select
@@ -818,22 +944,13 @@ function SetAcmeDnsPolicyDialog({
               </MenuItem>
             ))}
           </TextField>
-          <TextField
-            label="Contact email (optional)"
-            placeholder="ops@example.com"
-            value={contact}
-            onChange={(e) => setContact(e.target.value)}
-            fullWidth
-            helperText={
-              <span>
-                Supplied: the daemon kicks off a one-shot ACME-DNS issuance in
-                the background as soon as the policy is saved.
-                <br />
-                Omitted: the policy is recorded; first issuance must be
-                triggered separately.
-              </span>
-            }
-          />
+          {isExact && (
+            <Typography variant="caption" sx={{ color: "text.secondary" }}>
+              When the global contact email is configured, the daemon will
+              auto-fire a one-shot ACME-DNS issuance for this exact hostname
+              if no active cert exists yet.
+            </Typography>
+          )}
         </Stack>
       </DialogContent>
       <DialogActions>
@@ -844,9 +961,9 @@ function SetAcmeDnsPolicyDialog({
           onClick={submit}
           variant="contained"
           disabled={!valid || submitting}
-          startIcon={trimmedContact ? <BoltIcon /> : undefined}
+          startIcon={isExact ? <BoltIcon /> : undefined}
         >
-          {trimmedContact ? "Save & issue" : "Save"}
+          Save
         </Button>
       </DialogActions>
     </Dialog>

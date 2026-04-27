@@ -959,6 +959,7 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 > `config` is a provider-specific object whose shape depends on `kind`. For `kind = "route53"` the required fields are `access_key_id`, `secret_access_key`, and an optional `region` (defaults to `us-east-1`).
 > The credentials are stored encrypted at rest and never returned through any operator endpoint.
 > Returns `requirements_invalid` if `name` is empty or `kind` is unknown.
+> When this is the first DNS provider on the node and no `*` policy already exists, the runtime auto-creates a catch-all `*` policy bound to it per [tls.policy.auto-default](runtime.md#r--tls.policy.auto-default); the response field `auto_policy_created` indicates whether that happened.
 
 > i[tls.dns-provider.delete]
 > `/tls/dns-providers/delete { name }` removes a DNS provider entry.
@@ -973,11 +974,11 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 > Hostnames not in this list use the default ACME-HTTP-01 strategy.
 
 > i[tls.policy.set-acme-dns]
-> `/tls/policies/set-acme-dns { hostname, dns_provider, contact_email?, directory_url? }` binds `hostname` to the named DNS provider for ACME-DNS-01 issuance.
+> `/tls/policies/set-acme-dns { hostname, dns_provider, directory_url? }` binds `hostname` to the named DNS provider for ACME-DNS-01 issuance.
+> `hostname` may be an exact hostname, the catch-all `*`, or a single-asterisk left-anchored wildcard such as `*.example.com`, per [tls.policy.wildcard](runtime.md#r--tls.policy.wildcard).
 > The new policy takes effect on the next reconciliation tick per [tls.policy.apply](runtime.md#r--tls.policy.apply).
-> When `contact_email` is supplied and the hostname has no active certificate yet, the runtime fires a single ACME-DNS issuance attempt asynchronously; the response includes `auto_issue_kicked: true` to signal that.
-> Subsequent renewals are handled by the autonomous renewal task using the ACME account credentials persisted during first issuance, so `contact_email` is required only at first-issue time.
-> When `contact_email` is omitted, no issuance is triggered; the operator must run [`tls.cert.issue-acme-dns`](#i--tls.cert.issue-acme-dns) to acquire the first cert.
+> When `hostname` is exact and the global [contact email](#i--tls.settings.set) is configured, the runtime fires a single ACME-DNS issuance attempt asynchronously if no active cert exists yet; the response includes `auto_issue_kicked: true` to signal that.
+> Wildcard policies do not auto-issue (there is no concrete hostname to acquire a cert for); the operator runs [`tls.cert.issue-acme-dns`](#i--tls.cert.issue-acme-dns) per hostname.
 > `directory_url` defaults to the Let's Encrypt production directory.
 
 > i[tls.policy.set-manual]
@@ -997,12 +998,22 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 > Private key material is never returned.
 
 > i[tls.cert.issue-acme-dns]
-> `/tls/certificates/issue-acme-dns { hostname, contact_email, directory_url? }` synchronously runs the ACME-DNS-01 issuance flow for `hostname`.
-> The hostname must already be bound to an `acme_dns` policy with a configured DNS provider; otherwise the call returns `requirements_invalid`.
+> `/tls/certificates/issue-acme-dns { hostname, contact_email?, directory_url? }` synchronously runs the ACME-DNS-01 issuance flow for `hostname`.
+> The hostname must resolve (per [tls.policy.wildcard](runtime.md#r--tls.policy.wildcard)) to an `acme_dns` policy with a configured DNS provider; otherwise the call returns `requirements_invalid`.
+> When `contact_email` is omitted, the runtime falls back to the global setting; if neither is populated, the call returns `requirements_invalid`.
 > `directory_url` defaults to the Let's Encrypt production directory.
 > The call blocks for the full duration of the ACME flow (typically tens of seconds) and returns `{ cert_id, not_after }` on success.
 > Failure returns `internal` with a message identifying the stage that failed.
 > The newly-issued certificate supersedes any prior active certificate for the same hostname.
+
+## Settings
+
+> i[tls.settings.get]
+> `/tls/settings/get` returns the global TLS settings as `{ contact_email, updated_at }`. Empty `contact_email` means none is configured.
+
+> i[tls.settings.set]
+> `/tls/settings/set { contact_email }` updates the global operator contact email used for ACME account registration.
+> The change takes effect on the next renewal pass without daemon restart per [tls.settings.contact-email](runtime.md#r--tls.settings.contact-email).
 
 # Client Behaviour
 

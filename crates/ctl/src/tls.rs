@@ -13,7 +13,7 @@ pub(super) enum TlsCommand {
         #[command(subcommand)]
         command: DnsProvidersCommand,
     },
-    /// Per-hostname strategy policies
+    /// Per-hostname strategy policies (supports wildcards: `*`, `*.example.com`)
     Policies {
         #[command(subcommand)]
         command: PoliciesCommand,
@@ -23,6 +23,19 @@ pub(super) enum TlsCommand {
         #[command(subcommand)]
         command: CertsCommand,
     },
+    /// Global TLS settings (operator contact email, …)
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub(super) enum ConfigCommand {
+    /// Show the current global TLS settings
+    Get,
+    /// Set the operator contact email used for ACME account registration
+    SetContact { email: String },
 }
 
 #[derive(Subcommand)]
@@ -52,21 +65,19 @@ pub(super) enum DnsProvidersCommand {
 pub(super) enum PoliciesCommand {
     /// List per-hostname policies (hostnames absent from the list use the default ACME-HTTP-01)
     List,
-    /// Bind a hostname to ACME-DNS issuance via a configured provider
+    /// Bind a hostname (or wildcard pattern) to ACME-DNS issuance via a
+    /// configured provider.
     ///
-    /// Supplying `--contact` triggers a one-shot background issuance for the
-    /// hostname if it has no current active cert, so the operator does not
-    /// have to run a separate `tls certs issue-acme-dns` afterwards. The
-    /// daemon prints the cert id (or a failure) to its log; on success the
-    /// hostname will appear under `tls certs list` within a few seconds.
+    /// `<hostname>` may be exact (`foo.example.com`), a left-anchored
+    /// wildcard (`*.example.com`), or the catch-all `*`. When the global
+    /// contact email is configured (`tls config set-contact`) and the
+    /// hostname is exact, the daemon kicks off auto-issuance in the
+    /// background; the cert lands in `tls certs list` within seconds.
     SetAcmeDns {
         hostname: String,
         /// Name of a configured DNS provider
         #[arg(long)]
         provider: String,
-        /// Operator contact email — kicks off auto-issuance when supplied
-        #[arg(long)]
-        contact: Option<String>,
         /// ACME directory URL (defaults to Let's Encrypt production)
         #[arg(long)]
         directory: Option<String>,
@@ -85,12 +96,12 @@ pub(super) enum PoliciesCommand {
 pub(super) enum CertsCommand {
     /// List all stored certificates
     List,
-    /// Run ACME-DNS issuance now for a hostname already bound to an acme_dns policy
+    /// Run ACME-DNS issuance now for a hostname covered by an acme_dns policy
     IssueAcmeDns {
         hostname: String,
-        /// Operator contact email (used for ACME account registration)
+        /// Operator contact email override (defaults to the global setting)
         #[arg(long)]
-        contact: String,
+        contact: Option<String>,
         /// ACME directory URL (defaults to Let's Encrypt production)
         #[arg(long)]
         directory: Option<String>,
@@ -102,6 +113,22 @@ pub(super) async fn dispatch(client: &OiClient, cmd: TlsCommand) {
         TlsCommand::DnsProviders { command } => dispatch_dns_providers(client, command).await,
         TlsCommand::Policies { command } => dispatch_policies(client, command).await,
         TlsCommand::Certs { command } => dispatch_certs(client, command).await,
+        TlsCommand::Config { command } => dispatch_config(client, command).await,
+    }
+}
+
+async fn dispatch_config(client: &OiClient, cmd: ConfigCommand) {
+    match cmd {
+        ConfigCommand::Get => {
+            print_result(client.request("/tls/settings/get", json!({})).await);
+        }
+        ConfigCommand::SetContact { email } => {
+            print_result(
+                client
+                    .request("/tls/settings/set", json!({ "contact_email": email }))
+                    .await,
+            );
+        }
     }
 }
 
@@ -145,13 +172,9 @@ async fn dispatch_policies(client: &OiClient, cmd: PoliciesCommand) {
         PoliciesCommand::SetAcmeDns {
             hostname,
             provider,
-            contact,
             directory,
         } => {
             let mut params = json!({ "hostname": hostname, "dns_provider": provider });
-            if let Some(c) = contact {
-                params["contact_email"] = json!(c);
-            }
             if let Some(d) = directory {
                 params["directory_url"] = json!(d);
             }
@@ -187,7 +210,10 @@ async fn dispatch_certs(client: &OiClient, cmd: CertsCommand) {
             contact,
             directory,
         } => {
-            let mut params = json!({ "hostname": hostname, "contact_email": contact });
+            let mut params = json!({ "hostname": hostname });
+            if let Some(c) = contact {
+                params["contact_email"] = json!(c);
+            }
             if let Some(dir) = directory {
                 params["directory_url"] = json!(dir);
             }

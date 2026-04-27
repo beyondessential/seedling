@@ -37,22 +37,22 @@ pub const DEFAULT_TICK: Duration = Duration::from_secs(3600);
 /// equally well with 90-day and 6-day cert profiles.
 pub const RENEW_AT_FRACTION: f64 = 1.0 / 3.0;
 
-/// Configuration captured at startup so the renewal task can drive issuance
-/// without consulting global state.
+/// Configuration captured at startup. The contact email is sourced live
+/// from `tls_settings` per tick so operator updates take effect without
+/// restarting the daemon; this struct only carries the fallback directory
+/// URL.
 #[derive(Debug, Clone)]
 pub struct RenewalConfig {
-    /// ACME directory URL to use for renewals. Reads from existing certs'
-    /// `acme_account_id`; this is only used as a fallback / future-proofing.
+    /// ACME directory URL used when an existing cert's account row is
+    /// missing (e.g. data restored without its account state). Normally
+    /// each cert renews against the same directory it was issued from.
     pub directory_url: String,
-    /// Operator contact email for ACME account registration.
-    pub contact_email: String,
 }
 
 impl Default for RenewalConfig {
     fn default() -> Self {
         Self {
             directory_url: acme::default_directory_url(),
-            contact_email: String::new(),
         }
     }
 }
@@ -72,8 +72,21 @@ pub async fn tick(db: &DbHandle, cipher: &Cipher, config: &RenewalConfig) -> Ren
         }
     };
 
+    // r[impl tls.settings.contact-email]
+    // Read the global contact email at tick time so changes via
+    // /tls/settings/set take effect on the next pass without a daemon
+    // restart. Only used when a candidate cert was issued by an account
+    // we no longer have on disk.
+    let fallback_contact = match db.call(super::store::get_settings) {
+        Ok(s) => s.contact_email,
+        Err(e) => {
+            tracing::warn!(error = %e, "renewal: failed to read tls_settings");
+            String::new()
+        }
+    };
+
     for cand in candidates {
-        match run_one(db, cipher, config, &cand).await {
+        match run_one(db, cipher, config, &cand, &fallback_contact).await {
             Ok(()) => report.renewed += 1,
             Err(e) => {
                 tracing::warn!(
@@ -133,36 +146,38 @@ struct Candidate {
 fn collect_renewal_candidates(conn: &Db) -> rusqlite::Result<Vec<Candidate>> {
     let now = Timestamp::now().as_second();
 
-    // Pull active acme_dns certs joined with their policy row (for the bound
-    // DNS provider) and ACME account (for the directory + email). Only
-    // certs whose policy is still acme_dns are renewable here.
+    // Walk every active acme_dns cert; resolve the matching policy via the
+    // wildcard rules so a cert for `foo.example.com` is renewed when it's
+    // covered by `foo.example.com`, `*.example.com`, or `*` — whichever is
+    // most specific. A cert whose policy has been cleared falls out of
+    // candidacy: it stays served until expiry but isn't auto-renewed.
     let mut stmt = conn.conn.prepare(
-        "SELECT c.hostname, c.not_before, c.not_after,
-                a.directory_url, a.contact_email,
-                p.dns_provider
+        "SELECT c.hostname, c.not_before, c.not_after, c.acme_account_id
          FROM tls_certificates c
-         JOIN tls_policies p
-           ON p.hostname = c.hostname AND p.strategy = 'acme_dns'
-         LEFT JOIN tls_acme_accounts a ON a.id = c.acme_account_id
          WHERE c.state = 'active' AND c.origin = 'acme_dns'",
     )?;
 
-    let rows = stmt
+    type CertSnapshot = (String, Option<i64>, Option<i64>, Option<i64>);
+    let cert_rows: Vec<CertSnapshot> = stmt
         .query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, Option<i64>>(1)?,
                 row.get::<_, Option<i64>>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<i64>>(3)?,
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
     let mut out = Vec::new();
-    for (hostname, not_before, not_after, directory_url, contact_email, provider) in rows {
-        let Some(provider) = provider else { continue };
+    for (hostname, not_before, not_after, account_id) in cert_rows {
+        let Some(policy_row) = super::store::resolve_policy(conn, &hostname)? else {
+            continue;
+        };
+        let dns_provider_name = match policy_row.policy {
+            super::TlsPolicy::AcmeDns { dns_provider } => dns_provider,
+            super::TlsPolicy::Manual { .. } => continue,
+        };
         let Some(not_before) = not_before else {
             continue;
         };
@@ -172,14 +187,28 @@ fn collect_renewal_candidates(conn: &Db) -> rusqlite::Result<Vec<Candidate>> {
         }
         let total = (not_after - not_before) as f64;
         let remaining = (not_after - now) as f64;
-        if remaining <= 0.0 || (remaining / total) <= RENEW_AT_FRACTION {
-            out.push(Candidate {
-                hostname,
-                contact_email,
-                directory_url,
-                dns_provider_name: provider,
-            });
+        if remaining > 0.0 && (remaining / total) > RENEW_AT_FRACTION {
+            continue;
         }
+
+        // Pick up directory + contact from the issuing ACME account so
+        // renewal reuses the same registration. Falls back to None and
+        // the renewal config when the account row is missing (eg legacy
+        // certs).
+        let mut directory_url = None;
+        let mut contact_email = None;
+        if let Some(aid) = account_id
+            && let Some(account) = super::store::get_acme_account_by_id(conn, aid)?
+        {
+            directory_url = Some(account.directory_url);
+            contact_email = Some(account.contact_email);
+        }
+        out.push(Candidate {
+            hostname,
+            contact_email,
+            directory_url,
+            dns_provider_name,
+        });
     }
     Ok(out)
 }
@@ -189,6 +218,7 @@ async fn run_one(
     cipher: &Cipher,
     config: &RenewalConfig,
     cand: &Candidate,
+    fallback_contact_email: &str,
 ) -> Result<(), acme::AcmeError> {
     let directory_url = cand
         .directory_url
@@ -197,7 +227,7 @@ async fn run_one(
     let contact_email = cand
         .contact_email
         .clone()
-        .unwrap_or_else(|| config.contact_email.clone());
+        .unwrap_or_else(|| fallback_contact_email.to_owned());
 
     let issue_params = IssueParams {
         hostname: &cand.hostname,

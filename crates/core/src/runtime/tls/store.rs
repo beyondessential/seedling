@@ -10,7 +10,8 @@ use secrecy::{ExposeSecret, SecretString};
 
 use super::{
     AcmeAccount, DnsProviderEntry, DnsProviderKind, DnsProviderSummary, KeyType, TlsCertOrigin,
-    TlsCertState, TlsCertificate, TlsPolicy, TlsPolicyRow,
+    TlsCertState, TlsCertificate, TlsPolicy, TlsPolicyRow, TlsSettings, pattern_matches,
+    pattern_specificity,
 };
 use crate::runtime::{db::Db, secrets::Cipher};
 
@@ -107,19 +108,45 @@ pub fn get_dns_provider(
     Ok(row)
 }
 
+/// Outcome of [`upsert_dns_provider`]. Lets the caller surface to operators
+/// when a default `*` policy was auto-created so the first ACME-DNS setup
+/// is a single step rather than two.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UpsertProviderOutcome {
+    pub auto_policy_created: bool,
+}
+
 // r[impl tls.dns-provider.lifecycle]
+// r[impl tls.policy.auto-default]
 pub fn upsert_dns_provider(
     db: &Db,
     cipher: &Cipher,
     name: &str,
     kind: DnsProviderKind,
     config: &SecretString,
-) -> rusqlite::Result<()> {
+) -> rusqlite::Result<UpsertProviderOutcome> {
     let ct = cipher
         .encrypt(config)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
     let now = now_secs();
-    db.conn.execute(
+
+    // Wrap insert + auto-policy in a transaction so a partial state
+    // (provider inserted, policy missed) cannot persist.
+    let tx = db.conn.unchecked_transaction()?;
+
+    // Snapshot whether any providers existed before this upsert. If not,
+    // and no policy currently covers `*`, we'll add a catch-all policy
+    // pointing at this provider so all hostnames flow through ACME-DNS by
+    // default. Operators can clear or replace it any time.
+    let providers_before: i64 =
+        tx.query_row("SELECT COUNT(*) FROM tls_dns_providers", [], |r| r.get(0))?;
+    let star_policy_exists: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM tls_policies WHERE hostname = '*'",
+        [],
+        |r| r.get(0),
+    )?;
+
+    tx.execute(
         "INSERT INTO tls_dns_providers (name, kind, config_ciphertext, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?4)
          ON CONFLICT(name) DO UPDATE SET
@@ -128,7 +155,21 @@ pub fn upsert_dns_provider(
              updated_at = excluded.updated_at",
         params![name, kind.as_str(), ct, now],
     )?;
-    Ok(())
+
+    let mut auto_policy_created = false;
+    if providers_before == 0 && star_policy_exists == 0 {
+        // r[impl tls.policy.auto-default]
+        tx.execute(
+            "INSERT INTO tls_policies (hostname, strategy, dns_provider, cert_id, updated_at)
+             VALUES ('*', 'acme_dns', ?1, NULL, ?2)",
+            params![name, now],
+        )?;
+        auto_policy_created = true;
+    }
+    tx.commit()?;
+    Ok(UpsertProviderOutcome {
+        auto_policy_created,
+    })
 }
 
 // r[impl tls.dns-provider.lifecycle]
@@ -411,6 +452,53 @@ fn row_to_certificate(row: &rusqlite::Row<'_>) -> rusqlite::Result<TlsCertificat
     })
 }
 
+/// Find the most-specific [`TlsPolicy`] that matches `hostname`. Patterns
+/// are evaluated under the rules defined in [`super::pattern_matches`]:
+/// exact > `*.suffix` (longest suffix wins) > `*`. Returns `None` when no
+/// policy matches, signalling the runtime default ACME-HTTP-01.
+// r[impl tls.policy.wildcard]
+pub fn resolve_policy(db: &Db, hostname: &str) -> rusqlite::Result<Option<TlsPolicyRow>> {
+    let policies = list_policies(db)?;
+    let mut best: Option<(u32, TlsPolicyRow)> = None;
+    for row in policies {
+        if pattern_matches(&row.hostname, hostname) {
+            let score = pattern_specificity(&row.hostname);
+            if best.as_ref().is_none_or(|(s, _)| score > *s) {
+                best = Some((score, row));
+            }
+        }
+    }
+    Ok(best.map(|(_, row)| row))
+}
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+// r[impl tls.settings.contact-email]
+pub fn get_settings(db: &Db) -> rusqlite::Result<TlsSettings> {
+    db.conn.query_row(
+        "SELECT contact_email, updated_at FROM tls_settings WHERE singleton = 1",
+        [],
+        |row| {
+            Ok(TlsSettings {
+                contact_email: row.get(0)?,
+                updated_at: row.get(1)?,
+            })
+        },
+    )
+}
+
+// r[impl tls.settings.contact-email]
+pub fn set_contact_email(db: &Db, email: &str) -> rusqlite::Result<()> {
+    let now = now_secs();
+    db.conn.execute(
+        "UPDATE tls_settings SET contact_email = ?1, updated_at = ?2 WHERE singleton = 1",
+        params![email, now],
+    )?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // ACME accounts
 // ---------------------------------------------------------------------------
@@ -604,6 +692,9 @@ mod tests {
             &provider_config(),
         )
         .unwrap();
+        // Upsert auto-creates a `*` policy referencing this provider; clear
+        // it so the deletion isn't refused by the FK.
+        clear_policy(&db, "*").unwrap();
         assert!(delete_dns_provider(&db, "p").unwrap());
         assert!(!delete_dns_provider(&db, "p").unwrap());
     }
@@ -754,6 +845,9 @@ mod tests {
             &provider_config(),
         )
         .unwrap();
+        // Drop the auto-created `*` policy so this test only counts the
+        // explicit ones added below.
+        clear_policy(&db, "*").unwrap();
         set_policy_acme_dns(&db, "foo.example.com", "p").unwrap();
         set_policy_acme_dns(&db, "bar.example.com", "p").unwrap();
 
@@ -792,6 +886,7 @@ mod tests {
             &provider_config(),
         )
         .unwrap();
+        clear_policy(&db, "*").unwrap();
         let cert_id = insert_test_cert(&db, "foo.example.com");
 
         set_policy_acme_dns(&db, "foo.example.com", "p").unwrap();
@@ -835,5 +930,159 @@ mod tests {
 
         let decrypted = decrypt_acme_account_key(&cipher, &by_id).unwrap();
         assert!(decrypted.expose_secret().contains("BEGIN PRIVATE KEY"));
+    }
+
+    // r[verify tls.policy.auto-default]
+    #[test]
+    fn first_provider_upsert_auto_creates_star_policy() {
+        let (db, cipher) = fresh_db();
+        let outcome = upsert_dns_provider(
+            &db,
+            &cipher,
+            "primary",
+            DnsProviderKind::Route53,
+            &provider_config(),
+        )
+        .unwrap();
+        assert!(outcome.auto_policy_created);
+        let policies = list_policies(&db).unwrap();
+        assert_eq!(policies.len(), 1);
+        assert_eq!(policies[0].hostname, "*");
+        match &policies[0].policy {
+            TlsPolicy::AcmeDns { dns_provider } => assert_eq!(dns_provider, "primary"),
+            _ => panic!("expected acme_dns"),
+        }
+    }
+
+    #[test]
+    fn second_provider_upsert_does_not_overwrite_existing_star() {
+        let (db, cipher) = fresh_db();
+        upsert_dns_provider(
+            &db,
+            &cipher,
+            "primary",
+            DnsProviderKind::Route53,
+            &provider_config(),
+        )
+        .unwrap();
+        let outcome = upsert_dns_provider(
+            &db,
+            &cipher,
+            "secondary",
+            DnsProviderKind::Route53,
+            &provider_config(),
+        )
+        .unwrap();
+        assert!(!outcome.auto_policy_created);
+        // The catch-all still points at the first provider; operators can
+        // re-bind it explicitly via /tls/policies/set-acme-dns.
+        let policies = list_policies(&db).unwrap();
+        let star = policies.iter().find(|p| p.hostname == "*").unwrap();
+        match &star.policy {
+            TlsPolicy::AcmeDns { dns_provider } => assert_eq!(dns_provider, "primary"),
+            _ => panic!("expected acme_dns"),
+        }
+    }
+
+    #[test]
+    fn upsert_does_not_auto_create_star_when_policy_already_exists() {
+        let (db, _cipher) = fresh_db();
+        // Operator manually pinned a `*` policy before any provider was
+        // configured (e.g. to a manual cert) — but that's impossible
+        // because manual requires a cert_id; instead simulate having an
+        // exact-match policy and confirm we still don't add `*`.
+        // For this case we use a manual policy on an exact hostname so the
+        // "providers existed before" branch can be exercised separately.
+        // Catch-all by direct INSERT (bypassing the API) is approximated
+        // here by inserting another provider first.
+        let cipher = Cipher::for_tests();
+        upsert_dns_provider(
+            &db,
+            &cipher,
+            "first",
+            DnsProviderKind::Route53,
+            &provider_config(),
+        )
+        .unwrap();
+        // Now pretend the operator cleared the auto-created `*` and
+        // installed a different manual catch-all; verify a third provider
+        // upsert leaves it alone.
+        clear_policy(&db, "*").unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO tls_policies (hostname, strategy, dns_provider, cert_id, updated_at)
+                 VALUES ('*', 'acme_dns', 'first', NULL, ?1)",
+                params![now_secs()],
+            )
+            .unwrap();
+        let outcome = upsert_dns_provider(
+            &db,
+            &cipher,
+            "second",
+            DnsProviderKind::Route53,
+            &provider_config(),
+        )
+        .unwrap();
+        assert!(!outcome.auto_policy_created);
+    }
+
+    // r[verify tls.policy.wildcard]
+    #[test]
+    fn resolve_policy_prefers_exact_over_wildcard() {
+        let (db, cipher) = fresh_db();
+        upsert_dns_provider(
+            &db,
+            &cipher,
+            "p",
+            DnsProviderKind::Route53,
+            &provider_config(),
+        )
+        .unwrap();
+        // The auto-created `*` is in place; add an exact + a `*.example.com`.
+        set_policy_acme_dns(&db, "foo.example.com", "p").unwrap();
+        let cert_id = insert_test_cert(&db, "bar.example.com");
+        set_policy_manual(&db, "bar.example.com", cert_id).unwrap();
+        // We need a different provider for the *.example.com policy to
+        // distinguish it; reuse "p" for simplicity since we only check the
+        // pattern, not the provider here.
+        set_policy_acme_dns(&db, "*.example.com", "p").unwrap();
+
+        // Exact match wins.
+        let row = resolve_policy(&db, "foo.example.com").unwrap().unwrap();
+        assert_eq!(row.hostname, "foo.example.com");
+        let row = resolve_policy(&db, "bar.example.com").unwrap().unwrap();
+        assert_eq!(row.hostname, "bar.example.com");
+
+        // No exact: dotted wildcard wins.
+        let row = resolve_policy(&db, "baz.example.com").unwrap().unwrap();
+        assert_eq!(row.hostname, "*.example.com");
+
+        // Outside the dotted wildcard's suffix: catch-all wins.
+        let row = resolve_policy(&db, "outside.org").unwrap().unwrap();
+        assert_eq!(row.hostname, "*");
+    }
+
+    #[test]
+    fn resolve_policy_returns_none_when_nothing_matches() {
+        let (db, _cipher) = fresh_db();
+        // No providers, no policies — every hostname uses the runtime default.
+        assert!(
+            resolve_policy(&db, "anything.example.com")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    // r[verify tls.settings.contact-email]
+    #[test]
+    fn settings_default_is_empty_then_persists() {
+        let (db, _cipher) = fresh_db();
+        let s = get_settings(&db).unwrap();
+        assert_eq!(s.contact_email, "");
+
+        set_contact_email(&db, "ops@example.com").unwrap();
+        let s = get_settings(&db).unwrap();
+        assert_eq!(s.contact_email, "ops@example.com");
+        assert!(s.updated_at > 0);
     }
 }

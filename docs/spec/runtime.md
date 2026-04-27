@@ -1287,8 +1287,22 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > This is the default and applies to any hostname not bound to a different strategy.
 
 > r[tls.strategy.acme-dns]
-> Operators may bind a hostname to a [DNS provider](#r--tls.dns-provider.lifecycle); the runtime must drive ACME for that hostname using the DNS-01 challenge against the bound provider.
+> Operators may bind a hostname or wildcard pattern to a [DNS provider](#r--tls.dns-provider.lifecycle); the runtime must drive ACME for any matching hostname using the DNS-01 challenge against the bound provider.
 > The runtime must perform the ACME flow itself rather than configuring the proxy to do so, so that DNS-provider credentials are not exposed to the proxy or its persistent configuration.
+
+> r[tls.policy.wildcard]
+> Policies may name a hostname pattern instead of an exact hostname.
+> Two pattern shapes must be supported: the catch-all `*`, and a left-anchored single-asterisk wildcard `*.<suffix>` matching any hostname that ends in `.<suffix>` (and is not equal to `<suffix>` itself).
+> When several patterns match a hostname, the most-specific match wins: an exact pattern beats any wildcard, a longer `*.<suffix>` beats a shorter one, and `*` is least specific.
+
+> r[tls.policy.auto-default]
+> When the operator configures the first DNS provider on a node and no `*` policy already exists, the runtime must automatically create a catch-all `*` policy bound to that provider with the `acme_dns` strategy.
+> The auto-policy is operator-mutable: it may be cleared, re-bound, or replaced like any other policy, and it must not be re-created on subsequent provider additions.
+
+> r[tls.settings.contact-email]
+> The runtime must persist a single global operator contact email used whenever it registers an ACME account on the operator's behalf.
+> The setting must be readable and writable through the operator interface, take effect on the next renewal pass without restart, and default to empty.
+> Issuance and renewal that need to register a new ACME account must fail with a clear error when no contact email is configured.
 
 > r[tls.acme.account.persist]
 > The runtime must persist ACME account state — at minimum the account private key and the URL returned by the directory's newAccount endpoint — for each `(directory_url, contact_email)` pair, encrypted at rest using the [secret key](#r--secret.key).

@@ -208,3 +208,92 @@ pub struct AcmeAccount {
     pub created_at: i64,
     pub updated_at: i64,
 }
+
+/// Global TLS settings. Currently just the operator contact email used by
+/// every ACME account registration; a single value applied across all
+/// hostnames keeps the operator interface from prompting for the same
+/// information per binding.
+// r[impl tls.settings.contact-email]
+#[derive(Debug, Clone, Default)]
+pub struct TlsSettings {
+    pub contact_email: String,
+    pub updated_at: i64,
+}
+
+/// Returns whether `pattern` matches `hostname`. Patterns are:
+///
+/// - `*` — catch-all, matches any hostname.
+/// - `*.<suffix>` — matches any hostname ending in `.<suffix>`.
+///   `*.example.com` matches `foo.example.com`, `a.b.example.com`,
+///   but not `example.com` itself.
+/// - anything else — exact match (case-insensitive).
+///
+/// More-specific patterns are tried first by [`store::resolve_policy`].
+pub fn pattern_matches(pattern: &str, hostname: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    let p = pattern.to_ascii_lowercase();
+    let h = hostname.to_ascii_lowercase();
+    if let Some(suffix) = p.strip_prefix("*.") {
+        // The dotted suffix form: hostname must end with ".<suffix>" and
+        // not equal the suffix itself (the wildcard requires at least one
+        // extra leading label).
+        let needle = format!(".{suffix}");
+        return h.ends_with(&needle) && h.len() > needle.len();
+    }
+    p == h
+}
+
+/// Specificity score used to pick the best-matching policy when several
+/// patterns match a hostname. Higher is more specific. The exact match
+/// always beats wildcards; a wildcard with a longer suffix beats a
+/// shorter one; the catch-all `*` is least specific.
+pub fn pattern_specificity(pattern: &str) -> u32 {
+    if pattern == "*" {
+        return 0;
+    }
+    if let Some(suffix) = pattern.strip_prefix("*.") {
+        // Wildcards score by suffix length, with the bare `*` at zero,
+        // and exact matches beating any wildcard.
+        return 1 + suffix.len() as u32;
+    }
+    // Exact match: rank above any wildcard regardless of suffix length.
+    1_000_000 + pattern.len() as u32
+}
+
+#[cfg(test)]
+mod pattern_tests {
+    use super::*;
+
+    #[test]
+    fn catchall_matches_anything() {
+        assert!(pattern_matches("*", "foo.example.com"));
+        assert!(pattern_matches("*", "x"));
+    }
+
+    #[test]
+    fn dotted_wildcard_requires_extra_label() {
+        assert!(pattern_matches("*.example.com", "foo.example.com"));
+        assert!(pattern_matches("*.example.com", "a.b.example.com"));
+        assert!(!pattern_matches("*.example.com", "example.com"));
+        assert!(!pattern_matches("*.example.com", "other.com"));
+    }
+
+    #[test]
+    fn exact_match_is_case_insensitive() {
+        assert!(pattern_matches("Foo.Example.com", "foo.example.com"));
+        assert!(!pattern_matches("foo.example.com", "bar.example.com"));
+    }
+
+    #[test]
+    fn specificity_ordering() {
+        let exact = pattern_specificity("foo.example.com");
+        let wide = pattern_specificity("*.example.com");
+        let wider = pattern_specificity("*.com");
+        let star = pattern_specificity("*");
+        assert!(exact > wide);
+        assert!(wide > wider);
+        assert!(wider > star);
+    }
+}

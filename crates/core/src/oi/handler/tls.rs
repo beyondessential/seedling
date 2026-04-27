@@ -82,11 +82,14 @@ pub(crate) fn upsert_dns_provider(
     let config_secret = SecretString::new(config_json.into());
     let cipher = Arc::clone(&state.cipher);
     let name = params.name;
-    state
+    let outcome = state
         .db
         .call(move |db| store::upsert_dns_provider(db, &cipher, &name, kind, &config_secret))
         .map_err(db_error)?;
-    Ok(json!({ "ok": true }))
+    Ok(json!({
+        "ok": true,
+        "auto_policy_created": outcome.auto_policy_created,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -153,14 +156,11 @@ pub(crate) fn list_policies(state: &OiState) -> HandlerResult {
 
 #[derive(Deserialize)]
 pub(crate) struct SetAcmeDnsParams {
+    /// Hostname or wildcard pattern (`*`, `*.example.com`).
     pub hostname: String,
     pub dns_provider: String,
-    /// When supplied, the runtime auto-fires a single issuance attempt
-    /// in the background if the hostname has no current active cert.
-    /// Subsequent renewals reuse the ACME account credentials persisted
-    /// during this first issuance.
-    #[serde(default)]
-    pub contact_email: Option<String>,
+    /// Optional override for the ACME directory URL. Defaults to Let's
+    /// Encrypt production. Persisted only via the resulting account row.
     #[serde(default)]
     pub directory_url: Option<String>,
 }
@@ -170,7 +170,6 @@ pub(crate) fn set_policy_acme_dns(state: &OiState, params: SetAcmeDnsParams) -> 
     let SetAcmeDnsParams {
         hostname,
         dns_provider,
-        contact_email,
         directory_url,
     } = params;
 
@@ -181,48 +180,58 @@ pub(crate) fn set_policy_acme_dns(state: &OiState, params: SetAcmeDnsParams) -> 
         .call(move |db| store::set_policy_acme_dns(db, &hostname_for_db, &dns_provider_for_db))
         .map_err(db_error)?;
 
+    // Auto-issue is only meaningful for exact hostnames. Wildcard policies
+    // have no concrete name to acquire a cert for; first issuance happens
+    // lazily when an ingress for a matching hostname appears or via the
+    // explicit /tls/certificates/issue-acme-dns endpoint.
     let mut auto_issue_kicked = false;
-    if let Some(contact_email) = contact_email {
-        // Only fire if there is no current active cert; otherwise a policy
-        // re-set should not redundantly hammer the CA.
-        let hostname_for_check = hostname.clone();
-        let existing = state
-            .db
-            .call(move |db| store::find_active_for_hostname(db, &hostname_for_check))
-            .map_err(db_error)?;
-        if existing.is_none() {
-            let directory_url = directory_url.unwrap_or_else(acme::default_directory_url);
-            let db = state.db.clone();
-            let cipher = Arc::clone(&state.cipher);
-            let hostname_for_task = hostname.clone();
-            let dns_provider_for_task = dns_provider.clone();
-            tokio::spawn(async move {
-                let result = acme::issue(
-                    &db,
-                    &cipher,
-                    IssueParams {
-                        hostname: &hostname_for_task,
-                        contact_email: &contact_email,
-                        directory_url: &directory_url,
-                        dns_provider_name: &dns_provider_for_task,
-                    },
-                )
-                .await;
-                match result {
-                    Ok(issued) => tracing::info!(
-                        hostname = %hostname_for_task,
-                        cert_id = issued.cert_id,
-                        not_after = issued.not_after,
-                        "auto-issued cert on policy set"
-                    ),
-                    Err(e) => tracing::warn!(
-                        hostname = %hostname_for_task,
-                        error = %e,
-                        "auto-issue on policy set failed; operator can retry via /tls/certificates/issue-acme-dns"
-                    ),
-                }
-            });
-            auto_issue_kicked = true;
+    let is_exact = !hostname.contains('*');
+    if is_exact {
+        // Look up the global contact email; if none is configured, leave
+        // auto-issue to the operator (they'll set the email and retry, or
+        // run the explicit issue command).
+        let settings = state.db.call(store::get_settings).map_err(db_error)?;
+        if !settings.contact_email.is_empty() {
+            let hostname_for_check = hostname.clone();
+            let existing = state
+                .db
+                .call(move |db| store::find_active_for_hostname(db, &hostname_for_check))
+                .map_err(db_error)?;
+            if existing.is_none() {
+                let directory_url = directory_url.unwrap_or_else(acme::default_directory_url);
+                let db = state.db.clone();
+                let cipher = Arc::clone(&state.cipher);
+                let hostname_for_task = hostname.clone();
+                let dns_provider_for_task = dns_provider.clone();
+                let contact_for_task = settings.contact_email.clone();
+                tokio::spawn(async move {
+                    let result = acme::issue(
+                        &db,
+                        &cipher,
+                        IssueParams {
+                            hostname: &hostname_for_task,
+                            contact_email: &contact_for_task,
+                            directory_url: &directory_url,
+                            dns_provider_name: &dns_provider_for_task,
+                        },
+                    )
+                    .await;
+                    match result {
+                        Ok(issued) => tracing::info!(
+                            hostname = %hostname_for_task,
+                            cert_id = issued.cert_id,
+                            not_after = issued.not_after,
+                            "auto-issued cert on policy set"
+                        ),
+                        Err(e) => tracing::warn!(
+                            hostname = %hostname_for_task,
+                            error = %e,
+                            "auto-issue on policy set failed; operator can retry via /tls/certificates/issue-acme-dns"
+                        ),
+                    }
+                });
+                auto_issue_kicked = true;
+            }
         }
     }
 
@@ -300,7 +309,10 @@ pub(crate) fn list_certificates(state: &OiState) -> HandlerResult {
 #[derive(Deserialize)]
 pub(crate) struct IssueAcmeDnsParams {
     pub hostname: String,
-    pub contact_email: String,
+    /// Optional override of the global contact email setting. Errors when
+    /// neither this field nor the global setting is populated.
+    #[serde(default)]
+    pub contact_email: Option<String>,
     /// Optional override; defaults to Let's Encrypt production.
     #[serde(default)]
     pub directory_url: Option<String>,
@@ -313,12 +325,14 @@ pub(crate) struct IssueAcmeDnsParams {
 /// setting the policy to acquire the first cert.
 // i[tls.cert.issue-acme-dns]
 pub(crate) fn issue_acme_dns(state: &OiState, params: IssueAcmeDnsParams) -> HandlerResult {
-    // Check that the hostname has a current acme_dns policy and look up the
-    // bound provider name in a quick sync DB call.
+    // Resolve the hostname's policy via wildcard rules so an operator can
+    // issue against `foo.example.com` whenever a `*.example.com` or `*`
+    // policy applies, without needing to add an explicit exact-match
+    // policy first.
     let hostname_for_lookup = params.hostname.clone();
     let policy = state
         .db
-        .call(move |db| store::get_policy(db, &hostname_for_lookup))
+        .call(move |db| store::resolve_policy(db, &hostname_for_lookup))
         .map_err(db_error)?;
     let dns_provider_name = match policy.map(|p| p.policy) {
         Some(TlsPolicy::AcmeDns { dns_provider }) => dns_provider,
@@ -326,7 +340,7 @@ pub(crate) fn issue_acme_dns(state: &OiState, params: IssueAcmeDnsParams) -> Han
             return Err(OiError::new(
                 ErrorCode::RequirementsInvalid,
                 format!(
-                    "hostname {} is not bound to an acme_dns policy",
+                    "hostname {} resolves to a manual policy; bind it to acme_dns first",
                     params.hostname
                 ),
             ));
@@ -335,10 +349,26 @@ pub(crate) fn issue_acme_dns(state: &OiState, params: IssueAcmeDnsParams) -> Han
             return Err(OiError::new(
                 ErrorCode::RequirementsInvalid,
                 format!(
-                    "hostname {} has no policy; bind it via /tls/policies/set-acme-dns first",
+                    "hostname {} has no matching policy; bind it via /tls/policies/set-acme-dns first",
                     params.hostname
                 ),
             ));
+        }
+    };
+
+    // Contact email: use the explicit param if supplied, else fall back to
+    // the global tls_settings row.
+    let contact_email = match params.contact_email {
+        Some(c) if !c.is_empty() => c,
+        _ => {
+            let settings = state.db.call(store::get_settings).map_err(db_error)?;
+            if settings.contact_email.is_empty() {
+                return Err(OiError::new(
+                    ErrorCode::RequirementsInvalid,
+                    "no contact email: supply contact_email or set the global one via /tls/settings/set",
+                ));
+            }
+            settings.contact_email
         }
     };
 
@@ -358,7 +388,7 @@ pub(crate) fn issue_acme_dns(state: &OiState, params: IssueAcmeDnsParams) -> Han
                 &cipher,
                 IssueParams {
                     hostname: &params.hostname,
-                    contact_email: &params.contact_email,
+                    contact_email: &contact_email,
                     directory_url: &directory_url,
                     dns_provider_name: &dns_provider_name,
                 },
@@ -377,6 +407,33 @@ pub(crate) fn issue_acme_dns(state: &OiState, params: IssueAcmeDnsParams) -> Han
             format!("acme-dns issuance failed: {e}"),
         )),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+// i[tls.settings.get]
+pub(crate) fn get_settings(state: &OiState) -> HandlerResult {
+    let s = state.db.call(store::get_settings).map_err(db_error)?;
+    Ok(json!({
+        "contact_email": s.contact_email,
+        "updated_at": s.updated_at,
+    }))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct SetSettingsParams {
+    pub contact_email: String,
+}
+
+// i[tls.settings.set]
+pub(crate) fn set_settings(state: &OiState, params: SetSettingsParams) -> HandlerResult {
+    state
+        .db
+        .call(move |db| store::set_contact_email(db, &params.contact_email))
+        .map_err(db_error)?;
+    Ok(json!({ "ok": true }))
 }
 
 // ---------------------------------------------------------------------------
