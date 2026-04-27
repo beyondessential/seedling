@@ -653,7 +653,9 @@ fn warm_certs_barrier_uses_cert_oracle() {
     // Mark cert as valid for the ingress; the standard ingress lifecycle is
     // intentionally NOT set to Ready, so this proves .ready() consults
     // cert_valid_for rather than lifecycle_state.
-    oracle.set_cert_valid(ing("public"));
+    // Ingresses are now keyed by `<hostname>:<port>` so multiple
+    // ingresses on the same service have distinct identities.
+    oracle.set_cert_valid(ing("warm.example.com:443"));
 
     let log = InMemoryActionLog::new();
     let result = run_operation(

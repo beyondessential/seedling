@@ -129,16 +129,27 @@ impl CustomType for Service {
                     this.ensure_unfrozen()?;
                     let port = Port::new(port)?;
                     validate_hostname(hostname)?;
-                    // l[impl ingress.conflicts]
-                    // TODO: check for duplicate (hostname, port) in the app's ingress
-                    // registry and throw if a conflict is found.
                     let ingress = Ingress::new(this.clone(), hostname.into(), port);
                     // l[impl ingress.type]
+                    // l[impl ingress.conflicts]
                     if let Some(arc) = this.app_def.as_ref().and_then(Weak::upgrade) {
                         let id = ResourceId {
                             kind: ResourceKind::Ingress,
                             name: ingress.name.clone(),
                         };
+                        // Conflict check: a prior ingress with the
+                        // same (hostname, port) keyed by the same
+                        // resource name in this app must not be
+                        // overwritten. Throwing lets the script
+                        // catch + handle it; silently overriding
+                        // would erase a previous declaration.
+                        if arc.load().resources.contains_key(&id) {
+                            return Err(format!(
+                                "ingress conflict: ({hostname}, {}) is already declared in this app",
+                                port.get()
+                            )
+                            .into());
+                        }
                         let ingress_clone = ingress.clone();
                         arc.rcu(|d| {
                             let mut d = (**d).clone();

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use rhai::{CustomType, EvalAltResult, TypeBuilder};
 
 use super::{Freezable, Holder, Port, resource::ResourceName, service::Service};
@@ -41,7 +43,13 @@ impl super::Freezable for Ingress {
 
 impl Ingress {
     pub fn new(service: Service, hostname: String, port: Port) -> Self {
-        let name = service.name.clone();
+        // The ingress's resource name is its (hostname, port) tuple,
+        // not the underlying service's name: a single service is
+        // allowed multiple ingresses (different hostnames, redirect
+        // settings, ports), and they need distinct identities so the
+        // app's resource map doesn't collapse them.
+        // l[impl ingress.type]
+        let name: ResourceName = Arc::new(ingress_resource_name(&hostname, port));
         Self {
             name,
             service: service.clone(),
@@ -59,6 +67,15 @@ impl Ingress {
             frozen: false,
         }
     }
+}
+
+/// Construct the resource name we use to key ingresses inside an
+/// `AppDef`. Format is `"<hostname>:<port>"` — readable, stable, and
+/// unique per (hostname, port) tuple. Exposed so the conflict check
+/// in `service::ingress()` can build the same key without duplicating
+/// the format.
+pub fn ingress_resource_name(hostname: &str, port: Port) -> String {
+    format!("{hostname}:{}", port.get())
 }
 
 fn require_https(def: &IngressDef) -> Result<(), Box<EvalAltResult>> {
