@@ -141,6 +141,10 @@ struct Candidate {
     contact_email: Option<String>,
     directory_url: Option<String>,
     dns_provider_name: String,
+    /// PEM chain of the cert we're renewing, when present. Threaded into
+    /// the new order's `replaces` field per RFC 9773 § 5.
+    // r[impl tls.cert.ari]
+    previous_cert_pem: Option<String>,
 }
 
 fn collect_renewal_candidates(conn: &Db) -> rusqlite::Result<Vec<Candidate>> {
@@ -151,43 +155,39 @@ fn collect_renewal_candidates(conn: &Db) -> rusqlite::Result<Vec<Candidate>> {
     // covered by `foo.example.com`, `*.example.com`, or `*` — whichever is
     // most specific. A cert whose policy has been cleared falls out of
     // candidacy: it stays served until expiry but isn't auto-renewed.
-    let mut stmt = conn.conn.prepare(
-        "SELECT c.hostname, c.not_before, c.not_after, c.acme_account_id
-         FROM tls_certificates c
-         WHERE c.state = 'active' AND c.origin = 'acme_dns'",
-    )?;
-
-    type CertSnapshot = (String, Option<i64>, Option<i64>, Option<i64>);
-    let cert_rows: Vec<CertSnapshot> = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<i64>>(1)?,
-                row.get::<_, Option<i64>>(2)?,
-                row.get::<_, Option<i64>>(3)?,
-            ))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let active = super::store::list_certificates(conn)?
+        .into_iter()
+        .filter(|c| {
+            c.state == super::TlsCertState::Active && c.origin == super::TlsCertOrigin::AcmeDns
+        });
 
     let mut out = Vec::new();
-    for (hostname, not_before, not_after, account_id) in cert_rows {
-        let Some(policy_row) = super::store::resolve_policy(conn, &hostname)? else {
+    for cert in active {
+        let Some(policy_row) = super::store::resolve_policy(conn, &cert.hostname)? else {
             continue;
         };
         let dns_provider_name = match policy_row.policy {
             super::TlsPolicy::AcmeDns { dns_provider } => dns_provider,
             super::TlsPolicy::Manual { .. } => continue,
         };
-        let Some(not_before) = not_before else {
-            continue;
+
+        // r[impl tls.cert.ari]
+        // Prefer the CA's ARI suggested-window start when present.
+        // Otherwise fall back to the fixed 1/3-lifetime threshold.
+        let due = if let Some(start) = cert.ari_window_start {
+            now >= start
+        } else if let (Some(nb), Some(na)) = (cert.not_before, cert.not_after) {
+            if na <= nb {
+                false
+            } else {
+                let total = (na - nb) as f64;
+                let remaining = (na - now) as f64;
+                remaining <= 0.0 || (remaining / total) <= RENEW_AT_FRACTION
+            }
+        } else {
+            false
         };
-        let Some(not_after) = not_after else { continue };
-        if not_after <= not_before {
-            continue;
-        }
-        let total = (not_after - not_before) as f64;
-        let remaining = (not_after - now) as f64;
-        if remaining > 0.0 && (remaining / total) > RENEW_AT_FRACTION {
+        if !due {
             continue;
         }
 
@@ -197,17 +197,18 @@ fn collect_renewal_candidates(conn: &Db) -> rusqlite::Result<Vec<Candidate>> {
         // certs).
         let mut directory_url = None;
         let mut contact_email = None;
-        if let Some(aid) = account_id
+        if let Some(aid) = cert.acme_account_id
             && let Some(account) = super::store::get_acme_account_by_id(conn, aid)?
         {
             directory_url = Some(account.directory_url);
             contact_email = Some(account.contact_email);
         }
         out.push(Candidate {
-            hostname,
+            hostname: cert.hostname,
             contact_email,
             directory_url,
             dns_provider_name,
+            previous_cert_pem: cert.cert_pem,
         });
     }
     Ok(out)
@@ -234,6 +235,7 @@ async fn run_one(
         contact_email: &contact_email,
         directory_url: &directory_url,
         dns_provider_name: &cand.dns_provider_name,
+        previous_cert_pem: cand.previous_cert_pem.as_deref(),
     };
     acme::issue(db, cipher, issue_params).await.map(|_| ())
 }
@@ -365,7 +367,7 @@ mod tests {
             KeyType::EcdsaP256,
             CertMetadata {
                 not_before: Some(now - 60 * 86400),
-                not_after: Some(now + 1 * 86400),
+                not_after: Some(now + 86400),
                 ..Default::default()
             },
             None,

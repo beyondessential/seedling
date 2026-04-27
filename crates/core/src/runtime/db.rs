@@ -114,6 +114,8 @@ const SQL_V44: &str = include_str!("db/migrations/v44.sql");
 const SQL_V45: &str = include_str!("db/migrations/v45.sql");
 // r[impl tls.cert.force-retry]
 const SQL_V46: &str = include_str!("db/migrations/v46.sql");
+// r[impl tls.cert.ari]
+const SQL_V47: &str = include_str!("db/migrations/v47.sql");
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -339,6 +341,11 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 46,
         sql: SQL_V46,
+        custom_run: None,
+    },
+    Migration {
+        version: 47,
+        sql: SQL_V47,
         custom_run: None,
     },
 ];

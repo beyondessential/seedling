@@ -20,9 +20,10 @@
 use std::time::Duration;
 
 use instant_acme::{
-    Account, AuthorizationStatus, ChallengeType, Identifier, LetsEncrypt, NewAccount, NewOrder,
-    OrderStatus, RetryPolicy,
+    Account, AuthorizationStatus, CertificateIdentifier, ChallengeType, Identifier, LetsEncrypt,
+    NewAccount, NewOrder, OrderStatus, RetryPolicy,
 };
+use rustls_pki_types::Der;
 use secrecy::{ExposeSecret, SecretString};
 use snafu::{ResultExt, Snafu};
 
@@ -85,6 +86,12 @@ pub struct IssueParams<'a> {
     pub contact_email: &'a str,
     pub directory_url: &'a str,
     pub dns_provider_name: &'a str,
+    /// PEM chain of the previous certificate for this hostname, when this
+    /// is a renewal. Used to populate the order's `replaces` field per
+    /// RFC 9773 § 5 so the CA can skip rate-limiting on the renewal and
+    /// invalidate any pending ARI advice for the old cert.
+    // r[impl tls.cert.ari]
+    pub previous_cert_pem: Option<&'a str>,
 }
 
 /// Outcome of a successful issuance.
@@ -136,10 +143,21 @@ pub async fn issue(
         load_or_create_account(db, cipher, params.directory_url, params.contact_email).await?;
 
     let identifiers = vec![Identifier::Dns(params.hostname.to_owned())];
-    let mut order = account
-        .new_order(&NewOrder::new(&identifiers))
-        .await
-        .context(AcmeSnafu)?;
+    let mut new_order = NewOrder::new(&identifiers);
+    // r[impl tls.cert.ari]
+    // If we know the previous cert, hand its CertificateIdentifier
+    // to the CA via the order's `replaces` field. Saves us a rate-limit
+    // round-trip on Let's Encrypt and lets ARI advice for the old cert
+    // be invalidated cleanly. Failure to extract the identifier is not
+    // fatal — we just issue without the hint.
+    let replaces_owned = params
+        .previous_cert_pem
+        .and_then(|pem| extract_cert_identifier(pem).ok())
+        .flatten();
+    if let Some(ref ident) = replaces_owned {
+        new_order = new_order.replaces(ident.clone());
+    }
+    let mut order = account.new_order(&new_order).await.context(AcmeSnafu)?;
 
     let challenge_name = challenge_record_name(params.hostname);
     let mut planted: Vec<String> = Vec::new();
@@ -229,7 +247,55 @@ pub async fn issue(
         })
         .context(StorageSnafu)?;
 
+    // r[impl tls.cert.ari]
+    // Pull the renewal window from the CA for the cert we just issued
+    // and stamp it onto the row. The renewal task uses this in
+    // preference to the fixed 1/3-lifetime threshold. Failure here is
+    // best-effort: the cert itself is fine, we just don't have ARI
+    // guidance and the renewal task falls back.
+    if let Some(new_ident) = build_cert_identifier(&parsed) {
+        match account.renewal_info(&new_ident).await {
+            Ok((info, _retry_after)) => {
+                let start = info.suggested_window.start.unix_timestamp();
+                let end = info.suggested_window.end.unix_timestamp();
+                let polled = jiff::Timestamp::now().as_second();
+                let _ = db.call(move |db_inner| {
+                    store::update_ari_window(db_inner, cert_id, start, end, polled)
+                });
+                tracing::debug!(
+                    %cert_id,
+                    ari_start = start,
+                    ari_end = end,
+                    "ACME renewal info captured"
+                );
+            }
+            Err(e) => {
+                tracing::debug!(
+                    %cert_id,
+                    error = %e,
+                    "ACME renewal info unavailable; renewal will fall back to fixed-fraction threshold"
+                );
+            }
+        }
+    }
+
     Ok(Issued { cert_id, not_after })
+}
+
+/// Try to extract a [`CertificateIdentifier`] from a PEM chain. Returns
+/// `None` when the leaf has no AKI extension (in which case the CA can't
+/// look the cert up by RFC 9773 anyway).
+fn extract_cert_identifier(
+    pem: &str,
+) -> std::result::Result<Option<CertificateIdentifier<'static>>, parse::Error> {
+    let parsed = parse::parse_chain(pem)?;
+    Ok(build_cert_identifier(&parsed))
+}
+
+fn build_cert_identifier(parsed: &parse::ParsedChain) -> Option<CertificateIdentifier<'static>> {
+    let aki = parsed.leaf_aki_der.as_deref()?;
+    let serial = parsed.leaf_serial_der.as_slice();
+    Some(CertificateIdentifier::new(Der::from_slice(aki), Der::from_slice(serial)).into_owned())
 }
 
 /// Restore an ACME account from the encrypted credentials in the DB, or

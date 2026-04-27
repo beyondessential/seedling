@@ -34,6 +34,16 @@ pub struct ParsedChain {
     /// Encoded leaf public key bytes (SubjectPublicKeyInfo, DER). Used by
     /// upload validation to confirm the supplied private key matches.
     pub leaf_spki_der: Vec<u8>,
+    /// DER-encoded `keyIdentifier` octet string from the leaf's
+    /// `AuthorityKeyIdentifier` extension, when present. Required (with
+    /// the serial) to construct the RFC 9773 cert identifier the CA needs
+    /// for ARI lookups and `replaces` on renewal.
+    // r[impl tls.cert.ari]
+    pub leaf_aki_der: Option<Vec<u8>>,
+    /// DER-encoded ASN.1 INTEGER serial number from the leaf certificate.
+    /// (Note: this is the *encoded* form, not a big-integer representation.)
+    // r[impl tls.cert.ari]
+    pub leaf_serial_der: Vec<u8>,
 }
 
 /// Parse a PEM blob that may contain one or more CERTIFICATE entries
@@ -86,6 +96,20 @@ pub fn parse_chain(pem: &str) -> Result<ParsedChain> {
     }
 
     let leaf_spki_der = cert.tbs_certificate.subject_pki.raw.to_vec();
+    let leaf_serial_der = cert.tbs_certificate.raw_serial().to_vec();
+    // r[impl tls.cert.ari]
+    // Pull the AKI keyIdentifier octet-string contents (not the TLV
+    // wrapper); RFC 9773 § 4.1 takes those bytes base64url-encoded.
+    let mut leaf_aki_der = None;
+    for ext in cert.extensions() {
+        if let x509_parser::extensions::ParsedExtension::AuthorityKeyIdentifier(aki) =
+            ext.parsed_extension()
+            && let Some(kid) = &aki.key_identifier
+        {
+            leaf_aki_der = Some(kid.0.to_vec());
+            break;
+        }
+    }
 
     Ok(ParsedChain {
         metadata: CertMetadata {
@@ -98,6 +122,8 @@ pub fn parse_chain(pem: &str) -> Result<ParsedChain> {
         chain_pem,
         san_dns_names,
         leaf_spki_der,
+        leaf_aki_der,
+        leaf_serial_der,
     })
 }
 

@@ -326,7 +326,8 @@ pub fn get_certificate(db: &Db, id: i64) -> rusqlite::Result<Option<TlsCertifica
         .query_row(
             "SELECT id, hostname, state, origin, cert_pem, csr_pem, key_ciphertext,
                     key_type, issuer, not_before, not_after, serial, self_signed,
-                    note, acme_account_id, created_at, updated_at
+                    note, acme_account_id, ari_window_start, ari_window_end,
+                    ari_polled_at, created_at, updated_at
              FROM tls_certificates WHERE id = ?1",
             [id],
             row_to_certificate,
@@ -338,7 +339,8 @@ pub fn list_certificates(db: &Db) -> rusqlite::Result<Vec<TlsCertificate>> {
     let mut stmt = db.conn.prepare(
         "SELECT id, hostname, state, origin, cert_pem, csr_pem, key_ciphertext,
                 key_type, issuer, not_before, not_after, serial, self_signed,
-                note, acme_account_id, created_at, updated_at
+                note, acme_account_id, ari_window_start, ari_window_end,
+                ari_polled_at, created_at, updated_at
          FROM tls_certificates ORDER BY id DESC",
     )?;
     stmt.query_map([], row_to_certificate)?.collect()
@@ -353,7 +355,8 @@ pub fn find_active_for_hostname(
         .query_row(
             "SELECT id, hostname, state, origin, cert_pem, csr_pem, key_ciphertext,
                     key_type, issuer, not_before, not_after, serial, self_signed,
-                    note, acme_account_id, created_at, updated_at
+                    note, acme_account_id, ari_window_start, ari_window_end,
+                    ari_polled_at, created_at, updated_at
              FROM tls_certificates
              WHERE hostname = ?1 AND state = 'active'
              ORDER BY id DESC LIMIT 1",
@@ -448,9 +451,35 @@ fn row_to_certificate(row: &rusqlite::Row<'_>) -> rusqlite::Result<TlsCertificat
         self_signed: self_signed_int != 0,
         note: row.get(13)?,
         acme_account_id: row.get(14)?,
-        created_at: row.get(15)?,
-        updated_at: row.get(16)?,
+        ari_window_start: row.get(15)?,
+        ari_window_end: row.get(16)?,
+        ari_polled_at: row.get(17)?,
+        created_at: row.get(18)?,
+        updated_at: row.get(19)?,
     })
+}
+
+/// Update the ARI suggested-renewal window for a cert. `polled_at` is the
+/// time the data was fetched from the CA, which the renewal task uses to
+/// decide when to re-poll.
+// r[impl tls.cert.ari]
+pub fn update_ari_window(
+    db: &Db,
+    id: i64,
+    window_start: i64,
+    window_end: i64,
+    polled_at: i64,
+) -> rusqlite::Result<()> {
+    db.conn.execute(
+        "UPDATE tls_certificates SET
+            ari_window_start = ?1,
+            ari_window_end   = ?2,
+            ari_polled_at    = ?3,
+            updated_at       = ?3
+         WHERE id = ?4",
+        params![window_start, window_end, polled_at, id],
+    )?;
+    Ok(())
 }
 
 /// Find the most-specific [`TlsPolicy`] that matches `hostname`. Patterns

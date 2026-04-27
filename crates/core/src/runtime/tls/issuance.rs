@@ -39,6 +39,32 @@ use crate::runtime::{db::DbHandle, faults, secrets::Cipher};
 /// ([`Coordinator::issue_now`]) bypass this completely.
 const AUTO_RETRY_DEBOUNCE_SECS: i64 = 60 * 60; // 1 hour
 
+/// Fixed-fraction renewal threshold used when the CA hasn't supplied
+/// ARI advice. Renew when remaining lifetime drops below this fraction
+/// of the total lifetime — copes equally with 90-day and 6-day
+/// certificate profiles.
+const RENEW_AT_FRACTION: f64 = 1.0 / 3.0;
+
+/// Decide whether `cert` is past its renewal trigger. Prefers the CA's
+/// ARI suggested-window start when present; falls back to the fixed
+/// fraction-of-lifetime threshold.
+// r[impl tls.cert.ari]
+fn is_due_for_renewal(cert: &super::TlsCertificate) -> bool {
+    let now = jiff::Timestamp::now().as_second();
+    if let Some(start) = cert.ari_window_start {
+        return now >= start;
+    }
+    let (Some(nb), Some(na)) = (cert.not_before, cert.not_after) else {
+        return false;
+    };
+    if na <= nb {
+        return false;
+    }
+    let total = (na - nb) as f64;
+    let remaining = (na - now) as f64;
+    remaining <= 0.0 || (remaining / total) <= RENEW_AT_FRACTION
+}
+
 #[derive(Debug, Snafu)]
 pub enum CoordinatorError {
     #[snafu(display("storage error: {source}"))]
@@ -155,21 +181,29 @@ impl Coordinator {
     async fn run(self: &Arc<Self>, hostname: &str, trigger: AttemptTrigger) -> Result<Issued> {
         let _guard = self.issue_lock.lock().await;
 
-        // 1. If there's already an active cert for the hostname, nothing
-        //    to do (background) or a no-op success-equivalent (manual).
+        // 1. Look up any existing cert. For renewals (the cert is past its
+        //    ARI window or the operator forced a retry), we keep the PEM
+        //    around so we can pass it as `replaces` in the new order; for
+        //    first-issuance there's nothing to pass.
         let host_for_lookup = hostname.to_owned();
         let existing = self
             .db
             .call(move |db| store::find_active_for_hostname(db, &host_for_lookup))
             .map_err(|source| CoordinatorError::Storage { source })?;
-        if let Some(existing) = existing {
-            // Treat manual-retry against an existing cert as a no-op
-            // success: the operator presumably wanted us to "make sure
-            // there's a cert" and there is one.
-            return Ok(Issued {
-                cert_id: existing.id,
-                not_after: existing.not_after.unwrap_or(0),
-            });
+        let mut previous_cert_pem: Option<String> = None;
+        if let Some(ref ex) = existing {
+            // For background runs we treat an existing cert as "nothing
+            // to do" — the renewal task is the path that flips through
+            // here once the cert is past its renewal window. Manual
+            // operator retries skip this short-circuit.
+            let due_for_renewal = is_due_for_renewal(ex);
+            if !due_for_renewal && trigger != AttemptTrigger::Manual {
+                return Ok(Issued {
+                    cert_id: ex.id,
+                    not_after: ex.not_after.unwrap_or(0),
+                });
+            }
+            previous_cert_pem = ex.cert_pem.clone();
         }
 
         // 2. Operator pause.
@@ -285,6 +319,7 @@ impl Coordinator {
                 contact_email: &settings.contact_email,
                 directory_url: &acme::default_directory_url(),
                 dns_provider_name: &dns_provider_name,
+                previous_cert_pem: previous_cert_pem.as_deref(),
             },
         )
         .await;

@@ -94,6 +94,20 @@ pub struct TlsCertificate {
     pub note: Option<String>,
     /// For `origin = AcmeDns`: the account that issued.
     pub acme_account_id: Option<i64>,
+    /// ACME Renewal Information (RFC 9773) suggested-window start, in
+    /// Unix seconds. When set, the renewal task should not renew before
+    /// this time. Populated at issuance and refreshed periodically.
+    // r[impl tls.cert.ari]
+    pub ari_window_start: Option<i64>,
+    /// ARI suggested-window end, in Unix seconds. The renewal task
+    /// renews when `now >= ari_window_start`; missing ARI data falls
+    /// back to a fixed 1/3-lifetime threshold.
+    // r[impl tls.cert.ari]
+    pub ari_window_end: Option<i64>,
+    /// When the ARI window was last fetched, in Unix seconds. Drives
+    /// re-poll cadence.
+    // r[impl tls.cert.ari]
+    pub ari_polled_at: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
 }

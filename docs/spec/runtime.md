@@ -1336,6 +1336,12 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > Renewal must be attempted while the certificate is still valid, with sufficient lead time that a transient failure does not cause expiry.
 > Successful renewal must replace the prior certificate atomically so that in-flight TLS handshakes are unaffected.
 
+> r[tls.cert.ari]
+> When the issuing CA advertises ACME Renewal Information (RFC 9773), the runtime should use the CA's suggested renewal window to schedule renewal in preference to its own fixed-fraction-of-lifetime heuristic.
+> The runtime must persist the suggested window alongside the certificate (start, end, and the timestamp at which it was last polled) and treat the certificate as due for renewal once the current time has reached the window's start.
+> When submitting a renewal order for a certificate whose predecessor's RFC 9773 identifier (authority key identifier plus serial) is available, the runtime must include that identifier in the order's `replaces` field so the CA can correlate the renewal.
+> If the CA does not support ARI or the lookup fails, the runtime must fall back to its fixed-fraction-of-lifetime renewal heuristic without surfacing the absence as an error.
+
 > r[tls.strategy.manual]
 > Operators may upload a PEM-encoded certificate chain and matching private key for a hostname; the runtime must cause the proxy to serve that exact pair for TLS handshakes whose SNI matches the hostname.
 > Manual certificates are not auto-renewed; replacement requires another upload.
