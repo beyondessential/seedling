@@ -238,6 +238,14 @@ export default function Certificates() {
           writeReason={writeGuard.reason}
         />
 
+        <RetryBlocksSection
+          blocks={blocks?.blocks ?? []}
+          loading={blocksLoading}
+          onClearBlock={onClearBlock}
+          writeAllowed={writeGuard.allowed}
+          writeReason={writeGuard.reason}
+        />
+
         <AttemptsSection
           attempts={attempts?.attempts ?? []}
           loading={attemptsLoading}
@@ -626,6 +634,101 @@ function PoliciesSection({
           </Table>
         </TableContainer>
       )}
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Retry blocks section
+// ---------------------------------------------------------------------------
+
+interface RetryBlocksSectionProps {
+  blocks: TlsRetryBlock[];
+  loading: boolean;
+  onClearBlock: (hostname: string) => void;
+  writeAllowed: boolean;
+  writeReason: string | null;
+}
+
+function RetryBlocksSection({
+  blocks,
+  loading,
+  onClearBlock,
+  writeAllowed,
+  writeReason,
+}: RetryBlocksSectionProps) {
+  if (blocks.length === 0) {
+    return null;
+  }
+  return (
+    <Box>
+      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>
+        Retry blocks
+      </Typography>
+      <Typography
+        variant="caption"
+        sx={{ color: "text.secondary", mb: 1, display: "block" }}
+      >
+        Per-hostname pauses on automatic ACME-DNS issuance. Auto blocks are
+        set after a failed attempt; clear one to retry on the next handshake.
+        Operator blocks persist until cleared explicitly.
+      </Typography>
+      {loading && <CircularProgress size={20} />}
+      <TableContainer component={Paper} variant="outlined">
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>Hostname</TableCell>
+              <TableCell>Source</TableCell>
+              <TableCell>Set at</TableCell>
+              <TableCell>Reason</TableCell>
+              <TableCell align="right" />
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {blocks.map((b) => (
+              <TableRow key={b.hostname} hover>
+                <TableCell sx={{ fontFamily: "monospace" }}>{b.hostname}</TableCell>
+                <TableCell>
+                  <Chip
+                    label={b.set_by}
+                    size="small"
+                    color={b.set_by === "auto" ? "warning" : "default"}
+                    variant="outlined"
+                  />
+                </TableCell>
+                <TableCell sx={{ fontSize: "0.85rem" }}>
+                  {formatTime(b.set_at)}
+                </TableCell>
+                <TableCell
+                  sx={{
+                    fontFamily: "monospace",
+                    fontSize: "0.75rem",
+                    maxWidth: 480,
+                    whiteSpace: "normal",
+                    wordBreak: "break-word",
+                  }}
+                >
+                  {b.reason ?? "—"}
+                </TableCell>
+                <TableCell align="right">
+                  <Tooltip title={writeReason ?? "Clear block"}>
+                    <span>
+                      <IconButton
+                        size="small"
+                        disabled={!writeAllowed}
+                        onClick={() => onClearBlock(b.hostname)}
+                      >
+                        <RefreshIcon fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </TableContainer>
     </Box>
   );
 }
