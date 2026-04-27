@@ -14,6 +14,8 @@
 //! re-bootstrapping the account on every restart.
 
 pub mod dns;
+pub mod keypair;
+pub mod parse;
 pub mod store;
 
 use secrecy::SecretString;
