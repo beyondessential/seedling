@@ -20,11 +20,7 @@ use seedling_protocol::error::{ErrorCode, OiError};
 
 use super::HandlerResult;
 use crate::oi::state::OiState;
-use crate::runtime::tls::{
-    AttemptOutcome, AttemptTrigger, DnsProviderKind, RetryBlockSource, TlsPolicy,
-    acme::{self, IssueParams},
-    store,
-};
+use crate::runtime::tls::{DnsProviderKind, RetryBlockSource, TlsPolicy, store};
 
 // ---------------------------------------------------------------------------
 // DNS providers
@@ -159,10 +155,6 @@ pub(crate) struct SetAcmeDnsParams {
     /// Hostname or wildcard pattern (`*`, `*.example.com`).
     pub hostname: String,
     pub dns_provider: String,
-    /// Optional override for the ACME directory URL. Defaults to Let's
-    /// Encrypt production. Persisted only via the resulting account row.
-    #[serde(default)]
-    pub directory_url: Option<String>,
 }
 
 // i[tls.policy.set-acme-dns]
@@ -170,7 +162,6 @@ pub(crate) fn set_policy_acme_dns(state: &OiState, params: SetAcmeDnsParams) -> 
     let SetAcmeDnsParams {
         hostname,
         dns_provider,
-        directory_url,
     } = params;
 
     let hostname_for_db = hostname.clone();
@@ -180,59 +171,14 @@ pub(crate) fn set_policy_acme_dns(state: &OiState, params: SetAcmeDnsParams) -> 
         .call(move |db| store::set_policy_acme_dns(db, &hostname_for_db, &dns_provider_for_db))
         .map_err(db_error)?;
 
-    // Auto-issue is only meaningful for exact hostnames. Wildcard policies
-    // have no concrete name to acquire a cert for; first issuance happens
-    // lazily when an ingress for a matching hostname appears or via the
-    // explicit /tls/certificates/issue-acme-dns endpoint.
+    // Issuance for an exact hostname kicks in via the issuance coordinator.
+    // For wildcard policies there's no concrete hostname to issue against
+    // until an ingress for a matching name appears, at which point the
+    // reconciler hands it to the coordinator.
     let mut auto_issue_kicked = false;
-    let is_exact = !hostname.contains('*');
-    if is_exact {
-        // Look up the global contact email; if none is configured, leave
-        // auto-issue to the operator (they'll set the email and retry, or
-        // run the explicit issue command).
-        let settings = state.db.call(store::get_settings).map_err(db_error)?;
-        if !settings.contact_email.is_empty() {
-            let hostname_for_check = hostname.clone();
-            let existing = state
-                .db
-                .call(move |db| store::find_active_for_hostname(db, &hostname_for_check))
-                .map_err(db_error)?;
-            if existing.is_none() {
-                let directory_url = directory_url.unwrap_or_else(acme::default_directory_url);
-                let db = state.db.clone();
-                let cipher = Arc::clone(&state.cipher);
-                let hostname_for_task = hostname.clone();
-                let dns_provider_for_task = dns_provider.clone();
-                let contact_for_task = settings.contact_email.clone();
-                tokio::spawn(async move {
-                    let result = acme::issue(
-                        &db,
-                        &cipher,
-                        IssueParams {
-                            hostname: &hostname_for_task,
-                            contact_email: &contact_for_task,
-                            directory_url: &directory_url,
-                            dns_provider_name: &dns_provider_for_task,
-                        },
-                    )
-                    .await;
-                    match result {
-                        Ok(issued) => tracing::info!(
-                            hostname = %hostname_for_task,
-                            cert_id = issued.cert_id,
-                            not_after = issued.not_after,
-                            "auto-issued cert on policy set"
-                        ),
-                        Err(e) => tracing::warn!(
-                            hostname = %hostname_for_task,
-                            error = %e,
-                            "auto-issue on policy set failed; operator can retry via /tls/certificates/issue-acme-dns"
-                        ),
-                    }
-                });
-                auto_issue_kicked = true;
-            }
-        }
+    if !hostname.contains('*') {
+        state.tls_coordinator.ensure(&hostname);
+        auto_issue_kicked = true;
     }
 
     Ok(json!({ "ok": true, "auto_issue_kicked": auto_issue_kicked }))
@@ -309,153 +255,60 @@ pub(crate) fn list_certificates(state: &OiState) -> HandlerResult {
 #[derive(Deserialize)]
 pub(crate) struct IssueAcmeDnsParams {
     pub hostname: String,
-    /// Optional override of the global contact email setting. Errors when
-    /// neither this field nor the global setting is populated.
-    #[serde(default)]
-    pub contact_email: Option<String>,
-    /// Optional override; defaults to Let's Encrypt production.
-    #[serde(default)]
-    pub directory_url: Option<String>,
 }
 
-/// Synchronously run an ACME-DNS issuance for a hostname. Blocks the OI
-/// thread for the duration of the flow (typically tens of seconds).
-/// The hostname must already be bound to an `acme_dns` policy with a
-/// configured DNS provider; this trigger is what the operator runs after
-/// setting the policy to acquire the first cert.
+/// Synchronously run an ACME-DNS issuance for a hostname via the issuance
+/// coordinator. Blocks the OI worker for the duration of the flow
+/// (typically tens of seconds). The hostname must resolve to an
+/// `acme_dns` policy; the coordinator handles the rest, including
+/// recording the attempt and filing a fault on failure.
+///
+/// `contact_email` and `directory_url` are no longer accepted as
+/// per-call overrides — the global setting is the source of truth.
 // i[tls.cert.issue-acme-dns]
 pub(crate) fn issue_acme_dns(state: &OiState, params: IssueAcmeDnsParams) -> HandlerResult {
-    // Resolve the hostname's policy via wildcard rules so an operator can
-    // issue against `foo.example.com` whenever a `*.example.com` or `*`
-    // policy applies, without needing to add an explicit exact-match
-    // policy first.
-    let hostname_for_lookup = params.hostname.clone();
-    let policy = state
-        .db
-        .call(move |db| store::resolve_policy(db, &hostname_for_lookup))
-        .map_err(db_error)?;
-    let dns_provider_name = match policy.map(|p| p.policy) {
-        Some(TlsPolicy::AcmeDns { dns_provider }) => dns_provider,
-        Some(_) => {
-            return Err(OiError::new(
-                ErrorCode::RequirementsInvalid,
-                format!(
-                    "hostname {} resolves to a manual policy; bind it to acme_dns first",
-                    params.hostname
-                ),
-            ));
-        }
-        None => {
-            return Err(OiError::new(
-                ErrorCode::RequirementsInvalid,
-                format!(
-                    "hostname {} has no matching policy; bind it via /tls/policies/set-acme-dns first",
-                    params.hostname
-                ),
-            ));
-        }
-    };
-
-    // Contact email: use the explicit param if supplied, else fall back to
-    // the global tls_settings row.
-    let contact_email = match params.contact_email {
-        Some(c) if !c.is_empty() => c,
-        _ => {
-            let settings = state.db.call(store::get_settings).map_err(db_error)?;
-            if settings.contact_email.is_empty() {
-                return Err(OiError::new(
-                    ErrorCode::RequirementsInvalid,
-                    "no contact email: supply contact_email or set the global one via /tls/settings/set",
-                ));
-            }
-            settings.contact_email
-        }
-    };
-
-    let directory_url = params
-        .directory_url
-        .unwrap_or_else(acme::default_directory_url);
-
-    // Manual issuance always clears any prior auto retry-block: the
-    // operator is explicitly retrying. The block will be re-set if this
-    // attempt also fails.
-    let host_for_clear = params.hostname.clone();
-    let _ = state
-        .db
-        .call(move |db| store::clear_retry_block(db, &host_for_clear));
-
-    // Open the attempt row before running so a panic mid-flight still
-    // leaves a trace.
-    let host_for_attempt = params.hostname.clone();
-    let attempt_id = state
-        .db
-        .call(move |db| store::insert_attempt(db, &host_for_attempt, AttemptTrigger::Manual))
-        .map_err(db_error)?;
-
-    // Run the async ACME flow on the current Tokio runtime, blocking the OI
-    // worker for the duration. ACME-DNS issuance takes tens of seconds; we
-    // accept that for the sync UX.
-    let db = state.db.clone();
-    let cipher = Arc::clone(&state.cipher);
+    let coord = Arc::clone(&state.tls_coordinator);
+    let hostname = params.hostname;
     let result = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
-            acme::issue(
-                &db,
-                &cipher,
-                IssueParams {
-                    hostname: &params.hostname,
-                    contact_email: &contact_email,
-                    directory_url: &directory_url,
-                    dns_provider_name: &dns_provider_name,
-                },
-            )
-            .await
-        })
+        tokio::runtime::Handle::current().block_on(async move { coord.issue_now(&hostname).await })
     });
-
     match result {
-        Ok(issued) => {
-            let cert_id = issued.cert_id;
-            let _ = state.db.call(move |db| {
-                store::finalize_attempt(
-                    db,
-                    attempt_id,
-                    AttemptOutcome::Success,
-                    Some(cert_id),
-                    None,
-                )
-            });
-            Ok(json!({
-                "cert_id": issued.cert_id,
-                "not_after": issued.not_after,
-            }))
-        }
-        Err(e) => {
-            let err_msg = format!("acme-dns issuance failed: {e}");
-            // Finalise the attempt + set a fresh auto retry-block so
-            // Caddy doesn't immediately re-trigger from a handshake.
-            let host_for_block = params.hostname.clone();
-            let err_for_attempt = err_msg.clone();
-            let err_for_block = err_msg.clone();
-            let _ = state.db.call(move |db| -> rusqlite::Result<()> {
-                store::finalize_attempt(
-                    db,
-                    attempt_id,
-                    AttemptOutcome::Failure,
-                    None,
-                    Some(&err_for_attempt),
-                )?;
-                store::set_retry_block(
-                    db,
-                    &host_for_block,
-                    RetryBlockSource::Auto,
-                    Some(&err_for_block),
-                )?;
-                Ok(())
-            });
-            Err(OiError::new(ErrorCode::Internal, err_msg))
-        }
+        Ok(issued) => Ok(json!({
+            "cert_id": issued.cert_id,
+            "not_after": issued.not_after,
+        })),
+        Err(e) => Err(OiError::new(
+            ErrorCode::Internal,
+            format!("acme-dns issuance failed: {e}"),
+        )),
     }
+}
+
+#[derive(Deserialize)]
+pub(crate) struct RetryParams {
+    pub hostname: String,
+}
+
+/// Operator-driven retry: clears any operator pause for `hostname`,
+/// records the persistent force-retry signal, and ensures the issuance
+/// coordinator picks it up immediately. Returns immediately; the
+/// reconciler / coordinator runs the actual ACME flow in the background.
+/// Survives a daemon restart between this call and the actual flow:
+/// the force-retry row stays in the DB until consumed.
+// i[tls.cert.retry]
+pub(crate) fn retry(state: &OiState, params: RetryParams) -> HandlerResult {
+    let RetryParams { hostname } = params;
+    let host_for_db = hostname.clone();
+    state
+        .db
+        .call(move |db| -> rusqlite::Result<()> {
+            store::clear_retry_block(db, &host_for_db)?;
+            store::set_force_retry(db, &host_for_db)?;
+            Ok(())
+        })
+        .map_err(db_error)?;
+    state.tls_coordinator.ensure(&hostname);
+    Ok(json!({ "ok": true }))
 }
 
 // ---------------------------------------------------------------------------

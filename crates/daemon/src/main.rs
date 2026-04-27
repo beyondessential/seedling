@@ -857,6 +857,14 @@ async fn main() {
         (Some(url), handle)
     };
 
+    // r[impl tls.cert.eager-issuance]
+    // The TLS issuance coordinator owns every ACME-DNS flow: the
+    // reconciler hands it the set of TLS-terminating hostnames each
+    // tick, and the OI / CLI route operator-driven retries through it
+    // too. The cert-serve endpoint stays a pure lookup.
+    let tls_coordinator =
+        seedling_core::runtime::tls::issuance::Coordinator::new(db.clone(), Arc::clone(&cipher));
+
     // r[impl tls.acme.renewal.auto]
     // Spawn the ACME-DNS renewal task. Each tick (default hourly) it
     // scans for active acme_dns certs whose remaining validity is past
@@ -888,6 +896,7 @@ async fn main() {
         force_dns64_translation,
         Arc::clone(&shells),
         cert_endpoint_url,
+        Some(Arc::clone(&tls_coordinator)),
     );
 
     // The reconciler and schedule ticker are spawned below, after OiState is
@@ -930,6 +939,7 @@ async fn main() {
         script_limits,
         dns_servers,
         cipher,
+        tls_coordinator: Arc::clone(&tls_coordinator),
     });
 
     // ---------------------------------------------------------------------------

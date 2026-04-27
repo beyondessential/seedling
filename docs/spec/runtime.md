@@ -1312,11 +1312,20 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > The operator interface must expose this log so that an unsuccessful issuance is visible without having to inspect daemon logs.
 
 > r[tls.cert.retry-block]
-> When an on-demand or operator-triggered ACME-DNS issuance attempt fails, the runtime must set a per-hostname retry block.
-> While a retry block is set, on-demand issuance for that hostname must be skipped (the cert-serving endpoint must signal fall-through to the proxy as if no policy applied), so a permanent failure cause does not produce a tight retry loop driven by repeat handshakes.
-> Operator-driven manual issuance must clear the block on entry and proceed; the autonomous renewal task must not auto-clear it.
-> A successful issuance must clear the block.
-> Operators must be able to set, list, and clear retry blocks through the operator interface; an operator-set block must persist across restarts and across automatic clears until explicitly cleared.
+> Operators may set a per-hostname retry block to pause runtime-driven issuance.
+> While a block is set, the issuance coordinator must skip the hostname.
+> The block persists across restarts and is removed only by explicit operator action (clear or operator-driven retry).
+
+> r[tls.cert.eager-issuance]
+> The runtime — not the proxy — must drive every certificate-issuance attempt for runtime-managed strategies.
+> The reconciler must hand each TLS-terminating ingress hostname to the issuance coordinator on every tick.
+> The coordinator must dedup in-flight requests, skip hostnames whose policy is not `acme_dns` or that already have an active certificate, debounce after a recent failure, and run the rest in the background.
+> The cert-serving endpoint must remain a pure lookup: it must never trigger an issuance flow itself (see [tls.cert.serve](#r--tls.cert.serve)).
+
+> r[tls.cert.force-retry]
+> Operator-driven retry must be expressible as a persistent state row keyed by hostname, so the request survives a daemon restart between the operator clicking retry and the reconciler picking it up.
+> The issuance coordinator must consume the row atomically at the start of an issuance run, bypassing the recent-failure debounce.
+> A successful issuance must remove the row; subsequent operator-driven retries write a fresh one.
 
 > r[tls.acme.account.persist]
 > The runtime must persist ACME account state — at minimum the account private key and the URL returned by the directory's newAccount endpoint — for each `(directory_url, contact_email)` pair, encrypted at rest using the [secret key](#r--secret.key).
@@ -1354,6 +1363,7 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > r[tls.cert.serve]
 > For runtime-managed certificates (ACME DNS-01, manual, and CSR-derived), the runtime must deliver certificate and key material to the ingress proxy through a mechanism that does not require including private key material in the proxy's persistent configuration or its restart-replay cache.
 > The proxy must be able to obtain the appropriate certificate by SNI hostname at TLS handshake time.
+> The serving endpoint must be a pure lookup: a stored cert returns 200 with PEM, an unknown hostname returns 204 (no content), and the runtime must never trigger an issuance flow from this path. Issuance is the issuance coordinator's job (see [tls.cert.eager-issuance](#r--tls.cert.eager-issuance)).
 
 > r[tls.cert.validation.san-coverage]
 > Whenever the runtime accepts an operator-supplied certificate (manual upload or CSR cert upload), it must validate that the leaf certificate's Subject Alternative Name DNS entries either contain the target hostname literally or contain a wildcard entry that covers it under RFC 6125.

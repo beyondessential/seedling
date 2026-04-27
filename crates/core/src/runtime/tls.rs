@@ -15,6 +15,7 @@
 
 pub mod acme;
 pub mod dns;
+pub mod issuance;
 pub mod keypair;
 pub mod parse;
 pub mod renewal;
@@ -322,8 +323,11 @@ impl RetryBlockSource {
     }
 }
 
-/// A retry-block row. While present, on-demand issuance for the hostname
-/// is skipped; manual issuance ignores the block (and clears it on entry).
+/// A retry-block row. While present, the runtime skips background
+/// issuance for the hostname. Now operator-only: the legacy auto-set
+/// behaviour after a failed attempt was dropped in favour of the
+/// reconciler-driven model, where a recent failure naturally debounces
+/// the next attempt via the attempt log.
 // r[impl tls.cert.retry-block]
 #[derive(Debug, Clone)]
 pub struct TlsCertRetryBlock {
@@ -331,6 +335,18 @@ pub struct TlsCertRetryBlock {
     pub set_at: i64,
     pub set_by: RetryBlockSource,
     pub reason: Option<String>,
+}
+
+/// Persistent operator-set "issue a fresh cert now" signal. The reconciler
+/// consumes the row when it next attempts issuance for the hostname,
+/// bypassing the recent-failure debounce. Survives daemon restarts: an
+/// operator can click retry, the daemon can crash before processing, and
+/// the next start-up's reconciler tick picks it up.
+// r[impl tls.cert.force-retry]
+#[derive(Debug, Clone)]
+pub struct TlsCertForceRetry {
+    pub hostname: String,
+    pub requested_at: i64,
 }
 
 /// Returns whether `pattern` matches `hostname`. Patterns are:

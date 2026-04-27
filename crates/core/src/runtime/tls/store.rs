@@ -10,9 +10,9 @@ use secrecy::{ExposeSecret, SecretString};
 
 use super::{
     AcmeAccount, AttemptOutcome, AttemptTrigger, DnsProviderEntry, DnsProviderKind,
-    DnsProviderSummary, KeyType, RetryBlockSource, TlsCertAttempt, TlsCertOrigin,
-    TlsCertRetryBlock, TlsCertState, TlsCertificate, TlsPolicy, TlsPolicyRow, TlsSettings,
-    pattern_matches, pattern_specificity,
+    DnsProviderSummary, KeyType, RetryBlockSource, TlsCertAttempt, TlsCertForceRetry,
+    TlsCertOrigin, TlsCertRetryBlock, TlsCertState, TlsCertificate, TlsPolicy, TlsPolicyRow,
+    TlsSettings, pattern_matches, pattern_specificity,
 };
 use crate::runtime::{db::Db, secrets::Cipher};
 
@@ -738,6 +738,49 @@ pub fn list_retry_blocks(db: &Db) -> rusqlite::Result<Vec<TlsCertRetryBlock>> {
                 set_by: RetryBlockSource::parse(&set_by_str)
                     .ok_or(rusqlite::Error::InvalidQuery)?,
                 reason: row.get(3)?,
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
+// ---------------------------------------------------------------------------
+// Force-retry signal
+// ---------------------------------------------------------------------------
+
+// r[impl tls.cert.force-retry]
+pub fn set_force_retry(db: &Db, hostname: &str) -> rusqlite::Result<()> {
+    let now = now_secs();
+    db.conn.execute(
+        "INSERT INTO tls_cert_force_retry (hostname, requested_at)
+         VALUES (?1, ?2)
+         ON CONFLICT(hostname) DO UPDATE SET requested_at = excluded.requested_at",
+        params![hostname, now],
+    )?;
+    Ok(())
+}
+
+/// Return whether `hostname` has a force-retry row, atomically deleting it.
+/// The reconciler calls this at the start of an issuance run so a single
+/// retry request is consumed exactly once even if multiple ticks race.
+// r[impl tls.cert.force-retry]
+pub fn take_force_retry(db: &Db, hostname: &str) -> rusqlite::Result<bool> {
+    let n = db.conn.execute(
+        "DELETE FROM tls_cert_force_retry WHERE hostname = ?1",
+        [hostname],
+    )?;
+    Ok(n > 0)
+}
+
+pub fn list_force_retries(db: &Db) -> rusqlite::Result<Vec<TlsCertForceRetry>> {
+    let mut stmt = db
+        .conn
+        .prepare("SELECT hostname, requested_at FROM tls_cert_force_retry ORDER BY hostname")?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(TlsCertForceRetry {
+                hostname: row.get(0)?,
+                requested_at: row.get(1)?,
             })
         })?
         .collect::<rusqlite::Result<_>>()?;

@@ -229,6 +229,12 @@ pub struct Reconciler {
     /// runtime-managed certs are served via the daemon.
     // r[impl tls.cert.serve]
     cert_endpoint_url: Option<String>,
+    /// Drives ACME-DNS issuance for hostnames declared by ingresses. The
+    /// reconciler calls `ensure()` for each TLS-terminating hostname after
+    /// building the proxy config; the coordinator dedups and runs the flow
+    /// in the background.
+    // r[impl tls.cert.eager-issuance]
+    tls_coordinator: Option<Arc<crate::runtime::tls::issuance::Coordinator>>,
 }
 
 impl Reconciler {
@@ -251,6 +257,7 @@ impl Reconciler {
         force_dns64_translation: bool,
         shells: Arc<ShellRegistry>,
         cert_endpoint_url: Option<String>,
+        tls_coordinator: Option<Arc<crate::runtime::tls::issuance::Coordinator>>,
     ) -> Self {
         let observer = Observer::new(Arc::clone(&driver));
         let written_obs = seed_written_obs(&db);
@@ -294,6 +301,7 @@ impl Reconciler {
             warm_cert_first_seen: HashMap::new(),
             image_phase_state: images::ImagePhaseState::new(),
             cert_endpoint_url,
+            tls_coordinator,
         }
     }
 
@@ -652,6 +660,19 @@ impl Reconciler {
                 } = proxy_build;
                 let has_proxy_config =
                     !proxy_config.virtual_hosts.is_empty() || !proxy_config.l4_routes.is_empty();
+
+                // r[impl tls.cert.eager-issuance]
+                // Hand every TLS-terminating hostname to the issuance
+                // coordinator. ensure() dedups in-flight requests, skips
+                // hostnames with current certs / paused / non-acme_dns
+                // policy, and runs the rest in the background.
+                if let Some(coord) = self.tls_coordinator.as_ref() {
+                    for vh in &proxy_config.virtual_hosts {
+                        if vh.tls_acme {
+                            coord.ensure(&vh.hostname);
+                        }
+                    }
+                }
 
                 self.persist_obs(proxy_obs);
 

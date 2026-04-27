@@ -178,6 +178,17 @@ export default function Certificates() {
     }
   };
 
+  const onRetry = async (hostname: string) => {
+    clearError();
+    try {
+      await execute("/tls/certificates/retry", { hostname });
+      refetchBlocks();
+      refetchAttempts();
+    } catch {
+      // surfaced via actionError
+    }
+  };
+
   return (
     <Box sx={{ p: 3, maxWidth: 1100, mx: "auto" }}>
       <Box sx={{ display: "flex", alignItems: "center", mb: 2, gap: 1 }}>
@@ -234,6 +245,7 @@ export default function Certificates() {
             setRemovingPolicy(hostname);
           }}
           onClearBlock={onClearBlock}
+          onRetry={onRetry}
           writeAllowed={writeGuard.allowed}
           writeReason={writeGuard.reason}
         />
@@ -242,6 +254,7 @@ export default function Certificates() {
           blocks={blocks?.blocks ?? []}
           loading={blocksLoading}
           onClearBlock={onClearBlock}
+          onRetry={onRetry}
           writeAllowed={writeGuard.allowed}
           writeReason={writeGuard.reason}
         />
@@ -477,6 +490,7 @@ interface PoliciesSectionProps {
   onAdd: () => void;
   onClear: (hostname: string) => void;
   onClearBlock: (hostname: string) => void;
+  onRetry: (hostname: string) => void;
   writeAllowed: boolean;
   writeReason: string | null;
 }
@@ -491,6 +505,7 @@ function PoliciesSection({
   onAdd,
   onClear,
   onClearBlock,
+  onRetry,
   writeAllowed,
   writeReason,
 }: PoliciesSectionProps) {
@@ -615,6 +630,19 @@ function PoliciesSection({
                       </Typography>
                     </TableCell>
                     <TableCell align="right">
+                      {p.strategy === "acme_dns" && !p.hostname.includes("*") && (
+                        <Tooltip title={writeReason ?? "Retry issuance"}>
+                          <span>
+                            <IconButton
+                              size="small"
+                              disabled={!writeAllowed}
+                              onClick={() => onRetry(p.hostname)}
+                            >
+                              <RefreshIcon fontSize="small" />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                      )}
                       <Tooltip title={writeReason ?? "Clear policy"}>
                         <span>
                           <IconButton
@@ -646,6 +674,7 @@ interface RetryBlocksSectionProps {
   blocks: TlsRetryBlock[];
   loading: boolean;
   onClearBlock: (hostname: string) => void;
+  onRetry: (hostname: string) => void;
   writeAllowed: boolean;
   writeReason: string | null;
 }
@@ -654,6 +683,7 @@ function RetryBlocksSection({
   blocks,
   loading,
   onClearBlock,
+  onRetry,
   writeAllowed,
   writeReason,
 }: RetryBlocksSectionProps) {
@@ -719,14 +749,30 @@ function RetryBlocksSection({
                   {b.reason ?? "—"}
                 </TableCell>
                 <TableCell align="right">
-                  <Tooltip title={writeReason ?? "Clear block"}>
+                  <Tooltip title={writeReason ?? "Retry issuance now"}>
+                    <span>
+                      <IconButton
+                        size="small"
+                        disabled={!writeAllowed}
+                        onClick={() => onRetry(b.hostname)}
+                      >
+                        <RefreshIcon fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                  <Tooltip
+                    title={
+                      writeReason
+                      ?? "Clear block without retrying (issuance stays paused)"
+                    }
+                  >
                     <span>
                       <IconButton
                         size="small"
                         disabled={!writeAllowed}
                         onClick={() => onClearBlock(b.hostname)}
                       >
-                        <RefreshIcon fontSize="small" />
+                        <DeleteOutlineIcon fontSize="small" />
                       </IconButton>
                     </span>
                   </Tooltip>

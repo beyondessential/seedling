@@ -37,4 +37,9 @@ pub struct OiState {
     pub dns_servers: Vec<std::net::Ipv6Addr>,
     // r[impl secret.key]
     pub cipher: Arc<crate::runtime::secrets::Cipher>,
+    /// TLS issuance coordinator. The OI uses it to run operator-driven
+    /// `issue-acme-dns` calls and to enqueue retries with the persistent
+    /// force-retry signal.
+    // r[impl tls.cert.eager-issuance]
+    pub tls_coordinator: Arc<crate::runtime::tls::issuance::Coordinator>,
 }

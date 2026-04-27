@@ -998,13 +998,18 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 > Private key material is never returned.
 
 > i[tls.cert.issue-acme-dns]
-> `/tls/certificates/issue-acme-dns { hostname, contact_email?, directory_url? }` synchronously runs the ACME-DNS-01 issuance flow for `hostname`.
-> The hostname must resolve (per [tls.policy.wildcard](runtime.md#r--tls.policy.wildcard)) to an `acme_dns` policy with a configured DNS provider; otherwise the call returns `requirements_invalid`.
-> When `contact_email` is omitted, the runtime falls back to the global setting; if neither is populated, the call returns `requirements_invalid`.
-> `directory_url` defaults to the Let's Encrypt production directory.
+> `/tls/certificates/issue-acme-dns { hostname }` synchronously runs the ACME-DNS-01 issuance flow for `hostname` via the issuance coordinator.
+> The hostname must resolve (per [tls.policy.wildcard](runtime.md#r--tls.policy.wildcard)) to an `acme_dns` policy with a configured DNS provider; otherwise the call returns `internal` with a descriptive message.
+> Contact email and directory come from the global [TLS settings](#i--tls.settings.set); if no contact email is configured, the call returns `internal` with a descriptive message.
 > The call blocks for the full duration of the ACME flow (typically tens of seconds) and returns `{ cert_id, not_after }` on success.
 > Failure returns `internal` with a message identifying the stage that failed.
 > The newly-issued certificate supersedes any prior active certificate for the same hostname.
+
+> i[tls.cert.retry]
+> `/tls/certificates/retry { hostname }` queues a retry for `hostname` and returns immediately.
+> The runtime clears any operator pause for the hostname, writes a persistent force-retry signal per [tls.cert.force-retry](runtime.md#r--tls.cert.force-retry), and nudges the issuance coordinator.
+> The actual ACME flow runs in the background; the cert appears in [`tls.cert.list`](#i--tls.cert.list) once issuance completes.
+> Survives a daemon restart: if the daemon dies between this call and the coordinator picking it up, the next reconciler tick after restart still processes it.
 
 ## Cert attempt log
 

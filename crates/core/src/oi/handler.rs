@@ -268,6 +268,8 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/tls/certificates/list" => tls::list_certificates(state),
         // i[tls.cert.issue-acme-dns]
         "/tls/certificates/issue-acme-dns" => tls::issue_acme_dns(state, parse_params(req.params)?),
+        // i[tls.cert.retry]
+        "/tls/certificates/retry" => tls::retry(state, parse_params(req.params)?),
         // i[tls.settings.get]
         "/tls/settings/get" => tls::get_settings(state),
         // i[tls.settings.set]

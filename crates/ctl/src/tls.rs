@@ -128,16 +128,19 @@ pub(super) enum PoliciesCommand {
 pub(super) enum CertsCommand {
     /// List all stored certificates
     List,
-    /// Run ACME-DNS issuance now for a hostname covered by an acme_dns policy
-    IssueAcmeDns {
-        hostname: String,
-        /// Operator contact email override (defaults to the global setting)
-        #[arg(long)]
-        contact: Option<String>,
-        /// ACME directory URL (defaults to Let's Encrypt production)
-        #[arg(long)]
-        directory: Option<String>,
-    },
+    /// Run ACME-DNS issuance now for a hostname covered by an acme_dns policy.
+    ///
+    /// Blocks until the flow completes (typically tens of seconds). For a
+    /// fire-and-forget retry that survives daemon restarts, use `retry`
+    /// instead — it sets a persistent force-retry signal that the
+    /// reconciler picks up on the next tick.
+    IssueAcmeDns { hostname: String },
+    /// Queue a retry for a hostname.
+    ///
+    /// Clears any operator pause, records a persistent force-retry signal,
+    /// and nudges the issuance coordinator. Returns immediately; the cert
+    /// appears in `tls certs list` once the reconciler runs the flow.
+    Retry { hostname: String },
 }
 
 pub(super) async fn dispatch(client: &OiClient, cmd: TlsCommand) {
@@ -271,21 +274,20 @@ async fn dispatch_certs(client: &OiClient, cmd: CertsCommand) {
         CertsCommand::List => {
             print_result(client.request("/tls/certificates/list", json!({})).await);
         }
-        CertsCommand::IssueAcmeDns {
-            hostname,
-            contact,
-            directory,
-        } => {
-            let mut params = json!({ "hostname": hostname });
-            if let Some(c) = contact {
-                params["contact_email"] = json!(c);
-            }
-            if let Some(dir) = directory {
-                params["directory_url"] = json!(dir);
-            }
+        CertsCommand::IssueAcmeDns { hostname } => {
             print_result(
                 client
-                    .request("/tls/certificates/issue-acme-dns", params)
+                    .request(
+                        "/tls/certificates/issue-acme-dns",
+                        json!({ "hostname": hostname }),
+                    )
+                    .await,
+            );
+        }
+        CertsCommand::Retry { hostname } => {
+            print_result(
+                client
+                    .request("/tls/certificates/retry", json!({ "hostname": hostname }))
                     .await,
             );
         }
