@@ -10,6 +10,11 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[transport.quic]
 > The OI uses QUIC as its wire transport protocol.
 
+> i[transport.alpn]
+> The TLS handshake negotiates an Application-Layer Protocol Negotiation (ALPN) identifier.
+> Both client and server must offer the same identifier; a connection where the peer does not offer the expected identifier is rejected at the TLS layer.
+> The current identifier is `oi1`. Future incompatible protocol revisions are introduced by adding a new identifier; the negotiation result selects the variant.
+
 > i[transport.server-identity]
 > The server authenticates using an RFC 7250 raw public key (SPKI).
 > The server's key pair is generated at first startup and persisted to the data directory so that clients can pin the SPKI fingerprint across restarts.

@@ -6,7 +6,7 @@ use serde_json::json;
 use tokio::sync::{Semaphore, mpsc};
 use tracing::Instrument;
 
-use seedling_protocol::{actor::Actor, events::EventSenderWithActor, keys};
+use seedling_protocol::{OI_ALPN, actor::Actor, events::EventSenderWithActor, keys};
 
 use super::{
     auth::{SeedlingClientVerifier, TrustedKeys},
@@ -52,6 +52,8 @@ fn build_tls_config(
         .with_cert_resolver(resolver);
 
     tls_config.key_log = Arc::new(rustls::KeyLogFile::new());
+    // i[transport.alpn]
+    tls_config.alpn_protocols = vec![OI_ALPN.to_vec()];
 
     Ok(tls_config)
 }
