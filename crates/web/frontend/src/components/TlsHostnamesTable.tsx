@@ -29,7 +29,7 @@ import type {
 } from "../lib/types";
 
 interface TlsHostnamesTableProps {
-  /** Filter to a single app's TLS hostnames. */
+  /** Filter to a single app's TLS-terminating domains. */
   app?: string;
   /** Hide the "Apps" column (useful when filtered to a single app). */
   hideAppsColumn?: boolean;
@@ -120,18 +120,28 @@ function lastIssuanceLabel(
   return { primary: `ACME-DNS via ${provider}`, secondary: when };
 }
 
-function nextIssuanceLabel(view: TlsHostnameView, now: number): string {
+function nextIssuanceLabel(view: TlsHostnameView, now: number): React.ReactNode {
   if (view.next_issuance_source === "immediate") return "queued";
   if (view.next_issuance_at == null) return "—";
   if (view.next_issuance_source === "debounce") {
     // Last attempt failed; the runtime won't retry until this point.
     return `retry after ${relative(view.next_issuance_at, now)} (last attempt failed)`;
   }
-  const sourceTag =
-    view.next_issuance_source === "ari" ? " (ARI)"
-    : view.next_issuance_source === "fallback" ? " (fallback)"
-    : "";
-  return `${relative(view.next_issuance_at, now)}${sourceTag}`;
+  const when = relative(view.next_issuance_at, now);
+  if (view.next_issuance_source === "ari") {
+    return (
+      <>
+        {when}{" "}
+        <abbr title="ACME Renewal Information (RFC 9773): the issuing CA told us when to renew this cert.">
+          (ARI)
+        </abbr>
+      </>
+    );
+  }
+  if (view.next_issuance_source === "fallback") {
+    return `${when} (fallback)`;
+  }
+  return when;
 }
 
 export function TlsHostnamesTable({
@@ -170,7 +180,7 @@ export function TlsHostnamesTable({
     <Box>
       {!hideTitle && (
         <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>
-          {title ?? "TLS hostnames"}
+          {title ?? "Domains"}
         </Typography>
       )}
       {error && <OiErrorAlert error={error} />}
@@ -178,14 +188,14 @@ export function TlsHostnamesTable({
       {loading && rows.length === 0 && <CircularProgress size={20} />}
       {!loading && rows.length === 0 ? (
         <Typography variant="body2" sx={{ color: "text.secondary" }}>
-          No TLS-terminating ingress hostnames declared.
+          No TLS-terminating ingress domains declared.
         </Typography>
       ) : (
         <TableContainer component={Paper} variant="outlined">
           <Table size="small">
             <TableHead>
               <TableRow>
-                <TableCell>Hostname</TableCell>
+                <TableCell>Domain</TableCell>
                 {!hideAppsColumn && <TableCell>Apps</TableCell>}
                 <TableCell>Status</TableCell>
                 <TableCell>Last issued</TableCell>
@@ -203,7 +213,7 @@ export function TlsHostnamesTable({
                     : row.status === "blocked" && row.retry_block?.reason
                       ? `Paused: ${row.retry_block.reason}`
                       : row.status === "blocked"
-                        ? "Issuance is paused for this hostname"
+                        ? "Issuance is paused for this domain"
                         : row.status === "default"
                           ? "No policy bound — the proxy handles ACME-HTTP-01 automatically"
                           : row.status === "pending" && row.force_retry_at
@@ -287,7 +297,8 @@ export function TlsHostnamesTable({
                           variant="caption"
                           sx={{ color: "text.secondary" }}
                         >
-                          expires {relative(row.active_cert.not_after, now)}
+                          {row.active_cert.not_after < now ? "expired" : "expires"}{" "}
+                          {relative(row.active_cert.not_after, now)}
                         </Typography>
                       )}
                     </TableCell>

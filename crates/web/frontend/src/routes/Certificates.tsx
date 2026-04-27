@@ -107,7 +107,7 @@ export default function Certificates() {
     <Box sx={{ p: 3, maxWidth: 1100, mx: "auto" }}>
       <Box sx={{ display: "flex", alignItems: "center", mb: 2, gap: 1 }}>
         <Typography variant="h5" sx={{ flexGrow: 1 }}>
-          Certificates
+          TLS Certificates
         </Typography>
         <Tooltip title="Refresh">
           <span>
@@ -121,8 +121,8 @@ export default function Certificates() {
         variant="body2"
         sx={{ color: "text.secondary", mb: 2 }}
       >
-        Per-hostname rollup of every TLS-terminating ingress in the system.
-        Hostnames without an explicit policy use the default (TLS/HTTP/internal)
+        Per-domain rollup of every TLS-terminating ingress in the system.
+        Domains without an explicit policy use the default (TLS/HTTP/internal)
         issuance Caddy provides automatically.
       </Typography>
 
@@ -330,7 +330,7 @@ export default function Certificates() {
         title="Clear policy"
         body={
           removingPolicy
-            ? `Clear the policy for "${removingPolicy}"? The hostname will revert to the default caddy issuance strategy.`
+            ? `Clear the policy for "${removingPolicy}"? The domain will revert to the default Caddy issuance strategy.`
             : ""
         }
         confirmLabel="Clear"
@@ -559,7 +559,7 @@ function PoliciesSection({
     <Box>
       <Box sx={{ display: "flex", alignItems: "center", mb: 1, gap: 1 }}>
         <Typography variant="subtitle1" sx={{ fontWeight: 600, flexGrow: 1 }}>
-          Per-hostname policies
+          Per-domain policies
         </Typography>
         <Tooltip title={writeReason ?? ""}>
           <span>
@@ -569,26 +569,26 @@ function PoliciesSection({
               onClick={onAdd}
               disabled={!writeAllowed || providers.length === 0}
             >
-              Bind hostname
+              Bind domain
             </Button>
           </span>
         </Tooltip>
       </Box>
       <Typography variant="caption" sx={{ color: "text.secondary", mb: 1, display: "block" }}>
-        Hostnames absent here use the default Caddy issuance strategy (TLS/HTTP/internal).
+        Domains absent here use the default Caddy issuance strategy (TLS/HTTP/internal).
       </Typography>
       {error && <OiErrorAlert error={error} />}
       {loading && <CircularProgress size={20} />}
       {policies.length === 0 ? (
         <Typography variant="body2" sx={{ color: "text.secondary" }}>
-          No operator policies — every TLS-terminating hostname uses the caddy default.
+          No operator policies — every TLS-terminating domain uses the Caddy default.
         </Typography>
       ) : (
         <TableContainer component={Paper} variant="outlined">
           <Table size="small">
             <TableHead>
               <TableRow>
-                <TableCell>Hostname pattern</TableCell>
+                <TableCell>Domain pattern</TableCell>
                 <TableCell>Strategy</TableCell>
                 <TableCell>Source</TableCell>
                 <TableCell>Updated</TableCell>
@@ -706,8 +706,9 @@ function ManualCertsSection({
         </Tooltip>
       </Box>
       <Typography variant="caption" sx={{ color: "text.secondary", mb: 1, display: "block" }}>
-        Manually-uploaded and CSR-derived certificates available for binding. Bind one to a hostname with{" "}
-        <code>tls policies set-manual</code>.
+        Manually-uploaded and CSR-derived certificates. The runtime auto-binds each
+        certificate to every domain its SAN list covers, so no per-domain
+        configuration step is needed.
       </Typography>
       {error && <OiErrorAlert error={error} />}
       {loading && certs.length === 0 && <CircularProgress size={20} />}
@@ -721,7 +722,7 @@ function ManualCertsSection({
             <TableHead>
               <TableRow>
                 <TableCell>#</TableCell>
-                <TableCell>Hostname</TableCell>
+                <TableCell>Primary SAN</TableCell>
                 <TableCell>Origin</TableCell>
                 <TableCell>State</TableCell>
                 <TableCell>Issuer</TableCell>
@@ -1096,7 +1097,7 @@ function SetAcmeDnsPolicyDialog({
 
   return (
     <Dialog open={open} onClose={close} fullWidth maxWidth="sm">
-      <DialogTitle>Bind hostname to ACME-DNS</DialogTitle>
+      <DialogTitle>Bind domain to ACME-DNS</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
           {error && (
@@ -1105,7 +1106,7 @@ function SetAcmeDnsPolicyDialog({
             </Alert>
           )}
           <TextField
-            label="Hostname or wildcard"
+            label="Domain or wildcard"
             placeholder="e.g. example.com, *.example.com, *"
             value={hostname}
             onChange={(e) => setHostname(e.target.value)}
@@ -1138,7 +1139,7 @@ function SetAcmeDnsPolicyDialog({
           {isExact && (
             <Typography variant="caption" sx={{ color: "text.secondary" }}>
               When the global contact email is configured, the daemon will
-              auto-fire a one-shot ACME-DNS issuance for this exact hostname
+              auto-fire a one-shot ACME-DNS issuance for this exact domain
               if no active cert exists yet.
             </Typography>
           )}
