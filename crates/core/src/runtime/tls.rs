@@ -17,6 +17,7 @@ pub mod acme;
 pub mod dns;
 pub mod keypair;
 pub mod parse;
+pub mod renewal;
 pub mod store;
 
 use secrecy::SecretString;

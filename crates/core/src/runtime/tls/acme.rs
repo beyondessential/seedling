@@ -29,10 +29,9 @@ use snafu::{ResultExt, Snafu};
 use super::{
     KeyType, TlsCertOrigin, TlsCertState,
     dns::{self, DnsProvider, challenge_record_name},
-    keypair, parse,
-    store::{self, CertMetadata},
+    keypair, parse, store,
 };
-use crate::runtime::{db::Db, secrets::Cipher};
+use crate::runtime::{db::DbHandle, secrets::Cipher};
 
 /// Default Let's Encrypt production directory; override via [`IssueParams`].
 pub fn default_directory_url() -> String {
@@ -100,9 +99,20 @@ pub struct Issued {
 const DNS_PROPAGATION_DELAY: Duration = Duration::from_secs(30);
 
 /// Run the full ACME-DNS issuance flow against a single hostname.
+///
+/// `db` is held by `Arc` so background callers (the renewal task) can share
+/// it without lifetime ceremony. DB access is sliced into short, sync
+/// closures via `DbHandle::call`; network I/O happens between calls so the
+/// DB worker thread never blocks on remote services.
 // r[impl tls.strategy.acme-dns]
-pub async fn issue(db: &Db, cipher: &Cipher, params: IssueParams<'_>) -> Result<Issued, AcmeError> {
-    let provider_entry = store::get_dns_provider(db, cipher, params.dns_provider_name)
+pub async fn issue(
+    db: &DbHandle,
+    cipher: &Cipher,
+    params: IssueParams<'_>,
+) -> Result<Issued, AcmeError> {
+    let provider_name_owned = params.dns_provider_name.to_owned();
+    let raw = db
+        .call(move |db_inner| store::get_dns_provider_raw(db_inner, &provider_name_owned))
         .context(StorageSnafu)?
         .ok_or_else(|| {
             ProviderNotFoundSnafu {
@@ -110,6 +120,16 @@ pub async fn issue(db: &Db, cipher: &Cipher, params: IssueParams<'_>) -> Result<
             }
             .build()
         })?;
+    let config_secret = cipher
+        .decrypt(&raw.config_ciphertext)
+        .context(CipherSnafu)?;
+    let provider_entry = super::DnsProviderEntry {
+        name: raw.name,
+        kind: raw.kind,
+        config: config_secret,
+        created_at: raw.created_at,
+        updated_at: raw.updated_at,
+    };
     let provider = dns::build_provider(&provider_entry).context(DnsSnafu)?;
 
     let (account, account_id) =
@@ -186,23 +206,27 @@ pub async fn issue(db: &Db, cipher: &Cipher, params: IssueParams<'_>) -> Result<
 
     let metadata = parsed.metadata.clone();
     let not_after = metadata.not_after.unwrap_or(0);
+    let hostname_owned = params.hostname.to_owned();
+    let chain_pem = parsed.chain_pem.clone();
 
-    let cert_id = store::insert_certificate(
-        db,
-        params.hostname,
-        TlsCertState::Active,
-        TlsCertOrigin::AcmeDns,
-        Some(&parsed.chain_pem),
-        None,
-        &key_ct,
-        KeyType::EcdsaP256,
-        metadata,
-        None,
-        Some(account_id),
-    )
-    .context(StorageSnafu)?;
-
-    store::supersede_other_active_for_hostname(db, params.hostname, cert_id)
+    let cert_id = db
+        .call(move |db_inner| -> rusqlite::Result<i64> {
+            let id = store::insert_certificate(
+                db_inner,
+                &hostname_owned,
+                TlsCertState::Active,
+                TlsCertOrigin::AcmeDns,
+                Some(&chain_pem),
+                None,
+                &key_ct,
+                KeyType::EcdsaP256,
+                metadata,
+                None,
+                Some(account_id),
+            )?;
+            store::supersede_other_active_for_hostname(db_inner, &hostname_owned, id)?;
+            Ok(id)
+        })
         .context(StorageSnafu)?;
 
     Ok(Issued { cert_id, not_after })
@@ -213,14 +237,18 @@ pub async fn issue(db: &Db, cipher: &Cipher, params: IssueParams<'_>) -> Result<
 /// row id for `tls_acme_accounts.id` so callers can stamp issued certs.
 // r[impl tls.acme.account.persist]
 async fn load_or_create_account(
-    db: &Db,
+    db: &DbHandle,
     cipher: &Cipher,
     directory_url: &str,
     contact_email: &str,
 ) -> Result<(Account, i64), AcmeError> {
-    if let Some(row) =
-        store::get_acme_account(db, directory_url, contact_email).context(StorageSnafu)?
-    {
+    let directory_owned = directory_url.to_owned();
+    let contact_owned = contact_email.to_owned();
+    let existing = db
+        .call(move |db_inner| store::get_acme_account(db_inner, &directory_owned, &contact_owned))
+        .context(StorageSnafu)?;
+
+    if let Some(row) = existing {
         let plaintext = store::decrypt_acme_account_key(cipher, &row).context(CipherSnafu)?;
         let creds: instant_acme::AccountCredentials =
             serde_json::from_str(plaintext.expose_secret()).context(AccountSerdeSnafu)?;
@@ -248,16 +276,22 @@ async fn load_or_create_account(
     let creds_json = serde_json::to_string(&credentials).context(AccountSerdeSnafu)?;
     let account_url = account.id().to_owned();
     let creds_secret = SecretString::new(creds_json.into());
+    // Encrypt before crossing into the DB closure so the closure stays Cipher-free.
+    let creds_ct = cipher.encrypt(&creds_secret).context(CipherSnafu)?;
 
-    let id = store::insert_acme_account(
-        db,
-        cipher,
-        directory_url,
-        contact_email,
-        &account_url,
-        &creds_secret,
-    )
-    .context(StorageSnafu)?;
+    let directory_owned = directory_url.to_owned();
+    let contact_owned = contact_email.to_owned();
+    let id = db
+        .call(move |db_inner| {
+            store::insert_acme_account_raw(
+                db_inner,
+                &directory_owned,
+                &contact_owned,
+                &account_url,
+                &creds_ct,
+            )
+        })
+        .context(StorageSnafu)?;
 
     Ok((account, id))
 }

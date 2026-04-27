@@ -42,6 +42,38 @@ pub fn list_dns_providers(db: &Db) -> rusqlite::Result<Vec<DnsProviderSummary>> 
     Ok(rows)
 }
 
+/// Like [`get_dns_provider`] but returns the encrypted blob without
+/// decrypting. Suitable for DB-thread closures that don't hold the cipher.
+pub fn get_dns_provider_raw(db: &Db, name: &str) -> rusqlite::Result<Option<DnsProviderRaw>> {
+    db.conn
+        .query_row(
+            "SELECT name, kind, config_ciphertext, created_at, updated_at
+             FROM tls_dns_providers WHERE name = ?1",
+            [name],
+            |row| {
+                let kind_str: String = row.get(1)?;
+                Ok(DnsProviderRaw {
+                    name: row.get(0)?,
+                    kind: DnsProviderKind::parse(&kind_str)
+                        .ok_or_else(|| rusqlite::Error::InvalidQuery)?,
+                    config_ciphertext: row.get(2)?,
+                    created_at: row.get(3)?,
+                    updated_at: row.get(4)?,
+                })
+            },
+        )
+        .optional()
+}
+
+#[derive(Debug, Clone)]
+pub struct DnsProviderRaw {
+    pub name: String,
+    pub kind: DnsProviderKind,
+    pub config_ciphertext: Vec<u8>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 // r[impl tls.dns-provider.lifecycle]
 pub fn get_dns_provider(
     db: &Db,
@@ -425,13 +457,31 @@ pub fn insert_acme_account(
     let ct = cipher
         .encrypt(account_key_pem)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    insert_acme_account_raw(db, directory_url, contact_email, account_url, &ct)
+}
+
+/// Variant of [`insert_acme_account`] that takes pre-encrypted ciphertext.
+/// Use this in DB-thread closures that don't carry a [`Cipher`].
+pub fn insert_acme_account_raw(
+    db: &Db,
+    directory_url: &str,
+    contact_email: &str,
+    account_url: &str,
+    account_key_ciphertext: &[u8],
+) -> rusqlite::Result<i64> {
     let now = now_secs();
     db.conn.execute(
         "INSERT INTO tls_acme_accounts
             (directory_url, contact_email, account_key_ciphertext,
              account_url, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
-        params![directory_url, contact_email, ct, account_url, now],
+        params![
+            directory_url,
+            contact_email,
+            account_key_ciphertext,
+            account_url,
+            now
+        ],
     )?;
     Ok(db.conn.last_insert_rowid())
 }
