@@ -266,6 +266,8 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/tls/policies/clear" => tls::clear_policy(state, parse_params(req.params)?),
         // i[tls.cert.list]
         "/tls/certificates/list" => tls::list_certificates(state),
+        // i[tls.cert.preview]
+        "/tls/certificates/preview" => tls::preview_cert(state, parse_params(req.params)?),
         // i[tls.cert.upload-manual]
         "/tls/certificates/upload-manual" => tls::upload_manual(state, parse_params(req.params)?),
         // i[tls.cert.delete]

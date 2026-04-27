@@ -711,6 +711,25 @@ export interface TlsHostnamesResponse {
   hostnames: TlsHostnameView[];
 }
 
+export interface TlsCertPreview {
+  san_dns_names: string[];
+  issuer: string | null;
+  not_before: number | null;
+  not_after: number | null;
+  self_signed: boolean;
+  serial: string | null;
+}
+
+export interface TlsCsrBeginResponse {
+  id: number;
+  csr_pem: string;
+}
+
+export interface TlsCsrGetResponse {
+  id: number;
+  csr_pem: string;
+}
+
 export interface TlsRetryBlocksResponse {
   blocks: TlsRetryBlock[];
 }

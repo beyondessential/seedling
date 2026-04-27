@@ -415,6 +415,32 @@ pub(crate) fn delete_certificate(state: &OiState, params: CertIdParams) -> Handl
     Ok(json!({ "ok": true }))
 }
 
+#[derive(Deserialize)]
+pub(crate) struct PreviewCertParams {
+    pub cert_pem: String,
+}
+
+/// Parse a cert chain without storing it. Used by the upload UI to
+/// inspect the SAN list and metadata so the operator picks a hostname
+/// from the cert rather than retyping it. Read-only; no DB access.
+// i[tls.cert.preview]
+pub(crate) fn preview_cert(_state: &OiState, params: PreviewCertParams) -> HandlerResult {
+    let parsed = crate::runtime::tls::parse::parse_chain(&params.cert_pem).map_err(|e| {
+        OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!("certificate parse error: {e}"),
+        )
+    })?;
+    Ok(json!({
+        "san_dns_names": parsed.san_dns_names,
+        "issuer": parsed.metadata.issuer,
+        "not_before": parsed.metadata.not_before,
+        "not_after": parsed.metadata.not_after,
+        "self_signed": parsed.metadata.self_signed,
+        "serial": parsed.metadata.serial,
+    }))
+}
+
 // ---------------------------------------------------------------------------
 // CSR flow
 // ---------------------------------------------------------------------------

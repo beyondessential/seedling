@@ -26,7 +26,7 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useGuard } from "../components/SafetyModeProvider";
 import { TlsHostnamesTable } from "../components/TlsHostnamesTable";
@@ -34,8 +34,11 @@ import type { OiQueryError } from "../hooks/useOi";
 import { useOiQuery } from "../hooks/useOi";
 import { useOiAction } from "../hooks/useOiAction";
 import type {
+  TlsCertPreview,
   TlsCertificate,
   TlsCertificatesResponse,
+  TlsCsrBeginResponse,
+  TlsCsrGetResponse,
   TlsDnsProvider,
   TlsDnsProvidersResponse,
   TlsPoliciesResponse,
@@ -82,6 +85,9 @@ export default function Certificates() {
   const [providerDialog, setProviderDialog] = useState(false);
   const [policyDialog, setPolicyDialog] = useState(false);
   const [uploadDialog, setUploadDialog] = useState(false);
+  const [csrBeginDialog, setCsrBeginDialog] = useState(false);
+  const [csrShow, setCsrShow] = useState<{ id: number; csrPem: string } | null>(null);
+  const [csrUpload, setCsrUpload] = useState<TlsCertificate | null>(null);
   const [removingProvider, setRemovingProvider] = useState<string | null>(null);
   const [removingPolicy, setRemovingPolicy] = useState<string | null>(null);
   const [deletingCert, setDeletingCert] = useState<TlsCertificate | null>(null);
@@ -167,6 +173,34 @@ export default function Certificates() {
             clearError();
             setDeletingCert(c);
           }}
+          onGenerateCsr={() => {
+            clearError();
+            setCsrBeginDialog(true);
+          }}
+          onShowCsr={async (c) => {
+            clearError();
+            try {
+              const result = (await execute("/tls/certificates/csr/get", {
+                id: c.id,
+              })) as TlsCsrGetResponse;
+              setCsrShow({ id: result.id, csrPem: result.csr_pem });
+            } catch {
+              // surfaced via actionError
+            }
+          }}
+          onUploadCsrCert={(c) => {
+            clearError();
+            setCsrUpload(c);
+          }}
+          onCancelCsr={async (c) => {
+            clearError();
+            try {
+              await execute("/tls/certificates/csr/cancel", { id: c.id });
+              refetchCerts();
+            } catch {
+              // surfaced via actionError
+            }
+          }}
           writeAllowed={writeGuard.allowed}
           writeReason={writeGuard.reason}
           dangerAllowed={dangerGuard.allowed}
@@ -221,6 +255,32 @@ export default function Certificates() {
         onSubmitted={() => {
           refetchCerts();
           setUploadDialog(false);
+        }}
+        execute={execute}
+      />
+      <CsrBeginDialog
+        open={csrBeginDialog}
+        onClose={() => setCsrBeginDialog(false)}
+        onSubmitted={(result) => {
+          refetchCerts();
+          setCsrBeginDialog(false);
+          setCsrShow({ id: result.id, csrPem: result.csr_pem });
+        }}
+        execute={execute}
+      />
+      <CsrShowDialog
+        open={csrShow !== null}
+        csrId={csrShow?.id ?? null}
+        csrPem={csrShow?.csrPem ?? ""}
+        onClose={() => setCsrShow(null)}
+      />
+      <CsrUploadCertDialog
+        open={csrUpload !== null}
+        cert={csrUpload}
+        onClose={() => setCsrUpload(null)}
+        onSubmitted={() => {
+          refetchCerts();
+          setCsrUpload(null);
         }}
         execute={execute}
       />
@@ -528,6 +588,10 @@ interface ManualCertsSectionProps {
   error: OiQueryError | null;
   onUpload: () => void;
   onDelete: (cert: TlsCertificate) => void;
+  onGenerateCsr: () => void;
+  onShowCsr: (cert: TlsCertificate) => void;
+  onUploadCsrCert: (cert: TlsCertificate) => void;
+  onCancelCsr: (cert: TlsCertificate) => void;
   writeAllowed: boolean;
   writeReason: string | null;
   dangerAllowed: boolean;
@@ -540,6 +604,10 @@ function ManualCertsSection({
   error,
   onUpload,
   onDelete,
+  onGenerateCsr,
+  onShowCsr,
+  onUploadCsrCert,
+  onCancelCsr,
   writeAllowed,
   writeReason,
   dangerAllowed,
@@ -551,6 +619,17 @@ function ManualCertsSection({
         <Typography variant="subtitle1" sx={{ fontWeight: 600, flexGrow: 1 }}>
           Stored certificates
         </Typography>
+        <Tooltip title={writeReason ?? ""}>
+          <span>
+            <Button
+              size="small"
+              onClick={onGenerateCsr}
+              disabled={!writeAllowed}
+            >
+              Generate CSR
+            </Button>
+          </span>
+        </Tooltip>
         <Tooltip title={writeReason ?? ""}>
           <span>
             <Button
@@ -589,51 +668,88 @@ function ManualCertsSection({
               </TableRow>
             </TableHead>
             <TableBody>
-              {certs.map((c) => (
-                <TableRow key={c.id} hover>
-                  <TableCell sx={{ fontFamily: "monospace" }}>{c.id}</TableCell>
-                  <TableCell sx={{ fontFamily: "monospace" }}>{c.hostname}</TableCell>
-                  <TableCell>
-                    <Chip label={c.origin} size="small" variant="outlined" />
-                  </TableCell>
-                  <TableCell>
-                    <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
-                      <Chip
-                        label={c.state}
-                        size="small"
-                        color={
-                          c.state === "active"
-                            ? "success"
-                            : c.state === "failed"
-                              ? "error"
-                              : "default"
-                        }
-                        variant={c.state === "active" ? "filled" : "outlined"}
-                      />
-                      {c.self_signed && (
-                        <Chip label="self-signed" size="small" color="warning" variant="outlined" />
-                      )}
-                    </Stack>
-                  </TableCell>
-                  <TableCell sx={{ fontFamily: "monospace", fontSize: "0.8rem" }}>
-                    {c.issuer ?? "—"}
-                  </TableCell>
-                  <TableCell sx={{ fontSize: "0.85rem" }}>{formatTime(c.not_after)}</TableCell>
-                  <TableCell align="right">
-                    <Tooltip title={dangerReason ?? "Delete"}>
-                      <span>
-                        <IconButton
+              {certs.map((c) => {
+                const pending = c.state === "csr_pending";
+                return (
+                  <TableRow key={c.id} hover>
+                    <TableCell sx={{ fontFamily: "monospace" }}>{c.id}</TableCell>
+                    <TableCell sx={{ fontFamily: "monospace" }}>{c.hostname}</TableCell>
+                    <TableCell>
+                      <Chip label={c.origin} size="small" variant="outlined" />
+                    </TableCell>
+                    <TableCell>
+                      <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
+                        <Chip
+                          label={c.state}
                           size="small"
-                          disabled={!dangerAllowed}
-                          onClick={() => onDelete(c)}
-                        >
-                          <DeleteOutlineIcon fontSize="small" />
-                        </IconButton>
-                      </span>
-                    </Tooltip>
-                  </TableCell>
-                </TableRow>
-              ))}
+                          color={
+                            c.state === "active"
+                              ? "success"
+                              : c.state === "failed"
+                                ? "error"
+                                : "default"
+                          }
+                          variant={c.state === "active" ? "filled" : "outlined"}
+                        />
+                        {c.self_signed && (
+                          <Chip label="self-signed" size="small" color="warning" variant="outlined" />
+                        )}
+                      </Stack>
+                    </TableCell>
+                    <TableCell sx={{ fontFamily: "monospace", fontSize: "0.8rem" }}>
+                      {c.issuer ?? "—"}
+                    </TableCell>
+                    <TableCell sx={{ fontSize: "0.85rem" }}>{formatTime(c.not_after)}</TableCell>
+                    <TableCell align="right">
+                      {pending ? (
+                        <>
+                          <Tooltip title="Show CSR PEM again">
+                            <span>
+                              <Button size="small" onClick={() => onShowCsr(c)}>
+                                Show CSR
+                              </Button>
+                            </span>
+                          </Tooltip>
+                          <Tooltip title={writeReason ?? "Upload signed cert"}>
+                            <span>
+                              <Button
+                                size="small"
+                                disabled={!writeAllowed}
+                                onClick={() => onUploadCsrCert(c)}
+                              >
+                                Upload cert
+                              </Button>
+                            </span>
+                          </Tooltip>
+                          <Tooltip title={writeReason ?? "Cancel CSR (deletes the keypair)"}>
+                            <span>
+                              <IconButton
+                                size="small"
+                                disabled={!writeAllowed}
+                                onClick={() => onCancelCsr(c)}
+                              >
+                                <DeleteOutlineIcon fontSize="small" />
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                        </>
+                      ) : (
+                        <Tooltip title={dangerReason ?? "Delete"}>
+                          <span>
+                            <IconButton
+                              size="small"
+                              disabled={!dangerAllowed}
+                              onClick={() => onDelete(c)}
+                            >
+                              <DeleteOutlineIcon fontSize="small" />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         </TableContainer>
@@ -982,18 +1098,22 @@ function UploadManualCertDialog({
   onSubmitted,
   execute,
 }: UploadManualCertDialogProps) {
-  const [hostname, setHostname] = useState("");
   const [certPem, setCertPem] = useState("");
   const [keyPem, setKeyPem] = useState("");
   const [note, setNote] = useState("");
+  const [sans, setSans] = useState<string[]>([]);
+  const [hostname, setHostname] = useState("");
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [warnings, setWarnings] = useState<string[] | null>(null);
 
   const reset = () => {
-    setHostname("");
     setCertPem("");
     setKeyPem("");
     setNote("");
+    setSans([]);
+    setHostname("");
+    setPreviewError(null);
     setWarnings(null);
   };
 
@@ -1002,16 +1122,54 @@ function UploadManualCertDialog({
     onClose();
   };
 
-  const trimmedHost = hostname.trim();
+  // Whenever the cert PEM changes, ask the backend for SANs so the
+  // operator picks the hostname from the cert rather than retyping it.
+  useEffect(() => {
+    if (!open) return;
+    const trimmed = certPem.trim();
+    if (trimmed.length === 0) {
+      setSans([]);
+      setPreviewError(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = (await execute("/tls/certificates/preview", {
+          cert_pem: trimmed,
+        })) as TlsCertPreview;
+        if (cancelled) return;
+        setPreviewError(null);
+        setSans(result.san_dns_names);
+        if (result.san_dns_names.length > 0 && !result.san_dns_names.includes(hostname)) {
+          // Default to the first concrete SAN, falling back to the
+          // first entry (which may be a wildcard).
+          const concrete = result.san_dns_names.find((s) => !s.startsWith("*."));
+          setHostname(concrete ?? result.san_dns_names[0]);
+        }
+      } catch (e) {
+        if (cancelled) return;
+        setSans([]);
+        setPreviewError(
+          e instanceof Error ? e.message : "could not parse certificate",
+        );
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [certPem, open, execute]);
+
   const valid =
-    trimmedHost.length > 0 && certPem.trim().length > 0 && keyPem.trim().length > 0;
+    hostname.length > 0 && certPem.trim().length > 0 && keyPem.trim().length > 0;
 
   const submit = async () => {
     setSubmitting(true);
     setWarnings(null);
     try {
       const params: Record<string, unknown> = {
-        hostname: trimmedHost,
+        hostname,
         cert_pem: certPem,
         key_pem: keyPem,
       };
@@ -1042,6 +1200,208 @@ function UploadManualCertDialog({
       <DialogTitle>Upload manual certificate</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
+          <PemField
+            label="Certificate PEM"
+            placeholder="-----BEGIN CERTIFICATE-----..."
+            accept=".pem,.crt,.cer"
+            minRows={6}
+            value={certPem}
+            onChange={setCertPem}
+            helperText={
+              previewError
+                ? `Could not parse: ${previewError}`
+                : sans.length > 0
+                  ? `Detected SANs: ${sans.join(", ")}`
+                  : "Paste, drop, or open a PEM file. Leaf cert plus optional intermediates."
+            }
+          />
+          {sans.length > 1 ? (
+            <TextField
+              select
+              label="Bind to SAN"
+              value={hostname}
+              onChange={(e) => setHostname(e.target.value)}
+              fullWidth
+              helperText="Pick which SAN this cert row should be bound to. The cert remains usable for any covered hostname; this is the row's primary label."
+            >
+              {sans.map((s) => (
+                <MenuItem key={s} value={s} sx={{ fontFamily: "monospace" }}>
+                  {s}
+                </MenuItem>
+              ))}
+            </TextField>
+          ) : sans.length === 1 ? (
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+              <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                Will bind to:
+              </Typography>
+              <Typography sx={{ fontFamily: "monospace" }}>{sans[0]}</Typography>
+            </Box>
+          ) : null}
+          <PemField
+            label="Private key PEM"
+            placeholder="-----BEGIN PRIVATE KEY-----..."
+            accept=".pem,.key"
+            minRows={5}
+            value={keyPem}
+            onChange={setKeyPem}
+            helperText="PKCS#8 PEM. Stored encrypted at rest; never returned by any operator endpoint."
+          />
+          <TextField
+            label="Note (optional)"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            fullWidth
+          />
+          {warnings && (
+            <Alert severity="warning">
+              Uploaded with warnings: {warnings.join(", ")}.
+            </Alert>
+          )}
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        {warnings ? (
+          <Button onClick={acceptAndClose} variant="contained">
+            OK
+          </Button>
+        ) : (
+          <>
+            <Button onClick={close} disabled={submitting}>
+              Cancel
+            </Button>
+            <Button
+              onClick={submit}
+              variant="contained"
+              disabled={!valid || submitting}
+            >
+              Upload
+            </Button>
+          </>
+        )}
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// PEM field helper (paste OR pick from disk)
+// ---------------------------------------------------------------------------
+
+interface PemFieldProps {
+  label: string;
+  placeholder: string;
+  accept: string;
+  minRows: number;
+  value: string;
+  onChange: (next: string) => void;
+  helperText?: React.ReactNode;
+}
+
+function PemField({
+  label,
+  placeholder,
+  accept,
+  minRows,
+  value,
+  onChange,
+  helperText,
+}: PemFieldProps) {
+  const inputId = `pem-file-${label.replace(/\s+/g, "-")}`;
+  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    onChange(text);
+    e.target.value = "";
+  };
+  return (
+    <Box>
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          mb: 0.5,
+          gap: 1,
+        }}
+      >
+        <Typography variant="caption" sx={{ color: "text.secondary", flexGrow: 1 }}>
+          {label}
+        </Typography>
+        <Button
+          size="small"
+          component="label"
+          htmlFor={inputId}
+          variant="outlined"
+        >
+          Open file…
+          <input
+            id={inputId}
+            type="file"
+            hidden
+            accept={accept}
+            onChange={handleFile}
+          />
+        </Button>
+      </Box>
+      <TextField
+        placeholder={placeholder}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        fullWidth
+        multiline
+        minRows={minRows}
+        slotProps={{
+          htmlInput: { style: { fontFamily: "monospace", fontSize: "0.75rem" } },
+        }}
+        helperText={helperText}
+      />
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// CSR dialogs
+// ---------------------------------------------------------------------------
+
+interface CsrBeginDialogProps {
+  open: boolean;
+  onClose: () => void;
+  onSubmitted: (result: TlsCsrBeginResponse) => void;
+  execute: (path: string, params: unknown) => Promise<unknown>;
+}
+
+function CsrBeginDialog({ open, onClose, onSubmitted, execute }: CsrBeginDialogProps) {
+  const [hostname, setHostname] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  const close = () => {
+    setHostname("");
+    onClose();
+  };
+
+  const submit = async () => {
+    setSubmitting(true);
+    try {
+      const result = (await execute("/tls/certificates/csr/begin", {
+        hostname: hostname.trim(),
+        key_type: "ecdsa_p256",
+      })) as TlsCsrBeginResponse;
+      setHostname("");
+      onSubmitted(result);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const trimmed = hostname.trim();
+  const valid = trimmed.length > 0 && !trimmed.includes("*");
+
+  return (
+    <Dialog open={open} onClose={close} fullWidth maxWidth="sm">
+      <DialogTitle>Generate CSR</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ mt: 1 }}>
           <TextField
             autoFocus
             label="Hostname"
@@ -1050,35 +1410,164 @@ function UploadManualCertDialog({
             onChange={(e) => setHostname(e.target.value)}
             fullWidth
             slotProps={{ htmlInput: { style: { fontFamily: "monospace" } } }}
-            helperText="Must be covered by the certificate's SAN list (literally or via *.suffix wildcard)."
+            helperText="Must be a concrete hostname (no wildcards). The runtime generates an ECDSA P-256 keypair on the server; only the CSR is returned. Get the CSR signed by your CA, then come back to upload the signed cert."
           />
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={close} disabled={submitting}>
+          Cancel
+        </Button>
+        <Button onClick={submit} variant="contained" disabled={!valid || submitting}>
+          Generate
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+interface CsrShowDialogProps {
+  open: boolean;
+  csrId: number | null;
+  csrPem: string;
+  onClose: () => void;
+}
+
+function CsrShowDialog({ open, csrId, csrPem, onClose }: CsrShowDialogProps) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(csrPem);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // ignore
+    }
+  };
+  const download = () => {
+    const blob = new Blob([csrPem], { type: "application/pem-certificate-chain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `csr-${csrId ?? "unknown"}.pem`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+  return (
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="md">
+      <DialogTitle>
+        Pending CSR{csrId !== null ? ` #${csrId}` : ""}
+      </DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ mt: 1 }}>
+          <Alert severity="info">
+            Send this CSR to your certificate authority. When you receive the signed
+            certificate, upload it back to this row to transition it to active. The
+            private key never leaves the runtime.
+          </Alert>
           <TextField
-            label="Certificate PEM"
+            value={csrPem}
+            multiline
+            minRows={10}
+            fullWidth
+            slotProps={{
+              htmlInput: {
+                readOnly: true,
+                style: { fontFamily: "monospace", fontSize: "0.75rem" },
+              },
+            }}
+          />
+          <Box sx={{ display: "flex", gap: 1, justifyContent: "flex-end" }}>
+            <Button onClick={download} variant="outlined">
+              Download
+            </Button>
+            <Button onClick={copy} variant="outlined">
+              {copied ? "Copied" : "Copy"}
+            </Button>
+          </Box>
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Close</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+interface CsrUploadCertDialogProps {
+  open: boolean;
+  cert: TlsCertificate | null;
+  onClose: () => void;
+  onSubmitted: () => void;
+  execute: (path: string, params: unknown) => Promise<unknown>;
+}
+
+function CsrUploadCertDialog({
+  open,
+  cert,
+  onClose,
+  onSubmitted,
+  execute,
+}: CsrUploadCertDialogProps) {
+  const [certPem, setCertPem] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [warnings, setWarnings] = useState<string[] | null>(null);
+
+  const reset = () => {
+    setCertPem("");
+    setWarnings(null);
+  };
+
+  const close = () => {
+    reset();
+    onClose();
+  };
+
+  const submit = async () => {
+    if (!cert) return;
+    setSubmitting(true);
+    setWarnings(null);
+    try {
+      const result = (await execute("/tls/certificates/csr/upload-cert", {
+        id: cert.id,
+        cert_pem: certPem,
+      })) as { warnings?: string[] };
+      const warns = result?.warnings ?? [];
+      if (warns.length > 0) {
+        setWarnings(warns);
+      } else {
+        reset();
+        onSubmitted();
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const acceptAndClose = () => {
+    reset();
+    onSubmitted();
+  };
+
+  const valid = certPem.trim().length > 0;
+
+  return (
+    <Dialog open={open} onClose={close} fullWidth maxWidth="md">
+      <DialogTitle>
+        Upload signed cert{cert ? ` for ${cert.hostname} (#${cert.id})` : ""}
+      </DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ mt: 1 }}>
+          <PemField
+            label="Signed certificate PEM"
             placeholder="-----BEGIN CERTIFICATE-----..."
+            accept=".pem,.crt,.cer"
+            minRows={8}
             value={certPem}
-            onChange={(e) => setCertPem(e.target.value)}
-            fullWidth
-            multiline
-            minRows={6}
-            slotProps={{ htmlInput: { style: { fontFamily: "monospace", fontSize: "0.75rem" } } }}
-            helperText="Paste the leaf cert plus optional intermediates."
-          />
-          <TextField
-            label="Private key PEM"
-            placeholder="-----BEGIN PRIVATE KEY-----..."
-            value={keyPem}
-            onChange={(e) => setKeyPem(e.target.value)}
-            fullWidth
-            multiline
-            minRows={5}
-            slotProps={{ htmlInput: { style: { fontFamily: "monospace", fontSize: "0.75rem" } } }}
-            helperText="PKCS#8 PEM. Stored encrypted at rest; never returned by any operator endpoint."
-          />
-          <TextField
-            label="Note (optional)"
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            fullWidth
+            onChange={setCertPem}
+            helperText="The runtime checks that this cert's public key matches the CSR's stored private key, plus SAN coverage and validity."
           />
           {warnings && (
             <Alert severity="warning">
