@@ -26,7 +26,7 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useGuard } from "../components/SafetyModeProvider";
 import type { OiQueryError } from "../hooks/useOi";
@@ -154,6 +154,19 @@ export default function Certificates() {
     for (const b of blocks?.blocks ?? []) m.set(b.hostname, b);
     return m;
   }, [blocks]);
+
+  // Poll the volatile views (attempts + blocks) so a freshly-failed
+  // on-demand issuance shows up without the operator hitting refresh. Five
+  // seconds is small enough to feel live and large enough to be cheap.
+  // Providers/policies/certs/settings change only on operator action so
+  // we leave them out of the auto-poll.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      refetchAttempts();
+      refetchBlocks();
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [refetchAttempts, refetchBlocks]);
 
   const onClearBlock = async (hostname: string) => {
     clearError();
