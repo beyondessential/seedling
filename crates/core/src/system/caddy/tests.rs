@@ -256,7 +256,7 @@ fn https_server_includes_quic_listener() {
 
 // r[verify tls.cert.serve]
 #[test]
-fn cert_endpoint_url_is_emitted_as_get_certificate() {
+fn cert_endpoint_url_is_emitted_inside_automation_policy() {
     let config = ProxyConfig {
         listeners: vec![ProxyListener {
             port: 443,
@@ -268,22 +268,30 @@ fn cert_endpoint_url_is_emitted_as_get_certificate() {
         cert_endpoint_url: Some("http://[fd5e::ff:1]:8443/get".to_string()),
     };
     let json = build_caddy_config(&config);
-    let getters = &json["apps"]["tls"]["certificates"]["get_certificate"];
+    // Per Caddy's schema, get_certificate is a per-policy field, not
+    // a top-level tls.certificates field.
+    let policy = &json["apps"]["tls"]["automation"]["policies"][0];
+    let getters = &policy["get_certificate"];
     let arr = getters
         .as_array()
         .expect("get_certificate must be an array");
     assert_eq!(arr.len(), 1);
     assert_eq!(arr[0]["via"], "http");
     assert_eq!(arr[0]["url"], "http://[fd5e::ff:1]:8443/get");
-    // Default automation policy still present.
-    assert!(json["apps"]["tls"]["automation"]["policies"].is_array());
+    assert_eq!(policy["subjects"][0], "example.com");
+    assert!(
+        json["apps"]["tls"]["certificates"]["get_certificate"].is_null(),
+        "get_certificate must not appear under tls.certificates"
+    );
 }
 
 #[test]
-fn cert_endpoint_url_alone_emits_tls_app_without_automation() {
-    // No TLS-terminating vhosts: the default-strategy policy is empty, but
-    // the get_certificate endpoint must still be emitted so Caddy can
-    // serve runtime-managed certs for any future SNI hits.
+fn cert_endpoint_url_without_subjects_emits_no_tls_app() {
+    // Without any TLS-terminating vhosts there is no automation policy
+    // to attach get_certificate to and no SNI traffic to serve, so the
+    // tls app is omitted entirely. Once an ingress declares a hostname
+    // the next reconciler tick rebuilds the config with the policy +
+    // get_certificate wired in.
     let config = ProxyConfig {
         listeners: vec![],
         virtual_hosts: vec![],
@@ -292,9 +300,5 @@ fn cert_endpoint_url_alone_emits_tls_app_without_automation() {
         cert_endpoint_url: Some("http://[fd5e::ff:1]:8443/get".to_string()),
     };
     let json = build_caddy_config(&config);
-    assert_eq!(
-        json["apps"]["tls"]["certificates"]["get_certificate"][0]["url"],
-        "http://[fd5e::ff:1]:8443/get"
-    );
-    assert!(json["apps"]["tls"]["automation"].is_null());
+    assert!(json["apps"]["tls"].is_null());
 }

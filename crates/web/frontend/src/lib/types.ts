@@ -528,3 +528,67 @@ export interface OiError {
 export type OiResult =
   | { ok: true; value: unknown }
   | { ok: false; error: OiError };
+
+// ---------------------------------------------------------------------------
+// TLS certificate management
+// ---------------------------------------------------------------------------
+
+export type TlsDnsProviderKind = "route53";
+
+export interface TlsDnsProvider {
+  name: string;
+  kind: TlsDnsProviderKind;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface TlsDnsProvidersResponse {
+  providers: TlsDnsProvider[];
+}
+
+export type TlsStrategy = "acme_dns" | "manual";
+
+export interface TlsPolicyAcmeDns {
+  hostname: string;
+  strategy: "acme_dns";
+  dns_provider: string;
+  updated_at: number;
+}
+
+export interface TlsPolicyManual {
+  hostname: string;
+  strategy: "manual";
+  cert_id: number;
+  updated_at: number;
+}
+
+export type TlsPolicy = TlsPolicyAcmeDns | TlsPolicyManual;
+
+export interface TlsPoliciesResponse {
+  policies: TlsPolicy[];
+}
+
+export type TlsCertState = "csr_pending" | "active" | "superseded" | "failed";
+export type TlsCertOrigin = "manual" | "csr" | "acme_dns";
+export type TlsKeyType = "ecdsa_p256";
+
+export interface TlsCertificate {
+  id: number;
+  hostname: string;
+  state: TlsCertState;
+  origin: TlsCertOrigin;
+  key_type: TlsKeyType;
+  issuer: string | null;
+  not_before: number | null;
+  not_after: number | null;
+  serial: string | null;
+  self_signed: boolean;
+  note: string | null;
+  acme_account_id: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface TlsCertificatesResponse {
+  certificates: TlsCertificate[];
+}

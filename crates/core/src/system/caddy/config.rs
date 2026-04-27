@@ -98,40 +98,26 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
 
     let mut apps = json!({ "http": { "servers": servers } });
 
-    let needs_tls = !all_subjects.is_empty() || config.cert_endpoint_url.is_some();
-    if needs_tls {
+    if !all_subjects.is_empty() {
         // r[impl actuate.ingress.warm-certs]
         // r[impl tls.strategy.default]
+        // r[impl tls.cert.serve]
         // l[impl ingress.certificates]
         // For routed subjects, Caddy acquires the cert lazily on first
         // request to the matching server; for warm-only subjects, no server
         // matches and Caddy must be told explicitly via certificates.automate.
-        // The empty automation policy here selects Caddy's default ACME issuer
-        // (HTTP-01 against Let's Encrypt), which is the runtime default per
-        // tls.strategy.default. Per-hostname overrides (acme-dns, manual,
-        // CSR-derived) are served via tls.certificates.get_certificate
-        // below: Caddy queries the daemon by SNI before falling through
-        // to automation.
-        let mut tls = if all_subjects.is_empty() {
-            json!({})
-        } else {
-            json!({
-                "automation": {
-                    "policies": [{
-                        "subjects": all_subjects,
-                    }]
-                }
-            })
-        };
-
-        let mut certificates = serde_json::Map::new();
-        if !warm_subjects.is_empty() {
-            let warm_list: Vec<&str> = warm_subjects.iter().copied().collect();
-            certificates.insert("automate".to_string(), json!(warm_list));
-        }
-        // r[impl tls.cert.serve]
+        //
+        // The single automation policy here covers every TLS-terminating
+        // hostname. Its issuer defaults to Caddy's ACME-HTTP-01 against
+        // Let's Encrypt (tls.strategy.default). When the daemon's cert
+        // endpoint is set, we add `get_certificate` to the same policy so
+        // Caddy first asks the daemon by SNI: a 200 returns the
+        // runtime-managed cert (acme-dns / manual / CSR-derived); a 404
+        // falls through to the policy's regular issuer.
+        let mut policy = serde_json::Map::new();
+        policy.insert("subjects".to_string(), json!(all_subjects));
         if let Some(url) = &config.cert_endpoint_url {
-            certificates.insert(
+            policy.insert(
                 "get_certificate".to_string(),
                 json!([{
                     "via": "http",
@@ -139,8 +125,15 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
                 }]),
             );
         }
-        if !certificates.is_empty() {
-            tls["certificates"] = Value::Object(certificates);
+
+        let mut tls = json!({
+            "automation": {
+                "policies": [Value::Object(policy)]
+            }
+        });
+        if !warm_subjects.is_empty() {
+            let warm_list: Vec<&str> = warm_subjects.iter().copied().collect();
+            tls["certificates"] = json!({ "automate": warm_list });
         }
         apps["tls"] = tls;
     }
