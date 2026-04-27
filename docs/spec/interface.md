@@ -973,9 +973,12 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 > Hostnames not in this list use the default ACME-HTTP-01 strategy.
 
 > i[tls.policy.set-acme-dns]
-> `/tls/policies/set-acme-dns { hostname, dns_provider }` binds `hostname` to the named DNS provider for ACME-DNS-01 issuance.
+> `/tls/policies/set-acme-dns { hostname, dns_provider, contact_email?, directory_url? }` binds `hostname` to the named DNS provider for ACME-DNS-01 issuance.
 > The new policy takes effect on the next reconciliation tick per [tls.policy.apply](runtime.md#r--tls.policy.apply).
-> No certificate is issued by this call; trigger initial issuance via [`tls.cert.issue-acme-dns`](#i--tls.cert.issue-acme-dns) or wait for the autonomous renewal task to pick it up.
+> When `contact_email` is supplied and the hostname has no active certificate yet, the runtime fires a single ACME-DNS issuance attempt asynchronously; the response includes `auto_issue_kicked: true` to signal that.
+> Subsequent renewals are handled by the autonomous renewal task using the ACME account credentials persisted during first issuance, so `contact_email` is required only at first-issue time.
+> When `contact_email` is omitted, no issuance is triggered; the operator must run [`tls.cert.issue-acme-dns`](#i--tls.cert.issue-acme-dns) to acquire the first cert.
+> `directory_url` defaults to the Let's Encrypt production directory.
 
 > i[tls.policy.set-manual]
 > `/tls/policies/set-manual { hostname, cert_id }` binds `hostname` to a stored certificate row.

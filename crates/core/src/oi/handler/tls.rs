@@ -155,6 +155,14 @@ pub(crate) fn list_policies(state: &OiState) -> HandlerResult {
 pub(crate) struct SetAcmeDnsParams {
     pub hostname: String,
     pub dns_provider: String,
+    /// When supplied, the runtime auto-fires a single issuance attempt
+    /// in the background if the hostname has no current active cert.
+    /// Subsequent renewals reuse the ACME account credentials persisted
+    /// during this first issuance.
+    #[serde(default)]
+    pub contact_email: Option<String>,
+    #[serde(default)]
+    pub directory_url: Option<String>,
 }
 
 // i[tls.policy.set-acme-dns]
@@ -162,12 +170,63 @@ pub(crate) fn set_policy_acme_dns(state: &OiState, params: SetAcmeDnsParams) -> 
     let SetAcmeDnsParams {
         hostname,
         dns_provider,
+        contact_email,
+        directory_url,
     } = params;
+
+    let hostname_for_db = hostname.clone();
+    let dns_provider_for_db = dns_provider.clone();
     state
         .db
-        .call(move |db| store::set_policy_acme_dns(db, &hostname, &dns_provider))
+        .call(move |db| store::set_policy_acme_dns(db, &hostname_for_db, &dns_provider_for_db))
         .map_err(db_error)?;
-    Ok(json!({ "ok": true }))
+
+    let mut auto_issue_kicked = false;
+    if let Some(contact_email) = contact_email {
+        // Only fire if there is no current active cert; otherwise a policy
+        // re-set should not redundantly hammer the CA.
+        let hostname_for_check = hostname.clone();
+        let existing = state
+            .db
+            .call(move |db| store::find_active_for_hostname(db, &hostname_for_check))
+            .map_err(db_error)?;
+        if existing.is_none() {
+            let directory_url = directory_url.unwrap_or_else(acme::default_directory_url);
+            let db = state.db.clone();
+            let cipher = Arc::clone(&state.cipher);
+            let hostname_for_task = hostname.clone();
+            let dns_provider_for_task = dns_provider.clone();
+            tokio::spawn(async move {
+                let result = acme::issue(
+                    &db,
+                    &cipher,
+                    IssueParams {
+                        hostname: &hostname_for_task,
+                        contact_email: &contact_email,
+                        directory_url: &directory_url,
+                        dns_provider_name: &dns_provider_for_task,
+                    },
+                )
+                .await;
+                match result {
+                    Ok(issued) => tracing::info!(
+                        hostname = %hostname_for_task,
+                        cert_id = issued.cert_id,
+                        not_after = issued.not_after,
+                        "auto-issued cert on policy set"
+                    ),
+                    Err(e) => tracing::warn!(
+                        hostname = %hostname_for_task,
+                        error = %e,
+                        "auto-issue on policy set failed; operator can retry via /tls/certificates/issue-acme-dns"
+                    ),
+                }
+            });
+            auto_issue_kicked = true;
+        }
+    }
+
+    Ok(json!({ "ok": true, "auto_issue_kicked": auto_issue_kicked }))
 }
 
 #[derive(Deserialize)]

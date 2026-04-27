@@ -53,11 +53,23 @@ pub(super) enum PoliciesCommand {
     /// List per-hostname policies (hostnames absent from the list use the default ACME-HTTP-01)
     List,
     /// Bind a hostname to ACME-DNS issuance via a configured provider
+    ///
+    /// Supplying `--contact` triggers a one-shot background issuance for the
+    /// hostname if it has no current active cert, so the operator does not
+    /// have to run a separate `tls certs issue-acme-dns` afterwards. The
+    /// daemon prints the cert id (or a failure) to its log; on success the
+    /// hostname will appear under `tls certs list` within a few seconds.
     SetAcmeDns {
         hostname: String,
         /// Name of a configured DNS provider
         #[arg(long)]
         provider: String,
+        /// Operator contact email — kicks off auto-issuance when supplied
+        #[arg(long)]
+        contact: Option<String>,
+        /// ACME directory URL (defaults to Let's Encrypt production)
+        #[arg(long)]
+        directory: Option<String>,
     },
     /// Bind a hostname to a stored certificate (manual or CSR-derived)
     SetManual {
@@ -130,15 +142,20 @@ async fn dispatch_policies(client: &OiClient, cmd: PoliciesCommand) {
         PoliciesCommand::List => {
             print_result(client.request("/tls/policies/list", json!({})).await);
         }
-        PoliciesCommand::SetAcmeDns { hostname, provider } => {
-            print_result(
-                client
-                    .request(
-                        "/tls/policies/set-acme-dns",
-                        json!({ "hostname": hostname, "dns_provider": provider }),
-                    )
-                    .await,
-            );
+        PoliciesCommand::SetAcmeDns {
+            hostname,
+            provider,
+            contact,
+            directory,
+        } => {
+            let mut params = json!({ "hostname": hostname, "dns_provider": provider });
+            if let Some(c) = contact {
+                params["contact_email"] = json!(c);
+            }
+            if let Some(d) = directory {
+                params["directory_url"] = json!(d);
+            }
+            print_result(client.request("/tls/policies/set-acme-dns", params).await);
         }
         PoliciesCommand::SetManual { hostname, cert_id } => {
             print_result(
