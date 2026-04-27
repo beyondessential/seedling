@@ -816,6 +816,63 @@ async fn main() {
 
     let shells = seedling_core::oi::shells::ShellRegistry::new();
 
+    // r[impl tls.cert.serve]
+    // Bind the cert-serving HTTP endpoint on the seedling-proxy bridge
+    // gateway so only Caddy + host processes can reach it. Token-in-path
+    // protects against host-local enumeration; the URL we hand to Caddy
+    // includes both. See runtime::tls::serve.
+    let (cert_endpoint_url, _cert_serve_handle) = {
+        let token_path = data_dir.join("tls-cert-endpoint.token");
+        let token = seedling_core::runtime::tls::serve::load_or_create_token(&token_path)
+            .unwrap_or_else(|e| {
+                tracing::error!("cannot load/create cert endpoint token: {e}");
+                std::process::exit(1);
+            });
+
+        let gateway = seedling_core::system::proxy_bridge_gateway(&node_prefix);
+        let bind_addr = std::net::SocketAddr::new(std::net::IpAddr::V6(gateway), 7892);
+
+        let cipher_for_serve = Arc::clone(&cipher);
+        let db_for_serve = db.clone();
+        let token_for_serve = token.clone();
+        let (resolved_addr, handle) = match seedling_core::runtime::tls::serve::spawn_server(
+            db_for_serve,
+            cipher_for_serve,
+            token_for_serve,
+            bind_addr,
+        )
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!(
+                    bind = %bind_addr,
+                    "cannot bind cert serve endpoint: {e}; runtime-managed certs will not be served"
+                );
+                (bind_addr, tokio::spawn(async {}))
+            }
+        };
+        let url = seedling_core::runtime::tls::serve::caddy_url(resolved_addr, &token);
+        tracing::info!(url = %url, "tls cert serve endpoint listening");
+        (Some(url), handle)
+    };
+
+    // r[impl tls.acme.renewal.auto]
+    // Spawn the ACME-DNS renewal task. Each tick (default hourly) it
+    // scans for active acme_dns certs whose remaining validity is past
+    // the renewal threshold, and re-runs the issuance flow.
+    {
+        let cipher_for_renewal = Arc::clone(&cipher);
+        let db_for_renewal = db.clone();
+        let renewal_config = seedling_core::runtime::tls::renewal::RenewalConfig::default();
+        let _renewal_handle = seedling_core::runtime::tls::renewal::spawn(
+            db_for_renewal,
+            cipher_for_renewal,
+            renewal_config,
+            seedling_core::runtime::tls::renewal::DEFAULT_TICK,
+        );
+    }
+
     let reconciler = Reconciler::new(
         Arc::clone(&driver),
         node_prefix,
@@ -830,6 +887,7 @@ async fn main() {
         nat64_active,
         force_dns64_translation,
         Arc::clone(&shells),
+        cert_endpoint_url,
     );
 
     // The reconciler and schedule ticker are spawned below, after OiState is

@@ -112,6 +112,26 @@ audit log so a post-incident review can answer "who did this and when".
 See `docs/spec/runtime.md#r--audit.log` and
 `docs/spec/interface.md#i--wire.actor`.
 
+### T9. Disclosure of TLS key material
+
+The runtime stores three classes of TLS key material on behalf of the
+operator: ACME account keys, DNS-provider credentials, and the private
+keys for runtime-managed certificates (manual uploads, CSR-derived
+certs, and certs the runtime obtained itself via ACME). All three must
+be encrypted at rest, omitted from any operator-facing list/describe
+response, and reachable to the proxy only through the cert-serving
+endpoint defined in
+`docs/spec/runtime.md#r--tls.cert.serve`. In particular:
+
+- Private keys must never appear in the proxy's persistent
+  configuration or its restart-replay cache.
+- DNS-provider credentials must not be passed to the proxy as
+  environment variables, file mounts, or anywhere the proxy could log
+  them; the runtime drives ACME-DNS itself precisely so credentials
+  never leave the daemon.
+- The cert-serving endpoint must restrict access by binding to a
+  non-routable bridge address and requiring a per-installation token.
+
 ## What we do not defend against
 
 These threats are explicitly out of scope. A request to "harden against X"
@@ -190,6 +210,28 @@ Port forwards (`/forwards/start`) tunnel TCP/UDP from the operator to a
 named service inside the workload network. Seedling forwards bytes. It is
 the workload's responsibility to authenticate or encrypt that traffic if
 it needs to.
+
+### N9b. ACME-CA and DNS-provider availability or honesty
+
+Once the operator binds a hostname to a public CA (Let's Encrypt by
+default) or a DNS provider (Route 53), seedling depends on those third
+parties for issuance and renewal. If the CA mis-issues a certificate
+for a hostname operators control, or if the DNS provider serves a TXT
+record for an attacker, seedling has no independent path to detect
+that. This is a property of the public ACME / DNS ecosystem, not of
+seedling. Mitigations: prefer DNS-01 (which requires control of the
+zone) over HTTP-01 where possible, monitor CT logs out-of-band, and
+rotate DNS-provider credentials promptly if compromise is suspected.
+
+### N9c. Outbound network reach from the daemon
+
+The daemon makes outbound HTTPS requests to the configured ACME
+directory and to the DNS-provider API endpoints (Route 53 today). A
+firewall blocking those endpoints will stall ACME-DNS issuance and
+renewal; the runtime files faults but cannot work around the lack of
+egress. Operators are responsible for permitting the necessary egress
+or supplying an alternative directory via
+[`tls.cert.issue-acme-dns`](docs/spec/interface.md#i--tls.cert.issue-acme-dns).
 
 ### N9. Backup integrity once exfiltrated
 
@@ -312,6 +354,48 @@ builders enumerated in `docs/spec/language.md`.
   secret, so the historical plaintext does not linger
   (`docs/spec/runtime.md#r--secret.migration`).
 
+### TLS certificate handling
+
+The runtime owns the full lifecycle of operator-managed certificates
+to keep key material out of the proxy's reach until the moment of a
+TLS handshake.
+
+- **Encryption at rest** for ACME account keys, DNS-provider
+  credentials, manual private keys, and CSR-flow private keys, all
+  under the same secret-key file used for secret parameters
+  (`docs/spec/runtime.md#r--tls.acme.account.persist`,
+  `#r--tls.dns-provider.lifecycle`, `#r--tls.strategy.manual`,
+  `#r--tls.csr.flow`).
+- **Daemon-driven ACME-DNS** so DNS-provider credentials never
+  reach the proxy or its persistent configuration. The runtime runs
+  the ACME client itself, publishes the DNS-01 TXT record via the
+  `DnsProvider` trait, and only then hands the resulting certificate
+  to the proxy via the cert-serving endpoint
+  (`docs/spec/runtime.md#r--tls.strategy.acme-dns`).
+- **No private keys in the proxy config** — the rendered Caddy JSON
+  references the cert-serving endpoint URL and never contains cert
+  bytes or keys, so the blue/green replay cache is safe to keep
+  in plaintext (`docs/spec/runtime.md#r--tls.cert.serve`).
+- **Cert-serving endpoint scope.** The endpoint binds to the
+  seedling-proxy bridge gateway address (a ULA in `fd00::/8` reachable
+  only from Caddy and host processes) and requires a per-installation
+  token in the URL path. The token is stored as a 0600-permission file
+  alongside the database secret key. Defence-in-depth against a
+  non-root host process attempting to enumerate hostnames and harvest
+  private keys.
+- **Redaction in the OI.** The `tls.cert.list`, `tls.policy.list`, and
+  `tls.dns-provider.list` responses describe certificates and
+  providers without exposing private key material, account keys, or
+  provider credentials (`docs/spec/interface.md#i--tls.cert.list`,
+  `#i--tls.policy.list`, `#i--tls.dns-provider.list`). The CSR-flow
+  contract additionally requires that a server-generated private key
+  never leaves the host
+  (`docs/spec/runtime.md#r--tls.csr.flow`).
+- **Autonomous renewal** of ACME-DNS certificates by a background
+  task, before expiry, so a stalled operator does not turn into a
+  served-cert outage. Manual and CSR-derived certs are flagged via
+  the `cert_expiring_soon` fault (`docs/spec/runtime.md#r--tls.fault.expiring`).
+
 ### Audit and observability
 
 - **Audit log** records every OI request, the actor, and the resulting
@@ -352,10 +436,12 @@ When reviewing a feature, walk it against the boundaries:
 2. Does it bridge two apps that are not deliberately wired together by
    the operator? (T4)
 3. Does it persist new operator-facing data that should be redacted in
-   the OI surface? (T6)
+   the OI surface? (T6, T9)
 4. Does it short-circuit the audit log? (T8)
 5. Does it create a destructive action without a confirmation path or a
    recoverable hold? (T7)
+6. Does it move TLS key material into a place the proxy or its config
+   cache can read? (T9)
 
 If a change relaxes a boundary on purpose (e.g. exposing a new capability
 to BSL), call it out and update this document so the new posture is the

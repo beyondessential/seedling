@@ -29,6 +29,17 @@ pub mod volume_store;
 
 pub use actuator::{ActuateError, Actuator, TMPFS_VOLUMES_DIR};
 pub use observer::{ObserveError, Observer};
+
+/// Returns the host-side bridge gateway IP for the seedling-proxy network,
+/// derived from the node's /48 prefix. The daemon binds local services that
+/// only Caddy + host processes should reach (e.g. the TLS cert endpoint) to
+/// this address so that workload pods on other /64s cannot route to them.
+pub fn proxy_bridge_gateway(node_prefix: &Ipv6Net) -> std::net::Ipv6Addr {
+    let proxy_net = caddy::proxy_network_prefix(node_prefix);
+    let mut bytes = proxy_net.network().octets();
+    bytes[15] = 1;
+    std::net::Ipv6Addr::from(bytes)
+}
 pub use types::{
     ActiveState, ContainerHealth, ContainerStatus, DataPlaneRules as SystemDataPlaneRules,
     ExecHandle as SystemExecHandle, ForwardProto, HealthCheckSpec, HttpRedirect, IngressRule,

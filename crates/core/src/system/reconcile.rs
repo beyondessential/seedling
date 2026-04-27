@@ -224,6 +224,11 @@ pub struct Reconciler {
     /// Scratch state for the image reconcile phase (last-GC timestamp).
     // r[impl image.gc]
     image_phase_state: images::ImagePhaseState,
+    /// URL Caddy should use for `tls.certificates.get_certificate`. Set
+    /// once at daemon startup; threaded into every proxy config build so
+    /// runtime-managed certs are served via the daemon.
+    // r[impl tls.cert.serve]
+    cert_endpoint_url: Option<String>,
 }
 
 impl Reconciler {
@@ -245,6 +250,7 @@ impl Reconciler {
         nat64_active: bool,
         force_dns64_translation: bool,
         shells: Arc<ShellRegistry>,
+        cert_endpoint_url: Option<String>,
     ) -> Self {
         let observer = Observer::new(Arc::clone(&driver));
         let written_obs = seed_written_obs(&db);
@@ -287,6 +293,7 @@ impl Reconciler {
             caddy_data_path: tokio::sync::OnceCell::new(),
             warm_cert_first_seen: HashMap::new(),
             image_phase_state: images::ImagePhaseState::new(),
+            cert_endpoint_url,
         }
     }
 
@@ -618,8 +625,12 @@ impl Reconciler {
                 &ext_snapshot,
             );
 
-            let proxy_build =
-                phases::compute_proxy_config(&apps, &self.node_prefix, &*self.registry);
+            let proxy_build = phases::compute_proxy_config(
+                &apps,
+                &self.node_prefix,
+                &*self.registry,
+                self.cert_endpoint_url.as_deref(),
+            );
 
             (nft_build, proxy_build, caddy_ip)
         });

@@ -249,6 +249,7 @@ pub(super) fn compute_proxy_config(
     apps: &[AppSnapshot],
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
+    cert_endpoint_url: Option<&str>,
 ) -> ProxyBuildResult {
     let mut all_pairs = Vec::new();
     let mut all_l4_routes = Vec::new();
@@ -300,6 +301,7 @@ pub(super) fn compute_proxy_config(
     let mut config = build_proxy_config(&all_pairs);
     config.l4_routes = all_l4_routes;
     crate::system::translate::proxy::augment_with_warm_certs(&mut config, all_warm);
+    config.cert_endpoint_url = cert_endpoint_url.map(str::to_owned);
     let caddy_json = super::super::caddy::build_caddy_config(&config);
 
     ProxyBuildResult {
