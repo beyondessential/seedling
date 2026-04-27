@@ -195,6 +195,15 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > w[routes.volumes.held-count]
 > The navbar's held-volumes badge must reflect the current count of held volumes without requiring a page reload, both when new held volumes are created and when the operator confirms their deletion.
 
+> w[routes.certificates]
+> The web interface must expose TLS certificate management at `/certificates`, with three sections:
+>
+> - **Per-hostname policies**: list, add (binding a hostname to ACME-DNS via a configured provider, with an optional contact email that triggers immediate auto-issuance), and clear.
+> - **Stored certificates**: list grouped by hostname, surfacing state, origin, issuer, expiry, and serial; certificates within fourteen days of expiry and self-signed certificates must be visually flagged.
+> - **DNS providers**: list (without credentials), add (Route 53), and delete (refused while a policy references the provider).
+>
+> Private key material, ACME account keys, and DNS-provider credentials must never be returned to the client.
+
 > w[sessions.events]
 > The web interface must emit `WebSessionStarted` and `WebSessionStopped` events on the event feed when a WebTransport session is established or closed. Clients must use these events, together with the OI events `ShellStarted`, `ShellExited`, `ForwardStarted`, and `ForwardStopped`, to keep the connected-clients count up to date without polling.
 
