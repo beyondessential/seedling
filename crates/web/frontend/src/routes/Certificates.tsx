@@ -26,7 +26,7 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useGuard } from "../components/SafetyModeProvider";
 import type { OiQueryError } from "../hooks/useOi";
@@ -657,7 +657,15 @@ function RetryBlocksSection({
   writeAllowed,
   writeReason,
 }: RetryBlocksSectionProps) {
-  if (blocks.length === 0) {
+  // Stick to the last non-empty list while a poll is in flight so the
+  // section doesn't collapse-then-reappear when the underlying useOiQuery
+  // momentarily reports the new fetch's pre-response state.
+  const stableRef = useRef<TlsRetryBlock[]>(blocks);
+  if (blocks.length > 0 || !loading) {
+    stableRef.current = blocks;
+  }
+  const visible = stableRef.current;
+  if (visible.length === 0) {
     return null;
   }
   return (
@@ -673,7 +681,6 @@ function RetryBlocksSection({
         set after a failed attempt; clear one to retry on the next handshake.
         Operator blocks persist until cleared explicitly.
       </Typography>
-      {loading && <CircularProgress size={20} />}
       <TableContainer component={Paper} variant="outlined">
         <Table size="small">
           <TableHead>
@@ -686,7 +693,7 @@ function RetryBlocksSection({
             </TableRow>
           </TableHead>
           <TableBody>
-            {blocks.map((b) => (
+            {visible.map((b) => (
               <TableRow key={b.hostname} hover>
                 <TableCell sx={{ fontFamily: "monospace" }}>{b.hostname}</TableCell>
                 <TableCell>
