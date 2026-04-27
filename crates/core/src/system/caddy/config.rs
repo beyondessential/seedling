@@ -114,13 +114,11 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
         //      asks the daemon by SNI. A 200 returns the runtime-managed
         //      cert (acme-dns / manual / CSR-derived); a 204 (no content)
         //      tells Caddy to fall through.
-        //   2. `issuers`: ACME (HTTP-01 against Let's Encrypt by default),
-        //      so any hostname not served by the daemon still gets a cert
-        //      autonomously per tls.strategy.default.
-        //
-        // We name the issuer explicitly (rather than relying on Caddy's
-        // built-in default) so the rendered config makes the fallback
-        // contract obvious to any operator reading it.
+        //   2. Caddy's default issuer chain — ACME against Let's Encrypt
+        //      for public hostnames, the internal CA for non-public ones
+        //      (localhost, *.local, plain IPs, etc.). We deliberately do
+        //      not pin `issuers` here; that would force ACME on every
+        //      subject and break self-signed certs for internal hostnames.
         let mut policy = serde_json::Map::new();
         policy.insert("subjects".to_string(), json!(all_subjects));
         if let Some(url) = &config.cert_endpoint_url {
@@ -132,7 +130,6 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
                 }]),
             );
         }
-        policy.insert("issuers".to_string(), json!([{ "module": "acme" }]));
 
         let mut tls = json!({
             "automation": {

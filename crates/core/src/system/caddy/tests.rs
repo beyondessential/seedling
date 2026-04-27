@@ -280,42 +280,17 @@ fn cert_endpoint_url_is_emitted_inside_automation_policy() {
     assert_eq!(arr[0]["via"], "http");
     assert_eq!(arr[0]["url"], "http://[fd5e::ff:1]:8443/get");
     assert_eq!(policy["subjects"][0], "example.com");
-    // The same policy carries the explicit ACME issuer so a 204 from the
-    // daemon falls through to autonomous ACME-HTTP-01 issuance.
-    let issuers = policy["issuers"]
-        .as_array()
-        .expect("issuers must be an array");
-    assert_eq!(issuers.len(), 1);
-    assert_eq!(issuers[0]["module"], "acme");
+    // We deliberately do NOT pin `issuers`: Caddy's default chain picks
+    // ACME for public hostnames and the internal CA for non-public ones,
+    // which is the right behaviour for tls.strategy.default.
+    assert!(
+        policy["issuers"].is_null(),
+        "issuers must be left unset so Caddy's default chain applies"
+    );
     assert!(
         json["apps"]["tls"]["certificates"]["get_certificate"].is_null(),
         "get_certificate must not appear under tls.certificates"
     );
-}
-
-// r[verify tls.strategy.default]
-#[test]
-fn policy_carries_explicit_acme_issuer_even_without_cert_endpoint() {
-    // Without runtime-managed certs there's no get_certificate, but the
-    // policy still names the issuer so the operator-visible rendered
-    // config makes the issuance path explicit.
-    let config = ProxyConfig {
-        listeners: vec![ProxyListener {
-            port: 443,
-            proto: ProxyListenerProto::Https,
-        }],
-        virtual_hosts: vec![https_vhost("example.com", "[fd5e::1]:3000")],
-        l4_routes: vec![],
-        warm_cert_hostnames: Default::default(),
-        cert_endpoint_url: None,
-    };
-    let json = build_caddy_config(&config);
-    let policy = &json["apps"]["tls"]["automation"]["policies"][0];
-    let issuers = policy["issuers"]
-        .as_array()
-        .expect("issuers must be an array");
-    assert_eq!(issuers[0]["module"], "acme");
-    assert!(policy["get_certificate"].is_null());
 }
 
 #[test]
