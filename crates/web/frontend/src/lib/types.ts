@@ -555,14 +555,7 @@ export interface TlsPolicyAcmeDns {
   updated_at: number;
 }
 
-export interface TlsPolicyManual {
-  hostname: string;
-  strategy: "manual";
-  cert_id: number;
-  updated_at: number;
-}
-
-export type TlsPolicy = TlsPolicyAcmeDns | TlsPolicyManual;
+export type TlsPolicy = TlsPolicyAcmeDns;
 
 export interface TlsPoliciesResponse {
   policies: TlsPolicy[];
@@ -641,12 +634,6 @@ export type TlsHostnamePolicy =
     dns_provider: string;
     pattern: string;
     is_wildcard_match: boolean;
-  }
-  | {
-    strategy: "manual";
-    cert_id: number;
-    pattern: string;
-    is_wildcard_match: boolean;
   };
 
 export interface TlsHostnameActiveCert {
@@ -709,15 +696,6 @@ export interface TlsHostnameView {
 
 export interface TlsHostnamesResponse {
   hostnames: TlsHostnameView[];
-}
-
-export interface TlsCertPreview {
-  san_dns_names: string[];
-  issuer: string | null;
-  not_before: number | null;
-  not_after: number | null;
-  self_signed: boolean;
-  serial: string | null;
 }
 
 export interface TlsCsrBeginResponse {

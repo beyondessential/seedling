@@ -97,16 +97,11 @@ pub struct HostnameState<'a> {
 /// `decision` is `IssueNow` with `IssueReason::Renewal`.
 #[derive(Debug, Clone)]
 pub enum Decision {
-    /// No policy bound — the proxy handles certificate acquisition
-    /// (default ACME-HTTP-01). The runtime takes no action.
+    /// No operator-driven policy bound — the runtime takes no action.
+    /// A manual cert that auto-binds via SAN, or a proxy-managed cert,
+    /// may still appear in `active_cert`; the runtime won't drive
+    /// renewal of those unless a separate `acme_dns` policy applies.
     Default,
-    /// Manual policy bound. The runtime never auto-renews these; the
-    /// operator must upload a replacement.
-    Manual {
-        cert_id: Option<i64>,
-        /// Whether the bound cert's `not_after` is in the past.
-        expired: bool,
-    },
     /// Operator pause set. The runtime won't act until the block is
     /// cleared (`/tls/retry-blocks/clear`) or a force-retry is queued.
     Blocked { reason: Option<String> },
@@ -166,10 +161,9 @@ impl NextSource {
 pub fn compute_state<'a>(snap: &'a Snapshot, hostname: &str) -> HostnameState<'a> {
     let policy = resolve_policy(&snap.policies, hostname);
 
-    let active_cert = match policy.map(|p| &p.policy) {
-        Some(TlsPolicy::Manual { cert_id }) => snap.certificates.iter().find(|c| c.id == *cert_id),
-        _ => find_active_for_hostname(&snap.certificates, hostname),
-    };
+    // SAN-aware lookup: matches ACME-DNS certs by hostname column
+    // (fast path) and manual certs by SAN coverage (auto-bind).
+    let active_cert = find_active_for_hostname(&snap.certificates, hostname);
 
     let mut last_attempt: Option<&TlsCertAttempt> = None;
     let mut last_success: Option<&TlsCertAttempt> = None;
@@ -265,21 +259,44 @@ pub fn is_caddy_internal(hostname: &str) -> bool {
     )
 }
 
+/// Find the most-recent active certificate that covers `hostname`.
+///
+/// Match rules mirror [`super::store::find_active_for_hostname`]: a
+/// cert whose primary `hostname` column equals the target wins (the
+/// fast path for ACME-DNS rows). Otherwise, the first active cert
+/// whose SAN list covers `hostname` per RFC 6125 wins, picked in
+/// newest-first order.
 fn find_active_for_hostname<'a>(
     certs: &'a [TlsCertificate],
     hostname: &str,
 ) -> Option<&'a TlsCertificate> {
-    let mut best: Option<&TlsCertificate> = None;
-    for c in certs {
-        if c.hostname == hostname && c.state == TlsCertState::Active {
-            match best {
-                None => best = Some(c),
-                Some(prev) if c.created_at > prev.created_at => best = Some(c),
-                _ => {}
-            }
+    // Fast path: exact-hostname-column match.
+    let exact = certs
+        .iter()
+        .filter(|c| c.state == TlsCertState::Active && c.hostname == hostname)
+        .max_by_key(|c| c.created_at);
+    if exact.is_some() {
+        return exact;
+    }
+
+    // SAN-coverage scan, newest-first.
+    let mut active: Vec<&TlsCertificate> = certs
+        .iter()
+        .filter(|c| c.state == TlsCertState::Active)
+        .collect();
+    active.sort_by_key(|c| std::cmp::Reverse(c.created_at));
+    for cert in active {
+        let Some(pem) = cert.cert_pem.as_deref() else {
+            continue;
+        };
+        let Ok(parsed) = super::parse::parse_chain(pem) else {
+            continue;
+        };
+        if super::parse::san_covers(&parsed.san_dns_names, hostname) {
+            return Some(cert);
         }
     }
-    best
+    None
 }
 
 fn decide(
@@ -292,13 +309,13 @@ fn decide(
     settings: &TlsSettings,
 ) -> Decision {
     match policy {
+        // No operator policy bound: the runtime takes no action. If a
+        // manual cert (or proxy-managed cert) happens to cover this
+        // hostname, the rollup surfaces it via `active_cert`; the
+        // runtime doesn't drive issuance because nothing has asked it
+        // to. Manual-near-expiry-via-acme-dns is handled separately by
+        // [`decide_acme_dns`] when an acme_dns policy *also* applies.
         None => Decision::Default,
-        Some(TlsPolicy::Manual { cert_id }) => Decision::Manual {
-            cert_id: Some(*cert_id),
-            expired: active_cert
-                .and_then(|c| c.not_after)
-                .is_some_and(|na| now > na),
-        },
         Some(TlsPolicy::AcmeDns { .. }) => decide_acme_dns(
             now,
             active_cert,
@@ -489,24 +506,17 @@ mod tests {
     }
 
     #[test]
-    fn manual_policy_yields_manual() {
-        let mut policies = vec![TlsPolicyRow {
-            hostname: "host.example.com".to_owned(),
-            policy: TlsPolicy::Manual { cert_id: 7 },
-            updated_at: 0,
-        }];
-        // Push an unrelated wildcard to ensure resolve_policy picks the exact match.
-        policies.push(policy_acme("*", "p"));
-        let cert = fake_cert("host.example.com", 7, 0, 100);
-        let s = snap(policies, vec![cert], vec![], vec![], vec![], "ops@x", 50);
+    fn manual_cert_auto_binds_without_policy() {
+        // No policy bound, but a manual cert exists for this hostname.
+        // compute_state should surface the cert via active_cert and
+        // keep the decision at Default (runtime takes no action; the
+        // cert just covers what its SANs say).
+        let mut cert = fake_cert("host.example.com", 7, 0, 100);
+        cert.origin = TlsCertOrigin::Manual;
+        let s = snap(vec![], vec![cert], vec![], vec![], vec![], "ops@x", 50);
         let st = compute_state(&s, "host.example.com");
-        match st.decision {
-            Decision::Manual { cert_id, expired } => {
-                assert_eq!(cert_id, Some(7));
-                assert!(!expired);
-            }
-            d => panic!("unexpected: {d:?}"),
-        }
+        assert!(matches!(st.decision, Decision::Default));
+        assert_eq!(st.active_cert.map(|c| c.id), Some(7));
     }
 
     #[test]

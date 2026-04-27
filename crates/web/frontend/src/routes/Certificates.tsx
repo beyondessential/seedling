@@ -26,7 +26,7 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useGuard } from "../components/SafetyModeProvider";
 import { TlsHostnamesTable } from "../components/TlsHostnamesTable";
@@ -34,7 +34,6 @@ import type { OiQueryError } from "../hooks/useOi";
 import { useOiQuery } from "../hooks/useOi";
 import { useOiAction } from "../hooks/useOiAction";
 import type {
-  TlsCertPreview,
   TlsCertificate,
   TlsCertificatesResponse,
   TlsCsrBeginResponse,
@@ -539,16 +538,14 @@ function PoliciesSection({
                   </TableCell>
                   <TableCell>
                     <Chip
-                      label={p.strategy === "acme_dns" ? "acme-dns" : "manual"}
+                      label="acme-dns"
                       size="small"
-                      color={p.strategy === "acme_dns" ? "primary" : "default"}
+                      color="primary"
                       variant="outlined"
                     />
                   </TableCell>
                   <TableCell sx={{ fontFamily: "monospace", fontSize: "0.85rem" }}>
-                    {p.strategy === "acme_dns"
-                      ? `provider: ${p.dns_provider}`
-                      : `cert #${p.cert_id}`}
+                    provider: {p.dns_provider}
                   </TableCell>
                   <TableCell>
                     <Typography variant="caption" sx={{ color: "text.secondary" }}>
@@ -1101,20 +1098,16 @@ function UploadManualCertDialog({
   const [certPem, setCertPem] = useState("");
   const [keyPem, setKeyPem] = useState("");
   const [note, setNote] = useState("");
-  const [sans, setSans] = useState<string[]>([]);
-  const [hostname, setHostname] = useState("");
-  const [previewError, setPreviewError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [warnings, setWarnings] = useState<string[] | null>(null);
+  const [result, setResult] = useState<
+    { primary_san?: string; san_dns_names?: string[]; warnings: string[] } | null
+  >(null);
 
   const reset = () => {
     setCertPem("");
     setKeyPem("");
     setNote("");
-    setSans([]);
-    setHostname("");
-    setPreviewError(null);
-    setWarnings(null);
+    setResult(null);
   };
 
   const close = () => {
@@ -1122,68 +1115,32 @@ function UploadManualCertDialog({
     onClose();
   };
 
-  // Whenever the cert PEM changes, ask the backend for SANs so the
-  // operator picks the hostname from the cert rather than retyping it.
-  useEffect(() => {
-    if (!open) return;
-    const trimmed = certPem.trim();
-    if (trimmed.length === 0) {
-      setSans([]);
-      setPreviewError(null);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const result = (await execute("/tls/certificates/preview", {
-          cert_pem: trimmed,
-        })) as TlsCertPreview;
-        if (cancelled) return;
-        setPreviewError(null);
-        setSans(result.san_dns_names);
-        if (result.san_dns_names.length > 0 && !result.san_dns_names.includes(hostname)) {
-          // Default to the first concrete SAN, falling back to the
-          // first entry (which may be a wildcard).
-          const concrete = result.san_dns_names.find((s) => !s.startsWith("*."));
-          setHostname(concrete ?? result.san_dns_names[0]);
-        }
-      } catch (e) {
-        if (cancelled) return;
-        setSans([]);
-        setPreviewError(
-          e instanceof Error ? e.message : "could not parse certificate",
-        );
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [certPem, open, execute]);
-
-  const valid =
-    hostname.length > 0 && certPem.trim().length > 0 && keyPem.trim().length > 0;
+  const valid = certPem.trim().length > 0 && keyPem.trim().length > 0;
 
   const submit = async () => {
     setSubmitting(true);
-    setWarnings(null);
     try {
       const params: Record<string, unknown> = {
-        hostname,
         cert_pem: certPem,
         key_pem: keyPem,
       };
       const trimmedNote = note.trim();
       if (trimmedNote.length > 0) params.note = trimmedNote;
-      const result = (await execute("/tls/certificates/upload-manual", params)) as {
+      const r = (await execute("/tls/certificates/upload-manual", params)) as {
+        primary_san?: string;
+        san_dns_names?: string[];
         warnings?: string[];
       };
-      const warns = result?.warnings ?? [];
-      if (warns.length > 0) {
-        setWarnings(warns);
-      } else {
+      const warns = r.warnings ?? [];
+      if (warns.length === 0) {
         reset();
         onSubmitted();
+      } else {
+        setResult({
+          primary_san: r.primary_san,
+          san_dns_names: r.san_dns_names,
+          warnings: warns,
+        });
       }
     } finally {
       setSubmitting(false);
@@ -1207,37 +1164,8 @@ function UploadManualCertDialog({
             minRows={6}
             value={certPem}
             onChange={setCertPem}
-            helperText={
-              previewError
-                ? `Could not parse: ${previewError}`
-                : sans.length > 0
-                  ? `Detected SANs: ${sans.join(", ")}`
-                  : "Paste, drop, or open a PEM file. Leaf cert plus optional intermediates."
-            }
+            helperText="Paste, drop, or open a PEM file. Leaf cert plus optional intermediates. The runtime will auto-bind the cert to every hostname its SANs cover."
           />
-          {sans.length > 1 ? (
-            <TextField
-              select
-              label="Bind to SAN"
-              value={hostname}
-              onChange={(e) => setHostname(e.target.value)}
-              fullWidth
-              helperText="Pick which SAN this cert row should be bound to. The cert remains usable for any covered hostname; this is the row's primary label."
-            >
-              {sans.map((s) => (
-                <MenuItem key={s} value={s} sx={{ fontFamily: "monospace" }}>
-                  {s}
-                </MenuItem>
-              ))}
-            </TextField>
-          ) : sans.length === 1 ? (
-            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-              <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                Will bind to:
-              </Typography>
-              <Typography sx={{ fontFamily: "monospace" }}>{sans[0]}</Typography>
-            </Box>
-          ) : null}
           <PemField
             label="Private key PEM"
             placeholder="-----BEGIN PRIVATE KEY-----..."
@@ -1253,15 +1181,20 @@ function UploadManualCertDialog({
             onChange={(e) => setNote(e.target.value)}
             fullWidth
           />
-          {warnings && (
+          {result && (
             <Alert severity="warning">
-              Uploaded with warnings: {warnings.join(", ")}.
+              Uploaded with warnings: {result.warnings.join(", ")}.
+              {result.san_dns_names && result.san_dns_names.length > 0 && (
+                <>
+                  {" "}Will cover: {result.san_dns_names.join(", ")}.
+                </>
+              )}
             </Alert>
           )}
         </Stack>
       </DialogContent>
       <DialogActions>
-        {warnings ? (
+        {result ? (
           <Button onClick={acceptAndClose} variant="contained">
             OK
           </Button>

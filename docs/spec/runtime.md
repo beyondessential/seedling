@@ -1345,9 +1345,11 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > If the CA does not support ARI or the lookup fails, the runtime must fall back to its fixed-fraction-of-lifetime renewal heuristic without surfacing the absence as an error.
 
 > r[tls.strategy.manual]
-> Operators may upload a PEM-encoded certificate chain and matching private key for a hostname; the runtime must cause the proxy to serve that exact pair for TLS handshakes whose SNI matches the hostname.
-> Manual certificates are not auto-renewed; replacement requires another upload.
-> A wildcard manual certificate (`*.example.com`) may be bound to a concrete hostname (`foo.example.com`) provided the certificate's [SAN coverage](#r--tls.cert.validation.san-coverage) admits that hostname.
+> Operators may upload a PEM-encoded certificate chain and matching private key.
+> The runtime must auto-bind the uploaded cert to every hostname its SubjectAlternativeName list covers — literally for exact entries, and per RFC 6125 single-label rules for wildcard SANs — and cause the proxy to serve that exact pair for TLS handshakes whose SNI matches a covered hostname.
+> Auto-binding requires no per-hostname operator action: a `*.example.com` cert covers `foo.example.com` and `bar.example.com` as soon as it is uploaded; further hostnames added later are picked up automatically.
+> When more than one stored cert covers the same hostname, the most recently created active row wins.
+> The runtime does not auto-renew manual certs on its own; however, if an `acme_dns` policy applies to a covered hostname and the manual cert is past its renewal threshold, the runtime must initiate the normal ACME-DNS issuance flow so a renewable cert can take over before the manual cert expires.
 
 > r[tls.csr.flow]
 > Operators may instruct the runtime to generate a keypair and a Certificate Signing Request for a hostname.

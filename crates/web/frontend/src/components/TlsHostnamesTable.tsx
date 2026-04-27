@@ -90,10 +90,6 @@ function policySummary(view: TlsHostnameView): string {
       return policy.is_wildcard_match
         ? `ACME-DNS via ${policy.dns_provider} (${policy.pattern})`
         : `ACME-DNS via ${policy.dns_provider}`;
-    case "manual":
-      return policy.is_wildcard_match
-        ? `manual cert #${policy.cert_id} (${policy.pattern})`
-        : `manual cert #${policy.cert_id}`;
   }
 }
 

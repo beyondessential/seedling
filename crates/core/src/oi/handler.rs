@@ -260,14 +260,10 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/tls/policies/list" => tls::list_policies(state),
         // i[tls.policy.set-acme-dns]
         "/tls/policies/set-acme-dns" => tls::set_policy_acme_dns(state, parse_params(req.params)?),
-        // i[tls.policy.set-manual]
-        "/tls/policies/set-manual" => tls::set_policy_manual(state, parse_params(req.params)?),
         // i[tls.policy.clear]
         "/tls/policies/clear" => tls::clear_policy(state, parse_params(req.params)?),
         // i[tls.cert.list]
         "/tls/certificates/list" => tls::list_certificates(state),
-        // i[tls.cert.preview]
-        "/tls/certificates/preview" => tls::preview_cert(state, parse_params(req.params)?),
         // i[tls.cert.upload-manual]
         "/tls/certificates/upload-manual" => tls::upload_manual(state, parse_params(req.params)?),
         // i[tls.cert.delete]

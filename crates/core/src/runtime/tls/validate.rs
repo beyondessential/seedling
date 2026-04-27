@@ -4,14 +4,19 @@
 //! (`tls.cert.csr.upload-cert`) flows. The rules come from the spec block
 //! `tls.cert.validation.*` in `docs/spec/runtime.md`:
 //!
-//! - **SAN coverage**: leaf SANs must literally cover the hostname or
-//!   carry an RFC 6125 wildcard that does.
+//! - **SAN list non-empty**: the cert must carry at least one DNS SAN,
+//!   otherwise it cannot ever auto-bind to a hostname.
 //! - **Self-signed**: accepted with a warning so the operator interface
 //!   can flag it.
 //! - **Expired**: outright rejected when `not_after` is in the past.
 //! - **Not yet valid**: accepted with a warning.
-//! - **Key match** (manual upload only): the supplied private key's
-//!   SubjectPublicKeyInfo must equal the leaf certificate's SPKI.
+//! - **Key match**: the supplied private key's SubjectPublicKeyInfo
+//!   must equal the leaf certificate's SPKI. (For CSR uploads the
+//!   stored CSR keypair plays the role of the supplied key.)
+//!
+//! The cert auto-binds to whatever hostnames its SANs cover at
+//! resolution time (see [`super::store::find_active_for_hostname`]);
+//! validation does not pin it to any one hostname.
 //!
 //! Each function returns a [`Validated`] with the parsed metadata and
 //! the list of warnings, or a [`ValidateError`] describing the precise
@@ -32,8 +37,8 @@ pub enum ValidateError {
     #[snafu(display("private key parse error: {source}"))]
     ParseKey { source: keypair::Error },
 
-    #[snafu(display("certificate SAN list does not cover hostname {hostname:?} (SANs: {sans:?})"))]
-    SanCoverage { hostname: String, sans: Vec<String> },
+    #[snafu(display("certificate has no DNS SANs; nothing to bind to"))]
+    NoSans,
 
     #[snafu(display("certificate has already expired (notAfter = {not_after}, now = {now})"))]
     Expired { not_after: i64, now: i64 },
@@ -57,25 +62,17 @@ pub struct Validated {
     pub key_type: KeyType,
 }
 
-/// Validate a manual cert+key upload for `hostname`. Performs every check
-/// in [`tls.cert.validation.*`] plus the manual-only key match.
-// r[impl tls.cert.validation.san-coverage]
+/// Validate an operator-supplied cert+key pair. The cert auto-binds to
+/// whatever hostnames its SANs cover at resolution time, so validation
+/// does not take a hostname parameter; instead it asserts that the SAN
+/// list is non-empty (otherwise the cert can never bind to anything).
 // r[impl tls.cert.validation.self-signed]
 // r[impl tls.cert.validation.expired]
-pub fn validate_manual_upload(
-    hostname: &str,
-    cert_pem: &str,
-    key_pem: &SecretString,
-) -> Result<Validated> {
+pub fn validate_upload(cert_pem: &str, key_pem: &SecretString) -> Result<Validated> {
     let parsed = parse::parse_chain(cert_pem).context(ParseCertSnafu)?;
 
-    // SAN coverage applies to manual + CSR-cert uploads.
-    if !parse::san_covers(&parsed.san_dns_names, hostname) {
-        return SanCoverageSnafu {
-            hostname: hostname.to_owned(),
-            sans: parsed.san_dns_names.clone(),
-        }
-        .fail();
+    if parsed.san_dns_names.is_empty() {
+        return NoSansSnafu.fail();
     }
 
     // Validity window. Already-expired certs are rejected; a not-yet-valid
@@ -142,31 +139,16 @@ mod tests {
     #[test]
     fn accepts_self_signed_with_warning() {
         let (cert, key) = make("foo.example.com");
-        let v = validate_manual_upload("foo.example.com", &cert, &key).unwrap();
+        let v = validate_upload(&cert, &key).unwrap();
         assert!(v.warnings.contains(&"self_signed"));
         assert!(!v.parsed.san_dns_names.is_empty());
     }
 
     #[test]
-    fn rejects_san_mismatch() {
-        let (cert, key) = make("foo.example.com");
-        let err = validate_manual_upload("bar.example.com", &cert, &key).unwrap_err();
-        assert!(matches!(err, ValidateError::SanCoverage { .. }), "{err:?}");
-    }
-
-    #[test]
-    fn accepts_wildcard_san_for_concrete_host() {
-        // RFC 6125 single-label match: *.example.com covers foo.example.com.
+    fn accepts_wildcard_san() {
         let (cert, key) = make("*.example.com");
-        let v = validate_manual_upload("foo.example.com", &cert, &key).unwrap();
-        assert!(v.warnings.contains(&"self_signed"));
-    }
-
-    #[test]
-    fn rejects_wildcard_for_apex() {
-        let (cert, key) = make("*.example.com");
-        let err = validate_manual_upload("example.com", &cert, &key).unwrap_err();
-        assert!(matches!(err, ValidateError::SanCoverage { .. }), "{err:?}");
+        let v = validate_upload(&cert, &key).unwrap();
+        assert!(v.parsed.san_dns_names.iter().any(|s| s == "*.example.com"));
     }
 
     fn odt(seconds: i64) -> time::OffsetDateTime {
@@ -180,7 +162,7 @@ mod tests {
             p.not_before = odt(1);
             p.not_after = odt(2);
         });
-        let err = validate_manual_upload("foo.example.com", &cert, &key).unwrap_err();
+        let err = validate_upload(&cert, &key).unwrap_err();
         assert!(matches!(err, ValidateError::Expired { .. }), "{err:?}");
     }
 
@@ -192,7 +174,7 @@ mod tests {
             p.not_before = odt(future);
             p.not_after = odt(later);
         });
-        let v = validate_manual_upload("foo.example.com", &cert, &key).unwrap();
+        let v = validate_upload(&cert, &key).unwrap();
         assert!(v.warnings.contains(&"not_yet_valid"));
     }
 
@@ -201,7 +183,7 @@ mod tests {
         let (cert, _key) = make("foo.example.com");
         let other_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
         let other_pem = SecretString::new(other_key.serialize_pem().into());
-        let err = validate_manual_upload("foo.example.com", &cert, &other_pem).unwrap_err();
+        let err = validate_upload(&cert, &other_pem).unwrap_err();
         assert!(matches!(err, ValidateError::KeyMismatch), "{err:?}");
     }
 
@@ -209,12 +191,12 @@ mod tests {
     fn rejects_garbage_pem() {
         let (cert, _key) = make("foo.example.com");
         let bad_key = SecretString::new("not a pem file".to_owned().into());
-        let err = validate_manual_upload("foo.example.com", &cert, &bad_key).unwrap_err();
+        let err = validate_upload(&cert, &bad_key).unwrap_err();
         assert!(matches!(err, ValidateError::ParseKey { .. }), "{err:?}");
 
         let bad_cert = "-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----\n";
         let key_pem = SecretString::new("dummy".to_owned().into());
-        let err = validate_manual_upload("foo.example.com", bad_cert, &key_pem).unwrap_err();
+        let err = validate_upload(bad_cert, &key_pem).unwrap_err();
         assert!(matches!(err, ValidateError::ParseCert { .. }), "{err:?}");
     }
 }

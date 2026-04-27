@@ -198,23 +198,27 @@ pub fn list_policies(db: &Db) -> rusqlite::Result<Vec<TlsPolicyRow>> {
             let hostname: String = row.get(0)?;
             let strategy: String = row.get(1)?;
             let dns_provider: Option<String> = row.get(2)?;
-            let cert_id: Option<i64> = row.get(3)?;
+            let _cert_id: Option<i64> = row.get(3)?;
             let updated_at: i64 = row.get(4)?;
+            // Manual policy rows from older shipped versions of the
+            // schema (where strategy = 'manual' + cert_id) are now
+            // ignored: manual certs auto-bind by SAN coverage at
+            // resolution time. Returning Ok(None) drops them; the
+            // outer collect filters None out.
             let policy = match strategy.as_str() {
                 "acme_dns" => TlsPolicy::AcmeDns {
                     dns_provider: dns_provider.ok_or_else(|| rusqlite::Error::InvalidQuery)?,
                 },
-                "manual" => TlsPolicy::Manual {
-                    cert_id: cert_id.ok_or_else(|| rusqlite::Error::InvalidQuery)?,
-                },
+                "manual" => return Ok(None),
                 _ => return Err(rusqlite::Error::InvalidQuery),
             };
-            Ok(TlsPolicyRow {
+            Ok(Some(TlsPolicyRow {
                 hostname,
                 policy,
                 updated_at,
-            })
+            }))
         })?
+        .filter_map(|r| r.transpose())
         .collect::<rusqlite::Result<_>>()?;
     Ok(rows)
 }
@@ -237,23 +241,6 @@ pub fn set_policy_acme_dns(db: &Db, hostname: &str, dns_provider: &str) -> rusql
              cert_id = NULL,
              updated_at = excluded.updated_at",
         params![hostname, dns_provider, now],
-    )?;
-    Ok(())
-}
-
-// r[impl tls.strategy.manual]
-// r[impl tls.policy.apply]
-pub fn set_policy_manual(db: &Db, hostname: &str, cert_id: i64) -> rusqlite::Result<()> {
-    let now = now_secs();
-    db.conn.execute(
-        "INSERT INTO tls_policies (hostname, strategy, dns_provider, cert_id, updated_at)
-         VALUES (?1, 'manual', NULL, ?2, ?3)
-         ON CONFLICT(hostname) DO UPDATE SET
-             strategy = excluded.strategy,
-             dns_provider = NULL,
-             cert_id = excluded.cert_id,
-             updated_at = excluded.updated_at",
-        params![hostname, cert_id, now],
     )?;
     Ok(())
 }
@@ -346,12 +333,25 @@ pub fn list_certificates(db: &Db) -> rusqlite::Result<Vec<TlsCertificate>> {
     stmt.query_map([], row_to_certificate)?.collect()
 }
 
-/// Returns the most-recent active cert for a hostname, if any.
+/// Returns the most-recent active cert covering `hostname`, if any.
+///
+/// Resolution rules:
+///
+/// - Exact match on the cert's primary `hostname` column wins (this is
+///   the fast path for ACME-DNS certs, whose row is always created
+///   for the hostname they were issued for).
+/// - Otherwise, scan every active cert and pick the most-recent one
+///   whose SubjectAlternativeName list covers `hostname` per RFC 6125
+///   (literal match or single-label wildcard). This auto-binds manual
+///   uploads — including wildcard certs — without requiring the
+///   operator to re-declare the binding per host.
+// r[impl tls.strategy.manual]
 pub fn find_active_for_hostname(
     db: &Db,
     hostname: &str,
 ) -> rusqlite::Result<Option<TlsCertificate>> {
-    db.conn
+    if let Some(cert) = db
+        .conn
         .query_row(
             "SELECT id, hostname, state, origin, cert_pem, csr_pem, key_ciphertext,
                     key_type, issuer, not_before, not_after, serial, self_signed,
@@ -363,7 +363,38 @@ pub fn find_active_for_hostname(
             [hostname],
             row_to_certificate,
         )
-        .optional()
+        .optional()?
+    {
+        return Ok(Some(cert));
+    }
+
+    // SAN-coverage scan: walk active certs newest-first and return the
+    // first whose SAN list covers the hostname. Cost is one PEM parse
+    // per active row; in operator-scale databases (<<1000 active rows)
+    // this is microseconds.
+    let mut stmt = db.conn.prepare(
+        "SELECT id, hostname, state, origin, cert_pem, csr_pem, key_ciphertext,
+                key_type, issuer, not_before, not_after, serial, self_signed,
+                note, acme_account_id, ari_window_start, ari_window_end,
+                ari_polled_at, created_at, updated_at
+         FROM tls_certificates
+         WHERE state = 'active'
+         ORDER BY created_at DESC, id DESC",
+    )?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let cert = row_to_certificate(row)?;
+        let Some(pem) = cert.cert_pem.as_deref() else {
+            continue;
+        };
+        let Ok(parsed) = super::parse::parse_chain(pem) else {
+            continue;
+        };
+        if super::parse::san_covers(&parsed.san_dns_names, hostname) {
+            return Ok(Some(cert));
+        }
+    }
+    Ok(None)
 }
 
 /// Transition a cert to a new state, optionally updating cert PEM and parsed
@@ -1078,28 +1109,11 @@ mod tests {
         assert_eq!(rows.len(), 2);
         match &rows[0].policy {
             TlsPolicy::AcmeDns { dns_provider } => assert_eq!(dns_provider, "p"),
-            _ => panic!("expected acme_dns"),
         }
     }
 
     #[test]
-    fn policy_manual_then_clear() {
-        let (db, _) = fresh_db();
-        let cert_id = insert_test_cert(&db, "foo.example.com");
-        set_policy_manual(&db, "foo.example.com", cert_id).unwrap();
-
-        let row = get_policy(&db, "foo.example.com").unwrap().unwrap();
-        match row.policy {
-            TlsPolicy::Manual { cert_id: c } => assert_eq!(c, cert_id),
-            _ => panic!("expected manual"),
-        }
-
-        assert!(clear_policy(&db, "foo.example.com").unwrap());
-        assert!(get_policy(&db, "foo.example.com").unwrap().is_none());
-    }
-
-    #[test]
-    fn policy_strategy_swap_keeps_single_row() {
+    fn acme_dns_policy_then_clear() {
         let (db, cipher) = fresh_db();
         upsert_dns_provider(
             &db,
@@ -1110,17 +1124,15 @@ mod tests {
         )
         .unwrap();
         clear_policy(&db, "*").unwrap();
-        let cert_id = insert_test_cert(&db, "foo.example.com");
-
         set_policy_acme_dns(&db, "foo.example.com", "p").unwrap();
-        set_policy_manual(&db, "foo.example.com", cert_id).unwrap();
 
-        let rows = list_policies(&db).unwrap();
-        assert_eq!(rows.len(), 1);
-        match &rows[0].policy {
-            TlsPolicy::Manual { cert_id: c } => assert_eq!(*c, cert_id),
-            _ => panic!("expected manual after swap"),
+        let row = get_policy(&db, "foo.example.com").unwrap().unwrap();
+        match row.policy {
+            TlsPolicy::AcmeDns { dns_provider } => assert_eq!(dns_provider, "p"),
         }
+
+        assert!(clear_policy(&db, "foo.example.com").unwrap());
+        assert!(get_policy(&db, "foo.example.com").unwrap().is_none());
     }
 
     #[test]
@@ -1173,7 +1185,6 @@ mod tests {
         assert_eq!(policies[0].hostname, "*");
         match &policies[0].policy {
             TlsPolicy::AcmeDns { dns_provider } => assert_eq!(dns_provider, "primary"),
-            _ => panic!("expected acme_dns"),
         }
     }
 
@@ -1203,7 +1214,6 @@ mod tests {
         let star = policies.iter().find(|p| p.hostname == "*").unwrap();
         match &star.policy {
             TlsPolicy::AcmeDns { dns_provider } => assert_eq!(dns_provider, "primary"),
-            _ => panic!("expected acme_dns"),
         }
     }
 
@@ -1263,18 +1273,11 @@ mod tests {
         .unwrap();
         // The auto-created `*` is in place; add an exact + a `*.example.com`.
         set_policy_acme_dns(&db, "foo.example.com", "p").unwrap();
-        let cert_id = insert_test_cert(&db, "bar.example.com");
-        set_policy_manual(&db, "bar.example.com", cert_id).unwrap();
-        // We need a different provider for the *.example.com policy to
-        // distinguish it; reuse "p" for simplicity since we only check the
-        // pattern, not the provider here.
         set_policy_acme_dns(&db, "*.example.com", "p").unwrap();
 
         // Exact match wins.
         let row = resolve_policy(&db, "foo.example.com").unwrap().unwrap();
         assert_eq!(row.hostname, "foo.example.com");
-        let row = resolve_policy(&db, "bar.example.com").unwrap().unwrap();
-        assert_eq!(row.hostname, "bar.example.com");
 
         // No exact: dotted wildcard wins.
         let row = resolve_policy(&db, "baz.example.com").unwrap().unwrap();

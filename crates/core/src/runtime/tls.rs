@@ -196,13 +196,13 @@ impl KeyType {
 }
 
 /// Per-hostname operator policy. Hostnames absent from `tls_policies` use
-/// the runtime default (ACME HTTP-01 via Caddy).
+/// the runtime default (ACME HTTP-01 via Caddy). Manual certs do not
+/// require a per-hostname policy: they auto-bind by SAN coverage at
+/// resolution time (see [`store::find_active_for_hostname`]).
 // r[impl tls.strategy.acme-dns]
-// r[impl tls.strategy.manual]
 #[derive(Debug, Clone)]
 pub enum TlsPolicy {
     AcmeDns { dns_provider: String },
-    Manual { cert_id: i64 },
 }
 
 #[derive(Debug, Clone)]

@@ -150,12 +150,6 @@ pub(super) enum PoliciesCommand {
         #[arg(long)]
         directory: Option<String>,
     },
-    /// Bind a hostname to a stored certificate (manual or CSR-derived)
-    SetManual {
-        hostname: String,
-        #[arg(long)]
-        cert_id: i64,
-    },
     /// Remove the policy for a hostname, returning it to the default ACME-HTTP-01
     Clear { hostname: String },
 }
@@ -315,16 +309,6 @@ async fn dispatch_policies(client: &OiClient, cmd: PoliciesCommand) {
                 params["directory_url"] = json!(d);
             }
             print_result(client.request("/tls/policies/set-acme-dns", params).await);
-        }
-        PoliciesCommand::SetManual { hostname, cert_id } => {
-            print_result(
-                client
-                    .request(
-                        "/tls/policies/set-manual",
-                        json!({ "hostname": hostname, "cert_id": cert_id }),
-                    )
-                    .await,
-            );
         }
         PoliciesCommand::Clear { hostname } => {
             print_result(

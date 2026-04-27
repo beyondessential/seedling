@@ -43,14 +43,6 @@ pub enum CoordinatorError {
     #[snafu(display("no contact email is configured; set one via /tls/settings/set"))]
     NoContactEmail,
 
-    #[snafu(display(
-        "hostname {hostname} resolves to a {strategy} policy; ACME-DNS does not apply"
-    ))]
-    NotAcmeDns {
-        hostname: String,
-        strategy: &'static str,
-    },
-
     #[snafu(display("hostname {hostname} has no policy; bind one via /tls/policies/set-acme-dns"))]
     NoPolicy { hostname: String },
 
@@ -277,9 +269,8 @@ struct OwnedState {
 
 impl OwnedState {
     fn from_snapshot(snap: &state::Snapshot, s: &state::HostnameState<'_>) -> Self {
-        let dns_provider_name = s.policy.and_then(|p| match &p.policy {
-            TlsPolicy::AcmeDns { dns_provider } => Some(dns_provider.clone()),
-            TlsPolicy::Manual { .. } => None,
+        let dns_provider_name = s.policy.map(|p| match &p.policy {
+            TlsPolicy::AcmeDns { dns_provider } => dns_provider.clone(),
         });
         Self {
             decision: s.decision.clone(),
@@ -312,10 +303,6 @@ fn handle_non_issuing(
     match &owned.decision {
         Decision::Default => Err(CoordinatorError::NoPolicy {
             hostname: hostname.to_owned(),
-        }),
-        Decision::Manual { .. } => Err(CoordinatorError::NotAcmeDns {
-            hostname: hostname.to_owned(),
-            strategy: "manual",
         }),
         Decision::Blocked { reason } => Err(CoordinatorError::Paused {
             hostname: hostname.to_owned(),

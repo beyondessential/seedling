@@ -274,6 +274,10 @@ pub async fn teardown_resolver(container: &dyn ContainerRuntime, process: &dyn P
 /// [`HEALTH_CHECK_FAIL_THRESHOLD`], so a single missed 2-second probe
 /// doesn't churn the resolver when the container is alive but the host
 /// is briefly busy.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "infra subsystem startup needs the full set of runtime handles"
+)]
 #[tracing::instrument(skip_all, level = "debug")]
 pub async fn ensure_resolver_running(
     container: &dyn ContainerRuntime,

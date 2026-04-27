@@ -146,12 +146,6 @@ pub(crate) fn list_policies(state: &OiState) -> HandlerResult {
                 "dns_provider": dns_provider,
                 "updated_at": row.updated_at,
             }),
-            TlsPolicy::Manual { cert_id } => json!({
-                "hostname": row.hostname,
-                "strategy": "manual",
-                "cert_id": cert_id,
-                "updated_at": row.updated_at,
-            }),
         })
         .collect();
     Ok(json!({ "policies": result }))
@@ -189,22 +183,6 @@ pub(crate) fn set_policy_acme_dns(state: &OiState, params: SetAcmeDnsParams) -> 
     }
 
     Ok(json!({ "ok": true, "auto_issue_kicked": auto_issue_kicked }))
-}
-
-#[derive(Deserialize)]
-pub(crate) struct SetManualParams {
-    pub hostname: String,
-    pub cert_id: i64,
-}
-
-// i[tls.policy.set-manual]
-pub(crate) fn set_policy_manual(state: &OiState, params: SetManualParams) -> HandlerResult {
-    let SetManualParams { hostname, cert_id } = params;
-    state
-        .db
-        .call(move |db| store::set_policy_manual(db, &hostname, cert_id))
-        .map_err(db_error)?;
-    Ok(json!({ "ok": true }))
 }
 
 #[derive(Deserialize)]
@@ -293,46 +271,39 @@ pub(crate) fn issue_acme_dns(state: &OiState, params: IssueAcmeDnsParams) -> Han
 
 #[derive(Deserialize)]
 pub(crate) struct UploadManualParams {
-    pub hostname: String,
     pub cert_pem: String,
     pub key_pem: String,
     #[serde(default)]
     pub note: Option<String>,
 }
 
-/// Upload an operator-supplied (cert, key) pair for `hostname`. The
-/// cert is validated against the SAN coverage / self-signed / expiry
-/// rules in [`tls.cert.validation.*`] and the supplied key is
-/// confirmed to match the leaf cert's public key. The pair is stored
-/// (key encrypted at rest), any prior active cert with the same
-/// hostname is superseded, and the new row id plus any non-fatal
-/// `warnings` (e.g. `self_signed`, `not_yet_valid`) come back to the
-/// caller.
-///
-/// Note: this endpoint registers the cert in storage; the operator
-/// still needs to bind a hostname to it via `tls.policy.set-manual`
-/// for the runtime to start serving it.
+/// Upload an operator-supplied (cert, key) pair. The cert auto-binds
+/// to whatever hostnames its SANs cover at resolution time; the row's
+/// `hostname` column is just the first SAN, kept as a primary label
+/// for display. The pair is validated per [`tls.cert.validation.*`]
+/// and the supplied key's public key is confirmed to match the leaf
+/// cert's `SubjectPublicKeyInfo`. Stored with the key encrypted at
+/// rest. Returns `{ id, warnings }` (warnings: `self_signed`,
+/// `not_yet_valid`, …).
 // i[tls.cert.upload-manual]
 // r[impl tls.strategy.manual]
 pub(crate) fn upload_manual(state: &OiState, params: UploadManualParams) -> HandlerResult {
     let UploadManualParams {
-        hostname,
         cert_pem,
         key_pem,
         note,
     } = params;
 
-    if hostname.trim().is_empty() {
-        return Err(OiError::new(
-            ErrorCode::RequirementsInvalid,
-            "hostname must not be empty",
-        ));
-    }
-
     let key_secret = SecretString::new(key_pem.into());
-    let validated = validate::validate_manual_upload(&hostname, &cert_pem, &key_secret)
-        .map_err(map_validate_error)?;
+    let validated =
+        validate::validate_upload(&cert_pem, &key_secret).map_err(map_validate_error)?;
 
+    let primary_san = validated
+        .parsed
+        .san_dns_names
+        .first()
+        .cloned()
+        .expect("validate_upload rejects empty SAN lists");
     let chain_pem = validated.parsed.chain_pem.clone();
     let metadata = CertMetadata {
         issuer: validated.parsed.metadata.issuer.clone(),
@@ -351,14 +322,14 @@ pub(crate) fn upload_manual(state: &OiState, params: UploadManualParams) -> Hand
         )
     })?;
 
-    let host_for_insert = hostname.clone();
+    let label_for_insert = primary_san.clone();
     let note_for_insert = note;
     let id = state
         .db
         .call(move |db| -> rusqlite::Result<i64> {
             let id = store::insert_certificate(
                 db,
-                &host_for_insert,
+                &label_for_insert,
                 TlsCertState::Active,
                 TlsCertOrigin::Manual,
                 Some(&chain_pem),
@@ -369,16 +340,20 @@ pub(crate) fn upload_manual(state: &OiState, params: UploadManualParams) -> Hand
                 note_for_insert.as_deref(),
                 None,
             )?;
-            // Replace any prior active cert for the same hostname so
-            // serving picks up the new one immediately. Leaves the old
-            // row in `superseded` state for history.
-            store::supersede_other_active_for_hostname(db, &host_for_insert, id)?;
+            // Replace any prior active cert with the same primary SAN
+            // (renewal-of-same-cert flow) so serving picks the new one
+            // up immediately. Other certs with overlapping SAN coverage
+            // stay around; resolution picks the most-recent active row
+            // covering each hostname.
+            store::supersede_other_active_for_hostname(db, &label_for_insert, id)?;
             Ok(id)
         })
         .map_err(db_error)?;
 
     Ok(json!({
         "id": id,
+        "primary_san": primary_san,
+        "san_dns_names": validated.parsed.san_dns_names,
         "warnings": validated.warnings,
     }))
 }
@@ -413,32 +388,6 @@ pub(crate) fn delete_certificate(state: &OiState, params: CertIdParams) -> Handl
         return Err(OiError::not_found(format!("certificate not found: {id}")));
     }
     Ok(json!({ "ok": true }))
-}
-
-#[derive(Deserialize)]
-pub(crate) struct PreviewCertParams {
-    pub cert_pem: String,
-}
-
-/// Parse a cert chain without storing it. Used by the upload UI to
-/// inspect the SAN list and metadata so the operator picks a hostname
-/// from the cert rather than retyping it. Read-only; no DB access.
-// i[tls.cert.preview]
-pub(crate) fn preview_cert(_state: &OiState, params: PreviewCertParams) -> HandlerResult {
-    let parsed = crate::runtime::tls::parse::parse_chain(&params.cert_pem).map_err(|e| {
-        OiError::new(
-            ErrorCode::RequirementsInvalid,
-            format!("certificate parse error: {e}"),
-        )
-    })?;
-    Ok(json!({
-        "san_dns_names": parsed.san_dns_names,
-        "issuer": parsed.metadata.issuer,
-        "not_before": parsed.metadata.not_before,
-        "not_after": parsed.metadata.not_after,
-        "self_signed": parsed.metadata.self_signed,
-        "serial": parsed.metadata.serial,
-    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -597,10 +546,12 @@ pub(crate) fn csr_upload_cert(state: &OiState, params: CsrUploadCertParams) -> H
         )
     })?;
 
-    // Validation reuses the manual-upload rules: SAN coverage,
-    // expiry, and (here against the CSR's stored key) SPKI match.
-    let validated = validate::validate_manual_upload(&cert_row.hostname, &cert_pem, &stored_key)
-        .map_err(map_validate_error)?;
+    // Validation reuses the upload rules: SAN-list non-empty, expiry,
+    // and (here against the CSR's stored key) SPKI match. SAN coverage
+    // for the originally-requested hostname is enforced as part of the
+    // SPKI match — the CSR was built with that name as its only SAN.
+    let validated =
+        validate::validate_upload(&cert_pem, &stored_key).map_err(map_validate_error)?;
 
     let chain_pem = validated.parsed.chain_pem.clone();
     let metadata = CertMetadata {
@@ -663,16 +614,7 @@ pub(crate) fn csr_cancel(state: &OiState, params: CertIdParams) -> HandlerResult
 }
 
 fn map_validate_error(e: ValidateError) -> OiError {
-    let msg = e.to_string();
-    let code = match e {
-        ValidateError::ParseCert { .. } | ValidateError::ParseKey { .. } => {
-            ErrorCode::RequirementsInvalid
-        }
-        ValidateError::SanCoverage { .. } => ErrorCode::RequirementsInvalid,
-        ValidateError::Expired { .. } => ErrorCode::RequirementsInvalid,
-        ValidateError::KeyMismatch => ErrorCode::RequirementsInvalid,
-    };
-    OiError::new(code, msg)
+    OiError::new(ErrorCode::RequirementsInvalid, e.to_string())
 }
 
 #[derive(Deserialize)]
@@ -828,12 +770,6 @@ fn project_hostname_state(
             "pattern": pattern,
             "is_wildcard_match": pattern != hostname,
         }),
-        Some((TlsPolicy::Manual { cert_id }, pattern)) => json!({
-            "strategy": "manual",
-            "cert_id": cert_id,
-            "pattern": pattern,
-            "is_wildcard_match": pattern != hostname,
-        }),
     };
 
     let active_cert_json = match (st.active_cert, caddy_cert) {
@@ -888,14 +824,17 @@ fn project_hostname_state(
     })
 }
 
-/// Map the unified [`state::Decision`] to a status label for the UI.
-/// The label is a *projection* of the decision, not a re-computation —
-/// when the decision says "Issue now (renewal)" but the existing cert is
-/// still valid, status is `"active"` because the operator's mental model
-/// of the cert is "it's serving".
+/// Map the unified [`state::Decision`] (plus the active cert it
+/// resolved against) to a status label for the UI. The label is a
+/// projection of the decision, not a re-computation — when the
+/// decision says "Issue now (renewal)" but the existing cert is still
+/// valid, status is `"active"` because the operator's mental model of
+/// the cert is "it's serving".
 ///
-/// For `Decision::Default`, the runtime has no opinion; the status comes
-/// from whatever Caddy has on disk for the hostname.
+/// For `Decision::Default`, the runtime has no opinion; the status
+/// reflects whichever cert is actually serving — a SAN-bound manual
+/// cert from the runtime store, or whatever proxy-managed cert is on
+/// disk.
 fn decision_status(
     st: &state::HostnameState<'_>,
     caddy_cert: Option<&crate::system::caddy::CaddyCertView>,
@@ -903,23 +842,15 @@ fn decision_status(
     use state::Decision::*;
     use state::IssueReason as R;
     let now = jiff::Timestamp::now().as_second();
+    let active_not_after = st.active_cert.and_then(|c| c.not_after);
     match &st.decision {
-        Default => match caddy_cert.and_then(|c| c.not_after) {
-            None => "default",
-            Some(na) if na < now => "expired",
-            Some(_) => "active",
+        Default => match (active_not_after, caddy_cert.and_then(|c| c.not_after)) {
+            (Some(na), _) if na < now => "expired",
+            (Some(_), _) => "active",
+            (None, Some(na)) if na < now => "expired",
+            (None, Some(_)) => "active",
+            (None, None) => "default",
         },
-        Manual { expired: true, .. } => "expired",
-        Manual {
-            cert_id,
-            expired: false,
-        } => {
-            if cert_id.is_some() && st.active_cert.is_some() {
-                "active"
-            } else {
-                "no_cert"
-            }
-        }
         Blocked { .. } => "blocked",
         NoContactEmail | Debounced { .. } => "error",
         Scheduled { .. } => "active",
@@ -932,11 +863,7 @@ fn decision_status(
             // Cert is past its renewal trigger. If it's also past expiry
             // (which can happen if every retry has failed), surface that
             // instead of pretending it's still active.
-            if st
-                .active_cert
-                .and_then(|c| c.not_after)
-                .is_some_and(|na| na < now)
-            {
+            if active_not_after.is_some_and(|na| na < now) {
                 "expired"
             } else {
                 "active"
@@ -950,7 +877,7 @@ fn decision_next_issuance(st: &state::HostnameState<'_>) -> (Option<i64>, Option
     use state::Decision::*;
     use state::IssueReason as R;
     match &st.decision {
-        Default | Manual { .. } | Blocked { .. } | NoContactEmail => (None, None),
+        Default | Blocked { .. } | NoContactEmail => (None, None),
         Debounced { until } => (Some(*until), Some("immediate")),
         Scheduled { next_at, source } => (Some(*next_at), Some(source.as_str())),
         IssueNow {
@@ -984,9 +911,8 @@ fn build_last_issuance(
         });
     }
     if let Some(att) = st.last_success {
-        let provider = st.policy.and_then(|p| match &p.policy {
-            TlsPolicy::AcmeDns { dns_provider } => Some(dns_provider.clone()),
-            TlsPolicy::Manual { .. } => None,
+        let provider = st.policy.map(|p| match &p.policy {
+            TlsPolicy::AcmeDns { dns_provider } => dns_provider.clone(),
         });
         return json!({
             "kind": "acme_dns",

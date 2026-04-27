@@ -981,11 +981,6 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 > Wildcard policies do not auto-issue (there is no concrete hostname to acquire a cert for); the operator runs [`tls.cert.issue-acme-dns`](#i--tls.cert.issue-acme-dns) per hostname.
 > `directory_url` defaults to the Let's Encrypt production directory.
 
-> i[tls.policy.set-manual]
-> `/tls/policies/set-manual { hostname, cert_id }` binds `hostname` to a stored certificate row.
-> The cert must already exist in the certificate store via manual upload or the CSR flow.
-> The new policy takes effect on the next reconciliation tick.
-
 > i[tls.policy.clear]
 > `/tls/policies/clear { hostname }` removes any operator policy for `hostname`, returning it to the default ACME-HTTP-01 strategy.
 > Returns `not_found` if no policy exists for the hostname.
@@ -997,18 +992,13 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 > Response `result.certificates` is an array of objects each with `id`, `hostname`, `state` (`"csr_pending"`, `"active"`, `"superseded"`, or `"failed"`), `origin` (`"manual"`, `"csr"`, or `"acme_dns"`), `key_type`, `issuer`, `not_before`, `not_after`, `serial`, `self_signed`, `note`, `acme_account_id`, `created_at`, `updated_at`.
 > Private key material is never returned.
 
-> i[tls.cert.preview]
-> `/tls/certificates/preview { cert_pem }` parses a cert chain without storing it and returns `{ san_dns_names, issuer, not_before, not_after, self_signed, serial }`.
-> Read-only; intended for the upload UI to extract SANs from a pasted-or-uploaded cert so the operator picks a hostname from the cert rather than retyping it.
-
 > i[tls.cert.upload-manual]
-> `/tls/certificates/upload-manual { hostname, cert_pem, key_pem, note? }` registers an operator-supplied certificate-and-key pair under `hostname` and returns `{ id, warnings }`.
+> `/tls/certificates/upload-manual { cert_pem, key_pem, note? }` registers an operator-supplied certificate-and-key pair and returns `{ id, primary_san, san_dns_names, warnings }`.
 > The `cert_pem` may carry a leaf with optional intermediates in any PEM order (the runtime re-emits the chain leaf-first); the `key_pem` is a PKCS#8 PEM private key.
-> The runtime validates the upload per [tls.cert.validation.san-coverage](runtime.md#r--tls.cert.validation.san-coverage), [tls.cert.validation.self-signed](runtime.md#r--tls.cert.validation.self-signed), and [tls.cert.validation.expired](runtime.md#r--tls.cert.validation.expired), and additionally rejects the upload when the supplied private key's public key does not match the leaf certificate's `SubjectPublicKeyInfo`.
-> Validation rejections return `requirements_invalid` with a message describing the failed rule (key mismatch, expired, SAN-coverage failure, or PEM parse error).
+> The runtime validates the upload per [tls.cert.validation.self-signed](runtime.md#r--tls.cert.validation.self-signed) and [tls.cert.validation.expired](runtime.md#r--tls.cert.validation.expired), additionally rejects the upload when the leaf carries no DNS SANs (nothing to bind to), and rejects when the supplied private key's public key does not match the leaf certificate's `SubjectPublicKeyInfo`.
+> Validation rejections return `requirements_invalid` with a message describing the failed rule.
 > On success the cert is stored with the private key encrypted at rest using the [secret key](runtime.md#r--secret.key); the response `warnings` array contains `"self_signed"` when the leaf is self-signed and/or `"not_yet_valid"` when `not_before` is in the future.
-> The new row supersedes any prior active certificate for the same `hostname`.
-> Registering a cert does not automatically bind it; the operator must additionally call [`tls.policy.set-manual`](#i--tls.policy.set-manual) for the runtime to start serving it.
+> No per-hostname binding step is required: the runtime auto-binds the cert to every hostname its SAN list covers per [tls.strategy.manual](runtime.md#r--tls.strategy.manual). The new row supersedes any prior active certificate whose primary SAN matches.
 
 > i[tls.cert.delete]
 > `/tls/certificates/delete { id }` removes a stored certificate.
