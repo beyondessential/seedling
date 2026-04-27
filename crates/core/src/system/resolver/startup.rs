@@ -1,6 +1,7 @@
 use std::{
     net::{Ipv6Addr, SocketAddr},
     path::Path,
+    sync::atomic::{AtomicU32, Ordering},
     time::Duration,
 };
 
@@ -19,6 +20,14 @@ pub(crate) const RESOLVER_BLUE: &str = "seedling-resolver-blue";
 pub(crate) const RESOLVER_GREEN: &str = "seedling-resolver-green";
 pub(crate) const RESOLVER_IMAGE: &str = "docker.io/coredns/coredns:1.12.1";
 pub const RESOLVER_NETWORK: &str = "seedling-resolver";
+
+/// Number of consecutive inline-health-check failures the runtime
+/// tolerates before deciding the container is genuinely sick and
+/// stop+restarting it. With a 2-second per-check timeout and a 5-second
+/// reconciler tick, a real outage trips after ≤15s while a transient
+/// host-load blip (where coredns is alive but the HTTP probe missed its
+/// deadline) doesn't bounce the container.
+pub(crate) const HEALTH_CHECK_FAIL_THRESHOLD: u32 = 3;
 
 #[derive(Debug)]
 pub struct ResolverAddrs {
@@ -259,6 +268,12 @@ pub async fn teardown_resolver(container: &dyn ContainerRuntime, process: &dyn P
     }
 }
 
+/// `inline_health_fail_count` is a caller-owned counter of consecutive
+/// failed inline health checks. Cleared on success; the function only
+/// stop+restarts the container after the count crosses
+/// [`HEALTH_CHECK_FAIL_THRESHOLD`], so a single missed 2-second probe
+/// doesn't churn the resolver when the container is alive but the host
+/// is briefly busy.
 #[tracing::instrument(skip_all, level = "debug")]
 pub async fn ensure_resolver_running(
     container: &dyn ContainerRuntime,
@@ -268,6 +283,7 @@ pub async fn ensure_resolver_running(
     upstreams: &[SocketAddr],
     nat64_active: bool,
     force_dns64_translation: bool,
+    inline_health_fail_count: &AtomicU32,
 ) -> Result<ResolverAddrs, ResolverStartupError> {
     let resolver_prefix = resolver_network_prefix(node_prefix);
     let resolver_ip = resolver_addr(node_prefix);
@@ -351,12 +367,32 @@ pub async fn ensure_resolver_running(
                     .await
                     .is_ok_and(|r| r.status().is_success());
                 if healthy {
+                    inline_health_fail_count.store(0, Ordering::Relaxed);
+                    return Ok(ResolverAddrs { v6: resolver_ip });
+                }
+                let fails = inline_health_fail_count.fetch_add(1, Ordering::Relaxed) + 1;
+                if fails < HEALTH_CHECK_FAIL_THRESHOLD {
+                    // Container is `Running`; the 2-second probe is
+                    // tight enough that one miss is almost always a
+                    // host-load blip rather than a real outage. Trust
+                    // the running container, return Ok with the cached
+                    // address, and try again next tick. systemd's
+                    // Restart=Always will catch a genuine container
+                    // crash independently.
+                    tracing::warn!(
+                        container = %active,
+                        consecutive_failures = fails,
+                        threshold = HEALTH_CHECK_FAIL_THRESHOLD,
+                        "resolver inline health check failed; deferring restart pending more failures"
+                    );
                     return Ok(ResolverAddrs { v6: resolver_ip });
                 }
                 tracing::warn!(
                     container = %active,
-                    "resolver running with correct image but health check failed; restarting"
+                    consecutive_failures = fails,
+                    "resolver inline health check failed for {HEALTH_CHECK_FAIL_THRESHOLD} consecutive ticks; restarting"
                 );
+                inline_health_fail_count.store(0, Ordering::Relaxed);
                 stop_slot(&active, process, container).await;
             } else {
                 // r[impl infra.resolver.upgrade]

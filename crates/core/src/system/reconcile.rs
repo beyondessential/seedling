@@ -235,6 +235,11 @@ pub struct Reconciler {
     /// in the background.
     // r[impl tls.cert.eager-issuance]
     tls_coordinator: Option<Arc<crate::runtime::tls::issuance::Coordinator>>,
+    /// Counter of consecutive resolver inline-health-check failures, owned
+    /// by the reconciler so [`resolver::ensure_resolver_running`] can
+    /// debounce transient probe misses across ticks instead of bouncing
+    /// the container on the first 2-second timeout.
+    resolver_health_fail_count: std::sync::atomic::AtomicU32,
 }
 
 impl Reconciler {
@@ -302,6 +307,7 @@ impl Reconciler {
             image_phase_state: images::ImagePhaseState::new(),
             cert_endpoint_url,
             tls_coordinator,
+            resolver_health_fail_count: std::sync::atomic::AtomicU32::new(0),
         }
     }
 
@@ -528,6 +534,7 @@ impl Reconciler {
                     &self.dns_upstreams,
                     self.nat64_active,
                     self.force_dns64_translation,
+                    &self.resolver_health_fail_count,
                 ),
             ),
         );
