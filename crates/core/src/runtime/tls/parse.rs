@@ -2,8 +2,7 @@
 //! exposes via the operator interface, plus utilities for validating
 //! certificates supplied at upload time.
 
-use snafu::{ResultExt, Snafu};
-use x509_parser::pem::parse_x509_pem;
+use snafu::Snafu;
 use x509_parser::prelude::FromDer;
 
 use super::store::CertMetadata;
