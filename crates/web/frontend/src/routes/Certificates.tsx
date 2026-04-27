@@ -34,6 +34,8 @@ import type { OiQueryError } from "../hooks/useOi";
 import { useOiQuery } from "../hooks/useOi";
 import { useOiAction } from "../hooks/useOiAction";
 import type {
+  TlsCertificate,
+  TlsCertificatesResponse,
   TlsDnsProvider,
   TlsDnsProvidersResponse,
   TlsPoliciesResponse,
@@ -66,6 +68,12 @@ export default function Certificates() {
     error: settingsError,
     refetch: refetchSettings,
   } = useOiQuery<TlsSettings>("/tls/settings/get", {});
+  const {
+    data: certs,
+    loading: certsLoading,
+    error: certsError,
+    refetch: refetchCerts,
+  } = useOiQuery<TlsCertificatesResponse>("/tls/certificates/list", {});
 
   const { execute, error: actionError, clearError } = useOiAction();
   const writeGuard = useGuard("write");
@@ -73,16 +81,20 @@ export default function Certificates() {
 
   const [providerDialog, setProviderDialog] = useState(false);
   const [policyDialog, setPolicyDialog] = useState(false);
+  const [uploadDialog, setUploadDialog] = useState(false);
   const [removingProvider, setRemovingProvider] = useState<string | null>(null);
   const [removingPolicy, setRemovingPolicy] = useState<string | null>(null);
+  const [deletingCert, setDeletingCert] = useState<TlsCertificate | null>(null);
 
   const refreshAll = () => {
     refetchProviders();
     refetchPolicies();
     refetchSettings();
+    refetchCerts();
   };
 
-  const anyLoading = providersLoading || policiesLoading || settingsLoading;
+  const anyLoading =
+    providersLoading || policiesLoading || settingsLoading || certsLoading;
 
   return (
     <Box sx={{ p: 3, maxWidth: 1100, mx: "auto" }}>
@@ -143,6 +155,24 @@ export default function Certificates() {
           writeReason={writeGuard.reason}
         />
 
+        <ManualCertsSection
+          certs={(certs?.certificates ?? []).filter((c) => c.origin !== "acme_dns")}
+          loading={certsLoading}
+          error={certsError}
+          onUpload={() => {
+            clearError();
+            setUploadDialog(true);
+          }}
+          onDelete={(c) => {
+            clearError();
+            setDeletingCert(c);
+          }}
+          writeAllowed={writeGuard.allowed}
+          writeReason={writeGuard.reason}
+          dangerAllowed={dangerGuard.allowed}
+          dangerReason={dangerGuard.reason}
+        />
+
         <DnsProvidersSection
           providers={providers?.providers ?? []}
           loading={providersLoading}
@@ -184,6 +214,37 @@ export default function Certificates() {
           setPolicyDialog(false);
         }}
         execute={execute}
+      />
+      <UploadManualCertDialog
+        open={uploadDialog}
+        onClose={() => setUploadDialog(false)}
+        onSubmitted={() => {
+          refetchCerts();
+          setUploadDialog(false);
+        }}
+        execute={execute}
+      />
+      <ConfirmDialog
+        open={deletingCert !== null}
+        title="Delete certificate"
+        body={
+          deletingCert
+            ? `Delete cert #${deletingCert.id} (${deletingCert.hostname})? Refused if a manual policy still references it.`
+            : ""
+        }
+        confirmLabel="Delete"
+        confirmColor="error"
+        onClose={() => setDeletingCert(null)}
+        onConfirm={async () => {
+          if (!deletingCert) return;
+          try {
+            await execute("/tls/certificates/delete", { id: deletingCert.id });
+            refetchCerts();
+            setDeletingCert(null);
+          } catch {
+            // surfaced via actionError
+          }
+        }}
       />
       <ConfirmDialog
         open={removingProvider !== null}
@@ -441,6 +502,130 @@ function PoliciesSection({
                           size="small"
                           disabled={!writeAllowed}
                           onClick={() => onClear(p.hostname)}
+                        >
+                          <DeleteOutlineIcon fontSize="small" />
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Manual / CSR-derived certificates section
+// ---------------------------------------------------------------------------
+
+interface ManualCertsSectionProps {
+  certs: TlsCertificate[];
+  loading: boolean;
+  error: OiQueryError | null;
+  onUpload: () => void;
+  onDelete: (cert: TlsCertificate) => void;
+  writeAllowed: boolean;
+  writeReason: string | null;
+  dangerAllowed: boolean;
+  dangerReason: string | null;
+}
+
+function ManualCertsSection({
+  certs,
+  loading,
+  error,
+  onUpload,
+  onDelete,
+  writeAllowed,
+  writeReason,
+  dangerAllowed,
+  dangerReason,
+}: ManualCertsSectionProps) {
+  return (
+    <Box>
+      <Box sx={{ display: "flex", alignItems: "center", mb: 1, gap: 1 }}>
+        <Typography variant="subtitle1" sx={{ fontWeight: 600, flexGrow: 1 }}>
+          Stored certificates
+        </Typography>
+        <Tooltip title={writeReason ?? ""}>
+          <span>
+            <Button
+              size="small"
+              startIcon={<AddIcon />}
+              onClick={onUpload}
+              disabled={!writeAllowed}
+            >
+              Upload manual cert
+            </Button>
+          </span>
+        </Tooltip>
+      </Box>
+      <Typography variant="caption" sx={{ color: "text.secondary", mb: 1, display: "block" }}>
+        Manually-uploaded and CSR-derived certificates available for binding. Bind one to a hostname with{" "}
+        <code>tls policies set-manual</code>.
+      </Typography>
+      {error && <OiErrorAlert error={error} />}
+      {loading && certs.length === 0 && <CircularProgress size={20} />}
+      {certs.length === 0 ? (
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          No manual or CSR-derived certificates stored.
+        </Typography>
+      ) : (
+        <TableContainer component={Paper} variant="outlined">
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>#</TableCell>
+                <TableCell>Hostname</TableCell>
+                <TableCell>Origin</TableCell>
+                <TableCell>State</TableCell>
+                <TableCell>Issuer</TableCell>
+                <TableCell>Not after</TableCell>
+                <TableCell align="right" />
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {certs.map((c) => (
+                <TableRow key={c.id} hover>
+                  <TableCell sx={{ fontFamily: "monospace" }}>{c.id}</TableCell>
+                  <TableCell sx={{ fontFamily: "monospace" }}>{c.hostname}</TableCell>
+                  <TableCell>
+                    <Chip label={c.origin} size="small" variant="outlined" />
+                  </TableCell>
+                  <TableCell>
+                    <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
+                      <Chip
+                        label={c.state}
+                        size="small"
+                        color={
+                          c.state === "active"
+                            ? "success"
+                            : c.state === "failed"
+                              ? "error"
+                              : "default"
+                        }
+                        variant={c.state === "active" ? "filled" : "outlined"}
+                      />
+                      {c.self_signed && (
+                        <Chip label="self-signed" size="small" color="warning" variant="outlined" />
+                      )}
+                    </Stack>
+                  </TableCell>
+                  <TableCell sx={{ fontFamily: "monospace", fontSize: "0.8rem" }}>
+                    {c.issuer ?? "—"}
+                  </TableCell>
+                  <TableCell sx={{ fontSize: "0.85rem" }}>{formatTime(c.not_after)}</TableCell>
+                  <TableCell align="right">
+                    <Tooltip title={dangerReason ?? "Delete"}>
+                      <span>
+                        <IconButton
+                          size="small"
+                          disabled={!dangerAllowed}
+                          onClick={() => onDelete(c)}
                         >
                           <DeleteOutlineIcon fontSize="small" />
                         </IconButton>
@@ -779,6 +964,148 @@ function SetAcmeDnsPolicyDialog({
         >
           Save
         </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+interface UploadManualCertDialogProps {
+  open: boolean;
+  onClose: () => void;
+  onSubmitted: () => void;
+  execute: (path: string, params: unknown) => Promise<unknown>;
+}
+
+function UploadManualCertDialog({
+  open,
+  onClose,
+  onSubmitted,
+  execute,
+}: UploadManualCertDialogProps) {
+  const [hostname, setHostname] = useState("");
+  const [certPem, setCertPem] = useState("");
+  const [keyPem, setKeyPem] = useState("");
+  const [note, setNote] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [warnings, setWarnings] = useState<string[] | null>(null);
+
+  const reset = () => {
+    setHostname("");
+    setCertPem("");
+    setKeyPem("");
+    setNote("");
+    setWarnings(null);
+  };
+
+  const close = () => {
+    reset();
+    onClose();
+  };
+
+  const trimmedHost = hostname.trim();
+  const valid =
+    trimmedHost.length > 0 && certPem.trim().length > 0 && keyPem.trim().length > 0;
+
+  const submit = async () => {
+    setSubmitting(true);
+    setWarnings(null);
+    try {
+      const params: Record<string, unknown> = {
+        hostname: trimmedHost,
+        cert_pem: certPem,
+        key_pem: keyPem,
+      };
+      const trimmedNote = note.trim();
+      if (trimmedNote.length > 0) params.note = trimmedNote;
+      const result = (await execute("/tls/certificates/upload-manual", params)) as {
+        warnings?: string[];
+      };
+      const warns = result?.warnings ?? [];
+      if (warns.length > 0) {
+        setWarnings(warns);
+      } else {
+        reset();
+        onSubmitted();
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const acceptAndClose = () => {
+    reset();
+    onSubmitted();
+  };
+
+  return (
+    <Dialog open={open} onClose={close} fullWidth maxWidth="md">
+      <DialogTitle>Upload manual certificate</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ mt: 1 }}>
+          <TextField
+            autoFocus
+            label="Hostname"
+            placeholder="e.g. app.example.com"
+            value={hostname}
+            onChange={(e) => setHostname(e.target.value)}
+            fullWidth
+            slotProps={{ htmlInput: { style: { fontFamily: "monospace" } } }}
+            helperText="Must be covered by the certificate's SAN list (literally or via *.suffix wildcard)."
+          />
+          <TextField
+            label="Certificate PEM"
+            placeholder="-----BEGIN CERTIFICATE-----..."
+            value={certPem}
+            onChange={(e) => setCertPem(e.target.value)}
+            fullWidth
+            multiline
+            minRows={6}
+            slotProps={{ htmlInput: { style: { fontFamily: "monospace", fontSize: "0.75rem" } } }}
+            helperText="Paste the leaf cert plus optional intermediates."
+          />
+          <TextField
+            label="Private key PEM"
+            placeholder="-----BEGIN PRIVATE KEY-----..."
+            value={keyPem}
+            onChange={(e) => setKeyPem(e.target.value)}
+            fullWidth
+            multiline
+            minRows={5}
+            slotProps={{ htmlInput: { style: { fontFamily: "monospace", fontSize: "0.75rem" } } }}
+            helperText="PKCS#8 PEM. Stored encrypted at rest; never returned by any operator endpoint."
+          />
+          <TextField
+            label="Note (optional)"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            fullWidth
+          />
+          {warnings && (
+            <Alert severity="warning">
+              Uploaded with warnings: {warnings.join(", ")}.
+            </Alert>
+          )}
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        {warnings ? (
+          <Button onClick={acceptAndClose} variant="contained">
+            OK
+          </Button>
+        ) : (
+          <>
+            <Button onClick={close} disabled={submitting}>
+              Cancel
+            </Button>
+            <Button
+              onClick={submit}
+              variant="contained"
+              disabled={!valid || submitting}
+            >
+              Upload
+            </Button>
+          </>
+        )}
       </DialogActions>
     </Dialog>
   );
