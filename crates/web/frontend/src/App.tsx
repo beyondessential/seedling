@@ -6,6 +6,7 @@ import { SessionProvider } from "./components/SessionProvider";
 import AppDetail from "./routes/AppDetail";
 import Apps from "./routes/Apps";
 import Backups from "./routes/Backups";
+import Certificates from "./routes/Certificates";
 import CreateApp from "./routes/CreateApp";
 import EditScript from "./routes/EditScript";
 import EditTemplate from "./routes/EditTemplate";
@@ -38,6 +39,7 @@ const router = createBrowserRouter([
       { path: "faults", element: <Faults /> },
       { path: "volumes", element: <Volumes /> },
       { path: "services", element: <Services /> },
+      { path: "certificates", element: <Certificates /> },
       { path: "backups", element: <Backups /> },
       { path: "keys", element: <Keys /> },
       { path: "registries", element: <Registries /> },

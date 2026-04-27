@@ -3,6 +3,7 @@ import CloudQueueIcon from "@mui/icons-material/CloudQueue";
 import DescriptionIcon from "@mui/icons-material/Description";
 import EventNoteIcon from "@mui/icons-material/EventNote";
 import HubIcon from "@mui/icons-material/Hub";
+import HttpsIcon from "@mui/icons-material/Https";
 import InventoryIcon from "@mui/icons-material/Inventory2";
 import KeyIcon from "@mui/icons-material/Key";
 import PeopleAltIcon from "@mui/icons-material/PeopleAlt";
@@ -145,6 +146,16 @@ export function Navbar() {
             sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
           >
             <HubIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="TLS certificates">
+          <IconButton
+            size="small"
+            component={Link}
+            to="/certificates"
+            sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
+          >
+            <HttpsIcon fontSize="small" />
           </IconButton>
         </Tooltip>
         <Tooltip
