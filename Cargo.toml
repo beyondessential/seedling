@@ -44,9 +44,10 @@ wildmatch = "2.6.1"
 [patch.crates-io]
 smartstring = { git = "https://github.com/bodil/smartstring", rev = "refs/pull/34/head" }
 
-[profile.dev]
-frame-pointers = "force-on"
-
-[profile.release]
-debug = true
-frame-pointers = "force-on"
+# Useful when debugging deadlocks, frame-pointers requires nightly
+#[profile.dev]
+#frame-pointers = "force-on"
+#
+#[profile.release]
+#debug = true
+#frame-pointers = "force-on"
