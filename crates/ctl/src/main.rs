@@ -19,6 +19,7 @@ mod services;
 mod shell;
 mod subscribe;
 mod templates;
+mod tls;
 mod volumes;
 
 #[derive(Parser)]
@@ -101,6 +102,11 @@ enum Command {
     Templates {
         #[command(subcommand)]
         command: templates::TemplatesCommand,
+    },
+    /// TLS certificate management (DNS providers, policies, certs)
+    Tls {
+        #[command(subcommand)]
+        command: tls::TlsCommand,
     },
     /// User/key management
     User {
@@ -324,6 +330,7 @@ async fn main() {
         Command::Images { command } => op::dispatch_images(&client, command).await,
         Command::Backups { command } => backups::dispatch(&client, command).await,
         Command::Templates { command } => templates::dispatch(&client, command).await,
+        Command::Tls { command } => tls::dispatch(&client, command).await,
         Command::User { command } => op::dispatch_user(&client, command).await,
         Command::Status => {
             print_result(
