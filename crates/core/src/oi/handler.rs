@@ -22,6 +22,7 @@ mod registries;
 mod services;
 mod status;
 mod templates;
+mod tls;
 mod volumes;
 
 pub(crate) use status::get_infra_status;
@@ -249,6 +250,24 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/templates/instantiate" => {
             templates::instantiate_template(state, parse_params(req.params)?, ctx)
         }
+        // i[tls.dns-provider.list]
+        "/tls/dns-providers/list" => tls::list_dns_providers(state),
+        // i[tls.dns-provider.upsert]
+        "/tls/dns-providers/upsert" => tls::upsert_dns_provider(state, parse_params(req.params)?),
+        // i[tls.dns-provider.delete]
+        "/tls/dns-providers/delete" => tls::delete_dns_provider(state, parse_params(req.params)?),
+        // i[tls.policy.list]
+        "/tls/policies/list" => tls::list_policies(state),
+        // i[tls.policy.set-acme-dns]
+        "/tls/policies/set-acme-dns" => tls::set_policy_acme_dns(state, parse_params(req.params)?),
+        // i[tls.policy.set-manual]
+        "/tls/policies/set-manual" => tls::set_policy_manual(state, parse_params(req.params)?),
+        // i[tls.policy.clear]
+        "/tls/policies/clear" => tls::clear_policy(state, parse_params(req.params)?),
+        // i[tls.cert.list]
+        "/tls/certificates/list" => tls::list_certificates(state),
+        // i[tls.cert.issue-acme-dns]
+        "/tls/certificates/issue-acme-dns" => tls::issue_acme_dns(state, parse_params(req.params)?),
         other => Err(OiError::not_found(format!("unknown method: {other}"))),
     };
 

@@ -943,6 +943,64 @@ Absent specification bugs, anything that is not defined here is either defined i
 > After instantiation the app's script is independent of the template — subsequent `/templates/remove` or any future template editing has no effect on the app.
 > Returns `not_found` if the template does not exist; `requirements_invalid` if the app name is invalid or already in use; `script_error` if the template body fails to evaluate.
 
+# TLS Certificate Management
+
+The TLS certificate operator surface mirrors the runtime concepts defined in [the runtime spec](runtime.md): named DNS providers, per-hostname policies, and a certificate registry covering manual uploads, CSR-derived certs, and certs the runtime obtained itself via ACME.
+This section covers the operator interface for the ACME-DNS strategy, manual cert lifecycle, and policy management.
+
+## DNS Providers
+
+> i[tls.dns-provider.list]
+> `/tls/dns-providers/list` returns the configured DNS providers without their credentials.
+> Response `result.providers` is an array of objects each with `name` (string), `kind` (string), `created_at`, and `updated_at` (Unix timestamp integers).
+
+> i[tls.dns-provider.upsert]
+> `/tls/dns-providers/upsert { name, kind, config }` creates a new provider entry or replaces an existing one with the same name.
+> `config` is a provider-specific object whose shape depends on `kind`. For `kind = "route53"` the required fields are `access_key_id`, `secret_access_key`, and an optional `region` (defaults to `us-east-1`).
+> The credentials are stored encrypted at rest and never returned through any operator endpoint.
+> Returns `requirements_invalid` if `name` is empty or `kind` is unknown.
+
+> i[tls.dns-provider.delete]
+> `/tls/dns-providers/delete { name }` removes a DNS provider entry.
+> Returns `not_found` if no provider with that name exists.
+> Returns `requirements_invalid` if any policy still references the provider; the operator must clear those policies first.
+
+## Policies
+
+> i[tls.policy.list]
+> `/tls/policies/list` returns all per-hostname policy rows.
+> Response `result.policies` is an array of objects each with `hostname`, `strategy` (`"acme_dns"` or `"manual"`), and either `dns_provider` (for acme-dns) or `cert_id` (for manual), plus `updated_at`.
+> Hostnames not in this list use the default ACME-HTTP-01 strategy.
+
+> i[tls.policy.set-acme-dns]
+> `/tls/policies/set-acme-dns { hostname, dns_provider }` binds `hostname` to the named DNS provider for ACME-DNS-01 issuance.
+> The new policy takes effect on the next reconciliation tick per [tls.policy.apply](runtime.md#r--tls.policy.apply).
+> No certificate is issued by this call; trigger initial issuance via [`tls.cert.issue-acme-dns`](#i--tls.cert.issue-acme-dns) or wait for the autonomous renewal task to pick it up.
+
+> i[tls.policy.set-manual]
+> `/tls/policies/set-manual { hostname, cert_id }` binds `hostname` to a stored certificate row.
+> The cert must already exist in the certificate store via manual upload or the CSR flow.
+> The new policy takes effect on the next reconciliation tick.
+
+> i[tls.policy.clear]
+> `/tls/policies/clear { hostname }` removes any operator policy for `hostname`, returning it to the default ACME-HTTP-01 strategy.
+> Returns `not_found` if no policy exists for the hostname.
+
+## Certificates
+
+> i[tls.cert.list]
+> `/tls/certificates/list` returns all stored certificates.
+> Response `result.certificates` is an array of objects each with `id`, `hostname`, `state` (`"csr_pending"`, `"active"`, `"superseded"`, or `"failed"`), `origin` (`"manual"`, `"csr"`, or `"acme_dns"`), `key_type`, `issuer`, `not_before`, `not_after`, `serial`, `self_signed`, `note`, `acme_account_id`, `created_at`, `updated_at`.
+> Private key material is never returned.
+
+> i[tls.cert.issue-acme-dns]
+> `/tls/certificates/issue-acme-dns { hostname, contact_email, directory_url? }` synchronously runs the ACME-DNS-01 issuance flow for `hostname`.
+> The hostname must already be bound to an `acme_dns` policy with a configured DNS provider; otherwise the call returns `requirements_invalid`.
+> `directory_url` defaults to the Let's Encrypt production directory.
+> The call blocks for the full duration of the ACME flow (typically tens of seconds) and returns `{ cert_id, not_after }` on success.
+> Failure returns `internal` with a message identifying the stage that failed.
+> The newly-issued certificate supersedes any prior active certificate for the same hostname.
+
 # Client Behaviour
 
 > i[ctl.graceful-shutdown]
