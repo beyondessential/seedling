@@ -19,9 +19,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::extract::{Path as AxumPath, Query, State};
+use axum::extract::{Path as AxumPath, Query, Request, State};
 use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use rand_core::{OsRng, RngCore};
 use secrecy::{ExposeSecret, SecretString};
@@ -162,6 +163,44 @@ async fn handle(
     }
 }
 
+/// Axum middleware that logs every request to the cert endpoint at
+/// info level. The token in the URL path is redacted so logs never
+/// disclose it. Intended primarily for diagnosing whether the proxy is
+/// actually hitting this endpoint at handshake time.
+async fn log_request(req: Request, next: Next) -> Response {
+    let method = req.method().clone();
+    let path_redacted = redact_token_in_path(req.uri().path());
+    let server_name_present = req.uri().query().is_some_and(|q| q.contains("server_name"));
+    let started = std::time::Instant::now();
+    let response = next.run(req).await;
+    let elapsed = started.elapsed();
+    let status = response.status();
+    tracing::info!(
+        target: "seedling::tls::serve",
+        %method,
+        path = %path_redacted,
+        status = status.as_u16(),
+        elapsed_ms = elapsed.as_millis() as u64,
+        sni_present = server_name_present,
+        "cert endpoint request"
+    );
+    response
+}
+
+fn redact_token_in_path(path: &str) -> String {
+    // Path shape is `/cert/<token>/get-certificate`; replace the token
+    // segment with `<token>` so logs don't leak the shared secret.
+    let parts: Vec<&str> = path.split('/').collect();
+    if parts.len() >= 4 && parts[1] == "cert" {
+        let mut out = String::new();
+        out.push_str(parts[0]);
+        out.push_str("/cert/<token>/");
+        out.push_str(&parts[3..].join("/"));
+        return out;
+    }
+    path.to_owned()
+}
+
 /// Load (or generate and persist) the shared path-token used to authorise
 /// cert-fetch requests. Stored as a 0600-permission file alongside the
 /// database secret key. The file content is the hex-encoded random token.
@@ -231,6 +270,7 @@ pub async fn spawn_server(
     };
     let app = Router::new()
         .route("/cert/{token}/get-certificate", get(handle))
+        .layer(middleware::from_fn(log_request))
         .with_state(app_state);
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
     let local = listener.local_addr()?;
@@ -391,6 +431,17 @@ mod tests {
             format!("http://{addr}/cert/wrongtoken/get-certificate?server_name=host.example.com");
         let resp = reqwest::get(&url).await.unwrap();
         assert_eq!(resp.status().as_u16(), 404);
+    }
+
+    #[test]
+    fn redact_token_keeps_path_shape_but_hides_secret() {
+        let redacted = redact_token_in_path("/cert/abcdef0123/get-certificate");
+        assert_eq!(redacted, "/cert/<token>/get-certificate");
+        assert!(!redacted.contains("abcdef"));
+
+        // Unrelated paths pass through unchanged.
+        assert_eq!(redact_token_in_path("/health"), "/health");
+        assert_eq!(redact_token_in_path("/cert"), "/cert");
     }
 
     #[test]
