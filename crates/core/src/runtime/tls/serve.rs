@@ -13,6 +13,7 @@
 //! cert chain followed by the private key, all as PEM blocks — that's
 //! the convention Caddy expects.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -26,12 +27,17 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use rand_core::{OsRng, RngCore};
 use secrecy::{ExposeSecret, SecretString};
+use seedling_protocol::names::AppName;
 use serde::Deserialize;
 use snafu::{ResultExt, Snafu};
 use subtle::ConstantTimeEq;
 
-use super::{TlsCertOrigin, TlsCertState, store};
-use crate::runtime::{db::DbHandle, secrets::Cipher};
+use super::{
+    TlsCertOrigin, TlsCertState, TlsPolicy,
+    acme::{self, IssueParams},
+    store,
+};
+use crate::runtime::{db::DbHandle, faults, secrets::Cipher};
 
 #[derive(Debug, Snafu)]
 pub enum ServeError {
@@ -115,6 +121,20 @@ struct ServeState {
     /// Hex-encoded shared token; clients embed this in the URL path.
     /// See [`load_or_create_token`].
     token: Arc<String>,
+    /// Per-hostname mutex used to serialise on-demand issuance requests for
+    /// the same SNI. Without this a burst of concurrent handshakes for a
+    /// fresh hostname would each kick off a parallel ACME flow.
+    issue_locks: IssueLocks,
+}
+
+type IssueLocks = Arc<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>;
+
+fn acquire_issue_lock(locks: &IssueLocks, hostname: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let mut map = locks.lock().expect("issue_locks poisoned");
+    Arc::clone(
+        map.entry(hostname.to_owned())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
+    )
 }
 
 /// Query string parsed from Caddy's `tls.certificates.get_certificate.http`
@@ -141,26 +161,207 @@ async fn handle(
             .into_response();
     };
 
+    // Fast path: cert already stored.
     match lookup(&state.db, &state.cipher, &hostname).await {
-        Ok(Some(bundle)) => {
-            let body = format_response(&bundle);
-            (
-                StatusCode::OK,
-                [(axum::http::header::CONTENT_TYPE, "application/x-pem-file")],
-                body,
-            )
-                .into_response()
-        }
-        // 204 No Content is Caddy's contract for "no cert; fall through to
-        // the policy's regular issuer". A 404 (or any other non-2xx) would
-        // be treated as an error by the http cert getter rather than a
-        // fall-through signal.
-        Ok(None) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Some(bundle)) => return cert_ok(&bundle).into_response(),
+        Ok(None) => {}
         Err(e) => {
             tracing::warn!(%hostname, error = %e, "cert serve lookup failed");
-            (StatusCode::INTERNAL_SERVER_ERROR, "lookup failed").into_response()
+            return (StatusCode::INTERNAL_SERVER_ERROR, "lookup failed").into_response();
         }
     }
+
+    // No cert. If the hostname is covered by an `acme_dns` policy we own
+    // the issuance path — try now rather than 204'ing back to Caddy whose
+    // own issuer chain may not be viable on this host (e.g. the host
+    // isn't reachable on :80 or :443 from the public internet).
+    match attempt_on_demand_issue(&state, &hostname).await {
+        IssueOutcome::Served(bundle) => cert_ok(&bundle).into_response(),
+        // 204 No Content is Caddy's contract for "no cert; fall through to
+        // the policy's regular issuer". 404 (or any other non-2xx) would
+        // be treated as an error rather than a fall-through signal.
+        IssueOutcome::FallThrough => StatusCode::NO_CONTENT.into_response(),
+    }
+}
+
+/// Result of [`attempt_on_demand_issue`]. Either we issued (and the cert is
+/// ready to serve) or the operator hasn't configured the runtime to handle
+/// this hostname and Caddy should be told to fall through.
+enum IssueOutcome {
+    Served(CertBundle),
+    FallThrough,
+}
+
+async fn attempt_on_demand_issue(state: &ServeState, hostname: &str) -> IssueOutcome {
+    // Resolve the policy first; if it's not acme_dns we have nothing to
+    // contribute and Caddy can fall through to its own issuer chain.
+    let host_for_lookup = hostname.to_owned();
+    let policy = match state
+        .db
+        .call(move |db| store::resolve_policy(db, &host_for_lookup))
+    {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(%hostname, error = %e, "policy lookup failed");
+            return IssueOutcome::FallThrough;
+        }
+    };
+    let dns_provider_name = match policy.map(|p| p.policy) {
+        Some(TlsPolicy::AcmeDns { dns_provider }) => dns_provider,
+        _ => return IssueOutcome::FallThrough,
+    };
+
+    // Serialise concurrent handshakes for the same SNI so a single
+    // burst doesn't fan out into multiple parallel ACME orders.
+    let lock = acquire_issue_lock(&state.issue_locks, hostname);
+    let _guard = lock.lock().await;
+
+    // Re-check after acquiring the lock: another holder may have just
+    // finished issuance.
+    match lookup(&state.db, &state.cipher, hostname).await {
+        Ok(Some(bundle)) => return IssueOutcome::Served(bundle),
+        Ok(None) => {}
+        Err(e) => {
+            tracing::warn!(%hostname, error = %e, "cert lookup failed after lock");
+            return IssueOutcome::FallThrough;
+        }
+    }
+
+    // Need the global contact email to register an ACME account.
+    let settings = match state.db.call(store::get_settings) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(%hostname, error = %e, "settings lookup failed");
+            file_cert_fault(
+                &state.db,
+                hostname,
+                "cert_issue_failed",
+                &format!("settings lookup failed: {e}"),
+            );
+            return IssueOutcome::FallThrough;
+        }
+    };
+    if settings.contact_email.is_empty() {
+        let msg = format!(
+            "on-demand TLS for {hostname} requires a contact email; \
+             set one via /tls/settings/set"
+        );
+        tracing::warn!("{msg}");
+        file_cert_fault(&state.db, hostname, "cert_issue_failed", &msg);
+        return IssueOutcome::FallThrough;
+    }
+
+    tracing::info!(
+        %hostname,
+        provider = %dns_provider_name,
+        "on-demand ACME-DNS issuance triggered by Caddy handshake"
+    );
+    match acme::issue(
+        &state.db,
+        &state.cipher,
+        IssueParams {
+            hostname,
+            contact_email: &settings.contact_email,
+            directory_url: &acme::default_directory_url(),
+            dns_provider_name: &dns_provider_name,
+        },
+    )
+    .await
+    {
+        Ok(issued) => {
+            tracing::info!(
+                %hostname,
+                cert_id = issued.cert_id,
+                not_after = issued.not_after,
+                "on-demand issuance succeeded"
+            );
+            // Clear any prior cert_issue_failed fault for this hostname.
+            clear_cert_fault(&state.db, hostname, "cert_issue_failed");
+            match lookup(&state.db, &state.cipher, hostname).await {
+                Ok(Some(bundle)) => IssueOutcome::Served(bundle),
+                Ok(None) => {
+                    tracing::warn!(
+                        %hostname,
+                        "issuance succeeded but cert lookup returned none"
+                    );
+                    IssueOutcome::FallThrough
+                }
+                Err(e) => {
+                    tracing::warn!(%hostname, error = %e, "cert lookup after issue failed");
+                    IssueOutcome::FallThrough
+                }
+            }
+        }
+        Err(e) => {
+            let msg = format!("on-demand ACME-DNS issuance for {hostname} failed: {e}");
+            tracing::warn!("{msg}");
+            file_cert_fault(&state.db, hostname, "cert_issue_failed", &msg);
+            IssueOutcome::FallThrough
+        }
+    }
+}
+
+fn cert_ok(bundle: &CertBundle) -> impl IntoResponse {
+    let body = format_response(bundle);
+    (
+        StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "application/x-pem-file")],
+        body,
+    )
+}
+
+/// File a non-app-scoped fault under the `_system` sentinel app. Idempotent
+/// per (kind, description): if the same fault is already filed we don't
+/// duplicate it. Failures are logged but don't propagate — the caller is
+/// already on a degraded path.
+fn file_cert_fault(db: &DbHandle, hostname: &str, kind: &str, description: &str) {
+    let kind_owned = kind.to_owned();
+    let desc_owned = description.to_owned();
+    let host_owned = hostname.to_owned();
+    db.call(move |db_inner| {
+        let app = AppName::new_unchecked("_system");
+        let already = faults::list_active_faults(db_inner, Some(&app))
+            .unwrap_or_default()
+            .into_iter()
+            .any(|f| {
+                f.kind == kind_owned && f.resource_name.as_deref() == Some(host_owned.as_str())
+            });
+        if already {
+            return;
+        }
+        if let Err(e) = faults::file_fault(
+            db_inner,
+            &app,
+            Some("hostname"),
+            Some(&host_owned),
+            None,
+            &kind_owned,
+            &desc_owned,
+        ) {
+            tracing::warn!(error = %e, "failed to file cert fault");
+        }
+    });
+}
+
+fn clear_cert_fault(db: &DbHandle, hostname: &str, kind: &str) {
+    let kind_owned = kind.to_owned();
+    let host_owned = hostname.to_owned();
+    db.call(move |db_inner| {
+        let app = AppName::new_unchecked("_system");
+        let to_clear: Vec<String> = faults::list_active_faults(db_inner, Some(&app))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|f| {
+                f.kind == kind_owned && f.resource_name.as_deref() == Some(host_owned.as_str())
+            })
+            .map(|f| f.id)
+            .collect();
+        for id in to_clear {
+            if let Err(e) = faults::clear_fault(db_inner, &id, &app) {
+                tracing::warn!(error = %e, "failed to clear cert fault");
+            }
+        }
+    });
 }
 
 /// Axum middleware that logs every request to the cert endpoint at
@@ -267,6 +468,7 @@ pub async fn spawn_server(
         db,
         cipher,
         token: Arc::new(token),
+        issue_locks: Arc::new(std::sync::Mutex::new(HashMap::new())),
     };
     let app = Router::new()
         .route("/cert/{token}/get-certificate", get(handle))
@@ -388,6 +590,64 @@ mod tests {
         let body = reqwest::get(&url).await.unwrap().text().await.unwrap();
         assert!(body.contains("BEGIN CERTIFICATE"));
         assert!(body.contains("BEGIN PRIVATE KEY"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn server_files_fault_when_acme_dns_policy_lacks_contact_email() {
+        // With an acme_dns policy in place but no contact email, on-demand
+        // issuance can't proceed. We must surface this to the operator via a
+        // fault rather than silently 204'ing back to Caddy.
+        let (db, cipher) = fresh().await;
+        // Stage: provider + policy via the DB-thread closures.
+        db.call(|db_inner| {
+            let cipher = Cipher::for_tests();
+            crate::runtime::tls::store::upsert_dns_provider(
+                db_inner,
+                &cipher,
+                "p",
+                super::super::DnsProviderKind::Route53,
+                &SecretString::new(
+                    r#"{"access_key_id":"AKIA","secret_access_key":"s","region":"us-east-1"}"#
+                        .into(),
+                ),
+            )
+            .unwrap();
+            // The first provider auto-creates a `*` policy, which is what
+            // we want here — the unknown hostname will resolve to it.
+        });
+
+        let token = "deadbeef".to_owned();
+        let (addr, _handle) = spawn_server(
+            db.clone(),
+            Arc::new(cipher),
+            token.clone(),
+            "127.0.0.1:0".parse().unwrap(),
+        )
+        .await
+        .unwrap();
+
+        // Hit the endpoint with a fresh hostname; the daemon will try to
+        // issue, find no contact email, file a fault, and 204 back.
+        let url =
+            format!("http://{addr}/cert/{token}/get-certificate?server_name=fresh.example.com");
+        let resp = reqwest::get(&url).await.unwrap();
+        assert_eq!(resp.status().as_u16(), 204);
+
+        // Confirm the fault landed in the system app under our hostname.
+        let active = db.call(|db_inner| {
+            crate::runtime::faults::list_active_faults(
+                db_inner,
+                Some(&AppName::new_unchecked("_system")),
+            )
+            .unwrap_or_default()
+        });
+        let our_fault = active.iter().find(|f| {
+            f.kind == "cert_issue_failed" && f.resource_name.as_deref() == Some("fresh.example.com")
+        });
+        assert!(
+            our_fault.is_some(),
+            "expected cert_issue_failed fault for fresh.example.com; got: {active:?}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
