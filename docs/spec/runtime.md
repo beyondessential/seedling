@@ -1296,6 +1296,8 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > The wildcard covers multiple subdomain levels: `*.example.com` matches both `foo.example.com` and `a.b.example.com`. This is *not* the RFC 6125 DNS-wildcard semantic (which would match exactly one extra label); the runtime is matching operator policy, not a certificate's SAN, so the broader semantic lets a single rule cover an entire zone.
 > When several patterns match a hostname, the most-specific match wins: an exact pattern beats any wildcard, a longer `*.<suffix>` beats a shorter one, and `*` is least specific.
 > Operators that want to override a sub-zone may add a more-specific pattern (e.g. `*.internal.example.com` or `host.example.com`) alongside.
+> Wildcard patterns must not auto-bind hostnames that the proxy itself manages with an internal CA — IP literals, single-label hostnames, and the `.localhost`, `.local`, `.internal` TLDs — because no public CA can issue for them and DNS-01 has nowhere to put the challenge record.
+> An exact (non-wildcard) policy still applies to such hostnames so an operator can deliberately override.
 
 > r[tls.policy.auto-default]
 > When the operator configures the first DNS provider on a node and no `*` policy already exists, the runtime must automatically create a catch-all `*` policy bound to that provider with the `acme_dns` strategy.

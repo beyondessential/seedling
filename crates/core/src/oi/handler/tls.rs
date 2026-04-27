@@ -364,22 +364,74 @@ pub(crate) fn list_hostnames(state: &OiState, params: ListHostnamesParams) -> Ha
     // sees here is exactly what the runtime will do.
     let snapshot = state.db.call(state::Snapshot::load).map_err(db_error)?;
 
+    // Resolve Caddy's data volume once per request (cached on OiState
+    // after first hit). For hostnames whose strategy is "default"
+    // (no operator policy bound) we read Caddy's certmagic store off
+    // disk to surface issuer / expiry / last-issued, since the runtime
+    // has no DB rows for those certs.
+    let caddy_data_path = resolve_caddy_data_path(state);
+
     let result: Vec<Value> = hostname_apps
         .into_iter()
         .map(|(hostname, apps)| {
             let st = state::compute_state(&snapshot, &hostname);
-            project_hostname_state(&hostname, &apps, &st)
+            let caddy_cert = if matches!(st.decision, state::Decision::Default) {
+                caddy_data_path
+                    .as_deref()
+                    .and_then(|p| crate::system::caddy::read_caddy_cert(p, &hostname))
+            } else {
+                None
+            };
+            project_hostname_state(&hostname, &apps, &st, caddy_cert.as_ref())
         })
         .collect();
 
     Ok(json!({ "hostnames": result }))
 }
 
+/// Resolve (and cache) the host filesystem path of the Caddy data
+/// volume. Returns `None` if the volume can't be located right now —
+/// e.g. Caddy hasn't started yet, or the runtime is using a container
+/// driver whose mount-point query failed. The cell is one-shot success;
+/// transient failures retry on the next call.
+fn resolve_caddy_data_path(state: &OiState) -> Option<std::path::PathBuf> {
+    if let Some(p) = state.caddy_data_path.get() {
+        return Some(p.clone());
+    }
+    let runtime = Arc::clone(&state.container_runtime);
+    let resolved: Result<std::path::PathBuf, _> = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async move {
+            runtime
+                .volume_mountpoint(crate::system::caddy::CADDY_DATA_VOLUME)
+                .await
+        })
+    });
+    match resolved {
+        Ok(p) => {
+            // Best-effort fill; if another caller raced ahead and won
+            // we use whatever they stored.
+            let _ = state.caddy_data_path.set(p.clone());
+            Some(p)
+        }
+        Err(e) => {
+            tracing::debug!(
+                error = %e,
+                "tls/hostnames: caddy data volume unresolved; default-strategy hostnames will not show cert metadata"
+            );
+            None
+        }
+    }
+}
+
 /// Render a [`state::HostnameState`] as the JSON the OI rollup serves.
+/// `caddy_cert` is supplied for default-strategy hostnames: it carries
+/// what Caddy's own automatic TLS has on disk, so the rollup can show
+/// issuer / expiry / "last issued" for certs the runtime doesn't own.
 fn project_hostname_state(
     hostname: &str,
     apps: &BTreeSet<String>,
     st: &state::HostnameState<'_>,
+    caddy_cert: Option<&crate::system::caddy::CaddyCertView>,
 ) -> Value {
     let policy_json = match st.policy.map(|p| (&p.policy, p.hostname.as_str())) {
         None => json!({ "strategy": "default" }),
@@ -397,8 +449,8 @@ fn project_hostname_state(
         }),
     };
 
-    let active_cert_json = st.active_cert.map_or(Value::Null, |c| {
-        json!({
+    let active_cert_json = match (st.active_cert, caddy_cert) {
+        (Some(c), _) => json!({
             "id": c.id,
             "origin": c.origin.as_str(),
             "issuer": c.issuer,
@@ -407,15 +459,27 @@ fn project_hostname_state(
             "self_signed": c.self_signed,
             "ari_window_start": c.ari_window_start,
             "ari_window_end": c.ari_window_end,
-        })
-    });
+        }),
+        (None, Some(cc)) => json!({
+            "id": null,
+            "origin": "caddy",
+            "caddy_issuer": cc.issuer_kind,
+            "issuer": cc.issuer,
+            "not_before": cc.not_before,
+            "not_after": cc.not_after,
+            "self_signed": cc.self_signed,
+            "ari_window_start": null,
+            "ari_window_end": null,
+        }),
+        (None, None) => Value::Null,
+    };
 
-    let last_issuance_json = build_last_issuance(st);
+    let last_issuance_json = build_last_issuance(st, caddy_cert);
     let last_error = st
         .last_attempt
         .filter(|a| a.outcome == AttemptOutcome::Failure)
         .and_then(|a| a.error.clone());
-    let status = decision_status(st);
+    let status = decision_status(st, caddy_cert);
     let (next_issuance_at, next_issuance_source) = decision_next_issuance(st);
     let block_json = st.retry_block.map_or(
         Value::Null,
@@ -442,11 +506,22 @@ fn project_hostname_state(
 /// when the decision says "Issue now (renewal)" but the existing cert is
 /// still valid, status is `"active"` because the operator's mental model
 /// of the cert is "it's serving".
-fn decision_status(st: &state::HostnameState<'_>) -> &'static str {
+///
+/// For `Decision::Default`, the runtime has no opinion; the status comes
+/// from whatever Caddy has on disk for the hostname.
+fn decision_status(
+    st: &state::HostnameState<'_>,
+    caddy_cert: Option<&crate::system::caddy::CaddyCertView>,
+) -> &'static str {
     use state::Decision::*;
     use state::IssueReason as R;
+    let now = jiff::Timestamp::now().as_second();
     match &st.decision {
-        Default => "default",
+        Default => match caddy_cert.and_then(|c| c.not_after) {
+            None => "default",
+            Some(na) if na < now => "expired",
+            Some(_) => "active",
+        },
         Manual { expired: true, .. } => "expired",
         Manual {
             cert_id,
@@ -473,7 +548,7 @@ fn decision_status(st: &state::HostnameState<'_>) -> &'static str {
             if st
                 .active_cert
                 .and_then(|c| c.not_after)
-                .is_some_and(|na| na < jiff::Timestamp::now().as_second())
+                .is_some_and(|na| na < now)
             {
                 "expired"
             } else {
@@ -506,8 +581,12 @@ fn decision_next_issuance(st: &state::HostnameState<'_>) -> (Option<i64>, Option
 /// Build the `last_issuance` object: prefer the active cert's metadata
 /// for manual uploads (which never go through the attempt log), fall
 /// back to the latest successful attempt for ACME-DNS, then to the
-/// active cert's bare creation timestamp.
-fn build_last_issuance(st: &state::HostnameState<'_>) -> Value {
+/// active cert's bare creation timestamp, then — for default-strategy
+/// hostnames — to whatever Caddy's on-disk store has.
+fn build_last_issuance(
+    st: &state::HostnameState<'_>,
+    caddy_cert: Option<&crate::system::caddy::CaddyCertView>,
+) -> Value {
     if let Some(cert) = st.active_cert
         && cert.origin == TlsCertOrigin::Manual
     {
@@ -534,6 +613,14 @@ fn build_last_issuance(st: &state::HostnameState<'_>) -> Value {
             "kind": cert.origin.as_str(),
             "at": cert.created_at,
             "cert_id": cert.id,
+        });
+    }
+    if let Some(cc) = caddy_cert {
+        return json!({
+            "kind": "caddy",
+            "at": cc.issued_at,
+            "cert_id": null,
+            "provider": cc.issuer_kind,
         });
     }
     Value::Null

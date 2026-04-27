@@ -217,9 +217,20 @@ pub fn compute_state<'a>(snap: &'a Snapshot, hostname: &str) -> HostnameState<'a
 }
 
 fn resolve_policy<'a>(policies: &'a [TlsPolicyRow], hostname: &str) -> Option<&'a TlsPolicyRow> {
+    let internal = is_caddy_internal(hostname);
     let mut best: Option<(u32, &TlsPolicyRow)> = None;
     for row in policies {
         if pattern_matches(&row.hostname, hostname) {
+            // Wildcard policies do not auto-bind hostnames Caddy already
+            // manages with its internal CA — `.localhost`, `.local`,
+            // `.internal`, IP literals, single-label names. No public CA
+            // will issue for them and DNS-01 has nowhere to put the
+            // challenge record, so a wildcard catch would just churn
+            // failed orders. An explicit (non-wildcard) policy still
+            // wins, so an operator can deliberately override.
+            if internal && row.hostname.contains('*') {
+                continue;
+            }
             let score = pattern_specificity(&row.hostname);
             if best.as_ref().is_none_or(|(s, _)| score > *s) {
                 best = Some((score, row));
@@ -227,6 +238,31 @@ fn resolve_policy<'a>(policies: &'a [TlsPolicyRow], hostname: &str) -> Option<&'
         }
     }
     best.map(|(_, row)| row)
+}
+
+/// Whether `hostname` is a name Caddy's automatic TLS handles with its
+/// internal CA rather than ACME. Mirrors Caddy's own
+/// `matchInternalHosts` heuristic for the cases we encounter:
+///
+/// - IP literals (v4 or v6).
+/// - Single-label hostnames (no `.`), e.g. `internal-api`.
+/// - `.localhost`, `.local`, `.internal` TLDs (and the bare TLDs
+///   themselves).
+///
+/// Used by [`resolve_policy`] to skip wildcard auto-bindings on these
+/// names; an explicit policy still applies.
+pub fn is_caddy_internal(hostname: &str) -> bool {
+    if hostname.parse::<std::net::IpAddr>().is_ok() {
+        return true;
+    }
+    let lc = hostname.to_ascii_lowercase();
+    if !lc.contains('.') {
+        return true;
+    }
+    matches!(
+        lc.rsplit('.').next(),
+        Some("localhost" | "local" | "internal")
+    )
 }
 
 fn find_active_for_hostname<'a>(
@@ -636,6 +672,83 @@ mod tests {
             }
             d => panic!("unexpected: {d:?}"),
         }
+    }
+
+    #[test]
+    fn wildcard_policy_skips_caddy_internal_hostnames() {
+        // A `*` wildcard catches every name in seedling's policy
+        // resolver. For `.localhost` etc. that catch must be ignored so
+        // Caddy's internal CA still serves the cert.
+        let cases = [
+            "servedir.localhost",
+            "foo.local",
+            "bar.internal",
+            "single-label",
+            "192.168.1.1",
+            "::1",
+        ];
+        for host in cases {
+            let s = snap(
+                vec![policy_acme("*", "p")],
+                vec![],
+                vec![],
+                vec![],
+                vec![],
+                "ops@x",
+                1000,
+            );
+            let st = compute_state(&s, host);
+            assert!(
+                matches!(st.decision, Decision::Default),
+                "{host} should fall through to default (got {:?})",
+                st.decision
+            );
+            assert!(st.policy.is_none(), "{host} policy should be unresolved");
+        }
+    }
+
+    #[test]
+    fn explicit_policy_overrides_caddy_internal_skip() {
+        // Pinning an exact hostname forces ACME-DNS even for a name
+        // Caddy would otherwise handle internally.
+        let s = snap(
+            vec![policy_acme("servedir.localhost", "p")],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            "ops@x",
+            1000,
+        );
+        let st = compute_state(&s, "servedir.localhost");
+        assert!(matches!(
+            st.decision,
+            Decision::IssueNow {
+                reason: IssueReason::First
+            }
+        ));
+    }
+
+    #[test]
+    fn public_hostname_still_matched_by_wildcard() {
+        // Sanity-check the inverse: a public hostname still resolves
+        // through the wildcard. The skip is internal-only.
+        let s = snap(
+            vec![policy_acme("*", "p")],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            "ops@x",
+            1000,
+        );
+        let st = compute_state(&s, "app.example.com");
+        assert!(matches!(
+            st.decision,
+            Decision::IssueNow {
+                reason: IssueReason::First
+            }
+        ));
     }
 
     #[test]
