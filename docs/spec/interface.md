@@ -975,7 +975,7 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 
 > i[tls.policy.set-acme-dns]
 > `/tls/policies/set-acme-dns { hostname, dns_provider, directory_url? }` binds `hostname` to the named DNS provider for ACME-DNS-01 issuance.
-> `hostname` may be an exact hostname, the catch-all `*`, or a single-asterisk left-anchored wildcard such as `*.example.com`, per [tls.policy.wildcard](runtime.md#r--tls.policy.wildcard).
+> `hostname` may be an exact hostname, the catch-all `*`, or a shell-glob-style subdomain wildcard such as `*.example.com` (which matches `foo.example.com`, `a.b.example.com`, and any deeper subdomain), per [tls.policy.wildcard](runtime.md#r--tls.policy.wildcard).
 > The new policy takes effect on the next reconciliation tick per [tls.policy.apply](runtime.md#r--tls.policy.apply).
 > When `hostname` is exact and the global [contact email](#i--tls.settings.set) is configured, the runtime fires a single ACME-DNS issuance attempt asynchronously if no active cert exists yet; the response includes `auto_issue_kicked: true` to signal that.
 > Wildcard policies do not auto-issue (there is no concrete hostname to acquire a cert for); the operator runs [`tls.cert.issue-acme-dns`](#i--tls.cert.issue-acme-dns) per hostname.

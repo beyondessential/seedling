@@ -13,7 +13,9 @@ pub(super) enum TlsCommand {
         #[command(subcommand)]
         command: DnsProvidersCommand,
     },
-    /// Per-hostname strategy policies (supports wildcards: `*`, `*.example.com`)
+    /// Per-hostname strategy policies. Hostname patterns may be exact,
+    /// the catch-all `*`, or a shell-glob subdomain wildcard
+    /// (`*.example.com` matches `foo.example.com` and `a.b.example.com`).
     Policies {
         #[command(subcommand)]
         command: PoliciesCommand,
@@ -68,8 +70,10 @@ pub(super) enum PoliciesCommand {
     /// Bind a hostname (or wildcard pattern) to ACME-DNS issuance via a
     /// configured provider.
     ///
-    /// `<hostname>` may be exact (`foo.example.com`), a left-anchored
-    /// wildcard (`*.example.com`), or the catch-all `*`. When the global
+    /// `<hostname>` may be exact (`foo.example.com`), a shell-glob subdomain
+    /// wildcard (`*.example.com`, which covers `foo.example.com`,
+    /// `a.b.example.com`, and any deeper subdomain — *not* RFC 6125
+    /// single-label semantics), or the catch-all `*`. When the global
     /// contact email is configured (`tls config set-contact`) and the
     /// hostname is exact, the daemon kicks off auto-issuance in the
     /// background; the cert lands in `tls certs list` within seconds.

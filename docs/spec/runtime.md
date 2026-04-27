@@ -1292,8 +1292,10 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 
 > r[tls.policy.wildcard]
 > Policies may name a hostname pattern instead of an exact hostname.
-> Two pattern shapes must be supported: the catch-all `*`, and a left-anchored single-asterisk wildcard `*.<suffix>` matching any hostname that ends in `.<suffix>` (and is not equal to `<suffix>` itself).
+> Two pattern shapes must be supported: the catch-all `*`, and a left-anchored shell-glob-style subdomain wildcard `*.<suffix>` matching any hostname that ends in `.<suffix>` (and is not equal to `<suffix>` itself).
+> The wildcard covers multiple subdomain levels: `*.example.com` matches both `foo.example.com` and `a.b.example.com`. This is *not* the RFC 6125 DNS-wildcard semantic (which would match exactly one extra label); the runtime is matching operator policy, not a certificate's SAN, so the broader semantic lets a single rule cover an entire zone.
 > When several patterns match a hostname, the most-specific match wins: an exact pattern beats any wildcard, a longer `*.<suffix>` beats a shorter one, and `*` is least specific.
+> Operators that want to override a sub-zone may add a more-specific pattern (e.g. `*.internal.example.com` or `host.example.com`) alongside.
 
 > r[tls.policy.auto-default]
 > When the operator configures the first DNS provider on a node and no `*` policy already exists, the runtime must automatically create a catch-all `*` policy bound to that provider with the `acme_dns` strategy.

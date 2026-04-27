@@ -930,9 +930,12 @@ function SetAcmeDnsPolicyDialog({
             slotProps={{ htmlInput: { style: { fontFamily: "monospace" } } }}
             helperText={
               <span>
-                Exact (<code>example.com</code>), single-asterisk wildcard
-                (<code>*.example.com</code>), or catch-all (<code>*</code>).
-                Most-specific match wins.
+                Exact (<code>example.com</code>), shell-glob subdomain
+                wildcard (<code>*.example.com</code> covers
+                <code>foo.example.com</code> and{" "}
+                <code>a.b.example.com</code> — any depth), or catch-all
+                (<code>*</code>). Most-specific match wins, so a more
+                specific pattern overrides a broader one.
               </span>
             }
           />

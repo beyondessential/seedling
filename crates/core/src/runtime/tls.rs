@@ -223,9 +223,19 @@ pub struct TlsSettings {
 /// Returns whether `pattern` matches `hostname`. Patterns are:
 ///
 /// - `*` — catch-all, matches any hostname.
-/// - `*.<suffix>` — matches any hostname ending in `.<suffix>`.
-///   `*.example.com` matches `foo.example.com`, `a.b.example.com`,
-///   but not `example.com` itself.
+/// - `*.<suffix>` — **shell-glob-style** subdomain wildcard. Matches any
+///   hostname ending in `.<suffix>`, including multi-label
+///   subdomains. So `*.example.com` matches `foo.example.com` AND
+///   `a.b.example.com`, but not `example.com` itself.
+///
+///   This is *not* the RFC 6125 DNS-wildcard semantic (which would
+///   match exactly one extra label). It's chosen so an operator can
+///   say "use this DNS provider for everything under example.com" with
+///   a single rule, rather than re-declaring the same policy at every
+///   depth. Most-specific-first resolution
+///   ([`pattern_specificity`]) means an operator can still pin a
+///   sub-zone to a different policy by adding `*.sub.example.com` or
+///   `foo.example.com` alongside.
 /// - anything else — exact match (case-insensitive).
 ///
 /// More-specific patterns are tried first by [`store::resolve_policy`].
@@ -236,9 +246,9 @@ pub fn pattern_matches(pattern: &str, hostname: &str) -> bool {
     let p = pattern.to_ascii_lowercase();
     let h = hostname.to_ascii_lowercase();
     if let Some(suffix) = p.strip_prefix("*.") {
-        // The dotted suffix form: hostname must end with ".<suffix>" and
-        // not equal the suffix itself (the wildcard requires at least one
-        // extra leading label).
+        // Shell-glob: hostname must end with ".<suffix>" and not equal
+        // the suffix itself (the wildcard requires at least one extra
+        // leading label, but that label may itself contain dots).
         let needle = format!(".{suffix}");
         return h.ends_with(&needle) && h.len() > needle.len();
     }
@@ -275,9 +285,26 @@ mod pattern_tests {
     #[test]
     fn dotted_wildcard_requires_extra_label() {
         assert!(pattern_matches("*.example.com", "foo.example.com"));
+        // Multi-level: shell-glob style covers any depth, NOT RFC 6125's
+        // single-label semantic. A change here is a behaviour change for
+        // operator policy and should be made deliberately.
         assert!(pattern_matches("*.example.com", "a.b.example.com"));
+        assert!(pattern_matches("*.example.com", "x.y.z.example.com"));
         assert!(!pattern_matches("*.example.com", "example.com"));
         assert!(!pattern_matches("*.example.com", "other.com"));
+    }
+
+    #[test]
+    fn more_specific_wildcard_beats_broader_one() {
+        // Two policies overlap at `foo.bar.example.com`; the longer suffix
+        // must score higher so the operator's deliberate sub-zone override
+        // wins. This is the contract that makes shell-glob multi-level
+        // wildcards safe to use as a catch-all.
+        let broad = pattern_specificity("*.example.com");
+        let narrow = pattern_specificity("*.bar.example.com");
+        assert!(narrow > broad);
+        assert!(pattern_matches("*.example.com", "foo.bar.example.com"));
+        assert!(pattern_matches("*.bar.example.com", "foo.bar.example.com"));
     }
 
     #[test]
