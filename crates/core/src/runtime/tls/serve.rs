@@ -13,7 +13,6 @@
 //! cert chain followed by the private key, all as PEM blocks — that's
 //! the convention Caddy expects.
 
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -121,20 +120,13 @@ struct ServeState {
     /// Hex-encoded shared token; clients embed this in the URL path.
     /// See [`load_or_create_token`].
     token: Arc<String>,
-    /// Per-hostname mutex used to serialise on-demand issuance requests for
-    /// the same SNI. Without this a burst of concurrent handshakes for a
-    /// fresh hostname would each kick off a parallel ACME flow.
-    issue_locks: IssueLocks,
-}
-
-type IssueLocks = Arc<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>;
-
-fn acquire_issue_lock(locks: &IssueLocks, hostname: &str) -> Arc<tokio::sync::Mutex<()>> {
-    let mut map = locks.lock().expect("issue_locks poisoned");
-    Arc::clone(
-        map.entry(hostname.to_owned())
-            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
-    )
+    /// Process-wide queue serialising on-demand ACME-DNS issuance. A single
+    /// mutex is enough: handlers re-check the cert store after acquiring
+    /// the lock, so a second handshake for the same SNI returns the
+    /// freshly-issued cert without re-issuing. Different hostnames also
+    /// queue here, which keeps us from hammering the CA with parallel
+    /// orders during a cold-start spike.
+    issue_queue: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// Query string parsed from Caddy's `tls.certificates.get_certificate.http`
@@ -211,13 +203,10 @@ async fn attempt_on_demand_issue(state: &ServeState, hostname: &str) -> IssueOut
         _ => return IssueOutcome::FallThrough,
     };
 
-    // Serialise concurrent handshakes for the same SNI so a single
-    // burst doesn't fan out into multiple parallel ACME orders.
-    let lock = acquire_issue_lock(&state.issue_locks, hostname);
-    let _guard = lock.lock().await;
-
-    // Re-check after acquiring the lock: another holder may have just
-    // finished issuance.
+    // Queue behind any in-flight issuance. Handlers behind us re-check the
+    // cert store after acquiring the lock, so a second handshake for the
+    // same SNI returns the freshly-issued cert without re-issuing.
+    let _guard = state.issue_queue.lock().await;
     match lookup(&state.db, &state.cipher, hostname).await {
         Ok(Some(bundle)) => return IssueOutcome::Served(bundle),
         Ok(None) => {}
@@ -468,7 +457,7 @@ pub async fn spawn_server(
         db,
         cipher,
         token: Arc::new(token),
-        issue_locks: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        issue_queue: Arc::new(tokio::sync::Mutex::new(())),
     };
     let app = Router::new()
         .route("/cert/{token}/get-certificate", get(handle))
