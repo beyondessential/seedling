@@ -18,7 +18,7 @@ use super::{resolver_addr, resolver_ipv4_subnet, resolver_network_prefix};
 pub(crate) const RESOLVER_BLUE: &str = "seedling-resolver-blue";
 pub(crate) const RESOLVER_GREEN: &str = "seedling-resolver-green";
 pub(crate) const RESOLVER_IMAGE: &str = "docker.io/coredns/coredns:1.12.1";
-pub(crate) const RESOLVER_NETWORK: &str = "seedling-resolver";
+pub const RESOLVER_NETWORK: &str = "seedling-resolver";
 
 #[derive(Debug)]
 pub struct ResolverAddrs {

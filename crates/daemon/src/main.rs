@@ -650,8 +650,15 @@ async fn main() {
     // seedling-<display_name> network whose matching container is gone is
     // safe to remove.
     //
-    // Excluded by prefix: seedling-caddy-*, seedling-resolver-*,
-    // seedling-mount-* — these are infra networks managed separately.
+    // Excluded: the infra networks `seedling-proxy` (Caddy) and
+    // `seedling-resolver` (CoreDNS), plus seedling-mount-* — managed by
+    // the corresponding subsystem's `ensure_*_running` path. Earlier
+    // versions of this filter used `seedling-caddy-*` / `seedling-resolver-*`
+    // prefixes, but those are *container* names; the *network* names are
+    // bare, so the filter let the infra networks through and we then
+    // tore them down on every restart, kicking the resolver into a
+    // start/heath-check/restart loop until coredns happened to come up
+    // fast enough to clear the inline health check.
     // Also excluded: any network whose name matches a currently-known
     // dynamic resource display_name (would be cleaned up by the earlier
     // dynamic-resource loop).
@@ -697,11 +704,7 @@ async fn main() {
             })
         };
 
-        let is_infra = |name: &str| {
-            name.starts_with("seedling-caddy-")
-                || name.starts_with("seedling-resolver-")
-                || name.starts_with("seedling-mount-")
-        };
+        let is_infra = seedling_core::system::is_infra_network;
 
         let orphan_nets: Vec<String> = nets
             .into_iter()

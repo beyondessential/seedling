@@ -4,7 +4,8 @@ use ipnet::{Ipv4Net, Ipv6Net};
 
 pub use forwarder::spawn_dns_forwarder;
 pub use startup::{
-    ResolverAddrs, ResolverStartupError, ensure_resolver_running, teardown_resolver,
+    RESOLVER_NETWORK, ResolverAddrs, ResolverStartupError, ensure_resolver_running,
+    teardown_resolver,
 };
 
 mod config;

@@ -30,6 +30,57 @@ pub mod volume_store;
 pub use actuator::{ActuateError, Actuator, TMPFS_VOLUMES_DIR};
 pub use observer::{ObserveError, Observer};
 
+/// Returns whether `network_name` is one of the infrastructure networks
+/// managed by the daemon's own ensure_*_running paths (Caddy proxy,
+/// CoreDNS resolver, mount-namespace nets) rather than a per-app pod
+/// network. The daemon's startup orphan-network sweep uses this to skip
+/// infra networks: their containers may legitimately be down at the
+/// moment the sweep runs (we're about to recreate them on the first
+/// reconciler tick), so name-prefix correlation against live containers
+/// would mistake them for orphans and tear them down.
+pub fn is_infra_network(network_name: &str) -> bool {
+    network_name == caddy::PROXY_NETWORK
+        || network_name == resolver::RESOLVER_NETWORK
+        || network_name.starts_with("seedling-mount-")
+}
+
+#[cfg(test)]
+mod is_infra_network_tests {
+    use super::*;
+
+    #[test]
+    fn excludes_proxy_and_resolver_networks_by_exact_name() {
+        // Both networks are bare ("seedling-proxy", "seedling-resolver");
+        // earlier filters using "seedling-caddy-" / "seedling-resolver-"
+        // prefixes did not match these names — letting the orphan sweep
+        // delete them on every startup.
+        assert!(is_infra_network("seedling-proxy"));
+        assert!(is_infra_network("seedling-resolver"));
+    }
+
+    #[test]
+    fn excludes_mount_networks_by_prefix() {
+        assert!(is_infra_network("seedling-mount-foo"));
+        assert!(is_infra_network("seedling-mount-"));
+    }
+
+    #[test]
+    fn accepts_app_pod_networks_as_non_infra() {
+        assert!(!is_infra_network("seedling-myapp"));
+        assert!(!is_infra_network(
+            "seedling-postgres-tamanu-postgres-0746d008"
+        ));
+    }
+
+    #[test]
+    fn does_not_match_infra_container_names() {
+        // The container slot names used to be the basis of the prefix
+        // filter; they must not be confused with the network names.
+        assert!(!is_infra_network("seedling-resolver-blue"));
+        assert!(!is_infra_network("seedling-caddy-green"));
+    }
+}
+
 /// Returns the host-side bridge gateway IP for the seedling-proxy network,
 /// derived from the node's /48 prefix. The daemon binds local services that
 /// only Caddy + host processes should reach (e.g. the TLS cert endpoint) to
