@@ -103,6 +103,22 @@ impl CaddyProxy {
         let caddy_json = super::config::build_caddy_config(config);
         let client = self.get_client().await;
 
+        // Dedup against Caddy's current config: when nothing has
+        // changed (the steady state) the per-tick POST kicks Caddy's
+        // reload machinery, churns its admin-API logs, and prints
+        // "config applied" lines on our side too. Cheaper to GET once,
+        // compare, and skip when identical. A failed GET (or a body
+        // we can't parse) just falls through to POST so we never
+        // skip a real apply by accident.
+        if let Ok(resp) = client.get("http://localhost/config/").send().await
+            && resp.status().is_success()
+            && let Ok(current) = resp.json::<Value>().await
+            && current == caddy_json
+        {
+            tracing::debug!("caddy config unchanged; skipping POST");
+            return Ok(());
+        }
+
         let resp = client
             .post("http://localhost/config/")
             .json(&caddy_json)
