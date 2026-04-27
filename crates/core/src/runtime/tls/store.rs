@@ -537,14 +537,20 @@ pub fn resolve_policy(db: &Db, hostname: &str) -> rusqlite::Result<Option<TlsPol
 // ---------------------------------------------------------------------------
 
 // r[impl tls.settings.contact-email]
+// r[impl tls.settings.cert-profile]
 pub fn get_settings(db: &Db) -> rusqlite::Result<TlsSettings> {
     db.conn.query_row(
-        "SELECT contact_email, updated_at FROM tls_settings WHERE singleton = 1",
+        "SELECT contact_email, cert_profile, updated_at FROM tls_settings WHERE singleton = 1",
         [],
         |row| {
+            // Stored empty string normalises to None so callers don't
+            // have to differentiate "explicitly cleared" from "never set".
+            let raw_profile: Option<String> = row.get(1)?;
+            let cert_profile = raw_profile.filter(|s| !s.is_empty());
             Ok(TlsSettings {
                 contact_email: row.get(0)?,
-                updated_at: row.get(1)?,
+                cert_profile,
+                updated_at: row.get(2)?,
             })
         },
     )
@@ -556,6 +562,17 @@ pub fn set_contact_email(db: &Db, email: &str) -> rusqlite::Result<()> {
     db.conn.execute(
         "UPDATE tls_settings SET contact_email = ?1, updated_at = ?2 WHERE singleton = 1",
         params![email, now],
+    )?;
+    Ok(())
+}
+
+// r[impl tls.settings.cert-profile]
+pub fn set_cert_profile(db: &Db, profile: Option<&str>) -> rusqlite::Result<()> {
+    let now = now_secs();
+    let stored = profile.map(str::trim).filter(|s| !s.is_empty());
+    db.conn.execute(
+        "UPDATE tls_settings SET cert_profile = ?1, updated_at = ?2 WHERE singleton = 1",
+        params![stored, now],
     )?;
     Ok(())
 }

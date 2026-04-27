@@ -227,14 +227,19 @@ pub struct AcmeAccount {
     pub updated_at: i64,
 }
 
-/// Global TLS settings. Currently just the operator contact email used by
-/// every ACME account registration; a single value applied across all
-/// hostnames keeps the operator interface from prompting for the same
-/// information per binding.
+/// Global TLS settings: the operator contact email used by every ACME
+/// account registration, plus an optional ACME profile name that the
+/// runtime forwards to the CA when present (e.g. Let's Encrypt's
+/// `shortlived` for ~6-day certs).
 // r[impl tls.settings.contact-email]
+// r[impl tls.settings.cert-profile]
 #[derive(Debug, Clone, Default)]
 pub struct TlsSettings {
     pub contact_email: String,
+    /// ACME profile name forwarded on every order. `None` (or stored
+    /// empty string) means "let the CA pick its default profile".
+    // r[impl tls.settings.cert-profile]
+    pub cert_profile: Option<String>,
     pub updated_at: i64,
 }
 

@@ -1308,6 +1308,12 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > The setting must be readable and writable through the operator interface, take effect on the next renewal pass without restart, and default to empty.
 > Issuance and renewal that need to register a new ACME account must fail with a clear error when no contact email is configured.
 
+> r[tls.settings.cert-profile]
+> The runtime must persist an optional global ACME profile name and forward it on every issuance order via the ACME profiles extension.
+> When unset, the runtime must omit the profile field so the CA selects its default profile (typically a ~90-day certificate at Let's Encrypt).
+> When set, every subsequent ACME-DNS order — first issuance, renewal, and operator-driven retry — must include that profile name; the CA chooses validity and any other profile-defined attributes accordingly. Let's Encrypt's `shortlived` profile, for example, yields ~6-day certificates, and the runtime's existing renewal threshold (1/3 of remaining lifetime, or RFC 9773 ARI when supplied) handles the resulting shorter renewal cadence without further configuration.
+> The setting must be readable and writable through the operator interface and take effect on the next renewal pass without restart.
+
 > r[tls.cert.attempt-log]
 > The runtime must record every certificate-issuance attempt — successful or failed — in a durable log, scoped per hostname.
 > Each entry must capture the hostname, the trigger (`on_demand`, `manual`, or `renewal`), start and finish timestamps, the outcome (`pending`, `success`, or `failure`), the resulting certificate id (on success), and the error string (on failure).

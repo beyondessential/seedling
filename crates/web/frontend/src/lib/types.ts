@@ -588,6 +588,10 @@ export interface TlsCertificatesResponse {
 
 export interface TlsSettings {
   contact_email: string;
+  /** ACME profile name forwarded to the CA on every order (e.g.
+   * `shortlived` for Let's Encrypt's ~6-day certs). Null when unset; the
+   * CA picks its default profile. */
+  cert_profile: string | null;
   updated_at: number;
 }
 

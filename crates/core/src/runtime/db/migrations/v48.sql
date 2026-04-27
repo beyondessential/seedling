@@ -1,0 +1,11 @@
+-- r[impl tls.settings.cert-profile]
+-- Operator-controllable ACME profile name. When set, the runtime
+-- passes it to NewOrder via the ACME profiles extension; the CA
+-- chooses validity (and any other profile-defined attributes)
+-- accordingly. Let's Encrypt currently exposes `shortlived` for ~6-day
+-- certs alongside the default ~90-day issuance; other CAs may expose
+-- their own.
+--
+-- NULL / empty means "unset", and the runtime omits the profile field
+-- so the CA picks its default profile.
+ALTER TABLE tls_settings ADD COLUMN cert_profile TEXT;

@@ -209,6 +209,7 @@ impl Coordinator {
                 directory_url: &acme::default_directory_url(),
                 dns_provider_name: &dns_provider_name,
                 previous_cert_pem: owned.previous_cert_pem.as_deref(),
+                cert_profile: owned.cert_profile.as_deref(),
             },
         )
         .await;
@@ -261,6 +262,7 @@ struct OwnedState {
     decision: Decision,
     dns_provider_name: Option<String>,
     contact_email: String,
+    cert_profile: Option<String>,
     active_cert_id: Option<i64>,
     active_cert_not_after: Option<i64>,
     previous_cert_pem: Option<String>,
@@ -276,6 +278,7 @@ impl OwnedState {
             decision: s.decision.clone(),
             dns_provider_name,
             contact_email: snap.settings.contact_email.clone(),
+            cert_profile: snap.settings.cert_profile.clone(),
             active_cert_id: s.active_cert.map(|c| c.id),
             active_cert_not_after: s.active_cert.and_then(|c| c.not_after),
             previous_cert_pem: s.active_cert.and_then(|c| c.cert_pem.clone()),

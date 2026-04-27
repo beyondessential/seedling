@@ -102,6 +102,17 @@ pub(super) enum ConfigCommand {
     Get,
     /// Set the operator contact email used for ACME account registration
     SetContact { email: String },
+    /// Set the ACME profile name forwarded on every order (e.g.
+    /// `shortlived` for Let's Encrypt's ~6-day certs). Use `--clear`
+    /// to revert to the CA's default profile.
+    SetProfile {
+        /// The profile name (e.g. `shortlived`).
+        #[arg(conflicts_with = "clear")]
+        name: Option<String>,
+        /// Clear the profile so the CA picks its default.
+        #[arg(long, conflicts_with = "name")]
+        clear: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -256,6 +267,28 @@ async fn dispatch_config(client: &OiClient, cmd: ConfigCommand) {
             print_result(
                 client
                     .request("/tls/settings/set", json!({ "contact_email": email }))
+                    .await,
+            );
+        }
+        ConfigCommand::SetProfile { name, clear } => {
+            // Send the cert_profile field as JSON null when clearing,
+            // or as the supplied string. The OI handler distinguishes
+            // "field absent" from "field present but null" so it only
+            // touches the column the operator asked about.
+            let value = if clear {
+                serde_json::Value::Null
+            } else {
+                match name {
+                    Some(n) => serde_json::Value::String(n),
+                    None => {
+                        eprintln!("error: pass either a profile name or --clear");
+                        std::process::exit(1);
+                    }
+                }
+            };
+            print_result(
+                client
+                    .request("/tls/settings/set", json!({ "cert_profile": value }))
                     .await,
             );
         }

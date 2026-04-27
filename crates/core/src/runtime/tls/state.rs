@@ -516,6 +516,7 @@ mod tests {
             force_retries,
             settings: TlsSettings {
                 contact_email: contact_email.to_owned(),
+                cert_profile: None,
                 updated_at: now,
             },
             now,

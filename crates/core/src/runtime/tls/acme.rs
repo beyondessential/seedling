@@ -92,6 +92,13 @@ pub struct IssueParams<'a> {
     /// invalidate any pending ARI advice for the old cert.
     // r[impl tls.cert.ari]
     pub previous_cert_pem: Option<&'a str>,
+    /// ACME profile name forwarded to the CA via the profiles
+    /// extension. `None` means "let the CA pick its default". Let's
+    /// Encrypt's `shortlived` profile yields ~6-day certs; absent a
+    /// profile they issue ~90-day certs. The order fails with a clear
+    /// CA-side error if the directory does not advertise the profile.
+    // r[impl tls.settings.cert-profile]
+    pub cert_profile: Option<&'a str>,
 }
 
 /// Outcome of a successful issuance.
@@ -156,6 +163,10 @@ pub async fn issue(
         .flatten();
     if let Some(ref ident) = replaces_owned {
         new_order = new_order.replaces(ident.clone());
+    }
+    // r[impl tls.settings.cert-profile]
+    if let Some(profile) = params.cert_profile {
+        new_order = new_order.profile(profile);
     }
     let mut order = account.new_order(&new_order).await.context(AcmeSnafu)?;
 

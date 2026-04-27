@@ -1084,11 +1084,13 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 ## Settings
 
 > i[tls.settings.get]
-> `/tls/settings/get` returns the global TLS settings as `{ contact_email, updated_at }`. Empty `contact_email` means none is configured.
+> `/tls/settings/get` returns the global TLS settings as `{ contact_email, cert_profile, updated_at }`. Empty `contact_email` means none is configured. `cert_profile` is null when no profile has been set, otherwise the configured ACME profile name.
 
 > i[tls.settings.set]
-> `/tls/settings/set { contact_email }` updates the global operator contact email used for ACME account registration.
-> The change takes effect on the next renewal pass without daemon restart per [tls.settings.contact-email](runtime.md#r--tls.settings.contact-email).
+> `/tls/settings/set { contact_email?, cert_profile? }` updates whichever fields are present.
+> `contact_email` (string) sets the operator contact email used for ACME account registration; pass an empty string to clear.
+> `cert_profile` (string or null) opts into a non-default ACME profile (e.g. Let's Encrypt's `shortlived` for ~6-day certs) per [tls.settings.cert-profile](runtime.md#r--tls.settings.cert-profile); pass `null` to clear so the CA selects its default profile, or omit the field to leave it unchanged.
+> Both updates take effect on the next renewal pass without daemon restart.
 
 # Client Behaviour
 

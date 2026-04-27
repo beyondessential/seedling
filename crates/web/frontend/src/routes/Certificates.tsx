@@ -6,12 +6,14 @@ import {
   Alert,
   Box,
   Button,
+  Checkbox,
   Chip,
   CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
+  FormControlLabel,
   IconButton,
   MenuItem,
   Paper,
@@ -371,12 +373,17 @@ function SettingsSection({
   writeReason,
 }: SettingsSectionProps) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
+  const [emailDraft, setEmailDraft] = useState("");
+  const [profileDraft, setProfileDraft] = useState("");
+  const [shortLived, setShortLived] = useState(false);
   const [saving, setSaving] = useState(false);
   const { execute, error: submitError, clearError } = useOiAction();
 
   const startEdit = () => {
-    setDraft(settings?.contact_email ?? "");
+    setEmailDraft(settings?.contact_email ?? "");
+    const stored = settings?.cert_profile ?? "";
+    setShortLived(stored === "shortlived");
+    setProfileDraft(stored === "shortlived" ? "" : stored);
     clearError();
     setEditing(true);
   };
@@ -389,7 +396,19 @@ function SettingsSection({
   const submit = async () => {
     setSaving(true);
     try {
-      await execute("/tls/settings/set", { contact_email: draft.trim() });
+      // Send both fields explicitly: contact_email is always present
+      // (empty string clears), cert_profile is null when neither short-
+      // lived is selected nor a custom profile is typed.
+      const trimmedProfile = profileDraft.trim();
+      const profile: string | null = shortLived
+        ? "shortlived"
+        : trimmedProfile.length > 0
+          ? trimmedProfile
+          : null;
+      await execute("/tls/settings/set", {
+        contact_email: emailDraft.trim(),
+        cert_profile: profile,
+      });
       onSaved();
       setEditing(false);
     } catch {
@@ -398,6 +417,13 @@ function SettingsSection({
       setSaving(false);
     }
   };
+
+  const profileSummary = (() => {
+    const p = settings?.cert_profile;
+    if (!p) return "default (CA picks the profile, ~90 days at Let's Encrypt)";
+    if (p === "shortlived") return "shortlived (~6-day certificates at Let's Encrypt)";
+    return p;
+  })();
 
   return (
     <Box>
@@ -410,7 +436,7 @@ function SettingsSection({
         <Stack
           direction="row"
           spacing={2}
-          sx={{ alignItems: "center", flexWrap: "wrap" }}
+          sx={{ alignItems: "flex-start", flexWrap: "wrap" }}
         >
           <Box sx={{ flexGrow: 1, minWidth: 240 }}>
             <Typography variant="caption" sx={{ color: "text.secondary" }}>
@@ -421,9 +447,15 @@ function SettingsSection({
                 ? settings.contact_email
                 : <em style={{ color: "var(--mui-palette-text-secondary)" }}>not set</em>}
             </Typography>
-            <Typography variant="caption" sx={{ color: "text.secondary" }}>
+            <Typography variant="caption" sx={{ color: "text.secondary", mb: 1, display: "block" }}>
               Used by every ACME account registration. Required before the
               runtime can issue certificates against a public CA.
+            </Typography>
+            <Typography variant="caption" sx={{ color: "text.secondary" }}>
+              Cert profile
+            </Typography>
+            <Typography sx={{ fontFamily: "monospace" }}>
+              {profileSummary}
             </Typography>
           </Box>
           <Tooltip title={writeReason ?? ""}>
@@ -440,7 +472,7 @@ function SettingsSection({
         </Stack>
       </Paper>
       <Dialog open={editing} onClose={closeEdit} fullWidth maxWidth="sm">
-        <DialogTitle>Update contact email</DialogTitle>
+        <DialogTitle>TLS settings</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 1 }}>
             {submitError && (
@@ -452,10 +484,36 @@ function SettingsSection({
               autoFocus
               label="Contact email"
               placeholder="ops@example.com"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
+              value={emailDraft}
+              onChange={(e) => setEmailDraft(e.target.value)}
               fullWidth
-              helperText="Leave blank to clear. New value applies on the next renewal pass."
+              helperText="Leave blank to clear. Required before public-CA issuance."
+            />
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={shortLived}
+                  onChange={(e) => {
+                    setShortLived(e.target.checked);
+                    if (e.target.checked) setProfileDraft("");
+                  }}
+                />
+              }
+              label="Use Let's Encrypt short-lived (~6-day) certificates"
+            />
+            <TextField
+              label="Custom ACME profile (advanced)"
+              placeholder="leave blank for the CA's default"
+              value={profileDraft}
+              onChange={(e) => setProfileDraft(e.target.value)}
+              disabled={shortLived}
+              fullWidth
+              slotProps={{ htmlInput: { style: { fontFamily: "monospace" } } }}
+              helperText={
+                shortLived
+                  ? "Disabled because the short-lived option above is selected."
+                  : "Forwarded on every ACME order. Most operators want either the short-lived toggle or no profile at all."
+              }
             />
           </Stack>
         </DialogContent>
