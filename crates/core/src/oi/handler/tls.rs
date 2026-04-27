@@ -23,8 +23,8 @@ use super::HandlerResult;
 use crate::defs::resource::Resource;
 use crate::oi::state::OiState;
 use crate::runtime::tls::{
-    AttemptOutcome, DnsProviderKind, RetryBlockSource, TlsCertOrigin, TlsCertState, TlsPolicy,
-    state, store,
+    AttemptOutcome, DnsProviderKind, KeyType, RetryBlockSource, TlsCertOrigin, TlsCertState,
+    TlsPolicy, keypair, state, store,
     store::CertMetadata,
     validate::{self, ValidateError},
 };
@@ -412,6 +412,227 @@ pub(crate) fn delete_certificate(state: &OiState, params: CertIdParams) -> Handl
     if !removed {
         return Err(OiError::not_found(format!("certificate not found: {id}")));
     }
+    Ok(json!({ "ok": true }))
+}
+
+// ---------------------------------------------------------------------------
+// CSR flow
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub(crate) struct CsrBeginParams {
+    pub hostname: String,
+    /// Optional key type. Defaults to `ecdsa_p256`, the only kind
+    /// currently supported.
+    #[serde(default)]
+    pub key_type: Option<String>,
+}
+
+/// Generate a server-side keypair and a CSR for `hostname`. The
+/// private key is encrypted at rest and never leaves the runtime; the
+/// CSR is returned in the response and is also retrievable later via
+/// `tls.cert.csr.get` while the row is still in `csr_pending`. After
+/// the operator has the CSR signed externally, they upload the signed
+/// cert via `tls.cert.csr.upload-cert` to transition the row to
+/// `active`.
+// i[tls.cert.csr.begin]
+// r[impl tls.csr.flow]
+pub(crate) fn csr_begin(state: &OiState, params: CsrBeginParams) -> HandlerResult {
+    let CsrBeginParams { hostname, key_type } = params;
+    if hostname.trim().is_empty() {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            "hostname must not be empty",
+        ));
+    }
+    let key_type = match key_type.as_deref() {
+        None | Some("ecdsa_p256") => KeyType::EcdsaP256,
+        Some(other) => {
+            return Err(OiError::new(
+                ErrorCode::RequirementsInvalid,
+                format!("unsupported key type: {other}"),
+            ));
+        }
+    };
+
+    let generated = keypair::generate(key_type).map_err(|e| {
+        OiError::new(
+            ErrorCode::Internal,
+            format!("keypair generation failed: {e}"),
+        )
+    })?;
+    let csr = keypair::build_csr(&hostname, &generated.inner)
+        .map_err(|e| OiError::new(ErrorCode::Internal, format!("csr generation failed: {e}")))?;
+
+    let cipher = Arc::clone(&state.cipher);
+    let key_ciphertext = cipher.encrypt(&generated.pem).map_err(|e| {
+        OiError::new(
+            ErrorCode::Internal,
+            format!("private key encryption failed: {e}"),
+        )
+    })?;
+
+    let host_for_insert = hostname.clone();
+    let csr_pem_for_insert = csr.pem.clone();
+    let id = state
+        .db
+        .call(move |db| {
+            store::insert_certificate(
+                db,
+                &host_for_insert,
+                TlsCertState::CsrPending,
+                TlsCertOrigin::Csr,
+                None,
+                Some(&csr_pem_for_insert),
+                &key_ciphertext,
+                key_type,
+                CertMetadata::default(),
+                None,
+                None,
+            )
+        })
+        .map_err(db_error)?;
+
+    Ok(json!({
+        "id": id,
+        "csr_pem": csr.pem,
+    }))
+}
+
+/// Re-fetch the PEM CSR for a pending row. Returns `not_found` when the
+/// id is unknown, and `requirements_invalid` when the row is no longer
+/// in `csr_pending` (cert already uploaded or row cancelled).
+// i[tls.cert.csr.get]
+pub(crate) fn csr_get(state: &OiState, params: CertIdParams) -> HandlerResult {
+    let CertIdParams { id } = params;
+    let cert = state
+        .db
+        .call(move |db| store::get_certificate(db, id))
+        .map_err(db_error)?;
+    let Some(cert) = cert else {
+        return Err(OiError::not_found(format!("certificate not found: {id}")));
+    };
+    if cert.state != TlsCertState::CsrPending {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!(
+                "certificate {id} is in state {} — no pending CSR to return",
+                cert.state.as_str()
+            ),
+        ));
+    }
+    let Some(csr_pem) = cert.csr_pem else {
+        return Err(OiError::new(
+            ErrorCode::Internal,
+            format!("certificate {id} is csr_pending but has no stored CSR"),
+        ));
+    };
+    Ok(json!({ "id": id, "csr_pem": csr_pem }))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct CsrUploadCertParams {
+    pub id: i64,
+    pub cert_pem: String,
+}
+
+/// Upload the externally-signed certificate for a pending CSR. The
+/// runtime decrypts the stored private key, verifies that the leaf
+/// cert's SubjectPublicKeyInfo matches the stored key, runs the
+/// standard SAN-coverage / expiry checks, and on success transitions
+/// the row to `active`. Any prior active certificate for the same
+/// hostname is superseded.
+// i[tls.cert.csr.upload-cert]
+// r[impl tls.csr.flow]
+pub(crate) fn csr_upload_cert(state: &OiState, params: CsrUploadCertParams) -> HandlerResult {
+    let CsrUploadCertParams { id, cert_pem } = params;
+
+    // Pull the row.
+    let cert_row = state
+        .db
+        .call(move |db| store::get_certificate(db, id))
+        .map_err(db_error)?
+        .ok_or_else(|| OiError::not_found(format!("certificate not found: {id}")))?;
+    if cert_row.state != TlsCertState::CsrPending {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!(
+                "certificate {id} is in state {}; cert upload only applies to csr_pending rows",
+                cert_row.state.as_str()
+            ),
+        ));
+    }
+
+    let cipher = Arc::clone(&state.cipher);
+    let stored_key = cipher.decrypt(&cert_row.key_ciphertext).map_err(|e| {
+        OiError::new(
+            ErrorCode::Internal,
+            format!("private key decryption failed: {e}"),
+        )
+    })?;
+
+    // Validation reuses the manual-upload rules: SAN coverage,
+    // expiry, and (here against the CSR's stored key) SPKI match.
+    let validated = validate::validate_manual_upload(&cert_row.hostname, &cert_pem, &stored_key)
+        .map_err(map_validate_error)?;
+
+    let chain_pem = validated.parsed.chain_pem.clone();
+    let metadata = CertMetadata {
+        issuer: validated.parsed.metadata.issuer.clone(),
+        not_before: validated.parsed.metadata.not_before,
+        not_after: validated.parsed.metadata.not_after,
+        serial: validated.parsed.metadata.serial.clone(),
+        self_signed: validated.parsed.metadata.self_signed,
+    };
+
+    let host_for_update = cert_row.hostname.clone();
+    state
+        .db
+        .call(move |db| -> rusqlite::Result<()> {
+            store::update_certificate(
+                db,
+                id,
+                TlsCertState::Active,
+                Some(&chain_pem),
+                Some(&metadata),
+            )?;
+            store::supersede_other_active_for_hostname(db, &host_for_update, id)?;
+            Ok(())
+        })
+        .map_err(db_error)?;
+
+    Ok(json!({
+        "id": id,
+        "warnings": validated.warnings,
+    }))
+}
+
+/// Cancel a pending CSR row. Refused for any state other than
+/// `csr_pending` so an operator cannot accidentally drop an active
+/// cert via this path; deletion of an active cert goes through
+/// `tls.cert.delete` instead.
+// i[tls.cert.csr.cancel]
+// r[impl tls.csr.flow]
+pub(crate) fn csr_cancel(state: &OiState, params: CertIdParams) -> HandlerResult {
+    let CertIdParams { id } = params;
+    let cert = state
+        .db
+        .call(move |db| store::get_certificate(db, id))
+        .map_err(db_error)?
+        .ok_or_else(|| OiError::not_found(format!("certificate not found: {id}")))?;
+    if cert.state != TlsCertState::CsrPending {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!(
+                "certificate {id} is in state {}; csr_cancel only applies to csr_pending rows",
+                cert.state.as_str()
+            ),
+        ));
+    }
+    state
+        .db
+        .call(move |db| store::delete_certificate(db, id))
+        .map_err(db_error)?;
     Ok(json!({ "ok": true }))
 }
 

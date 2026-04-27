@@ -1010,6 +1010,24 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 > `/tls/certificates/delete { id }` removes a stored certificate.
 > Refused with `requirements_invalid` when a manual policy still references the row, so the operator unbinds the policy first; returns `not_found` when the id is unknown.
 
+> i[tls.cert.csr.begin]
+> `/tls/certificates/csr/begin { hostname, key_type? }` generates a server-side keypair and a CSR for `hostname` and returns `{ id, csr_pem }`.
+> The private key is stored encrypted at rest using the [secret key](runtime.md#r--secret.key) and never leaves the runtime; only the CSR is returned, both in this response and via subsequent `tls.cert.csr.get` calls while the row remains in `csr_pending`.
+> `key_type` defaults to `"ecdsa_p256"`, which is currently the only accepted value.
+
+> i[tls.cert.csr.get]
+> `/tls/certificates/csr/get { id }` returns `{ id, csr_pem }` for a pending CSR row.
+> Returns `not_found` when the id is unknown, and `requirements_invalid` once the row has been transitioned away from `csr_pending` (cert uploaded or row cancelled).
+
+> i[tls.cert.csr.upload-cert]
+> `/tls/certificates/csr/upload-cert { id, cert_pem }` accepts the externally-signed certificate for a pending CSR.
+> The runtime verifies the leaf cert's `SubjectPublicKeyInfo` matches the stored private key and runs the standard SAN-coverage / expiry checks; on success the row transitions to `active` and supersedes any prior active certificate for the same hostname.
+> Validation rejections return `requirements_invalid`; non-fatal warnings (`self_signed`, `not_yet_valid`) come back in the response `warnings` array.
+
+> i[tls.cert.csr.cancel]
+> `/tls/certificates/csr/cancel { id }` cancels a pending CSR row, deleting the stored private key.
+> Refused with `requirements_invalid` when the row is no longer `csr_pending`; for active certs use [`tls.cert.delete`](#i--tls.cert.delete) instead.
+
 > i[tls.cert.issue-acme-dns]
 > `/tls/certificates/issue-acme-dns { hostname }` synchronously runs the ACME-DNS-01 issuance flow for `hostname` via the issuance coordinator.
 > The hostname must resolve (per [tls.policy.wildcard](runtime.md#r--tls.policy.wildcard)) to an `acme_dns` policy with a configured DNS provider; otherwise the call returns `internal` with a descriptive message.

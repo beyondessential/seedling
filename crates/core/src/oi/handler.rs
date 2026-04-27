@@ -270,6 +270,16 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/tls/certificates/upload-manual" => tls::upload_manual(state, parse_params(req.params)?),
         // i[tls.cert.delete]
         "/tls/certificates/delete" => tls::delete_certificate(state, parse_params(req.params)?),
+        // i[tls.cert.csr.begin]
+        "/tls/certificates/csr/begin" => tls::csr_begin(state, parse_params(req.params)?),
+        // i[tls.cert.csr.get]
+        "/tls/certificates/csr/get" => tls::csr_get(state, parse_params(req.params)?),
+        // i[tls.cert.csr.upload-cert]
+        "/tls/certificates/csr/upload-cert" => {
+            tls::csr_upload_cert(state, parse_params(req.params)?)
+        }
+        // i[tls.cert.csr.cancel]
+        "/tls/certificates/csr/cancel" => tls::csr_cancel(state, parse_params(req.params)?),
         // i[tls.cert.issue-acme-dns]
         "/tls/certificates/issue-acme-dns" => tls::issue_acme_dns(state, parse_params(req.params)?),
         // i[tls.cert.retry]

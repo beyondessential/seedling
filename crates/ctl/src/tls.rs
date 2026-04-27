@@ -57,6 +57,32 @@ pub(super) enum TlsCommand {
 }
 
 #[derive(Subcommand)]
+pub(super) enum CsrCommand {
+    /// Generate a new keypair + CSR for `hostname`. The private key
+    /// stays on the server (encrypted at rest); only the CSR is
+    /// returned for external signing.
+    Begin {
+        hostname: String,
+        /// Key type. Currently only `ecdsa-p256` is supported.
+        #[arg(long, default_value = "ecdsa-p256")]
+        key_type: String,
+    },
+    /// Re-fetch the PEM CSR for a pending request.
+    Get { id: i64 },
+    /// Upload the externally-signed cert for a pending CSR. The
+    /// runtime verifies the cert against the stored key and SAN
+    /// coverage before transitioning the row to `active`.
+    UploadCert {
+        id: i64,
+        /// PEM-encoded certificate chain, or `-` for stdin.
+        #[arg(long)]
+        cert: String,
+    },
+    /// Cancel a pending CSR; deletes the stored keypair.
+    Cancel { id: i64 },
+}
+
+#[derive(Subcommand)]
 pub(super) enum RetryBlocksCommand {
     /// List active retry blocks
     List,
@@ -157,6 +183,11 @@ pub(super) enum CertsCommand {
     },
     /// Delete a stored certificate by id.
     Delete { id: i64 },
+    /// Server-generated keypair + Certificate Signing Request flow.
+    Csr {
+        #[command(subcommand)]
+        command: CsrCommand,
+    },
     /// Run ACME-DNS issuance now for a hostname covered by an acme_dns policy.
     ///
     /// Blocks until the flow completes (typically tens of seconds). For a
@@ -351,6 +382,7 @@ async fn dispatch_certs(client: &OiClient, cmd: CertsCommand) {
                     .await,
             );
         }
+        CertsCommand::Csr { command } => dispatch_csr(client, command).await,
         CertsCommand::IssueAcmeDns { hostname } => {
             print_result(
                 client
@@ -365,6 +397,53 @@ async fn dispatch_certs(client: &OiClient, cmd: CertsCommand) {
             print_result(
                 client
                     .request("/tls/certificates/retry", json!({ "hostname": hostname }))
+                    .await,
+            );
+        }
+    }
+}
+
+async fn dispatch_csr(client: &OiClient, cmd: CsrCommand) {
+    match cmd {
+        CsrCommand::Begin { hostname, key_type } => {
+            let kt = key_type.replace('-', "_");
+            print_result(
+                client
+                    .request(
+                        "/tls/certificates/csr/begin",
+                        json!({ "hostname": hostname, "key_type": kt }),
+                    )
+                    .await,
+            );
+        }
+        CsrCommand::Get { id } => {
+            print_result(
+                client
+                    .request("/tls/certificates/csr/get", json!({ "id": id }))
+                    .await,
+            );
+        }
+        CsrCommand::UploadCert { id, cert } => {
+            let cert_pem = match read_pem_arg(&cert) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("error reading --cert: {e}");
+                    std::process::exit(1);
+                }
+            };
+            print_result(
+                client
+                    .request(
+                        "/tls/certificates/csr/upload-cert",
+                        json!({ "id": id, "cert_pem": cert_pem }),
+                    )
+                    .await,
+            );
+        }
+        CsrCommand::Cancel { id } => {
+            print_result(
+                client
+                    .request("/tls/certificates/csr/cancel", json!({ "id": id }))
                     .await,
             );
         }
