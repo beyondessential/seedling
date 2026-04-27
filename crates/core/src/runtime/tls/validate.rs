@@ -37,8 +37,13 @@ pub enum ValidateError {
     #[snafu(display("private key parse error: {source}"))]
     ParseKey { source: keypair::Error },
 
-    #[snafu(display("certificate has no DNS SANs; nothing to bind to"))]
-    NoSans,
+    #[snafu(display(
+        "certificate has no DNS SANs; nothing to bind to (leaf subject={subject:?}, issuer={issuer:?})"
+    ))]
+    NoSans {
+        subject: String,
+        issuer: Option<String>,
+    },
 
     #[snafu(display("certificate has already expired (notAfter = {not_after}, now = {now})"))]
     Expired { not_after: i64, now: i64 },
@@ -72,7 +77,11 @@ pub fn validate_upload(cert_pem: &str, key_pem: &SecretString) -> Result<Validat
     let parsed = parse::parse_chain(cert_pem).context(ParseCertSnafu)?;
 
     if parsed.san_dns_names.is_empty() {
-        return NoSansSnafu.fail();
+        return NoSansSnafu {
+            subject: parsed.leaf_subject.clone(),
+            issuer: parsed.metadata.issuer.clone(),
+        }
+        .fail();
     }
 
     // Validity window. Already-expired certs are rejected; a not-yet-valid

@@ -29,6 +29,13 @@ pub struct ParsedChain {
     pub metadata: CertMetadata,
     /// Full chain re-encoded as a single PEM blob, in leaf-first order.
     pub chain_pem: String,
+    /// Number of CERTIFICATE PEM blocks the chain contained, leaf
+    /// included. Useful for diagnostics when a confusion-of-which-cert-
+    /// is-the-leaf is suspected.
+    pub chain_len: usize,
+    /// Leaf certificate's Subject DN. Empty string when the cert has no
+    /// Subject DN (legitimate when SAN is the only identifier).
+    pub leaf_subject: String,
     /// DNS names listed in the leaf's SubjectAlternativeName extension.
     pub san_dns_names: Vec<String>,
     /// Encoded leaf public key bytes (SubjectPublicKeyInfo, DER). Used by
@@ -63,6 +70,7 @@ pub fn parse_chain(pem: &str) -> Result<ParsedChain> {
     if blocks.is_empty() {
         return NoCertBlockSnafu.fail();
     }
+    let chain_len = blocks.len();
 
     // Re-encode in canonical leaf-first PEM form.
     let mut chain_pem = String::new();
@@ -86,30 +94,36 @@ pub fn parse_chain(pem: &str) -> Result<ParsedChain> {
     let not_after = cert.validity().not_after.timestamp();
     let serial = cert.tbs_certificate.raw_serial_as_string();
 
+    // Walk parsed extensions and pull both the SAN DNS names and the
+    // AKI keyIdentifier in one pass. Using the parsed-extension stream
+    // (rather than `subject_alternative_name()`) avoids x509-parser's
+    // duplicate-extension error path silently masking a present SAN —
+    // we just take whichever SAN extension we find first.
     let mut san_dns_names = Vec::new();
-    if let Ok(Some(san_ext)) = cert.subject_alternative_name() {
-        for name in &san_ext.value.general_names {
-            if let x509_parser::extensions::GeneralName::DNSName(dns) = name {
-                san_dns_names.push((*dns).to_owned());
+    // r[impl tls.cert.ari]
+    // AKI keyIdentifier octet-string contents (not the TLV wrapper);
+    // RFC 9773 § 4.1 takes those bytes base64url-encoded.
+    let mut leaf_aki_der = None;
+    for ext in cert.extensions() {
+        match ext.parsed_extension() {
+            x509_parser::extensions::ParsedExtension::SubjectAlternativeName(san) => {
+                for name in &san.general_names {
+                    if let x509_parser::extensions::GeneralName::DNSName(dns) = name {
+                        san_dns_names.push((*dns).to_owned());
+                    }
+                }
             }
+            x509_parser::extensions::ParsedExtension::AuthorityKeyIdentifier(aki) => {
+                if let Some(kid) = &aki.key_identifier {
+                    leaf_aki_der = Some(kid.0.to_vec());
+                }
+            }
+            _ => {}
         }
     }
 
     let leaf_spki_der = cert.tbs_certificate.subject_pki.raw.to_vec();
     let leaf_serial_der = cert.tbs_certificate.raw_serial().to_vec();
-    // r[impl tls.cert.ari]
-    // Pull the AKI keyIdentifier octet-string contents (not the TLV
-    // wrapper); RFC 9773 § 4.1 takes those bytes base64url-encoded.
-    let mut leaf_aki_der = None;
-    for ext in cert.extensions() {
-        if let x509_parser::extensions::ParsedExtension::AuthorityKeyIdentifier(aki) =
-            ext.parsed_extension()
-            && let Some(kid) = &aki.key_identifier
-        {
-            leaf_aki_der = Some(kid.0.to_vec());
-            break;
-        }
-    }
 
     Ok(ParsedChain {
         metadata: CertMetadata {
@@ -120,6 +134,8 @@ pub fn parse_chain(pem: &str) -> Result<ParsedChain> {
             self_signed,
         },
         chain_pem,
+        chain_len,
+        leaf_subject: subject,
         san_dns_names,
         leaf_spki_der,
         leaf_aki_der,
@@ -203,5 +219,53 @@ mod tests {
         let sans = vec!["foo.example.com".to_owned(), "*.other.com".to_owned()];
         assert!(!san_covers(&sans, "bar.example.com"));
         assert!(!san_covers(&sans, "example.com"));
+    }
+
+    /// Caddy's internal CA emits leaf certs with an empty Subject DN
+    /// and only a SAN extension (often marked `critical`). Earlier code
+    /// used `cert.subject_alternative_name()`, which can return Err
+    /// rather than Ok(Some(...)) under edge cases — silently skipping
+    /// the SAN list. Walking parsed extensions directly avoids that.
+    #[test]
+    fn parse_chain_extracts_san_from_caddy_local_leaf() {
+        // Inline cert produced by Caddy's local CA: empty Subject DN,
+        // critical SAN with one DNS name. The chain has both leaf and
+        // intermediate so chain_len is exercised too.
+        let pem = "-----BEGIN CERTIFICATE-----\n\
+MIIBxzCCAW2gAwIBAgIRAPGljHBbVFm+j2zx72VpwHEwCgYIKoZIzj0EAwIwMzEx\n\
+MC8GA1UEAxMoQ2FkZHkgTG9jYWwgQXV0aG9yaXR5IC0gRUNDIEludGVybWVkaWF0\n\
+ZTAeFw0yNjA0MjAwNjQ2NTBaFw0yNjA0MjAxODQ2NTBaMAAwWTATBgcqhkjOPQIB\n\
+BggqhkjOPQMBBwNCAATokbf3b4r3pH/IoIF6GJluMgqyfyXcL0hiojvqJ2X6W4s/\n\
+1s5rqTO+L2P43miE3b1p0mDJM1F2F/9XFBagbALko4GUMIGRMA4GA1UdDwEB/wQE\n\
+AwIHgDAdBgNVHSUEFjAUBggrBgEFBQcDAQYIKwYBBQUHAwIwHQYDVR0OBBYEFC3Q\n\
+E8HWS8oP8Coe4l9p4OfqI/vpMB8GA1UdIwQYMBaAFA8JgliWBqb9BV249zkEQWqk\n\
+SeORMCAGA1UdEQEB/wQWMBSCEnNlcnZlZGlyLmxvY2FsaG9zdDAKBggqhkjOPQQD\n\
+AgNIADBFAiEA/OJ3FbDV3w9GaJ+ubLjOjUiMJSAwkS9dzgNKKZe2hw0CICzS2SZE\n\
+06F+x1VFAWjMf1r6Qk1oTBhteiITc/UMqgT3\n\
+-----END CERTIFICATE-----\n\
+-----BEGIN CERTIFICATE-----\n\
+MIIBxzCCAW2gAwIBAgIQL4sgwtfrews18bAJQR0pwDAKBggqhkjOPQQDAjAwMS4w\n\
+LAYDVQQDEyVDYWRkeSBMb2NhbCBBdXRob3JpdHkgLSAyMDI2IEVDQyBSb290MB4X\n\
+DTI2MDQyMDAyMzYxN1oXDTI2MDQyNzAyMzYxN1owMzExMC8GA1UEAxMoQ2FkZHkg\n\
+TG9jYWwgQXV0aG9yaXR5IC0gRUNDIEludGVybWVkaWF0ZTBZMBMGByqGSM49AgEG\n\
+CCqGSM49AwEHA0IABLuQVB998laF1CVXgLv0YVQFmnXjEcwRad/iD7ie5CCKh+38\n\
+l7wMQ5E+4C+oNcFHBMTC+U5ECBGGhfJXIs+uRQWjZjBkMA4GA1UdDwEB/wQEAwIB\n\
+BjASBgNVHRMBAf8ECDAGAQH/AgEAMB0GA1UdDgQWBBQPCYJYlgam/QVduPc5BEFq\n\
+pEnjkTAfBgNVHSMEGDAWgBQp1FCK3DvDcBoOgxrSP1qgdAlt7zAKBggqhkjOPQQD\n\
+AgNJADBGAiEAo4OD1uvy0g1CpJXGq6DkyLXfL75gMrBVZQGJqFPg00ICIQDTuv9F\n\
+TAdkb2FptCcYpxytQuVaRq79ihx0VPxbWzcBYg==\n\
+-----END CERTIFICATE-----\n";
+        let parsed = parse_chain(pem).expect("parse");
+        assert_eq!(parsed.chain_len, 2);
+        assert_eq!(parsed.san_dns_names, vec!["servedir.localhost".to_owned()]);
+        assert_eq!(parsed.leaf_subject, "");
+        assert!(
+            parsed
+                .metadata
+                .issuer
+                .as_deref()
+                .unwrap()
+                .contains("ECC Intermediate")
+        );
     }
 }
