@@ -641,7 +641,7 @@ fn warm_certs_barrier_uses_cert_oracle() {
     let (engine, mut scope, app, ast) = setup_with_script(
         r#"
         let svc = app.service("public");
-        let ingress = svc.ingress("warm.example.com", 443).tls();
+        let ingress = svc.ingress("warm.example.com", 443).tls(Terminate.Tls, Output.Tcp);
         app.on_start(|rt, _param| {
             let warm = rt.warm_certs(ingress);
             warm.ready();
@@ -695,7 +695,7 @@ fn warm_certs_barrier_suspends_when_cert_not_valid() {
     let (engine, mut scope, app, ast) = setup_with_script(
         r#"
         let svc = app.service("public");
-        let ingress = svc.ingress("warm.example.com", 443).tls();
+        let ingress = svc.ingress("warm.example.com", 443).tls(Terminate.Tls, Output.Tcp);
         app.on_start(|rt, _param| {
             let warm = rt.warm_certs(ingress);
             warm.ready();

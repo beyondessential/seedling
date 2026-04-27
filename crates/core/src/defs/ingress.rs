@@ -2,7 +2,12 @@ use std::sync::Arc;
 
 use rhai::{CustomType, EvalAltResult, TypeBuilder};
 
-use super::{Freezable, Holder, Port, resource::ResourceName, service::Service};
+use super::{
+    Freezable, Holder, Port,
+    enums::{Output, Terminate},
+    resource::ResourceName,
+    service::Service,
+};
 
 #[derive(Debug, Clone)]
 pub struct IngressDef {
@@ -80,7 +85,57 @@ pub fn ingress_resource_name(hostname: &str, port: Port) -> String {
 
 fn require_https(def: &IngressDef) -> Result<(), Box<EvalAltResult>> {
     if def.http_terminate.is_none() {
-        return Err("redirect() requires an HTTPS termination (http() or http2())".into());
+        return Err(
+            "redirect() requires an HTTPS termination, e.g. tls(Terminate.Https, Output.Http1)"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+/// Apply a `(Terminate, Output)` pair to the ingress's `IngressDef`.
+/// Only the four pairings that match a real protocol stack are
+/// accepted; everything else throws so a script that asks for, say,
+/// `Terminate.Https` with `Output.Tcp` doesn't silently produce a
+/// nonsensical ingress.
+// l[impl ingress.termination]
+fn apply_termination(
+    def: &mut IngressDef,
+    terminate: Terminate,
+    output: Output,
+) -> Result<(), Box<EvalAltResult>> {
+    match (terminate, output) {
+        (Terminate::Tls, Output::Tcp) => {
+            def.tls = true;
+            def.dtls = false;
+            def.http_terminate = None;
+        }
+        (Terminate::Dtls, Output::Udp) => {
+            def.tls = false;
+            def.dtls = true;
+            def.http_terminate = None;
+        }
+        (Terminate::Https, Output::Http1) => {
+            def.tls = true;
+            def.dtls = false;
+            def.http_terminate = Some(HttpTermination::Http1);
+        }
+        (Terminate::Https, Output::Http2) => {
+            def.tls = true;
+            def.dtls = false;
+            def.http_terminate = Some(HttpTermination::Http2);
+        }
+        _ => {
+            return Err(format!(
+                "invalid termination/output combination: \
+                 Terminate.{terminate:?} + Output.{output:?}. \
+                 Valid combinations are Terminate.Tls + Output.Tcp, \
+                 Terminate.Dtls + Output.Udp, \
+                 Terminate.Https + Output.Http1, and \
+                 Terminate.Https + Output.Http2."
+            )
+            .into());
+        }
     }
     Ok(())
 }
@@ -89,47 +144,17 @@ impl CustomType for Ingress {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
             .with_name("Ingress")
-            // l[impl ingress.tls]
+            // l[impl ingress.termination]
             .with_fn(
                 "tls",
-                |this: &mut Self| -> Result<Ingress, Box<EvalAltResult>> {
+                |this: &mut Self,
+                 terminate: Terminate,
+                 output: Output|
+                 -> Result<Ingress, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
-                    this.def.lock().tls = true;
-                    Ok(this.clone())
-                },
-            )
-            // l[impl ingress.dtls]
-            .with_fn(
-                "dtls",
-                |this: &mut Self| -> Result<Ingress, Box<EvalAltResult>> {
-                    this.ensure_unfrozen()?;
-                    this.def.lock().dtls = true;
-                    Ok(this.clone())
-                },
-            )
-            // l[impl ingress.http]
-            .with_fn(
-                "http",
-                |this: &mut Self| -> Result<Ingress, Box<EvalAltResult>> {
-                    this.ensure_unfrozen()?;
-                    {
-                        let mut def = this.def.lock();
-                        def.tls = true;
-                        def.http_terminate = Some(HttpTermination::Http1);
-                    }
-                    Ok(this.clone())
-                },
-            )
-            // l[impl ingress.http2]
-            .with_fn(
-                "http2",
-                |this: &mut Self| -> Result<Ingress, Box<EvalAltResult>> {
-                    this.ensure_unfrozen()?;
-                    {
-                        let mut def = this.def.lock();
-                        def.tls = true;
-                        def.http_terminate = Some(HttpTermination::Http2);
-                    }
+                    let mut def = this.def.lock();
+                    apply_termination(&mut def, terminate, output)?;
+                    drop(def);
                     Ok(this.clone())
                 },
             )

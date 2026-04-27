@@ -407,39 +407,50 @@ This is currently the only value.
 > l[ingress.service]
 > The `ingress.service()` instance method returns the Service that the ingress was created from.
 
-> l[ingress.tls]
-> The `ingress.tls()` builder method terminates TLS for the TCP traffic to this ingress.
+> l[ingress.termination]
+> The `ingress.tls(terminate: Terminate, output: Output)` builder method declares both what is terminated at the edge and what protocol the ingress hands to the bound Service.
 >
-> The Ingress only terminates TLS, it does not interact with the TCP traffic.
-> If non-TLS TCP traffic is sent to the ingress, it is rejected.
+> Exactly four `(terminate, output)` pairings are accepted; any other pairing must throw:
+>
+> | `terminate`        | `output`        | Behaviour |
+> | ------------------ | --------------- | --------- |
+> | `Terminate.Tls`    | `Output.Tcp`    | Terminate TLS for incoming TCP, re-emit as plaintext TCP. The ingress does not interpret the application protocol; non-TLS TCP traffic is rejected. |
+> | `Terminate.Dtls`   | `Output.Udp`    | Terminate DTLS for incoming UDP, re-emit as plaintext UDP. Non-DTLS UDP traffic is rejected. |
+> | `Terminate.Https`  | `Output.Http1`  | Terminate HTTPS (HTTP/1.1 and HTTP/2 over TCP, HTTP/3 over UDP), re-emit as plaintext HTTP/1.1. Non-HTTP traffic is rejected. |
+> | `Terminate.Https`  | `Output.Http2`  | Terminate HTTPS, re-emit as plaintext HTTP/2 (`h2c`). Non-HTTP traffic is rejected. |
+>
+> Calling `tls()` without arguments, or with any other pairing, must throw with a clear message naming the supplied pair and the valid set.
+>
+> An ingress with no termination call is left as plain TCP passthrough.
 
-> l[ingress.dtls]
-> The `ingress.dtls()` builder method terminates DTLS for the UDP traffic to this ingress.
->
-> The Ingress only terminates DTLS, it does not interact with the UDP traffic.
-> If non-DTLS UDP traffic is sent to the ingress, it is rejected.
+> l[const.terminate.tls]
+> The `Terminate.Tls` constant tags an ingress termination mode that strips TLS from incoming TCP traffic and exposes the inner bytes as plaintext TCP, without interpreting any application protocol.
 
-> l[ingress.http]
-> The `ingress.http()` builder method terminates HTTPS (HTTP/1.1 and HTTP/2 for TCP, HTTP/3 for UDP) traffic for this ingress.
->
-> The Ingress only terminates HTTPS, it does not interact with the application traffic.
-> The traffic is re-emitted as plaintext HTTP/1.1.
-> If non-HTTP traffic is sent to the ingress, it is rejected.
+> l[const.terminate.dtls]
+> The `Terminate.Dtls` constant tags an ingress termination mode that strips DTLS from incoming UDP traffic and exposes the inner datagrams as plaintext UDP.
 
-> l[ingress.http2]
-> The `ingress.http2()` builder method terminates HTTPS (HTTP/1.1 and HTTP/2 for TCP, HTTP/3 for UDP) traffic for this ingress.
->
-> The Ingress only terminates HTTPS, it does not interact with the application traffic.
-> The traffic is re-emitted as plaintext HTTP/2 (`h2c`).
-> If non-HTTP traffic is sent to the ingress, it is rejected.
+> l[const.terminate.https]
+> The `Terminate.Https` constant tags an ingress termination mode that terminates HTTPS (HTTP/1.1 and HTTP/2 for TCP, HTTP/3 for UDP) and re-emits HTTP traffic to the bound Service.
+
+> l[const.output.tcp]
+> The `Output.Tcp` constant tags an ingress output protocol of plaintext TCP.
+
+> l[const.output.udp]
+> The `Output.Udp` constant tags an ingress output protocol of plaintext UDP datagrams.
+
+> l[const.output.http1]
+> The `Output.Http1` constant tags an ingress output protocol of plaintext HTTP/1.1.
+
+> l[const.output.http2]
+> The `Output.Http2` constant tags an ingress output protocol of plaintext HTTP/2 (`h2c`).
 
 > l[ingress.redirect]
-> The `ingress.redirect(port?: number, code?: number)` builder method emits an HTTP redirect on the `port` given if and when the ingress has obtained a TLS certificate for one of the HTTP terminations.
+> The `ingress.redirect(port?: number, code?: number)` builder method emits an HTTP redirect on the `port` given if and when the ingress has obtained a TLS certificate.
 >
 > The `port` defaults to 80.
 > The `code` defaults to 307 ([Temporary Redirect](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/307)).
 >
-> Calling this on an ingress _not_ configured for HTTPS termination throws.
+> Calling this on an ingress whose termination is not `Terminate.Https` throws.
 
 # Deployment
 

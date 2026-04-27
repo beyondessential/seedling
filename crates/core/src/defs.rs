@@ -208,6 +208,17 @@ pub fn scope() -> (Scope<'static>, app::App) {
     // l[impl const.resource-type.enum]
     scope.push_constant("ResourceType", resource::ResourceKind::rhai_constant());
 
+    // l[impl const.terminate.tls]
+    // l[impl const.terminate.dtls]
+    // l[impl const.terminate.https]
+    scope.push_constant("Terminate", enums::Terminate::rhai_constant());
+
+    // l[impl const.output.tcp]
+    // l[impl const.output.udp]
+    // l[impl const.output.http1]
+    // l[impl const.output.http2]
+    scope.push_constant("Output", enums::Output::rhai_constant());
+
     let app = app::App::default();
     // l[impl app.var]
     scope.push("app", app.clone());

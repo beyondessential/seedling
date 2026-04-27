@@ -2,7 +2,7 @@ use super::*;
 use defs::resource::ResourceKind;
 
 // l[verify ingress.type]
-// l[verify ingress.http]
+// l[verify ingress.termination]
 // l[verify ingress.service]
 #[test]
 fn ingress_builder_chain() {
@@ -10,7 +10,7 @@ fn ingress_builder_chain() {
         r#"
         let domain = "example.com";
         let traffic = app.service("public")
-            .ingress(domain, 443).http()
+            .ingress(domain, 443).tls(Terminate.Https, Output.Http1)
             .service()
             .http(80);
     "#,
@@ -23,33 +23,51 @@ fn ingress_builder_chain() {
     );
 }
 
-// l[verify ingress.tls]
+// l[verify ingress.termination]
 #[test]
-fn ingress_tls() {
+fn ingress_terminate_tls_to_tcp() {
     run_test_script_app(
         r#"
-        let ing = app.service("web").ingress("example.com", 443).tls();
+        let ing = app.service("web").ingress("example.com", 443).tls(Terminate.Tls, Output.Tcp);
     "#,
     );
 }
 
-// l[verify ingress.dtls]
+// l[verify ingress.termination]
 #[test]
-fn ingress_dtls() {
+fn ingress_terminate_dtls_to_udp() {
     run_test_script_app(
         r#"
-        let ing = app.service("web").ingress("example.com", 443).dtls();
+        let ing = app.service("web").ingress("example.com", 443).tls(Terminate.Dtls, Output.Udp);
     "#,
     );
 }
 
-// l[verify ingress.http2]
+// l[verify ingress.termination]
 #[test]
-fn ingress_http2() {
+fn ingress_terminate_https_to_http2() {
     run_test_script_app(
         r#"
-        let ing = app.service("web").ingress("example.com", 443).http2();
+        let ing = app.service("web").ingress("example.com", 443).tls(Terminate.Https, Output.Http2);
     "#,
+    );
+}
+
+// l[verify ingress.termination]
+#[test]
+fn invalid_termination_combo_throws() {
+    // Terminate.Https + Output.Tcp is nonsense — HTTPS termination
+    // implies the ingress understands HTTP, so the output must be one
+    // of the HTTP variants.
+    let err = run_test_script_err(
+        r#"
+        app.service("web").ingress("example.com", 443).tls(Terminate.Https, Output.Tcp);
+    "#,
+    );
+    assert!(
+        err.to_string()
+            .contains("invalid termination/output combination"),
+        "expected combo error, got: {err}"
     );
 }
 
@@ -58,7 +76,7 @@ fn ingress_http2() {
 fn ingress_redirect_defaults() {
     run_test_script_app(
         r#"
-        app.service("web").ingress("example.com", 443).http().redirect();
+        app.service("web").ingress("example.com", 443).tls(Terminate.Https, Output.Http1).redirect();
     "#,
     );
 }
@@ -68,7 +86,7 @@ fn ingress_redirect_defaults() {
 fn ingress_redirect_custom_port_and_code() {
     run_test_script_app(
         r#"
-        app.service("web").ingress("example.com", 443).http().redirect(8080, 301);
+        app.service("web").ingress("example.com", 443).tls(Terminate.Https, Output.Http1).redirect(8080, 301);
     "#,
     );
 }
@@ -78,17 +96,17 @@ fn ingress_redirect_custom_port_and_code() {
 fn ingress_redirect_without_https_throws() {
     let _ = run_test_script_err(
         r#"
-        app.service("web").ingress("example.com", 443).tls().redirect();
+        app.service("web").ingress("example.com", 443).tls(Terminate.Tls, Output.Tcp).redirect();
     "#,
     );
 }
 
 // l[verify ingress.certificates]
 #[test]
-fn ingress_certificates_implied_by_http() {
+fn ingress_certificates_implied_by_https() {
     let _ = run_test_script_app(
         r#"
-        app.service("web").ingress("example.com", 443).http();
+        app.service("web").ingress("example.com", 443).tls(Terminate.Https, Output.Http1);
     "#,
     );
 }
@@ -173,8 +191,8 @@ fn multiple_ingresses_on_same_service_coexist() {
     let app = run_test_script_app(
         r#"
         let traffic = app.service("public");
-        traffic.ingress("test.example.com", 443).http().redirect();
-        traffic.ingress("test.localhost", 443).http().redirect();
+        traffic.ingress("test.example.com", 443).tls(Terminate.Https, Output.Http1).redirect();
+        traffic.ingress("test.localhost", 443).tls(Terminate.Https, Output.Http1).redirect();
         traffic.ingress("test2.localhost", 80);
     "#,
     );
@@ -199,8 +217,8 @@ fn ingress_conflict_within_app_throws() {
     let err = run_test_script_err(
         r#"
         let svc = app.service("web");
-        svc.ingress("example.com", 443).http();
-        svc.ingress("example.com", 443).http();
+        svc.ingress("example.com", 443).tls(Terminate.Https, Output.Http1);
+        svc.ingress("example.com", 443).tls(Terminate.Https, Output.Http1);
     "#,
     );
     assert!(
@@ -216,9 +234,9 @@ fn ingress_conflict_within_app_is_catchable() {
     let app = run_test_script_app(
         r#"
         let svc = app.service("web");
-        svc.ingress("example.com", 443).http();
+        svc.ingress("example.com", 443).tls(Terminate.Https, Output.Http1);
         try {
-            svc.ingress("example.com", 443).http();
+            svc.ingress("example.com", 443).tls(Terminate.Https, Output.Http1);
         } catch(err) {
             // conflict caught — the original ingress should remain.
         }
@@ -241,7 +259,7 @@ fn ingress_same_hostname_different_port_does_not_conflict() {
         r#"
         let svc = app.service("web");
         svc.ingress("example.com", 80);
-        svc.ingress("example.com", 443).http();
+        svc.ingress("example.com", 443).tls(Terminate.Https, Output.Http1);
     "#,
     );
     let def = app.def.load();
