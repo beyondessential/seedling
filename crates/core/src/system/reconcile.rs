@@ -668,16 +668,24 @@ impl Reconciler {
                 let has_proxy_config =
                     !proxy_config.virtual_hosts.is_empty() || !proxy_config.l4_routes.is_empty();
 
+                // The TLS-managed-ingress enumeration is shared with
+                // the OI rollup and the expiry sweep so all three call
+                // sites act on exactly the same set of hostnames; the
+                // shared function skips `NotInstalled` apps per the
+                // rules in [`tls::state::managed_ingresses`].
+                let managed_ingresses = {
+                    let reg = self.app_registry.read();
+                    crate::runtime::tls::state::managed_ingresses(&reg)
+                };
+
                 // r[impl tls.cert.eager-issuance]
                 // Hand every TLS-terminating hostname to the issuance
                 // coordinator. ensure() dedups in-flight requests, skips
                 // hostnames with current certs / paused / non-acme_dns
                 // policy, and runs the rest in the background.
                 if let Some(coord) = self.tls_coordinator.as_ref() {
-                    for vh in &proxy_config.virtual_hosts {
-                        if vh.tls_acme {
-                            coord.ensure(&vh.hostname);
-                        }
+                    for mi in &managed_ingresses {
+                        coord.ensure(&mi.hostname);
                     }
                 }
 
@@ -688,7 +696,15 @@ impl Reconciler {
                 // ACME-DNS certs are exempt because the renewal task
                 // handles them. The sweep also clears stale faults whose
                 // ingress is gone or whose cert has been replaced.
-                let expiring_targets = build_expiring_targets(&apps);
+                let expiring_targets: Vec<crate::runtime::tls::expiring::IngressTarget> =
+                    managed_ingresses
+                        .iter()
+                        .map(|mi| crate::runtime::tls::expiring::IngressTarget {
+                            app: mi.app.clone(),
+                            ingress_name: mi.ingress_name.clone(),
+                            hostname: mi.hostname.clone(),
+                        })
+                        .collect();
                 if let Err(e) = self
                     .db
                     .call(move |db| crate::runtime::tls::expiring::sweep(db, &expiring_targets))
@@ -1160,34 +1176,4 @@ impl Reconciler {
             }
         }
     }
-}
-
-/// Walk the apps snapshot and collect every TLS-terminating ingress as
-/// an `IngressTarget` for the `cert_expiring_soon` fault sweep. Skips
-/// apps that are uninstalling — their ingresses are being torn down,
-/// so we don't want to surface or refresh faults against them.
-// r[impl tls.fault.expiring]
-fn build_expiring_targets(
-    apps: &[AppSnapshot],
-) -> Vec<crate::runtime::tls::expiring::IngressTarget> {
-    let mut out = Vec::new();
-    for app in apps {
-        if app.phase == AppPhase::Uninstalling {
-            continue;
-        }
-        for resource in app.app_def.resources.values() {
-            if let crate::defs::resource::Resource::Ingress(ing) = resource {
-                let ing_def = ing.def.lock();
-                if !ing_def.tls {
-                    continue;
-                }
-                out.push(crate::runtime::tls::expiring::IngressTarget {
-                    app: app.name.clone(),
-                    ingress_name: ing.name.as_str().to_owned(),
-                    hostname: ing_def.hostname.clone(),
-                });
-            }
-        }
-    }
-    out
 }

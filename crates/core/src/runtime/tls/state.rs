@@ -17,12 +17,15 @@
 //! state; the snapshot is loaded once and reused per call.
 
 use jiff::Timestamp;
+use seedling_protocol::names::AppName;
 
 use super::{
     AttemptOutcome, TlsCertAttempt, TlsCertForceRetry, TlsCertOrigin, TlsCertRetryBlock,
     TlsCertState, TlsCertificate, TlsPolicy, TlsPolicyRow, TlsSettings, pattern_matches,
     pattern_specificity, store,
 };
+use crate::defs::resource::Resource;
+use crate::runtime::apps::{AppPhase, AppRegistry};
 use crate::runtime::db::Db;
 
 /// Default minimum interval between auto-retries of a failed background
@@ -37,6 +40,54 @@ pub const AUTO_RETRY_DEBOUNCE_SECS: i64 = 60 * 60;
 // r[impl tls.cert.ari]
 pub const RENEW_AT_FRACTION_NUM: i64 = 1;
 pub const RENEW_AT_FRACTION_DEN: i64 = 3;
+
+/// One TLS-terminating ingress the runtime is currently managing: the
+/// app it belongs to, the ingress resource's name, and the hostname
+/// that ingress claims. Produced by [`managed_ingresses`] from the
+/// app registry; the issuance coordinator (via the reconciler), the
+/// expiring-cert sweep, and the OI rollup all walk the same list so
+/// they cannot disagree about which hostnames the runtime is acting
+/// on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedIngress {
+    pub app: AppName,
+    pub ingress_name: String,
+    pub hostname: String,
+}
+
+/// Walk the app registry and return every TLS-terminating ingress the
+/// runtime is currently managing. Skips apps in `NotInstalled` phase
+/// (mirroring the reconciler's [`snapshot_all_apps`] filter): those
+/// apps have no live ingresses, no certs being driven for them, and
+/// surfacing them anywhere — coordinator, renewal, OI rollup, expiry
+/// sweep — would misrepresent the runtime's actual scope.
+///
+/// All three call sites consume the *same* function so the set of
+/// in-scope hostnames is structurally identical, not coincidentally
+/// matched.
+// r[impl tls.cert.hostname-view]
+pub fn managed_ingresses(registry: &AppRegistry) -> Vec<ManagedIngress> {
+    let mut out = Vec::new();
+    for entry in registry.iter() {
+        if *entry.phase.lock() == AppPhase::NotInstalled {
+            continue;
+        }
+        let def = entry.app.def.load();
+        for resource in def.resources.values() {
+            if let Resource::Ingress(ing) = resource {
+                let ing_def = ing.def.lock();
+                if ing_def.tls {
+                    out.push(ManagedIngress {
+                        app: entry.name.clone(),
+                        ingress_name: ing.name.as_str().to_owned(),
+                        hostname: ing_def.hostname.clone(),
+                    });
+                }
+            }
+        }
+    }
+    out
+}
 
 /// Snapshot of every DB row that drives a hostname's decision. Loaded
 /// once per OI rollup or coordinator run; reused across hostnames.

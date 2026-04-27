@@ -20,7 +20,6 @@ use serde_json::{Value, json};
 use seedling_protocol::error::{ErrorCode, OiError};
 
 use super::HandlerResult;
-use crate::defs::resource::Resource;
 use crate::oi::state::OiState;
 use crate::runtime::tls::{
     AttemptOutcome, DnsProviderKind, KeyType, RetryBlockSource, TlsCertOrigin, TlsCertState,
@@ -659,30 +658,24 @@ pub(crate) struct ListHostnamesParams {
 // i[tls.hostname.list]
 // r[impl tls.cert.hostname-view]
 pub(crate) fn list_hostnames(state: &OiState, params: ListHostnamesParams) -> HandlerResult {
-    // Walk the registry to discover every TLS-terminating ingress hostname
-    // and the apps declaring it. Multiple apps may declare the same
-    // hostname (e.g. shared ingress); collect them all.
+    // Use the same managed-ingresses enumeration the issuance
+    // coordinator and expiry sweep consume, so the rollup cannot
+    // disagree with them about which hostnames the runtime is
+    // managing. A hostname may be claimed by more than one app (shared
+    // ingress); collect all of them.
     let mut hostname_apps: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     {
         let reg = state.registry.read();
-        for entry in reg.iter() {
+        for managed in state::managed_ingresses(&reg) {
             if let Some(filter) = params.app.as_deref()
-                && entry.name.as_str() != filter
+                && managed.app.as_str() != filter
             {
                 continue;
             }
-            let def = entry.app.def.load();
-            for resource in def.resources.values() {
-                if let Resource::Ingress(ing) = resource {
-                    let ing_def = ing.def.lock();
-                    if ing_def.tls {
-                        hostname_apps
-                            .entry(ing_def.hostname.clone())
-                            .or_default()
-                            .insert(entry.name.as_str().to_owned());
-                    }
-                }
-            }
+            hostname_apps
+                .entry(managed.hostname)
+                .or_default()
+                .insert(managed.app.as_str().to_owned());
         }
     }
 
