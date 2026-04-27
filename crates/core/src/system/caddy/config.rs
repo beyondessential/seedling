@@ -1,5 +1,6 @@
 use serde_json::{Value, json};
 
+use crate::runtime::tls::state::is_caddy_internal;
 use crate::system::types::{L4Proto, ProxyConfig, ProxyListenerProto, VirtualHost};
 
 pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
@@ -107,35 +108,46 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
         // request to the matching server; for warm-only subjects, no server
         // matches and Caddy must be told explicitly via certificates.automate.
         //
-        // The single automation policy here covers every TLS-terminating
-        // hostname. The chain is:
+        // We emit one or two automation policies — one for hostnames the
+        // proxy handles with its internal CA (`.localhost`, `.local`,
+        // `.internal`, IP literals, single-label names), and one for the
+        // rest. Caddy's automation only auto-picks the internal CA for
+        // these names when no policy covers them; once we list a policy
+        // for a subject, the unpinned default chain is ACME-only and
+        // would fail on names public CAs cannot issue for. Splitting the
+        // policy explicitly pins the internal issuer for that bucket.
+        //
+        // For each policy the chain is:
         //
         //   1. `get_certificate` (when cert_endpoint_url is set): Caddy
         //      asks the daemon by SNI. A 200 returns the runtime-managed
         //      cert (acme-dns / manual / CSR-derived); a 204 (no content)
         //      tells Caddy to fall through.
-        //   2. Caddy's default issuer chain — ACME against Let's Encrypt
-        //      for public hostnames, the internal CA for non-public ones
-        //      (localhost, *.local, plain IPs, etc.). We deliberately do
-        //      not pin `issuers` here; that would force ACME on every
-        //      subject and break self-signed certs for internal hostnames.
-        let mut policy = serde_json::Map::new();
-        policy.insert("subjects".to_string(), json!(all_subjects));
-        if let Some(url) = &config.cert_endpoint_url {
-            policy.insert(
-                "get_certificate".to_string(),
-                json!([{
-                    "via": "http",
-                    "url": url,
-                }]),
-            );
+        //   2. The policy's issuer — Caddy's default chain (ACME) for the
+        //      public bucket, the explicit `internal` module for the
+        //      internal bucket.
+        let (internal_subjects, public_subjects): (Vec<&str>, Vec<&str>) = all_subjects
+            .iter()
+            .copied()
+            .partition(|h| is_caddy_internal(h));
+
+        let mut policies: Vec<Value> = Vec::with_capacity(2);
+        if !public_subjects.is_empty() {
+            policies.push(Value::Object(build_policy(
+                &public_subjects,
+                config.cert_endpoint_url.as_deref(),
+                None,
+            )));
+        }
+        if !internal_subjects.is_empty() {
+            policies.push(Value::Object(build_policy(
+                &internal_subjects,
+                config.cert_endpoint_url.as_deref(),
+                Some(json!([{ "module": "internal" }])),
+            )));
         }
 
-        let mut tls = json!({
-            "automation": {
-                "policies": [Value::Object(policy)]
-            }
-        });
+        let mut tls = json!({ "automation": { "policies": policies } });
         if !warm_subjects.is_empty() {
             let warm_list: Vec<&str> = warm_subjects.iter().copied().collect();
             tls["certificates"] = json!({ "automate": warm_list });
@@ -178,6 +190,25 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
     }
 
     json!({ "admin": { "listen": "unix//run/caddy-admin/admin.sock" }, "apps": apps })
+}
+
+fn build_policy(
+    subjects: &[&str],
+    cert_endpoint_url: Option<&str>,
+    issuers: Option<Value>,
+) -> serde_json::Map<String, Value> {
+    let mut policy = serde_json::Map::new();
+    policy.insert("subjects".to_string(), json!(subjects));
+    if let Some(url) = cert_endpoint_url {
+        policy.insert(
+            "get_certificate".to_string(),
+            json!([{ "via": "http", "url": url }]),
+        );
+    }
+    if let Some(issuers) = issuers {
+        policy.insert("issuers".to_string(), issuers);
+    }
+    policy
 }
 
 fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {

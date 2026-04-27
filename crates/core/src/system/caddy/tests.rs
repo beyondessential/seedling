@@ -280,17 +280,84 @@ fn cert_endpoint_url_is_emitted_inside_automation_policy() {
     assert_eq!(arr[0]["via"], "http");
     assert_eq!(arr[0]["url"], "http://[fd5e::ff:1]:8443/get");
     assert_eq!(policy["subjects"][0], "example.com");
-    // We deliberately do NOT pin `issuers`: Caddy's default chain picks
-    // ACME for public hostnames and the internal CA for non-public ones,
-    // which is the right behaviour for tls.strategy.default.
+    // For the public bucket we do NOT pin `issuers`: Caddy's default
+    // chain (ACME) is correct here. The internal bucket pins
+    // `issuers: [{module: internal}]`; see the dedicated test.
     assert!(
         policy["issuers"].is_null(),
-        "issuers must be left unset so Caddy's default chain applies"
+        "issuers must be left unset on the public policy so the default ACME chain applies"
     );
     assert!(
         json["apps"]["tls"]["certificates"]["get_certificate"].is_null(),
         "get_certificate must not appear under tls.certificates"
     );
+}
+
+// r[verify tls.strategy.default]
+#[test]
+fn internal_hostnames_pin_caddy_internal_issuer() {
+    // `node.localhost` cannot be issued by a public CA. With a single
+    // unpinned policy Caddy would fail with
+    // "subject does not qualify for a public certificate"; splitting the
+    // policy so that internal hostnames carry an explicit `internal`
+    // issuer is what makes Caddy reach for its self-signed CA instead.
+    let config = ProxyConfig {
+        listeners: vec![ProxyListener {
+            port: 443,
+            proto: ProxyListenerProto::Https,
+        }],
+        virtual_hosts: vec![
+            https_vhost("public.example.com", "[fd5e::1]:3000"),
+            https_vhost("node.localhost", "[fd5e::1]:3001"),
+        ],
+        l4_routes: vec![],
+        warm_cert_hostnames: Default::default(),
+        cert_endpoint_url: None,
+    };
+    let json = build_caddy_config(&config);
+    let policies = json["apps"]["tls"]["automation"]["policies"]
+        .as_array()
+        .expect("policies array");
+    assert_eq!(policies.len(), 2, "one policy per bucket");
+
+    let public = policies
+        .iter()
+        .find(|p| p["subjects"].as_array().unwrap()[0] == "public.example.com")
+        .expect("public policy");
+    assert!(
+        public["issuers"].is_null(),
+        "public bucket leaves issuers unset"
+    );
+
+    let internal = policies
+        .iter()
+        .find(|p| p["subjects"].as_array().unwrap()[0] == "node.localhost")
+        .expect("internal policy");
+    let issuers = internal["issuers"].as_array().expect("issuers array");
+    assert_eq!(issuers.len(), 1);
+    assert_eq!(issuers[0]["module"], "internal");
+}
+
+// r[verify tls.strategy.default]
+#[test]
+fn only_internal_hostnames_emit_just_internal_policy() {
+    let config = ProxyConfig {
+        listeners: vec![ProxyListener {
+            port: 443,
+            proto: ProxyListenerProto::Https,
+        }],
+        virtual_hosts: vec![https_vhost("node.localhost", "[fd5e::1]:3000")],
+        l4_routes: vec![],
+        warm_cert_hostnames: Default::default(),
+        cert_endpoint_url: None,
+    };
+    let json = build_caddy_config(&config);
+    let policies = json["apps"]["tls"]["automation"]["policies"]
+        .as_array()
+        .expect("policies array");
+    assert_eq!(policies.len(), 1, "one bucket only");
+    assert_eq!(policies[0]["issuers"][0]["module"], "internal");
+    assert_eq!(policies[0]["subjects"][0], "node.localhost");
 }
 
 #[test]

@@ -1285,6 +1285,7 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > r[tls.strategy.default]
 > When no operator-defined strategy applies to a hostname declared by a TLS-terminating ingress, the runtime must request a public ACME certificate using the HTTP-01 challenge.
 > This is the default and applies to any hostname not bound to a different strategy.
+> For hostnames that no public CA can issue for — IP literals, single-label hostnames, and the `.localhost`, `.local`, `.internal` TLDs (the same set excluded from wildcard auto-binding in [tls.policy.wildcard](#r--tls.policy.wildcard)) — the runtime must instead use the proxy's internal CA, producing a self-signed certificate that the proxy serves directly without contacting any external authority.
 
 > r[tls.strategy.acme-dns]
 > Operators may bind a hostname or wildcard pattern to a [DNS provider](#r--tls.dns-provider.lifecycle); the runtime must drive ACME for any matching hostname using the DNS-01 challenge against the bound provider.
