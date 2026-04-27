@@ -681,6 +681,21 @@ impl Reconciler {
                     }
                 }
 
+                // r[impl tls.fault.expiring]
+                // Reconcile cert_expiring_soon faults against the
+                // current TLS-terminating ingresses. Manual / CSR-derived
+                // certs are surfaced when within fourteen days of expiry;
+                // ACME-DNS certs are exempt because the renewal task
+                // handles them. The sweep also clears stale faults whose
+                // ingress is gone or whose cert has been replaced.
+                let expiring_targets = build_expiring_targets(&apps);
+                if let Err(e) = self
+                    .db
+                    .call(move |db| crate::runtime::tls::expiring::sweep(db, &expiring_targets))
+                {
+                    warn!(error = %e, "tls: expiring-cert fault sweep failed");
+                }
+
                 self.persist_obs(proxy_obs);
 
                 let (routes_res, rules_res, proxy_res) = tokio::join!(
@@ -1145,4 +1160,34 @@ impl Reconciler {
             }
         }
     }
+}
+
+/// Walk the apps snapshot and collect every TLS-terminating ingress as
+/// an `IngressTarget` for the `cert_expiring_soon` fault sweep. Skips
+/// apps that are uninstalling — their ingresses are being torn down,
+/// so we don't want to surface or refresh faults against them.
+// r[impl tls.fault.expiring]
+fn build_expiring_targets(
+    apps: &[AppSnapshot],
+) -> Vec<crate::runtime::tls::expiring::IngressTarget> {
+    let mut out = Vec::new();
+    for app in apps {
+        if app.phase == AppPhase::Uninstalling {
+            continue;
+        }
+        for resource in app.app_def.resources.values() {
+            if let crate::defs::resource::Resource::Ingress(ing) = resource {
+                let ing_def = ing.def.lock();
+                if !ing_def.tls {
+                    continue;
+                }
+                out.push(crate::runtime::tls::expiring::IngressTarget {
+                    app: app.name.clone(),
+                    ingress_name: ing.name.as_str().to_owned(),
+                    hostname: ing_def.hostname.clone(),
+                });
+            }
+        }
+    }
+    out
 }

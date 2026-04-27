@@ -15,6 +15,7 @@
 
 pub mod acme;
 pub mod dns;
+pub mod expiring;
 pub mod issuance;
 pub mod keypair;
 pub mod parse;
