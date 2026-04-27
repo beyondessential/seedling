@@ -13,8 +13,21 @@
 //! cert chain followed by the private key, all as PEM blocks — that's
 //! the convention Caddy expects.
 
+use std::net::SocketAddr;
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+use std::sync::Arc;
+
+use axum::Router;
+use axum::extract::{Path as AxumPath, Query, State};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::routing::get;
+use rand_core::{OsRng, RngCore};
 use secrecy::{ExposeSecret, SecretString};
+use serde::Deserialize;
 use snafu::{ResultExt, Snafu};
+use subtle::ConstantTimeEq;
 
 use super::{TlsCertOrigin, TlsCertState, store};
 use crate::runtime::{db::DbHandle, secrets::Cipher};
@@ -91,6 +104,142 @@ pub fn format_response(bundle: &CertBundle) -> String {
         out.push('\n');
     }
     out
+}
+
+/// Shared state for the cert-serving HTTP server.
+#[derive(Clone)]
+struct ServeState {
+    db: DbHandle,
+    cipher: Arc<Cipher>,
+    /// Hex-encoded shared token; clients embed this in the URL path.
+    /// See [`load_or_create_token`].
+    token: Arc<String>,
+}
+
+/// Query string parsed from Caddy's `tls.certificates.get_certificate.http`
+/// request: it always sends `?server_name=<host>`.
+#[derive(Deserialize)]
+struct ServeQuery {
+    server_name: Option<String>,
+}
+
+async fn handle(
+    State(state): State<ServeState>,
+    AxumPath(token): AxumPath<String>,
+    Query(query): Query<ServeQuery>,
+) -> impl IntoResponse {
+    // Constant-time compare so a probe can't time-based-distinguish a near-match.
+    if token.as_bytes().ct_eq(state.token.as_bytes()).unwrap_u8() != 1 {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(hostname) = query.server_name.filter(|s| !s.is_empty()) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "missing server_name query parameter",
+        )
+            .into_response();
+    };
+
+    match lookup(&state.db, &state.cipher, &hostname).await {
+        Ok(Some(bundle)) => {
+            let body = format_response(&bundle);
+            (
+                StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, "application/x-pem-file")],
+                body,
+            )
+                .into_response()
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            "no runtime-managed cert for hostname",
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::warn!(%hostname, error = %e, "cert serve lookup failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, "lookup failed").into_response()
+        }
+    }
+}
+
+/// Load (or generate and persist) the shared path-token used to authorise
+/// cert-fetch requests. Stored as a 0600-permission file alongside the
+/// database secret key. The file content is the hex-encoded random token.
+///
+/// The token is defence-in-depth on top of binding to a non-routable
+/// bridge IP: it stops other host processes from harvesting private keys
+/// by SNI enumeration even when they can reach the listener.
+pub fn load_or_create_token(path: &Path) -> std::io::Result<String> {
+    if path.exists() {
+        let mode = path.metadata()?.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!(
+                    "cert-endpoint token at {} has insecure permissions (0{:o}); expected 0600",
+                    path.display(),
+                    mode
+                ),
+            ));
+        }
+        let contents = std::fs::read_to_string(path)?;
+        return Ok(contents.trim().to_owned());
+    }
+    let mut bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    let token = hex_encode(&bytes);
+    std::fs::write(path, &token)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    Ok(token)
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        write!(&mut s, "{b:02x}").expect("write to String is infallible");
+    }
+    s
+}
+
+/// Render the URL Caddy should fetch from. Caddy automatically appends
+/// `?server_name=...` and overwrites any existing query, so the token
+/// must live in the path.
+pub fn caddy_url(bind_addr: SocketAddr, token: &str) -> String {
+    format!("http://{bind_addr}/cert/{token}/get-certificate")
+}
+
+/// Spawn an HTTP server bound to `bind_addr` that responds to Caddy's
+/// `get_certificate.http` requests by looking up the active runtime-managed
+/// cert for the SNI hostname and returning it as concatenated PEM, or 404
+/// when no such cert is stored. Returns the bound socket address (possibly
+/// resolved from a port=0 caller) and the join handle.
+///
+/// `token` is the path component a caller must include in the URL; see
+/// [`load_or_create_token`].
+// r[impl tls.cert.serve]
+pub async fn spawn_server(
+    db: DbHandle,
+    cipher: Arc<Cipher>,
+    token: String,
+    bind_addr: SocketAddr,
+) -> std::io::Result<(SocketAddr, tokio::task::JoinHandle<()>)> {
+    let app_state = ServeState {
+        db,
+        cipher,
+        token: Arc::new(token),
+    };
+    let app = Router::new()
+        .route("/cert/{token}/get-certificate", get(handle))
+        .with_state(app_state);
+    let listener = tokio::net::TcpListener::bind(bind_addr).await?;
+    let local = listener.local_addr()?;
+    let handle = tokio::spawn(async move {
+        if let Err(e) = axum::serve(listener, app).await {
+            tracing::error!(error = %e, "tls cert server exited");
+        }
+    });
+    Ok((local, handle))
 }
 
 #[cfg(test)]
@@ -176,6 +325,87 @@ mod tests {
         let cert_pos = body.find("BEGIN CERTIFICATE").unwrap();
         let key_pos = body.find("BEGIN PRIVATE KEY").unwrap();
         assert!(cert_pos < key_pos, "cert must precede key");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn server_returns_pem_for_known_hostname() {
+        let (db, cipher) = fresh().await;
+        let key_pem = "-----BEGIN PRIVATE KEY-----\nMIGdummykey\n-----END PRIVATE KEY-----\n";
+        insert_active(&db, &cipher, "served.example.com", key_pem);
+
+        let token = "deadbeef".to_owned();
+        let (addr, _handle) = spawn_server(
+            db,
+            Arc::new(cipher),
+            token.clone(),
+            "127.0.0.1:0".parse().unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let url =
+            format!("http://{addr}/cert/{token}/get-certificate?server_name=served.example.com");
+        let body = reqwest::get(&url).await.unwrap().text().await.unwrap();
+        assert!(body.contains("BEGIN CERTIFICATE"));
+        assert!(body.contains("BEGIN PRIVATE KEY"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn server_returns_404_for_unknown_hostname() {
+        let (db, cipher) = fresh().await;
+        let token = "deadbeef".to_owned();
+        let (addr, _handle) = spawn_server(
+            db,
+            Arc::new(cipher),
+            token.clone(),
+            "127.0.0.1:0".parse().unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let url =
+            format!("http://{addr}/cert/{token}/get-certificate?server_name=missing.example.com");
+        let resp = reqwest::get(&url).await.unwrap();
+        assert_eq!(resp.status().as_u16(), 404);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn server_rejects_wrong_token() {
+        let (db, cipher) = fresh().await;
+        let key_pem = "-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----\n";
+        insert_active(&db, &cipher, "host.example.com", key_pem);
+
+        let (addr, _handle) = spawn_server(
+            db,
+            Arc::new(cipher),
+            "rightoken".to_owned(),
+            "127.0.0.1:0".parse().unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let url =
+            format!("http://{addr}/cert/wrongtoken/get-certificate?server_name=host.example.com");
+        let resp = reqwest::get(&url).await.unwrap();
+        assert_eq!(resp.status().as_u16(), 404);
+    }
+
+    #[test]
+    fn caddy_url_format_round_trips_through_axum_path() {
+        let url = caddy_url("[::1]:7892".parse().unwrap(), "abc123");
+        assert_eq!(url, "http://[::1]:7892/cert/abc123/get-certificate");
+    }
+
+    #[test]
+    fn token_persistence_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cert-endpoint-token");
+        let t1 = load_or_create_token(&path).unwrap();
+        let t2 = load_or_create_token(&path).unwrap();
+        assert_eq!(t1, t2);
+        assert_eq!(t1.len(), 64, "32-byte hex token");
+        let perms = path.metadata().unwrap().permissions();
+        assert_eq!(perms.mode() & 0o777, 0o600);
     }
 
     #[tokio::test]

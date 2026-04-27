@@ -4377,6 +4377,7 @@ dependencies = [
  "aws-config",
  "aws-credential-types",
  "aws-sdk-route53",
+ "axum",
  "clap",
  "cronexpr",
  "ed25519-dalek",
