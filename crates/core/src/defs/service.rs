@@ -126,42 +126,53 @@ impl CustomType for Service {
                  hostname: &str,
                  port: i64|
                  -> Result<Ingress, Box<EvalAltResult>> {
-                    this.ensure_unfrozen()?;
-                    let port = Port::new(port)?;
-                    validate_hostname(hostname)?;
-                    let ingress = Ingress::new(this.clone(), hostname.into(), port);
-                    // l[impl ingress.type]
-                    // l[impl ingress.conflicts]
-                    if let Some(arc) = this.app_def.as_ref().and_then(Weak::upgrade) {
-                        let id = ResourceId {
-                            kind: ResourceKind::Ingress,
-                            name: ingress.name.clone(),
-                        };
-                        // Conflict check: a prior ingress with the
-                        // same (hostname, port) keyed by the same
-                        // resource name in this app must not be
-                        // overwritten. Throwing lets the script
-                        // catch + handle it; silently overriding
-                        // would erase a previous declaration.
-                        if arc.load().resources.contains_key(&id) {
-                            return Err(format!(
-                                "ingress conflict: ({hostname}, {}) is already declared in this app",
-                                port.get()
-                            )
-                            .into());
-                        }
-                        let ingress_clone = ingress.clone();
-                        arc.rcu(|d| {
-                            let mut d = (**d).clone();
-                            d.resources
-                                .insert(id.clone(), Resource::Ingress(ingress_clone.clone()));
-                            d
-                        });
-                    }
-                    Ok(ingress)
+                    declare_ingress(this, hostname, port)
                 },
             );
     }
+}
+
+/// Register an ingress on `service`. Shared between `Service::ingress`
+/// and `HttpService::ingress` so both surfaces produce the same
+/// validation, identity, conflict semantics, and resource-tree side
+/// effects. The `HttpService` route just picks the underlying
+/// `Service` out of its `BoundService` and calls this.
+// l[impl ingress.type]
+// l[impl ingress.conflicts]
+pub(crate) fn declare_ingress(
+    service: &mut Service,
+    hostname: &str,
+    port: i64,
+) -> Result<Ingress, Box<EvalAltResult>> {
+    service.ensure_unfrozen()?;
+    let port = Port::new(port)?;
+    validate_hostname(hostname)?;
+    let ingress = Ingress::new(service.clone(), hostname.into(), port);
+    if let Some(arc) = service.app_def.as_ref().and_then(Weak::upgrade) {
+        let id = ResourceId {
+            kind: ResourceKind::Ingress,
+            name: ingress.name.clone(),
+        };
+        // Conflict check: a prior ingress with the same (hostname, port)
+        // keyed by the same resource name in this app must not be
+        // overwritten. Throwing lets the script catch + handle it;
+        // silently overriding would erase a previous declaration.
+        if arc.load().resources.contains_key(&id) {
+            return Err(format!(
+                "ingress conflict: ({hostname}, {}) is already declared in this app",
+                port.get()
+            )
+            .into());
+        }
+        let ingress_clone = ingress.clone();
+        arc.rcu(|d| {
+            let mut d = (**d).clone();
+            d.resources
+                .insert(id.clone(), Resource::Ingress(ingress_clone.clone()));
+            d
+        });
+    }
+    Ok(ingress)
 }
 
 // Reference-to-a-service carried by pod bindings. It's either an app's own
@@ -251,6 +262,26 @@ impl CustomType for HttpService {
                         service: this.service.clone(),
                         port,
                     })
+                },
+            )
+            // l[impl ingress.type]
+            // Pass-through to the underlying Service: declaring an
+            // ingress on `svc.http()` is just a chaining-friendly way
+            // of declaring it on `svc`. The resulting Ingress is bound
+            // to the Service, not to the HttpService — HttpService is
+            // a per-call view, not a separate resource.
+            .with_fn(
+                "ingress",
+                |this: &mut Self,
+                 hostname: &str,
+                 port: i64|
+                 -> Result<Ingress, Box<EvalAltResult>> {
+                    let BoundService::App(ref mut svc) = this.service else {
+                        return Err("ingress() is only valid on app-declared services; \
+                             external services cannot have ingresses"
+                            .into());
+                    };
+                    declare_ingress(svc, hostname, port)
                 },
             );
     }

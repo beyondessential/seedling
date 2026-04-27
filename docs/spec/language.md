@@ -352,6 +352,8 @@ This is currently the only value.
 > A Service can be _specialised_ into an HTTP Service, using the `service.http(port?: number)` instance method, which returns an `HttpService`.
 >
 > The `port` argument is optional and defaults to `80`.
+>
+> An `HttpService` is a per-call view of the underlying Service rather than a distinct resource. As an ergonomic affordance, `httpService.ingress(hostname, port)` is accepted and is equivalent to calling `ingress()` on the wrapped Service: the resulting Ingress is bound to the Service. Calling `ingress()` on an `HttpService` whose Service is external must throw.
 
 > l[service.http.route]
 > An HTTP Service Route serves a URL prefix.

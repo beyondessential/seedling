@@ -251,6 +251,51 @@ fn ingress_conflict_within_app_is_catchable() {
     assert_eq!(ingresses.len(), 1, "exactly one ingress should remain");
 }
 
+// l[verify ingress.type]
+#[test]
+fn http_service_can_declare_ingress() {
+    // ingress() called on an HttpService delegates to the underlying
+    // Service — same identity, same conflict behaviour, same chain
+    // ergonomics as svc.ingress(). The HttpService is a per-call view
+    // of the service, not a separate resource.
+    let app = run_test_script_app(
+        r#"
+        let api = app.service("api").http(8080);
+        api.ingress("api.example.com", 443).tls(Terminate.Https, Output.Http1);
+        api.ingress("api.localhost", 443).tls(Terminate.Https, Output.Http1);
+    "#,
+    );
+    let def = app.def.load();
+    let names: Vec<String> = def
+        .resources
+        .keys()
+        .filter(|id| id.kind == ResourceKind::Ingress)
+        .map(|id| (*id.name).clone())
+        .collect();
+    assert_eq!(names.len(), 2, "got {names:?}");
+    assert!(names.contains(&"api.example.com:443".to_owned()));
+    assert!(names.contains(&"api.localhost:443".to_owned()));
+}
+
+// l[verify ingress.type]
+#[test]
+fn http_service_ingress_conflicts_with_service_ingress() {
+    // The ingress declared via HttpService and the one declared via
+    // Service share the same (hostname, port) keying, so duplicates
+    // collide regardless of which surface declared them.
+    let err = run_test_script_err(
+        r#"
+        let svc = app.service("web");
+        svc.ingress("example.com", 443).tls(Terminate.Https, Output.Http1);
+        svc.http(8080).ingress("example.com", 443).tls(Terminate.Https, Output.Http1);
+    "#,
+    );
+    assert!(
+        err.to_string().contains("ingress conflict"),
+        "expected conflict error, got: {err}"
+    );
+}
+
 // l[verify ingress.conflicts]
 #[test]
 fn ingress_same_hostname_different_port_does_not_conflict() {
