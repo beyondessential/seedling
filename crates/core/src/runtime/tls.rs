@@ -18,6 +18,7 @@ pub mod dns;
 pub mod keypair;
 pub mod parse;
 pub mod renewal;
+pub mod serve;
 pub mod store;
 
 use secrecy::SecretString;
