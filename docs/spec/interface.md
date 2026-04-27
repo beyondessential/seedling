@@ -1053,7 +1053,7 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 > - `retry_block`: `{ set_at, reason }` when an operator pause is set, otherwise null
 > - `force_retry_at`: timestamp of a queued operator-driven retry awaiting the coordinator, otherwise null
 > - `next_issuance_at`: expected next issuance time in Unix seconds, or null
-> - `next_issuance_source`: `"ari" | "fallback" | "immediate"` describing how `next_issuance_at` was derived (RFC 9773 ARI window, the runtime's lifetime-fraction fallback, or "as soon as the coordinator runs"), or null when the strategy is manual or default
+> - `next_issuance_source`: `"ari" | "fallback" | "immediate" | "debounce"` describing how `next_issuance_at` was derived (RFC 9773 ARI window, the runtime's lifetime-fraction fallback, "as soon as the coordinator runs", or "the time the after-failure debounce expires"), or null when the strategy is manual or default
 >
 > The view is the canonical operator surface for what TLS hostnames exist and what state they are in; it deliberately replaces the older "list every stored cert" and "list every recent attempt" views, which exposed implementation rather than per-hostname state.
 

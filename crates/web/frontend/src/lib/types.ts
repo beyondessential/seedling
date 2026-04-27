@@ -678,7 +678,7 @@ export type TlsHostnameLastIssuance =
     provider: string;
   };
 
-export type TlsNextIssuanceSource = "ari" | "fallback" | "immediate";
+export type TlsNextIssuanceSource = "ari" | "fallback" | "immediate" | "debounce";
 
 export interface TlsHostnameView {
   hostname: string;

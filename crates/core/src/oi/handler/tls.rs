@@ -871,7 +871,10 @@ fn decision_next_issuance(st: &state::HostnameState<'_>) -> (Option<i64>, Option
     use state::IssueReason as R;
     match &st.decision {
         Default | Blocked { .. } | NoContactEmail => (None, None),
-        Debounced { until } => (Some(*until), Some("immediate")),
+        // Debounce after a failure: surface the time the runtime is
+        // willing to retry, with a distinct source so the UI can render
+        // "retry blocked until …" rather than "queued for next tick".
+        Debounced { until } => (Some(*until), Some("debounce")),
         Scheduled { next_at, source } => (Some(*next_at), Some(source.as_str())),
         IssueNow {
             reason: R::First | R::ForceRetry,

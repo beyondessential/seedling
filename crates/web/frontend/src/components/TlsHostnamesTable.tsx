@@ -123,6 +123,10 @@ function lastIssuanceLabel(
 function nextIssuanceLabel(view: TlsHostnameView, now: number): string {
   if (view.next_issuance_source === "immediate") return "queued";
   if (view.next_issuance_at == null) return "—";
+  if (view.next_issuance_source === "debounce") {
+    // Last attempt failed; the runtime won't retry until this point.
+    return `retry after ${relative(view.next_issuance_at, now)} (last attempt failed)`;
+  }
   const sourceTag =
     view.next_issuance_source === "ari" ? " (ARI)"
     : view.next_issuance_source === "fallback" ? " (fallback)"
