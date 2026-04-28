@@ -155,6 +155,7 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/apps/images/discover" => images::discover_images(state, parse_params(req.params)?),
         "/volumes/held/list" => volumes::list_held(state),
         "/volumes/held/delete" => volumes::delete_held(state, parse_params(req.params)?, ctx),
+        "/volumes/held/restore" => volumes::restore_held(state, parse_params(req.params)?, ctx),
         "/volumes/exported/list" => volumes::list_exported(state),
         "/volumes/app/list" => volumes::list_app_volumes(state),
         "/volumes/site/create" => {

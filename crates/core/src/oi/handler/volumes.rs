@@ -67,6 +67,116 @@ pub(crate) fn delete_held(
     Ok(json!({ "deleted": true }))
 }
 
+#[derive(Deserialize)]
+pub(crate) struct RestoreHeldParams {
+    pub id: HeldVolumeId,
+    /// Optional override for the new managed site volume's name. Defaults
+    /// to the held volume's recorded `volume_name` when omitted.
+    #[serde(default)]
+    pub target_name: Option<SiteVolumeName>,
+}
+
+// r[impl actuate.volume.hold.restore]
+pub(crate) fn restore_held(
+    state: &OiState,
+    params: RestoreHeldParams,
+    ctx: &RequestCtx,
+) -> HandlerResult {
+    use crate::runtime::site_volumes::{self, SiteVolumeDef, SiteVolumeKind};
+
+    let held = state
+        .driver
+        .volume_store
+        .list_held()
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("failed to list held volumes: {e}"),
+            )
+        })?
+        .into_iter()
+        .find(|h| h.id == params.id)
+        .ok_or_else(|| {
+            OiError::new(
+                ErrorCode::RequirementsInvalid,
+                format!("no held volume with id {}", params.id),
+            )
+        })?;
+
+    let target_name = match params.target_name {
+        Some(n) => n,
+        None => SiteVolumeName::new(&held.volume_name).map_err(|e| {
+            OiError::new(
+                ErrorCode::RequirementsInvalid,
+                format!(
+                    "held volume's recorded name {:?} is not a valid site volume name: {e}; pass target_name to override",
+                    held.volume_name
+                ),
+            )
+        })?,
+    };
+
+    let target_for_lookup = target_name.clone();
+    let existing = state
+        .db
+        .call(move |db| site_volumes::get(db, &target_for_lookup))
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("failed to look up site volume: {e}"),
+            )
+        })?;
+    if existing.is_some() {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!(
+                "site volume {:?} already exists; pick a different target_name",
+                target_name.as_str()
+            ),
+        ));
+    }
+
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            state
+                .driver
+                .volume_store
+                .restore_held_to_site(&params.id, target_name.as_str())
+                .await
+                .map_err(|e| {
+                    OiError::new(
+                        ErrorCode::Internal,
+                        format!("failed to restore held volume: {e}"),
+                    )
+                })
+        })
+    })?;
+
+    let def = SiteVolumeDef {
+        name: target_name.clone(),
+        kind: SiteVolumeKind::Managed,
+        created_at: jiff::Timestamp::now().to_string(),
+    };
+    state
+        .db
+        .call(move |db| site_volumes::create(db, &def))
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("failed to record restored site volume: {e}"),
+            )
+        })?;
+
+    // r[impl actuate.volume.hold.events]
+    ctx.events
+        .held_volume_restored(params.id, target_name.as_str());
+    // r[impl volume.site.lifecycle.events]
+    ctx.events
+        .site_volume_created(target_name.as_str(), "managed", None);
+
+    Ok(json!({ "restored": true, "name": target_name }))
+}
+
 pub(crate) fn list_exported(state: &OiState) -> HandlerResult {
     let registry = state.registry.read();
     let mut exported = Vec::new();
