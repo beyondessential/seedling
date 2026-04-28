@@ -4,8 +4,6 @@ BSL (BES Seedling Language) is the scripting language used to define and manage 
 
 The full language specification is at [`docs/spec/language.md`](spec/language.md). This document is a practical guide to writing a script, with a reference summary and annotated examples. When this document and the spec disagree, the spec wins.
 
-For the operator side — running, observing, and managing apps once they're written — see the [operator guide](./operator-guide.md).
-
 ## Language fundamentals
 
 BSL is written in [Rhai](https://rhai.rs). Rhai is a scripting language with Rust-like syntax: `let`, closures `|args| { body }`, string interpolation with backticks, object maps `#{ key: value }`, and arrays `[a, b, c]`. You do not need to know Rust to write BSL.
