@@ -9,7 +9,8 @@ use crate::{
     defs::ingress::IngressDef,
     runtime::identity::ResourceInstance,
     system::types::{
-        HttpRedirect, ProxyConfig, ProxyListener, ProxyListenerProto, ProxyRoute, VirtualHost,
+        HttpRedirect, ProxyConfig, ProxyListener, ProxyListenerProto, ProxyRoute,
+        ProxyRouteHandler, VirtualHost,
     },
 };
 
@@ -18,6 +19,15 @@ use crate::{
 pub struct ServiceUpstream {
     pub service_ip: Ipv6Addr,
     pub service_port: u16,
+}
+
+/// Resolved redirect target for a site-ingress attachment. Used in place of
+/// a `ServiceUpstream` when the attachment answers requests with an HTTP
+/// redirect instead of forwarding them to a backing service.
+pub struct RedirectTarget {
+    pub url: String,
+    pub code: u16,
+    pub preserve_path: bool,
 }
 
 /// Derives the IPv6 address for a resource instance using the ULA encoding.
@@ -76,71 +86,41 @@ pub fn node_mount_addr(prefix: &Ipv6Net) -> Ipv6Addr {
 }
 
 /// Builds the full `ProxyConfig` from the current set of active ingresses
-/// and their resolved service upstreams.
+/// and their resolved service upstreams or redirect targets.
 ///
 /// The Ingress → Service → running-pod-instance resolution is performed by
 /// the caller; this function receives already-resolved data.
-///
-pub fn build_proxy_config(ingresses: &[(IngressDef, ServiceUpstream)]) -> ProxyConfig {
+pub fn build_proxy_config(
+    forwards: &[(IngressDef, ServiceUpstream)],
+    redirects: &[(IngressDef, RedirectTarget)],
+) -> ProxyConfig {
     let mut listener_set: BTreeSet<ProxyListener> = BTreeSet::new();
     let mut vhosts: BTreeMap<String, VirtualHost> = BTreeMap::new();
 
-    for (ingress, upstream) in ingresses {
-        let is_https = ingress.http_terminate.is_some();
-
-        // Main port listener.
-        listener_set.insert(ProxyListener {
-            port: ingress.port.get(),
-            proto: if is_https {
-                ProxyListenerProto::Https
-            } else {
-                ProxyListenerProto::Http
-            },
-        });
-
-        // HTTP/3 QUIC listener alongside HTTPS.
-        if is_https {
-            listener_set.insert(ProxyListener {
-                port: ingress.port.get(),
-                proto: ProxyListenerProto::Quic,
-            });
-        }
-
-        // Plain-HTTP listener for the redirect source port.
-        if let Some(redirect) = &ingress.redirect {
-            listener_set.insert(ProxyListener {
-                port: redirect.port.get(),
-                proto: ProxyListenerProto::Http,
-            });
-        }
-
+    for (ingress, upstream) in forwards {
+        register_listeners(&mut listener_set, ingress);
         // Caddy always contacts the service over plain HTTP; TLS is
         // terminated by Caddy, not by the backing service.
         let upstream_url = format!("http://[{}]:{}", upstream.service_ip, upstream.service_port);
-
-        let vhost = vhosts
-            .entry(ingress.hostname.clone())
-            .or_insert_with(|| VirtualHost {
-                hostname: ingress.hostname.clone(),
-                tls_acme: false,
-                redirect: None,
-                routes: vec![],
-            });
-
-        if ingress.tls {
-            vhost.tls_acme = true;
-        }
-
-        if let Some(redirect) = &ingress.redirect {
-            vhost.redirect = Some(HttpRedirect {
-                from_port: redirect.port.get(),
-                code: redirect.code,
-            });
-        }
-
+        let vhost = ensure_vhost(&mut vhosts, ingress);
         vhost.routes.push(ProxyRoute {
             prefix: "/".to_string(),
-            upstreams: vec![upstream_url],
+            handler: ProxyRouteHandler::ReverseProxy {
+                upstreams: vec![upstream_url],
+            },
+        });
+    }
+
+    for (ingress, target) in redirects {
+        register_listeners(&mut listener_set, ingress);
+        let vhost = ensure_vhost(&mut vhosts, ingress);
+        vhost.routes.push(ProxyRoute {
+            prefix: "/".to_string(),
+            handler: ProxyRouteHandler::Redirect {
+                url: target.url.clone(),
+                code: target.code,
+                preserve_path: target.preserve_path,
+            },
         });
     }
 
@@ -151,6 +131,60 @@ pub fn build_proxy_config(ingresses: &[(IngressDef, ServiceUpstream)]) -> ProxyC
         warm_cert_hostnames: BTreeSet::new(),
         cert_endpoint_url: None,
     }
+}
+
+fn register_listeners(set: &mut BTreeSet<ProxyListener>, ingress: &IngressDef) {
+    let is_https = ingress.http_terminate.is_some();
+
+    set.insert(ProxyListener {
+        port: ingress.port.get(),
+        proto: if is_https {
+            ProxyListenerProto::Https
+        } else {
+            ProxyListenerProto::Http
+        },
+    });
+
+    if is_https {
+        set.insert(ProxyListener {
+            port: ingress.port.get(),
+            proto: ProxyListenerProto::Quic,
+        });
+    }
+
+    if let Some(redirect) = &ingress.redirect {
+        set.insert(ProxyListener {
+            port: redirect.port.get(),
+            proto: ProxyListenerProto::Http,
+        });
+    }
+}
+
+fn ensure_vhost<'a>(
+    vhosts: &'a mut BTreeMap<String, VirtualHost>,
+    ingress: &IngressDef,
+) -> &'a mut VirtualHost {
+    let vhost = vhosts
+        .entry(ingress.hostname.clone())
+        .or_insert_with(|| VirtualHost {
+            hostname: ingress.hostname.clone(),
+            tls_acme: false,
+            redirect: None,
+            routes: vec![],
+        });
+
+    if ingress.tls {
+        vhost.tls_acme = true;
+    }
+
+    if let Some(redirect) = &ingress.redirect {
+        vhost.redirect = Some(HttpRedirect {
+            from_port: redirect.port.get(),
+            code: redirect.code,
+        });
+    }
+
+    vhost
 }
 
 /// Augment a ProxyConfig with warm-cert hostnames collected from the per-app

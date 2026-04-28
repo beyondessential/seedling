@@ -225,21 +225,47 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
                 json!({ "host": [&vh.hostname], "path": [format!("{}*", route.prefix)] })
             };
 
-            let upstreams: Vec<Value> = route
-                .upstreams
-                .iter()
-                .map(|u| {
-                    let dial = u.strip_prefix("http://").unwrap_or(u).to_string();
-                    json!({ "dial": dial })
-                })
-                .collect();
+            let handle = match &route.handler {
+                crate::system::types::ProxyRouteHandler::ReverseProxy { upstreams } => {
+                    let upstreams: Vec<Value> = upstreams
+                        .iter()
+                        .map(|u| {
+                            let dial = u.strip_prefix("http://").unwrap_or(u).to_string();
+                            json!({ "dial": dial })
+                        })
+                        .collect();
+                    json!([{
+                        "handler": "reverse_proxy",
+                        "upstreams": upstreams,
+                    }])
+                }
+                // r[impl ingress.site.attachment]
+                crate::system::types::ProxyRouteHandler::Redirect {
+                    url,
+                    code,
+                    preserve_path,
+                } => {
+                    // Caddy expands `{http.request.uri}` to the full path
+                    // + query of the incoming request, which is what
+                    // operators expect from a "preserve path" redirect.
+                    // For the URL-verbatim case we strip any trailing slash
+                    // so the Location is exactly what the operator typed.
+                    let location = if *preserve_path {
+                        format!("{}{{http.request.uri}}", url.trim_end_matches('/'))
+                    } else {
+                        url.clone()
+                    };
+                    json!([{
+                        "handler": "static_response",
+                        "status_code": code,
+                        "headers": { "Location": [location] },
+                    }])
+                }
+            };
 
             json!({
                 "match": [match_expr],
-                "handle": [{
-                    "handler": "reverse_proxy",
-                    "upstreams": upstreams,
-                }],
+                "handle": handle,
                 "terminal": true,
             })
         })

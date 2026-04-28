@@ -33,6 +33,7 @@ use crate::{
 mod faults;
 mod images;
 mod phases;
+mod site_proxy;
 mod state;
 
 pub mod pods;
@@ -240,6 +241,12 @@ pub struct Reconciler {
     /// debounce transient probe misses across ticks instead of bouncing
     /// the container on the first 2-second timeout.
     resolver_health_fail_count: std::sync::atomic::AtomicU32,
+    /// Last tick's set of (hostname, port) tuples that were in an
+    /// app-vs-site-ingress conflict. Used to clear the corresponding
+    /// `ingress_conflict` faults on the first tick where the conflict
+    /// no longer appears.
+    // r[impl ingress.site.conflict]
+    prev_ingress_conflicts: std::collections::BTreeSet<(String, u16)>,
 }
 
 impl Reconciler {
@@ -308,6 +315,7 @@ impl Reconciler {
             cert_endpoint_url,
             tls_coordinator,
             resolver_health_fail_count: std::sync::atomic::AtomicU32::new(0),
+            prev_ingress_conflicts: std::collections::BTreeSet::new(),
         }
     }
 
@@ -626,6 +634,19 @@ impl Reconciler {
         );
         self.persist_obs(route_obs);
 
+        // --- Load site-ingress snapshot (DB-backed) once per tick. ---
+        // r[impl ingress.site] r[impl ingress.site.attachment]
+        let site_ingress_snapshot = self
+            .db
+            .call(|db| Ok::<_, rusqlite::Error>(site_proxy::load(db)))
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "site_proxy: load failed; using empty snapshot");
+                site_proxy::SiteIngressSnapshot {
+                    ingresses: Vec::new(),
+                    attachments: Vec::new(),
+                }
+            });
+
         // --- Compute nftables + proxy (sync, gated on caddy) ---
         let nft_and_proxy = caddy_addrs.map(|addrs| {
             let caddy_ip = addrs.v6;
@@ -642,6 +663,7 @@ impl Reconciler {
 
             let proxy_build = phases::compute_proxy_config(
                 &apps,
+                &site_ingress_snapshot,
                 &self.node_prefix,
                 &*self.registry,
                 self.cert_endpoint_url.as_deref(),
@@ -664,7 +686,13 @@ impl Reconciler {
                     caddy_json,
                     observations: proxy_obs,
                     ready_observations: proxy_ready_obs,
+                    conflicts: ingress_conflicts,
+                    unresolved_site_attachments,
                 } = proxy_build;
+                // r[impl ingress.site.conflict]
+                self.reconcile_ingress_conflicts(&ingress_conflicts);
+                // r[impl ingress.site.attachment]
+                self.reconcile_unresolved_site_attachments(&unresolved_site_attachments);
                 let has_proxy_config =
                     !proxy_config.virtual_hosts.is_empty() || !proxy_config.l4_routes.is_empty();
 

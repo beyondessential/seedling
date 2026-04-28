@@ -544,6 +544,198 @@ impl Reconciler {
         });
     }
 
+    /// Reconcile `ingress_conflict` faults against the current
+    /// `(hostname, port)` collision set. New conflicts get one fault per
+    /// involved app and one against `_system` for each site ingress;
+    /// resolved conflicts (in the prior set but not the current) are
+    /// auto-cleared.
+    // r[impl ingress.site.conflict]
+    pub(super) fn reconcile_ingress_conflicts(
+        &mut self,
+        report: &super::site_proxy::ConflictReport,
+    ) {
+        // Snapshot the parties for the closure.
+        let parties = report.parties.clone();
+        let current = report.conflicts.clone();
+        let prior = std::mem::take(&mut self.prev_ingress_conflicts);
+
+        // 1. File faults for current conflicts (idempotent).
+        let parties_for_file = parties.clone();
+        self.db.call(move |db| {
+            for party in &parties_for_file {
+                let app_summary: Vec<String> = party
+                    .apps
+                    .iter()
+                    .map(|(a, ing)| format!("{a}/{ing}"))
+                    .collect();
+                let site_summary: Vec<String> = party.site.clone();
+                let host_port = format!("{}:{}", party.hostname, party.port);
+
+                // App side: one fault per involved app+ingress.
+                for (app, ingress_name) in &party.apps {
+                    let already = faults::list_active_faults(db, Some(app))
+                        .unwrap_or_default()
+                        .iter()
+                        .any(|f| {
+                            f.kind == "ingress_conflict"
+                                && f.resource_name.as_deref() == Some(ingress_name.as_str())
+                        });
+                    if already {
+                        continue;
+                    }
+                    let desc = format!(
+                        "ingress conflict on ({host_port}) with site ingress(es) {site_summary:?}; \
+                         both sides are dropped from the proxy until resolved"
+                    );
+                    if let Err(e) = faults::file_fault(
+                        db,
+                        app,
+                        Some("ingress"),
+                        Some(ingress_name.as_str()),
+                        None,
+                        "ingress_conflict",
+                        &desc,
+                    ) {
+                        tracing::warn!(app = %app, ingress = %ingress_name, "failed to file ingress_conflict fault: {e}");
+                    }
+                }
+
+                // Site side: one fault per involved site ingress, scoped
+                // to the `_system` sentinel app per the existing system
+                // fault pattern.
+                let system = AppName::new_unchecked("_system");
+                for site_name in &party.site {
+                    let already = faults::list_active_faults(db, Some(&system))
+                        .unwrap_or_default()
+                        .iter()
+                        .any(|f| {
+                            f.kind == "ingress_conflict"
+                                && f.resource_type.as_deref() == Some("site_ingress")
+                                && f.resource_name.as_deref() == Some(site_name.as_str())
+                        });
+                    if already {
+                        continue;
+                    }
+                    let desc = format!(
+                        "ingress conflict on ({host_port}) with app ingress(es) {app_summary:?}; \
+                         both sides are dropped from the proxy until resolved"
+                    );
+                    if let Err(e) = faults::file_fault(
+                        db,
+                        &system,
+                        Some("site_ingress"),
+                        Some(site_name.as_str()),
+                        None,
+                        "ingress_conflict",
+                        &desc,
+                    ) {
+                        tracing::warn!(site_ingress = %site_name, "failed to file ingress_conflict fault: {e}");
+                    }
+                }
+            }
+        });
+
+        // 2. Clear faults for resolved conflicts (in prior \ current).
+        let resolved: Vec<(String, u16)> =
+            prior.difference(&current).cloned().collect();
+        if !resolved.is_empty() {
+            self.db.call(move |db| {
+                let system = AppName::new_unchecked("_system");
+                for (host, port) in &resolved {
+                    let host_port = format!("{host}:{port}");
+                    // Sweep both `_system` and any other app whose
+                    // ingress_conflict fault description references the
+                    // resolved tuple. Description match keeps the surface
+                    // narrow without needing to remember which apps were
+                    // involved last tick.
+                    let active = faults::list_active_faults(db, None).unwrap_or_default();
+                    for f in active {
+                        if f.kind != "ingress_conflict" {
+                            continue;
+                        }
+                        if !f.description.contains(&host_port) {
+                            continue;
+                        }
+                        let owner = if f.resource_type.as_deref() == Some("site_ingress") {
+                            system.clone()
+                        } else {
+                            f.app.clone()
+                        };
+                        if let Err(e) = faults::clear_fault(db, &f.id, &owner) {
+                            tracing::warn!(fault_id = %f.id, "failed to clear ingress_conflict fault: {e}");
+                        }
+                    }
+                }
+            });
+        }
+
+        self.prev_ingress_conflicts = current;
+    }
+
+    /// File a `site_ingress_target_missing` fault for each unresolved
+    /// site-ingress attachment. We dedup on (site_ingress, port, protocol)
+    /// so a stable misconfiguration doesn't fan out into duplicate faults.
+    // r[impl ingress.site.attachment]
+    pub(super) fn reconcile_unresolved_site_attachments(
+        &self,
+        unresolved: &[super::site_proxy::UnresolvedAttachment],
+    ) {
+        let entries: Vec<_> = unresolved.to_vec();
+        self.db.call(move |db| {
+            let system = AppName::new_unchecked("_system");
+            let active = faults::list_active_faults(db, Some(&system)).unwrap_or_default();
+            // Track which currently-active site_ingress_target_missing
+            // faults survive this tick — anything that doesn't get a
+            // matching `entries` row is cleared at the end.
+            let mut keep: std::collections::BTreeSet<String> =
+                std::collections::BTreeSet::new();
+            for entry in &entries {
+                let key = format!(
+                    "{}:{}:{}",
+                    entry.site_ingress, entry.port, entry.protocol
+                );
+                let already = active.iter().any(|f| {
+                    f.kind == "site_ingress_target_missing"
+                        && f.resource_name.as_deref() == Some(entry.site_ingress.as_str())
+                        && f.description.contains(&key)
+                });
+                keep.insert(key.clone());
+                if already {
+                    continue;
+                }
+                let desc = format!(
+                    "[{key}] {} (site ingress {} port {} protocol {})",
+                    entry.reason, entry.site_ingress, entry.port, entry.protocol
+                );
+                if let Err(e) = faults::file_fault(
+                    db,
+                    &system,
+                    Some("site_ingress"),
+                    Some(entry.site_ingress.as_str()),
+                    None,
+                    "site_ingress_target_missing",
+                    &desc,
+                ) {
+                    tracing::warn!(site_ingress = %entry.site_ingress, "failed to file site_ingress_target_missing fault: {e}");
+                }
+            }
+            // Clear stale faults whose key no longer appears in this
+            // tick's unresolved set.
+            for f in active {
+                if f.kind != "site_ingress_target_missing" {
+                    continue;
+                }
+                let still_in_set = keep.iter().any(|key| f.description.contains(&format!("[{key}]")));
+                if still_in_set {
+                    continue;
+                }
+                if let Err(e) = faults::clear_fault(db, &f.id, &system) {
+                    tracing::warn!(fault_id = %f.id, "failed to clear site_ingress_target_missing fault: {e}");
+                }
+            }
+        });
+    }
+
     pub fn file_system_fault(&self, fault_kind: &str, description: &str) {
         let fault_kind = fault_kind.to_owned();
         let description = description.to_owned();

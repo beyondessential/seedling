@@ -1,6 +1,7 @@
 use super::*;
 use crate::system::types::{
-    HttpRedirect, ProxyConfig, ProxyListener, ProxyListenerProto, ProxyRoute, VirtualHost,
+    HttpRedirect, ProxyConfig, ProxyListener, ProxyListenerProto, ProxyRoute, ProxyRouteHandler,
+    VirtualHost,
 };
 
 fn http_vhost(hostname: &str, upstream: &str) -> VirtualHost {
@@ -10,7 +11,9 @@ fn http_vhost(hostname: &str, upstream: &str) -> VirtualHost {
         redirect: None,
         routes: vec![ProxyRoute {
             prefix: "/".to_string(),
-            upstreams: vec![format!("http://{upstream}")],
+            handler: ProxyRouteHandler::ReverseProxy {
+                upstreams: vec![format!("http://{upstream}")],
+            },
         }],
     }
 }
@@ -25,7 +28,9 @@ fn https_vhost(hostname: &str, upstream: &str) -> VirtualHost {
         }),
         routes: vec![ProxyRoute {
             prefix: "/".to_string(),
-            upstreams: vec![format!("http://{upstream}")],
+            handler: ProxyRouteHandler::ReverseProxy {
+                upstreams: vec![format!("http://{upstream}")],
+            },
         }],
     }
 }
@@ -106,7 +111,9 @@ fn tls_acme_subjects_appear_in_automation() {
             redirect: None,
             routes: vec![ProxyRoute {
                 prefix: "/".to_string(),
-                upstreams: vec!["http://[fd5e::1]:3000".to_string()],
+                handler: ProxyRouteHandler::ReverseProxy {
+                    upstreams: vec!["http://[fd5e::1]:3000".to_string()],
+                },
             }],
         }],
         l4_routes: vec![],
@@ -155,7 +162,9 @@ fn warm_cert_skipped_when_already_routed() {
             redirect: None,
             routes: vec![ProxyRoute {
                 prefix: "/".to_string(),
-                upstreams: vec!["http://[fd5e::1]:3000".to_string()],
+                handler: ProxyRouteHandler::ReverseProxy {
+                    upstreams: vec!["http://[fd5e::1]:3000".to_string()],
+                },
             }],
         }],
         l4_routes: vec![],
@@ -199,7 +208,9 @@ fn dial_strips_http_scheme() {
             redirect: None,
             routes: vec![ProxyRoute {
                 prefix: "/".to_string(),
-                upstreams: vec!["http://[fd5e:ed12:3456:0100::3]:3000".to_string()],
+                handler: ProxyRouteHandler::ReverseProxy {
+                    upstreams: vec!["http://[fd5e:ed12:3456:0100::3]:3000".to_string()],
+                },
             }],
         }],
         l4_routes: vec![],
@@ -231,7 +242,9 @@ fn https_server_includes_quic_listener() {
             redirect: None,
             routes: vec![ProxyRoute {
                 prefix: "/".to_string(),
-                upstreams: vec!["http://[fd5e::1]:3000".to_string()],
+                handler: ProxyRouteHandler::ReverseProxy {
+                    upstreams: vec!["http://[fd5e::1]:3000".to_string()],
+                },
             }],
         }],
         l4_routes: vec![],

@@ -411,9 +411,31 @@ pub struct HttpRedirect {
 #[derive(Debug, Clone)]
 pub struct ProxyRoute {
     pub prefix: String,
-    /// One upstream per service: `"http://[fd5e:ed...]:3000"`.
-    /// ECMP at the kernel distributes connections across instances.
-    pub upstreams: Vec<String>,
+    pub handler: ProxyRouteHandler,
+}
+
+#[derive(Debug, Clone)]
+pub enum ProxyRouteHandler {
+    /// Forward to one or more upstream services via reverse proxy.
+    ReverseProxy {
+        /// One upstream per service: `"http://[fd5e:ed...]:3000"`.
+        /// ECMP at the kernel distributes connections across instances.
+        upstreams: Vec<String>,
+    },
+    /// Answer with a static HTTP redirect to a fixed URL. Used by
+    /// site-ingress redirect attachments to migrate hostnames without
+    /// shipping an app.
+    // r[impl ingress.site.attachment]
+    Redirect {
+        /// Target URL. Must include scheme + host (e.g.
+        /// `"https://new.example.com"`).
+        url: String,
+        /// HTTP status code (301 / 302 / 307 / 308).
+        code: u16,
+        /// When `true`, append the original request URI to the target
+        /// URL so paths and query strings carry over.
+        preserve_path: bool,
+    },
 }
 
 // ---------------------------------------------------------------------------

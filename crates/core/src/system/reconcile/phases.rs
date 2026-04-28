@@ -6,7 +6,7 @@ use std::{
 use ipnet::Ipv6Net;
 use seedling_protocol::names::AppName;
 
-use super::{AppSnapshot, RunningPod, pods, proxy, routes, rules, volumes};
+use super::{AppSnapshot, RunningPod, pods, proxy, routes, rules, site_proxy, volumes};
 use crate::{
     runtime::{
         AppPhase, InstanceRegistry, db::DbHandle,
@@ -197,6 +197,16 @@ pub(super) struct ProxyBuildResult {
         &'static str,
         serde_json::Value,
     )>,
+    /// Site-ingress / app-ingress collisions on the same `(hostname, port)`
+    /// detected this tick. The reconciler files faults on both parties for
+    /// new conflicts and clears them when a `(host, port)` drops out of the
+    /// set. Both sides are dropped from the proxy config.
+    // r[impl ingress.site.conflict]
+    pub conflicts: super::site_proxy::ConflictReport,
+    /// Site-ingress attachments that couldn't be resolved this tick (target
+    /// app/service missing, unsupported protocol, etc). Each entry produces
+    /// a `site_ingress_target_missing` fault under the `_system` app.
+    pub unresolved_site_attachments: Vec<super::site_proxy::UnresolvedAttachment>,
 }
 
 /// Resolve all warm-cert ingresses across snapshots into `(instance, hostname)`
@@ -247,11 +257,13 @@ pub(super) fn warm_cert_targets(
 
 pub(super) fn compute_proxy_config(
     apps: &[AppSnapshot],
+    site_snapshot: &site_proxy::SiteIngressSnapshot,
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
     cert_endpoint_url: Option<&str>,
 ) -> ProxyBuildResult {
-    let mut all_pairs = Vec::new();
+    let mut all_pairs: Vec<(AppName, crate::defs::ingress::IngressDef, crate::system::translate::proxy::ServiceUpstream)> =
+        Vec::new();
     let mut all_l4_routes = Vec::new();
     let mut observations = Vec::new();
     let mut ready_observations = Vec::new();
@@ -273,7 +285,9 @@ pub(super) fn compute_proxy_config(
                 continue;
             }
         };
-        all_pairs.extend(build.pairs);
+        for (def, upstream) in build.pairs {
+            all_pairs.push((app.name.clone(), def, upstream));
+        }
         all_l4_routes.extend(build.l4_routes);
         observations.extend(build.observations);
         ready_observations.extend(build.ready_observations);
@@ -298,7 +312,36 @@ pub(super) fn compute_proxy_config(
         }
     }
 
-    let mut config = build_proxy_config(&all_pairs);
+    // r[impl ingress.site] r[impl ingress.site.attachment]
+    let site_data = site_proxy::collect(site_snapshot, apps, node_prefix, registry);
+
+    // r[impl ingress.site.conflict]
+    let conflicts = site_proxy::detect_conflicts(&all_pairs, &site_data);
+    let surviving_app_pairs =
+        site_proxy::drop_conflicting_app_pairs(all_pairs, &conflicts.conflicts);
+    let surviving_site_data =
+        site_proxy::drop_conflicting_site_data(site_data, &conflicts.conflicts);
+
+    // build_proxy_config wants the (def, upstream) shape — the app name was
+    // only carried along so the conflict report could attribute the apps.
+    let app_proxy_pairs: Vec<_> = surviving_app_pairs
+        .into_iter()
+        .map(|(_app, def, up)| (def, up))
+        .collect();
+    let site_forward_pairs: Vec<_> = surviving_site_data
+        .forwards
+        .into_iter()
+        .map(|(_name, def, up)| (def, up))
+        .collect();
+    let site_redirect_pairs: Vec<_> = surviving_site_data
+        .redirects
+        .into_iter()
+        .map(|(_name, def, target)| (def, target))
+        .collect();
+
+    let mut combined_forwards = app_proxy_pairs;
+    combined_forwards.extend(site_forward_pairs);
+    let mut config = build_proxy_config(&combined_forwards, &site_redirect_pairs);
     config.l4_routes = all_l4_routes;
     crate::system::translate::proxy::augment_with_warm_certs(&mut config, all_warm);
     config.cert_endpoint_url = cert_endpoint_url.map(str::to_owned);
@@ -309,5 +352,7 @@ pub(super) fn compute_proxy_config(
         caddy_json,
         observations,
         ready_observations,
+        conflicts,
+        unresolved_site_attachments: surviving_site_data.unresolved,
     }
 }
