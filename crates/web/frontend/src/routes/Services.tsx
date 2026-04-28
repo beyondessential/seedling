@@ -43,6 +43,7 @@ import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
 import { formatServiceTarget, looksLikeIpv6Literal } from "../lib/services";
 import type {
+  AppService,
   DeclaredExternalService,
   ExportedService,
   ExternalServiceMapping,
@@ -325,6 +326,7 @@ function MapExternalServiceDialog({
   onClose,
   onSuccess,
   siteServices,
+  declared,
   existing,
   prefill,
 }: {
@@ -332,28 +334,38 @@ function MapExternalServiceDialog({
   onClose: () => void;
   onSuccess: () => void;
   siteServices: SiteService[];
+  declared: DeclaredExternalService[];
   existing?: ExternalServiceMapping;
   prefill?: { app: string; name: string };
 }) {
   const { execute, loading, error, clearError } = useOiAction();
   const writeGuard = useGuard("write");
+  const { data: appServices } = useOiQuery<AppService[]>("/services/app/list", {});
 
-  const [app, setApp] = useState(existing?.app ?? prefill?.app ?? "");
-  const [slot, setSlot] = useState(existing?.external_name ?? prefill?.name ?? "");
+  const isRemap = existing != null;
+  const isFixed = isRemap || prefill != null;
+
+  const initialApp = existing?.app ?? prefill?.app ?? "";
+  const initialSlot = existing?.external_name ?? prefill?.name ?? "";
+
+  const [slotKey, setSlotKey] = useState(
+    initialApp && initialSlot ? `${initialApp}\0${initialSlot}` : "",
+  );
   const [kind, setKind] = useState<"site" | "app">(
     existing?.target.kind ?? "site",
   );
   const [siteName, setSiteName] = useState(
     existing?.target.kind === "site" ? existing.target.name : "",
   );
-  const [targetApp, setTargetApp] = useState(
-    existing?.target.kind === "app" ? existing.target.app : "",
-  );
-  const [targetService, setTargetService] = useState(
-    existing?.target.kind === "app" ? existing.target.service : "",
+  const [targetKey, setTargetKey] = useState(
+    existing?.target.kind === "app"
+      ? `${existing.target.app}\0${existing.target.service}`
+      : "",
   );
 
-  const isRemap = existing != null;
+  const app = isFixed ? initialApp : slotKey.split("\0")[0] ?? "";
+  const slot = isFixed ? initialSlot : slotKey.split("\0")[1] ?? "";
+  const [targetApp, targetService] = targetKey ? targetKey.split("\0") : ["", ""];
 
   const handleClose = () => {
     clearError();
@@ -388,26 +400,47 @@ function MapExternalServiceDialog({
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 0.5 }}>
           {error && <OiErrorAlert error={error} />}
-          <Stack direction="row" spacing={2}>
+          {isFixed ? (
             <TextField
-              label="App"
+              label="App / Slot"
               size="small"
-              value={app}
-              onChange={(e) => setApp(e.target.value)}
-              disabled={isRemap || prefill != null}
-              sx={{ flex: 1 }}
+              value={`${app} / ${slot}`}
+              disabled
               slotProps={{ htmlInput: { style: { fontFamily: "monospace" } } }}
             />
-            <TextField
-              label="Slot"
-              size="small"
-              value={slot}
-              onChange={(e) => setSlot(e.target.value)}
-              disabled={isRemap || prefill != null}
-              sx={{ flex: 1 }}
-              slotProps={{ htmlInput: { style: { fontFamily: "monospace" } } }}
-            />
-          </Stack>
+          ) : declared.length > 0 ? (
+            <FormControl size="small" fullWidth>
+              <InputLabel>App / Slot</InputLabel>
+              <Select
+                label="App / Slot"
+                value={slotKey}
+                onChange={(e) => setSlotKey(e.target.value)}
+                sx={{ fontFamily: "monospace" }}
+                autoFocus
+              >
+                {declared.map((d) => (
+                  <MenuItem
+                    key={`${d.app}\0${d.name}`}
+                    value={`${d.app}\0${d.name}`}
+                    sx={{ fontFamily: "monospace" }}
+                  >
+                    {d.app}
+                    <Typography
+                      component="span"
+                      sx={{ color: "text.secondary", mx: 0.5 }}
+                    >
+                      /
+                    </Typography>
+                    {d.name}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          ) : (
+            <Typography variant="body2" sx={{ color: "text.secondary" }}>
+              No external service slots declared by any registered app.
+            </Typography>
+          )}
           <FormControl>
             <FormLabel>Target kind</FormLabel>
             <RadioGroup
@@ -458,25 +491,55 @@ function MapExternalServiceDialog({
                 slotProps={{ htmlInput: { style: { fontFamily: "monospace" } } }}
               />
             )
+          ) : (appServices ?? []).length > 0 ? (
+            <FormControl size="small" fullWidth>
+              <InputLabel>Target app / service</InputLabel>
+              <Select
+                label="Target app / service"
+                value={targetKey}
+                onChange={(e) => setTargetKey(e.target.value)}
+                sx={{ fontFamily: "monospace" }}
+              >
+                {(appServices ?? []).map((s) => (
+                  <MenuItem
+                    key={`${s.app}\0${s.service_name}`}
+                    value={`${s.app}\0${s.service_name}`}
+                    sx={{ fontFamily: "monospace" }}
+                  >
+                    {s.app}
+                    <Typography
+                      component="span"
+                      sx={{ color: "text.secondary", mx: 0.5 }}
+                    >
+                      /
+                    </Typography>
+                    {s.service_name}
+                    {s.http && (
+                      <Typography
+                        component="span"
+                        variant="caption"
+                        sx={{ color: "text.secondary", ml: 1 }}
+                      >
+                        http
+                      </Typography>
+                    )}
+                    {!s.exported && (
+                      <Typography
+                        component="span"
+                        variant="caption"
+                        sx={{ color: "warning.main", ml: 1 }}
+                      >
+                        not exported
+                      </Typography>
+                    )}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
           ) : (
-            <Stack direction="row" spacing={2}>
-              <TextField
-                label="Target app"
-                size="small"
-                value={targetApp}
-                onChange={(e) => setTargetApp(e.target.value)}
-                sx={{ flex: 1 }}
-                slotProps={{ htmlInput: { style: { fontFamily: "monospace" } } }}
-              />
-              <TextField
-                label="Target service"
-                size="small"
-                value={targetService}
-                onChange={(e) => setTargetService(e.target.value)}
-                sx={{ flex: 1 }}
-                slotProps={{ htmlInput: { style: { fontFamily: "monospace" } } }}
-              />
-            </Stack>
+            <Typography variant="body2" sx={{ color: "text.secondary" }}>
+              No app services available.
+            </Typography>
           )}
         </Stack>
       </DialogContent>
@@ -970,6 +1033,7 @@ export default function Services() {
             setPrefillTarget(null);
           }}
           siteServices={siteSvcs ?? []}
+          declared={declared ?? []}
           existing={remapTarget ?? undefined}
           prefill={prefillTarget ?? undefined}
         />
