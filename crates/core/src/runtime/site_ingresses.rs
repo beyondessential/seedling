@@ -406,10 +406,9 @@ mod tests {
         let got = get(&db, &def.name).unwrap().expect("row present");
         assert_eq!(got, def);
 
-        let by_key =
-            find_discovered(&db, DiscoveryProvider::Tailscale, "n-abc123")
-                .unwrap()
-                .expect("row present");
+        let by_key = find_discovered(&db, DiscoveryProvider::Tailscale, "n-abc123")
+            .unwrap()
+            .expect("row present");
         assert_eq!(by_key, def);
     }
 

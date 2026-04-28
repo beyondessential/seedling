@@ -210,7 +210,9 @@ impl KeyType {
 // r[impl tls.strategy.acme-dns]
 #[derive(Debug, Clone)]
 pub enum TlsPolicy {
-    AcmeDns { dns_provider: String },
+    AcmeDns {
+        dns_provider: String,
+    },
     /// Hostnames whose certs are obtained from the local Tailscale
     /// facility. The Coordinator dispatches to
     /// [`super::tls::tailscale_issuer`] for these instead of running

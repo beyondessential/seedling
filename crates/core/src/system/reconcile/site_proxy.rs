@@ -482,8 +482,9 @@ mod tests {
             redirects: vec![],
             unresolved: vec![],
         };
-        let conflicts: BTreeSet<(String, u16)> =
-            [("dropped.example.com".to_owned(), 443)].into_iter().collect();
+        let conflicts: BTreeSet<(String, u16)> = [("dropped.example.com".to_owned(), 443)]
+            .into_iter()
+            .collect();
         let kept_app = drop_conflicting_app_pairs(app_pairs, &conflicts);
         assert_eq!(kept_app.len(), 1);
         assert_eq!(kept_app[0].1.hostname, "kept.example.com");

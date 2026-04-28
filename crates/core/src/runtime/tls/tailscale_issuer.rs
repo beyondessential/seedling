@@ -62,8 +62,7 @@ pub async fn issue(
     hostname: &str,
     socket_path: Option<PathBuf>,
 ) -> Result<Issued> {
-    let socket =
-        socket_path.unwrap_or_else(|| PathBuf::from(tailscale::DEFAULT_SOCKET_PATH));
+    let socket = socket_path.unwrap_or_else(|| PathBuf::from(tailscale::DEFAULT_SOCKET_PATH));
 
     let client = reqwest::Client::builder()
         .unix_socket(socket)
@@ -73,9 +72,13 @@ pub async fn issue(
         })?;
 
     let url = format!("http://local/localapi/v0/cert/{hostname}?type=pair");
-    let resp = client.get(&url).send().await.map_err(|e| IssueError::Unreachable {
-        message: e.to_string(),
-    })?;
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| IssueError::Unreachable {
+            message: e.to_string(),
+        })?;
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
@@ -171,10 +174,7 @@ async fn persist(
             Ok::<_, rusqlite::Error>(id)
         })
         .context(StorageSnafu)?;
-    Ok(Issued {
-        cert_id,
-        not_after,
-    })
+    Ok(Issued { cert_id, not_after })
 }
 
 #[cfg(test)]

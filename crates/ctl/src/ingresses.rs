@@ -263,7 +263,9 @@ fn parse_app_service(s: &str) -> Result<(String, String), String> {
         .split_once('/')
         .ok_or_else(|| format!("invalid forward target {s:?}: expected <app>/<service>"))?;
     if app.is_empty() || service.is_empty() {
-        return Err(format!("invalid forward target {s:?}: neither part may be empty"));
+        return Err(format!(
+            "invalid forward target {s:?}: neither part may be empty"
+        ));
     }
     Ok((app.to_owned(), service.to_owned()))
 }

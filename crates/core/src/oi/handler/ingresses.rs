@@ -21,10 +21,7 @@ fn validate_hostname(hostname: &str) -> Result<(), OiError> {
     if hostname.is_empty() || hostname.len() > 253 {
         return Err(OiError::new(
             ErrorCode::RequirementsInvalid,
-            format!(
-                "hostname must be 1-253 characters, got {}",
-                hostname.len()
-            ),
+            format!("hostname must be 1-253 characters, got {}", hostname.len()),
         ));
     }
     if hostname.contains('*') {
@@ -60,7 +57,10 @@ fn validate_hostname(hostname: &str) -> Result<(), OiError> {
     Ok(())
 }
 
-fn render_ingress(def: &SiteIngressDef, attachments: &[SiteIngressAttachment]) -> serde_json::Value {
+fn render_ingress(
+    def: &SiteIngressDef,
+    attachments: &[SiteIngressAttachment],
+) -> serde_json::Value {
     let (source_str, discovered_provider) = match &def.source {
         SiteIngressSource::Manual => ("manual", None),
         SiteIngressSource::Discovered { provider, .. } => ("discovered", Some(provider.as_str())),
@@ -153,10 +153,7 @@ pub(crate) struct GetSiteIngressParams {
     pub name: SiteIngressName,
 }
 
-pub(crate) fn get_site_ingress(
-    state: &OiState,
-    params: GetSiteIngressParams,
-) -> HandlerResult {
+pub(crate) fn get_site_ingress(state: &OiState, params: GetSiteIngressParams) -> HandlerResult {
     let name_for_get = params.name.clone();
     let name_for_atts = params.name.clone();
     let (def, attachments) = state
@@ -206,8 +203,7 @@ pub(crate) fn create_site_ingress(
     if matches!(params.tls_provider, TlsProvider::Tailscale) {
         return Err(OiError::new(
             ErrorCode::RequirementsInvalid,
-            "tls_provider 'tailscale' is only legal on a discovered Tailscale ingress"
-                .to_owned(),
+            "tls_provider 'tailscale' is only legal on a discovered Tailscale ingress".to_owned(),
         ));
     }
 
@@ -360,8 +356,7 @@ pub(crate) fn update_site_ingress(
     {
         return Err(OiError::new(
             ErrorCode::RequirementsInvalid,
-            "tls_provider 'tailscale' is only legal on a discovered Tailscale ingress"
-                .to_owned(),
+            "tls_provider 'tailscale' is only legal on a discovered Tailscale ingress".to_owned(),
         ));
     }
 
@@ -437,7 +432,10 @@ pub(crate) struct DetachAttachmentParams {
     pub protocol: AttachmentProtocol,
 }
 
-fn ensure_ingress_exists(state: &OiState, name: &SiteIngressName) -> Result<SiteIngressDef, OiError> {
+fn ensure_ingress_exists(
+    state: &OiState,
+    name: &SiteIngressName,
+) -> Result<SiteIngressDef, OiError> {
     let n = name.clone();
     let def = state
         .db
@@ -597,11 +595,8 @@ pub(crate) fn detach(
         ));
     }
 
-    ctx.events.site_ingress_attachment_removed(
-        &params.name,
-        params.port,
-        params.protocol.as_str(),
-    );
+    ctx.events
+        .site_ingress_attachment_removed(&params.name, params.port, params.protocol.as_str());
 
     state.tick_notify.notify_one();
     Ok(json!({ "detached": true }))

@@ -262,8 +262,11 @@ pub(super) fn compute_proxy_config(
     registry: &dyn InstanceRegistry,
     cert_endpoint_url: Option<&str>,
 ) -> ProxyBuildResult {
-    let mut all_pairs: Vec<(AppName, crate::defs::ingress::IngressDef, crate::system::translate::proxy::ServiceUpstream)> =
-        Vec::new();
+    let mut all_pairs: Vec<(
+        AppName,
+        crate::defs::ingress::IngressDef,
+        crate::system::translate::proxy::ServiceUpstream,
+    )> = Vec::new();
     let mut all_l4_routes = Vec::new();
     let mut observations = Vec::new();
     let mut ready_observations = Vec::new();

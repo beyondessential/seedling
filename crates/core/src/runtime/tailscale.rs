@@ -18,9 +18,7 @@ use tracing::{debug, info, warn};
 
 use crate::runtime::{
     db::DbHandle,
-    site_ingresses::{
-        self, DiscoveryProvider, SiteIngressDef, SiteIngressSource, TlsProvider,
-    },
+    site_ingresses::{self, DiscoveryProvider, SiteIngressDef, SiteIngressSource, TlsProvider},
 };
 
 /// Default Tailscale local API socket path. Operators on non-standard
@@ -216,14 +214,13 @@ impl TailscaleProvider {
         let raw = match client.get("http://local/localapi/v0/status").send().await {
             Ok(resp) => resp,
             Err(e) => {
-                if let Some(io_err) = io_error(&e) {
-                    if matches!(
+                if let Some(io_err) = io_error(&e)
+                    && matches!(
                         io_err.kind(),
-                        std::io::ErrorKind::NotFound
-                            | std::io::ErrorKind::ConnectionRefused
-                    ) {
-                        return Err(TailscaleError::Unreachable(io_err.to_string()));
-                    }
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                    )
+                {
+                    return Err(TailscaleError::Unreachable(io_err.to_string()));
                 }
                 return Err(TailscaleError::Unreachable(e.to_string()));
             }
@@ -483,7 +480,10 @@ mod tests {
         assert_eq!(row.tls_provider, TlsProvider::Tailscale);
         assert!(matches!(
             row.source,
-            SiteIngressSource::Discovered { provider: DiscoveryProvider::Tailscale, .. }
+            SiteIngressSource::Discovered {
+                provider: DiscoveryProvider::Tailscale,
+                ..
+            }
         ));
         assert!(!row.stale);
     }

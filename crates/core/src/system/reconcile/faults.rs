@@ -636,8 +636,7 @@ impl Reconciler {
         });
 
         // 2. Clear faults for resolved conflicts (in prior \ current).
-        let resolved: Vec<(String, u16)> =
-            prior.difference(&current).cloned().collect();
+        let resolved: Vec<(String, u16)> = prior.difference(&current).cloned().collect();
         if !resolved.is_empty() {
             self.db.call(move |db| {
                 let system = AppName::new_unchecked("_system");

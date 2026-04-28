@@ -105,32 +105,37 @@ impl AttachmentTarget {
     }
 }
 
-fn target_columns(
-    target: &AttachmentTarget,
-) -> (
-    &'static str,
-    Option<&AppName>,
-    Option<&AppServiceName>,
-    Option<&str>,
-    Option<i64>,
-    Option<i64>,
-) {
+struct TargetColumns<'a> {
+    kind: &'static str,
+    target_app: Option<&'a AppName>,
+    target_service: Option<&'a AppServiceName>,
+    redirect_url: Option<&'a str>,
+    redirect_code: Option<i64>,
+    redirect_preserve_path: Option<i64>,
+}
+
+fn target_columns(target: &AttachmentTarget) -> TargetColumns<'_> {
     match target {
-        AttachmentTarget::Forward { app, service } => {
-            ("forward", Some(app), Some(service), None, None, None)
-        }
+        AttachmentTarget::Forward { app, service } => TargetColumns {
+            kind: "forward",
+            target_app: Some(app),
+            target_service: Some(service),
+            redirect_url: None,
+            redirect_code: None,
+            redirect_preserve_path: None,
+        },
         AttachmentTarget::Redirect {
             url,
             code,
             preserve_path,
-        } => (
-            "redirect",
-            None,
-            None,
-            Some(url.as_str()),
-            Some(i64::from(*code)),
-            Some(i64::from(*preserve_path)),
-        ),
+        } => TargetColumns {
+            kind: "redirect",
+            target_app: None,
+            target_service: None,
+            redirect_url: Some(url.as_str()),
+            redirect_code: Some(i64::from(*code)),
+            redirect_preserve_path: Some(i64::from(*preserve_path)),
+        },
     }
 }
 
@@ -198,7 +203,7 @@ fn target_from_columns(
 
 // r[impl ingress.site.attachment]
 pub fn attach(db: &Db, att: &SiteIngressAttachment) -> rusqlite::Result<()> {
-    let (kind, app, service, url, code, preserve_path) = target_columns(&att.target);
+    let cols = target_columns(&att.target);
     db.conn.execute(
         "INSERT INTO site_ingress_attachments
              (site_ingress, port, protocol, target_kind,
@@ -210,12 +215,12 @@ pub fn attach(db: &Db, att: &SiteIngressAttachment) -> rusqlite::Result<()> {
             att.site_ingress,
             att.port,
             att.protocol,
-            kind,
-            app,
-            service,
-            url,
-            code,
-            preserve_path,
+            cols.kind,
+            cols.target_app,
+            cols.target_service,
+            cols.redirect_url,
+            cols.redirect_code,
+            cols.redirect_preserve_path,
             att.created_at,
         ],
     )?;
@@ -223,7 +228,7 @@ pub fn attach(db: &Db, att: &SiteIngressAttachment) -> rusqlite::Result<()> {
 }
 
 pub fn update(db: &Db, att: &SiteIngressAttachment) -> rusqlite::Result<bool> {
-    let (kind, app, service, url, code, preserve_path) = target_columns(&att.target);
+    let cols = target_columns(&att.target);
     let count = db.conn.execute(
         "UPDATE site_ingress_attachments
          SET target_kind = ?4, target_app = ?5, target_service = ?6,
@@ -233,12 +238,12 @@ pub fn update(db: &Db, att: &SiteIngressAttachment) -> rusqlite::Result<bool> {
             att.site_ingress,
             att.port,
             att.protocol,
-            kind,
-            app,
-            service,
-            url,
-            code,
-            preserve_path,
+            cols.kind,
+            cols.target_app,
+            cols.target_service,
+            cols.redirect_url,
+            cols.redirect_code,
+            cols.redirect_preserve_path,
         ],
     )?;
     Ok(count > 0)
@@ -395,7 +400,9 @@ mod tests {
         let att = forward(&p, 443);
         attach(&db, &att).unwrap();
         assert_eq!(
-            get(&db, &p, 443, AttachmentProtocol::Http).unwrap().as_ref(),
+            get(&db, &p, 443, AttachmentProtocol::Http)
+                .unwrap()
+                .as_ref(),
             Some(&att)
         );
     }
@@ -407,7 +414,9 @@ mod tests {
         let att = redirect(&p, 443);
         attach(&db, &att).unwrap();
         assert_eq!(
-            get(&db, &p, 443, AttachmentProtocol::Http).unwrap().as_ref(),
+            get(&db, &p, 443, AttachmentProtocol::Http)
+                .unwrap()
+                .as_ref(),
             Some(&att)
         );
     }
@@ -443,7 +452,9 @@ mod tests {
         let mut updated = redirect(&p, 443);
         updated.protocol = AttachmentProtocol::Http;
         assert!(update(&db, &updated).unwrap());
-        let got = get(&db, &p, 443, AttachmentProtocol::Http).unwrap().unwrap();
+        let got = get(&db, &p, 443, AttachmentProtocol::Http)
+            .unwrap()
+            .unwrap();
         assert!(matches!(got.target, AttachmentTarget::Redirect { .. }));
     }
 

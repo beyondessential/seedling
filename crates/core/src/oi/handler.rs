@@ -213,9 +213,7 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/services/external/declared" => services::list_declared_external_services(state),
         // r[impl ingress.site]
         "/ingresses/site/list" => ingresses::list_site_ingresses(state),
-        "/ingresses/site/show" => {
-            ingresses::get_site_ingress(state, parse_params(req.params)?)
-        }
+        "/ingresses/site/show" => ingresses::get_site_ingress(state, parse_params(req.params)?),
         // r[impl ingress.site.lifecycle]
         "/ingresses/site/create" => {
             ingresses::create_site_ingress(state, parse_params(req.params)?, ctx)
@@ -237,9 +235,7 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
             ingresses::attach_redirect(state, parse_params(req.params)?, ctx)
         }
         // r[impl ingress.site.attachment]
-        "/ingresses/site/detach" => {
-            ingresses::detach(state, parse_params(req.params)?, ctx)
-        }
+        "/ingresses/site/detach" => ingresses::detach(state, parse_params(req.params)?, ctx),
         "/ingresses/site/discovery/status" => ingresses::discovery_status(state),
         // i[backup.app.register]
         "/backups/apps/register" => backups::register_backup_app(state, parse_params(req.params)?),
