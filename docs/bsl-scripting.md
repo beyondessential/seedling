@@ -65,11 +65,24 @@ let svc = app.service("name")
 let http_svc = svc.http(80);          // specialise; port defaults to 80
 let route = http_svc.route("/api");   // HTTP path prefix routing
 
-let ing = svc.ingress("host.example.com", 443)
-    .http()                           // terminate HTTPS → HTTP/1.1
-    .redirect();                      // redirect port 80 → 443
-let ing2 = ing.http2();               // terminate HTTPS → HTTP/2 (h2c)
-let ing3 = svc.ingress("h.example.com", 443).tls();  // terminate TLS (non-HTTP)
+// Ingresses are keyed by (hostname, port); one service can have many.
+// .tls(terminate, output) declares both what's terminated at the edge
+// and what protocol is handed to the bound Service. Without it, the
+// ingress is plain TCP passthrough.
+svc.ingress("host.example.com", 443)
+    .tls(Terminate.Https, Output.Http1)   // HTTPS → HTTP/1.1
+    .redirect();                           // redirect port 80 → 443
+svc.ingress("host.example.com", 8443)
+    .tls(Terminate.Https, Output.Http2);   // HTTPS → HTTP/2 (h2c)
+svc.ingress("tls.example.com", 443)
+    .tls(Terminate.Tls, Output.Tcp);       // TLS → plaintext TCP
+svc.ingress("dtls.example.com", 443)
+    .tls(Terminate.Dtls, Output.Udp);      // DTLS → plaintext UDP
+
+// HttpService.ingress() delegates to the wrapped Service, so chains
+// that flow through .http() can declare ingresses without backing out.
+// The resulting Ingress is bound to the Service. Throws on external services.
+http_svc.ingress("api.example.com", 443).tls(Terminate.Https, Output.Http1);
 
 // External services are slots; the operator binds them to a concrete endpoint.
 let db = app.external_service("upstream-db");
@@ -200,6 +213,13 @@ col.select(#{ name_patterns: ["worker-*"] })
 - `OnExit.Restart`: Always restart on exit
 - `OnExit.Terminate`: Stop container on exit
 - `OnExit.RestartOnFailure`: Restart on non-zero exit, terminate otherwise
+- `Terminate.Tls`: Edge terminates TLS over TCP
+- `Terminate.Dtls`: Edge terminates DTLS over UDP
+- `Terminate.Https`: Edge terminates HTTPS (HTTP/1.1, HTTP/2, HTTP/3)
+- `Output.Tcp`: Hand plaintext TCP to the Service
+- `Output.Udp`: Hand plaintext UDP to the Service
+- `Output.Http1`: Hand plaintext HTTP/1.1 to the Service
+- `Output.Http2`: Hand plaintext HTTP/2 (h2c) to the Service
 - `ResourceType.{Parameter,Service,HttpService,Ingress,Deployment,Job,Volume,ExternalVolume,Action}`: For use with `col.select()`
 
 ## Annotated example
@@ -217,10 +237,10 @@ let image = || `ghcr.io/example/myapp:${version.value()}`;
 // Specialising as .http() enables URL-prefix routing.
 let web_svc = app.service("web")
     .ingress("myapp.example.com", 443)
-    .http()               // terminate HTTPS, re-emit HTTP/1.1
-    .redirect()           // redirect HTTP on port 80 to 443
-    .service()            // navigate back from ingress to the service
-    .http(80);            // specialise the service for path routing
+    .tls(Terminate.Https, Output.Http1)  // terminate HTTPS, re-emit HTTP/1.1
+    .redirect()                          // redirect HTTP on port 80 to 443
+    .service()                           // navigate back from ingress to the service
+    .http(80);                           // specialise the service for path routing
 
 // A persistent volume, exported so operators and other apps can reference it.
 let data = app.volume("data").exported(#{ description: "Application data" });
