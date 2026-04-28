@@ -120,6 +120,8 @@ const SQL_V47: &str = include_str!("db/migrations/v47.sql");
 const SQL_V48: &str = include_str!("db/migrations/v48.sql");
 // r[impl ingress.site] r[impl ingress.site.attachment]
 const SQL_V49: &str = include_str!("db/migrations/v49.sql");
+// r[impl ingress.site.tailscale]
+const SQL_V50: &str = include_str!("db/migrations/v50.sql");
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -360,6 +362,11 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 49,
         sql: SQL_V49,
+        custom_run: None,
+    },
+    Migration {
+        version: 50,
+        sql: SQL_V50,
         custom_run: None,
     },
 ];
