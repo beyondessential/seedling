@@ -47,4 +47,9 @@ pub struct OiState {
     /// cache (i.e. the TLS hostname rollup).
     // r[impl tls.cert.hostname-view]
     pub caddy_data_path: tokio::sync::OnceCell<PathBuf>,
+    /// Tailscale discovery provider. `None` when Tailscale is not in use
+    /// at all (e.g. in test harnesses); the discovery handler returns an
+    /// empty status in that case.
+    // r[impl ingress.site.tailscale]
+    pub tailscale_provider: Option<Arc<crate::runtime::tailscale::TailscaleProvider>>,
 }

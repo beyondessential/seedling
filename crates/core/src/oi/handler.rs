@@ -237,6 +237,8 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         // r[impl ingress.site.attachment]
         "/ingresses/site/detach" => ingresses::detach(state, parse_params(req.params)?, ctx),
         "/ingresses/site/discovery/status" => ingresses::discovery_status(state),
+        // r[impl ingress.site.tailscale]
+        "/ingresses/site/discovery/refresh" => ingresses::discovery_refresh(state),
         // i[backup.app.register]
         "/backups/apps/register" => backups::register_backup_app(state, parse_params(req.params)?),
         // i[backup.app.deregister]

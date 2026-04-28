@@ -853,6 +853,20 @@ async fn main() {
     // Periodic garbage collection of operational tables.
     let _gc_handle = seedling_core::runtime::gc::spawn_gc_task(db.clone(), args.gc.into());
 
+    // r[impl ingress.site.tailscale]
+    // Spawn the Tailscale discovery provider. It polls the host's
+    // tailscaled local API on its own cadence and reconciles a single
+    // discovered site ingress against the runtime DB. We always
+    // construct the provider and let it skip cycles when the socket is
+    // unreachable — operators without Tailscale see no faults; operators
+    // with Tailscale get a discovered ingress as soon as the daemon can
+    // reach tailscaled.
+    let tailscale_provider = seedling_core::runtime::tailscale::TailscaleProvider::new(
+        db.clone(),
+        seedling_core::runtime::tailscale::TailscaleConfig::default(),
+    );
+    let _tailscale_handle = Arc::clone(&tailscale_provider).spawn();
+
     let shells = seedling_core::oi::shells::ShellRegistry::new();
 
     // r[impl tls.cert.serve]
@@ -979,6 +993,7 @@ async fn main() {
         cipher,
         tls_coordinator: Arc::clone(&tls_coordinator),
         caddy_data_path: tokio::sync::OnceCell::new(),
+        tailscale_provider: Some(Arc::clone(&tailscale_provider)),
     });
 
     // ---------------------------------------------------------------------------

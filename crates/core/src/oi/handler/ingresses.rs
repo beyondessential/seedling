@@ -603,16 +603,15 @@ pub(crate) fn detach(
 }
 
 /// Read-only summary of the discovery providers the runtime knows about.
-/// In v1 the only entry is Tailscale, and the row is materialised by the
-/// Tailscale provider's poll loop.
+/// In v1 the only entry is Tailscale; the row is materialised by the
+/// Tailscale provider's poll loop and reported here with health, last
+/// poll time, and any pending error so the operator can see *why*
+/// discovery is unhealthy without grepping logs.
+// r[impl ingress.site.tailscale]
 pub(crate) fn discovery_status(state: &OiState) -> HandlerResult {
     let discovered = state
         .db
-        .call(|db| {
-            site_ingresses::find_discovered(db, DiscoveryProvider::Tailscale, "")
-                .or(Ok(None))
-                .and_then(|_| site_ingresses::list(db))
-        })
+        .call(|db| site_ingresses::list(db))
         .map_err(|e| {
             OiError::new(
                 ErrorCode::Internal,
@@ -620,26 +619,67 @@ pub(crate) fn discovery_status(state: &OiState) -> HandlerResult {
             )
         })?;
 
-    let tailscale: Vec<_> = discovered
+    let tailscale_ingresses: Vec<_> = discovered
         .iter()
         .filter_map(|d| match &d.source {
-            SiteIngressSource::Discovered { provider, key } => Some(json!({
-                "name": d.name,
-                "provider": provider.as_str(),
-                "key": key,
-                "hostname": d.hostname,
-                "stale": d.stale,
-            })),
-            SiteIngressSource::Manual => None,
+            SiteIngressSource::Discovered { provider, key }
+                if matches!(provider, DiscoveryProvider::Tailscale) =>
+            {
+                Some(json!({
+                    "name": d.name,
+                    "provider": provider.as_str(),
+                    "key": key,
+                    "hostname": d.hostname,
+                    "stale": d.stale,
+                }))
+            }
+            _ => None,
         })
         .collect();
 
+    let mut tailscale_obj = json!({
+        "name": "tailscale",
+        "ingresses": tailscale_ingresses,
+    });
+    if let Some(provider) = &state.tailscale_provider {
+        let snap = provider.status().snapshot();
+        tailscale_obj["healthy"] = json!(snap.healthy);
+        if let Some(ts) = snap.last_poll_at {
+            tailscale_obj["last_poll_at"] = json!(ts.to_string());
+        }
+        if let Some(err) = snap.last_error {
+            tailscale_obj["last_error"] = json!(err);
+        }
+        if let Some(id) = snap.identity {
+            tailscale_obj["identity"] = json!({
+                "hostname": id.hostname,
+                "node_id": id.node_id,
+                "backend_running": id.backend_running,
+            });
+        }
+    } else {
+        tailscale_obj["healthy"] = json!(false);
+        tailscale_obj["last_error"] = json!("Tailscale provider is not configured");
+    }
+
     Ok(json!({
-        "providers": [
-            {
-                "name": "tailscale",
-                "ingresses": tailscale,
-            }
-        ]
+        "providers": [tailscale_obj]
     }))
+}
+
+/// Force the Tailscale provider's poll loop to run now instead of
+/// waiting for the next tick. Returns `{"refreshed": true}` when the
+/// kick was delivered, or an error if no provider is configured.
+// r[impl ingress.site.tailscale]
+pub(crate) fn discovery_refresh(state: &OiState) -> HandlerResult {
+    match &state.tailscale_provider {
+        Some(p) => {
+            p.refresh_now();
+            Ok(json!({ "refreshed": true }))
+        }
+        None => Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            "Tailscale provider is not configured on this daemon".to_owned(),
+        )),
+    }
 }
