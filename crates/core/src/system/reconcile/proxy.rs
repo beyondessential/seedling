@@ -57,10 +57,15 @@ pub(super) fn collect(
 
         let upstream_port = find_upstream_port(snapshot, svc_name, def.port.get());
 
+        // The ingress's resource name is "<hostname>:<port>" (multiple
+        // ingresses can hang off one service). The instance must be keyed
+        // by the same name the AppDef uses, otherwise the lifecycle
+        // lookup in `effective_app_status` finds nothing and the app
+        // sits at Degraded with the ingress wedged at Pending.
         let ingress_instance = registry.get_or_create_singleton(
             app_name,
             ResourceKind::Ingress,
-            Some(ingress.service.name.as_str()),
+            Some(ingress.name.as_str()),
         )?;
 
         if def.http_terminate.is_none() {
@@ -123,7 +128,7 @@ pub(super) fn collect(
         let ingress_instance = registry.get_or_create_singleton(
             app_name,
             ResourceKind::Ingress,
-            Some(ingress.service.name.as_str()),
+            Some(ingress.name.as_str()),
         )?;
         observations.push((ingress_instance.clone(), "stop_sent", serde_json::json!({})));
         observations.push((
