@@ -400,6 +400,31 @@ app.on_action("copy-image-defaults", |rt, _param| {
     copy_image_defaults.call(rt);
 }, #{ description: "Copy the image's default.json5 to /config/default.reference.json5 for operator inspection" });
 
+// Pre-pull the container images for a target version into local storage so
+// the actual version change can rotate without paying registry-fetch latency
+// inside the migration window. The images are pinned to this app until they
+// are observed in use, matching what `version.on_change` does at upgrade time.
+app.on_action("warm-images", |rt, param| {
+    let target = if "target-version" in param && param["target-version"] != "" {
+        param["target-version"]
+    } else {
+        version.value()
+    };
+    rt.warm_images([
+        app.job().image(`ghcr.io/beyondessential/tamanu-facility:${target}`),
+        app.job().image(`ghcr.io/beyondessential/tamanu-frontend:${target}`),
+    ]).ready(600);
+}, #{
+    description: "Pre-pull the facility and frontend images for a target version",
+    params: #{
+        "target-version": #{
+            kind: "text",
+            required: false,
+            description: "Tamanu image tag to warm (e.g. v2.10.0); defaults to the currently configured version",
+        },
+    },
+});
+
 app.on_action("restart-api", |rt, _param| {
     rt.restart(app.deployment("api"));
 }, #{ description: "Restart the API workers" });
