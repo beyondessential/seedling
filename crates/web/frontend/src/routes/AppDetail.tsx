@@ -521,6 +521,19 @@ function ResourcesSection({
                 }}
               />
             )}
+            {r.dynamic && (
+              <Chip
+                label={r.anonymous ? "dynamic · anonymous" : "dynamic"}
+                size="small"
+                color="info"
+                variant="outlined"
+                sx={{
+                  fontSize: "0.65rem",
+                  height: 18,
+                  "& .MuiChip-label": { px: 0.75 },
+                }}
+              />
+            )}
             {(r.type === "deployment" || r.type === "job") && (
               <Tooltip title="View resource logs">
                 <IconButton
@@ -532,7 +545,7 @@ function ResourcesSection({
                 </IconButton>
               </Tooltip>
             )}
-            {r.scale && (
+            {!r.dynamic && r.scale && (
               <>
                 <Typography
                   variant="caption"
@@ -585,7 +598,7 @@ function ResourcesSection({
                 </Box>
               </>
             )}
-            {r.type === "deployment" && (
+            {!r.dynamic && r.type === "deployment" && (
               <Tooltip title={writeGuard.reason ?? "Restart deployment"}>
                 <span>
                   <IconButton
@@ -600,7 +613,7 @@ function ResourcesSection({
             )}
             {/* w[volumes.shell-ui] */}
             {/* w[impl volumes.shell-ui.read-only] */}
-            {r.type === "volume" && (
+            {!r.dynamic && r.type === "volume" && (
               <>
                 <Tooltip
                   title={shellReadOnly ? "Open shell (read-only)" : "Open shell"}
@@ -638,7 +651,8 @@ function ResourcesSection({
                 </Tooltip>
               </>
             )}
-            {STOPPABLE_KINDS.has(r.type) &&
+            {!r.dynamic &&
+              STOPPABLE_KINDS.has(r.type) &&
               (r.stopped ? (
                 <Tooltip title={writeGuard.reason ?? "Unstop resource"}>
                   <span>
@@ -3050,7 +3064,13 @@ export default function AppDetail() {
                 <Section title="Resources">
                   <ResourcesSection
                     appName={name!}
-                    resources={data.resources}
+                    resources={[
+                      ...data.resources,
+                      ...(data.dynamic_resources ?? []).map((r) => ({
+                        ...r,
+                        dynamic: true,
+                      })),
+                    ]}
                     onRefresh={refetch}
                   />
                 </Section>

@@ -94,6 +94,16 @@ export interface AppResource {
   scale?: ScaleBounds;
   def?: ResourceDef;
   stopped?: boolean;
+  /** True for entries returned via `dynamic_resources` (jobs / volumes etc.
+   * created inside an action closure). Anonymous dynamic resources have a
+   * generated `name` (the display_name) and no BSL-level identifier. */
+  dynamic?: boolean;
+  /** True for dynamic resources without a BSL name (`app.job()` / `app.volume()`
+   * with no name argument). Set alongside `dynamic`. */
+  anonymous?: boolean;
+  /** Operation that created this dynamic resource — useful for grouping when
+   * multiple actions are queued. Set alongside `dynamic`. */
+  operation_id?: string;
 }
 
 export interface AppParam {
@@ -146,6 +156,10 @@ export interface AppDetail {
   generation: number;
   faults: FaultRecord[];
   resources: AppResource[];
+  /** Resources created inside an in-flight action closure (jobs, anonymous
+   * services/volumes). Empty when no operation is running. The shape mirrors
+   * `AppResource` so consumers can render them through the same UI. */
+  dynamic_resources: AppResource[];
   stopped_resources: StoppedResource[];
   params: AppParam[];
   unknown_params: AppParam[];

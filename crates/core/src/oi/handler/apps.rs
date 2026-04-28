@@ -611,6 +611,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
             | AppStatus::Degraded
             | AppStatus::Faulted
             | AppStatus::Operating { .. }
+            | AppStatus::Installing
             | AppStatus::Uninstalling
     );
     // i[app.describe]
@@ -637,7 +638,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     let name_owned = params.app.clone();
     let all_faults_clone = all_faults_for_app.clone();
     let stopped_set_clone = stopped_set.clone();
-    let mut resources_json: Vec<Value> = state.db.call(move |db| {
+    let resources_json: Vec<Value> = state.db.call(move |db| {
         resource_infos
             .into_iter()
             .map(|info| {
@@ -708,11 +709,15 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
             .collect()
     });
 
-    // Append dynamic resources (started inside action closures, not in AppDef).
-    if query_instances {
+    // Dynamic resources (created inside action closures, not in AppDef).
+    // Returned as a separate top-level field so consumers can choose whether
+    // to merge them with `resources` or render them independently — anonymous
+    // jobs from an in-flight action have a different lifecycle from declared
+    // app resources and a UI may want to surface that distinction.
+    let dynamic_resources_json: Vec<Value> = if query_instances {
         let name_owned = params.app.clone();
         let all_faults_clone2 = all_faults_for_app.clone();
-        let dyn_entries: Vec<Value> = state.db.call(move |db| {
+        state.db.call(move |db| {
             let dyn_records = list_dynamic_resources_for_app(db, &name_owned).unwrap_or_default();
             let mut out = Vec::new();
             for rec in dyn_records {
@@ -734,6 +739,9 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                 let (lifecycle, transition_time) =
                     derive_state_with_transition_time(&inst, &observations);
                 let kind_str = format!("{:?}", kind).to_lowercase();
+                // Anonymous resources have no `resource_name`; fall back to
+                // the display_name so they have a stable identifier in the
+                // UI (e.g. `tamanu-central--abc12345`).
                 let display_name = rec
                     .resource_name
                     .as_deref()
@@ -758,6 +766,8 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                 out.push(json!({
                     "name": display_name,
                     "type": kind_str,
+                    "anonymous": rec.resource_name.is_none(),
+                    "operation_id": rec.operation_id,
                     "instances": [{
                         "id": rec.instance_id,
                         "display_name": rec.display_name,
@@ -770,9 +780,10 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                 }));
             }
             out
-        });
-        resources_json.extend(dyn_entries);
-    }
+        })
+    } else {
+        Vec::new()
+    };
 
     // i[impl resource.stop.status]
     let stopped_resources_json: Vec<Value> = stopped_set
@@ -785,13 +796,22 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         "generation": generation,
         "faults": app_faults_json,
         "resources": resources_json,
+        "dynamic_resources": dynamic_resources_json,
         "stopped_resources": stopped_resources_json,
         "params": params_json,
         "unknown_params": unknown_params_json,
         "actions": actions_json,
     });
 
-    if let AppStatus::Operating { .. } = &status {
+    // i[impl action.describe.barrier]
+    // Surface the in-flight operation (action name, generation transition,
+    // currently-blocking barrier) for any status that has a scheduled action
+    // attached — install and uninstall are tracked as their own statuses but
+    // both run an action closure with the same observable surface.
+    if matches!(
+        &status,
+        AppStatus::Operating { .. } | AppStatus::Installing | AppStatus::Uninstalling
+    ) {
         let (action_name, source_generation, target_generation, op_id) = state
             .scheduler
             .lock()
