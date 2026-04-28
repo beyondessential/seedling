@@ -346,6 +346,13 @@ pub(super) fn compute_proxy_config(
     combined_forwards.extend(site_forward_pairs);
     let mut config = build_proxy_config(&combined_forwards, &site_redirect_pairs);
     config.l4_routes = all_l4_routes;
+    // r[impl ingress.site.attachment]
+    config.l4_routes.extend(
+        surviving_site_data
+            .l4_routes
+            .into_iter()
+            .map(|entry| entry.route),
+    );
     crate::system::translate::proxy::augment_with_warm_certs(&mut config, all_warm);
     config.cert_endpoint_url = cert_endpoint_url.map(str::to_owned);
     let caddy_json = super::super::caddy::build_caddy_config(&config);

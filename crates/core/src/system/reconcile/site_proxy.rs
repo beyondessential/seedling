@@ -17,7 +17,10 @@ use crate::{
         },
         site_ingresses::{self, SiteIngressDef, TlsProvider},
     },
-    system::translate::proxy::{RedirectTarget, ServiceUpstream, instance_ipv6},
+    system::{
+        translate::proxy::{RedirectTarget, ServiceUpstream, instance_ipv6},
+        types::{L4Proto, L4Route},
+    },
 };
 
 /// Result of resolving every site-ingress attachment against the current
@@ -27,6 +30,11 @@ use crate::{
 pub(super) struct SiteProxyData {
     pub forwards: Vec<(SiteIngressName, IngressDef, ServiceUpstream)>,
     pub redirects: Vec<(SiteIngressName, IngressDef, RedirectTarget)>,
+    /// L4 (tcp/udp) forward attachments, resolved to a Caddy L4 route.
+    /// Listener port comes from the attachment; upstream is the same
+    /// IPv6 service address the HTTP path uses.
+    // r[impl ingress.site.attachment]
+    pub l4_routes: Vec<SiteL4Entry>,
     /// `(site_ingress, port, protocol, reason)` for entries that couldn't
     /// be resolved this tick. Used for fault filing.
     pub unresolved: Vec<UnresolvedAttachment>,
@@ -38,6 +46,19 @@ pub(super) struct UnresolvedAttachment {
     pub port: u16,
     pub protocol: AttachmentProtocol,
     pub reason: String,
+}
+
+/// One resolved L4 (tcp/udp) site-ingress attachment. We carry the parent
+/// site ingress's name + hostname alongside the route so the conflict
+/// detector can attribute collisions and the reconciler can drop both
+/// sides from the proxy config when an app ingress claims the same
+/// `(hostname, port)`.
+// r[impl ingress.site.attachment]
+#[derive(Debug, Clone)]
+pub(super) struct SiteL4Entry {
+    pub site_ingress: SiteIngressName,
+    pub hostname: String,
+    pub route: L4Route,
 }
 
 /// Snapshot of the site ingress / attachment tables, loaded once per
@@ -75,6 +96,7 @@ pub(super) fn collect(
     let mut data = SiteProxyData {
         forwards: Vec::new(),
         redirects: Vec::new(),
+        l4_routes: Vec::new(),
         unresolved: Vec::new(),
     };
 
@@ -105,24 +127,62 @@ fn resolve_attachment(
     registry: &dyn InstanceRegistry,
     data: &mut SiteProxyData,
 ) {
-    // L4 (TCP/UDP) attachments need the L4 proxy/nftables path; deferred to
-    // a follow-up. The OI handler currently allows the protocol values, so
-    // we skip them here and surface the limitation as an unresolved entry.
+    // L4 (TCP/UDP) attachments take a separate path through Caddy's L4
+    // module; redirect targets only make sense on HTTP, so a TCP/UDP
+    // redirect is a configuration error.
+    if matches!(
+        att.protocol,
+        AttachmentProtocol::Tcp | AttachmentProtocol::Udp
+    ) {
+        // r[impl ingress.site.attachment]
+        match &att.target {
+            AttachmentTarget::Forward { app, service } => {
+                match resolve_forward_upstream(app, service, apps, node_prefix, registry) {
+                    Ok(upstream) => {
+                        let upstream_url =
+                            format!("[{}]:{}", upstream.service_ip, upstream.service_port);
+                        let proto = match att.protocol {
+                            AttachmentProtocol::Tcp => L4Proto::Tcp,
+                            AttachmentProtocol::Udp => L4Proto::Udp,
+                            _ => unreachable!("guarded by outer match"),
+                        };
+                        data.l4_routes.push(SiteL4Entry {
+                            site_ingress: ingress.name.clone(),
+                            hostname: ingress.hostname.clone(),
+                            route: L4Route {
+                                port: att.port,
+                                proto,
+                                upstreams: vec![upstream_url],
+                            },
+                        });
+                    }
+                    Err(reason) => data.unresolved.push(UnresolvedAttachment {
+                        site_ingress: ingress.name.as_str().to_owned(),
+                        port: att.port,
+                        protocol: att.protocol,
+                        reason,
+                    }),
+                }
+            }
+            AttachmentTarget::Redirect { .. } => {
+                data.unresolved.push(UnresolvedAttachment {
+                    site_ingress: ingress.name.as_str().to_owned(),
+                    port: att.port,
+                    protocol: att.protocol,
+                    reason: format!(
+                        "redirect targets are only valid on HTTP/HTTP2 attachments, not {}",
+                        att.protocol
+                    ),
+                });
+            }
+        }
+        return;
+    }
+
     let term = match att.protocol {
         AttachmentProtocol::Http => HttpTermination::Http1,
         AttachmentProtocol::Http2 => HttpTermination::Http2,
-        AttachmentProtocol::Tcp | AttachmentProtocol::Udp => {
-            data.unresolved.push(UnresolvedAttachment {
-                site_ingress: ingress.name.as_str().to_owned(),
-                port: att.port,
-                protocol: att.protocol,
-                reason: format!(
-                    "L4 ({}) attachments are not yet supported on site ingresses",
-                    att.protocol
-                ),
-            });
-            return;
-        }
+        AttachmentProtocol::Tcp | AttachmentProtocol::Udp => unreachable!("handled above"),
     };
 
     let port = match Port::new(i64::from(att.port)) {
@@ -319,6 +379,12 @@ pub(super) fn detect_conflicts(
             .or_default()
             .push(name.as_str().to_owned());
     }
+    for entry in &site_data.l4_routes {
+        site_index
+            .entry((entry.hostname.clone(), entry.route.port))
+            .or_default()
+            .push(entry.site_ingress.as_str().to_owned());
+    }
 
     let mut report = ConflictReport::default();
     for (key, apps) in &app_index {
@@ -362,6 +428,8 @@ pub(super) fn drop_conflicting_site_data(
         .retain(|(_n, def, _u)| !conflicts.contains(&(def.hostname.clone(), def.port.get())));
     data.redirects
         .retain(|(_n, def, _r)| !conflicts.contains(&(def.hostname.clone(), def.port.get())));
+    data.l4_routes
+        .retain(|entry| !conflicts.contains(&(entry.hostname.clone(), entry.route.port)));
     data
 }
 
@@ -409,6 +477,7 @@ mod tests {
         let data = SiteProxyData {
             forwards: vec![(site("front"), def("b.example.com", 443), upstream())],
             redirects: vec![],
+            l4_routes: vec![],
             unresolved: vec![],
         };
         let report = detect_conflicts(&app_pairs, &data);
@@ -422,6 +491,7 @@ mod tests {
         let data = SiteProxyData {
             forwards: vec![(site("front"), def("shared.example.com", 443), upstream())],
             redirects: vec![],
+            l4_routes: vec![],
             unresolved: vec![],
         };
         let report = detect_conflicts(&app_pairs, &data);
@@ -448,6 +518,7 @@ mod tests {
                 def("shared.example.com", 443),
                 redirect_target(),
             )],
+            l4_routes: vec![],
             unresolved: vec![],
         };
         let report = detect_conflicts(&app_pairs, &data);
@@ -461,10 +532,69 @@ mod tests {
         let data = SiteProxyData {
             forwards: vec![(site("front"), def("shared.example.com", 8080), upstream())],
             redirects: vec![],
+            l4_routes: vec![],
             unresolved: vec![],
         };
         let report = detect_conflicts(&app_pairs, &data);
         assert!(report.conflicts.is_empty());
+    }
+
+    #[test]
+    fn l4_route_conflicts_with_app_ingress_on_same_host_port() {
+        let app = AppName::new("web").unwrap();
+        let app_pairs = vec![(app.clone(), def("shared.example.com", 5432), upstream())];
+        let data = SiteProxyData {
+            forwards: vec![],
+            redirects: vec![],
+            l4_routes: vec![SiteL4Entry {
+                site_ingress: site("postgres"),
+                hostname: "shared.example.com".to_owned(),
+                route: L4Route {
+                    port: 5432,
+                    proto: L4Proto::Tcp,
+                    upstreams: vec!["[fd5e::1]:5432".to_owned()],
+                },
+            }],
+            unresolved: vec![],
+        };
+        let report = detect_conflicts(&app_pairs, &data);
+        assert_eq!(report.conflicts.len(), 1);
+        assert_eq!(report.parties[0].site[0], "postgres");
+    }
+
+    #[test]
+    fn drop_filters_l4_routes() {
+        let conflicts: BTreeSet<(String, u16)> = [("dropped.example.com".to_owned(), 5432)]
+            .into_iter()
+            .collect();
+        let data = SiteProxyData {
+            forwards: vec![],
+            redirects: vec![],
+            l4_routes: vec![
+                SiteL4Entry {
+                    site_ingress: site("dropped"),
+                    hostname: "dropped.example.com".to_owned(),
+                    route: L4Route {
+                        port: 5432,
+                        proto: L4Proto::Tcp,
+                        upstreams: vec!["[fd5e::1]:5432".to_owned()],
+                    },
+                },
+                SiteL4Entry {
+                    site_ingress: site("kept"),
+                    hostname: "kept.example.com".to_owned(),
+                    route: L4Route {
+                        port: 5432,
+                        proto: L4Proto::Tcp,
+                        upstreams: vec!["[fd5e::2]:5432".to_owned()],
+                    },
+                },
+            ],
+            unresolved: vec![],
+        };
+        let kept = drop_conflicting_site_data(data, &conflicts);
+        assert_eq!(kept.l4_routes.len(), 1);
+        assert_eq!(kept.l4_routes[0].hostname, "kept.example.com");
     }
 
     #[test]
@@ -480,6 +610,7 @@ mod tests {
                 (site("solo"), def("solo.example.com", 443), upstream()),
             ],
             redirects: vec![],
+            l4_routes: vec![],
             unresolved: vec![],
         };
         let conflicts: BTreeSet<(String, u16)> = [("dropped.example.com".to_owned(), 443)]

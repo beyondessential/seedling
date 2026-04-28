@@ -526,6 +526,18 @@ pub(crate) fn attach_redirect(
     let _ = ensure_ingress_exists(state, &params.name)?;
     validate_redirect_code(params.redirect_code)?;
     validate_redirect_url(&params.redirect_url)?;
+    if matches!(
+        params.protocol,
+        AttachmentProtocol::Tcp | AttachmentProtocol::Udp
+    ) {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!(
+                "redirect attachments must use protocol 'http' or 'http2'; got {}",
+                params.protocol
+            ),
+        ));
+    }
 
     let att = SiteIngressAttachment {
         site_ingress: params.name.clone(),
@@ -609,15 +621,12 @@ pub(crate) fn detach(
 /// discovery is unhealthy without grepping logs.
 // r[impl ingress.site.tailscale]
 pub(crate) fn discovery_status(state: &OiState) -> HandlerResult {
-    let discovered = state
-        .db
-        .call(|db| site_ingresses::list(db))
-        .map_err(|e| {
-            OiError::new(
-                ErrorCode::Internal,
-                format!("failed to read discovery state: {e}"),
-            )
-        })?;
+    let discovered = state.db.call(site_ingresses::list).map_err(|e| {
+        OiError::new(
+            ErrorCode::Internal,
+            format!("failed to read discovery state: {e}"),
+        )
+    })?;
 
     let tailscale_ingresses: Vec<_> = discovered
         .iter()
