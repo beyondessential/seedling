@@ -599,6 +599,51 @@ pub fn get_acme_account(
         .optional()
 }
 
+// r[impl tls.acme.account.persist]
+/// Look up the persisted account for an ACME directory regardless of the
+/// stored contact email. Used by the load-or-create path so that a
+/// changed contact email reuses the same account (with a follow-up
+/// `update_contacts` call) instead of registering a fresh one.
+///
+/// If a database somehow holds more than one row for the same directory
+/// (a leftover from when the schema keyed on `(directory, email)` and
+/// the email was changed), the most-recently-updated row wins.
+pub fn get_acme_account_for_directory(
+    db: &Db,
+    directory_url: &str,
+) -> rusqlite::Result<Option<AcmeAccount>> {
+    db.conn
+        .query_row(
+            "SELECT id, directory_url, contact_email, account_url,
+                    account_key_ciphertext, created_at, updated_at
+             FROM tls_acme_accounts
+             WHERE directory_url = ?1
+             ORDER BY updated_at DESC, id DESC
+             LIMIT 1",
+            params![directory_url],
+            row_to_acme_account,
+        )
+        .optional()
+}
+
+// r[impl tls.acme.account.contact-update]
+/// Update the persisted contact email for an existing account row, after
+/// the directory has accepted a `update_contacts` call.
+pub fn set_acme_account_contact_email(
+    db: &Db,
+    id: i64,
+    contact_email: &str,
+) -> rusqlite::Result<()> {
+    let now = now_secs();
+    db.conn.execute(
+        "UPDATE tls_acme_accounts
+         SET contact_email = ?1, updated_at = ?2
+         WHERE id = ?3",
+        params![contact_email, now, id],
+    )?;
+    Ok(())
+}
+
 pub fn get_acme_account_by_id(db: &Db, id: i64) -> rusqlite::Result<Option<AcmeAccount>> {
     db.conn
         .query_row(
@@ -1182,6 +1227,39 @@ mod tests {
 
         let decrypted = decrypt_acme_account_key(&cipher, &by_id).unwrap();
         assert!(decrypted.expose_secret().contains("BEGIN PRIVATE KEY"));
+    }
+
+    // r[verify tls.acme.account.persist]
+    // r[verify tls.acme.account.contact-update]
+    #[test]
+    fn acme_account_lookup_by_directory_and_contact_update() {
+        let (db, cipher) = fresh_db();
+        let key_pem = SecretString::new(
+            "-----BEGIN PRIVATE KEY-----\ndummy\n-----END PRIVATE KEY-----\n".into(),
+        );
+        let id = insert_acme_account(
+            &db,
+            &cipher,
+            "https://acme.example/directory",
+            "old@example.com",
+            "https://acme.example/acme/acct/1",
+            &key_pem,
+        )
+        .unwrap();
+
+        // Lookup by directory alone returns the account regardless of email.
+        let by_dir = get_acme_account_for_directory(&db, "https://acme.example/directory")
+            .unwrap()
+            .unwrap();
+        assert_eq!(by_dir.id, id);
+        assert_eq!(by_dir.contact_email, "old@example.com");
+
+        set_acme_account_contact_email(&db, id, "new@example.com").unwrap();
+        let after = get_acme_account_for_directory(&db, "https://acme.example/directory")
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.contact_email, "new@example.com");
+        assert_eq!(after.id, id, "row id is preserved across email updates");
     }
 
     // r[verify tls.policy.auto-default]

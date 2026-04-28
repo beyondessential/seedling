@@ -1341,8 +1341,12 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > A successful issuance must remove the row; subsequent operator-driven retries write a fresh one.
 
 > r[tls.acme.account.persist]
-> The runtime must persist ACME account state — at minimum the account private key and the URL returned by the directory's newAccount endpoint — for each `(directory_url, contact_email)` pair, encrypted at rest using the [secret key](#r--secret.key).
-> Subsequent orders against the same directory and contact must reuse the persisted account rather than creating a new one.
+> The runtime must persist ACME account state — at minimum the account private key and the URL returned by the directory's newAccount endpoint — for each ACME directory the runtime issues against, encrypted at rest using the [secret key](#r--secret.key).
+> All issuance against a given directory must reuse a single persisted account rather than creating a new one per strategy, hostname, or contact-email change.
+
+> r[tls.acme.account.contact-update]
+> When the operator changes [tls.settings.contact-email](#r--tls.settings.contact-email) and a persisted account already exists for the directory, the runtime must update the contact information on the existing account (RFC 8555 §7.3.2) rather than registering a new account.
+> The persisted contact email must be updated to match only after the directory accepts the change; if the directory rejects the update, the runtime must continue using the existing account, log the failure, and leave the persisted email unchanged so a later attempt can retry.
 
 > r[tls.acme.renewal.auto]
 > The runtime must autonomously renew certificates it has issued via ACME (DNS-01 strategy) before they expire.

@@ -312,7 +312,16 @@ fn build_cert_identifier(parsed: &parse::ParsedChain) -> Option<CertificateIdent
 /// Restore an ACME account from the encrypted credentials in the DB, or
 /// create a fresh one and persist it. Returns the live `Account` plus the
 /// row id for `tls_acme_accounts.id` so callers can stamp issued certs.
+///
+/// The lookup is keyed on the directory URL alone — a single account is
+/// reused across email changes. When the operator-configured
+/// `contact_email` differs from the email last persisted on the
+/// account, the account's contacts are updated on the directory (RFC
+/// 8555 §7.3.2) and only then is the persisted email rotated. A failed
+/// update logs and proceeds with the existing email so issuance is
+/// never blocked on a contact-only change.
 // r[impl tls.acme.account.persist]
+// r[impl tls.acme.account.contact-update]
 async fn load_or_create_account(
     db: &DbHandle,
     cipher: &Cipher,
@@ -320,9 +329,8 @@ async fn load_or_create_account(
     contact_email: &str,
 ) -> Result<(Account, i64), AcmeError> {
     let directory_owned = directory_url.to_owned();
-    let contact_owned = contact_email.to_owned();
     let existing = db
-        .call(move |db_inner| store::get_acme_account(db_inner, &directory_owned, &contact_owned))
+        .call(move |db_inner| store::get_acme_account_for_directory(db_inner, &directory_owned))
         .context(StorageSnafu)?;
 
     if let Some(row) = existing {
@@ -334,6 +342,41 @@ async fn load_or_create_account(
             .from_credentials(creds)
             .await
             .context(AcmeSnafu)?;
+
+        if row.contact_email != contact_email {
+            let contact_uri = format!("mailto:{contact_email}");
+            match account.update_contacts(&[contact_uri.as_str()]).await {
+                Ok(()) => {
+                    let id = row.id;
+                    let new_email = contact_email.to_owned();
+                    if let Err(e) = db.call(move |db_inner| {
+                        store::set_acme_account_contact_email(db_inner, id, &new_email)
+                    }) {
+                        tracing::warn!(
+                            account_id = row.id,
+                            error = %e,
+                            "ACME contacts updated on directory but DB row update failed"
+                        );
+                    } else {
+                        tracing::info!(
+                            account_id = row.id,
+                            old = %row.contact_email,
+                            new = %contact_email,
+                            "updated ACME account contact email"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        account_id = row.id,
+                        directory = %directory_url,
+                        error = %e,
+                        "directory rejected update_contacts; reusing account with prior email"
+                    );
+                }
+            }
+        }
+
         return Ok((account, row.id));
     }
 
