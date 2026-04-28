@@ -216,7 +216,14 @@ fn build_policy(
 }
 
 fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
-    vh.routes
+    // r[impl service.http.route.routing]
+    // Caddy evaluates routes within a server in order and a `/` matcher
+    // matches every request, so longer prefixes must come first or they
+    // get shadowed. Sort by prefix length descending; ties (rare) keep
+    // their input order.
+    let mut routes = vh.routes.clone();
+    routes.sort_by(|a, b| b.prefix.len().cmp(&a.prefix.len()));
+    routes
         .iter()
         .map(|route| {
             let match_expr = if route.prefix == "/" {

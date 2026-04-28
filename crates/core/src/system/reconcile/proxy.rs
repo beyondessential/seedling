@@ -13,10 +13,12 @@ use crate::{
         lifecycle::LifecycleState, registry::RegistryError,
     },
     system::{
-        translate::proxy::{ServiceUpstream, instance_ipv6},
+        translate::proxy::{HttpForwardRoute, ServiceUpstream, instance_ipv6},
         types::{L4Proto, L4Route},
     },
 };
+
+use super::RunningPod;
 
 pub(super) struct ProxyBuildOutput {
     pub pairs: Vec<(IngressDef, ServiceUpstream)>,
@@ -35,6 +37,7 @@ pub(super) fn collect(
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
     app_name: &AppName,
+    running_pods: &[RunningPod],
 ) -> Result<ProxyBuildOutput, RegistryError> {
     let mut observations: Vec<(ResourceInstance, &'static str, serde_json::Value)> = Vec::new();
     let mut ready_observations: Vec<(ResourceInstance, &'static str, serde_json::Value)> =
@@ -108,9 +111,17 @@ pub(super) fn collect(
 
         ready_observations.push((ingress_instance, "ingress_ready", serde_json::json!({})));
 
+        // r[impl service.http.route.routing]
+        // Per-prefix routes derived from pod http_bindings. Caddy will
+        // longest-prefix match these; the service IP fallback below only
+        // kicks in if the service has no http_bindings at all (e.g. an
+        // HTTPS-fronted TCP service).
+        let routes = collect_http_routes(snapshot, svc_name, running_pods);
+
         pairs.push((
             def,
             ServiceUpstream {
+                routes,
                 service_ip,
                 service_port: upstream_port,
             },
@@ -198,4 +209,84 @@ fn scan_pod_for_port(pod: &PodDef, service_name: &str) -> Option<u16> {
     }
 
     None
+}
+
+/// Build per-prefix HTTP routes for an ingress backed by `service_name`.
+///
+/// For each (pod, http_binding) on this app where the binding targets the
+/// named service, group by the binding's URL prefix and collect the running
+/// pod IPs as upstreams. Caddy then picks the right pods by longest-prefix
+/// match.
+///
+/// The pod-level binding is the source of truth: a single deployment's
+/// http_bindings can target the same service at multiple prefixes (e.g. an
+/// API server bound at both `/api` and `/v1`), and multiple deployments can
+/// claim different prefixes on the same service (e.g. an API on `/api` and
+/// a frontend on `/`). Without this fan-out, the reconciler would route all
+/// service traffic to all backing pods and the URL-prefix model would be a
+/// no-op.
+// r[impl service.http.route.routing]
+fn collect_http_routes(
+    snapshot: &AppDef,
+    service_name: &str,
+    running_pods: &[RunningPod],
+) -> Vec<HttpForwardRoute> {
+    use std::collections::BTreeMap;
+
+    // Map pod resource name → list of pod IPs (one per running replica) for
+    // the running pods in this app. Scaled deployments contribute multiple
+    // entries under the same name, all of which become upstreams for any
+    // prefix the deployment claims.
+    let mut pod_ips_for_resource: BTreeMap<String, Vec<std::net::Ipv6Addr>> = BTreeMap::new();
+    for p in running_pods {
+        if let Some(name) = p.instance.name.as_ref() {
+            pod_ips_for_resource
+                .entry(name.clone())
+                .or_default()
+                .push(p.pod_ip);
+        }
+    }
+
+    // prefix -> list of "ip:pod_port" upstream strings.
+    let mut by_prefix: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+    for resource in snapshot.resources.values() {
+        let (resource_name, http_bindings) = match resource {
+            Resource::Deployment(dep) => {
+                let def = dep.def.lock();
+                let pod = def.pod.lock();
+                (dep.name.to_string(), pod.http_bindings.clone())
+            }
+            Resource::Job(job) => {
+                let def = job.def.lock();
+                let pod = def.pod.lock();
+                (job.name.to_string(), pod.http_bindings.clone())
+            }
+            _ => continue,
+        };
+
+        for binding in &http_bindings {
+            if binding.route.http.service.name().as_str() != service_name {
+                continue;
+            }
+            // Only resources whose pods are observed running this tick
+            // contribute upstreams. A binding with no live pod yields an
+            // empty upstream list for its prefix; Caddy responds with 502
+            // until a pod comes up, which is the right behaviour during
+            // rollouts.
+            let entry = by_prefix
+                .entry(binding.route.prefix.clone())
+                .or_default();
+            if let Some(ips) = pod_ips_for_resource.get(&resource_name) {
+                for ip in ips {
+                    entry.push(format!("[{}]:{}", ip, binding.pod_port.get()));
+                }
+            }
+        }
+    }
+
+    by_prefix
+        .into_iter()
+        .map(|(prefix, upstreams)| HttpForwardRoute { prefix, upstreams })
+        .collect()
 }

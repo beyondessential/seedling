@@ -258,6 +258,7 @@ pub(super) fn warm_cert_targets(
 pub(super) fn compute_proxy_config(
     apps: &[AppSnapshot],
     site_snapshot: &site_proxy::SiteIngressSnapshot,
+    running_pods_by_app: &HashMap<AppName, Vec<RunningPod>>,
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
     cert_endpoint_url: Option<&str>,
@@ -275,12 +276,18 @@ pub(super) fn compute_proxy_config(
         if app.phase == AppPhase::Uninstalling {
             continue;
         }
+        let empty: Vec<RunningPod> = Vec::new();
+        let app_running_pods: &[RunningPod] = running_pods_by_app
+            .get(&app.name)
+            .map(Vec::as_slice)
+            .unwrap_or(&empty);
         let build = match proxy::collect(
             &app.app_def,
             &app.desired,
             node_prefix,
             registry,
             &app.name,
+            app_running_pods,
         ) {
             Ok(b) => b,
             Err(e) => {

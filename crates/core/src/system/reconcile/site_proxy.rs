@@ -282,6 +282,13 @@ fn resolve_forward_upstream(
         .ok_or_else(|| format!("no pod binding found for {target_app}/{svc_name_str}"))?;
 
     Ok(ServiceUpstream {
+        // Site-ingress attachments fall back to the legacy single-`/` route
+        // through the service IP. Per-prefix HTTP routing for site
+        // ingresses would require running-pod plumbing that hasn't been
+        // surfaced here yet; the typical use case for site ingresses is a
+        // 1:1 host→service mapping where the prefix model wouldn't change
+        // anything anyway.
+        routes: Vec::new(),
         service_ip,
         service_port: upstream_port,
     })
@@ -453,6 +460,7 @@ mod tests {
 
     fn upstream() -> ServiceUpstream {
         ServiceUpstream {
+            routes: Vec::new(),
             service_ip: Ipv6Addr::from([0xfd, 0x5e, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
             service_port: 8080,
         }

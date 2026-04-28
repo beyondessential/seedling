@@ -14,11 +14,33 @@ use crate::{
     },
 };
 
-/// A resolved upstream for one service: the service's stable IPv6 address
-/// and the internal port Caddy should send traffic to.
+/// A resolved upstream for one service.
+///
+/// `routes` lists the per-prefix HTTP routes declared by the BSL (each
+/// `deployment.http(pod_port, svc.route(prefix))` binding), with upstreams
+/// resolved to backend pod addresses so Caddy can do longest-prefix matching
+/// and pick the right pod directly. Bypassing the service IP for HTTP is
+/// the only way prefix routing can work — the service-IP path goes through
+/// nftables ECMP DNAT which doesn't know about URL prefixes.
+///
+/// `service_ip` / `service_port` remain as a fallback for ingresses whose
+/// backing service has no `http_bindings` at all (e.g. an HTTPS ingress
+/// fronting a TCP-only service): in that case `routes` is empty and the
+/// legacy single-`/` route through the service IP is emitted.
 pub struct ServiceUpstream {
+    pub routes: Vec<HttpForwardRoute>,
     pub service_ip: Ipv6Addr,
     pub service_port: u16,
+}
+
+/// One HTTP route on a service: the URL prefix declared in BSL, plus the
+/// concrete pod-IP upstreams backing that prefix on the current tick.
+// r[impl service.http.route.routing]
+#[derive(Debug, Clone)]
+pub struct HttpForwardRoute {
+    pub prefix: String,
+    /// `ip:port` upstreams, one per backing pod observed running this tick.
+    pub upstreams: Vec<String>,
 }
 
 /// Resolved redirect target for a site-ingress attachment. Used in place of
@@ -99,16 +121,38 @@ pub fn build_proxy_config(
 
     for (ingress, upstream) in forwards {
         register_listeners(&mut listener_set, ingress);
-        // Caddy always contacts the service over plain HTTP; TLS is
-        // terminated by Caddy, not by the backing service.
-        let upstream_url = format!("http://[{}]:{}", upstream.service_ip, upstream.service_port);
         let vhost = ensure_vhost(&mut vhosts, ingress);
-        vhost.routes.push(ProxyRoute {
-            prefix: "/".to_string(),
-            handler: ProxyRouteHandler::ReverseProxy {
-                upstreams: vec![upstream_url],
-            },
-        });
+        // r[impl service.http.route.routing]
+        // Prefer per-prefix routes when the BSL declared any: walk each route
+        // declared by the service's http_bindings (longest prefix wins inside
+        // Caddy) and emit a ProxyRoute pointing at the matching pod IPs. Fall
+        // back to a single "/" route through the service IP when the service
+        // has no http_bindings (TCP-only services fronted by an HTTPS
+        // ingress, or a transient state where no pod has bound yet).
+        if upstream.routes.is_empty() {
+            let upstream_url =
+                format!("http://[{}]:{}", upstream.service_ip, upstream.service_port);
+            vhost.routes.push(ProxyRoute {
+                prefix: "/".to_string(),
+                handler: ProxyRouteHandler::ReverseProxy {
+                    upstreams: vec![upstream_url],
+                },
+            });
+        } else {
+            for route in &upstream.routes {
+                let upstream_urls: Vec<String> = route
+                    .upstreams
+                    .iter()
+                    .map(|u| format!("http://{u}"))
+                    .collect();
+                vhost.routes.push(ProxyRoute {
+                    prefix: route.prefix.clone(),
+                    handler: ProxyRouteHandler::ReverseProxy {
+                        upstreams: upstream_urls,
+                    },
+                });
+            }
+        }
     }
 
     for (ingress, target) in redirects {

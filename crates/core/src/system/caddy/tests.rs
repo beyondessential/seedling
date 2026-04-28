@@ -373,6 +373,53 @@ fn only_internal_hostnames_emit_just_internal_policy() {
     assert_eq!(policies[0]["subjects"][0], "node.localhost");
 }
 
+// r[verify service.http.route.routing]
+#[test]
+fn vhost_with_multiple_prefixes_emits_per_prefix_routes_longest_first() {
+    let config = ProxyConfig {
+        listeners: vec![ProxyListener {
+            port: 443,
+            proto: ProxyListenerProto::Https,
+        }],
+        virtual_hosts: vec![VirtualHost {
+            hostname: "example.com".to_string(),
+            tls_acme: true,
+            redirect: None,
+            // Caddy is order-sensitive within a server's routes; the
+            // builder must emit `/api` before `/` so the API path matches
+            // first. We assert that order regardless of how the input
+            // was constructed.
+            routes: vec![
+                ProxyRoute {
+                    prefix: "/".to_string(),
+                    handler: ProxyRouteHandler::ReverseProxy {
+                        upstreams: vec!["http://[fd5e::1]:3000".to_string()],
+                    },
+                },
+                ProxyRoute {
+                    prefix: "/api".to_string(),
+                    handler: ProxyRouteHandler::ReverseProxy {
+                        upstreams: vec!["http://[fd5e::2]:3000".to_string()],
+                    },
+                },
+            ],
+        }],
+        l4_routes: vec![],
+        warm_cert_hostnames: Default::default(),
+        cert_endpoint_url: None,
+    };
+    let json = build_caddy_config(&config);
+    let routes = &json["apps"]["http"]["servers"]["seedling_https"]["routes"];
+    let routes = routes.as_array().unwrap();
+    assert_eq!(routes.len(), 2);
+    // Each route's match should carry the right host + path.
+    assert_eq!(routes[0]["match"][0]["path"][0], "/api*");
+    assert_eq!(routes[0]["match"][0]["host"][0], "example.com");
+    // `/` route has no `path` matcher (just host).
+    assert_eq!(routes[1]["match"][0]["host"][0], "example.com");
+    assert!(routes[1]["match"][0]["path"].is_null());
+}
+
 #[test]
 fn cert_endpoint_url_without_subjects_emits_no_tls_app() {
     // Without any TLS-terminating vhosts there is no automation policy

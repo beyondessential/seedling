@@ -790,6 +790,7 @@ impl Reconciler {
             let proxy_build = phases::compute_proxy_config(
                 &apps,
                 &site_ingress_snapshot,
+                &running_pods_by_app,
                 &self.node_prefix,
                 &*self.registry,
                 self.cert_endpoint_url.as_deref(),
