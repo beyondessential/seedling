@@ -424,6 +424,10 @@ let provision_admin = |rt, email, display_name, password| {
 // ── Install ───────────────────────────────────────────────────────────────────
 
 app.on_install(|rt, param| {
+    rt.warm_certs(app);
+    rt.start(app.select(#{ types: [ResourceType.Ingress, ResourceType.Service] }));
+    rt.start(app.deployment("frontend")).ready();
+
     copy_image_defaults.call(rt);
     render_config.call(rt);
     provision_db.call(rt);
@@ -433,7 +437,6 @@ app.on_install(|rt, param| {
         param["admin-display-name"],
         param["admin-password"]);
 
-    rt.warm_certs(app).ready();
     rt.start(app).ready(300);
 }, #{
     params: #{
