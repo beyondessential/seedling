@@ -41,6 +41,7 @@ import { useGuard } from "../components/SafetyModeProvider";
 import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
 import type {
+  AppService,
   AttachmentProtocol,
   SiteIngress,
   SiteIngressAttachment,
@@ -226,13 +227,14 @@ function AttachDialog({
   const [kind, setKind] = useState<"forward" | "redirect">("forward");
   const [port, setPort] = useState("443");
   const [protocol, setProtocol] = useState<AttachmentProtocol>("http");
-  const [targetApp, setTargetApp] = useState("");
-  const [targetService, setTargetService] = useState("");
+  const [target, setTarget] = useState("");
   const [redirectUrl, setRedirectUrl] = useState("");
   const [redirectCode, setRedirectCode] = useState<number>(307);
   const [preservePath, setPreservePath] = useState(true);
   const guard = useGuard("dangerous");
   const { execute, loading, error } = useOiAction();
+  const { data: appServices } = useOiQuery<AppService[]>("/services/app/list", {});
+  const [targetApp, targetService] = target ? target.split("\0") : ["", ""];
   const onSubmit = async () => {
     const portNum = Number.parseInt(port, 10);
     if (!Number.isFinite(portNum) || portNum < 1 || portNum > 65535) return;
@@ -310,22 +312,58 @@ function AttachDialog({
             </FormControl>
           </Stack>
           {kind === "forward" ? (
-            <Stack direction="row" spacing={2}>
-              <TextField
-                label="Target app"
-                size="small"
-                value={targetApp}
-                onChange={(e) => setTargetApp(e.target.value)}
-                fullWidth
-              />
-              <TextField
-                label="Target service"
-                size="small"
-                value={targetService}
-                onChange={(e) => setTargetService(e.target.value)}
-                fullWidth
-              />
-            </Stack>
+            (appServices ?? []).length > 0 ? (
+              <FormControl size="small" fullWidth>
+                <InputLabel id="att-target">Target app / service</InputLabel>
+                <Select
+                  labelId="att-target"
+                  label="Target app / service"
+                  value={target}
+                  onChange={(e) => setTarget(e.target.value)}
+                  sx={{ fontFamily: "monospace" }}
+                >
+                  {(appServices ?? []).map((s) => (
+                    <MenuItem
+                      key={`${s.app}\0${s.service_name}`}
+                      value={`${s.app}\0${s.service_name}`}
+                      sx={{ fontFamily: "monospace" }}
+                    >
+                      {s.app}
+                      <Typography
+                        component="span"
+                        sx={{ color: "text.secondary", mx: 0.5 }}
+                      >
+                        /
+                      </Typography>
+                      {s.service_name}
+                      {s.http && (
+                        <Typography
+                          component="span"
+                          variant="caption"
+                          sx={{ color: "text.secondary", ml: 1 }}
+                        >
+                          http
+                        </Typography>
+                      )}
+                      {!s.exported && (
+                        <Typography
+                          component="span"
+                          variant="caption"
+                          sx={{ color: "warning.main", ml: 1 }}
+                        >
+                          not exported
+                        </Typography>
+                      )}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            ) : (
+              <Typography variant="body2" sx={{ color: "text.secondary" }}>
+                No app services available. Register an app that exports a
+                service before attaching a forward.
+              </Typography>
+            )
           ) : (
             <Stack spacing={2}>
               <TextField
