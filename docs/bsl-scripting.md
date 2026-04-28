@@ -68,7 +68,7 @@ let route = http_svc.route("/api");   // HTTP path prefix routing
 // Ingresses are keyed by (hostname, port); one service can have many.
 // .tls(terminate, output) declares both what's terminated at the edge
 // and what protocol is handed to the bound Service. Without it, the
-// ingress is plain TCP passthrough.
+// ingress is plain TCP/UDP passthrough.
 svc.ingress("host.example.com", 443)
     .tls(Terminate.Https, Output.Http1)   // HTTPS → HTTP/1.1
     .redirect();                           // redirect port 80 → 443
@@ -235,12 +235,12 @@ let image = || `ghcr.io/example/myapp:${version.value()}`;
 
 // Services define network endpoints.
 // Specialising as .http() enables URL-prefix routing.
-let web_svc = app.service("web")
-    .ingress("myapp.example.com", 443)
+let web_svc = app.service("web").http(80);
+
+// Ingresses route traffic from outside to a service
+web_svc.ingress("myapp.example.com", 443)
     .tls(Terminate.Https, Output.Http1)  // terminate HTTPS, re-emit HTTP/1.1
-    .redirect()                          // redirect HTTP on port 80 to 443
-    .service()                           // navigate back from ingress to the service
-    .http(80);                           // specialise the service for path routing
+    .redirect();                         // redirect HTTP on port 80 to 443
 
 // A persistent volume, exported so operators and other apps can reference it.
 let data = app.volume("data").exported(#{ description: "Application data" });
