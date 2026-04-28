@@ -28,7 +28,7 @@ pub fn schedule_hash(app_name: &AppName, action_name: &ActionName) -> u64 {
 
 /// Validate and parse a 5-field cron expression. The `H` extension is supported
 /// using the hash derived from the given app and action names. The timezone
-/// defaults to UTC when omitted.
+/// defaults to the system local timezone when omitted.
 pub fn validate_cron_expr(
     expr: &str,
     app_name: &AppName,
@@ -53,7 +53,7 @@ pub fn parse_cron_expr(
 
 fn cron_parse_options(app_name: &AppName, action_name: &ActionName) -> cronexpr::ParseOptions {
     let mut opts = cronexpr::ParseOptions::default();
-    opts.fallback_timezone_option = cronexpr::FallbackTimezoneOption::UTC;
+    opts.fallback_timezone_option = cronexpr::FallbackTimezoneOption::System;
     opts.hashed_value = Some(schedule_hash(app_name, action_name));
     opts
 }

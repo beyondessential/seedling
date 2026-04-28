@@ -829,6 +829,8 @@ This is currently the only value.
 >
 > The `expr` is a 5-field cron expression (minute, hour, day-of-month, month, day-of-week) with 1-minute minimum resolution. The Jenkins `H` extension is supported: `H` is replaced with a stable hash-derived value within the field's range, computed from `(app_name, action_name)`. For example, `H 2 * * *` fires once daily at a stable minute during the 02:xx hour.
 >
+> An optional sixth field specifies the IANA timezone (e.g. `0 2 * * * Pacific/Auckland`). When omitted, the expression is interpreted in the system local timezone of the daemon.
+>
 > `on_schedule` must not be called on the Start Action (name `"start"`); doing so must throw. `on_schedule` is not available on Shell Actions.
 >
 > When a scheduled action fires, it is invoked as a normal lifecycle operation with an empty `param` map. Operators may also invoke a scheduled action manually via the action invocation RPC, in which case operator-provided params are passed through.

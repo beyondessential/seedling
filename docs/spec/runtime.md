@@ -522,11 +522,11 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 # Backup Scheduling
 
 > r[backup.schedule]
-> Backup strategies use named schedule buckets: `"every hour"`, `"twice a day"`, `"every day"`. Snapshots are taken on the round boundary:
+> Backup strategies use named schedule buckets: `"every hour"`, `"twice a day"`, `"every day"`. Snapshots are taken on the round boundary in the system local timezone:
 >
-> - `"every hour"`: top of each hour (xx:00 UTC).
-> - `"every day"`: midnight UTC (00:00).
-> - `"twice a day"`: midnight UTC and noon UTC (00:00, 12:00).
+> - `"every hour"`: top of each hour (xx:00 local time).
+> - `"every day"`: midnight local time (00:00).
+> - `"twice a day"`: midnight and noon local time (00:00, 12:00).
 
 > r[backup.schedule.delay]
 > Before executing a backup strategy, the runtime must apply a random delay of 0–10% of the schedule interval:
