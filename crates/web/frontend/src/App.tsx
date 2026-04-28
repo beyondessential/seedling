@@ -13,6 +13,7 @@ import EditTemplate from "./routes/EditTemplate";
 import Faults from "./routes/Faults";
 import Images from "./routes/Images";
 import InfraLogs from "./routes/InfraLogs";
+import Ingresses from "./routes/Ingresses";
 import Keys from "./routes/Keys";
 import Login from "./routes/Login";
 import Logs from "./routes/Logs";
@@ -39,6 +40,7 @@ const router = createBrowserRouter([
       { path: "faults", element: <Faults /> },
       { path: "volumes", element: <Volumes /> },
       { path: "services", element: <Services /> },
+      { path: "ingresses", element: <Ingresses /> },
       { path: "certificates", element: <Certificates /> },
       { path: "backups", element: <Backups /> },
       { path: "keys", element: <Keys /> },

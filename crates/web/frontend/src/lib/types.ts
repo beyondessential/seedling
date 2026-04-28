@@ -349,6 +349,62 @@ export interface SiteService {
   endpoints: SiteServiceEndpoint[];
 }
 
+export type AttachmentProtocol = "tcp" | "udp" | "http" | "http2";
+
+export type SiteIngressTlsProvider = "acme" | "tailscale" | "internal" | "none";
+
+export type SiteIngressSourceKind = "manual" | "discovered";
+
+export type SiteIngressDiscoveredProvider = "tailscale";
+
+export interface SiteIngressForwardAttachment {
+  port: number;
+  protocol: AttachmentProtocol;
+  target_kind: "forward";
+  target_app: string;
+  target_service: string;
+  created_at: string;
+}
+
+export interface SiteIngressRedirectAttachment {
+  port: number;
+  protocol: AttachmentProtocol;
+  target_kind: "redirect";
+  redirect_url: string;
+  redirect_code: number;
+  redirect_preserve_path: boolean;
+  created_at: string;
+}
+
+export type SiteIngressAttachment =
+  | SiteIngressForwardAttachment
+  | SiteIngressRedirectAttachment;
+
+export interface SiteIngress {
+  name: string;
+  hostname: string;
+  description?: string;
+  source: SiteIngressSourceKind;
+  discovered_provider?: SiteIngressDiscoveredProvider;
+  discovered_key?: string;
+  tls_provider: SiteIngressTlsProvider;
+  stale: boolean;
+  created_at: string;
+  attachments: SiteIngressAttachment[];
+}
+
+export interface SiteIngressDiscoveryEntry {
+  name: string;
+  provider: SiteIngressDiscoveredProvider;
+  key: string;
+  hostname: string;
+  stale: boolean;
+}
+
+export interface SiteIngressDiscoveryStatus {
+  providers: { name: string; ingresses: SiteIngressDiscoveryEntry[] }[];
+}
+
 export interface ExportedService {
   app: string;
   service_name: string;

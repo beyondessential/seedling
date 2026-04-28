@@ -1,3 +1,4 @@
+import AltRouteIcon from "@mui/icons-material/AltRoute";
 import BackupIcon from "@mui/icons-material/Backup";
 import CloudQueueIcon from "@mui/icons-material/CloudQueue";
 import DescriptionIcon from "@mui/icons-material/Description";
@@ -146,6 +147,16 @@ export function Navbar() {
             sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
           >
             <HubIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Site ingresses">
+          <IconButton
+            size="small"
+            component={Link}
+            to="/ingresses"
+            sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
+          >
+            <AltRouteIcon fontSize="small" />
           </IconButton>
         </Tooltip>
         <Tooltip title="TLS certificates">
