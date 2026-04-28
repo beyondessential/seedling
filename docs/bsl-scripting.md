@@ -295,10 +295,12 @@ app.on_shell("bash", |_rt, shell, _param| {
     description: "Bash shell in the app container",
 });
 
-// on_install only runs on first install, and can prompt for secrets.
+// on_install only runs on first install, and can prompt for secrets. Param
+// keys follow the BSL name rules (lowercase alphanumeric and hyphens), so
+// access them via `param["admin-password"]` rather than `param.admin_password`.
 app.on_install(|rt, param| {
     let seed_vol = app.volume();
-    seed_vol.write("/seed.json", `{"admin_password":"${param.admin_password}"}`);
+    seed_vol.write("/seed.json", `{"adminPassword":"${param["admin-password"]}"}`);
     let seed_job = app.job()
         .image(image.call())
         .command(["seed-db"])
@@ -308,7 +310,7 @@ app.on_install(|rt, param| {
     rt.action(app, "start");
 }, #{
     params: #{
-        admin_password: #{
+        "admin-password": #{
             kind: "password",
             description: "Initial administrator password",
         },

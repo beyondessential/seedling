@@ -1,27 +1,30 @@
 // Tamanu Central server.
 //
-// Runs the Tamanu central API, scheduled tasks, FHIR workers, and a frontend,
-// plus an optional patient portal. Connects to PostgreSQL via the unix socket
-// exported by the seedling-managed `postgres` app: the operator binds this
-// app's `pg-socket` external volume to that socket. The same socket is used
-// to provision the `tamanu` database and the read-only `raw` / `reporting`
-// users at install time.
+// Runs the Tamanu central API, scheduled tasks, an optional FHIR refresh +
+// resolve worker pair, and a frontend, plus an optional patient portal. The
+// central server connects to PostgreSQL via the unix socket exported by the
+// seedling-managed `postgres` app: the operator binds this app's `pg-socket`
+// external volume to that socket. Postgres `local trust` authentication makes
+// passwords unnecessary for connections via the socket.
 //
 // Routing model:
 //   - `/api/*` and `/v1/*` → API workers (port 3000)
 //   - `/*` → frontend (port 3000)
 //   - patient portal (when enabled) is a separate hostname / ingress
 //
+// Scaling: API scales 1..(AVAILABLE_THREADS / 2); the frontend is fixed at 1
+// (rolling restarts handle blue/green rotation by themselves).
+//
 // Version upgrades:
-//   - The frontend is rotated first (rolling) so cached HTML keeps working.
 //   - All API + worker deployments are stopped, the database migration job
 //     runs against the new image, and they come back up on the new tag.
+//   - The frontend keeps serving cached pages through the brief outage and
+//     rolls to the new tag as part of `rt.start(app)` afterwards.
 
 // ── Params ────────────────────────────────────────────────────────────────────
 
 let version = app.param("version")
     .required(true)
-    .default_value("v2.53.3")
     .description("Tamanu image tag (e.g. v2.10.0); applied to central, frontend, and patient-portal images");
 
 let public_hostname = app.param("public-hostname")
@@ -34,23 +37,8 @@ let canonical_url = app.param("canonical-url")
 
 let timezone = app.param("timezone")
     .required(false)
-    .default_value("UTC")
-    .description("IANA timezone, e.g. Pacific/Auckland");
-
-let country_name = app.param("country-name")
-    .required(false)
-    .default_value("Utopia")
-    .description("Country name for localisation");
-
-let country_alpha2 = app.param("country-alpha2")
-    .required(false)
-    .default_value("UT")
-    .description("ISO 3166-1 alpha-2 country code");
-
-let country_alpha3 = app.param("country-alpha3")
-    .required(false)
-    .default_value("UTO")
-    .description("ISO 3166-1 alpha-3 country code");
+    .default_value(TIMEZONE)
+    .description("IANA timezone, e.g. Pacific/Auckland; defaults to the host's local timezone");
 
 let auth_secret = app.param("auth-secret")
     .kind("password")
@@ -70,32 +58,12 @@ let db_name = app.param("db-name")
 let db_user = app.param("db-user")
     .required(false)
     .default_value("tamanu")
-    .description("PostgreSQL role the central server connects as");
+    .description("PostgreSQL role the central server connects as (uses local-socket trust auth, no password)");
 
-let db_password = app.param("db-password")
-    .kind("password")
-    .required(true)
-    .description("PostgreSQL password for the central server's role");
-
-let raw_password = app.param("raw-password")
-    .kind("password")
-    .required(true)
-    .description("Password for the 'raw' read-only reporting role");
-
-let reporting_password = app.param("reporting-password")
-    .kind("password")
-    .required(true)
-    .description("Password for the 'reporting' read-only reporting role");
-
-let api_replicas = app.param("api-replicas")
+let fhir_enabled = app.param("fhir-enabled")
     .required(false)
-    .default_value("2")
-    .description("Number of central API replicas");
-
-let frontend_replicas = app.param("frontend-replicas")
-    .required(false)
-    .default_value("2")
-    .description("Number of frontend replicas");
+    .default_value("false")
+    .description("Whether to run the FHIR refresh + resolve workers (set to 'true' to enable)");
 
 let patient_portal_fqdn = app.param("patient-portal-fqdn")
     .required(false)
@@ -118,6 +86,11 @@ let server_image = || `ghcr.io/beyondessential/tamanu-central:${version.value()}
 let frontend_image = || `ghcr.io/beyondessential/tamanu-frontend:${version.value()}`;
 let portal_image = || `ghcr.io/beyondessential/tamanu-patient-portal:${version.value()}`;
 
+// Postgres-client image used for the one-shot DB provisioning job. The tamanu
+// images don't ship with psql, so we run psql out of an alpine-based postgres
+// image. Trust auth on the local socket means no password handling is needed.
+let psql_image = "docker.io/library/postgres:18-alpine";
+
 let canonical = || if canonical_url.is_set() {
     canonical_url.value()
 } else {
@@ -125,6 +98,7 @@ let canonical = || if canonical_url.is_set() {
 };
 
 let portal_on = || patient_portal_fqdn.is_set();
+let fhir_on = || fhir_enabled.value() == "true";
 
 // JSON-string-encode a value with the few escapes JSON5 requires.
 let json_str = |s| {
@@ -173,11 +147,6 @@ ${extra_config.value()}
   },
   localisation: {
     data: {
-      country: {
-        name: ${json_str.call(country_name.value())},
-        "alpha-2": ${json_str.call(country_alpha2.value())},
-        "alpha-3": ${json_str.call(country_alpha3.value())},
-      },
       timeZone: ${json_str.call(timezone.value())},
     },
   },
@@ -196,15 +165,15 @@ ${portal_block}${extra}}
 `
 };
 
-// local.json5: deployment-local connection details. Tamanu reads this
-// alongside production.json5 (later loads override earlier ones).
+// local.json5: deployment-local connection details. The DB connection uses
+// the unix socket (host: "/var/run/postgresql"); postgres `local trust` auth
+// makes the password field a no-op, so it isn't included.
 let local_json = || `{
   // Generated by Seedling. Regenerate with the "reconfigure" action.
   db: {
     name: ${json_str.call(db_name.value())},
     verbose: false,
     username: ${json_str.call(db_user.value())},
-    password: ${json_str.call(db_password.value())},
     host: "/var/run/postgresql",
     port: null,
     migrateOnStartup: false,
@@ -212,11 +181,9 @@ let local_json = || `{
       connections: {
         raw: {
           username: "raw",
-          password: ${json_str.call(raw_password.value())},
         },
         reporting: {
           username: "reporting",
-          password: ${json_str.call(reporting_password.value())},
         },
       },
     },
@@ -224,10 +191,11 @@ let local_json = || `{
 }
 `;
 
-let parse_int_param = |p| {
-    let v = parse_int(p.value());
-    if v < 1 { throw `${p.value()} is not a positive integer` }
-    v
+// API replica range: scales from 1 up to half the node's available threads,
+// floored at 1 so deployments on a single-thread node still come up.
+let api_max_replicas = || {
+    let n = AVAILABLE_THREADS / 2;
+    if n < 1 { 1 } else { n }
 };
 
 // ── Resources ─────────────────────────────────────────────────────────────────
@@ -248,11 +216,9 @@ let web_svc = app.service("web")
     .exported(#{ description: "Tamanu central HTTPS endpoint (HTTP routing)" })
     .http(80);
 
-if public_hostname.is_set() {
-    web_svc.ingress(public_hostname.value(), 443)
-        .tls(Terminate.Https, Output.Http1)
-        .redirect();
-}
+web_svc.ingress(public_hostname.value(), 443)
+    .tls(Terminate.Https, Output.Http1)
+    .redirect();
 
 // Patient portal: separate ingress on its own hostname when enabled.
 let portal_svc = if portal_on.call() {
@@ -268,7 +234,7 @@ let portal_svc = if portal_on.call() {
 // API workers handle /api/* and /v1/* on the central HTTP service.
 configure_server.call(app.deployment("api")
     .image(server_image.call())
-    .scale(parse_int_param.call(api_replicas))
+    .scale(1..api_max_replicas.call())
     .arg(["startApi"])
     .http(3000, web_svc.route("/api"))
     .http(3000, web_svc.route("/v1"))
@@ -281,26 +247,29 @@ configure_server.call(app.deployment("tasks")
     .arg(["startTasks"])
 );
 
-// FHIR workers: refresh and resolve queues run as separate processes so
-// either can be scaled or restarted without affecting the other.
-configure_server.call(app.deployment("fhir-refresh")
-    .image(server_image.call())
-    .scale(1)
-    .arg(["startFhirWorker", "--topics=fhir.refresh.allFromUpstream,fhir.refresh.entireResource,fhir.refresh.fromUpstream"])
-);
-
-configure_server.call(app.deployment("fhir-resolve")
-    .image(server_image.call())
-    .scale(1)
-    .arg(["startFhirWorker", "--topics=fhir.resolver"])
-);
+// FHIR workers (refresh + resolve) only run when explicitly enabled. They
+// drive the FHIR materialised-resource pipeline, which most deployments don't
+// use day-to-day; gating them keeps the default footprint small.
+if fhir_on.call() {
+    configure_server.call(app.deployment("fhir-refresh")
+        .image(server_image.call())
+        .scale(1)
+        .arg(["startFhirWorker", "--topics=fhir.refresh.allFromUpstream,fhir.refresh.entireResource,fhir.refresh.fromUpstream"])
+    );
+    configure_server.call(app.deployment("fhir-resolve")
+        .image(server_image.call())
+        .scale(1)
+        .arg(["startFhirWorker", "--topics=fhir.resolver"])
+    );
+}
 
 // Frontend: serves the React app. The bundled env.js tells the client which
 // API to talk to; that's served from the same hostname so there's no CORS or
-// URL configuration to thread through here.
+// URL configuration to thread through here. Fixed at 1 replica — rolling
+// restarts handle blue/green rotation without needing a sibling.
 app.deployment("frontend")
     .image(frontend_image.call())
-    .scale(parse_int_param.call(frontend_replicas))
+    .scale(1)
     .env("TZ", timezone.value())
     .env("TAMANU_VERSION", version.value())
     .http(3000, web_svc.route("/"));
@@ -368,9 +337,11 @@ let render_config = |rt| {
     ).terminated(60).ensure_success();
 };
 
-// Set up the central database, role, and read-only reporting roles. Idempotent:
-// CREATE statements are guarded so re-running the action is harmless. Connects
-// over the local socket as the postgres superuser (trust auth on local).
+// Idempotent provisioning: create or refresh the database, the central role,
+// and the read-only reporting roles. Connects via the local socket as the
+// postgres superuser (`local trust` in the postgres app's pg_hba). No
+// passwords are set on the roles — every connection from these apps comes
+// in via the socket, where trust auth applies.
 let provision_db = |rt| {
     let staging = app.volume().tmpfs();
     let dbn = db_name.value();
@@ -379,21 +350,13 @@ let provision_db = |rt| {
     staging.write("/setup.sql", `
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${escape.call(dbu)}') THEN
-    EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L', '${escape.call(dbu)}', '${escape.call(db_password.value())}');
-  ELSE
-    EXECUTE format('ALTER ROLE %I WITH LOGIN PASSWORD %L', '${escape.call(dbu)}', '${escape.call(db_password.value())}');
+    EXECUTE format('CREATE ROLE %I LOGIN', '${escape.call(dbu)}');
   END IF;
-
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'raw') THEN
-    EXECUTE format('CREATE ROLE raw LOGIN PASSWORD %L', '${escape.call(raw_password.value())}');
-  ELSE
-    EXECUTE format('ALTER ROLE raw WITH LOGIN PASSWORD %L', '${escape.call(raw_password.value())}');
+    EXECUTE 'CREATE ROLE raw LOGIN';
   END IF;
-
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'reporting') THEN
-    EXECUTE format('CREATE ROLE reporting LOGIN PASSWORD %L', '${escape.call(reporting_password.value())}');
-  ELSE
-    EXECUTE format('ALTER ROLE reporting WITH LOGIN PASSWORD %L', '${escape.call(reporting_password.value())}');
+    EXECUTE 'CREATE ROLE reporting LOGIN';
   END IF;
 END $$;
 `);
@@ -401,7 +364,7 @@ END $$;
 `);
 
     rt.start(app.job()
-        .image(server_image.call())
+        .image(psql_image)
         .writable_rootfs()
         .mount("/var/run/postgresql", pg_socket)
         .mount("/staging", staging)
@@ -430,17 +393,68 @@ let migrate_db = |rt| {
     ).terminated_eventually().ensure_success();
 };
 
+// Provision the initial admin user via Tamanu's `provision` subcommand. Builds
+// a minimal provisioning JSON5 file with a single `users` entry and feeds it
+// to the central server. `--skip-if-not-needed` makes the command a no-op if
+// any user already exists, so this is safe to re-run on subsequent installs.
+let provision_admin = |rt, email, display_name, password| {
+    let staging = app.volume().tmpfs();
+    staging.write("/provision.json5", `{
+  users: {
+    ${json_str.call(email)}: {
+      role: "admin",
+      displayName: ${json_str.call(display_name)},
+      password: ${json_str.call(password)},
+    },
+  },
+}
+`);
+    rt.start(app.job()
+        .image(server_image.call())
+        .writable_rootfs()
+        .env("TZ", timezone.value())
+        .env("NODE_CONFIG_DIR", "/config")
+        .env("TAMANU_VERSION", version.value())
+        .mount("/config", config_vol)
+        .mount("/var/run/postgresql", pg_socket)
+        .mount("/staging", staging)
+        .arg(["provision", "/staging/provision.json5", "--skip-if-not-needed"])
+    ).terminated_eventually().ensure_success();
+};
+
 // ── Install ───────────────────────────────────────────────────────────────────
 
-app.on_install(|rt, _param| {
+app.on_install(|rt, param| {
     copy_image_defaults.call(rt);
     render_config.call(rt);
     provision_db.call(rt);
     migrate_db.call(rt);
+    provision_admin.call(rt,
+        param["admin-email"],
+        param["admin-display-name"],
+        param["admin-password"]);
 
     rt.warm_certs(app).ready();
     rt.start(app).ready(300);
-}, #{});
+}, #{
+    params: #{
+        "admin-email": #{
+            kind: "email",
+            required: true,
+            description: "Email of the initial admin user",
+        },
+        "admin-display-name": #{
+            kind: "text",
+            required: true,
+            description: "Display name of the initial admin user",
+        },
+        "admin-password": #{
+            kind: "password",
+            required: true,
+            description: "Password for the initial admin user",
+        },
+    },
+});
 
 // ── Maintenance actions ───────────────────────────────────────────────────────
 
@@ -448,8 +462,10 @@ app.on_action("reconfigure", |rt, _param| {
     render_config.call(rt);
     rt.restart(app.deployment("api"));
     rt.restart(app.deployment("tasks"));
-    rt.restart(app.deployment("fhir-refresh"));
-    rt.restart(app.deployment("fhir-resolve"));
+    if fhir_on.call() {
+        rt.restart(app.deployment("fhir-refresh"));
+        rt.restart(app.deployment("fhir-resolve"));
+    }
     if portal_on.call() {
         rt.restart(app.deployment("patient-portal"));
     }
@@ -477,8 +493,10 @@ app.on_action("restart-frontend", |rt, _param| {
 
 app.on_action("restart-workers", |rt, _param| {
     rt.restart(app.deployment("tasks"));
-    rt.restart(app.deployment("fhir-refresh"));
-    rt.restart(app.deployment("fhir-resolve"));
+    if fhir_on.call() {
+        rt.restart(app.deployment("fhir-refresh"));
+        rt.restart(app.deployment("fhir-resolve"));
+    }
 }, #{ description: "Restart the tasks and FHIR workers" });
 
 // ── Shells ────────────────────────────────────────────────────────────────────
@@ -548,8 +566,10 @@ version.on_change(|rt, old| {
 let restart_servers = |rt| {
     rt.restart(app.deployment("api"));
     rt.restart(app.deployment("tasks"));
-    rt.restart(app.deployment("fhir-refresh"));
-    rt.restart(app.deployment("fhir-resolve"));
+    if fhir_on.call() {
+        rt.restart(app.deployment("fhir-refresh"));
+        rt.restart(app.deployment("fhir-resolve"));
+    }
     if portal_on.call() {
         rt.restart(app.deployment("patient-portal"));
     }
@@ -557,32 +577,23 @@ let restart_servers = |rt| {
 
 canonical_url.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
 timezone.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
-country_name.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
-country_alpha2.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
-country_alpha3.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
 auth_secret.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
 refresh_secret.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
 extra_config.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
 
-// DB credential changes: re-provision (so the postgres-side passwords get
-// updated to match) and re-render the local config that holds them.
-db_password.on_change(|rt, _old| {
-    provision_db.call(rt);
-    render_config.call(rt);
-    restart_servers.call(rt);
+// Toggling the FHIR workers: bring them up or tear them down to match the new
+// param value. Re-render config first so any related side-channel state is
+// consistent, though FHIR workers don't currently read FHIR-specific config.
+fhir_enabled.on_change(|rt, old| {
+    if fhir_on.call() {
+        rt.start(app.select(#{
+            types: [ResourceType.Deployment],
+            names: ["fhir-refresh", "fhir-resolve"],
+        })).ready();
+    } else {
+        rt.stop(old.select(#{
+            types: [ResourceType.Deployment],
+            names: ["fhir-refresh", "fhir-resolve"],
+        }));
+    }
 });
-raw_password.on_change(|rt, _old| {
-    provision_db.call(rt);
-    render_config.call(rt);
-    restart_servers.call(rt);
-});
-reporting_password.on_change(|rt, _old| {
-    provision_db.call(rt);
-    render_config.call(rt);
-    restart_servers.call(rt);
-});
-
-// Replica count changes: the deployment definition is already updated by the
-// time on_change fires, so just push the new desired state.
-api_replicas.on_change(|rt, _old| { rt.start(app.deployment("api")); });
-frontend_replicas.on_change(|rt, _old| { rt.start(app.deployment("frontend")); });
