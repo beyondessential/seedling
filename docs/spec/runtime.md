@@ -925,6 +925,40 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > r[service.external.mapping.events]
 > Creating, removing, or retargeting an operator-configured external service mapping must emit an event identifying the app and external service name, the new mapping target (or absence of one for removal), and — for retargeting — the previous target. These events feed both the event feed and the [audit log](#r--audit.log).
 
+> r[ingress.site]
+> A site ingress is a named entry point managed by operators, independent of any app. A site ingress carries a hostname, an optional human-readable description, a TLS provisioning mode, and a source.
+>
+> A site ingress has one of two sources:
+>
+> - **Manual**: created and deleted by the operator.
+> - **Discovered**: created and deleted automatically by the daemon based on host configuration. Each discovered site ingress is owned by a *provider* (initially Tailscale; see [ingress.site.tailscale](#r--ingress.site.tailscale)) and carries an opaque, stable provider key that survives hostname changes.
+>
+> The TLS provisioning mode determines how certificates for the hostname are obtained when an attachment requires TLS termination. Valid modes are public-PKI ACME issuance, internal CA, the discovering provider's own certificate facility (only available on discovered ingresses), and "no TLS" (only plaintext attachments are permitted).
+
+> r[ingress.site.lifecycle]
+> Manual site ingresses are created, updated, and deleted exclusively through operator commands. Discovered site ingresses are created, updated, and deleted by the daemon's discovery loop; an operator command to delete a discovered site ingress while its source remains active must be rejected. Deletion of a site ingress, regardless of source, cascades to remove all of its attachments.
+>
+> When a discovery source temporarily disappears (e.g. the underlying provider becomes unreachable) the corresponding site ingress must be marked stale rather than deleted, so that the operator's attachments persist across transient outages and resume serving when the source returns.
+
+> r[ingress.site.lifecycle.events]
+> Site ingress creation, update, and deletion (whether by the operator or by a discovery provider) and attachment add, update, and remove operations must emit events on the event feed and be recorded in the [audit log](#r--audit.log). Events identify the site ingress name and, for attachment events, the `(port, protocol)` tuple and the attachment target.
+
+> r[ingress.site.attachment]
+> A site ingress carries zero or more *attachments*. Each attachment is keyed by `(port, protocol)` within the parent site ingress and binds that key to a target. The target is one of:
+>
+> - **Forward**: traffic for the attachment's `(port, protocol)` is routed to a specified app service.
+> - **Redirect**: requests for the attachment's `(port, protocol)` are answered with an HTTP redirect response to a configured target URL, using a configured response code, optionally preserving the request path.
+>
+> The set of supported protocols matches that of app-declared ingresses. The hostname and TLS provisioning mode are inherited from the parent site ingress; the attachment chooses only the listening `(port, protocol)` and the target. Multiple attachments differing in `(port, protocol)` may coexist on the same site ingress.
+
+> r[ingress.site.tailscale]
+> The Tailscale discovery provider creates a single discovered site ingress representing the host's Tailscale identity. The site ingress's hostname is the host's tailnet DNS name; its provider key is the host's stable Tailscale node identity. When the operator renames the node, the site ingress's hostname must be updated in place and its existing attachments preserved. When the underlying node identity changes (e.g. the node is re-created on the tailnet), the existing discovered site ingress is removed and a fresh one created.
+>
+> The Tailscale-provided site ingress's TLS mode resolves to certificates obtained from the local Tailscale facility. The runtime must not attempt to obtain certificates for tailnet hostnames through public ACME.
+
+> r[ingress.site.conflict]
+> When an app ingress and a site-ingress attachment both claim the same `(hostname, port)`, the runtime must drop both entries from the proxy configuration on each tick on which the conflict persists, and must file a fault against each side identifying the conflicting party and the `(hostname, port)` tuple. Faults filed for a `(hostname, port)` conflict must be cleared automatically on the first subsequent tick on which that `(hostname, port)` is no longer in conflict. Independent `(hostname, port)` tuples on the same hostname are not affected by a conflict on a different port.
+
 > r[actuate.volume.stop]
 > Stopping a Volume instance must remove the named volume.
 
