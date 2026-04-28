@@ -479,7 +479,7 @@ function IngressRow({
                 <Box component="span" sx={{ fontFamily: "monospace", fontSize: "0.85em" }}>
                   {describeAttachment(att)}
                 </Box>
-                <Tooltip title="Detach">
+                <Tooltip title={guard.reason ?? "Detach"}>
                   <span>
                     <IconButton
                       size="small"
@@ -497,7 +497,7 @@ function IngressRow({
       </TableCell>
       <TableCell align="right">
         <Box sx={{ display: "flex", flexDirection: "row", gap: 0.5, justifyContent: "flex-end" }}>
-          <Tooltip title="Attach forward or redirect">
+          <Tooltip title={guard.reason ?? "Attach forward or redirect"}>
             <span>
               <IconButton
                 size="small"
@@ -512,7 +512,7 @@ function IngressRow({
             title={
               isDiscovered
                 ? "Discovered ingresses are managed by the provider and cannot be deleted here"
-                : "Delete this manual site ingress"
+                : (guard.reason ?? "Delete this manual site ingress")
             }
           >
             <span>
@@ -537,6 +537,7 @@ export default function Ingresses() {
     "/ingresses/site/discovery/status",
     {},
   );
+  const guard = useGuard("dangerous");
   const { execute: executeDetach, error: detachError } = useOiAction();
   const {
     execute: executeRemove,
@@ -600,13 +601,18 @@ export default function Ingresses() {
         <IconButton onClick={refresh} aria-label="Refresh">
           <RefreshIcon />
         </IconButton>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => setCreateOpen(true)}
-        >
-          New ingress
-        </Button>
+        <Tooltip title={guard.reason ?? ""}>
+          <span>
+            <Button
+              variant="contained"
+              startIcon={<AddIcon />}
+              onClick={() => setCreateOpen(true)}
+              disabled={!guard.allowed}
+            >
+              New ingress
+            </Button>
+          </span>
+        </Tooltip>
       </Box>
 
       {tailscaleStaleOnly && (
