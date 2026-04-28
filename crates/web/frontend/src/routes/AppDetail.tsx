@@ -1459,14 +1459,14 @@ function ActionInvokeDialog({
 
 function InstallingSection({
   appName,
-  faults,
+  data,
   onRefresh,
 }: {
   appName: string;
-  faults: FaultRecord[];
+  data: AppDetail;
   onRefresh: () => void;
 }) {
-  const installFaults = faults.filter((f) => f.kind === "operation_failed");
+  const installFaults = data.faults.filter((f) => f.kind === "operation_failed");
   const { execute: executeCancel, loading: cancelling } = useOiAction();
   const writeGuard = useGuard("write");
   const handleCancel = async () => {
@@ -1477,49 +1477,176 @@ function InstallingSection({
       // surfaced by useOiAction globally
     }
   };
+
+  const op = data.current_operation;
+  const barrier = op?.barrier;
+  // The barrier's resource list is keyed by instance `display_name`. Used
+  // below to bold the rows the install action is currently blocked on.
+  const waitingOn = new Set(barrier?.resources ?? []);
+
+  // Container-shaped resources first (deployments + jobs) — they're the ones
+  // that take observable time to come up during install. Volumes / services /
+  // ingresses come second so the operator's eye lands on the workloads.
+  const containerKinds = new Set(["deployment", "job"]);
+  const orderedResources = [
+    ...data.resources.filter((r) => containerKinds.has(r.type)),
+    ...data.resources.filter((r) => !containerKinds.has(r.type)),
+  ];
+
   return (
-    <Box
-      sx={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        gap: 2,
-        py: 6,
-      }}
-    >
-      <CircularProgress />
-      <Typography
-        sx={{
-          color: "text.secondary",
-          textAlign: "center",
-        }}
-      >
-        Install in progress — the runtime is actuating your resources.
-      </Typography>
-      <Box sx={{ display: "flex", gap: 1 }}>
-        <Button
-          size="small"
-          startIcon={<ArticleIcon />}
-          component={Link}
-          to={`/apps/${appName}/logs`}
-        >
-          View container logs
-        </Button>
-        <Tooltip title={writeGuard.reason ?? ""}>
-          <span>
-            <Button
-              size="small"
-              color="error"
-              onClick={() => void handleCancel()}
-              disabled={cancelling || !writeGuard.allowed}
-            >
-              {cancelling ? "Cancelling…" : "Cancel install"}
-            </Button>
-          </span>
-        </Tooltip>
+    <Stack spacing={2} sx={{ py: 2 }}>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+        <CircularProgress size={20} />
+        <Box sx={{ flexGrow: 1 }}>
+          <Typography>
+            Install in progress
+            {op && (
+              <>
+                {" — "}
+                <Box component="span" sx={{ fontFamily: "monospace" }}>
+                  {op.action_name}
+                </Box>
+                {" (gen "}
+                {op.source_generation} → {op.target_generation}
+                {")"}
+              </>
+            )}
+          </Typography>
+          {barrier && (
+            <Typography variant="body2" sx={{ color: "text.secondary" }}>
+              Waiting for{" "}
+              <Box component="span" sx={{ fontFamily: "monospace" }}>
+                {barrier.required_state}
+              </Box>
+              {" · "}
+              {Math.round(barrier.elapsed_secs)}s
+              {barrier.deadline_secs !== null
+                ? ` / ${barrier.deadline_secs}s`
+                : " / ∞"}
+              {barrier.resources.length > 0 && (
+                <>
+                  {" · "}
+                  <Box component="span" sx={{ fontFamily: "monospace" }}>
+                    {barrier.resources.join(", ")}
+                  </Box>
+                </>
+              )}
+            </Typography>
+          )}
+        </Box>
+        <Box sx={{ display: "flex", gap: 1, flexShrink: 0 }}>
+          <Button
+            size="small"
+            startIcon={<ArticleIcon />}
+            component={Link}
+            to={`/apps/${appName}/logs`}
+          >
+            View container logs
+          </Button>
+          <Tooltip title={writeGuard.reason ?? ""}>
+            <span>
+              <Button
+                size="small"
+                color="error"
+                onClick={() => void handleCancel()}
+                disabled={cancelling || !writeGuard.allowed}
+              >
+                {cancelling ? "Cancelling…" : "Cancel install"}
+              </Button>
+            </span>
+          </Tooltip>
+        </Box>
       </Box>
+
+      {orderedResources.length > 0 && (
+        <TableContainer component={Paper} variant="outlined">
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>Resource</TableCell>
+                <TableCell width={100}>Type</TableCell>
+                <TableCell width={220}>State</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {orderedResources.map((r) => {
+                const resourceWaiting = r.instances.some((i) =>
+                  waitingOn.has(i.display_name),
+                );
+                const groupSx = resourceWaiting
+                  ? { "& > td": { fontWeight: "medium" } }
+                  : undefined;
+                if (r.instances.length === 0) {
+                  // Show a row for the resource itself when no instance has
+                  // been scheduled yet — e.g. a deployment that's still
+                  // pending image-warm or hasn't been started by the action.
+                  return (
+                    <TableRow key={`${r.type}/${r.name}`} sx={groupSx}>
+                      <TableCell sx={{ fontFamily: "monospace" }}>
+                        {r.name}
+                      </TableCell>
+                      <TableCell>
+                        <Chip
+                          label={r.type}
+                          size="small"
+                          variant="outlined"
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Chip label="pending" size="small" />
+                      </TableCell>
+                    </TableRow>
+                  );
+                }
+                return r.instances.map((inst, idx) => {
+                  const instanceWaiting = waitingOn.has(inst.display_name);
+                  const rowSx = instanceWaiting ? groupSx : undefined;
+                  return (
+                    <TableRow
+                      key={`${r.type}/${r.name}/${inst.id}`}
+                      sx={rowSx}
+                    >
+                      <TableCell sx={{ fontFamily: "monospace" }}>
+                        {idx === 0 ? r.name : ""}
+                        {r.instances.length > 1 && (
+                          <Box
+                            component="span"
+                            sx={{
+                              color: "text.secondary",
+                              ml: idx === 0 ? 1 : 0,
+                            }}
+                          >
+                            {inst.display_name}
+                          </Box>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {idx === 0 && (
+                          <Chip
+                            label={r.type}
+                            size="small"
+                            variant="outlined"
+                          />
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Chip
+                          label={inst.lifecycle.replace(/_/g, " ")}
+                          color={lifecycleColor(inst.lifecycle)}
+                          size="small"
+                        />
+                      </TableCell>
+                    </TableRow>
+                  );
+                });
+              })}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
+
       {installFaults.length > 0 && (
-        <Alert severity="error" sx={{ width: "100%", mt: 1 }}>
+        <Alert severity="error">
           <Typography variant="subtitle2" gutterBottom>
             The install is currently failing:
           </Typography>
@@ -1534,7 +1661,7 @@ function InstallingSection({
           ))}
         </Alert>
       )}
-    </Box>
+    </Stack>
   );
 }
 
@@ -3091,7 +3218,7 @@ export default function AppDetail() {
           ) : data.status === "installing" ? (
             <InstallingSection
               appName={name!}
-              faults={data.faults}
+              data={data}
               onRefresh={refetch}
             />
           ) : (
