@@ -47,6 +47,15 @@ pub(super) enum HeldCommand {
         #[arg(long)]
         confirm: bool,
     },
+    /// Restore a held volume's data into a fresh managed site volume
+    Restore {
+        /// Held volume ID (from `volumes held list`)
+        id: String,
+        /// Override the new site volume's name; defaults to the held
+        /// volume's recorded name.
+        #[arg(long)]
+        name: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -160,6 +169,13 @@ pub(super) async fn dispatch(client: &OiClient, cmd: VolumesCommand) {
                         .request("/volumes/held/delete", serde_json::json!({ "id": id }))
                         .await,
                 );
+            }
+            HeldCommand::Restore { id, name } => {
+                let mut params = serde_json::json!({ "id": id });
+                if let Some(name) = name {
+                    params["target_name"] = serde_json::json!(name);
+                }
+                print_result(client.request("/volumes/held/restore", params).await);
             }
         },
         VolumesCommand::Site { command } => match command {
