@@ -36,10 +36,12 @@ mod phases;
 mod site_proxy;
 mod state;
 
-/// Enumerate hostnames from the site-ingress snapshot that need TLS,
-/// i.e. their parent site ingress declares a non-`None` TLS provider
-/// and the row is not stale. Used by the reconciler to feed the
-/// issuance coordinator alongside the app-ingress list.
+/// Enumerate hostnames from the site-ingress snapshot that need TLS this
+/// tick. A hostname is only emitted when its parent ingress is non-stale,
+/// declares a non-`None` TLS provider, *and* carries at least one
+/// attachment — there's no point asking the issuance coordinator (and,
+/// for tailnet hostnames, tailscaled) to mint a cert for a hostname
+/// nothing is going to serve traffic on yet.
 // r[impl ingress.site.tailscale]
 fn site_ingress_tls_hostnames(snapshot: &site_proxy::SiteIngressSnapshot) -> Vec<String> {
     let mut out = Vec::new();
@@ -53,11 +55,111 @@ fn site_ingress_tls_hostnames(snapshot: &site_proxy::SiteIngressSnapshot) -> Vec
         ) {
             continue;
         }
+        let has_attachment = snapshot
+            .attachments
+            .iter()
+            .any(|a| a.site_ingress == ing.name);
+        if !has_attachment {
+            continue;
+        }
         if !out.iter().any(|h: &String| h == &ing.hostname) {
             out.push(ing.hostname.clone());
         }
     }
     out
+}
+
+#[cfg(test)]
+mod site_ingress_tls_hostname_tests {
+    use super::*;
+    use crate::runtime::site_ingress_attachments::{
+        AttachmentProtocol, AttachmentTarget, SiteIngressAttachment,
+    };
+    use crate::runtime::site_ingresses::{
+        DiscoveryProvider, SiteIngressDef, SiteIngressSource, TlsProvider,
+    };
+    use seedling_protocol::names::{AppName, AppServiceName, SiteIngressName};
+
+    fn manual(name: &str, hostname: &str, tls: TlsProvider) -> SiteIngressDef {
+        SiteIngressDef {
+            name: SiteIngressName::new(name).unwrap(),
+            hostname: hostname.into(),
+            description: None,
+            source: SiteIngressSource::Manual,
+            tls_provider: tls,
+            stale: false,
+            created_at: "2026-04-28T00:00:00Z".into(),
+        }
+    }
+
+    fn discovered(name: &str, hostname: &str, tls: TlsProvider) -> SiteIngressDef {
+        SiteIngressDef {
+            name: SiteIngressName::new(name).unwrap(),
+            hostname: hostname.into(),
+            description: None,
+            source: SiteIngressSource::Discovered {
+                provider: DiscoveryProvider::Tailscale,
+                key: "n-1".into(),
+            },
+            tls_provider: tls,
+            stale: false,
+            created_at: "2026-04-28T00:00:00Z".into(),
+        }
+    }
+
+    fn forward(name: &str, port: u16) -> SiteIngressAttachment {
+        SiteIngressAttachment {
+            site_ingress: SiteIngressName::new(name).unwrap(),
+            port,
+            protocol: AttachmentProtocol::Http,
+            target: AttachmentTarget::Forward {
+                app: AppName::new("web").unwrap(),
+                service: AppServiceName::new("api").unwrap(),
+            },
+            created_at: "2026-04-28T00:00:00Z".into(),
+        }
+    }
+
+    #[test]
+    fn skips_unattached_ingress() {
+        let snap = site_proxy::SiteIngressSnapshot {
+            ingresses: vec![discovered("tailscale", "host.ts.net", TlsProvider::Tailscale)],
+            attachments: vec![],
+        };
+        assert!(site_ingress_tls_hostnames(&snap).is_empty());
+    }
+
+    #[test]
+    fn includes_attached_ingress() {
+        let snap = site_proxy::SiteIngressSnapshot {
+            ingresses: vec![discovered("tailscale", "host.ts.net", TlsProvider::Tailscale)],
+            attachments: vec![forward("tailscale", 443)],
+        };
+        assert_eq!(
+            site_ingress_tls_hostnames(&snap),
+            vec!["host.ts.net".to_owned()]
+        );
+    }
+
+    #[test]
+    fn skips_stale() {
+        let mut ing = discovered("tailscale", "host.ts.net", TlsProvider::Tailscale);
+        ing.stale = true;
+        let snap = site_proxy::SiteIngressSnapshot {
+            ingresses: vec![ing],
+            attachments: vec![forward("tailscale", 443)],
+        };
+        assert!(site_ingress_tls_hostnames(&snap).is_empty());
+    }
+
+    #[test]
+    fn skips_no_tls() {
+        let snap = site_proxy::SiteIngressSnapshot {
+            ingresses: vec![manual("plain", "no-tls.example.com", TlsProvider::None)],
+            attachments: vec![forward("plain", 80)],
+        };
+        assert!(site_ingress_tls_hostnames(&snap).is_empty());
+    }
 }
 
 pub mod pods;
