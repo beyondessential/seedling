@@ -320,12 +320,14 @@ async fn main() {
     // l[impl const.nat64-active]
     // l[impl const.has-snapshots]
     // l[impl const.node-name]
+    // l[impl const.timezone]
     seedling_core::sysconst::set(seedling_core::sysconst::SystemFacts {
         ipv4_egress,
         ipv6_egress,
         nat64_active,
         has_snapshots: use_btrfs,
         node_name: whoami::devicename().unwrap_or_default(),
+        timezone: seedling_core::sysconst::detect_timezone(),
     });
 
     // r[impl infra.nat64.dns64.force-translation]

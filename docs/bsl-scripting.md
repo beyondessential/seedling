@@ -205,6 +205,7 @@ col.select(#{ name_patterns: ["worker-*"] })
 | `NAT64_ACTIVE` | bool | Whether the node itself is providing NAT64 translation |
 | `HAS_SNAPSHOTS` | bool | Whether volume storage supports copy-on-write snapshots |
 | `NODE_NAME` | string | Identifier of the node running the application |
+| `TIMEZONE` | string | IANA timezone of the host (e.g. `Pacific/Auckland`); `UTC` when unknown |
 | `DEFAULT_DEADLINE` | int | Default deadline in seconds |
 
 ### Enum constants

@@ -117,6 +117,21 @@ fn node_name_is_string() {
     );
 }
 
+// l[verify const.timezone]
+#[test]
+fn timezone_is_nonempty_string() {
+    run_test_script_app(
+        r#"
+        if type_of(TIMEZONE) != "string" {
+            throw "TIMEZONE must be a string";
+        }
+        if TIMEZONE == "" {
+            throw "TIMEZONE must not be empty";
+        }
+    "#,
+    );
+}
+
 // l[verify const.on-update.rolling]
 #[test]
 fn on_update_rolling() {

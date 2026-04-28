@@ -148,6 +148,11 @@ These are not guaranteed to be constant forever, only for the duration of one sc
 >
 > The format is not specified. It may be empty in contexts where the node identity is not meaningful, such as when validating scripts outside of a running node.
 
+> l[const.timezone]
+> `TIMEZONE` is a non-empty string identifying the host's IANA timezone, such as `Pacific/Auckland` or `Etc/UTC`.
+>
+> When the host's local timezone cannot be determined, the value is `UTC`.
+
 > l[const.default-deadline]
 > The default deadlines for `started.<state>()` barriers with no explicit `deadline` argument are:
 >

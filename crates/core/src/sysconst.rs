@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 ///
 /// Non-daemon callers (tests, `ctl`, `web`) never populate this; they see
 /// the [`Default`] value, which models a minimally-capable environment.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SystemFacts {
     /// Host has a default IPv4 route.
     pub ipv4_egress: bool,
@@ -24,6 +24,28 @@ pub struct SystemFacts {
     pub has_snapshots: bool,
     /// Human-readable identifier for the node (empty if not known).
     pub node_name: String,
+    /// IANA timezone name of the host (e.g. `Pacific/Auckland`); defaults to
+    /// `UTC` when the host's local timezone cannot be determined.
+    pub timezone: String,
+}
+
+impl Default for SystemFacts {
+    fn default() -> Self {
+        Self {
+            ipv4_egress: false,
+            ipv6_egress: false,
+            nat64_active: false,
+            has_snapshots: false,
+            node_name: String::new(),
+            timezone: "UTC".to_owned(),
+        }
+    }
+}
+
+/// Best-effort detection of the host's IANA timezone name. Returns `UTC`
+/// when detection fails (e.g. unusual `/etc/localtime` configuration).
+pub fn detect_timezone() -> String {
+    iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_owned())
 }
 
 static FACTS: OnceLock<SystemFacts> = OnceLock::new();

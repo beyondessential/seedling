@@ -190,6 +190,9 @@ pub fn scope() -> (Scope<'static>, app::App) {
     // l[impl const.node-name]
     scope.push_constant("NODE_NAME", facts.node_name.clone());
 
+    // l[impl const.timezone]
+    scope.push_constant("TIMEZONE", facts.timezone.clone());
+
     // l[impl const.default-deadline]
     scope.push_constant("DEFAULT_DEADLINE", 30_i64);
 
