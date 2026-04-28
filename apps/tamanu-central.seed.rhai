@@ -72,11 +72,6 @@ let patient_portal_fqdn = app.param("patient-portal-fqdn")
     .required(false)
     .description("Public FQDN for the patient portal; if set, the patient portal subsystem is enabled");
 
-let extra_config = app.param("extra-config")
-    .kind("multiline")
-    .required(false)
-    .description("Additional fields appended into production.json5 (advanced; merged at the top level)");
-
 // ── External resources ────────────────────────────────────────────────────────
 
 // Postgres unix socket. The operator maps this to the `socket` volume
@@ -111,17 +106,14 @@ let json_str = |s| {
 };
 
 // production.json5: tamanu's main config. Operator-tunable params land here.
+// Free-form overrides are not exposed as a script param: operators can edit
+// the rendered file directly via a volume-shell on the `config` volume, which
+// gives a proper editor instead of a single-line UI textbox.
 let production_json = || {
     let portal_block = if portal_on.call() {
         `  patientPortal: {
     portalUrl: ${json_str.call("https://" + patient_portal_fqdn.value())},
   },
-`
-    } else { "" };
-
-    let extra = if extra_config.is_set() {
-        `  // Operator-supplied overrides:
-${extra_config.value()}
 `
     } else { "" };
 
@@ -164,7 +156,7 @@ ${extra_config.value()}
       labTestCategoryIds: ['labTestCategory-COVID', 'labTestCategory-COVIDRAT'],
     },
   },
-${portal_block}${extra}}
+${portal_block}}
 `
 };
 
@@ -617,8 +609,6 @@ canonical_url.on_change(|rt, _old| { render_config.call(rt); restart_servers.cal
 timezone.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
 auth_secret.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
 refresh_secret.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
-extra_config.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
-
 // Toggling the FHIR workers: bring them up or tear them down to match the new
 // param value. Re-render config first so any related side-channel state is
 // consistent, though FHIR workers don't currently read FHIR-specific config.
