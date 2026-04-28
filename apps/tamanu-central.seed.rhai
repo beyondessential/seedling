@@ -25,6 +25,7 @@
 
 let version = app.param("version")
     .required(true)
+    .default_value("v2.53.3")
     .description("Tamanu image tag (e.g. v2.10.0); applied to central, frontend, and patient-portal images");
 
 let public_hostname = app.param("public-hostname")
@@ -216,9 +217,15 @@ let web_svc = app.service("web")
     .exported(#{ description: "Tamanu central HTTPS endpoint (HTTP routing)" })
     .http(80);
 
-web_svc.ingress(public_hostname.value(), 443)
-    .tls(Terminate.Https, Output.Http1)
-    .redirect();
+// Guard with `is_set()` so the script also evaluates cleanly before the
+// operator has supplied the hostname (e.g. on first registration / preview):
+// `Service.ingress()` validates its hostname argument eagerly, which would
+// otherwise throw on the empty default and leave the script unloadable.
+if public_hostname.is_set() {
+    web_svc.ingress(public_hostname.value(), 443)
+        .tls(Terminate.Https, Output.Http1)
+        .redirect();
+}
 
 // Patient portal: separate ingress on its own hostname when enabled.
 let portal_svc = if portal_on.call() {
