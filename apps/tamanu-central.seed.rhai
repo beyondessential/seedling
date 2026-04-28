@@ -450,11 +450,13 @@ app.on_install(|rt, param| {
         "admin-email": #{
             kind: "email",
             required: true,
+            default_value: "admin@tamanu.app",
             description: "Email of the initial admin user",
         },
         "admin-display-name": #{
             kind: "text",
             required: true,
+            default_value: "Superadmin",
             description: "Display name of the initial admin user",
         },
         "admin-password": #{
