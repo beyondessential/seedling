@@ -219,9 +219,11 @@ export interface SeedlingEvent {
   // WebSessionStarted / WebSessionStopped (web-layer events)
   // ServerBusy
   reason?: string;
-  // HeldVolumeCreated / HeldVolumeDeleted
+  // HeldVolumeCreated / HeldVolumeDeleted / HeldVolumeRestored
   held_id?: string;
   volume_name?: string;
+  // HeldVolumeRestored
+  site_name?: string;
 }
 
 export interface Actor {

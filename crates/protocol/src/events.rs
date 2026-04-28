@@ -243,6 +243,15 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
+    // r[impl actuate.volume.hold.events]
+    HeldVolumeRestored {
+        timestamp: Timestamp,
+        held_id: HeldVolumeId,
+        /// Name of the new managed site volume the held data became.
+        site_name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
     // r[impl volume.site.lifecycle.events]
     SiteVolumeCreated {
         timestamp: Timestamp,
@@ -733,6 +742,21 @@ impl EventSender {
         self.emit(OiEvent::HeldVolumeDeleted {
             timestamp: now(),
             held_id,
+            actor,
+        });
+    }
+
+    // r[impl actuate.volume.hold.events]
+    pub fn held_volume_restored(
+        &self,
+        held_id: HeldVolumeId,
+        site_name: &str,
+        actor: Option<Arc<Actor>>,
+    ) {
+        self.emit(OiEvent::HeldVolumeRestored {
+            timestamp: now(),
+            held_id,
+            site_name: site_name.to_owned(),
             actor,
         });
     }
@@ -1364,6 +1388,12 @@ impl EventSenderWithActor {
     pub fn held_volume_deleted(&self, held_id: HeldVolumeId) {
         self.inner
             .held_volume_deleted(held_id, Some(Arc::clone(&self.actor)));
+    }
+
+    // r[impl actuate.volume.hold.events]
+    pub fn held_volume_restored(&self, held_id: HeldVolumeId, site_name: &str) {
+        self.inner
+            .held_volume_restored(held_id, site_name, Some(Arc::clone(&self.actor)));
     }
 
     // r[impl volume.site.lifecycle.events]
