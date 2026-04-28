@@ -230,6 +230,57 @@ impl VolumeStore {
         Ok(results)
     }
 
+    /// Move a held volume's data into a fresh managed site volume named
+    /// `target_name`. Errors if the held id is unknown, if the held data
+    /// directory is missing, or if a site volume with the target name is
+    /// already present on disk. The caller is responsible for inserting the
+    /// `site_volumes` row and emitting the corresponding events.
+    // r[impl actuate.volume.hold.restore]
+    pub async fn restore_held_to_site(
+        &self,
+        id: &HeldVolumeId,
+        target_name: &str,
+    ) -> std::io::Result<HeldVolumeMeta> {
+        let held_dir = self.held_dir();
+        let data_path = held_dir.join(id.to_string());
+        let meta_path = held_dir.join(format!("{id}.meta.json"));
+
+        if !meta_path.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("no held volume with id {id}"),
+            ));
+        }
+        if !data_path.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("held volume {id} has no backing data directory"),
+            ));
+        }
+
+        let dest = self.site_path(target_name);
+        if dest.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!("site volume {target_name:?} already exists on disk"),
+            ));
+        }
+
+        let meta_json = tokio::fs::read_to_string(&meta_path).await?;
+        let meta: HeldVolumeMeta =
+            serde_json::from_str(&meta_json).map_err(std::io::Error::other)?;
+
+        tokio::fs::rename(&data_path, &dest).await?;
+        tokio::fs::remove_file(&meta_path).await?;
+
+        tracing::info!(
+            held_id = %id,
+            site_name = target_name,
+            "held volume restored to site volume"
+        );
+        Ok(meta)
+    }
+
     pub async fn confirm_delete_held(&self, id: &HeldVolumeId) -> std::io::Result<()> {
         let held_dir = self.held_dir();
         let data_path = held_dir.join(id.to_string());
