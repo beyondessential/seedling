@@ -196,9 +196,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - **Terminated**: the network plumbing has been torn down.
 
 > r[service.http.route.routing]
-> When an Ingress with HTTPS termination fronts a Service whose backing pods declare per-prefix [HTTP route](language.md#l--service.http.route) bindings, the runtime must route each request to the pods that bound the matching URL prefix, not to the Service's general routing pool.
+> URL-prefix routing is a property of the Service. When an HTTP-terminating Ingress (whether declared by the service's own app or attached as a [site ingress](#r--ingress.site.attachment)) fronts a Service whose backing pods declare per-prefix [HTTP route](language.md#l--service.http.route) bindings, the runtime must route each request to the pods that bound the matching URL prefix, not to the Service's general routing pool.
 >
-> Concretely: for every `deployment.http(pod_port, svc.route(prefix))` binding on a pod backing the ingress's service, the runtime emits one ingress route at `prefix` with upstreams set to the running backend pods that hold that binding. The proxy must select the longest matching prefix for each incoming request.
+> Concretely: for every `deployment.http(pod_port, svc.route(prefix))` binding on a pod backing the ingress's target service, the runtime emits one ingress route at `prefix` with upstreams set to the running backend pods that hold that binding. The proxy must select the longest matching prefix for each incoming request.
 >
 > When the backing service has no `http_bindings` at all (e.g. an HTTPS-fronted TCP-only service), the runtime falls back to a single `/` route through the Service's general routing pool.
 

@@ -211,9 +211,10 @@ fn scan_pod_for_port(pod: &PodDef, service_name: &str) -> Option<u16> {
     None
 }
 
-/// Build per-prefix HTTP routes for an ingress backed by `service_name`.
+/// Build per-prefix HTTP routes for an ingress backed by `service_name`
+/// declared in `snapshot` (the AppDef of the app that owns the service).
 ///
-/// For each (pod, http_binding) on this app where the binding targets the
+/// For each (pod, http_binding) on that app where the binding targets the
 /// named service, group by the binding's URL prefix and collect the running
 /// pod IPs as upstreams. Caddy then picks the right pods by longest-prefix
 /// match.
@@ -225,8 +226,12 @@ fn scan_pod_for_port(pod: &PodDef, service_name: &str) -> Option<u16> {
 /// a frontend on `/`). Without this fan-out, the reconciler would route all
 /// service traffic to all backing pods and the URL-prefix model would be a
 /// no-op.
+///
+/// Used by both app ingresses (where snapshot/running_pods belong to the
+/// same app as the ingress) and site ingresses (where snapshot/running_pods
+/// belong to whichever app actually declares the targeted service).
 // r[impl service.http.route.routing]
-fn collect_http_routes(
+pub(super) fn collect_http_routes(
     snapshot: &AppDef,
     service_name: &str,
     running_pods: &[RunningPod],

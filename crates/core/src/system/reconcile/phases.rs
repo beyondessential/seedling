@@ -323,7 +323,13 @@ pub(super) fn compute_proxy_config(
     }
 
     // r[impl ingress.site] r[impl ingress.site.attachment]
-    let site_data = site_proxy::collect(site_snapshot, apps, node_prefix, registry);
+    let site_data = site_proxy::collect(
+        site_snapshot,
+        apps,
+        running_pods_by_app,
+        node_prefix,
+        registry,
+    );
 
     // r[impl ingress.site.conflict]
     let conflicts = site_proxy::detect_conflicts(&all_pairs, &site_data);

@@ -90,6 +90,7 @@ pub(super) fn load(db: &crate::runtime::db::Db) -> SiteIngressSnapshot {
 pub(super) fn collect(
     snapshot: &SiteIngressSnapshot,
     apps: &[AppSnapshot],
+    running_pods_by_app: &std::collections::HashMap<AppName, Vec<super::RunningPod>>,
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
 ) -> SiteProxyData {
@@ -112,7 +113,15 @@ pub(super) fn collect(
             .iter()
             .filter(|a| a.site_ingress == ingress.name)
         {
-            resolve_attachment(ingress, att, apps, node_prefix, registry, &mut data);
+            resolve_attachment(
+                ingress,
+                att,
+                apps,
+                running_pods_by_app,
+                node_prefix,
+                registry,
+                &mut data,
+            );
         }
     }
 
@@ -123,6 +132,7 @@ fn resolve_attachment(
     ingress: &SiteIngressDef,
     att: &SiteIngressAttachment,
     apps: &[AppSnapshot],
+    running_pods_by_app: &std::collections::HashMap<AppName, Vec<super::RunningPod>>,
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
     data: &mut SiteProxyData,
@@ -137,7 +147,14 @@ fn resolve_attachment(
         // r[impl ingress.site.attachment]
         match &att.target {
             AttachmentTarget::Forward { app, service } => {
-                match resolve_forward_upstream(app, service, apps, node_prefix, registry) {
+                match resolve_forward_upstream(
+                    app,
+                    service,
+                    apps,
+                    running_pods_by_app,
+                    node_prefix,
+                    registry,
+                ) {
                     Ok(upstream) => {
                         let upstream_url =
                             format!("[{}]:{}", upstream.service_ip, upstream.service_port);
@@ -216,7 +233,14 @@ fn resolve_attachment(
 
     match &att.target {
         AttachmentTarget::Forward { app, service } => {
-            match resolve_forward_upstream(app, service, apps, node_prefix, registry) {
+            match resolve_forward_upstream(
+                app,
+                service,
+                apps,
+                running_pods_by_app,
+                node_prefix,
+                registry,
+            ) {
                 Ok(upstream) => data.forwards.push((ingress.name.clone(), def, upstream)),
                 Err(reason) => data.unresolved.push(UnresolvedAttachment {
                     site_ingress: ingress.name.as_str().to_owned(),
@@ -248,6 +272,7 @@ fn resolve_forward_upstream(
     target_app: &AppName,
     target_service: &seedling_protocol::names::AppServiceName,
     apps: &[AppSnapshot],
+    running_pods_by_app: &std::collections::HashMap<AppName, Vec<super::RunningPod>>,
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
 ) -> Result<ServiceUpstream, String> {
@@ -281,14 +306,25 @@ fn resolve_forward_upstream(
     let upstream_port = scan_apps_for_service_port(snapshot, svc_name_str)
         .ok_or_else(|| format!("no pod binding found for {target_app}/{svc_name_str}"))?;
 
+    // r[impl service.http.route.routing]
+    // Routing is a property of the *service*, not of the ingress that
+    // attaches to it. A site-ingress attachment to a service with HTTP
+    // route bindings must use the same per-prefix routing as an app
+    // ingress to the same service — otherwise the BSL author's prefix
+    // routing would silently flatten just because traffic arrived via a
+    // site ingress instead of an app ingress. Routes is empty for L4
+    // attachments and for HTTPS attachments fronting a TCP-only service;
+    // `build_proxy_config` then falls back to a single-`/` route through
+    // the service IP, which is the right behaviour in those cases.
+    let empty: Vec<super::RunningPod> = Vec::new();
+    let target_running: &[super::RunningPod] = running_pods_by_app
+        .get(target_app)
+        .map(Vec::as_slice)
+        .unwrap_or(&empty);
+    let routes = super::proxy::collect_http_routes(&snapshot.app_def, svc_name_str, target_running);
+
     Ok(ServiceUpstream {
-        // Site-ingress attachments fall back to the legacy single-`/` route
-        // through the service IP. Per-prefix HTTP routing for site
-        // ingresses would require running-pod plumbing that hasn't been
-        // surfaced here yet; the typical use case for site ingresses is a
-        // 1:1 host→service mapping where the prefix model wouldn't change
-        // anything anyway.
-        routes: Vec::new(),
+        routes,
         service_ip,
         service_port: upstream_port,
     })
