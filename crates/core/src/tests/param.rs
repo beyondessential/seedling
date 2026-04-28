@@ -578,3 +578,37 @@ fn param_schema_text_kind_with_secret_true_is_secret() {
     assert!(schema.secret);
     assert!(schema.is_secret());
 }
+
+// l[verify action.install.requirements.kind-random]
+#[test]
+fn param_schema_kind_random() {
+    let app = run_test_script_app(r#"app.param("nonce").kind("random");"#);
+    let def = app.def.load();
+    let schema = def.params.get("nonce").expect("param declared");
+    assert!(matches!(
+        schema.kind,
+        crate::defs::install::ParamKind::Random
+    ));
+}
+
+// l[verify action.install.requirements.kind-random]
+// l[verify param.schema.secret-from-kind]
+#[test]
+fn param_schema_random_kind_not_implicitly_secret() {
+    let app = run_test_script_app(r#"app.param("nonce").kind("random");"#);
+    let def = app.def.load();
+    let schema = def.params.get("nonce").expect("param declared");
+    assert!(!schema.secret);
+    assert!(!schema.is_secret());
+}
+
+// l[verify action.install.requirements.kind-random]
+// l[verify param.schema.secret]
+#[test]
+fn param_schema_random_kind_with_secret_true_is_secret() {
+    let app = run_test_script_app(r#"app.param("auth-secret").kind("random").secret(true);"#);
+    let def = app.def.load();
+    let schema = def.params.get("auth-secret").expect("param declared");
+    assert!(schema.secret);
+    assert!(schema.is_secret());
+}

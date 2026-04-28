@@ -1,6 +1,7 @@
 import AddIcon from "@mui/icons-material/Add";
 import ArticleIcon from "@mui/icons-material/Article";
 import CameraAltIcon from "@mui/icons-material/CameraAlt";
+import CasinoIcon from "@mui/icons-material/Casino";
 import CheckIcon from "@mui/icons-material/Check";
 import ClearIcon from "@mui/icons-material/Clear";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlineOutlined";
@@ -1014,6 +1015,18 @@ function ParamsSection({
                         input: {
                           endAdornment: (
                             <InputAdornment position="end">
+                              {p.kind === "random" && (
+                                <Tooltip title="Generate (32 bytes, hex)">
+                                  <IconButton
+                                    size="small"
+                                    onClick={() =>
+                                      setDraft(generateRandomHex())
+                                    }
+                                  >
+                                    <CasinoIcon fontSize="small" />
+                                  </IconButton>
+                                </Tooltip>
+                              )}
                               {(p.secret ||
                                 p.kind === "password" ||
                                 p.kind === "weak-password") && (
@@ -1184,6 +1197,14 @@ function paramFieldType(kind: string, secret?: boolean): string {
   return "text";
 }
 
+// l[impl action.install.requirements.kind-random]
+// Default `random` generator output: 32 bytes, lowercase hex (64 chars).
+function generateRandomHex(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 function ActionInvokeDialog({
   appName,
   action,
@@ -1323,6 +1344,7 @@ function ActionInvokeDialog({
               }
               const isPassword =
                 def.kind === "password" || def.kind === "weak-password";
+              const isRandom = def.kind === "random";
               const isMultiline = def.kind === "multiline";
               const val = values[key] ?? "";
               const weak =
@@ -1359,29 +1381,49 @@ function ActionInvokeDialog({
                   }
                   required={def.required}
                   slotProps={{
-                    input: isPassword
-                      ? {
-                          endAdornment: (
-                            <InputAdornment position="end">
-                              <Tooltip
-                                title={showPasswords[key] ? "Hide" : "Show"}
-                              >
-                                <IconButton
-                                  size="small"
-                                  onClick={() => toggleShow(key)}
-                                  edge="end"
-                                >
-                                  {showPasswords[key] ? (
-                                    <VisibilityOffIcon fontSize="small" />
-                                  ) : (
-                                    <VisibilityIcon fontSize="small" />
-                                  )}
-                                </IconButton>
-                              </Tooltip>
-                            </InputAdornment>
-                          ),
-                        }
-                      : undefined,
+                    input:
+                      isPassword || isRandom
+                        ? {
+                            endAdornment: (
+                              <InputAdornment position="end">
+                                {isRandom && (
+                                  <Tooltip title="Generate (32 bytes, hex)">
+                                    <IconButton
+                                      size="small"
+                                      onClick={() =>
+                                        setValues((v) => ({
+                                          ...v,
+                                          [key]: generateRandomHex(),
+                                        }))
+                                      }
+                                    >
+                                      <CasinoIcon fontSize="small" />
+                                    </IconButton>
+                                  </Tooltip>
+                                )}
+                                {isPassword && (
+                                  <Tooltip
+                                    title={
+                                      showPasswords[key] ? "Hide" : "Show"
+                                    }
+                                  >
+                                    <IconButton
+                                      size="small"
+                                      onClick={() => toggleShow(key)}
+                                      edge="end"
+                                    >
+                                      {showPasswords[key] ? (
+                                        <VisibilityOffIcon fontSize="small" />
+                                      ) : (
+                                        <VisibilityIcon fontSize="small" />
+                                      )}
+                                    </IconButton>
+                                  </Tooltip>
+                                )}
+                              </InputAdornment>
+                            ),
+                          }
+                        : undefined,
 
                     htmlInput: { style: { fontFamily: "monospace" } },
                   }}
@@ -1886,6 +1928,7 @@ function ShellOpenDialog({
           {paramEntries.map(([key, def]) => {
             const isPassword =
               def.kind === "password" || def.kind === "weak-password";
+            const isRandom = def.kind === "random";
             const isMultiline = def.kind === "multiline";
             const val = values[key] ?? "";
             const weak =
@@ -1922,29 +1965,47 @@ function ShellOpenDialog({
                 }
                 required={def.required}
                 slotProps={{
-                  input: isPassword
-                    ? {
-                        endAdornment: (
-                          <InputAdornment position="end">
-                            <Tooltip
-                              title={showPasswords[key] ? "Hide" : "Show"}
-                            >
-                              <IconButton
-                                size="small"
-                                onClick={() => toggleShow(key)}
-                                edge="end"
-                              >
-                                {showPasswords[key] ? (
-                                  <VisibilityOffIcon fontSize="small" />
-                                ) : (
-                                  <VisibilityIcon fontSize="small" />
-                                )}
-                              </IconButton>
-                            </Tooltip>
-                          </InputAdornment>
-                        ),
-                      }
-                    : undefined,
+                  input:
+                    isPassword || isRandom
+                      ? {
+                          endAdornment: (
+                            <InputAdornment position="end">
+                              {isRandom && (
+                                <Tooltip title="Generate (32 bytes, hex)">
+                                  <IconButton
+                                    size="small"
+                                    onClick={() =>
+                                      setValues((v) => ({
+                                        ...v,
+                                        [key]: generateRandomHex(),
+                                      }))
+                                    }
+                                  >
+                                    <CasinoIcon fontSize="small" />
+                                  </IconButton>
+                                </Tooltip>
+                              )}
+                              {isPassword && (
+                                <Tooltip
+                                  title={showPasswords[key] ? "Hide" : "Show"}
+                                >
+                                  <IconButton
+                                    size="small"
+                                    onClick={() => toggleShow(key)}
+                                    edge="end"
+                                  >
+                                    {showPasswords[key] ? (
+                                      <VisibilityOffIcon fontSize="small" />
+                                    ) : (
+                                      <VisibilityIcon fontSize="small" />
+                                    )}
+                                  </IconButton>
+                                </Tooltip>
+                              )}
+                            </InputAdornment>
+                          ),
+                        }
+                      : undefined,
 
                   htmlInput: { style: { fontFamily: "monospace" } },
                 }}

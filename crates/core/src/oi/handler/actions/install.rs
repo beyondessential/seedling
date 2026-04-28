@@ -77,7 +77,10 @@ pub(in crate::oi) fn validate_requirements(
                     errors.push(format!("{field_str}: password is too weak"));
                 }
             }
-            ParamKind::Text | ParamKind::Multiline | ParamKind::WeakPassword => {}
+            ParamKind::Text
+            | ParamKind::Multiline
+            | ParamKind::WeakPassword
+            | ParamKind::Random => {}
             // ParamKind::Volume is rejected at parse time for static schemas,
             // but the validate_requirements helper is shared with action invocation;
             // for action params, value validation is handled in the action handler.

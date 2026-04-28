@@ -893,6 +893,12 @@ This is currently the only value.
 > Password strength should be hinted, but must not restrict submission.
 > The field should have a strong password generator available.
 
+> l[action.install.requirements.kind-random]
+> A param kind of `"random"` is a free-form text field that hints to presentation layers (such as a web UI) that a one-click generator should be offered for producing a random value, alongside manual text entry.
+> When a generator is offered, its default output is 32 bytes encoded as lowercase hexadecimal (a 64-character string).
+> No validation is applied; the kind is semantically equivalent to `"text"` for storage and submission.
+> The kind does not imply [`secret`](#l--param.schema.secret) — scripts that store sensitive material in a `"random"` param must set `secret(true)` explicitly.
+
 > l[action.install.requirements.kind-unknown]
 > If a param `kind` is provided but does not match any of the defined kinds, `on_install()` must throw.
 

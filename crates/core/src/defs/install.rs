@@ -39,6 +39,8 @@ pub enum ParamKind {
     Password,
     // l[impl action.install.requirements.kind-weak-password]
     WeakPassword,
+    // l[impl action.install.requirements.kind-random]
+    Random,
     /// A reference to a site volume; only valid in action and shell param
     /// schemas. The runtime resolves the operator-supplied volume reference
     /// to an operation-scoped binding before invoking the closure.
@@ -62,6 +64,7 @@ impl ParamKind {
             Self::Email => "email",
             Self::Password => "password",
             Self::WeakPassword => "weak-password",
+            Self::Random => "random",
             Self::Volume => "volume",
         }
     }
@@ -77,6 +80,7 @@ impl std::str::FromStr for ParamKind {
             "email" => Ok(Self::Email),
             "password" => Ok(Self::Password),
             "weak-password" => Ok(Self::WeakPassword),
+            "random" => Ok(Self::Random),
             "volume" => Ok(Self::Volume),
             _ => Err(()),
         }

@@ -143,10 +143,10 @@ let vol = app.volume("data")
 
 ```rhai
 let version = app.param("version")
-    .kind("text")           // text | multiline | email | password | weak-password
+    .kind("text")           // text | multiline | email | password | weak-password | random
     .required(false)        // (action params can also use kind "volume" — see below)
     .default_value("latest")
-    .secret(false)          // password/weak-password imply secret=true
+    .secret(false)          // password/weak-password imply secret=true; random does NOT
     .description("Docker image tag to deploy");
 
 version.value()             // "latest" when no operator value is stored
