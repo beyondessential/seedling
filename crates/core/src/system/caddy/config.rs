@@ -208,6 +208,10 @@ fn build_policy(
     if let Some(issuers) = issuers {
         policy.insert("issuers".to_string(), issuers);
     }
+    // Eager: we control which subjects Caddy should know about (routed
+    // vhosts plus warm-cert hostnames), and we want the cert obtained
+    // when we tell Caddy about it, not lazily on first SNI.
+    policy.insert("on_demand".to_string(), Value::Bool(false));
     policy
 }
 
