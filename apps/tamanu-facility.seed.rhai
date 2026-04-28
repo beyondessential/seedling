@@ -1,0 +1,528 @@
+// Tamanu Facility server.
+//
+// Runs the Tamanu facility API, scheduled tasks, sync worker, and a frontend.
+// Connects to PostgreSQL via the unix socket exported by the seedling-managed
+// `postgres` app: the operator binds this app's `pg-socket` external volume
+// to that socket. The same socket is used to provision the `tamanu` database
+// and the read-only `raw` / `reporting` users at install time.
+//
+// The sync worker is a separate process exposing an internal HTTP service.
+// The API workers reach it inside the node via the seedling localmount
+// endpoint (no routing through Caddy or the public hostname).
+//
+// Routing model:
+//   - `/api/*` and `/v1/*` → API workers (port 3000)
+//   - `/*` → frontend (port 3000)
+
+// ── Params ────────────────────────────────────────────────────────────────────
+
+let version = app.param("version")
+    .required(true)
+    .description("Tamanu image tag (e.g. v2.10.0); applied to facility and frontend images");
+
+let public_hostname = app.param("public-hostname")
+    .required(true)
+    .description("Public FQDN for the facility server, served over HTTPS");
+
+let canonical_url = app.param("canonical-url")
+    .required(false)
+    .description("URL the facility advertises in API responses; defaults to https://<public-hostname>");
+
+let central_url = app.param("central-url")
+    .required(true)
+    .description("Canonical URL of the central server this facility syncs to (e.g. https://central.example.com)");
+
+let facility_id = app.param("facility-id")
+    .required(true)
+    .description("Identifier for this facility (matches a Facility record on the central server)");
+
+let sync_email = app.param("sync-email")
+    .kind("email")
+    .required(false)
+    .default_value("admin@tamanu.io")
+    .description("Email of the sync user the facility authenticates as on the central server");
+
+let sync_password = app.param("sync-password")
+    .kind("password")
+    .required(true)
+    .description("Password of the sync user on the central server");
+
+let timezone = app.param("timezone")
+    .required(false)
+    .default_value("UTC")
+    .description("IANA timezone, e.g. Pacific/Auckland");
+
+let auth_secret = app.param("auth-secret")
+    .kind("password")
+    .required(true)
+    .description("JWT signing secret used by the auth subsystem");
+
+let default_department = app.param("default-department")
+    .required(false)
+    .default_value("GenericClinic")
+    .description("Default department code for surveys");
+
+let default_location = app.param("default-location")
+    .required(false)
+    .default_value("GenericClinic")
+    .description("Default location code for surveys");
+
+let db_name = app.param("db-name")
+    .required(false)
+    .default_value("tamanu")
+    .description("PostgreSQL database name");
+
+let db_user = app.param("db-user")
+    .required(false)
+    .default_value("tamanu")
+    .description("PostgreSQL role the facility server connects as");
+
+let db_password = app.param("db-password")
+    .kind("password")
+    .required(true)
+    .description("PostgreSQL password for the facility server's role");
+
+let raw_password = app.param("raw-password")
+    .kind("password")
+    .required(true)
+    .description("Password for the 'raw' read-only reporting role");
+
+let reporting_password = app.param("reporting-password")
+    .kind("password")
+    .required(true)
+    .description("Password for the 'reporting' read-only reporting role");
+
+let api_replicas = app.param("api-replicas")
+    .required(false)
+    .default_value("2")
+    .description("Number of facility API replicas");
+
+let frontend_replicas = app.param("frontend-replicas")
+    .required(false)
+    .default_value("2")
+    .description("Number of frontend replicas");
+
+let extra_config = app.param("extra-config")
+    .kind("multiline")
+    .required(false)
+    .description("Additional fields appended into production.json5 (advanced; merged at the top level)");
+
+// ── External resources ────────────────────────────────────────────────────────
+
+// Postgres unix socket. The operator maps this to the `socket` volume
+// exported by the postgres app via the external-volume mapping table.
+let pg_socket = app.external_volume("pg-socket");
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+let server_image = || `ghcr.io/beyondessential/tamanu-facility:${version.value()}`;
+let frontend_image = || `ghcr.io/beyondessential/tamanu-frontend:${version.value()}`;
+
+let canonical = || if canonical_url.is_set() {
+    canonical_url.value()
+} else {
+    `https://${public_hostname.value()}`
+};
+
+let json_str = |s| {
+    let escaped = s.replace("\\", "\\\\").replace("\"", "\\\"")
+                   .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
+    `"${escaped}"`
+};
+
+// production.json5: facility-side tamanu config, including the upstream
+// central-server URL and the sync credentials.
+let production_json = || {
+    let extra = if extra_config.is_set() {
+        `  // Operator-supplied overrides:
+${extra_config.value()}
+`
+    } else { "" };
+
+    `{
+  // Generated by Seedling. Regenerate with the "reconfigure" action.
+  countryTimeZone: ${json_str.call(timezone.value())},
+  primaryTimeZone: ${json_str.call(timezone.value())},
+  serverFacilityIds: [${json_str.call(facility_id.value())}],
+  canonicalUrl: ${json_str.call(canonical.call())},
+  sync: {
+    host: ${json_str.call(central_url.value())},
+    email: ${json_str.call(sync_email.value())},
+    password: ${json_str.call(sync_password.value())},
+    dynamicLimiter: {
+      initialLimit: 10000,
+      minLimit: 1000,
+      maxLimit: 100000,
+      optimalTimePerPageMs: 10000,
+      maxLimitChangePerPage: 0.3,
+    },
+  },
+  auth: {
+    secret: ${json_str.call(auth_secret.value())},
+    useHardcodedPermissions: false,
+  },
+  survey: {
+    defaultCodes: {
+      department: ${json_str.call(default_department.value())},
+      location: ${json_str.call(default_location.value())},
+    },
+  },
+  db: {
+    reportSchemas: {
+      enabled: true,
+    },
+  },
+${extra}}
+`
+};
+
+// local.json5: deployment-local connection details. The api workers reach the
+// sync worker via localmount, which inside the pod resolves to the in-node
+// service endpoint for the `sync-api` service.
+let local_json = || `{
+  // Generated by Seedling. Regenerate with the "reconfigure" action.
+  db: {
+    name: ${json_str.call(db_name.value())},
+    verbose: false,
+    username: ${json_str.call(db_user.value())},
+    password: ${json_str.call(db_password.value())},
+    host: "/var/run/postgresql",
+    port: null,
+    migrateOnStartup: false,
+    reportSchemas: {
+      connections: {
+        raw: {
+          username: "raw",
+          password: ${json_str.call(raw_password.value())},
+        },
+        reporting: {
+          username: "reporting",
+          password: ${json_str.call(reporting_password.value())},
+        },
+      },
+    },
+  },
+  sync: {
+    syncApiConnection: {
+      host: "http://localmount",
+      port: 3000,
+    },
+  },
+}
+`;
+
+let parse_int_param = |p| {
+    let v = parse_int(p.value());
+    if v < 1 { throw `${p.value()} is not a positive integer` }
+    v
+};
+
+// ── Resources ─────────────────────────────────────────────────────────────────
+
+let config_vol = app.volume("config");
+
+// Public-facing HTTPS service: routes /api, /v1, and / to deployments.
+let web_svc = app.service("web")
+    .exported(#{ description: "Tamanu facility HTTPS endpoint (HTTP routing)" })
+    .http(80);
+
+web_svc.ingress(public_hostname.value(), 443)
+    .tls(Terminate.Https, Output.Http1)
+    .redirect();
+
+// Internal sync API service: only reachable inside the node, used by the api
+// deployment to talk to the sync worker. Not exported.
+let sync_svc = app.service("sync-api");
+
+// Common env + mounts for every server-image container (api, tasks, sync).
+let configure_server = |c| c
+    .env("TZ", timezone.value())
+    .env("NODE_CONFIG_DIR", "/config")
+    .env("TAMANU_VERSION", version.value())
+    .mount("/config", config_vol)
+    .mount("/var/run/postgresql", pg_socket);
+
+// API workers: handle /api/* and /v1/* on the public HTTP service. They also
+// mount the internal sync service so the api process can reach the sync
+// worker over the localmount endpoint.
+configure_server.call(app.deployment("api")
+    .image(server_image.call())
+    .scale(parse_int_param.call(api_replicas))
+    .arg(["startApi"])
+    .http(3000, web_svc.route("/api"))
+    .http(3000, web_svc.route("/v1"))
+    .mount(sync_svc.port(3000))
+);
+
+// Scheduled tasks worker.
+configure_server.call(app.deployment("tasks")
+    .image(server_image.call())
+    .scale(1)
+    .arg(["startTasks"])
+);
+
+// Sync worker: exposes an internal HTTP API on port 3000 for the api workers.
+configure_server.call(app.deployment("sync")
+    .image(server_image.call())
+    .scale(1)
+    .arg(["startSync"])
+    .tcp(3000, sync_svc.port(3000))
+);
+
+// Frontend.
+app.deployment("frontend")
+    .image(frontend_image.call())
+    .scale(parse_int_param.call(frontend_replicas))
+    .env("TZ", timezone.value())
+    .env("TAMANU_VERSION", version.value())
+    .http(3000, web_svc.route("/"));
+
+// ── Helper closures (dynamic) ─────────────────────────────────────────────────
+
+// Locate the default.json5 the image ships and drop a copy into the config
+// volume as `default.reference.json5` for operator inspection. Renamed so
+// node-config doesn't pick it up as an active config layer (node-config only
+// loads files named default / <NODE_ENV> / local / etc., never *.reference.*).
+let copy_image_defaults = |rt| {
+    rt.start(app.job()
+        .image(server_image.call())
+        .writable_rootfs()
+        .cap_add("DAC_READ_SEARCH")
+        .mount("/config", config_vol)
+        .command(["sh", "-c", `
+set -eu
+src=$(find / -path /proc -prune -o -path /sys -prune -o -path /config -prune -o \
+    -type f -name 'default.json5' -print 2>/dev/null | head -1)
+if [ -z "$src" ]; then
+  echo "no default.json5 found in image" >&2
+  exit 0
+fi
+echo "copying $src -> /config/default.reference.json5"
+install -m 0640 "$src" /config/default.reference.json5
+`])
+    ).terminated(120).ensure_success();
+};
+
+let render_config = |rt| {
+    let staging = app.volume().tmpfs();
+    staging.write("/production.json5", production_json.call());
+    staging.write("/local.json5", local_json.call());
+
+    rt.start(app.job()
+        .image(server_image.call())
+        .writable_rootfs()
+        .cap_add("CHOWN")
+        .cap_add("DAC_OVERRIDE")
+        .cap_add("FOWNER")
+        .mount("/staging", staging)
+        .mount("/config", config_vol)
+        .command(["sh", "-c",
+            "install -m 0640 /staging/production.json5 /config/production.json5 && " +
+            "install -m 0640 /staging/local.json5 /config/local.json5"
+        ])
+    ).terminated(60).ensure_success();
+};
+
+// Idempotent provisioning: create or refresh the database, the facility role,
+// and the read-only reporting roles. Connects via the local socket as the
+// postgres superuser (trust auth on local).
+let provision_db = |rt| {
+    let staging = app.volume().tmpfs();
+    let dbn = db_name.value();
+    let dbu = db_user.value();
+    let escape = |s| s.replace("'", "''");
+    staging.write("/setup.sql", `
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${escape.call(dbu)}') THEN
+    EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L', '${escape.call(dbu)}', '${escape.call(db_password.value())}');
+  ELSE
+    EXECUTE format('ALTER ROLE %I WITH LOGIN PASSWORD %L', '${escape.call(dbu)}', '${escape.call(db_password.value())}');
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'raw') THEN
+    EXECUTE format('CREATE ROLE raw LOGIN PASSWORD %L', '${escape.call(raw_password.value())}');
+  ELSE
+    EXECUTE format('ALTER ROLE raw WITH LOGIN PASSWORD %L', '${escape.call(raw_password.value())}');
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'reporting') THEN
+    EXECUTE format('CREATE ROLE reporting LOGIN PASSWORD %L', '${escape.call(reporting_password.value())}');
+  ELSE
+    EXECUTE format('ALTER ROLE reporting WITH LOGIN PASSWORD %L', '${escape.call(reporting_password.value())}');
+  END IF;
+END $$;
+`);
+    staging.write("/createdb.sql", `SELECT 'CREATE DATABASE "${escape.call(dbn)}" OWNER "${escape.call(dbu)}"' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '${escape.call(dbn)}')\\gexec
+`);
+
+    rt.start(app.job()
+        .image(server_image.call())
+        .writable_rootfs()
+        .mount("/var/run/postgresql", pg_socket)
+        .mount("/staging", staging)
+        .env("PGHOST", "/var/run/postgresql")
+        .env("PGUSER", "postgres")
+        .command(["sh", "-c",
+            "psql -d postgres -v ON_ERROR_STOP=1 -f /staging/setup.sql && " +
+            "psql -d postgres -v ON_ERROR_STOP=1 -f /staging/createdb.sql"
+        ])
+    ).terminated(120).ensure_success();
+};
+
+let migrate_db = |rt| {
+    rt.start(app.job()
+        .image(server_image.call())
+        .writable_rootfs()
+        .env("TZ", timezone.value())
+        .env("NODE_CONFIG_DIR", "/config")
+        .env("TAMANU_VERSION", version.value())
+        .mount("/config", config_vol)
+        .mount("/var/run/postgresql", pg_socket)
+        .arg(["migrate"])
+    ).terminated_eventually().ensure_success();
+};
+
+// ── Install ───────────────────────────────────────────────────────────────────
+
+app.on_install(|rt, _param| {
+    copy_image_defaults.call(rt);
+    render_config.call(rt);
+    provision_db.call(rt);
+    migrate_db.call(rt);
+
+    rt.warm_certs(app).ready();
+    rt.start(app).ready(300);
+}, #{});
+
+// ── Maintenance actions ───────────────────────────────────────────────────────
+
+app.on_action("reconfigure", |rt, _param| {
+    render_config.call(rt);
+    rt.restart(app.deployment("api"));
+    rt.restart(app.deployment("tasks"));
+    rt.restart(app.deployment("sync"));
+}, #{ description: "Regenerate production.json5 + local.json5 from current params and restart the API + workers" });
+
+app.on_action("migrate", |rt, _param| {
+    migrate_db.call(rt);
+}, #{ description: "Run pending schema migrations against the facility database" });
+
+app.on_action("provision-db", |rt, _param| {
+    provision_db.call(rt);
+}, #{ description: "Create or refresh the database, facility role, and reporting roles based on current params" });
+
+app.on_action("copy-image-defaults", |rt, _param| {
+    copy_image_defaults.call(rt);
+}, #{ description: "Copy the image's default.json5 to /config/default.reference.json5 for operator inspection" });
+
+app.on_action("restart-api", |rt, _param| {
+    rt.restart(app.deployment("api"));
+}, #{ description: "Restart the API workers" });
+
+app.on_action("restart-frontend", |rt, _param| {
+    rt.restart(app.deployment("frontend"));
+}, #{ description: "Restart the frontend" });
+
+app.on_action("restart-sync", |rt, _param| {
+    rt.restart(app.deployment("sync"));
+}, #{ description: "Restart the sync worker" });
+
+app.on_action("restart-workers", |rt, _param| {
+    rt.restart(app.deployment("tasks"));
+    rt.restart(app.deployment("sync"));
+}, #{ description: "Restart the tasks and sync workers" });
+
+// ── Shells ────────────────────────────────────────────────────────────────────
+
+// Equivalent of the ansible `tamanu-run` script: invoke any subcommand of the
+// facility image (e.g. `seed`, `report`) against the current config and database.
+app.on_shell("run", |_rt, shell, param| {
+    let cmd = if "command" in param && param["command"] != "" {
+        [param["command"]]
+    } else {
+        ["bash"]
+    };
+    shell.attach(app.job()
+        .image(server_image.call())
+        .writable_rootfs()
+        .env("TZ", timezone.value())
+        .env("NODE_CONFIG_DIR", "/config")
+        .env("TAMANU_VERSION", version.value())
+        .mount("/config", config_vol)
+        .mount("/var/run/postgresql", pg_socket)
+        .command(cmd));
+}, #{
+    description: "Run a subcommand inside the facility server image (defaults to bash)",
+    params: #{
+        command: #{
+            kind: "text",
+            required: false,
+            description: "Subcommand to invoke (e.g. migrate, seed, report). Leave blank for an interactive shell.",
+        },
+    },
+});
+
+// ── Version changes ───────────────────────────────────────────────────────────
+
+// Stop API + workers so the migration has exclusive database access; the
+// frontend keeps serving cached pages through the brief outage. `rt.start(app)`
+// afterwards rolls the frontend (rolling update) and brings the API + workers
+// back up on the new image.
+version.on_change(|rt, old| {
+    rt.warm_images([
+        app.job().image(server_image.call()),
+        app.job().image(frontend_image.call()),
+    ]).ready(600);
+
+    copy_image_defaults.call(rt);
+    render_config.call(rt);
+
+    rt.stop(old.select(#{
+        types: [ResourceType.Deployment],
+        names: ["api", "tasks", "sync"],
+    }));
+
+    migrate_db.call(rt);
+
+    rt.start(app).ready(300);
+});
+
+// ── Config parameter changes ──────────────────────────────────────────────────
+
+let restart_servers = |rt| {
+    rt.restart(app.deployment("api"));
+    rt.restart(app.deployment("tasks"));
+    rt.restart(app.deployment("sync"));
+};
+
+canonical_url.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
+central_url.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
+facility_id.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
+sync_email.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
+sync_password.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
+timezone.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
+auth_secret.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
+default_department.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
+default_location.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
+extra_config.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
+
+// DB credential changes: re-provision (so the postgres-side passwords get
+// updated to match) and re-render the local config that holds them.
+db_password.on_change(|rt, _old| {
+    provision_db.call(rt);
+    render_config.call(rt);
+    restart_servers.call(rt);
+});
+raw_password.on_change(|rt, _old| {
+    provision_db.call(rt);
+    render_config.call(rt);
+    restart_servers.call(rt);
+});
+reporting_password.on_change(|rt, _old| {
+    provision_db.call(rt);
+    render_config.call(rt);
+    restart_servers.call(rt);
+});
+
+api_replicas.on_change(|rt, _old| { rt.start(app.deployment("api")); });
+frontend_replicas.on_change(|rt, _old| { rt.start(app.deployment("frontend")); });

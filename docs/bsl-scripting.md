@@ -8,6 +8,8 @@ The full language specification is at [`docs/spec/language.md`](spec/language.md
 
 BSL is written in [Rhai](https://rhai.rs). Rhai is a scripting language with Rust-like syntax: `let`, closures `|args| { body }`, string interpolation with backticks, object maps `#{ key: value }`, and arrays `[a, b, c]`. You do not need to know Rust to write BSL.
 
+The conventional extension is `.seed.rhai`.
+
 A script runs in a fresh scope every time it is evaluated. The `app` global is pre-injected; everything else must be defined or computed.
 
 ### Names
