@@ -32,6 +32,7 @@ pub mod site_ingress_attachments;
 pub mod site_ingresses;
 pub mod site_services;
 pub mod site_volumes;
+pub mod tailscale;
 pub mod stopped;
 pub mod templates;
 pub mod tls;
