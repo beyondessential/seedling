@@ -122,7 +122,12 @@ function lastIssuanceLabel(
 
 function nextIssuanceLabel(view: TlsHostnameView, now: number): React.ReactNode {
   if (view.next_issuance_source === "immediate") return "queued";
-  if (view.next_issuance_at == null) return "—";
+  if (view.next_issuance_at == null) {
+    // No runtime issuance schedule applies — Caddy is the one driving
+    // renewal (default strategy: internal CA or ACME via the proxy).
+    if (view.policy.strategy === "default") return "controlled by Caddy";
+    return "—";
+  }
   if (view.next_issuance_source === "debounce") {
     // Last attempt failed; the runtime won't retry until this point.
     return `retry after ${relative(view.next_issuance_at, now)} (last attempt failed)`;
