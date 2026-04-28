@@ -64,8 +64,12 @@ pub async fn issue(
 ) -> Result<Issued> {
     let socket = socket_path.unwrap_or_else(|| PathBuf::from(tailscale::DEFAULT_SOCKET_PATH));
 
+    // No redirect following: any 30x from tailscaled would otherwise
+    // make reqwest re-issue with a Referer header set, which fails the
+    // CSRF check at the localapi entrypoint on the next hop.
     let client = reqwest::Client::builder()
         .unix_socket(socket)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| IssueError::Unreachable {
             message: format!("client build failed: {e}"),
@@ -99,49 +103,57 @@ pub async fn issue(
 }
 
 /// Split tailscaled's concatenated PEM response into `(cert_chain, key)`.
-/// The body looks like:
-///
-/// ```text
-/// -----BEGIN CERTIFICATE-----
-/// ...
-/// -----END CERTIFICATE-----
-/// -----BEGIN CERTIFICATE-----  (optional intermediates)
-/// ...
-/// -----END CERTIFICATE-----
-/// -----BEGIN PRIVATE KEY-----  (or EC PRIVATE KEY etc)
-/// ...
-/// -----END PRIVATE KEY-----
-/// ```
-///
-/// We split on the *last* `BEGIN .* PRIVATE KEY` block; everything before
-/// is the cert chain, everything from that block onwards is the key.
+/// The body is one or more PEM blocks; tailscaled writes the private key
+/// first followed by the leaf cert and any intermediates, but we don't
+/// rely on order — every block whose label contains `PRIVATE KEY` goes
+/// into the key bucket, every `CERTIFICATE` block goes into the chain
+/// bucket, and we return them in chain-first / key form (the shape the
+/// rest of the runtime expects).
 pub(crate) fn split_pem_pair(body: &str) -> Result<(String, String)> {
-    let key_marker_idx = body
-        .rmatch_indices("-----BEGIN ")
-        .find_map(|(i, _)| {
-            let after = &body[i..];
-            // Look for "-----BEGIN <something> PRIVATE KEY-----"
-            if after
-                .lines()
-                .next()
-                .is_some_and(|l| l.contains("PRIVATE KEY"))
-            {
-                Some(i)
-            } else {
-                None
-            }
-        })
-        .ok_or_else(|| IssueError::Pem {
-            message: "no PRIVATE KEY block found in tailscaled response".to_owned(),
-        })?;
-    let cert = body[..key_marker_idx].trim().to_owned();
-    let key = body[key_marker_idx..].trim().to_owned();
-    if cert.is_empty() {
+    let mut chain_blocks: Vec<&str> = Vec::new();
+    let mut key_blocks: Vec<&str> = Vec::new();
+    let mut cursor = body;
+    while let Some(begin_rel) = cursor.find("-----BEGIN ") {
+        let block_start = &cursor[begin_rel..];
+        // Pull the label off the first line so we know which bucket the
+        // block belongs in (CERTIFICATE vs PRIVATE KEY).
+        let header_line = block_start.lines().next().unwrap_or("");
+        let label = header_line
+            .strip_prefix("-----BEGIN ")
+            .and_then(|s| s.strip_suffix("-----"))
+            .unwrap_or("");
+        // Match the corresponding `-----END <label>-----` to find the
+        // block boundary. We accept any label that contains the matching
+        // keyword so EC / RSA / PKCS8 private keys all flow through.
+        let end_marker = format!("-----END {label}-----");
+        let Some(end_rel) = block_start.find(&end_marker) else {
+            return Err(IssueError::Pem {
+                message: format!("no closing marker for {label:?} block"),
+            });
+        };
+        let block_end = end_rel + end_marker.len();
+        let block = &block_start[..block_end];
+        if label.contains("PRIVATE KEY") {
+            key_blocks.push(block);
+        } else if label.contains("CERTIFICATE") {
+            chain_blocks.push(block);
+        }
+        // Otherwise drop the block silently — tailscaled doesn't emit
+        // anything else here, but if a future version starts including
+        // OCSP staples or similar we don't want to choke.
+        cursor = &block_start[block_end..];
+    }
+    if chain_blocks.is_empty() {
         return Err(IssueError::Pem {
-            message: "no certificate block before PRIVATE KEY in tailscaled response".to_owned(),
+            message: "no CERTIFICATE block in tailscaled response".to_owned(),
         });
     }
-    Ok((cert, key))
+    if key_blocks.is_empty() {
+        return Err(IssueError::Pem {
+            message: "no PRIVATE KEY block in tailscaled response".to_owned(),
+        });
+    }
+    Ok((chain_blocks.join("\n"), key_blocks.join("\n")))
 }
 
 async fn persist(
@@ -218,6 +230,35 @@ mod tests {
         let (cert, key) = split_pem_pair(body).unwrap();
         assert!(cert.contains("AAA"));
         assert!(key.contains("EC PRIVATE KEY"));
+    }
+
+    #[test]
+    fn split_pem_pair_handles_key_first_then_cert() {
+        // tailscaled emits the private key before the cert chain on the
+        // /localapi/v0/cert/<host>?type=pair endpoint, so the parser
+        // must not assume cert-then-key order.
+        let body = concat!(
+            "-----BEGIN EC PRIVATE KEY-----\n",
+            "KKK\n",
+            "-----END EC PRIVATE KEY-----\n",
+            "-----BEGIN CERTIFICATE-----\n",
+            "LEAF\n",
+            "-----END CERTIFICATE-----\n",
+            "-----BEGIN CERTIFICATE-----\n",
+            "INTERMEDIATE\n",
+            "-----END CERTIFICATE-----\n",
+        );
+        let (cert, key) = split_pem_pair(body).unwrap();
+        assert!(cert.contains("LEAF"));
+        assert!(cert.contains("INTERMEDIATE"));
+        assert!(!cert.contains("PRIVATE KEY"));
+        assert!(key.contains("EC PRIVATE KEY"));
+        assert!(key.contains("KKK"));
+        // Cert chain should appear leaf-first (the order tailscaled emits
+        // them in, which is what the parse_chain consumer expects).
+        let leaf_pos = cert.find("LEAF").unwrap();
+        let intermediate_pos = cert.find("INTERMEDIATE").unwrap();
+        assert!(leaf_pos < intermediate_pos);
     }
 
     #[test]
