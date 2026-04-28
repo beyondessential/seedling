@@ -1,8 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { AuthRequired, connect } from "../lib/session";
+import { AuthRequired, BackendUnreachable, connect } from "../lib/session";
 import type { Session } from "../lib/session";
 import type { SeedlingEvent, VolumeRef } from "../lib/types";
 import { UniRouter } from "../lib/uni-router";
+import { Offline } from "./Offline";
 
 const EVENTS_CACHE_SIZE = 200;
 const SIDEBAR_STORAGE_KEY = "seedling.eventsSidebar";
@@ -19,6 +20,7 @@ interface SessionCtx {
   session: Session | null;
   probing: boolean;
   reconnecting: boolean;
+  offline: boolean;
   setSession: (s: Session | null) => void;
   events: SeedlingEvent[];
   sidebarOpen: boolean;
@@ -40,6 +42,7 @@ export const SessionContext = createContext<SessionCtx>({
   session: null,
   probing: true,
   reconnecting: false,
+  offline: false,
   setSession: () => undefined,
   events: [],
   sidebarOpen: false,
@@ -67,6 +70,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [probing, setProbing] = useState(true);
   const [reconnecting, setReconnecting] = useState(false);
+  const [offline, setOffline] = useState(false);
   const [events, setEvents] = useState<SeedlingEvent[]>([]);
   const [uniRouter, setUniRouter] = useState<UniRouter | null>(null);
   const [sidebarOpen, setSidebarOpenState] = useState<boolean>(() => {
@@ -150,14 +154,55 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     if (probeRan.current) return;
     probeRan.current = true;
     connect({})
-      .then(setSession)
+      .then((s) => {
+        setSession(s);
+        setOffline(false);
+      })
       .catch((e) => {
-        if (!(e instanceof AuthRequired)) {
+        if (e instanceof BackendUnreachable) {
+          setOffline(true);
+        } else if (!(e instanceof AuthRequired)) {
           console.warn("connect probe failed:", e);
         }
       })
       .finally(() => setProbing(false));
   }, []);
+
+  // Poll while offline so the UI recovers automatically once the daemon
+  // is back. AuthRequired counts as "back online" — the user just needs
+  // to log in. Any other terminal error also exits offline mode so the
+  // app doesn't sit on the offline page forever for unrelated failures.
+  useEffect(() => {
+    if (!offline) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    let delay = 1000;
+
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        const s = await connect({});
+        if (cancelled) return;
+        setSession(s);
+        setOffline(false);
+      } catch (e) {
+        if (cancelled) return;
+        if (e instanceof BackendUnreachable) {
+          delay = Math.min(delay * 2, 15_000);
+          timer = window.setTimeout(poll, delay);
+        } else {
+          // 401 / 4xx / parse error — backend is reachable, stop polling.
+          setOffline(false);
+        }
+      }
+    };
+
+    timer = window.setTimeout(poll, delay);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [offline]);
 
   const doReconnect = useCallback(async (cancelled: { current: boolean }) => {
     setReconnecting(true);
@@ -169,6 +214,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         const newSession = await connect({});
         if (!cancelled.current) {
           setSession(newSession);
+          setOffline(false);
           setReconnecting(false);
         }
         return;
@@ -176,8 +222,17 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         if (e instanceof AuthRequired) {
           if (!cancelled.current) {
             setSession(null);
+            setOffline(false);
             setReconnecting(false);
           }
+          return;
+        }
+        if (e instanceof BackendUnreachable && !cancelled.current) {
+          // Hand off to the offline polling effect so the user sees
+          // the Offline page instead of an indefinite reconnect spinner.
+          setSession(null);
+          setReconnecting(false);
+          setOffline(true);
           return;
         }
         await new Promise<void>((r) => setTimeout(r, delay));
@@ -278,13 +333,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   return (
     <SessionContext.Provider value={{
-      session, probing, reconnecting, setSession,
+      session, probing, reconnecting, offline, setSession,
       events, sidebarOpen, setSidebarOpen, sidebarWidth, setSidebarWidth,
       uniRouter,
       shellTabs, activeShellId, setActiveShellId, openShell, openVolumeShell, closeShell,
       shellsSidebarWidth, setShellsSidebarWidth,
     }}>
-      {children}
+      {offline ? <Offline /> : children}
     </SessionContext.Provider>
   );
 }
