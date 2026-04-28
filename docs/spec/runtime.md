@@ -872,8 +872,11 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > r[actuate.volume.hold.confirm]
 > An operator must explicitly confirm deletion of a held volume before its data is removed.
 
+> r[actuate.volume.hold.restore]
+> An operator may restore a held volume's data into a fresh managed [site volume](#r--volume.site) instead of confirming its deletion. Restoration moves the held data into place under an operator-chosen site volume name, defaulting to the held volume's recorded name; the resulting volume is recorded as a managed site volume regardless of whether the hold originated from an app volume or a site volume. Restoration must be rejected when a site volume with the target name already exists, so operators surface and resolve the collision instead of silently overwriting either record. The held volume's tracking record is removed once its data has been moved.
+
 > r[actuate.volume.hold.events]
-> Creation and confirmed deletion of held volumes must be observable on the event feed so that UIs can refresh held-volume counts without polling.
+> Creation, confirmed deletion, and restoration of held volumes must be observable on the event feed so that UIs can refresh held-volume counts without polling. A restore event must identify the held volume that was consumed and the name of the new site volume it became.
 
 > r[volume.site]
 > A site volume is a named volume managed by operators, independent of any app. Site volumes come in two kinds:
