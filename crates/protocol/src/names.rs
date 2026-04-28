@@ -294,6 +294,17 @@ bsl_name_newtype! {
 }
 
 bsl_name_newtype! {
+    /// Canonical name of a site-level ingress.
+    ///
+    /// Site ingresses are operator-managed (or discovery-managed) named
+    /// entry points that live outside any app. Manual site ingresses are
+    /// created via `/ingresses/site/create`; discovered ones are
+    /// auto-created by a provider (e.g. Tailscale) and carry the same
+    /// `bsl.name`-shape identifier the operator sees in CLI/UI listings.
+    SiteIngressName
+}
+
+bsl_name_newtype! {
     /// Canonical name of a backup strategy.
     ///
     /// Backup strategies live at the site level (not inside an app) and are
@@ -734,6 +745,20 @@ mod tests {
     #[test]
     fn site_service_name_accepts_canonical() {
         SiteServiceName::new("postgres-prod").unwrap();
+    }
+
+    #[test]
+    fn site_ingress_name_accepts_canonical() {
+        SiteIngressName::new("tailscale").unwrap();
+        SiteIngressName::new("legacy-redirect").unwrap();
+    }
+
+    #[test]
+    fn site_ingress_name_rejects_leading_underscore() {
+        assert!(matches!(
+            SiteIngressName::new("_tailscale"),
+            Err(InvalidName::LeadingUnderscore)
+        ));
     }
 
     #[test]
