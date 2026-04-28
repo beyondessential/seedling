@@ -42,14 +42,16 @@ let timezone = app.param("timezone")
     .description("IANA timezone, e.g. Pacific/Auckland; defaults to the host's local timezone");
 
 let auth_secret = app.param("auth-secret")
-    .kind("password")
+    .kind("random")
+    .secret(true)
     .required(true)
-    .description("JWT signing secret used by the auth subsystem");
+    .description("JWT signing secret used by the auth subsystem; click the dice icon to generate a fresh 32-byte hex value");
 
 let refresh_secret = app.param("refresh-secret")
-    .kind("password")
+    .kind("random")
+    .secret(true)
     .required(true)
-    .description("Refresh-token signing secret used by the auth subsystem");
+    .description("Refresh-token signing secret used by the auth subsystem; click the dice icon to generate a fresh 32-byte hex value");
 
 let db_name = app.param("db-name")
     .required(false)
