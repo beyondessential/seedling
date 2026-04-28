@@ -36,6 +36,30 @@ mod phases;
 mod site_proxy;
 mod state;
 
+/// Enumerate hostnames from the site-ingress snapshot that need TLS,
+/// i.e. their parent site ingress declares a non-`None` TLS provider
+/// and the row is not stale. Used by the reconciler to feed the
+/// issuance coordinator alongside the app-ingress list.
+// r[impl ingress.site.tailscale]
+fn site_ingress_tls_hostnames(snapshot: &site_proxy::SiteIngressSnapshot) -> Vec<String> {
+    let mut out = Vec::new();
+    for ing in &snapshot.ingresses {
+        if ing.stale {
+            continue;
+        }
+        if matches!(
+            ing.tls_provider,
+            crate::runtime::site_ingresses::TlsProvider::None
+        ) {
+            continue;
+        }
+        if !out.iter().any(|h: &String| h == &ing.hostname) {
+            out.push(ing.hostname.clone());
+        }
+    }
+    out
+}
+
 pub mod pods;
 pub mod proxy;
 pub mod routes;
@@ -714,6 +738,16 @@ impl Reconciler {
                 if let Some(coord) = self.tls_coordinator.as_ref() {
                     for mi in &managed_ingresses {
                         coord.ensure(&mi.hostname);
+                    }
+                    // r[impl ingress.site.tailscale]
+                    // Site-ingress hostnames (manual + discovered) flow
+                    // through the same coordinator. The dispatch inside
+                    // ensure() picks the Tailscale issuer for discovered
+                    // tailnet hostnames and leaves manual ones to the
+                    // ACME pipeline (subject to the operator binding a
+                    // policy, same as app ingresses).
+                    for hostname in &site_ingress_tls_hostnames(&site_ingress_snapshot) {
+                        coord.ensure(hostname);
                     }
                 }
 

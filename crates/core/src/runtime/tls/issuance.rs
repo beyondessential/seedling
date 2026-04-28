@@ -31,9 +31,14 @@ use super::{
     AttemptOutcome, AttemptTrigger, TlsPolicy,
     acme::{self, IssueParams, Issued},
     state::{self, Decision},
-    store,
+    store, tailscale_issuer,
 };
-use crate::runtime::{db::DbHandle, faults, secrets::Cipher};
+use crate::runtime::{
+    db::DbHandle,
+    faults,
+    secrets::Cipher,
+    site_ingresses::{self, DiscoveryProvider, SiteIngressSource, TlsProvider as SiteTlsProvider},
+};
 
 #[derive(Debug, Snafu)]
 pub enum CoordinatorError {
@@ -51,6 +56,11 @@ pub enum CoordinatorError {
 
     #[snafu(display("acme protocol error: {source}"))]
     Acme { source: acme::AcmeError },
+
+    #[snafu(display("tailscale issuer error: {source}"))]
+    Tailscale {
+        source: tailscale_issuer::IssueError,
+    },
 
     #[snafu(display(
         "background issuance for {hostname} debounced after recent failure ({remaining_s}s left)"
@@ -141,6 +151,132 @@ impl Coordinator {
         });
     }
 
+    /// Returns `true` when `hostname` matches a non-stale, discovered
+    /// Tailscale site ingress whose `tls_provider` is `Tailscale`. The
+    /// Coordinator dispatches these hostnames to the Tailscale issuer
+    /// instead of the ACME pipeline.
+    // r[impl ingress.site.tailscale]
+    fn dispatch_to_tailscale(&self, hostname: &str) -> Result<bool> {
+        let host = hostname.to_owned();
+        let matched = self
+            .db
+            .call(move |db| -> rusqlite::Result<bool> {
+                for ing in site_ingresses::list(db)? {
+                    if ing.hostname != host {
+                        continue;
+                    }
+                    if ing.stale {
+                        continue;
+                    }
+                    let is_tailscale = matches!(
+                        &ing.source,
+                        SiteIngressSource::Discovered {
+                            provider: DiscoveryProvider::Tailscale,
+                            ..
+                        }
+                    ) && matches!(ing.tls_provider, SiteTlsProvider::Tailscale);
+                    if is_tailscale {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            })
+            .map_err(|source| CoordinatorError::Storage { source })?;
+        Ok(matched)
+    }
+
+    /// Tailscale-side counterpart to the ACME flow: open an attempt row,
+    /// call `tailscale_issuer::issue`, and finalise + emit faults the
+    /// same way the ACME path does so the operator-visible cert state
+    /// is consistent across origins.
+    // r[impl ingress.site.tailscale]
+    async fn run_tailscale(
+        self: &Arc<Self>,
+        hostname: &str,
+        trigger: AttemptTrigger,
+    ) -> Result<Issued> {
+        // Per-tick `coord.ensure(hostname)` calls would fetch a fresh
+        // cert from tailscaled every ten seconds without this guard.
+        // Match the renewal threshold the ACME path uses (a third of
+        // the cert's lifetime remaining); manual triggers always run
+        // regardless. tailscaled handles upstream renewal; we just
+        // need to fetch when our cached row is approaching expiry.
+        if trigger != AttemptTrigger::Manual {
+            let host_for_check = hostname.to_owned();
+            let active = self
+                .db
+                .call(move |db| store::find_active_for_hostname(db, &host_for_check))
+                .map_err(|source| CoordinatorError::Storage { source })?;
+            if let Some(cert) = active
+                && cert.origin == super::TlsCertOrigin::Tailscale
+                && let Some(not_after) = cert.not_after
+                && let Some(not_before) = cert.not_before
+            {
+                let now = jiff::Timestamp::now().as_second();
+                let lifetime = (not_after - not_before).max(1);
+                let remaining = (not_after - now).max(0);
+                if remaining * state::RENEW_AT_FRACTION_DEN
+                    > lifetime * state::RENEW_AT_FRACTION_NUM
+                {
+                    return Ok(Issued {
+                        cert_id: cert.id,
+                        not_after,
+                    });
+                }
+            }
+        }
+
+        let host_for_open = hostname.to_owned();
+        let attempt_id = self
+            .db
+            .call(move |db| store::insert_attempt(db, &host_for_open, trigger))
+            .map_err(|source| CoordinatorError::Storage { source })?;
+
+        tracing::info!(%hostname, ?trigger, "Tailscale issuance starting");
+        let result = tailscale_issuer::issue(&self.db, &self.cipher, hostname, None).await;
+        match result {
+            Ok(issued) => {
+                let cert_id = issued.cert_id;
+                let _ = self.db.call(move |db| {
+                    store::finalize_attempt(
+                        db,
+                        attempt_id,
+                        AttemptOutcome::Success,
+                        Some(cert_id),
+                        None,
+                    )
+                });
+                clear_cert_fault(&self.db, hostname, "cert_issue_failed");
+                tracing::info!(
+                    %hostname,
+                    cert_id = issued.cert_id,
+                    not_after = issued.not_after.unwrap_or(0),
+                    "Tailscale issuance succeeded"
+                );
+                Ok(Issued {
+                    cert_id: issued.cert_id,
+                    not_after: issued.not_after.unwrap_or(0),
+                })
+            }
+            Err(e) => {
+                let msg = format!("Tailscale issuance for {hostname} failed: {e}");
+                let err_for_attempt = msg.clone();
+                let _ = self.db.call(move |db| {
+                    store::finalize_attempt(
+                        db,
+                        attempt_id,
+                        AttemptOutcome::Failure,
+                        None,
+                        Some(&err_for_attempt),
+                    )
+                });
+                file_cert_fault(&self.db, hostname, "cert_issue_failed", &msg);
+                tracing::warn!(%hostname, error = %e, "Tailscale issuance failed");
+                Err(CoordinatorError::Tailscale { source: e })
+            }
+        }
+    }
+
     /// Synchronous variant for CLI/OI callers that want the result back in
     /// the same RPC. Goes through the same gating and code path as
     /// [`Self::ensure`]; the only difference is the trigger label
@@ -161,6 +297,18 @@ impl Coordinator {
     /// decision says to.
     async fn run(self: &Arc<Self>, hostname: &str, trigger: AttemptTrigger) -> Result<Issued> {
         let _guard = self.issue_lock.lock().await;
+
+        // r[impl ingress.site.tailscale]
+        // Tailscale-discovered hostnames bypass the ACME state machine
+        // entirely: there's no operator policy to read, no CA to talk
+        // to, and no ARI window. We just hand the request to
+        // tailscale_issuer, which fetches a fresh cert+key pair from
+        // the local tailscaled API, parses + persists it, and the rest
+        // of the runtime serves it via the same get_certificate path
+        // ACME certs flow through.
+        if self.dispatch_to_tailscale(hostname)? {
+            return self.run_tailscale(hostname, trigger).await;
+        }
 
         // Single source of truth for the decision; the OI rollup and the
         // renewal scheduler call the same function over the same DB
