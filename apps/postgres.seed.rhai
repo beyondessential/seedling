@@ -690,7 +690,10 @@ bestool_psql_version.on_change(|rt, _old| {
 // persistent volume. No deployment restart is needed since the password isn't
 // referenced by the deployment spec.
 password.on_change(|rt, _old| {
-    let escaped = password.value().replace("'", "''");
+    // Rhai's `String.replace(from, to)` mutates the receiver in place and
+    // returns `()`, so bind the value first, then mutate it, then use it.
+    let escaped = password.value();
+    escaped.replace("'", "''");
     let staging = app.volume().tmpfs();
     staging.write("/alter.sql", `ALTER USER postgres WITH PASSWORD '${escaped}';`);
 
