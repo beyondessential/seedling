@@ -28,6 +28,8 @@ pub mod scaling;
 pub mod scheduler;
 pub mod schedules;
 pub mod secrets;
+pub mod site_ingress_attachments;
+pub mod site_ingresses;
 pub mod site_services;
 pub mod site_volumes;
 pub mod stopped;
