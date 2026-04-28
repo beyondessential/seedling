@@ -85,7 +85,7 @@ function CreateSiteIngressDialog({
   const [hostname, setHostname] = useState("");
   const [description, setDescription] = useState("");
   const [tlsProvider, setTlsProvider] = useState<SiteIngressTlsProvider>("acme");
-  const guard = useGuard("dangerous");
+  const guard = useGuard("write");
   const { execute, loading, error } = useOiAction();
   const onSubmit = async () => {
     const params: Record<string, unknown> = {
@@ -231,7 +231,7 @@ function AttachDialog({
   const [redirectUrl, setRedirectUrl] = useState("");
   const [redirectCode, setRedirectCode] = useState<number>(307);
   const [preservePath, setPreservePath] = useState(true);
-  const guard = useGuard("dangerous");
+  const guard = useGuard("write");
   const { execute, loading, error } = useOiAction();
   const { data: appServices } = useOiQuery<AppService[]>("/services/app/list", {});
   const [targetApp, targetService] = target ? target.split("\0") : ["", ""];
@@ -436,7 +436,8 @@ function IngressRow({
   onDetach: (i: SiteIngress, att: SiteIngressAttachment) => void;
   onDelete: (i: SiteIngress) => void;
 }) {
-  const guard = useGuard("dangerous");
+  const writeGuard = useGuard("write");
+  const dangerGuard = useGuard("dangerous");
   const isDiscovered = ingress.source === "discovered";
   return (
     <TableRow>
@@ -479,12 +480,12 @@ function IngressRow({
                 <Box component="span" sx={{ fontFamily: "monospace", fontSize: "0.85em" }}>
                   {describeAttachment(att)}
                 </Box>
-                <Tooltip title={guard.reason ?? "Detach"}>
+                <Tooltip title={dangerGuard.reason ?? "Detach"}>
                   <span>
                     <IconButton
                       size="small"
                       onClick={() => onDetach(ingress, att)}
-                      disabled={!guard.allowed}
+                      disabled={!dangerGuard.allowed}
                     >
                       <LinkOffIcon fontSize="small" />
                     </IconButton>
@@ -497,12 +498,12 @@ function IngressRow({
       </TableCell>
       <TableCell align="right">
         <Box sx={{ display: "flex", flexDirection: "row", gap: 0.5, justifyContent: "flex-end" }}>
-          <Tooltip title={guard.reason ?? "Attach forward or redirect"}>
+          <Tooltip title={writeGuard.reason ?? "Attach forward or redirect"}>
             <span>
               <IconButton
                 size="small"
                 onClick={() => onAttach(ingress)}
-                disabled={!guard.allowed}
+                disabled={!writeGuard.allowed}
               >
                 <AddIcon fontSize="small" />
               </IconButton>
@@ -512,14 +513,14 @@ function IngressRow({
             title={
               isDiscovered
                 ? "Discovered ingresses are managed by the provider and cannot be deleted here"
-                : (guard.reason ?? "Delete this manual site ingress")
+                : (dangerGuard.reason ?? "Delete this manual site ingress")
             }
           >
             <span>
               <IconButton
                 size="small"
                 onClick={() => onDelete(ingress)}
-                disabled={isDiscovered || !guard.allowed}
+                disabled={isDiscovered || !dangerGuard.allowed}
               >
                 <DeleteOutlineIcon fontSize="small" />
               </IconButton>
@@ -537,7 +538,7 @@ export default function Ingresses() {
     "/ingresses/site/discovery/status",
     {},
   );
-  const guard = useGuard("dangerous");
+  const guard = useGuard("write");
   const { execute: executeDetach, error: detachError } = useOiAction();
   const {
     execute: executeRemove,
