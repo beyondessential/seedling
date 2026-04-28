@@ -471,7 +471,12 @@ async fn run_volume_backup(
         return;
     }
 
-    let snapshot_name = format!("backup-snap-{}-{}", strategy.name, uuid::Uuid::new_v4());
+    let snapshot_name = format!(
+        "{}{}-{}",
+        backup_execution::SNAPSHOT_NAME_PREFIX,
+        strategy.name,
+        uuid::Uuid::new_v4()
+    );
 
     let mut attempt = 0u8;
     loop {

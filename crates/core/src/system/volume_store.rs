@@ -274,6 +274,28 @@ impl VolumeStore {
         self.site_path(name).exists()
     }
 
+    /// Return the names (without the `site-` prefix) of every site volume
+    /// whose name starts with `prefix`.
+    pub fn list_sites_with_prefix(&self, prefix: &str) -> std::io::Result<Vec<String>> {
+        let mut out = Vec::new();
+        if !self.volumes_dir.exists() {
+            return Ok(out);
+        }
+        for entry in std::fs::read_dir(&self.volumes_dir)? {
+            let entry = entry?;
+            let Some(file_name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            let Some(rest) = file_name.strip_prefix("site-") else {
+                continue;
+            };
+            if rest.starts_with(prefix) {
+                out.push(rest.to_owned());
+            }
+        }
+        Ok(out)
+    }
+
     // r[impl volume.site.lifecycle]
     pub async fn create_site(&self, name: &str) -> std::io::Result<()> {
         let path = self.site_path(name);

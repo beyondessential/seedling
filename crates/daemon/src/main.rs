@@ -569,6 +569,42 @@ async fn main() {
         }
     }
 
+    // r[impl backup.execution.startup-cleanup]
+    // Filesystem-level scan for orphaned backup-execution snapshots.
+    // Per [backup.execution], the runtime takes a read-only snapshot of the
+    // source volume, hands it to the backup app, then removes it. If the
+    // daemon was killed between those two steps the snapshot is left on
+    // disk; without this scan they'd accumulate invisibly across restarts.
+    {
+        let driver_ref = Arc::clone(&driver);
+        let prefix = seedling_core::runtime::backup_execution::SNAPSHOT_NAME_PREFIX;
+        match driver_ref.volume_store.list_sites_with_prefix(prefix) {
+            Ok(orphans) if !orphans.is_empty() => {
+                tracing::warn!(
+                    count = orphans.len(),
+                    "found orphaned backup-execution snapshots from a previous run; removing"
+                );
+                for name in &orphans {
+                    tracing::info!(snapshot = %name, "removing orphaned backup snapshot");
+                    tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current().block_on(async {
+                            if let Err(e) = driver_ref.volume_store.remove_site(name).await {
+                                tracing::warn!(
+                                    snapshot = %name,
+                                    "failed to remove orphaned backup snapshot: {e}"
+                                );
+                            }
+                        })
+                    });
+                }
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!("failed to scan for orphaned backup snapshots: {e}");
+            }
+        }
+    }
+
     // r[impl actuate.volume.tmpfs]
     // Reset the tmpfs-volume bind-mount root on startup. /run is tmpfs so
     // contents are already gone after a host reboot, but a daemon restart

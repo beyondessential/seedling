@@ -584,6 +584,10 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > `backup_failed` fault is filed against the backup app with the failing volume noted in the
 > description.
 
+> r[backup.execution.startup-cleanup]
+> The snapshot cleanup mandated by [backup.execution](#r--backup.execution) is best-effort within a single process: if the runtime is killed between snapshot creation and the post-action removal step, the snapshot is left on disk and would otherwise accumulate invisibly across restarts.
+> On startup, the runtime must scan for any orphaned snapshots produced by [backup.execution](#r--backup.execution) — site volumes whose name identifies them as belonging to the backup-execution path rather than to a user-visible site volume — and delete them.
+
 > r[backup.list]
 > To list available snapshots for a volume, the runtime must synchronously invoke the backup app's
 > `list-snapshots` action. Using the scheme described in [operation.volume-param](#r--operation.volume-param) and [operation.volume-param.filename](#r--operation.volume-param.filename), the action receives:

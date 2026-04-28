@@ -5,6 +5,14 @@ use crate::defs::action::parse_cron_expr;
 use crate::runtime::backup_strategies;
 use crate::runtime::db::Db;
 
+// r[impl backup.execution]
+// r[impl backup.execution.startup-cleanup]
+/// Site-volume name prefix used for the read-only snapshots created by
+/// `backup.execution`. Shared between the runtime path that creates and
+/// removes them and the daemon's startup orphan-cleanup so both agree on
+/// what counts as one of these snapshots.
+pub const SNAPSHOT_NAME_PREFIX: &str = "backup-snap-";
+
 pub struct DueStrategy {
     pub name: BackupStrategyName,
     pub via: AppName,
