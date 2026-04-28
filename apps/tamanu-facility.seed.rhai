@@ -227,7 +227,6 @@ let sync_svc = app.service("sync-api");
 // Common env + mounts for every server-image container (api, tasks, sync).
 let configure_server = |c| c
     .env("TZ", timezone.value())
-    .env("NODE_CONFIG_DIR", "/config")
     .env("TAMANU_VERSION", version.value())
     .mount("/config", config_vol)
     .mount("/var/run/postgresql", pg_socket);
@@ -360,7 +359,6 @@ let migrate_db = |rt| {
         .image(server_image.call())
         .writable_rootfs()
         .env("TZ", timezone.value())
-        .env("NODE_CONFIG_DIR", "/config")
         .env("TAMANU_VERSION", version.value())
         .mount("/config", config_vol)
         .mount("/var/run/postgresql", pg_socket)
@@ -457,7 +455,6 @@ app.on_shell("run", |_rt, shell, param| {
         .image(server_image.call())
         .writable_rootfs()
         .env("TZ", timezone.value())
-        .env("NODE_CONFIG_DIR", "/config")
         .env("TAMANU_VERSION", version.value())
         .mount("/config", config_vol)
         .mount("/var/run/postgresql", pg_socket)

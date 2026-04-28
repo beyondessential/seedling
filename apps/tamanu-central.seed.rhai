@@ -206,10 +206,8 @@ let config_vol = app.volume("config");
 
 // Common env + mounts for every server-image container (api, tasks, fhir-*).
 // Tamanu reads /config/production.json5 and /config/local.json5 by default
-// when NODE_CONFIG_DIR points at /config.
 let configure_server = |c| c
     .env("TZ", timezone.value())
-    .env("NODE_CONFIG_DIR", "/config")
     .env("TAMANU_VERSION", version.value())
     .mount("/config", config_vol)
     .mount("/var/run/postgresql", pg_socket);
@@ -394,7 +392,6 @@ let migrate_db = |rt| {
         .image(server_image.call())
         .writable_rootfs()
         .env("TZ", timezone.value())
-        .env("NODE_CONFIG_DIR", "/config")
         .env("TAMANU_VERSION", version.value())
         .mount("/config", config_vol)
         .mount("/var/run/postgresql", pg_socket)
@@ -422,7 +419,6 @@ let provision_admin = |rt, email, display_name, password| {
         .image(server_image.call())
         .writable_rootfs()
         .env("TZ", timezone.value())
-        .env("NODE_CONFIG_DIR", "/config")
         .env("TAMANU_VERSION", version.value())
         .mount("/config", config_vol)
         .mount("/var/run/postgresql", pg_socket)
@@ -554,7 +550,6 @@ app.on_shell("run", |_rt, shell, param| {
         .image(server_image.call())
         .writable_rootfs()
         .env("TZ", timezone.value())
-        .env("NODE_CONFIG_DIR", "/config")
         .env("TAMANU_VERSION", version.value())
         .mount("/config", config_vol)
         .mount("/var/run/postgresql", pg_socket)
