@@ -211,7 +211,12 @@ impl TailscaleProvider {
     /// API errors.
     pub async fn poll_once(&self) -> Result<Option<DiscoveredIdentity>, TailscaleError> {
         let client = build_client(&self.config.socket_path)?;
-        let raw = match client.get("http://local/localapi/v0/status").send().await {
+        let raw = match client
+            .get("http://local-tailscaled.sock/localapi/v0/status")
+            .header("Sec-Tailscale", "localapi")
+            .send()
+            .await
+        {
             Ok(resp) => resp,
             Err(e) => {
                 if let Some(io_err) = io_error(&e)

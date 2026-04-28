@@ -71,9 +71,12 @@ pub async fn issue(
             message: format!("client build failed: {e}"),
         })?;
 
-    let url = format!("http://local/localapi/v0/cert/{hostname}?type=pair");
+    // tailscaled's local API rejects requests without the localapi
+    // CSRF header (or a matching Host), so we send both.
+    let url = format!("http://local-tailscaled.sock/localapi/v0/cert/{hostname}?type=pair");
     let resp = client
         .get(&url)
+        .header("Sec-Tailscale", "localapi")
         .send()
         .await
         .map_err(|e| IssueError::Unreachable {
