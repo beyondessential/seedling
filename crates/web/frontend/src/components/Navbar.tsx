@@ -37,12 +37,14 @@ const isSessionEvent = (ev: SeedlingEvent) =>
 // w[impl routes.volumes.held-count]
 // The backend emits HeldVolumeCreated whenever a volume is placed into the
 // held state (app-script updates, backend-migration, operator-triggered site
-// volume deletion) and HeldVolumeDeleted when an operator confirms final
-// removal. AppUpdated is kept as a belt-and-braces trigger for legacy
+// volume deletion), HeldVolumeDeleted when an operator confirms final
+// removal, and HeldVolumeRestored when a held volume is restored as a fresh
+// site volume. AppUpdated is kept as a belt-and-braces trigger for legacy
 // clients/servers that predate the held-volume events.
 const isHeldVolumeEvent = (ev: SeedlingEvent) =>
   ev.type === "HeldVolumeCreated" ||
   ev.type === "HeldVolumeDeleted" ||
+  ev.type === "HeldVolumeRestored" ||
   ev.type === "AppUpdated";
 
 export function Navbar() {

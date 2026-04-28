@@ -5,6 +5,7 @@ import EditIcon from "@mui/icons-material/Edit";
 import LinkOffIcon from "@mui/icons-material/LinkOff";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import TerminalIcon from "@mui/icons-material/Terminal";
+import UnarchiveIcon from "@mui/icons-material/UnarchiveOutlined";
 import UpgradeIcon from "@mui/icons-material/Upgrade";
 import {
   Alert,
@@ -114,6 +115,97 @@ function ConfirmDeleteHeldDialog({
               disabled={loading || !dangerGuard.allowed}
             >
               {loading ? "Deleting…" : "Delete permanently"}
+            </Button>
+          </span>
+        </Tooltip>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+function RestoreHeldVolumeDialog({
+  volume,
+  existingNames,
+  onCancel,
+  onSuccess,
+}: {
+  volume: HeldVolume;
+  existingNames: Set<string>;
+  onCancel: () => void;
+  onSuccess: () => void;
+}) {
+  const { execute, loading, error, clearError } = useOiAction();
+  const writeGuard = useGuard("write");
+  const [name, setName] = useState(volume.volume_name);
+
+  const handleClose = () => {
+    clearError();
+    onCancel();
+  };
+
+  const trimmed = name.trim();
+  const collision = trimmed.length > 0 && existingNames.has(trimmed);
+
+  const handleSubmit = async () => {
+    if (!trimmed || collision) return;
+    const params: { id: string; target_name?: string } = { id: volume.id };
+    if (trimmed !== volume.volume_name) params.target_name = trimmed;
+    const result = await execute("/volumes/held/restore", params);
+    if (result !== null) {
+      onSuccess();
+      handleClose();
+    }
+  };
+
+  return (
+    <Dialog open onClose={loading ? undefined : handleClose} maxWidth="xs" fullWidth>
+      <DialogTitle>Restore held volume</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ mt: 0.5 }}>
+          {error && <OiErrorAlert error={error} />}
+          <Typography variant="body2" sx={{ color: "text.secondary" }}>
+            Move the held data into a fresh managed site volume. The held
+            volume from{" "}
+            <Box component="span" sx={{ fontFamily: "monospace" }}>
+              {volume.app}
+            </Box>
+            , originally named{" "}
+            <Box component="span" sx={{ fontFamily: "monospace" }}>
+              {volume.volume_name}
+            </Box>
+            , will be moved out of the held list.
+          </Typography>
+          <TextField
+            label="New site volume name"
+            size="small"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            autoFocus
+            error={collision}
+            helperText={
+              collision
+                ? "A site volume with that name already exists."
+                : "Must be unique across site volumes."
+            }
+            slotProps={{
+              htmlInput: { style: { fontFamily: "monospace" } },
+            }}
+          />
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={handleClose} disabled={loading}>
+          Cancel
+        </Button>
+        <Tooltip title={writeGuard.reason ?? ""}>
+          <span>
+            <Button
+              variant="contained"
+              startIcon={<UnarchiveIcon />}
+              onClick={() => void handleSubmit()}
+              disabled={loading || !trimmed || collision || !writeGuard.allowed}
+            >
+              {loading ? "Restoring…" : "Restore"}
             </Button>
           </span>
         </Tooltip>
@@ -641,7 +733,13 @@ export default function Volumes() {
   const [prefillTarget, setPrefillTarget] = useState<{ app: string; name: string } | null>(null);
   const [siteDeleteTarget, setSiteDeleteTarget] = useState<SiteVolume | null>(null);
   const [heldDeleteTarget, setHeldDeleteTarget] = useState<HeldVolume | null>(null);
+  const [heldRestoreTarget, setHeldRestoreTarget] = useState<HeldVolume | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
+
+  const siteVolumeNames = useMemo(
+    () => new Set((siteVols ?? []).map((v) => v.name)),
+    [siteVols],
+  );
 
   const refreshAll = () => {
     refetchSite();
@@ -1115,6 +1213,17 @@ export default function Volumes() {
                               </IconButton>
                             </span>
                           </Tooltip>
+                          <Tooltip title={writeGuard.reason ?? "Restore as site volume"}>
+                            <span>
+                              <IconButton
+                                size="small"
+                                onClick={() => setHeldRestoreTarget(h)}
+                                disabled={!writeGuard.allowed}
+                              >
+                                <UnarchiveIcon sx={{ fontSize: 16 }} />
+                              </IconButton>
+                            </span>
+                          </Tooltip>
                           <Tooltip title={dangerGuard.reason ?? "Confirm delete"}>
                             <span>
                               <IconButton
@@ -1217,6 +1326,19 @@ export default function Volumes() {
           onCancel={() => setHeldDeleteTarget(null)}
           onConfirm={() => void confirmDeleteHeld()}
           loading={deleteBusy}
+        />
+      )}
+      {heldRestoreTarget && (
+        <RestoreHeldVolumeDialog
+          key={heldRestoreTarget.id}
+          volume={heldRestoreTarget}
+          existingNames={siteVolumeNames}
+          onCancel={() => setHeldRestoreTarget(null)}
+          onSuccess={() => {
+            refetchHeld();
+            refetchSite();
+            setHeldRestoreTarget(null);
+          }}
         />
       )}
     </Box>
