@@ -7,8 +7,9 @@ use tokio::sync::broadcast;
 use crate::{
     actor::Actor,
     names::{
-        ActionName, AppName, ExternalServiceName, ExternalVolumeName, ForwardId, HeldVolumeId,
-        ParamName, ServiceRef, SessionId, ShellName, TemplateName, VolumeRef,
+        ActionName, AppName, AppServiceName, ExternalServiceName, ExternalVolumeName, ForwardId,
+        HeldVolumeId, ParamName, ServiceRef, SessionId, ShellName, SiteIngressName, TemplateName,
+        VolumeRef,
     },
 };
 
@@ -374,6 +375,91 @@ pub enum OiEvent {
         external_name: ExternalServiceName,
         target: ServiceRef,
         previous_target: ServiceRef,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
+    // r[impl ingress.site.lifecycle.events]
+    SiteIngressCreated {
+        timestamp: Timestamp,
+        name: SiteIngressName,
+        hostname: String,
+        /// "manual" | "discovered"
+        source: String,
+        /// Provider id when source is "discovered" (e.g. "tailscale").
+        #[serde(skip_serializing_if = "Option::is_none")]
+        discovered_provider: Option<String>,
+        /// "acme" | "tailscale" | "internal" | "none"
+        tls_provider: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
+    // r[impl ingress.site.lifecycle.events]
+    SiteIngressUpdated {
+        timestamp: Timestamp,
+        name: SiteIngressName,
+        /// New hostname (may be unchanged from prior state).
+        hostname: String,
+        /// New TLS provider (may be unchanged from prior state).
+        tls_provider: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
+    // r[impl ingress.site.lifecycle.events]
+    SiteIngressDeleted {
+        timestamp: Timestamp,
+        name: SiteIngressName,
+        /// "manual" | "discovered"
+        source: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
+    // r[impl ingress.site.lifecycle.events]
+    SiteIngressAttachmentAdded {
+        timestamp: Timestamp,
+        name: SiteIngressName,
+        port: u16,
+        protocol: String,
+        /// "forward" | "redirect"
+        target_kind: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        target_app: Option<AppName>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        target_service: Option<AppServiceName>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        redirect_url: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        redirect_code: Option<u16>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
+    // r[impl ingress.site.lifecycle.events]
+    SiteIngressAttachmentUpdated {
+        timestamp: Timestamp,
+        name: SiteIngressName,
+        port: u16,
+        protocol: String,
+        target_kind: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        target_app: Option<AppName>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        target_service: Option<AppServiceName>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        redirect_url: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        redirect_code: Option<u16>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
+    // r[impl ingress.site.lifecycle.events]
+    SiteIngressAttachmentRemoved {
+        timestamp: Timestamp,
+        name: SiteIngressName,
+        port: u16,
+        protocol: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
@@ -884,6 +970,137 @@ impl EventSender {
         });
     }
 
+    // r[impl ingress.site.lifecycle.events]
+    #[allow(clippy::too_many_arguments)]
+    pub fn site_ingress_created(
+        &self,
+        name: &SiteIngressName,
+        hostname: &str,
+        source: &str,
+        discovered_provider: Option<&str>,
+        tls_provider: &str,
+        description: Option<&str>,
+        actor: Option<Arc<Actor>>,
+    ) {
+        self.emit(OiEvent::SiteIngressCreated {
+            timestamp: now(),
+            name: name.clone(),
+            hostname: hostname.to_owned(),
+            source: source.to_owned(),
+            discovered_provider: discovered_provider.map(str::to_owned),
+            tls_provider: tls_provider.to_owned(),
+            description: description.map(str::to_owned),
+            actor,
+        });
+    }
+
+    // r[impl ingress.site.lifecycle.events]
+    pub fn site_ingress_updated(
+        &self,
+        name: &SiteIngressName,
+        hostname: &str,
+        tls_provider: &str,
+        description: Option<&str>,
+        actor: Option<Arc<Actor>>,
+    ) {
+        self.emit(OiEvent::SiteIngressUpdated {
+            timestamp: now(),
+            name: name.clone(),
+            hostname: hostname.to_owned(),
+            tls_provider: tls_provider.to_owned(),
+            description: description.map(str::to_owned),
+            actor,
+        });
+    }
+
+    // r[impl ingress.site.lifecycle.events]
+    pub fn site_ingress_deleted(
+        &self,
+        name: &SiteIngressName,
+        source: &str,
+        actor: Option<Arc<Actor>>,
+    ) {
+        self.emit(OiEvent::SiteIngressDeleted {
+            timestamp: now(),
+            name: name.clone(),
+            source: source.to_owned(),
+            actor,
+        });
+    }
+
+    // r[impl ingress.site.lifecycle.events]
+    #[allow(clippy::too_many_arguments)]
+    pub fn site_ingress_attachment_added(
+        &self,
+        name: &SiteIngressName,
+        port: u16,
+        protocol: &str,
+        target_kind: &str,
+        target_app: Option<&AppName>,
+        target_service: Option<&AppServiceName>,
+        redirect_url: Option<&str>,
+        redirect_code: Option<u16>,
+        actor: Option<Arc<Actor>>,
+    ) {
+        self.emit(OiEvent::SiteIngressAttachmentAdded {
+            timestamp: now(),
+            name: name.clone(),
+            port,
+            protocol: protocol.to_owned(),
+            target_kind: target_kind.to_owned(),
+            target_app: target_app.cloned(),
+            target_service: target_service.cloned(),
+            redirect_url: redirect_url.map(str::to_owned),
+            redirect_code,
+            actor,
+        });
+    }
+
+    // r[impl ingress.site.lifecycle.events]
+    #[allow(clippy::too_many_arguments)]
+    pub fn site_ingress_attachment_updated(
+        &self,
+        name: &SiteIngressName,
+        port: u16,
+        protocol: &str,
+        target_kind: &str,
+        target_app: Option<&AppName>,
+        target_service: Option<&AppServiceName>,
+        redirect_url: Option<&str>,
+        redirect_code: Option<u16>,
+        actor: Option<Arc<Actor>>,
+    ) {
+        self.emit(OiEvent::SiteIngressAttachmentUpdated {
+            timestamp: now(),
+            name: name.clone(),
+            port,
+            protocol: protocol.to_owned(),
+            target_kind: target_kind.to_owned(),
+            target_app: target_app.cloned(),
+            target_service: target_service.cloned(),
+            redirect_url: redirect_url.map(str::to_owned),
+            redirect_code,
+            actor,
+        });
+    }
+
+    // r[impl ingress.site.lifecycle.events]
+    pub fn site_ingress_attachment_removed(
+        &self,
+        name: &SiteIngressName,
+        port: u16,
+        protocol: &str,
+        actor: Option<Arc<Actor>>,
+    ) {
+        self.emit(OiEvent::SiteIngressAttachmentRemoved {
+            timestamp: now(),
+            name: name.clone(),
+            port,
+            protocol: protocol.to_owned(),
+            actor,
+        });
+    }
+
     // i[impl deployment.restart]
     pub fn deployment_restarted(
         &self,
@@ -1297,6 +1514,118 @@ impl EventSenderWithActor {
             external_name,
             new,
             previous,
+            Some(Arc::clone(&self.actor)),
+        );
+    }
+
+    // r[impl ingress.site.lifecycle.events]
+    #[allow(clippy::too_many_arguments)]
+    pub fn site_ingress_created(
+        &self,
+        name: &SiteIngressName,
+        hostname: &str,
+        source: &str,
+        discovered_provider: Option<&str>,
+        tls_provider: &str,
+        description: Option<&str>,
+    ) {
+        self.inner.site_ingress_created(
+            name,
+            hostname,
+            source,
+            discovered_provider,
+            tls_provider,
+            description,
+            Some(Arc::clone(&self.actor)),
+        );
+    }
+
+    // r[impl ingress.site.lifecycle.events]
+    pub fn site_ingress_updated(
+        &self,
+        name: &SiteIngressName,
+        hostname: &str,
+        tls_provider: &str,
+        description: Option<&str>,
+    ) {
+        self.inner.site_ingress_updated(
+            name,
+            hostname,
+            tls_provider,
+            description,
+            Some(Arc::clone(&self.actor)),
+        );
+    }
+
+    // r[impl ingress.site.lifecycle.events]
+    pub fn site_ingress_deleted(&self, name: &SiteIngressName, source: &str) {
+        self.inner
+            .site_ingress_deleted(name, source, Some(Arc::clone(&self.actor)));
+    }
+
+    // r[impl ingress.site.lifecycle.events]
+    #[allow(clippy::too_many_arguments)]
+    pub fn site_ingress_attachment_added(
+        &self,
+        name: &SiteIngressName,
+        port: u16,
+        protocol: &str,
+        target_kind: &str,
+        target_app: Option<&AppName>,
+        target_service: Option<&AppServiceName>,
+        redirect_url: Option<&str>,
+        redirect_code: Option<u16>,
+    ) {
+        self.inner.site_ingress_attachment_added(
+            name,
+            port,
+            protocol,
+            target_kind,
+            target_app,
+            target_service,
+            redirect_url,
+            redirect_code,
+            Some(Arc::clone(&self.actor)),
+        );
+    }
+
+    // r[impl ingress.site.lifecycle.events]
+    #[allow(clippy::too_many_arguments)]
+    pub fn site_ingress_attachment_updated(
+        &self,
+        name: &SiteIngressName,
+        port: u16,
+        protocol: &str,
+        target_kind: &str,
+        target_app: Option<&AppName>,
+        target_service: Option<&AppServiceName>,
+        redirect_url: Option<&str>,
+        redirect_code: Option<u16>,
+    ) {
+        self.inner.site_ingress_attachment_updated(
+            name,
+            port,
+            protocol,
+            target_kind,
+            target_app,
+            target_service,
+            redirect_url,
+            redirect_code,
+            Some(Arc::clone(&self.actor)),
+        );
+    }
+
+    // r[impl ingress.site.lifecycle.events]
+    pub fn site_ingress_attachment_removed(
+        &self,
+        name: &SiteIngressName,
+        port: u16,
+        protocol: &str,
+    ) {
+        self.inner.site_ingress_attachment_removed(
+            name,
+            port,
+            protocol,
             Some(Arc::clone(&self.actor)),
         );
     }
