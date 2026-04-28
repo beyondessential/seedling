@@ -12,6 +12,7 @@ mod apps;
 mod backups;
 mod client;
 mod forward;
+mod ingresses;
 mod known_hosts;
 mod logs;
 mod op;
@@ -62,6 +63,11 @@ enum Command {
     Services {
         #[command(subcommand)]
         command: services::ServicesCommand,
+    },
+    /// Site ingress management (manual + Tailscale-discovered)
+    Ingresses {
+        #[command(subcommand)]
+        command: ingresses::IngressesCommand,
     },
     /// Proxy management
     Proxy {
@@ -322,6 +328,7 @@ async fn main() {
         Command::Apps { command } => apps::dispatch(&client, command).await,
         Command::Volumes { command } => volumes::dispatch(&client, command).await,
         Command::Services { command } => services::dispatch(&client, command).await,
+        Command::Ingresses { command } => ingresses::dispatch(&client, command).await,
         Command::Proxy { command } => op::dispatch_proxy(&client, command).await,
         Command::Dns { command } => op::dispatch_dns(&client, command).await,
         Command::Shells { command } => op::dispatch_shells(&client, command).await,
