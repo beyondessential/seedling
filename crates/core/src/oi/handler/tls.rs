@@ -145,6 +145,12 @@ pub(crate) fn list_policies(state: &OiState) -> HandlerResult {
                 "dns_provider": dns_provider,
                 "updated_at": row.updated_at,
             }),
+            // r[impl ingress.site.tailscale]
+            TlsPolicy::Tailscale => json!({
+                "hostname": row.hostname,
+                "strategy": "tailscale",
+                "updated_at": row.updated_at,
+            }),
         })
         .collect();
     Ok(json!({ "policies": result }))
@@ -763,6 +769,12 @@ fn project_hostname_state(
             "pattern": pattern,
             "is_wildcard_match": pattern != hostname,
         }),
+        // r[impl ingress.site.tailscale]
+        Some((TlsPolicy::Tailscale, pattern)) => json!({
+            "strategy": "tailscale",
+            "pattern": pattern,
+            "is_wildcard_match": pattern != hostname,
+        }),
     };
 
     let active_cert_json = match (st.active_cert, caddy_cert) {
@@ -907,8 +919,10 @@ fn build_last_issuance(
         });
     }
     if let Some(att) = st.last_success {
-        let provider = st.policy.map(|p| match &p.policy {
-            TlsPolicy::AcmeDns { dns_provider } => dns_provider.clone(),
+        let provider = st.policy.and_then(|p| match &p.policy {
+            TlsPolicy::AcmeDns { dns_provider } => Some(dns_provider.clone()),
+            // r[impl ingress.site.tailscale]
+            TlsPolicy::Tailscale => None,
         });
         return json!({
             "kind": "acme_dns",

@@ -209,6 +209,8 @@ pub fn list_policies(db: &Db) -> rusqlite::Result<Vec<TlsPolicyRow>> {
                 "acme_dns" => TlsPolicy::AcmeDns {
                     dns_provider: dns_provider.ok_or_else(|| rusqlite::Error::InvalidQuery)?,
                 },
+                // r[impl ingress.site.tailscale]
+                "tailscale" => TlsPolicy::Tailscale,
                 "manual" => return Ok(None),
                 _ => return Err(rusqlite::Error::InvalidQuery),
             };
@@ -1171,6 +1173,7 @@ mod tests {
         assert_eq!(rows.len(), 2);
         match &rows[0].policy {
             TlsPolicy::AcmeDns { dns_provider } => assert_eq!(dns_provider, "p"),
+            other => panic!("expected AcmeDns policy, got {other:?}"),
         }
     }
 
@@ -1191,6 +1194,7 @@ mod tests {
         let row = get_policy(&db, "foo.example.com").unwrap().unwrap();
         match row.policy {
             TlsPolicy::AcmeDns { dns_provider } => assert_eq!(dns_provider, "p"),
+            other => panic!("expected AcmeDns policy, got {other:?}"),
         }
 
         assert!(clear_policy(&db, "foo.example.com").unwrap());
@@ -1280,6 +1284,7 @@ mod tests {
         assert_eq!(policies[0].hostname, "*");
         match &policies[0].policy {
             TlsPolicy::AcmeDns { dns_provider } => assert_eq!(dns_provider, "primary"),
+            other => panic!("expected AcmeDns policy, got {other:?}"),
         }
     }
 
@@ -1309,6 +1314,7 @@ mod tests {
         let star = policies.iter().find(|p| p.hostname == "*").unwrap();
         match &star.policy {
             TlsPolicy::AcmeDns { dns_provider } => assert_eq!(dns_provider, "primary"),
+            other => panic!("expected AcmeDns policy, got {other:?}"),
         }
     }
 

@@ -120,7 +120,9 @@ fn compute_desired(
     let strategy = match cert.origin {
         TlsCertOrigin::Manual => "manual",
         TlsCertOrigin::Csr => "csr",
-        TlsCertOrigin::AcmeDns => unreachable!("filtered above"),
+        TlsCertOrigin::AcmeDns | TlsCertOrigin::Tailscale => {
+            unreachable!("filtered above: only manual / csr origins reach this branch")
+        }
     };
     let description = format!(
         "certificate for {} (strategy: {strategy}) expires at unix={not_after}; \

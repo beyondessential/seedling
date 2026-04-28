@@ -375,6 +375,22 @@ fn decide(
             force_retry,
             settings,
         ),
+        // r[impl ingress.site.tailscale]
+        // Tailscale-issued certs are managed by the local Tailscale
+        // facility; the runtime fetches a fresh pair on demand and
+        // doesn't run the ACME state machine for them. The Coordinator
+        // dispatch path that does the actual fetch is wired separately;
+        // this branch keeps the decision pipeline exhaustive.
+        Some(TlsPolicy::Tailscale) => {
+            if active_cert
+                .and_then(|c| c.not_after)
+                .is_some_and(|na| (na - now) > 0)
+            {
+                Decision::Default
+            } else {
+                Decision::Default
+            }
+        }
     }
 }
 

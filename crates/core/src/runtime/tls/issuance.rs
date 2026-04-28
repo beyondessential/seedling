@@ -289,8 +289,11 @@ struct OwnedState {
 
 impl OwnedState {
     fn from_snapshot(snap: &state::Snapshot, s: &state::HostnameState<'_>) -> Self {
-        let dns_provider_name = s.policy.map(|p| match &p.policy {
-            TlsPolicy::AcmeDns { dns_provider } => dns_provider.clone(),
+        let dns_provider_name = s.policy.and_then(|p| match &p.policy {
+            TlsPolicy::AcmeDns { dns_provider } => Some(dns_provider.clone()),
+            // Tailscale issuance doesn't use a DNS provider; the cert
+            // comes from the local tailscaled API.
+            TlsPolicy::Tailscale => None,
         });
         Self {
             decision: s.decision.clone(),

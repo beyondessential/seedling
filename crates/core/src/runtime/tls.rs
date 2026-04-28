@@ -23,6 +23,7 @@ pub mod renewal;
 pub mod serve;
 pub mod state;
 pub mod store;
+pub mod tailscale_issuer;
 pub mod validate;
 
 use secrecy::SecretString;
@@ -151,6 +152,10 @@ pub enum TlsCertOrigin {
     Manual,
     Csr,
     AcmeDns,
+    /// Issued by the host's local Tailscale facility. Only legal for
+    /// hostnames that match a discovered Tailscale site ingress.
+    // r[impl ingress.site.tailscale]
+    Tailscale,
 }
 
 impl TlsCertOrigin {
@@ -159,6 +164,7 @@ impl TlsCertOrigin {
             Self::Manual => "manual",
             Self::Csr => "csr",
             Self::AcmeDns => "acme_dns",
+            Self::Tailscale => "tailscale",
         }
     }
 
@@ -167,6 +173,7 @@ impl TlsCertOrigin {
             "manual" => Some(Self::Manual),
             "csr" => Some(Self::Csr),
             "acme_dns" => Some(Self::AcmeDns),
+            "tailscale" => Some(Self::Tailscale),
             _ => None,
         }
     }
@@ -204,6 +211,13 @@ impl KeyType {
 #[derive(Debug, Clone)]
 pub enum TlsPolicy {
     AcmeDns { dns_provider: String },
+    /// Hostnames whose certs are obtained from the local Tailscale
+    /// facility. The Coordinator dispatches to
+    /// [`super::tls::tailscale_issuer`] for these instead of running
+    /// ACME. Only legal on hostnames that match a discovered Tailscale
+    /// site ingress.
+    // r[impl ingress.site.tailscale]
+    Tailscale,
 }
 
 #[derive(Debug, Clone)]
