@@ -263,8 +263,7 @@ configure_server.call(app.deployment("sync")
 app.deployment("frontend")
     .image(frontend_image.call())
     .scale(1)
-    .env("TZ", timezone.value())
-    .env("TAMANU_VERSION", version.value())
+    .cap_add("NET_BIND_SERVICE")
     .http(3000, web_svc.route("/"));
 
 // ── Helper closures (dynamic) ─────────────────────────────────────────────────

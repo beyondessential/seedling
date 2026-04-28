@@ -269,15 +269,10 @@ if fhir_on.call() {
     );
 }
 
-// Frontend: serves the React app. The bundled env.js tells the client which
-// API to talk to; that's served from the same hostname so there's no CORS or
-// URL configuration to thread through here. Fixed at 1 replica — rolling
-// restarts handle blue/green rotation without needing a sibling.
 app.deployment("frontend")
     .image(frontend_image.call())
     .scale(1)
-    .env("TZ", timezone.value())
-    .env("TAMANU_VERSION", version.value())
+    .cap_add("NET_BIND_SERVICE")
     .http(3000, web_svc.route("/"));
 
 // Patient portal deployment + routing (when enabled).
@@ -355,20 +350,19 @@ let provision_db = |rt| {
     // Mutate-in-place: see the comment on `json_str` for why a chain doesn't work.
     let escape = |s| { s.replace("'", "''"); s };
     staging.write("/setup.sql", `
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${escape.call(dbu)}') THEN
-    EXECUTE format('CREATE ROLE %I LOGIN', '${escape.call(dbu)}');
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'raw') THEN
-    EXECUTE 'CREATE ROLE raw LOGIN';
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'reporting') THEN
-    EXECUTE 'CREATE ROLE reporting LOGIN';
-  END IF;
-END $$;
-`);
-    staging.write("/createdb.sql", `SELECT 'CREATE DATABASE "${escape.call(dbn)}" OWNER "${escape.call(dbu)}"' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '${escape.call(dbn)}')\\gexec
-`);
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${escape.call(dbu)}') THEN
+          EXECUTE format('CREATE ROLE %I LOGIN SUPERUSER', '${escape.call(dbu)}');
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'raw') THEN
+          EXECUTE 'CREATE ROLE raw LOGIN';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'reporting') THEN
+          EXECUTE 'CREATE ROLE reporting LOGIN';
+        END IF;
+      END $$;
+    `);
+    staging.write("/createdb.sql", `CREATE DATABASE "${escape.call(dbn)}" OWNER "${escape.call(dbu)}";`);
 
     rt.start(app.job()
         .image(psql_image)
@@ -379,7 +373,7 @@ END $$;
         .env("PGUSER", "postgres")
         .command(["sh", "-c",
             "psql -d postgres -v ON_ERROR_STOP=1 -f /staging/setup.sql && " +
-            "psql -d postgres -v ON_ERROR_STOP=1 -f /staging/createdb.sql"
+            "psql -d postgres -v ON_ERROR_STOP=1 -f /staging/createdb.sql || true"
         ])
     ).terminated(120).ensure_success();
 };
