@@ -99,10 +99,17 @@ let portal_on = || patient_portal_fqdn.is_set();
 let fhir_on = || fhir_enabled.value() == "true";
 
 // JSON-string-encode a value with the few escapes JSON5 requires.
+// Rhai's `String.replace(from, to)` mutates the receiver in place and
+// returns `()`, so each pass is a statement on `s`, not a chain.
+// Backslash must come first so escapes inserted by later passes (e.g. the
+// literal `\n` substituted in for a newline) aren't re-escaped.
 let json_str = |s| {
-    let escaped = s.replace("\\", "\\\\").replace("\"", "\\\"")
-                   .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
-    `"${escaped}"`
+    s.replace("\\", "\\\\");
+    s.replace("\"", "\\\"");
+    s.replace("\n", "\\n");
+    s.replace("\r", "\\r");
+    s.replace("\t", "\\t");
+    `"${s}"`
 };
 
 // production.json5: tamanu's main config. Operator-tunable params land here.
@@ -347,7 +354,8 @@ let provision_db = |rt| {
     let staging = app.volume().tmpfs();
     let dbn = db_name.value();
     let dbu = db_user.value();
-    let escape = |s| s.replace("'", "''");
+    // Mutate-in-place: see the comment on `json_str` for why a chain doesn't work.
+    let escape = |s| { s.replace("'", "''"); s };
     staging.write("/setup.sql", `
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${escape.call(dbu)}') THEN
