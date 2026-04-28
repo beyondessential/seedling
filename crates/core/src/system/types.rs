@@ -216,6 +216,23 @@ pub struct TransientUnitSpec {
     /// Seconds systemd waits between sending `kill_signal` and `SIGKILL`.
     /// Maps to `TimeoutStopSec`. `None` leaves systemd's default (90s).
     pub timeout_stop_secs: Option<u32>,
+    /// Seconds systemd waits between a unit's exit and the next restart
+    /// attempt. Maps to `RestartSec`. `None` leaves systemd's default (100ms),
+    /// which is dangerously aggressive for crash-looping containers — five
+    /// failures inside the default 10-second `StartLimitIntervalSec` trips
+    /// `start-limit-hit` and the unit refuses to restart at all.
+    // r[impl autonomous.restart.backoff]
+    pub restart_sec: Option<u32>,
+    /// Width of the start-limit window in seconds. Maps to
+    /// `StartLimitIntervalSec`. `None` leaves systemd's default (10s).
+    /// Set to 0 to disable the start limit entirely.
+    // r[impl autonomous.restart.backoff]
+    pub start_limit_interval_sec: Option<u32>,
+    /// Number of starts permitted within `start_limit_interval_sec` before
+    /// systemd refuses to restart the unit. Maps to `StartLimitBurst`. `None`
+    /// leaves systemd's default (5).
+    // r[impl autonomous.restart.backoff]
+    pub start_limit_burst: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -475,6 +492,14 @@ pub enum ObservationFact {
     UnitActive,
     UnitInactive,
     UnitFailed,
+    /// The unit reached `failed` state with sub-state `start-limit-hit`:
+    /// systemd has given up restarting the unit because it has burned
+    /// through its `StartLimitBurst` budget within `StartLimitIntervalSec`.
+    /// Treated as a hard fault by the reconciler — it does not auto-recover
+    /// from this state until the operator clears the resulting crash_loop
+    /// fault (typically by redeploying the app or fixing the root cause).
+    // r[impl autonomous.restart.start-limit-hit]
+    UnitStartLimitHit,
     /// The unit is not loaded by systemd at all (unit_state returned None).
     UnitGone,
 
@@ -526,6 +551,12 @@ impl ObservationFact {
             // secondary signal from systemd for crashes/OOMs/signals that
             // podman --rm cleans up before we can observe them.
             ObservationFact::UnitFailed => vec![("unit_failed", json!({}))],
+            // r[impl autonomous.restart.start-limit-hit]
+            // Persisted so the per-instance crash_loop fault path can identify
+            // the cause distinctly from a one-off unit failure.
+            ObservationFact::UnitStartLimitHit => {
+                vec![("unit_start_limit_hit", json!({}))]
+            }
             // Ingress observations are emitted by proxy::apply, not here.
             // Network observations are used only for pod actuation decisions.
             // The remaining unit facts are consumed only within a single tick

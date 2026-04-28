@@ -662,6 +662,21 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > r[autonomous.restart]
 > When a container resource in the desired state reaches the Terminated lifecycle state and its `on_exit` or `on_terminate` policy requires recreation, the reconciler must start a replacement.
 
+> r[autonomous.restart.backoff]
+> Per-unit restarts must be paced so that a crash-looping container does not exhaust systemd's start-rate limit before the reconciler has a chance to detect the problem. Container units must specify:
+>
+> - A non-default `RestartSec` (no shorter than several seconds) so the unit does not retry at the systemd default cadence (~100ms).
+> - A `StartLimitIntervalSec` and `StartLimitBurst` that allow several attempts within a window measured in minutes, not seconds, before systemd gives up.
+>
+> The exact values are an implementation concern — they need only be loose enough that a slow-failing container (one that takes seconds to crash) gets multiple chances, and tight enough that a permanently broken container reaches the start limit on a human-meaningful timescale.
+
+> r[autonomous.restart.start-limit-hit]
+> When a container unit reaches `failed/start-limit-hit` (systemd has refused further restarts because the unit exhausted [`StartLimitBurst`](#r--autonomous.restart.backoff)) the reconciler must:
+>
+> - File a `crash_loop` fault scoped to the offending instance, distinct from `container_start_failed`.
+> - Stop attempting to auto-recover the instance (no `reset_failed_unit` + restart cycle) until the fault is cleared. The expected recovery path is operator intervention — fixing the underlying cause, redeploying with new config, or explicitly clearing the fault.
+> - Clear the fault automatically if the instance is later observed healthy.
+
 > r[autonomous.job-terminal]
 > A Job instance that has naturally reached the Terminated lifecycle state must not be restarted by the reconciler.
 > The reconciler must clean up any lingering container or unit state for such an instance but must not start a replacement.
@@ -1030,6 +1045,10 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > r[fault.container-start]
 > When the reconciler observes that a resource instance's backing unit is in a failed state while the desired state is active, it must file a fault of kind `container_start_failed` associated with that instance.
 > The fault is cleared automatically when the unit is subsequently observed in an active or activating state.
+
+> r[fault.crash-loop]
+> When the reconciler observes that a resource instance's backing unit has reached the start-limit-hit terminal state (per [autonomous.restart.start-limit-hit](#r--autonomous.restart.start-limit-hit)), it must file a fault of kind `crash_loop` associated with that instance, distinct from `container_start_failed`.
+> The fault is cleared automatically when the instance is subsequently observed healthy. While the fault is active, the reconciler must not auto-restart the affected instance.
 
 > r[fault.external-volume-unmapped]
 > When a deployment or job instance requires an external volume that has no mapping in the external volume mapping table, the reconciler must not start the instance and must file a fault of kind `external_volume_not_mapped` against that instance, identifying the missing volume name.

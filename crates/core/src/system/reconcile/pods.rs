@@ -33,6 +33,11 @@ pub(super) struct PodActuationUpdate {
     pub unit_failures: Vec<ResourceInstance>,
     /// Instances whose backing unit was observed active/activating (clears prior failures).
     pub unit_healthy: Vec<ResourceInstance>,
+    /// Instances whose backing unit reached `failed/start-limit-hit` —
+    /// systemd has given up restarting and the runtime treats this as a
+    /// hard fault rather than auto-recovering.
+    // r[impl autonomous.restart.start-limit-hit]
+    pub crash_loops: Vec<ResourceInstance>,
     /// Instances whose declared healthcheck was observed as failing this tick.
     pub health_check_failures: Vec<ResourceInstance>,
     /// Instances whose healthcheck was observed as passing this tick.
@@ -66,6 +71,8 @@ struct PodInstanceResult {
     image_pull_success: Option<(ResourceInstance, String)>,
     unit_failure: Option<ResourceInstance>,
     unit_healthy: Option<ResourceInstance>,
+    // r[impl autonomous.restart.start-limit-hit]
+    crash_loop: Option<ResourceInstance>,
     health_check_failure: Option<ResourceInstance>,
     health_check_pass: Option<ResourceInstance>,
     registry_failure: Option<ResourceInstance>,
@@ -85,6 +92,8 @@ struct ObservedInstance<'a> {
     spec_stale: bool,
     unit_failed: bool,
     unit_active: bool,
+    // r[impl autonomous.restart.start-limit-hit]
+    unit_start_limit_hit: bool,
     container_exists: bool,
     /// Container has exited but not yet been removed (ContainerExited fact present).
     has_exited: bool,
@@ -116,6 +125,7 @@ async fn observe_one_pod<'a>(
         image_pull_success: None,
         unit_failure: None,
         unit_healthy: None,
+        crash_loop: None,
         health_check_failure: None,
         health_check_pass: None,
         registry_failure: None,
@@ -142,6 +152,7 @@ async fn observe_one_pod<'a>(
                 spec_stale: false,
                 unit_failed: false,
                 unit_active: false,
+                unit_start_limit_hit: false,
                 container_exists: false,
                 has_exited: false,
                 network_exists: false,
@@ -194,6 +205,10 @@ async fn observe_one_pod<'a>(
     let unit_active = facts
         .iter()
         .any(|(f, _)| matches!(f, ObservationFact::UnitActive));
+    // r[impl autonomous.restart.start-limit-hit]
+    let unit_start_limit_hit = facts
+        .iter()
+        .any(|(f, _)| matches!(f, ObservationFact::UnitStartLimitHit));
     // r[impl fault.healthcheck]
     // `ContainerUnhealthy` is only ever emitted when podman's own healthcheck
     // state machine reports `Unhealthy`, i.e. after the container's configured
@@ -262,6 +277,7 @@ async fn observe_one_pod<'a>(
         spec_stale,
         unit_failed,
         unit_active,
+        unit_start_limit_hit,
         container_exists,
         has_exited,
         network_exists,
@@ -360,9 +376,30 @@ async fn actuate_one_pod(
             if let Some(img) = image_ref_for_instance(&dr.definition) {
                 result.image_pull_success = Some((dr.instance.clone(), img));
             }
+        } else if obs.unit_start_limit_hit {
+            // r[impl autonomous.restart.start-limit-hit]
+            // Surface as a hard fault separate from the routine
+            // container_start_failed signal: the operator needs to know
+            // that systemd has stopped trying.
+            result.crash_loop = Some(dr.instance.clone());
         } else if obs.unit_failed || (obs.unit_active && !obs.is_running) {
             result.unit_failure = Some(dr.instance.clone());
         }
+    }
+
+    // r[impl autonomous.restart.start-limit-hit]
+    // Once systemd has hit the start limit, do not auto-recover a Ready
+    // instance. Tearing the unit down and starting a fresh transient unit
+    // would just walk the same crash loop again on the operator's behalf,
+    // hiding the underlying problem and consuming resources. The crash_loop
+    // fault sticks around until the operator clears it (e.g. by fixing
+    // config and reinstalling).
+    //
+    // Skip the auto-recovery path but allow the desired=Unscheduled branch
+    // below to run so a stuck unit can still be torn down on uninstall /
+    // resource removal.
+    if obs.unit_start_limit_hit && dr.desired == LifecycleState::Ready {
+        return Some(obs.result);
     }
 
     // r[impl fault.healthcheck]
@@ -734,6 +771,7 @@ pub(super) async fn observe_and_actuate(
         image_pull_successes: Vec::new(),
         unit_failures: Vec::new(),
         unit_healthy: Vec::new(),
+        crash_loops: Vec::new(),
         health_check_failures: Vec::new(),
         health_check_passes: Vec::new(),
         registry_failures: Vec::new(),
@@ -762,6 +800,9 @@ pub(super) async fn observe_and_actuate(
         }
         if let Some(h) = result.unit_healthy {
             update.unit_healthy.push(h);
+        }
+        if let Some(c) = result.crash_loop {
+            update.crash_loops.push(c);
         }
         if let Some(f) = result.health_check_failure {
             update.health_check_failures.push(f);

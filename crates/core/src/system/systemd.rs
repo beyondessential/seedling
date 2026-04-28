@@ -255,6 +255,27 @@ impl SystemdManager {
                 value: Value::from(u64::from(secs) * 1_000_000),
             });
         }
+        // r[impl autonomous.restart.backoff]
+        // Slow systemd's per-unit restart cadence so a crash-looping
+        // container does not blow through the start-limit window in seconds.
+        if let Some(secs) = spec.restart_sec {
+            props.push(UnitProperty {
+                name: "RestartUSec",
+                value: Value::from(u64::from(secs) * 1_000_000),
+            });
+        }
+        if let Some(secs) = spec.start_limit_interval_sec {
+            props.push(UnitProperty {
+                name: "StartLimitIntervalUSec",
+                value: Value::from(u64::from(secs) * 1_000_000),
+            });
+        }
+        if let Some(burst) = spec.start_limit_burst {
+            props.push(UnitProperty {
+                name: "StartLimitBurst",
+                value: Value::from(burst),
+            });
+        }
         // r[impl actuate.container.journal-metadata]
         // r[impl actuate.infra.journal-metadata]
         if !spec.log_extra_fields.is_empty() {

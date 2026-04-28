@@ -370,6 +370,70 @@ impl Reconciler {
         });
     }
 
+    // r[impl fault.crash-loop]
+    /// File a `crash_loop` fault for each instance whose backing systemd unit
+    /// reached `failed/start-limit-hit`. This is a hard fault: the runtime
+    /// stops auto-recovering until the operator clears it (typically by
+    /// fixing config and reinstalling, which generates a new instance ID and
+    /// therefore a fresh fault scope).
+    pub(super) fn file_crash_loop_faults(
+        &self,
+        app: &AppName,
+        update: &pods::PodActuationUpdate,
+    ) {
+        let app = app.clone();
+        let crash_loops: Vec<ResourceInstance> = update.crash_loops.to_vec();
+        let unit_healthy: Vec<ResourceInstance> = update.unit_healthy.to_vec();
+        self.db.call(move |db| {
+            for instance in &crash_loops {
+                let inst_hex = instance.id.to_hex();
+                let kind_str = format!("{:?}", instance.kind).to_lowercase();
+                let already_filed = faults::list_active_faults(db, Some(&app))
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|f| {
+                        f.kind == "crash_loop" && f.instance_id.as_deref() == Some(&inst_hex)
+                    });
+                if !already_filed {
+                    let desc = format!(
+                        "systemd hit start-limit for {}: too many restarts in window. \
+                         Auto-recovery is paused until this fault is cleared.",
+                        instance.display_name
+                    );
+                    if let Err(e) = faults::file_fault(
+                        db,
+                        &app,
+                        Some(&kind_str),
+                        instance.name.as_deref(),
+                        Some(&inst_hex),
+                        "crash_loop",
+                        &desc,
+                    ) {
+                        tracing::warn!(app = %app, instance = %inst_hex, "failed to file crash_loop fault: {e}");
+                    }
+                }
+            }
+            // Once the unit is back up healthy, clear any prior crash_loop
+            // fault — operator clearing the fault and the unit recovering
+            // are both valid paths out of this state.
+            for instance in &unit_healthy {
+                let inst_hex = instance.id.to_hex();
+                let cleared: Vec<_> = faults::list_active_faults(db, Some(&app))
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|f| {
+                        f.kind == "crash_loop" && f.instance_id.as_deref() == Some(&inst_hex)
+                    })
+                    .collect();
+                for f in cleared {
+                    if let Err(e) = faults::clear_fault(db, &f.id, &app) {
+                        tracing::warn!(app = %app, fault_id = %f.id, "failed to clear crash_loop fault: {e}");
+                    }
+                }
+            }
+        });
+    }
+
     // r[impl fault.external-volume-unmapped]
     pub(super) fn file_external_volume_faults(
         &self,

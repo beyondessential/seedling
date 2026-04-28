@@ -195,6 +195,9 @@ async fn start_slot(
             log_extra_fields: vec![("SEEDLING_INFRA".to_owned(), "resolver".to_owned())],
             kill_signal: None,
             timeout_stop_secs: None,
+            restart_sec: Some(5),
+            start_limit_interval_sec: Some(600),
+            start_limit_burst: Some(10),
         })
         .await
         .context(ProcessSnafu)

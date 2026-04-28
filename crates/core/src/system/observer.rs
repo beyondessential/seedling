@@ -225,15 +225,22 @@ impl Observer {
             }
         }
 
-        let unit_fact = match unit_state.as_ref().map(|s| s.active) {
+        // r[impl autonomous.restart.start-limit-hit]
+        // sub-state `start-limit-hit` is systemd's "I gave up" signal — the
+        // unit has burned through `StartLimitBurst` restarts within
+        // `StartLimitIntervalSec`. It is reported alongside `failed` and is
+        // distinct from a transient failure because no further automatic
+        // recovery will happen.
+        let unit_fact = match unit_state.as_ref() {
             None => ObservationFact::UnitGone,
-            Some(ActiveState::Inactive) | Some(ActiveState::Deactivating) => {
-                ObservationFact::UnitInactive
+            Some(s) if matches!(s.active, ActiveState::Failed) && s.sub == "start-limit-hit" => {
+                ObservationFact::UnitStartLimitHit
             }
-            Some(ActiveState::Active) | Some(ActiveState::Activating) => {
-                ObservationFact::UnitActive
-            }
-            Some(ActiveState::Failed) => ObservationFact::UnitFailed,
+            Some(s) => match s.active {
+                ActiveState::Inactive | ActiveState::Deactivating => ObservationFact::UnitInactive,
+                ActiveState::Active | ActiveState::Activating => ObservationFact::UnitActive,
+                ActiveState::Failed => ObservationFact::UnitFailed,
+            },
         };
         facts.push((unit_fact, now));
 

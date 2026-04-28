@@ -346,6 +346,16 @@ impl Actuator {
                 restart,
                 kill_signal,
                 timeout_stop_secs,
+                // r[impl autonomous.restart.backoff]
+                // Pod containers: 5 second pause between restarts, and a
+                // 10-minute / 10-attempt window before systemd gives up. The
+                // wider window means a slow-failing container (e.g. takes
+                // 30s to crash) still gets multiple chances; the per-attempt
+                // delay means a fast-failing container can't burn through
+                // the budget in a heartbeat.
+                restart_sec: Some(5),
+                start_limit_interval_sec: Some(600),
+                start_limit_burst: Some(10),
                 log_extra_fields: vec![
                     ("SEEDLING_APP".to_owned(), instance.app.as_str().to_owned()),
                     (
