@@ -30,6 +30,7 @@ Status: in production internally, but not an externally supported product.
 
 Documentation is a bit sparse at the moment.
 
+- [Operator guide](./docs/operator-guide.md) — what's available in the web UI and `seedling-ctl`
 - [App scripting language guide](./docs/bsl-scripting.md)
 - [Backup apps](./docs/backup-app.md)
 - [Dynamic vs static resources](./docs/resource-context-rules.md)
