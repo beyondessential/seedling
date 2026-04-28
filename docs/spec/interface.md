@@ -514,7 +514,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 # Volume Shells
 
 > i[volumes.shell]
-> `/volumes/shell { volumes, rows, cols, read_only? }` opens an interactive shell session inside an ephemeral Ubuntu container with one or more volumes bind-mounted at `/mnt/{display-name}`.
+> `/volumes/shell { volumes, rows, cols, read_only? }` opens an interactive shell session inside an ephemeral container with one or more volumes bind-mounted at `/mnt/{display-name}`.
 >
 > `volumes` is an array of volume references. Each reference is one of:
 > - `{ "kind": "site", "name": "<name>" }` — a site volume.
@@ -531,6 +531,11 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[volumes.shell.caps]
 > The shell container holds enough Linux capabilities for root inside the container to behave as root over the bind-mounted volumes — at minimum `CAP_DAC_OVERRIDE`, `CAP_DAC_READ_SEARCH`, `CAP_CHOWN`, and `CAP_FOWNER`.
 > Without them, the seedling-default `--cap-drop=ALL` would leave shell-root unable to traverse or edit files owned by service-specific UIDs (e.g. PostgreSQL's `0700 999:999` data directory), which defeats the point of opening the shell.
+
+> i[volumes.shell.image]
+> The volume-shell container image must include, at minimum, an interactive shell, terminal-based text editors, file-transfer / archive utilities, and a pager. Operators reach for these tools when poking at volume contents, and the image is the only context Seedling provides for that work.
+>
+> The image is a runtime concern, not a contract: implementations may build it locally on first use rather than pull it from a registry.
 
 # Port Forwards
 

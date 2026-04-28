@@ -1070,17 +1070,22 @@ async fn main() {
         }
     }
 
-    // Pre-pull the ubuntu image used by volume shells so it is warm before
-    // the first operator opens a volume shell session.
+    // Pre-build the volume-shell image so it is warm before the first
+    // operator opens a volume shell session. Building takes longer than a
+    // pull; doing it eagerly at startup is preferable to making the first
+    // operator wait when they're already trying to do something.
     {
         let cr = Arc::clone(&driver.container);
+        let build_dir = data_dir.to_path_buf();
         tokio::spawn(async move {
-            let image = "ubuntu:latest";
+            let image = seedling_core::oi::shells::VOLUME_SHELL_IMAGE;
             match cr.image_exists(image).await {
                 Ok(false) => {
-                    tracing::info!(%image, "pre-pulling volume shell image");
-                    if let Err(e) = cr.pull_image(image).await {
-                        tracing::warn!(%image, "volume shell image pre-pull failed: {e}");
+                    tracing::info!(%image, "pre-building volume shell image");
+                    if let Err(e) =
+                        seedling_core::oi::shells::build_volume_shell_image(&build_dir).await
+                    {
+                        tracing::warn!(%image, "volume shell image build failed: {e}");
                     }
                 }
                 Ok(true) => {}

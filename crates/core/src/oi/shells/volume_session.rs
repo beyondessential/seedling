@@ -221,17 +221,26 @@ pub(crate) async fn open_volume_shell_session(
     };
     let container_name = instance.display_name.clone();
 
-    let image = "ubuntu:latest";
+    let image = VOLUME_SHELL_IMAGE;
     match state.container_runtime.image_exists(image).await {
+        Ok(true) => {}
         Ok(false) => {
-            tracing::info!(%image, "pulling volume shell image");
-            if let Err(e) = state.container_runtime.pull_image(image).await {
-                tracing::warn!(%image, "image pull failed: {e}");
+            // i[impl volumes.shell.image]
+            // Build the alpine-based shell image on first use. We avoid
+            // pulling a generic distro image so operators can rely on a
+            // known toolset (editors, rsync, etc.) being available.
+            tracing::info!(%image, "building volume shell image");
+            let data_dir = state
+                .db_path
+                .parent()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
+            if let Err(e) = build_volume_shell_image(&data_dir).await {
+                tracing::warn!(%image, "image build failed: {e}");
                 fail!(-1);
             }
         }
         Err(e) => tracing::warn!(%image, "image_exists check failed: {e}"),
-        Ok(true) => {}
     }
 
     let net_name = format!("seedling-{container_name}");
@@ -486,4 +495,73 @@ pub(crate) async fn open_volume_shell_session(
     let _ = stdout_send.finish();
 
     tracing::info!(%session_name, %exit_code, "volume shell session ended");
+}
+
+// i[impl volumes.shell.image]
+/// Container image used for volume-shell sessions. Built locally from
+/// [`VOLUME_SHELL_CONTAINERFILE`] on first use; the `localhost/` prefix
+/// keeps the image off the registry-allowlist path.
+pub const VOLUME_SHELL_IMAGE: &str = "localhost/seedling-volume-shell:latest";
+
+/// Containerfile used to build [`VOLUME_SHELL_IMAGE`]. Alpine + bash and the
+/// utilities operators reach for when poking at volume contents: editors
+/// (nvim, nano), file transfer (rsync, curl, wget), archive tools (tar,
+/// gzip, zstd, xz), and a few ergonomic extras (less, jq, htop, ripgrep,
+/// tree, file). The repo also keeps a copy at `Containerfile.volume-shell`
+/// for documentation; the source-of-truth for the daemon is this constant.
+const VOLUME_SHELL_CONTAINERFILE: &str = "\
+FROM docker.io/library/alpine:3.21\n\
+RUN apk add --no-cache \
+bash \
+coreutils \
+curl \
+file \
+grep \
+gzip \
+htop \
+jq \
+less \
+nano \
+neovim \
+procps \
+ripgrep \
+rsync \
+tar \
+tree \
+wget \
+xz \
+zstd\n";
+
+/// Build the volume-shell image from the embedded Containerfile. Mirrors
+/// [`build_caddy_image`](crate::system::caddy) — the Containerfile and an
+/// empty build context are dropped into `data_dir` and `podman build` is
+/// invoked.
+pub async fn build_volume_shell_image(
+    data_dir: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    let containerfile_path = data_dir.join("Containerfile.volume-shell");
+    std::fs::write(&containerfile_path, VOLUME_SHELL_CONTAINERFILE)?;
+
+    let context_dir = data_dir.join("volume-shell-build-ctx");
+    std::fs::create_dir_all(&context_dir)?;
+
+    let output = tokio::process::Command::new("podman")
+        .args([
+            "build",
+            "-t",
+            VOLUME_SHELL_IMAGE,
+            "-f",
+            &containerfile_path.to_string_lossy(),
+            &context_dir.to_string_lossy(),
+        ])
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("podman build exited {}: {}", output.status, stderr.trim()).into());
+    }
+
+    tracing::info!("volume shell image built successfully");
+    Ok(())
 }

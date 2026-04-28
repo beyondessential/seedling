@@ -1,0 +1,21 @@
+FROM docker.io/library/alpine:3.21
+RUN apk add --no-cache \
+    bash \
+    coreutils \
+    curl \
+    file \
+    grep \
+    gzip \
+    htop \
+    jq \
+    less \
+    nano \
+    neovim \
+    procps \
+    ripgrep \
+    rsync \
+    tar \
+    tree \
+    wget \
+    xz \
+    zstd
