@@ -1010,6 +1010,45 @@ This spec defines the semantics of the Runtime Instance as far as BSL is concern
 >
 > Typical use cases: `SIGHUP` to reload configuration without restart (postgres, nginx), `SIGUSR1` to trigger log rotation, `SIGTERM`/`SIGINT` for cooperative shutdown when the deployment's `stop_signal` is not what the action wants for this one-off invocation.
 
+> l[rt.exec]
+> The `rt.exec(target, args: array<string>)` and `rt.exec(target, args: array<string>, options: map)` methods run a command inside an existing running container.
+>
+> The `target` argument is one of:
+>
+> - a `Started` handle (typically the return value of `rt.start(...)` earlier in the same action),
+> - a named `Deployment` (the runtime resolves it to its currently-running instance),
+> - a named `Job` (the runtime resolves it to its currently-running instance).
+>
+> The target must resolve to exactly one running container; otherwise calling `rt.exec` is a script error. Jobs and Deployments with the potential for more than one instance (e.g. `Deployment.scale(2)` or `Deployment.scale(1..3)`) are rejected without consulting the registry — the upper bound of the scale range must be `1`.
+>
+> `args` is the command and its arguments (argv). It must be a non-empty array of strings.
+>
+> The optional `options` map currently supports:
+>
+> - `env: #{ KEY: "value", ... }` — extra environment variables for the command, layered on top of the container's environment. Keys must be valid environment-variable names (POSIX `[A-Za-z_][A-Za-z0-9_]*`).
+>
+> Other option keys are reserved for future extension and currently rejected.
+>
+> `rt.exec` does NOT capture stdout or stderr; both streams are forwarded to the runtime's container-log sink for the target container.
+>
+> The call is _at-most-once_ across replays: when the runtime restarts mid-operation and replays the action closure, a previously-completed `rt.exec` is not re-executed; the recorded exit code is recovered from the action log.
+>
+> Calling `rt.exec` outside an action closure is a script error.
+
+> l[rt.executed.type]
+> `Executed` is an opaque type returned by `rt.exec`. It carries the exit code of the command and offers methods to inspect it.
+>
+> Discarding the returned `Executed` without calling any of its methods is supported and is the natural way to "fire and forget" a command whose result the script does not care about.
+
+> l[rt.executed.exit-code]
+> `Executed.exit_code()` returns the integer exit code of the command. A non-zero value indicates the command failed; the exact mapping (0..255 for normal exits, larger values for signal-terminated processes) follows the host convention.
+
+> l[rt.executed.success]
+> `Executed.success()` returns `true` when the command exited with code `0`, `false` otherwise. Equivalent to `executed.exit_code() == 0`.
+
+> l[rt.executed.ensure-success]
+> `Executed.ensure_success()` throws a script error when the command exited non-zero. The error message includes the exit code. It is the most concise way to assert that a command succeeded; the matching pattern is `rt.exec(...).ensure_success()`.
+
 > l[rt.write]
 > The `rt.write(target: Volume | ExternalVolume, path: string, contents: string)` method writes a file into the given volume at action runtime, parallel to the static `Volume.write`.
 >

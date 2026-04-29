@@ -320,6 +320,11 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > The runtime resolves the target volume to a host filesystem mountpoint using the same mechanism the actuator uses to apply static `Volume.write` content, then writes through a kernel-confined `openat2(RESOLVE_BENEATH)` so a malicious or buggy path cannot escape the volume's root.
 
+> r[rt.exec]
+> The runtime persists each [`rt.exec`](language.md#l--rt.exec) invocation to the action execution log. The persisted entry records the target container instance and the exit code. The argv and any options (e.g. env) are not stored in the log; only the outcome is needed for replay correctness. On replay, the runtime treats an exec entry at the same call site as already executed and recovers the exit code from the entry rather than re-running the command; this is the at-most-once-across-replays guarantee from `l[rt.exec]`.
+>
+> The runtime executes the command inside the target's running container via the container runtime (e.g. `podman exec`), inheriting the container's namespaces, working directory, user, and environment. Stdout and stderr are forwarded to the container-log sink for the target instance. The runtime blocks the action closure until the command exits, then returns control with the exit code attached to the `Executed` value.
+
 # Audit Log
 
 > r[audit.log]
