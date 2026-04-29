@@ -183,6 +183,17 @@ impl CustomType for App {
     fn build(mut builder: TypeBuilder<Self>) {
         builder.with_name("App");
 
+        // l[impl app.description]
+        builder.with_fn("description", |this: &mut App, desc: &str| -> App {
+            let desc_owned = desc.to_owned();
+            this.def.rcu(|d| {
+                let mut d = (**d).clone();
+                d.description = Some(desc_owned.clone());
+                d
+            });
+            this.clone()
+        });
+
         param::on_app(&mut builder);
         service::on_app(&mut builder);
         deployment::on_app(&mut builder);

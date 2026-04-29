@@ -129,7 +129,7 @@ fn external_volume_resolve(this: &mut App, name: &str) -> Result<Dynamic, Box<Ev
             Resource::ExternalVolume(ExternalVolume {
                 name: rname.clone(),
                 operation_binding: op_binding.clone(),
-                description: None,
+                def: Default::default(),
             })
         });
         d

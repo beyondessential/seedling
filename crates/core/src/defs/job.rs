@@ -52,5 +52,14 @@ impl CustomType for Job {
                 Ok(this.clone())
             },
         );
+        // l[impl bsl.resource.description]
+        builder.with_fn(
+            "description",
+            |this: &mut Self, desc: &str| -> Result<Job, Box<EvalAltResult>> {
+                this.ensure_unfrozen()?;
+                this.def.lock().description = Some(desc.to_owned());
+                Ok(this.clone())
+            },
+        );
     }
 }

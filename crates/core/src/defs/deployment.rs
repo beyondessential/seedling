@@ -115,6 +115,15 @@ impl CustomType for Deployment {
                     this.def.lock().on_terminate = strategy;
                     Ok(this.clone())
                 },
+            )
+            // l[impl bsl.resource.description]
+            .with_fn(
+                "description",
+                |this: &mut Self, desc: &str| -> Result<Deployment, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
+                    this.def.lock().description = Some(desc.to_owned());
+                    Ok(this.clone())
+                },
             );
     }
 }
