@@ -482,19 +482,11 @@ app.on_action("reconfigure", |rt, _param| {
     if portal_on.call() {
         rt.restart(app.deployment("patient-portal"));
     }
-}, #{ description: "Regenerate production.json5 + local.json5 from current params and restart the API + workers" });
+}, #{ description: "Regenerate local.json5 from current params and restart the API + workers" });
 
 app.on_action("migrate", |rt, _param| {
     migrate_db.call(rt);
-}, #{ description: "Run pending schema migrations against the central database" });
-
-app.on_action("setup-db", |rt, _param| {
-    setup_db.call(rt);
-}, #{ description: "Create or refresh the database, central role, and reporting roles based on current params" });
-
-app.on_action("copy-image-defaults", |rt, _param| {
-    copy_image_defaults.call(rt);
-}, #{ description: "Copy the image's default.json5 to /config/default.reference.json5 for operator inspection" });
+}, #{ description: "Run pending schema migrations against the database" });
 
 // Pre-pull the container images for a target version into local storage so
 // the actual version change can rotate without paying registry-fetch latency

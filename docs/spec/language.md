@@ -239,6 +239,12 @@ This is currently the only value.
 > In the **action context** (inside an action closure), `app.resource(name)` returns a **reference** to an existing static resource.
 > If no static resource with that name exists, it is a script error.
 
+> l[app.resources.context.immutable]
+> Static resources are immutable in the action context.
+> Calling a builder method on a static resource inside an action closure is a script error, regardless of how the resource handle was obtained — whether re-fetched via `app.resource(name)` inside the closure or captured from an outer-scope `let` binding.
+> This applies to every builder method on every static resource type (e.g. `Volume.write`, `Service.exported`, `Deployment.healthcheck`, `Job.deadline`, `Ingress.tls`).
+> Anonymous resources created inside the action context are mutable for the lifetime of the operation.
+
 > l[app.resources.context.anonymous]
 > Anonymous resources (those created without a name argument) may only be created in the action context.
 > Attempting to create an anonymous resource at the top level is a script error.
