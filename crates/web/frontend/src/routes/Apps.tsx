@@ -167,7 +167,7 @@ export default function Apps() {
                           mt: 0.25,
                         }}
                       >
-                        <Markdown text={app.description} inline />
+                        <Markdown text={app.description.split(/\n\s*\n/, 1)[0]} inline />
                       </Typography>
                     )}
                   </TableCell>
