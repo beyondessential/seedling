@@ -17,6 +17,16 @@ fmt:
 check:
     cargo clippy && cargo fmt --check
 
+# Run Rust tests (uses nextest if available, falls back to cargo test)
+test *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if command -v cargo-nextest >/dev/null 2>&1; then
+        cargo nextest run {{ args }}
+    else
+        cargo test {{ args }}
+    fi
+
 # Watch source files and rebuild on changes
 watch-build:
     SKIP_FRONTEND_BUILD=1 watchexec -I cargo build
