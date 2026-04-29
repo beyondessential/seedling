@@ -2,6 +2,7 @@ import LockIcon from "@mui/icons-material/Lock";
 import ShieldIcon from "@mui/icons-material/Shield";
 import WarningIcon from "@mui/icons-material/Warning";
 import {
+  Box,
   Button,
   Chip,
   Dialog,
@@ -189,17 +190,24 @@ export function SafetyModeSwitcher({ peerElevation }: { peerElevation?: PeerElev
               <ListItemIcon>
                 <ModeIcon mode={m} />
               </ListItemIcon>
-              <ListItemText primary={MODE_LABEL[m]} secondary={secondary} />
-              {peerCount > 0 && (
-                <Chip
-                  label={`${peerCount} other operator${
-                    peerCount === 1 ? "" : "s"
-                  } already at this level`}
-                  size="small"
-                  color={m === "dangerous" ? "error" : "warning"}
-                  sx={{ ml: 2, fontFamily: "monospace" }}
-                />
-              )}
+              <ListItemText
+                primary={
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                    <span>{MODE_LABEL[m]}</span>
+                    {peerCount > 0 && (
+                      <Chip
+                        label={`${peerCount} other operator${
+                          peerCount === 1 ? "" : "s"
+                        } already at this level`}
+                        size="small"
+                        color={m === "dangerous" ? "error" : "warning"}
+                        sx={{ fontFamily: "monospace" }}
+                      />
+                    )}
+                  </Box>
+                }
+                secondary={secondary}
+              />
             </MenuItem>
           );
         })}
