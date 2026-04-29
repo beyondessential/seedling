@@ -2,6 +2,7 @@
 // All items here are production infrastructure, not dead code.
 #![allow(dead_code, unused_imports)]
 
+pub mod action_params;
 pub mod apps;
 pub mod audit;
 pub mod autonomous_ops;

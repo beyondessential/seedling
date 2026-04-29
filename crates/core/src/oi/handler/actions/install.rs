@@ -7,7 +7,7 @@ use serde_json::json;
 
 use super::lifecycle::spawn_accepted_operation;
 use crate::{
-    defs::install::{ParamDef, ParamKind},
+    defs::install::ParamDef,
     oi::{
         handler::{HandlerResult, RequestCtx},
         state::OiState,
@@ -26,76 +26,12 @@ pub(crate) struct InvokeInstallParams {
 }
 
 // i[action.invoke.install.validation]
-fn is_valid_email(email: &str) -> bool {
-    let mut parts = email.splitn(2, '@');
-    let local = parts.next().unwrap_or("");
-    let domain = parts.next().unwrap_or("");
-    !local.is_empty()
-        && !domain.is_empty()
-        && domain.contains('.')
-        && !domain.starts_with('.')
-        && !domain.ends_with('.')
-}
-
-// i[action.invoke.install.validation]
-fn is_strong_password(password: &str) -> bool {
-    zxcvbn::zxcvbn(password, &[]).score() >= zxcvbn::Score::Three
-}
-
-// i[action.invoke.install.validation]
 pub(in crate::oi) fn validate_requirements(
     schema: &BTreeMap<ParamName, ParamDef>,
     submitted: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, String>, OiError> {
-    let mut filled = submitted.clone();
-    let mut errors: Vec<String> = Vec::new();
-
-    for (field, req_def) in schema {
-        let field_str = field.as_str();
-        let raw = filled.get(field_str).map(|s| s.as_str()).unwrap_or("");
-
-        if raw.is_empty() {
-            if let Some(default) = &req_def.default_value {
-                filled.insert(field_str.to_owned(), default.clone());
-            } else if req_def.required {
-                errors.push(format!("{field_str}: required field is missing"));
-                continue;
-            } else {
-                continue;
-            }
-        }
-
-        let value = filled.get(field_str).map(|s| s.as_str()).unwrap_or("");
-        match req_def.kind {
-            ParamKind::Email => {
-                if !is_valid_email(value) {
-                    errors.push(format!("{field_str}: invalid email address"));
-                }
-            }
-            ParamKind::Password => {
-                if !is_strong_password(value) {
-                    errors.push(format!("{field_str}: password is too weak"));
-                }
-            }
-            ParamKind::Text
-            | ParamKind::Multiline
-            | ParamKind::WeakPassword
-            | ParamKind::Random => {}
-            // ParamKind::Volume is rejected at parse time for static schemas,
-            // but the validate_requirements helper is shared with action invocation;
-            // for action params, value validation is handled in the action handler.
-            ParamKind::Volume => {}
-        }
-    }
-
-    if !errors.is_empty() {
-        return Err(OiError::new(
-            ErrorCode::RequirementsInvalid,
-            errors.join("; "),
-        ));
-    }
-
-    Ok(filled)
+    crate::runtime::action_params::run_requirements(schema, submitted)
+        .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))
 }
 
 // i[action.invoke.install.validation]

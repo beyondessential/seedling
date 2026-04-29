@@ -3,8 +3,9 @@ use std::collections::BTreeMap;
 use seedling_protocol::names::ParamName;
 
 use crate::defs::install::{ParamDef, ParamKind};
+use crate::runtime::action_params::{is_strong_password, is_valid_email};
 
-use super::{is_strong_password, is_valid_email, validate_requirements};
+use super::validate_requirements;
 
 // i[verify action.invoke.install.validation]
 #[test]

@@ -2,18 +2,18 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use seedling_protocol::error::{ErrorCode, OiError};
-use seedling_protocol::names::{ActionName, AppName, ParamName};
+use seedling_protocol::names::{ActionName, AppName, ParamName, SiteVolumeName};
 use serde::Deserialize;
 use serde_json::json;
 
-use self::install::validate_requirements;
 use self::lifecycle::spawn_accepted_operation;
 use super::HandlerResult;
 use crate::{
-    defs::install::{ParamDef, ParamKind},
+    defs::install::ParamDef,
     oi::{handler::RequestCtx, state::OiState},
     runtime::{
         AppPhase,
+        action_params::{self, ParamValidationError, VolumeLookup},
         scheduler::{CancelOutcome, RejectReason, ScheduleResult},
     },
 };
@@ -96,115 +96,55 @@ pub(crate) fn cancel_action(state: &Arc<OiState>, params: CancelActionParams) ->
     }
 }
 
+/// `OiState`-backed `VolumeLookup` adapter so the shared validation
+/// can resolve site volumes through the live registry.
+pub(crate) struct StateVolumeLookup<'a>(pub &'a OiState);
+
+impl VolumeLookup for StateVolumeLookup<'_> {
+    fn site_volume_exists(&self, name: &SiteVolumeName) -> bool {
+        let name = name.clone();
+        self.0
+            .db
+            .call(move |db| crate::runtime::site_volumes::get(db, &name).ok().flatten())
+            .is_some()
+    }
+}
+
+/// Map a [`ParamValidationError`] into the OI error envelope. Volume
+/// not-found gets a distinct code; everything else is
+/// `requirements_invalid`.
+fn validation_error_to_oi(e: ParamValidationError) -> OiError {
+    let code = match e {
+        ParamValidationError::VolumeNotFound { .. } => ErrorCode::NotFound,
+        _ => ErrorCode::RequirementsInvalid,
+    };
+    OiError::new(code, e.to_string())
+}
+
 // l[impl action.params]
 // r[impl operation.volume-param.reserved]
 fn validate_action_params(
     params: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), OiError> {
-    for key in params.keys() {
-        if key.ends_with("_volume") || key.ends_with("_filename") {
-            return Err(OiError::new(
-                ErrorCode::RequirementsInvalid,
-                format!(
-                    "param key {key:?} is reserved (keys ending in _volume or _filename are reserved)"
-                ),
-            ));
-        }
-    }
-    Ok(())
+    action_params::reject_reserved_keys(params).map_err(validation_error_to_oi)
 }
 
 // l[impl action.params.volume]
-/// Validate that every `kind: "volume"` param in the action schema has a
-/// matching string value in `params`, and that the referenced site volume
-/// exists. The check runs at invocation time so the caller sees a clear
-/// error before the operation is queued / dispatched, rather than a
-/// confusing failure mid-action.
 fn validate_volume_params(
     state: &OiState,
     schema: &BTreeMap<ParamName, ParamDef>,
     params: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), OiError> {
-    use crate::runtime::site_volumes;
-    use seedling_protocol::names::SiteVolumeName;
-
-    let volume_names: Vec<&ParamName> = schema
-        .iter()
-        .filter_map(|(name, def)| (def.kind == ParamKind::Volume).then_some(name))
-        .collect();
-    if volume_names.is_empty() {
-        return Ok(());
-    }
-
-    for name in volume_names {
-        let key = name.as_str();
-        let val = match params.get(key) {
-            Some(serde_json::Value::String(s)) => s.clone(),
-            Some(_) => {
-                return Err(OiError::new(
-                    ErrorCode::RequirementsInvalid,
-                    format!("param {key:?}: volume reference must be a string"),
-                ));
-            }
-            None => {
-                let def = schema.get(name).expect("schema entry");
-                if def.required {
-                    return Err(OiError::new(
-                        ErrorCode::RequirementsInvalid,
-                        format!("param {key:?}: required volume reference is missing"),
-                    ));
-                }
-                continue;
-            }
-        };
-        let site_name = SiteVolumeName::new(&val).map_err(|e| {
-            OiError::new(
-                ErrorCode::RequirementsInvalid,
-                format!("param {key:?}: invalid site volume name {val:?}: {e}"),
-            )
-        })?;
-        let exists = state
-            .db
-            .call(move |db| site_volumes::get(db, &site_name).ok().flatten());
-        if exists.is_none() {
-            return Err(OiError::new(
-                ErrorCode::NotFound,
-                format!("param {key:?}: site volume {val:?} not found"),
-            ));
-        }
-    }
-    Ok(())
+    action_params::validate_volume_params(schema, params, &StateVolumeLookup(state))
+        .map_err(validation_error_to_oi)
 }
 
 // i[action.invoke]
 fn apply_action_param_schema(
-    action_params_schema: &std::collections::BTreeMap<
-        seedling_protocol::names::ParamName,
-        crate::defs::install::ParamDef,
-    >,
+    action_params_schema: &BTreeMap<ParamName, ParamDef>,
     params: &mut serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), OiError> {
-    if action_params_schema.is_empty() {
-        return Ok(());
-    }
-
-    let submitted: std::collections::BTreeMap<String, String> = action_params_schema
-        .keys()
-        .filter_map(|k| {
-            params
-                .get(k.as_str())
-                .and_then(|v| v.as_str())
-                .map(|s| (k.as_str().to_owned(), s.to_owned()))
-        })
-        .collect();
-
-    let filled = validate_requirements(action_params_schema, &submitted)?;
-
-    for (k, v) in filled {
-        params.insert(k, serde_json::Value::String(v));
-    }
-
-    Ok(())
+    action_params::apply_schema(action_params_schema, params).map_err(validation_error_to_oi)
 }
 
 // i[action.not-installed-gate]
