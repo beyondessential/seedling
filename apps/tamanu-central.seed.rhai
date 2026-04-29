@@ -206,8 +206,8 @@ let api_max_replicas = || {
 
 // ── Resources ─────────────────────────────────────────────────────────────────
 
-let config_vol = app.volume("config")
-    .description("Generated production.json5 and local.json5 plus default.reference.json5 for operator inspection");
+let config_vol = app.volume("config").description("Tamanu configuration files");
+config_vol.write("/production.json5", INITIAL_CONFIG);
 
 // Common env + mounts for every server-image container (api, tasks, fhir-*).
 // Tamanu reads /config/production.json5 and /config/local.json5 by default
@@ -304,42 +304,29 @@ if portal_on.call() {
 
 // ── Helper closures (dynamic) ─────────────────────────────────────────────────
 
-// Locate the default.json5 the image ships and drop a copy into the config
-// volume as `default.reference.json5` for operator inspection. Renamed so
-// node-config doesn't pick it up as an active config layer (node-config only
-// loads files named default / <NODE_ENV> / local / etc., never *.reference.*).
+// Drops a copy of the default.json5 into the config volume as
+// `default.reference.json5` for operator convenience. The filename
+// is so node-config doesn't pick it up as an active config layer.
 let copy_image_defaults = |rt| {
     rt.start(app.job()
-        .description("Copy the image's default.json5 to /config/default.reference.json5 for operator inspection")
+        .description("Copy the image's default.json5 to /config/default.reference.json5 for convenience")
         .image(server_image.call())
-        .writable_rootfs()
         .cap_add("DAC_READ_SEARCH")
         .mount("/config", config_vol)
-        .command(["sh", "-c", `
-set -eu
-src=$(find / -path /proc -prune -o -path /sys -prune -o -path /config -prune -o \
-    -type f -name 'default.json5' -print 2>/dev/null | head -1)
-if [ -z "$src" ]; then
-  echo "no default.json5 found in image" >&2
-  exit 0
-fi
-echo "copying $src -> /config/default.reference.json5"
-install -m 0640 "$src" /config/default.reference.json5
-`])
+        .command([
+            "install", "-v", "-m", "0640",
+            "config/default.json5",
+            "/config/default.reference.json5"
+        ])
     ).terminated(120).ensure_success();
 };
 
-// Render production.json5 + local.json5 into the config volume via a staging
-// tmpfs so the rendered content comes from the script (which has the param
-// values) rather than being built up with shell quoting.
 let render_config = |rt| {
-    let staging = app.volume().tmpfs()
-        .description("Rendered production.json5 and local.json5 staged in RAM before being installed into the config volume");
-    staging.write("/production.json5", INITIAL_CONFIG);
+    let staging = app.volume().tmpfs().description("Intermediate config volume");
     staging.write("/local.json5", local_json5.call());
 
     rt.start(app.job()
-        .description("Install rendered production.json5 and local.json5 into the config volume")
+        .description("Install rendered local.json5 into the config volume")
         .image(server_image.call())
         .writable_rootfs()
         .cap_add("CHOWN")
@@ -347,9 +334,10 @@ let render_config = |rt| {
         .cap_add("FOWNER")
         .mount("/staging", staging)
         .mount("/config", config_vol)
-        .command(["sh", "-c",
-            "install -m 0640 /staging/production.json5 /config/production.json5 && " +
-            "install -m 0640 /staging/local.json5 /config/local.json5"
+        .command([
+            "install", "-v", "-m", "0640",
+            "/staging/local.json5",
+            "/config/local.json5",
         ])
     ).terminated(60).ensure_success();
 };
@@ -359,9 +347,8 @@ let render_config = |rt| {
 // postgres superuser (`local trust` in the postgres app's pg_hba). No
 // passwords are set on the roles — every connection from these apps comes
 // in via the socket, where trust auth applies.
-let provision_db = |rt| {
-    let staging = app.volume().tmpfs()
-        .description("DB provisioning SQL staged in RAM (creates roles and the central database)");
+let setup_db = |rt| {
+    let staging = app.volume().tmpfs().description("DB provisioning SQL, creates roles and the database");
     let dbn = db_name.value();
     let dbu = db_user.value();
     // Mutate-in-place: see the comment on `json_str` for why a chain doesn't work.
@@ -419,7 +406,8 @@ let migrate_db = |rt| {
 let provision_admin = |rt, email, display_name, password| {
     let staging = app.volume().tmpfs()
         .description("Initial admin provisioning JSON5 staged in RAM (contains the admin password)");
-    staging.write("/provision.json5", `{
+    staging.write("/provision.json5", `
+{
   users: {
     ${json_str.call(email)}: {
       role: "admin",
@@ -451,7 +439,7 @@ app.on_install(|rt, param| {
 
     copy_image_defaults.call(rt);
     render_config.call(rt);
-    provision_db.call(rt);
+    setup_db.call(rt);
     migrate_db.call(rt);
     provision_admin.call(rt,
         param["admin-email"],
@@ -500,8 +488,8 @@ app.on_action("migrate", |rt, _param| {
     migrate_db.call(rt);
 }, #{ description: "Run pending schema migrations against the central database" });
 
-app.on_action("provision-db", |rt, _param| {
-    provision_db.call(rt);
+app.on_action("setup-db", |rt, _param| {
+    setup_db.call(rt);
 }, #{ description: "Create or refresh the database, central role, and reporting roles based on current params" });
 
 app.on_action("copy-image-defaults", |rt, _param| {
@@ -555,15 +543,7 @@ app.on_action("restart-workers", |rt, _param| {
 
 // ── Shells ────────────────────────────────────────────────────────────────────
 
-// Equivalent of the ansible `tamanu-run` script: invoke any subcommand of the
-// central image (e.g. `seed`, `report`, `dump`) against the current config
-// and database.
-app.on_shell("run", |_rt, shell, param| {
-    let cmd = if "command" in param && param["command"] != "" {
-        [param["command"]]
-    } else {
-        ["bash"]
-    };
+app.on_shell("bash", |_rt, shell, _param| {
     shell.attach(app.job()
         .image(server_image.call())
         .writable_rootfs()
@@ -573,14 +553,7 @@ app.on_shell("run", |_rt, shell, param| {
         .mount("/var/run/postgresql", pg_socket)
         .command(cmd));
 }, #{
-    description: "Run a subcommand inside the central server image (defaults to bash)",
-    params: #{
-        command: #{
-            kind: "text",
-            required: false,
-            description: "Subcommand to invoke (e.g. migrate, seed, report). Leave blank for an interactive shell.",
-        },
-    },
+    description: "Run a bash inside the central server image",
 });
 
 // ── Version changes ───────────────────────────────────────────────────────────

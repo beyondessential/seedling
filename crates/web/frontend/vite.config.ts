@@ -11,6 +11,8 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
+    port: 7890,
+    strictPort: true,
     proxy: {
       "/connect": RUST_HTTP,
       "/healthz": RUST_HTTP,
