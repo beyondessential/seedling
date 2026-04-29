@@ -63,7 +63,7 @@ function forbiddenSpanSx(safety: SafetyMode, allowed: boolean) {
       "&& .Mui-disabled": {
         color: "text.primary",
         background: `repeating-linear-gradient(${angle}, ${stripe}, ${stripe} 6px, ${gap} 6px, ${gap} 12px)`,
-        filter: "grayscale(1)",
+        filter: "grayscale(0.7)",
         transition: theme.transitions.create("filter", {
           duration: theme.transitions.duration.shortest,
         }),
