@@ -193,8 +193,7 @@ let local_json5 = || {
         secret: ${json_str.call(refresh_secret.value())},
     },
     ${portal_block}
-}
-    `
+}`
 };
 
 // API replica range: scales from 1 up to half the node's available threads,
@@ -209,112 +208,78 @@ let api_max_replicas = || {
 let config_vol = app.volume("config").description("Tamanu configuration files");
 config_vol.write("/production.json5", INITIAL_CONFIG);
 
-// Common env + mounts for every server-image container (api, tasks, fhir-*).
-// Tamanu reads /config/production.json5 and /config/local.json5 by default
+let tmp_vol = app.volume("tmp").tmpfs();
+
+// Common options for every server-image container (api, tasks, fhir-*).
 let configure_server = |c| c
+    .image(server_image.call())
     .env("TZ", timezone.value())
-    .env("TAMANU_VERSION", version.value())
     .mount("/config", config_vol)
-    .mount("/var/run/postgresql", pg_socket);
+    .mount("/var/run/postgresql", pg_socket)
+    .mount("/tmp", tmp_vol);
 
-let web_svc = app.service("web")
-    .description("Tamanu central HTTP service — routes /api, /v1, and / to the API and frontend deployments")
-    .exported(#{ description: "Tamanu central HTTPS endpoint (HTTP routing)" })
-    .http(80);
-
-// Guard with `is_set()` so the script also evaluates cleanly before the
-// operator has supplied the hostname (e.g. on first registration / preview):
-// `Service.ingress()` validates its hostname argument eagerly, which would
-// otherwise throw on the empty default and leave the script unloadable.
+let web_svc = app.service("web").exported().http(80);
 if public_hostname.is_set() {
     web_svc.ingress(public_hostname.value(), 443)
         .tls(Terminate.Https, Output.Http1)
         .redirect();
 }
 
-// Patient portal: separate ingress on its own hostname when enabled.
 let portal_svc = if portal_on.call() {
-    let s = app.service("portal-web")
-        .description("Tamanu patient portal HTTP service — separate hostname from the central API")
-        .exported(#{ description: "Tamanu patient portal HTTPS endpoint" })
-        .http(80);
+    let s = app.service("portal-web").exported().http(80);
     s.ingress(patient_portal_fqdn.value(), 443)
         .tls(Terminate.Https, Output.Http1)
         .redirect();
     s
 } else { () };
 
-// API workers handle /api/* and /v1/* on the central HTTP service.
-configure_server.call(app.deployment("api")
-    .description("Tamanu central API workers serving /api and /v1")
-    .image(server_image.call())
+configure_server.call(app.deployment("api"))
+    .description("API servers")
     .scale(1..api_max_replicas.call())
     .arg(["startApi"])
     .http(3000, web_svc.route("/api"))
-    .http(3000, web_svc.route("/v1"))
-);
+    .http(3000, web_svc.route("/v1"));
 
-// Scheduled tasks: cron-style internal jobs the central server fires.
-configure_server.call(app.deployment("tasks")
-    .description("Tamanu scheduled-task worker (cron-style internal jobs)")
-    .image(server_image.call())
-    .scale(1)
-    .arg(["startTasks"])
-);
+configure_server.call(app.deployment("tasks"))
+    .description("Scheduled tasks worker")
+    .on_update(OnUpdate.Replace)
+    .arg(["startTasks"]);
 
-// FHIR workers (refresh + resolve) only run when explicitly enabled. They
-// drive the FHIR materialised-resource pipeline, which most deployments don't
-// use day-to-day; gating them keeps the default footprint small.
+// FHIR workers (refresh + resolve) only run when explicitly enabled.
 if fhir_on.call() {
-    configure_server.call(app.deployment("fhir-refresh")
+    configure_server.call(app.deployment("fhir-refresh"))
         .description("FHIR materialised-resource refresh worker")
-        .image(server_image.call())
-        .scale(1)
-        .arg(["startFhirWorker", "--topics=fhir.refresh.allFromUpstream,fhir.refresh.entireResource,fhir.refresh.fromUpstream"])
-    );
-    configure_server.call(app.deployment("fhir-resolve")
+        .on_update(OnUpdate.Replace)
+        .arg(["startFhirWorker", "--topics=fhir.refresh.allFromUpstream,fhir.refresh.entireResource,fhir.refresh.fromUpstream"]);
+    configure_server.call(app.deployment("fhir-resolve"))
         .description("FHIR resolver worker")
-        .image(server_image.call())
-        .scale(1)
-        .arg(["startFhirWorker", "--topics=fhir.resolver"])
-    );
+        .on_update(OnUpdate.Replace)
+        .arg(["startFhirWorker", "--topics=fhir.resolver"]);
 }
 
-app.deployment("frontend")
-    .description("Tamanu central single-page-app frontend (rolling restarts)")
+let configure_frontend = |c| c
     .image(frontend_image.call())
-    .scale(1)
-    .cap_add("NET_BIND_SERVICE")
+    .cap_add("NET_BIND_SERVICE");
+
+configure_frontend.call(app.deployment("frontend"))
+    .description("Practitioner / Admin frontend")
     .http(3000, web_svc.route("/"));
 
-// Patient portal deployment + routing (when enabled).
 if portal_on.call() {
-    app.deployment("patient-portal")
-        .description("Patient-facing portal SPA + API")
-        .image(portal_image.call())
-        .scale(1)
-        .env("TZ", timezone.value())
-        .env("TAMANU_VERSION", version.value())
-        .mount("/config", config_vol)
-        .mount("/var/run/postgresql", pg_socket)
-        .http(3000, portal_svc.route("/api"))
-        .http(3000, portal_svc.route("/v1"))
+    configure_frontend.call(app.deployment("patient-portal"))
+        .description("Patient-facing portal (frontend)")
         .http(3000, portal_svc.route("/"));
 }
 
 // ── Helper closures (dynamic) ─────────────────────────────────────────────────
 
-let start_builder = |rt| {
-    let builder = app.job()
+let start_intermediate = |rt| {
+    let builder = configure_server.call(app.job())
         .description("Common job to do server-context tasks in actions")
-        .image(server_image.call())
-        .writable_rootfs()
         .cap_add("DAC_READ_SEARCH")
         .cap_add("CHOWN")
         .cap_add("DAC_OVERRIDE")
         .cap_add("FOWNER")
-        .mount("/staging", staging)
-        .mount("/config", config_vol)
         .command(IDLE_CMD);
 
     rt.start(builder).running(60);
@@ -324,34 +289,16 @@ let start_builder = |rt| {
 // Drops a copy of the default.json5 into the config volume as
 // `default.reference.json5` for operator convenience. The filename
 // is so node-config doesn't pick it up as an active config layer.
-let copy_default_config = |rt, builder| {
-    rt.exec(builder, [
+let copy_default_config = |rt, inter| {
+    rt.exec(inter, [
         "install", "-v", "-m", "0640",
         "config/default.json5",
         "/config/default.reference.json5"
     ]).ensure_success();
 };
 
-let render_config = |rt| {
-    let staging = app.volume().tmpfs().description("Intermediate config volume");
-    staging.write("/local.json5", local_json5.call());
-
-    rt.start(app.job()
-        .description("Install rendered local.json5 into the config volume")
-        .image(server_image.call())
-        .writable_rootfs()
-        .cap_add("DAC_READ_SEARCH")
-        .cap_add("CHOWN")
-        .cap_add("DAC_OVERRIDE")
-        .cap_add("FOWNER")
-        .mount("/staging", staging)
-        .mount("/config", config_vol)
-        .command([
-            "install", "-v", "-m", "0640",
-            "/staging/local.json5",
-            "/config/local.json5",
-        ])
-    ).terminated(60).ensure_success();
+let upgrade_db = |rt, inter| {
+    rt.exec(inter, ["upgrade"]).ensure_success();
 };
 
 // Idempotent provisioning: create or refresh the database, the central role,
@@ -395,104 +342,6 @@ let setup_db = |rt| {
     rt.stop(psql);
 };
 
-// Run the schema migration against the current database using the current
-// image. Tamanu's `migrate` subcommand is idempotent — running it when the
-// schema is already at the target revision is a no-op.
-let upgrade_db = |rt| {
-    rt.start(app.job()
-        .description("App-based automated upgrade steps (including migrations)")
-        .image(server_image.call())
-        .writable_rootfs()
-        .env("TZ", timezone.value())
-        .env("TAMANU_VERSION", version.value())
-        .mount("/config", config_vol)
-        .mount("/var/run/postgresql", pg_socket)
-        .arg(["upgrade"])
-    ).terminated_eventually().ensure_success();
-};
-
-// Provision the initial admin user via Tamanu's `provision` subcommand. Builds
-// a minimal provisioning JSON5 file with a single `users` entry and feeds it
-// to the central server. `--skip-if-not-needed` makes the command a no-op if
-// any user already exists, so this is safe to re-run on subsequent installs.
-let provision_admin = |rt, email, display_name, password| {
-    let staging = app.volume().tmpfs()
-        .description("Initial admin provisioning JSON5 staged in RAM (contains the admin password)");
-    staging.write("/provision.json5", `
-{
-  users: {
-    ${json_str.call(email)}: {
-      role: "admin",
-      displayName: ${json_str.call(display_name)},
-      password: ${json_str.call(password)},
-    },
-  },
-}
-`);
-    rt.start(app.job()
-        .description("Provision the initial admin user via Tamanu's `provision` subcommand")
-        .image(server_image.call())
-        .writable_rootfs()
-        .env("TZ", timezone.value())
-        .env("TAMANU_VERSION", version.value())
-        .mount("/config", config_vol)
-        .mount("/var/run/postgresql", pg_socket)
-        .mount("/staging", staging)
-        .arg(["provision", "/staging/provision.json5", "--skip-if-not-needed"])
-    ).terminated_eventually().ensure_success();
-};
-
-// ── Install ───────────────────────────────────────────────────────────────────
-
-app.on_install(|rt, param| {
-    rt.warm_certs(app);
-    rt.start(app.select(#{ types: [ResourceType.Ingress, ResourceType.Service] }));
-    rt.start(app.deployment("frontend")).ready();
-
-    copy_default_config.call(rt);
-    render_config.call(rt);
-    setup_db.call(rt);
-    upgrade_db.call(rt);
-    provision_admin.call(rt,
-        param["admin-email"],
-        param["admin-display-name"],
-        param["admin-password"]);
-
-    rt.start(app).ready(300);
-}, #{
-    params: #{
-        "admin-email": #{
-            kind: "email",
-            required: true,
-            default_value: "admin@tamanu.app",
-            description: "Email of the initial admin user",
-        },
-        "admin-display-name": #{
-            kind: "text",
-            required: true,
-            default_value: "Superadmin",
-            description: "Display name of the initial admin user",
-        },
-        "admin-password": #{
-            kind: "password",
-            required: true,
-            description: "Password for the initial admin user",
-        },
-    },
-});
-
-// ── Maintenance actions ───────────────────────────────────────────────────────
-
-app.on_action("reconfigure", |rt, _param| {
-    render_config.call(rt);
-    rt.restart(app.deployment("api"));
-    rt.restart(app.deployment("tasks"));
-    if fhir_on.call() {
-        rt.restart(app.deployment("fhir-refresh"));
-        rt.restart(app.deployment("fhir-resolve"));
-    }
-}, #{ description: "Regenerate local.json5 from current params and restart the API + workers" });
-
 let warmup = app.on_action("warm-images", |rt, param| {
     let target = if "target-version" in param && param["target-version"] != "" {
         param["target-version"]
@@ -506,7 +355,7 @@ let warmup = app.on_action("warm-images", |rt, param| {
     if portal_on.call() {
         warm.push(app.job().image(`ghcr.io/beyondessential/tamanu-patient-portal:${target}`));
     }
-    rt.warm_images(warm).ready(600);
+    rt.warm_images(warm).ready();
 }, #{
     description: "Pre-pull the images for a target version",
     params: #{
@@ -518,17 +367,75 @@ let warmup = app.on_action("warm-images", |rt, param| {
     },
 });
 
-// ── Shells ────────────────────────────────────────────────────────────────────
+app.on_install(|rt, param| {
+    rt.warm_certs(app);
+    warmup.invoke();
+
+    let inter = start_intermediate.call(rt);
+    copy_default_config.call(rt, inter);
+    rt.write(app.volume("config"), "/config/local.json5", local_json5.call());
+    render_config.call(rt, inter);
+    upgrade_db.call(rt, inter);
+
+    rt.start(configure_server.call(app.job())
+        .description("Provision the initial admin user via Tamanu's `provision` subcommand")
+        .mount("/staging", {
+            let vol = app.volume().tmpfs().description("Initial admin provisioning");
+            vol.write("/provision.json5", `{
+                users: {
+                    ${json_str.call(params["email"])}: {
+                        role: "admin",
+                        displayName: ${json_str.call(params["name"])},
+                        password: ${json_str.call(params["password"])},
+                    },
+                },
+            }`);
+            vol
+        })
+        .arg(["provision", "/staging/provision.json5", "--skip-if-not-needed"])
+    ).terminated_eventually().ensure_success();
+
+    // then seedling will do normal bringup
+}, #{
+    params: #{
+        email: #{
+            kind: "email",
+            required: true,
+            default_value: "admin@tamanu.app",
+            description: "Email of the initial admin user",
+        },
+        name: #{
+            kind: "text",
+            required: true,
+            default_value: "Superadmin",
+            description: "Display name of the initial admin user",
+        },
+        password: #{
+            kind: "password",
+            required: true,
+            description: "Password for the initial admin user",
+        },
+    },
+});
+
+app.on_action("reconfigure", |rt, _param| {
+    rt.write(app.volume("config"), "/config/local.json5", local_json5.call());
+    rt.restart(app.deployment("api"));
+    rt.restart(app.deployment("tasks"));
+    if fhir_on.call() {
+        rt.restart(app.deployment("fhir-refresh"));
+        rt.restart(app.deployment("fhir-resolve"));
+    }
+}, #{ description: "Regenerate local.json5 from current params and restart the API + workers" });
 
 app.on_shell("bash", |_rt, shell, _param| {
-    shell.attach(app.job()
-        .image(server_image.call())
-        .writable_rootfs()
-        .env("TZ", timezone.value())
-        .env("TAMANU_VERSION", version.value())
-        .mount("/config", config_vol)
-        .mount("/var/run/postgresql", pg_socket)
-        .command(cmd));
+    shell.attach(configure_server.call(app.job()).command("bash"));
+}, #{
+    description: "Run a bash inside the central server image",
+});
+
+app.on_shell("node", |_rt, shell, _param| {
+    shell.attach(configure_server.call(app.job()).arg(["shell"]));
 }, #{
     description: "Run a bash inside the central server image",
 });
@@ -538,7 +445,10 @@ app.on_shell("bash", |_rt, shell, _param| {
 version.on_change(|rt, old| {
     // warming images keeps the rest of the upgrade fast and also gates on
     // all the images' availability *before* we start taking things down.
-    warmup.call();
+    warmup.invoke();
+
+    // start intermediate in the new server image early
+    let inter = start_intermediate.call(rt);
 
     // bring down everything non-essential
     let old_tasks = rt.stop(old.select(#{
@@ -547,22 +457,38 @@ version.on_change(|rt, old| {
     }));
 
     // swap the frontends.
-    let newfront = rt.start(app.deployment("frontend"));
-    newfront.running();
-    rt.signal(old.deployment("frontend"), "SIGTERM");
-    newfront.ready();
-    rt.stop(old.deployment("frontend"));
-
-    rt.stop(old.select(#{
+    // we could hard-swap the traffic over, but it's more gracious
+    // to get the new running, tell the old to stop gracefully,
+    // and only then hard-kill the old. the frontends are caddy,
+    // which does a soft-down on first INT, then hard on second.
+    let oldfront = old.select(#{
         types: [ResourceType.Deployment],
-        names: ["api", "patient-portal"],
+        names: ["frontend", "patient-portal"],
+    });
+    let newfront = rt.start(app.select(#{
+        types: [ResourceType.Deployment],
+        names: ["frontend", "patient-portal"],
     }));
+    newfront.running();
+    rt.signal(oldfront, "SIGINT");
+    newfront.ready();
+    rt.signal(oldfront, "SIGINT");
+    rt.stop(oldfront);
 
-    let builder = start_builder.call(rt);
-    copy_default_config.call(rt, builder);
-    render_config.call(rt, builder);
+    // in future we'll want to do this:
+    rt.stop(old.select(#{ types: [ResourceType.Deployment] }));
 
-    upgrade_db.call(rt);
+    rt.start(old.select(#))
+
+    // stop everything that's currently touching the database
+    rt.stop(old);
+
+    // mid-upgrade tasks
+    copy_default_config.call(rt, inter);
+    render_config.call(rt, inter);
+    upgrade_db.call(rt, inter);
+
+    //
 
     rt.start(app).ready(300);
 });
@@ -583,10 +509,6 @@ let restart_servers = |rt| {
     }
 };
 
-canonical_url.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
-timezone.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
-auth_secret.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
-refresh_secret.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
 // Toggling the FHIR workers: bring them up or tear them down to match the new
 // param value. Re-render config first so any related side-channel state is
 // consistent, though FHIR workers don't currently read FHIR-specific config.
