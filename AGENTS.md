@@ -21,6 +21,7 @@
 - To silence a warning, use `#[expect(..., reason = "...")]` instead of `#[allow(...)]`.
 - Don't use double spaces after punctuation.
 - Run `cargo clippy`, `cargo fmt`, and `tracey query status` before finishing an edit round.
+- Also run these *before* starting any work, and fix anything outstanding. Having everything clean avoids having to evaluate whether a clippy warning was introduced before a work's changes or not.
 - Spec items in docs/spec must describe **what** the system requires, not **how** the code achieves it. Keep tool names (`sfdisk`, `qemu-img`), exact command lines, syscall names (`splice(2)`), internal API details (`MetadataExt::rdev()`), env var names used only by the implementation, and similar out of spec text. Acceptable: interface contracts (config file paths, partition UUIDs, crypttab option values) that external actors or other components depend on. When in doubt, ask whether someone re-implementing the feature from scratch would be constrained to the same choice; if not, it is an implementation detail.
 - When adding or changing features, or when fixing bugs, first change the tracey spec in docs/spec, then implement, then add tests whenever possible.
 - Remember to annotate implementations and tests with tracey references: https://tracey.bearcove.eu/guide/annotating-code/
