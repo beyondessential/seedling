@@ -102,11 +102,13 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > The following values are accepted:
 > - A `Collection` — returned as-is.
-> - An `App` — yields a Collection of all its named resources and actions.
-> - Any named Resource (Deployment, Service, HttpService, Job, Ingress, named Volume, ExternalVolume, Action) — yields a Collection of that single resource.
+> - An `App` — yields a Collection of all its named resources.
+> - Any named Resource (Deployment, Service, HttpService, Job, Ingress, named Volume, ExternalVolume) — yields a Collection of that single resource.
 > - An array — yields a Collection of all elements coerced the same way (a union).
 > - An anonymous Volume (without a name) — yields an empty Collection.
 > - Any other value — yields an empty Collection.
+>
+> Action handles are not coercible to a Collection: actions are invoked via [`Action.call()`](#l--action.call), not scheduled as resources.
 
 # Constants
 
@@ -210,7 +212,8 @@ This is currently the only value.
 > - `Job`
 > - `Volume`
 > - `ExternalVolume`
-> - `Action`
+>
+> Actions are invocable handles, not resources, and so do not have a `ResourceType` value.
 
 # App global
 
@@ -775,7 +778,7 @@ This is currently the only value.
 >
 > Actions are defined using the `app.on_action(name: string, fn: closure, options?: object)` method, which returns an `Action`.
 >
-> Action implements [Collection](#l--collection.interface), the Action is treated as an opaque Resource.
+> An `Action` is an opaque handle that can be invoked from a dynamic context via [`Action.call()`](#l--action.call). It is not a Resource: it cannot be passed to `rt.start`, `rt.stop`, or any other resource-scheduling method, and it does not appear in resource collections produced by `app.select()` or `col(app)`.
 >
 > The `fn` closure must take exactly two arguments: the [Runtime Instance](#l--rt.var) (typically named `rt`) and the [param map](#l--action.params) (typically named `param`).
 >
@@ -797,6 +800,24 @@ This is currently the only value.
 > The `param` is an arbitrary key-value map provided by the invoker. When no params are provided, `param` is an empty map (`#{}`).
 >
 > Param keys ending in `_volume` or `_filename` are reserved for internal use by the Seedling runtime. The runtime must reject operator-provided params whose keys end in either suffix. See [operation.volume-param](runtime.md#r--operation.volume-param) for how the runtime uses these suffixes to hand operation-scoped volumes to action closures.
+
+> l[action.lookup]
+> `app.action(name: string)` returns the `Action` previously registered with that name. The handle returned is the same value that the original `app.on_action()` (or `app.on_start()`) call returned.
+>
+> `app.action()` is only valid in dynamic context (inside an action or shell closure). Calling it from the static context throws.
+>
+> If `name` does not match a registered action, `app.action()` throws. The Install Action is not registered under a name and is not reachable through this method (see [action.install](#l--action.install)).
+
+> l[action.call]
+> `Action.call(params?: object)` invokes the action's closure inline, in the calling context's runtime, with `params` (defaulting to an empty map).
+>
+> Before the closure runs, the runtime validates `params` against the action's declared schema (see [action.option-params](#l--action.option-params)): required fields must be present, defaults are applied to absent optional fields, unknown or [reserved keys](#l--action.params) are rejected, and `kind: "volume"` references must resolve to an existing site volume. Validation errors throw before the closure runs. The validation rules are exactly those applied to operator invocations.
+>
+> The closure runs with the same `rt` as the caller and accumulates into the same operation log. There is no separate operation_id and no separate top-level history entry, but the runtime records a `SubActionInvoked` action-log entry capturing the called action's name and validated params (see [history.action-log.entries](runtime.md#r--history.action-log.entries)).
+>
+> Exceptions thrown by the called closure propagate to the caller.
+>
+> `Action.call()` throws when invoked outside a dynamic context, and throws if the called action is already on the active call stack — directly (`bar` calling `bar`) or transitively (`foo` → `bar` → `foo`). The error names the offending chain. See [operation.composition](runtime.md#r--operation.composition).
 
 ## Start Action
 
@@ -864,10 +885,13 @@ This is currently the only value.
 >
 > The `fn` closure must take exactly two arguments: `rt` and `param`. Param values are delivered through `param`. The `config` object defines the validation schema; it does not change the closure signature.
 >
+> The Install Action is not registered under a name in the app's action map. It is not reachable from [`app.action()`](#l--action.lookup) or [`Action.call()`](#l--action.call); it is invoked only by the control plane via the install RPC.
+>
 > If it is not defined, it defaults to the equivalent of:
 > ```rhai
 > rt.start(app);
 > ```
+> This schedules the App's static resources but does not invoke any custom action closure (such as `on_start`). The Start Action is dispatched by the control plane after `Installing` completes, not from inside the install fallback.
 
 > l[action.install.requirements]
 > The Install Action can define special parameters which are only requested from the operator when installation is requested. The values of the params are only known to Seedling for the duration of the Install process, and are discarded afterwards.
@@ -958,6 +982,8 @@ This spec defines the semantics of the Runtime Instance as far as BSL is concern
 
 > l[rt.start]
 > The `rt.start(resources: Collection)` method schedules the resources in the Collection. It returns a [Started](#l--rt.started).
+>
+> Action handles are not valid arguments to `rt.start`: actions are not resources and `rt.start` does not invoke their closures. Use [`Action.call(params?)`](#l--action.call) to invoke an action from a dynamic context. Passing an Action (or a Collection containing one) to `rt.start` must throw.
 
 > l[rt.stop]
 > The `rt.stop(resources: Collection, deadline?: number)` method unschedules the resources in the Collection and blocks until all terminate.

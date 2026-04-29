@@ -308,6 +308,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - The `rt.*` call that was made (e.g. start, stop, warm_certs), and on which resources.
 > - The barrier condition, if a barrier was reached (which resources, which state, what deadline).
 > - Whether the barrier has been satisfied.
+>
+> The runtime must additionally emit a `SubActionInvoked` entry immediately before each [`Action.call()`](language.md#l--action.call) runs the called closure. The entry records the called action's name and the validated params map. On replay, the entry is treated as already-emitted: the runtime re-enters the FnPtr but recovers the params from the log rather than re-validating, so a schema change between operation start and replay does not desync the call. The `SubActionInvoked` entries are exposed in `apps history` so operators can inspect the nested call chain.
 
 > r[history.action-log.replay]
 > The action execution log must contain enough information to replay an interrupted lifecycle operation from the beginning and fast-forward to the interruption point.
@@ -492,13 +494,19 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 ## Action Composition
 
 > r[operation.composition]
-> An action closure may invoke other actions by calling `rt.start()` on a resource of type Action.
-> The invoked action's closure runs inline within the calling operation.
+> An action closure may invoke other actions by calling [`Action.call(params?)`](language.md#l--action.call) on an Action handle obtained from [`app.action(name)`](language.md#l--action.lookup) or returned by `app.on_action()` / `app.on_start()`.
+> The invoked action's closure runs inline within the calling operation, sharing its `rt`, its operation_id, and its action log.
 > Barriers within the invoked action are barriers of the overall operation.
 
 > r[operation.composition.cycles]
-> The runtime must detect cycles in action invocation.
-> If an action closure invokes an action that is already on the current call stack (directly or transitively), the invocation must throw.
+> The runtime must reject cycles in action invocation before the called closure runs.
+> A `.call()` whose action name is already on the current call stack — directly (the action calling itself) or transitively (any earlier frame on the stack) — must throw.
+> The check uses the action name; renaming a captured closure does not bypass it.
+> The thrown error must name the offending chain, e.g. `start → foo → bar` for the `bar.call()` that closes the cycle, so the operator can identify the script bug.
+
+> r[operation.composition.params]
+> The runtime applies the called action's declared param schema to the supplied `params` map before invoking the closure, using the same validation rules as operator invocation: required-field enforcement, default application, [reserved-key](language.md#l--action.params) rejection, and `kind: "volume"` resolution against the [operation-scoped volume bindings](#r--operation.volume-param). Validation errors throw before the closure runs.
+> The result of validation must be deterministic across replays so that the action log entry recorded for the call (see [history.action-log.entries](#r--history.action-log.entries)) faithfully describes what the closure observed.
 
 ## Shell Sessions
 
