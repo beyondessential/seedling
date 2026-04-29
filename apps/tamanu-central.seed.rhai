@@ -500,7 +500,7 @@ app.on_action("migrate", |rt, _param| {
     upgrade_db.call(rt);
 }, #{ description: "Run pending schema migrations against the database" });
 
-app.on_action("warm-images", |rt, param| {
+let warmup = app.on_action("warm-images", |rt, param| {
     let target = if "target-version" in param && param["target-version"] != "" {
         param["target-version"]
     } else {
@@ -563,17 +563,9 @@ app.on_shell("bash", |_rt, shell, _param| {
 // `rt.start(app)` afterwards rolls the frontend (rolling update) and brings
 // the API + workers back up on the new image.
 version.on_change(|rt, old| {
-    // warming images keeps the rest of the upgrade fast
-    // and also gates on all the images' availability
-    // *before* we start taking things down.
-    let warm = [
-        app.job().image(server_image.call()),
-        app.job().image(frontend_image.call()),
-    ];
-    if portal_on.call() {
-        warm.push(app.job().image(portal_image.call()));
-    }
-    rt.warm_images(warm).ready(600);
+    // warming images keeps the rest of the upgrade fast and also gates on
+    // all the images' availability *before* we start taking things down.
+    rt.start(warmup).terminated().ensure_success();
 
     rt.stop(old.select(#{
         types: [ResourceType.Deployment],

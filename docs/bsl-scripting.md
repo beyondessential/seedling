@@ -498,26 +498,34 @@ The operator picks the volume from the action invocation dialog (web UI) or via 
 
 `kind: "volume"` is valid only on action and shell schemas. `app.param(...)` and `on_install` requirements reject it because their bindings outlive any single operation; for those, declare an `app.external_volume(name)` and have the operator wire it up via the UI's external volume mappings.
 
-## Invoking actions
+## Sharing logic between actions
 
-`app.on_action(...)` and `app.on_start(...)` return an `Action`, which is a Resource — so to invoke it, pass it to `rt.start()`. There is no separate "call this action" verb.
+There is no "call this action's closure from inside another action" primitive: actions are invoked by the control plane (lifecycle: install / start / on_change / on_schedule) or by an operator (OI/CLI/Web), and `params` is a schema for the *operator's* invocation, not arguments you pass from script.
+
+For code reuse between actions, extract a top-level Rhai closure and `.call(rt, ...)` it:
 
 ```rhai
-let migrate = app.on_action("migrate", |rt, _p| {
-    rt.start(app.job()
-        .image("ghcr.io/example/api:v1")
-        .command(["migrate"])
-    ).terminated().ensure_success();
-});
+// Top level — defined once, used from any action body.
+let render_config = |rt| {
+    rt.write(config_vol, "/etc/postgresql.conf", build_config.call());
+};
+
+let reload_server = |rt| {
+    rt.signal(app.deployment("postgres"), "SIGHUP");
+};
+
+app.on_action("reconfigure", |rt, _p| {
+    render_config.call(rt);
+    reload_server.call(rt);
+}, #{ description: "Regenerate config and reload" });
 
 app.on_install(|rt, _p| {
-    // Run the migrate action defined above, then bring the app up.
-    rt.start(migrate).terminated().ensure_success();
+    render_config.call(rt);
     rt.start(app).ready();
 });
 ```
 
-`rt.start(app)` is the idiomatic way to run the start action: it schedules the App as a Collection, which includes the start action plus the resources it owns, and (with `.ready()`) waits for the whole thing to come up. It's also the install hook's implicit default — if you don't define `on_install`, the runtime behaves as if it called `rt.start(app)`.
+`rt.start(app)` schedules every static resource the App owns and (with `.ready()`) blocks until they're all up. It's the install hook's implicit default — if you don't define `on_install`, the runtime behaves as if it called `rt.start(app)` for you.
 
 ## Common patterns
 
