@@ -3,6 +3,17 @@
 // nav-bar icon links rather than driving the URL directly: that way we
 // also catch broken navbar wiring (wrong link target, missing tooltip) at
 // the same time.
+//
+// Each test verifies that the web interface provides the named route at
+// the expected path; the spec items below cover broader management
+// surfaces too, of which routing is one slice.
+//
+// w[verify routes.keys]
+// w[verify routes.registries]
+// w[verify routes.images]
+// w[verify routes.certificates]
+// w[verify routes.volumes]
+// w[verify routes.backups]
 
 import { expect, test } from "../test-fixtures";
 

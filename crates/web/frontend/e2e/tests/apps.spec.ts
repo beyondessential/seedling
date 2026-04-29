@@ -2,6 +2,8 @@
 // create a real app (script preview wants a non-trivial Rhai snippet that
 // the stub backends would happily accept but that we'd then have to keep
 // in sync with the language).
+//
+// w[verify routes.apps]
 
 import { expect, test } from "../test-fixtures";
 
