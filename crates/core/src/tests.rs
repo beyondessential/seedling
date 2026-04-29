@@ -15,6 +15,7 @@ mod constants;
 mod container;
 mod deployment;
 mod description;
+mod exec;
 mod ingress;
 mod job;
 mod param;
