@@ -13,6 +13,7 @@ export interface AppSummary {
   status: AppStatus;
   action_name?: string;
   has_stopped_resources?: boolean;
+  description?: string | null;
 }
 
 export interface FaultRecord {
@@ -73,13 +74,14 @@ export interface PodSummary {
 }
 
 export type ResourceDef =
-  | { kind: "service"; http: boolean }
+  | { kind: "service"; http: boolean; description?: string | null }
   | { kind: "http_service"; service: string; port: number }
-  | { kind: "ingress"; service: string; hostname: string; port: number; tls: boolean; dtls: boolean; http_terminate: "http1" | "http2" | null; redirect: { port: number; code: number } | null }
-  | { kind: "deployment"; container: ContainerSummary; pod: PodSummary; scale: { low: number; high: number }; on_update: string; on_terminate: string }
-  | { kind: "job"; container: ContainerSummary; pod: PodSummary; deadline: number | null }
-  | { kind: "volume"; readonly: boolean; tmpfs: boolean; writes: Record<string, string>; exported: boolean; export_description: string | null }
-  | { kind: "external_volume" };
+  | { kind: "ingress"; service: string; hostname: string; port: number; tls: boolean; dtls: boolean; http_terminate: "http1" | "http2" | null; redirect: { port: number; code: number } | null; description?: string | null }
+  | { kind: "deployment"; container: ContainerSummary; pod: PodSummary; scale: { low: number; high: number }; on_update: string; on_terminate: string; description?: string | null }
+  | { kind: "job"; container: ContainerSummary; pod: PodSummary; deadline: number | null; description?: string | null }
+  | { kind: "volume"; readonly: boolean; tmpfs: boolean; writes: Record<string, string>; exported: boolean; export_description: string | null; description?: string | null }
+  | { kind: "external_volume"; description?: string | null }
+  | { kind: "external_service"; description?: string | null };
 
 export interface StoppedResource {
   kind: string;
@@ -104,6 +106,11 @@ export interface AppResource {
   /** Operation that created this dynamic resource — useful for grouping when
    * multiple actions are queued. Set alongside `dynamic`. */
   operation_id?: string;
+  /** Free-form description set via `resource.description(...)`. For static
+   * resources this also lives at `def.description`; dynamic resources only
+   * carry it at the top level because their persisted record has no
+   * full def attached. */
+  description?: string | null;
 }
 
 export interface AppParam {
@@ -154,6 +161,8 @@ export interface InstallRequirement {
 export interface AppDetail {
   status: AppStatus;
   generation: number;
+  /** Free-form description set via `app.description(...)` in the BSL script. */
+  description?: string | null;
   faults: FaultRecord[];
   resources: AppResource[];
   /** Resources created inside an in-flight action closure (jobs, anonymous

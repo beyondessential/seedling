@@ -423,10 +423,15 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
                         .unwrap_or(false)
                 })
             };
+            // l[impl app.description]
+            let description = reg
+                .get(name.as_str())
+                .and_then(|entry| entry.app.def.load().description.clone());
             let mut obj = json!({
                 "name": name,
                 "status": status.name(),
                 "has_stopped_resources": has_stopped,
+                "description": description,
             });
             if let AppStatus::Operating { action_name } = &status {
                 obj["action_name"] = json!(action_name);

@@ -657,6 +657,19 @@ function ResourcesSection({
                 </IconActionButton>
               ))}
           </Box>
+          {(() => {
+            const desc =
+              (r.def && "description" in r.def && r.def.description) ||
+              r.description;
+            return desc ? (
+              <Typography
+                variant="body2"
+                sx={{ color: "text.secondary", mt: 0.25, mb: 0.5 }}
+              >
+                {desc}
+              </Typography>
+            ) : null;
+          })()}
           <FaultList faults={r.faults} />
           {r.def && <ResourceDefDetail def={r.def} />}
           <TableContainer component={Paper} variant="outlined" sx={{ mt: 0.5 }}>
@@ -2644,24 +2657,34 @@ export default function AppDetail() {
       )}
       {data && (
         <Stack spacing={3}>
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-            <Typography variant="h5">{name}</Typography>
-            <Chip
-              label={statusLabel(
-                data.status,
-                data.current_operation?.action_name,
-              )}
-              color={statusColor(data.status)}
-              size="small"
-            />
-            <Typography
-              variant="caption"
-              sx={{
-                color: "text.secondary",
-              }}
-            >
-              gen {data.generation}
-            </Typography>
+          <Box>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+              <Typography variant="h5">{name}</Typography>
+              <Chip
+                label={statusLabel(
+                  data.status,
+                  data.current_operation?.action_name,
+                )}
+                color={statusColor(data.status)}
+                size="small"
+              />
+              <Typography
+                variant="caption"
+                sx={{
+                  color: "text.secondary",
+                }}
+              >
+                gen {data.generation}
+              </Typography>
+            </Box>
+            {data.description && (
+              <Typography
+                variant="body2"
+                sx={{ color: "text.secondary", mt: 0.5 }}
+              >
+                {data.description}
+              </Typography>
+            )}
           </Box>
 
           {data.current_operation && (

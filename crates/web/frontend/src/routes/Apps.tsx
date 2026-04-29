@@ -154,7 +154,22 @@ export default function Apps() {
                   onClick={() => void navigate(`/apps/${app.name}`)}
                   sx={{ cursor: "pointer" }}
                 >
-                  <TableCell sx={{ fontWeight: 500 }}>{app.name}</TableCell>
+                  <TableCell sx={{ fontWeight: 500 }}>
+                    {app.name}
+                    {app.description && (
+                      <Typography
+                        variant="caption"
+                        component="div"
+                        sx={{
+                          color: "text.secondary",
+                          fontWeight: 400,
+                          mt: 0.25,
+                        }}
+                      >
+                        {app.description}
+                      </Typography>
+                    )}
+                  </TableCell>
                   <TableCell>
                     <Box sx={{ display: "flex", gap: 0.5, alignItems: "center" }}>
                       <Chip
