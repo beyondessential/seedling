@@ -56,6 +56,7 @@ import {
   ImageReferencesCell,
   primaryReference,
 } from "../components/ImageReferences";
+import { Markdown } from "../components/Markdown";
 import { MapVolumeDialog } from "../components/MapVolumeDialog";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useSafetyMode } from "../components/SafetyModeProvider";
@@ -665,8 +666,9 @@ function ResourcesSection({
               <Typography
                 variant="body2"
                 sx={{ color: "text.secondary", mt: 0.25, mb: 0.5 }}
+                component="div"
               >
-                {desc}
+                <Markdown text={desc} inline />
               </Typography>
             ) : null;
           })()}
@@ -2678,12 +2680,9 @@ export default function AppDetail() {
               </Typography>
             </Box>
             {data.description && (
-              <Typography
-                variant="body2"
-                sx={{ color: "text.secondary", mt: 0.5 }}
-              >
-                {data.description}
-              </Typography>
+              <Box sx={{ color: "text.secondary", mt: 0.5, fontSize: 14 }}>
+                <Markdown text={data.description} />
+              </Box>
             )}
           </Box>
 

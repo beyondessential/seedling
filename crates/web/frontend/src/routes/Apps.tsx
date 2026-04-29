@@ -25,6 +25,7 @@ import {
   IconActionButton,
   SolidActionButton,
 } from "../components/ActionButton";
+import { Markdown } from "../components/Markdown";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
@@ -166,7 +167,7 @@ export default function Apps() {
                           mt: 0.25,
                         }}
                       >
-                        {app.description}
+                        <Markdown text={app.description} inline />
                       </Typography>
                     )}
                   </TableCell>
