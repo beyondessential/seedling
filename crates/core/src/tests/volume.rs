@@ -849,3 +849,255 @@ fn captured_static_volume_cannot_be_modified_in_action() {
         "static-context write should be present, /inside must not be persisted"
     );
 }
+
+// ---------------------------------------------------------------------------
+// rt.write — runtime-time write to a volume
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+struct RecordedWrite {
+    target: crate::runtime::barrier::VolumeWriteTarget,
+    path: String,
+    contents: String,
+}
+
+#[derive(Default)]
+struct RecordingVolumeWriter {
+    writes: parking_lot::Mutex<Vec<RecordedWrite>>,
+}
+
+impl crate::runtime::barrier::VolumeWriter for RecordingVolumeWriter {
+    fn write(
+        &self,
+        _app: &str,
+        target: crate::runtime::barrier::VolumeWriteTarget,
+        path: &str,
+        contents: &str,
+    ) -> Result<(), String> {
+        self.writes.lock().push(RecordedWrite {
+            target,
+            path: path.to_owned(),
+            contents: contents.to_owned(),
+        });
+        Ok(())
+    }
+}
+
+fn run_action_with_writer(
+    script: &str,
+    action_name: &str,
+    writer: Arc<RecordingVolumeWriter>,
+    log: &crate::runtime::barrier::replay::InMemoryActionLog,
+) -> crate::runtime::barrier::replay::OperationResult {
+    use crate::runtime::{
+        EphemeralInstanceRegistry, TestWorldOracle,
+        barrier::OperationId,
+        barrier::replay::{OperationContext, run_operation},
+    };
+
+    let (engine, mut scope, app, ast) = run_test_script(script);
+    let oracle = Arc::new(TestWorldOracle::new());
+    let registry: Arc<dyn crate::runtime::InstanceRegistry> =
+        Arc::new(EphemeralInstanceRegistry::new());
+    run_operation(
+        OperationContext {
+            engine: &engine,
+            script_ast: &ast,
+            operation_id: OperationId::new(),
+            app: &app,
+            action_name,
+            log,
+            world: oracle,
+            registry,
+            active_progress: None,
+            tick_notify: None,
+            params: serde_json::Map::new(),
+            is_shell: false,
+            db: None,
+            source_generation: 0,
+            target_generation: 0,
+            script_limits: None,
+            cipher: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
+            volume_writer: Some(writer as Arc<dyn crate::runtime::barrier::VolumeWriter>),
+        },
+        &mut scope,
+    )
+}
+
+// l[verify rt.write]
+#[test]
+fn rt_write_named_volume_invokes_writer() {
+    use crate::runtime::barrier::VolumeWriteTarget;
+    use crate::runtime::barrier::replay::{InMemoryActionLog, OperationResult};
+
+    let writer = Arc::new(RecordingVolumeWriter::default());
+    let log = InMemoryActionLog::new();
+    let result = run_action_with_writer(
+        r#"
+        let cfg = app.volume("cfg");
+        app.on_action("seed", |rt, _param| {
+            rt.write(cfg, "/etc/app.conf", "key=value");
+        });
+        "#,
+        "seed",
+        Arc::clone(&writer),
+        &log,
+    );
+    assert!(matches!(result, OperationResult::Completed));
+
+    let writes = writer.writes.lock().clone();
+    assert_eq!(writes.len(), 1);
+    let w = &writes[0];
+    assert_eq!(w.path, "/etc/app.conf");
+    assert_eq!(w.contents, "key=value");
+    match &w.target {
+        VolumeWriteTarget::NamedVolume { name, tmpfs } => {
+            assert_eq!(name, "cfg");
+            assert!(!tmpfs);
+        }
+        other => panic!("expected NamedVolume, got {other:?}"),
+    }
+}
+
+// l[verify rt.write]
+#[test]
+fn rt_write_anonymous_volume_invokes_writer() {
+    use crate::runtime::barrier::VolumeWriteTarget;
+    use crate::runtime::barrier::replay::{InMemoryActionLog, OperationResult};
+
+    let writer = Arc::new(RecordingVolumeWriter::default());
+    let log = InMemoryActionLog::new();
+    let result = run_action_with_writer(
+        r#"
+        app.on_action("seed", |rt, _param| {
+            let scratch = app.volume();
+            rt.write(scratch, "/work/note", "hi");
+        });
+        "#,
+        "seed",
+        Arc::clone(&writer),
+        &log,
+    );
+    assert!(matches!(result, OperationResult::Completed));
+
+    let writes = writer.writes.lock().clone();
+    assert_eq!(writes.len(), 1);
+    match &writes[0].target {
+        VolumeWriteTarget::AnonymousVolume { anon_id, tmpfs } => {
+            assert!(anon_id.starts_with("seedling-anon-"));
+            assert!(!tmpfs);
+        }
+        other => panic!("expected AnonymousVolume, got {other:?}"),
+    }
+}
+
+// l[verify rt.write]
+#[test]
+fn rt_write_tmpfs_volume_is_allowed() {
+    use crate::runtime::barrier::VolumeWriteTarget;
+    use crate::runtime::barrier::replay::{InMemoryActionLog, OperationResult};
+
+    let writer = Arc::new(RecordingVolumeWriter::default());
+    let log = InMemoryActionLog::new();
+    let result = run_action_with_writer(
+        r#"
+        let scratch = app.volume("scratch").tmpfs();
+        app.on_action("seed", |rt, _param| {
+            rt.write(scratch, "/note", "ephemeral");
+        });
+        "#,
+        "seed",
+        Arc::clone(&writer),
+        &log,
+    );
+    assert!(matches!(result, OperationResult::Completed));
+
+    let writes = writer.writes.lock().clone();
+    assert_eq!(writes.len(), 1);
+    match &writes[0].target {
+        VolumeWriteTarget::NamedVolume { tmpfs, .. } => assert!(tmpfs),
+        other => panic!("expected NamedVolume tmpfs, got {other:?}"),
+    }
+}
+
+// l[verify rt.write]
+#[test]
+fn rt_write_rejects_path_traversal() {
+    use crate::runtime::barrier::replay::{InMemoryActionLog, OperationResult};
+
+    let writer = Arc::new(RecordingVolumeWriter::default());
+    let log = InMemoryActionLog::new();
+    let result = run_action_with_writer(
+        r#"
+        let cfg = app.volume("cfg");
+        app.on_action("seed", |rt, _param| {
+            rt.write(cfg, "/../escape", "evil");
+        });
+        "#,
+        "seed",
+        Arc::clone(&writer),
+        &log,
+    );
+    match result {
+        OperationResult::Failed(e) => {
+            let msg = e.to_string();
+            assert!(msg.contains("'..'"), "error should mention dotdot, got: {msg}");
+        }
+        other => panic!("expected Failed for path traversal, got {other:?}"),
+    }
+    assert!(writer.writes.lock().is_empty());
+}
+
+// l[verify rt.write]
+#[test]
+fn rt_write_outside_action_is_script_error() {
+    let result = std::panic::catch_unwind(|| {
+        let _ = run_test_script_app(
+            r#"
+            let cfg = app.volume("cfg");
+            rt.write(cfg, "/foo", "bar");
+            "#,
+        );
+    });
+    assert!(
+        result.is_err(),
+        "rt.write at top level must error during script eval"
+    );
+}
+
+// l[verify rt.write] r[verify rt.write]
+#[test]
+fn rt_write_skipped_on_replay() {
+    use crate::runtime::barrier::CallKind;
+    use crate::runtime::barrier::replay::{ActionLog, InMemoryActionLog, OperationResult};
+
+    let writer = Arc::new(RecordingVolumeWriter::default());
+    let log = InMemoryActionLog::new();
+    let script = r#"
+        let cfg = app.volume("cfg");
+        app.on_action("seed", |rt, _param| {
+            rt.write(cfg, "/a.conf", "first");
+        });
+    "#;
+
+    let result = run_action_with_writer(script, "seed", Arc::clone(&writer), &log);
+    assert!(matches!(result, OperationResult::Completed));
+    assert_eq!(writer.writes.lock().len(), 1);
+
+    let entries = log.load().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].call_kind, CallKind::Write);
+    assert_eq!(entries[0].extra.as_deref(), Some("/a.conf"));
+
+    // Second pass on the same log: the write must NOT be re-issued.
+    let result2 = run_action_with_writer(script, "seed", Arc::clone(&writer), &log);
+    assert!(matches!(result2, OperationResult::Completed));
+    assert_eq!(
+        writer.writes.lock().len(),
+        1,
+        "rt.write must be at-most-once across replays"
+    );
+}
