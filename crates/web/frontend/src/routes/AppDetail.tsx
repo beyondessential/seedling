@@ -1679,7 +1679,7 @@ function ActionsSection({
                         }}
                         disabled={!canInvoke}
                       >
-                        Open shell
+                        shell
                       </OutlinedActionButton>
                     ) : (
                       isInvokable &&
@@ -1887,7 +1887,7 @@ function ShellOpenDialog({
           onClick={() => onOpen(values)}
           disabled={hasWeakPassword}
         >
-          Open shell
+          shell
         </SolidActionButton>
       </DialogActions>
     </Dialog>
