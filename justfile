@@ -54,3 +54,19 @@ frontend-build:
 # Install frontend npm dependencies
 frontend-install:
     cd crates/web/frontend && npm install
+
+# Run frontend unit tests (vitest)
+frontend-test:
+    cd crates/web/frontend && npm test
+
+# Watch frontend unit tests
+frontend-test-watch:
+    cd crates/web/frontend && npm run test:watch
+
+# Run Playwright end-to-end tests (spawns a stubbed daemon + web pair)
+frontend-e2e: build
+    cd crates/web/frontend && npm run test:e2e
+
+# Run Playwright e2e tests with the interactive UI runner
+frontend-e2e-ui: build
+    cd crates/web/frontend && npm run test:e2e:ui
