@@ -58,6 +58,8 @@ In the dynamic context, `app.resource_method(name)` returns a _reference_ to an 
 | `app.on_shell(name, fn, opts?)` | `Action` | Interactive shell for operators |
 | `app.on_start(fn, opts?)` | `Action` | Startup lifecycle hook |
 | `app.on_install(fn, config?)` | `Action` | First-install hook with param schema |
+| `app.action(name)` | `Action` | Look up an action handle (dynamic context only) |
+| `action.invoke(params?)` | `()` | Run another action's closure inline (dynamic context only) |
 
 ### Service
 
@@ -498,34 +500,50 @@ The operator picks the volume from the action invocation dialog (web UI) or via 
 
 `kind: "volume"` is valid only on action and shell schemas. `app.param(...)` and `on_install` requirements reject it because their bindings outlive any single operation; for those, declare an `app.external_volume(name)` and have the operator wire it up via the UI's external volume mappings.
 
-## Sharing logic between actions
+## Invoking other actions
 
-There is no "call this action's closure from inside another action" primitive: actions are invoked by the control plane (lifecycle: install / start / on_change / on_schedule) or by an operator (OI/CLI/Web), and `params` is a schema for the *operator's* invocation, not arguments you pass from script.
+`Action.invoke(params?)` runs another action's closure inline, in the calling closure's runtime. Get the handle either by capturing the return of `app.on_action(...)` (or `app.on_start(...)`) or by looking it up by name with `app.action(name)`. Both produce the same `Action` value. `app.action(name)` is only valid in dynamic context — it throws when called from the static top-level.
 
-For code reuse between actions, extract a top-level Rhai closure and `.call(rt, ...)` it:
+`params` follows the called action's declared schema: required fields must be present, defaults are applied to absent optional fields, unknown or reserved-suffix keys (`*_volume`, `*_filename`) are rejected, and `kind: "volume"` references must resolve to a real site volume. Validation happens before the closure runs, and errors throw with the field name. Operator-invoked actions get the same validation, so a sub-action invocation behaves exactly like an operator dispatching the action manually.
 
 ```rhai
-// Top level — defined once, used from any action body.
-let render_config = |rt| {
-    rt.write(config_vol, "/etc/postgresql.conf", build_config.call());
-};
+let migrate = app.on_action("migrate", |rt, p| {
+    rt.start(app.job()
+        .image(image.call())
+        .command(["migrate", "--batch-size", p["batch-size"]])
+    ).terminated().ensure_success();
+}, #{
+    params: #{
+        "batch-size": #{ kind: "text", default_value: "1000" },
+    },
+});
 
-let reload_server = |rt| {
-    rt.signal(app.deployment("postgres"), "SIGHUP");
-};
-
-app.on_action("reconfigure", |rt, _p| {
-    render_config.call(rt);
-    reload_server.call(rt);
-}, #{ description: "Regenerate config and reload" });
+app.on_action("seed", |rt, _p| {
+    // Captured handle — same as the return of on_action above.
+    migrate.invoke();
+    // Or by name, in dynamic context only.
+    app.action("migrate").invoke(#{ "batch-size": "100" });
+});
 
 app.on_install(|rt, _p| {
-    render_config.call(rt);
-    rt.start(app).ready();
+    rt.start(app.job().image(seed_image).command(["seed-db"]))
+        .terminated()
+        .ensure_success();
+    app.action("start").invoke();
 });
 ```
 
-`rt.start(app)` schedules every static resource the App owns and (with `.ready()`) blocks until they're all up. It's the install hook's implicit default — if you don't define `on_install`, the runtime behaves as if it called `rt.start(app)` for you.
+The method is named `invoke` rather than `call` because the scripting engine reserves `obj.call(...)` for function-pointer dispatch.
+
+A few things invoke does *not* do:
+
+- It does not start a new operation. The called closure shares the caller's `rt`, operation id, and action log; nothing in `apps history` shows it as a separate top-level entry, but the runtime records a `SubActionInvoked` log entry with the action name and validated params so the nested chain is inspectable in the operation's history.
+- It does not allow recursion. Calling an action that is already on the active call stack — directly (`bar` invoking `bar`) or transitively (`foo` → `bar` → `foo`) — throws before the closure runs. The error names the chain.
+- It does not reach the install action. Install is not registered under a name in the action map; `app.action("install")` throws `no such action`.
+
+For code reuse that does *not* need a param schema or a history entry, extract a top-level Rhai closure and `.call(rt, ...)` it directly. The two patterns coexist: `Action.invoke()` for "a peer action's closure with its own validation surface", a plain Rhai closure for "shared steps that aren't actions in their own right".
+
+> **Note on `rt.start(app)`**: this schedules every static resource the App owns and (with `.ready()`) blocks until they're all up. It does *not* invoke any custom action closure. It is the install hook's implicit default — if you don't define `on_install`, the runtime behaves as if it called `rt.start(app)`.
 
 ## Common patterns
 

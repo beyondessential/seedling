@@ -99,11 +99,15 @@ See the scheduling rules above for how concurrent requests are handled.
 
 ### Action Composition
 
-Action closures can invoke other actions.
-For example, `on_upgrade` commonly calls the `start` action as a subroutine.
-This is not concurrent execution: the called action runs inline within the calling operation, and its barriers are barriers of the overall operation.
+An action closure may invoke another action by getting an `Action` handle — either the return of `app.on_action(...)` / `app.on_start(...)` or a fresh lookup via `app.action(name)` in dynamic context — and calling `Action.invoke(params?)` on it. Validation runs against the called action's declared schema before the closure executes, with the same rules an operator-driven invocation gets: required-field enforcement, default application, reserved-key rejection, and `kind: "volume"` resolution.
 
-Cycle detection prevents an action from invoking itself (directly or transitively).
+This is not concurrent execution. The called closure shares the caller's `rt`, operation id, and action log; barriers raised inside it suspend and resume the overall operation. The runtime emits a `SubActionInvoked` action-log entry capturing the called action's name and the validated params, so `apps history` exposes the nested chain without spawning a separate top-level operation.
+
+Cycle detection prevents an action from invoking itself directly or transitively. The runtime tracks the chain of currently-executing actions; an invocation whose action name is already on the chain is rejected before the closure runs, and the thrown error names the offending chain.
+
+The Install Action is not exposed through this mechanism. It lives in a separate slot rather than the action map, so `app.action("install")` throws `no such action`.
+
+The `obj.call(...)` syntax is reserved by the scripting engine for function-pointer dispatch, so the surface is named `Action.invoke(...)` rather than `Action.call(...)`.
 
 ### Shells
 
