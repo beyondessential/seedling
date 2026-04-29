@@ -367,14 +367,13 @@ let warmup = app.on_action("warm-images", |rt, param| {
     },
 });
 
-app.on_install(|rt, param| {
+app.on_install(|rt, params| {
     rt.warm_certs(app);
     warmup.invoke();
 
     let inter = start_intermediate.call(rt);
     copy_default_config.call(rt, inter);
     rt.write(app.volume("config"), "/config/local.json5", local_json5.call());
-    render_config.call(rt, inter);
     upgrade_db.call(rt, inter);
 
     rt.start(configure_server.call(app.job())
@@ -475,17 +474,19 @@ version.on_change(|rt, old| {
     rt.signal(oldfront, "SIGINT");
     rt.stop(oldfront);
 
-    // in future we'll want to do this:
-    rt.stop(old.select(#{ types: [ResourceType.Deployment] }));
-
-    rt.start(old.select(#))
+    // in future we'll want to do this instead of stopping everything:
+    // rt.stop(old.select(#{ types: [ResourceType.Deployment] }));
+    // rt.write(app.volume("config"), "/config/local.json5", local_json5.call(#{
+    //     readonly: true
+    // }));
+    // rt.start(old.deployment("api"));
 
     // stop everything that's currently touching the database
     rt.stop(old);
 
     // mid-upgrade tasks
     copy_default_config.call(rt, inter);
-    render_config.call(rt, inter);
+    rt.write(app.volume("config"), "/config/local.json5", local_json5.call());
     upgrade_db.call(rt, inter);
 
     //
