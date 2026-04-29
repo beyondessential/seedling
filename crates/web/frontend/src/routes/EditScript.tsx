@@ -153,7 +153,7 @@ export default function EditScript() {
         >
           Cancel
         </Button>
-        <Tooltip title={writeGuard.reason ?? ""}>
+        <Tooltip title={writeGuard.title()}>
           <span>
             <Button
               size="small"
@@ -205,7 +205,7 @@ export default function EditScript() {
           <Button onClick={handleCancel} disabled={saving}>
             Back to editor
           </Button>
-          <Tooltip title={writeGuard.reason ?? ""}>
+          <Tooltip title={writeGuard.title()}>
             <span>
               <Button
                 variant="contained"

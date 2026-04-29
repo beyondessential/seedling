@@ -311,7 +311,7 @@ export function TlsHostnamesTable({
                     </TableCell>
                     <TableCell align="right">
                       {isAcmeDns && (
-                        <Tooltip title={writeGuard.reason ?? "Renew now"}>
+                        <Tooltip title={writeGuard.title("Renew now")}>
                           <span>
                             <IconButton
                               size="small"

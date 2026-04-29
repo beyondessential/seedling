@@ -102,7 +102,7 @@ export default function CreateApp() {
         <Button size="small" component={Link} to="/" disabled={previewing || creating}>
           Cancel
         </Button>
-        <Tooltip title={writeGuard.reason ?? ""}>
+        <Tooltip title={writeGuard.title()}>
           <span>
             <Button
               size="small"
@@ -162,7 +162,7 @@ export default function CreateApp() {
           <Button onClick={handleCancel} disabled={creating}>
             Back to editor
           </Button>
-          <Tooltip title={writeGuard.reason ?? ""}>
+          <Tooltip title={writeGuard.title()}>
             <span>
               <Button
                 variant="contained"

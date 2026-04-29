@@ -30,7 +30,7 @@ import {
 } from "@mui/material";
 import { useState } from "react";
 import { OiErrorAlert } from "../components/OiErrorAlert";
-import { useGuard } from "../components/SafetyModeProvider";
+import { useGuard, type GuardResult } from "../components/SafetyModeProvider";
 import { TlsHostnamesTable } from "../components/TlsHostnamesTable";
 import type { OiQueryError } from "../hooks/useOi";
 import { useOiQuery } from "../hooks/useOi";
@@ -140,8 +140,7 @@ export default function Certificates() {
           loading={settingsLoading}
           error={settingsError}
           onSaved={refetchSettings}
-          writeAllowed={writeGuard.allowed}
-          writeReason={writeGuard.reason}
+          writeGuard={writeGuard}
         />
 
         <PoliciesSection
@@ -157,8 +156,7 @@ export default function Certificates() {
             clearError();
             setRemovingPolicy(hostname);
           }}
-          writeAllowed={writeGuard.allowed}
-          writeReason={writeGuard.reason}
+          writeGuard={writeGuard}
         />
 
         <ManualCertsSection
@@ -201,10 +199,8 @@ export default function Certificates() {
               // surfaced via actionError
             }
           }}
-          writeAllowed={writeGuard.allowed}
-          writeReason={writeGuard.reason}
-          dangerAllowed={dangerGuard.allowed}
-          dangerReason={dangerGuard.reason}
+          writeGuard={writeGuard}
+          dangerGuard={dangerGuard}
         />
 
         <DnsProvidersSection
@@ -219,10 +215,8 @@ export default function Certificates() {
             clearError();
             setRemovingProvider(name);
           }}
-          writeAllowed={writeGuard.allowed}
-          writeReason={writeGuard.reason}
-          dangerAllowed={dangerGuard.allowed}
-          dangerReason={dangerGuard.reason}
+          writeGuard={writeGuard}
+          dangerGuard={dangerGuard}
         />
       </Stack>
 
@@ -360,8 +354,7 @@ interface SettingsSectionProps {
   loading: boolean;
   error: OiQueryError | null;
   onSaved: () => void;
-  writeAllowed: boolean;
-  writeReason: string | null;
+  writeGuard: GuardResult;
 }
 
 function SettingsSection({
@@ -369,8 +362,7 @@ function SettingsSection({
   loading,
   error,
   onSaved,
-  writeAllowed,
-  writeReason,
+  writeGuard,
 }: SettingsSectionProps) {
   const [editing, setEditing] = useState(false);
   const [emailDraft, setEmailDraft] = useState("");
@@ -467,12 +459,12 @@ function SettingsSection({
                 {profileSummary}
               </Typography>
             </Box>
-            <Tooltip title={writeReason ?? ""}>
+            <Tooltip title={writeGuard.title()}>
               <span>
                 <Button
                   size="small"
                   onClick={startEdit}
-                  disabled={!writeAllowed || loading}
+                  disabled={!writeGuard.allowed || loading}
                 >
                   Edit
                 </Button>
@@ -551,8 +543,7 @@ interface PoliciesSectionProps {
   providers: TlsDnsProvider[];
   onAdd: () => void;
   onClear: (hostname: string) => void;
-  writeAllowed: boolean;
-  writeReason: string | null;
+  writeGuard: GuardResult;
 }
 
 function PoliciesSection({
@@ -562,8 +553,7 @@ function PoliciesSection({
   providers,
   onAdd,
   onClear,
-  writeAllowed,
-  writeReason,
+  writeGuard,
 }: PoliciesSectionProps) {
   return (
     <Box>
@@ -571,13 +561,13 @@ function PoliciesSection({
         <Typography variant="subtitle1" sx={{ fontWeight: 600, flexGrow: 1 }}>
           Per-domain policies
         </Typography>
-        <Tooltip title={writeReason ?? ""}>
+        <Tooltip title={writeGuard.title()}>
           <span>
             <Button
               size="small"
               startIcon={<AddIcon />}
               onClick={onAdd}
-              disabled={!writeAllowed || providers.length === 0}
+              disabled={!writeGuard.allowed || providers.length === 0}
             >
               Bind domain
             </Button>
@@ -628,11 +618,11 @@ function PoliciesSection({
                     </Typography>
                   </TableCell>
                   <TableCell align="right">
-                    <Tooltip title={writeReason ?? "Clear policy"}>
+                    <Tooltip title={writeGuard.title("Clear policy")}>
                       <span>
                         <IconButton
                           size="small"
-                          disabled={!writeAllowed}
+                          disabled={!writeGuard.allowed}
                           onClick={() => onClear(p.hostname)}
                         >
                           <DeleteOutlineIcon fontSize="small" />
@@ -664,10 +654,8 @@ interface ManualCertsSectionProps {
   onShowCsr: (cert: TlsCertificate) => void;
   onUploadCsrCert: (cert: TlsCertificate) => void;
   onCancelCsr: (cert: TlsCertificate) => void;
-  writeAllowed: boolean;
-  writeReason: string | null;
-  dangerAllowed: boolean;
-  dangerReason: string | null;
+  writeGuard: GuardResult;
+  dangerGuard: GuardResult;
 }
 
 function ManualCertsSection({
@@ -680,10 +668,8 @@ function ManualCertsSection({
   onShowCsr,
   onUploadCsrCert,
   onCancelCsr,
-  writeAllowed,
-  writeReason,
-  dangerAllowed,
-  dangerReason,
+  writeGuard,
+  dangerGuard,
 }: ManualCertsSectionProps) {
   return (
     <Box>
@@ -691,24 +677,24 @@ function ManualCertsSection({
         <Typography variant="subtitle1" sx={{ fontWeight: 600, flexGrow: 1 }}>
           Stored certificates
         </Typography>
-        <Tooltip title={writeReason ?? ""}>
+        <Tooltip title={writeGuard.title()}>
           <span>
             <Button
               size="small"
               onClick={onGenerateCsr}
-              disabled={!writeAllowed}
+              disabled={!writeGuard.allowed}
             >
               Generate CSR
             </Button>
           </span>
         </Tooltip>
-        <Tooltip title={writeReason ?? ""}>
+        <Tooltip title={writeGuard.title()}>
           <span>
             <Button
               size="small"
               startIcon={<AddIcon />}
               onClick={onUpload}
-              disabled={!writeAllowed}
+              disabled={!writeGuard.allowed}
             >
               Upload manual cert
             </Button>
@@ -783,22 +769,22 @@ function ManualCertsSection({
                               </Button>
                             </span>
                           </Tooltip>
-                          <Tooltip title={writeReason ?? "Upload signed cert"}>
+                          <Tooltip title={writeGuard.title("Upload signed cert")}>
                             <span>
                               <Button
                                 size="small"
-                                disabled={!writeAllowed}
+                                disabled={!writeGuard.allowed}
                                 onClick={() => onUploadCsrCert(c)}
                               >
                                 Upload cert
                               </Button>
                             </span>
                           </Tooltip>
-                          <Tooltip title={writeReason ?? "Cancel CSR (deletes the keypair)"}>
+                          <Tooltip title={writeGuard.title("Cancel CSR (deletes the keypair)")}>
                             <span>
                               <IconButton
                                 size="small"
-                                disabled={!writeAllowed}
+                                disabled={!writeGuard.allowed}
                                 onClick={() => onCancelCsr(c)}
                               >
                                 <DeleteOutlineIcon fontSize="small" />
@@ -807,11 +793,11 @@ function ManualCertsSection({
                           </Tooltip>
                         </>
                       ) : (
-                        <Tooltip title={dangerReason ?? "Delete"}>
+                        <Tooltip title={dangerGuard.title("Delete")}>
                           <span>
                             <IconButton
                               size="small"
-                              disabled={!dangerAllowed}
+                              disabled={!dangerGuard.allowed}
                               onClick={() => onDelete(c)}
                             >
                               <DeleteOutlineIcon fontSize="small" />
@@ -841,10 +827,8 @@ interface DnsProvidersSectionProps {
   error: OiQueryError | null;
   onAdd: () => void;
   onDelete: (name: string) => void;
-  writeAllowed: boolean;
-  writeReason: string | null;
-  dangerAllowed: boolean;
-  dangerReason: string | null;
+  writeGuard: GuardResult;
+  dangerGuard: GuardResult;
 }
 
 function DnsProvidersSection({
@@ -853,10 +837,8 @@ function DnsProvidersSection({
   error,
   onAdd,
   onDelete,
-  writeAllowed,
-  writeReason,
-  dangerAllowed,
-  dangerReason,
+  writeGuard,
+  dangerGuard,
 }: DnsProvidersSectionProps) {
   return (
     <Box>
@@ -864,13 +846,13 @@ function DnsProvidersSection({
         <Typography variant="subtitle1" sx={{ fontWeight: 600, flexGrow: 1 }}>
           DNS providers
         </Typography>
-        <Tooltip title={writeReason ?? ""}>
+        <Tooltip title={writeGuard.title()}>
           <span>
             <Button
               size="small"
               startIcon={<AddIcon />}
               onClick={onAdd}
-              disabled={!writeAllowed}
+              disabled={!writeGuard.allowed}
             >
               Add
             </Button>
@@ -911,11 +893,11 @@ function DnsProvidersSection({
                     </Typography>
                   </TableCell>
                   <TableCell align="right">
-                    <Tooltip title={dangerReason ?? "Delete provider"}>
+                    <Tooltip title={dangerGuard.title("Delete provider")}>
                       <span>
                         <IconButton
                           size="small"
-                          disabled={!dangerAllowed}
+                          disabled={!dangerGuard.allowed}
                           onClick={() => onDelete(p.name)}
                         >
                           <DeleteOutlineIcon fontSize="small" />

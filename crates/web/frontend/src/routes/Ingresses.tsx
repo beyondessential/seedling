@@ -153,7 +153,7 @@ function CreateSiteIngressDialog({
         <Button onClick={onCancel} disabled={loading}>
           Cancel
         </Button>
-        <Tooltip title={guard.reason ?? ""}>
+        <Tooltip title={guard.title()}>
           <span>
             <Button
               variant="contained"
@@ -198,7 +198,7 @@ function ConfirmDeleteSiteIngressDialog({
         <Button onClick={onCancel} disabled={loading}>
           Cancel
         </Button>
-        <Tooltip title={guard.reason ?? ""}>
+        <Tooltip title={guard.title()}>
           <span>
             <Button
               variant="contained"
@@ -409,7 +409,7 @@ function AttachDialog({
         <Button onClick={onCancel} disabled={loading}>
           Cancel
         </Button>
-        <Tooltip title={guard.reason ?? ""}>
+        <Tooltip title={guard.title()}>
           <span>
             <Button
               variant="contained"
@@ -480,7 +480,7 @@ function IngressRow({
                 <Box component="span" sx={{ fontFamily: "monospace", fontSize: "0.85em" }}>
                   {describeAttachment(att)}
                 </Box>
-                <Tooltip title={dangerGuard.reason ?? "Detach"}>
+                <Tooltip title={dangerGuard.title("Detach")}>
                   <span>
                     <IconButton
                       size="small"
@@ -498,7 +498,7 @@ function IngressRow({
       </TableCell>
       <TableCell align="right">
         <Box sx={{ display: "flex", flexDirection: "row", gap: 0.5, justifyContent: "flex-end" }}>
-          <Tooltip title={writeGuard.reason ?? "Attach forward or redirect"}>
+          <Tooltip title={writeGuard.title("Attach forward or redirect")}>
             <span>
               <IconButton
                 size="small"
@@ -513,7 +513,7 @@ function IngressRow({
             title={
               isDiscovered
                 ? "Discovered ingresses are managed by the provider and cannot be deleted here"
-                : (dangerGuard.reason ?? "Delete this manual site ingress")
+                : (dangerGuard.title("Delete this manual site ingress"))
             }
           >
             <span>
@@ -602,7 +602,7 @@ export default function Ingresses() {
         <IconButton onClick={refresh} aria-label="Refresh">
           <RefreshIcon />
         </IconButton>
-        <Tooltip title={guard.reason ?? ""}>
+        <Tooltip title={guard.title()}>
           <span>
             <Button
               variant="contained"

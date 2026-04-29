@@ -295,7 +295,7 @@ export function MapVolumeDialog({ open, onClose, onSuccess, existing, prefill }:
       </DialogContent>
       <DialogActions>
         <Button onClick={handleClose} disabled={loading}>Cancel</Button>
-        <Tooltip title={writeGuard.reason ?? ""}>
+        <Tooltip title={writeGuard.title()}>
           <span>
             <Button
               variant="contained"

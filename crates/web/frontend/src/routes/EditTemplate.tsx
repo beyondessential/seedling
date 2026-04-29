@@ -113,7 +113,7 @@ export default function EditTemplate() {
         >
           Cancel
         </Button>
-        <Tooltip title={writeGuard.reason ?? ""}>
+        <Tooltip title={writeGuard.title()}>
           <span>
             <Button
               size="small"

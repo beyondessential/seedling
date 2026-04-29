@@ -556,7 +556,7 @@ function ResourcesSection({
                   · scale
                 </Typography>
                 <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-                  <Tooltip title={writeGuard.reason ?? "Scale down"}>
+                  <Tooltip title={writeGuard.title("Scale down")}>
                     <span>
                       <IconButton
                         size="small"
@@ -572,7 +572,7 @@ function ResourcesSection({
                     </span>
                   </Tooltip>
                   <Typography variant="caption">{r.scale.current}</Typography>
-                  <Tooltip title={writeGuard.reason ?? "Scale up"}>
+                  <Tooltip title={writeGuard.title("Scale up")}>
                     <span>
                       <IconButton
                         size="small"
@@ -599,7 +599,7 @@ function ResourcesSection({
               </>
             )}
             {!r.dynamic && r.type === "deployment" && (
-              <Tooltip title={writeGuard.reason ?? "Restart deployment"}>
+              <Tooltip title={writeGuard.title("Restart deployment")}>
                 <span>
                   <IconButton
                     size="small"
@@ -633,7 +633,7 @@ function ResourcesSection({
                     </IconButton>
                   </span>
                 </Tooltip>
-                <Tooltip title={writeGuard.reason ?? "Snapshot"}>
+                <Tooltip title={writeGuard.title("Snapshot")}>
                   <span>
                     <IconButton
                       size="small"
@@ -654,7 +654,7 @@ function ResourcesSection({
             {!r.dynamic &&
               STOPPABLE_KINDS.has(r.type) &&
               (r.stopped ? (
-                <Tooltip title={writeGuard.reason ?? "Unstop resource"}>
+                <Tooltip title={writeGuard.title("Unstop resource")}>
                   <span>
                     <IconButton
                       size="small"
@@ -667,7 +667,7 @@ function ResourcesSection({
                   </span>
                 </Tooltip>
               ) : (
-                <Tooltip title={writeGuard.reason ?? "Stop resource"}>
+                <Tooltip title={writeGuard.title("Stop resource")}>
                   <span>
                     <IconButton
                       size="small"
@@ -775,7 +775,6 @@ function ParamsSection({
   const writeGuard = useGuard("write");
   const operationInFlight = status === "installing" || status === "operating";
   const editsDisabled = operationInFlight || !writeGuard.allowed;
-  const editsDisabledReason = !writeGuard.allowed ? writeGuard.reason : null;
   const { execute, loading, error, clearError } = useOiAction();
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -926,7 +925,7 @@ function ParamsSection({
           >
             No params.
           </Typography>
-          <Tooltip title={editsDisabledReason ?? ""}>
+          <Tooltip title={writeGuard.title()}>
             <span>
               <Button
                 size="small"
@@ -956,7 +955,7 @@ function ParamsSection({
       {error && <OiErrorAlert error={error} />}
       <Box sx={{ display: "flex", justifyContent: "flex-end" }}>
         {!adding && (
-          <Tooltip title={editsDisabledReason ?? ""}>
+          <Tooltip title={writeGuard.title()}>
             <span>
               <Button
                 size="small"
@@ -1147,10 +1146,9 @@ function ParamsSection({
                   </TableCell>
                   <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
                     <Tooltip
-                      title={
-                        editsDisabledReason ??
-                        (p.value == null && !p.is_set ? "Set" : "Edit")
-                      }
+                      title={writeGuard.title(
+                        p.value == null && !p.is_set ? "Set" : "Edit",
+                      )}
                     >
                       <span>
                         <IconButton
@@ -1163,7 +1161,7 @@ function ParamsSection({
                       </span>
                     </Tooltip>
                     {p.value != null && !p.required && (
-                      <Tooltip title={editsDisabledReason ?? "Unset"}>
+                      <Tooltip title={writeGuard.title("Unset")}>
                         <span>
                           <IconButton
                             size="small"
@@ -1179,7 +1177,7 @@ function ParamsSection({
                       p.required &&
                       p.default_value != null && (
                         <Tooltip
-                          title={editsDisabledReason ?? "Reset to default"}
+                          title={writeGuard.title("Reset to default")}
                         >
                           <span>
                             <IconButton
@@ -1451,7 +1449,7 @@ function ActionInvokeDialog({
         <Button onClick={handleClose} disabled={loading}>
           Cancel
         </Button>
-        <Tooltip title={writeGuard.reason ?? ""}>
+        <Tooltip title={writeGuard.title()}>
           <span>
             <Button
               variant="contained"
@@ -1522,7 +1520,7 @@ function InstallSection({
         >
           This app has not been installed yet.
         </Typography>
-        <Tooltip title={writeGuard.reason ?? ""}>
+        <Tooltip title={writeGuard.title()}>
           <span>
             <Button
               variant="contained"
@@ -1732,7 +1730,7 @@ function ActionsSection({
                   <TableCell align="right">
                     {/* w[shells.ui] */}
                     {a.kind === "shell" ? (
-                      <Tooltip title={writeGuard.reason ?? ""}>
+                      <Tooltip title={writeGuard.title()}>
                         <span>
                           <Button
                             size="small"
@@ -1762,7 +1760,7 @@ function ActionsSection({
                           Running…
                         </Button>
                       ) : (
-                        <Tooltip title={writeGuard.reason ?? ""}>
+                        <Tooltip title={writeGuard.title()}>
                           <span>
                             <Button
                               size="small"
@@ -1949,7 +1947,7 @@ function ShellOpenDialog({
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
-        <Tooltip title={writeGuard.reason ?? ""}>
+        <Tooltip title={writeGuard.title()}>
           <span>
             <Button
               variant="contained"
@@ -2204,11 +2202,9 @@ function AppImagesSection({
         {/* w[impl routes.images.discover] */}
         {discoveredExtras.length > 0 && (
           <Tooltip
-            title={
-              !writeGuard.allowed
-                ? (writeGuard.reason ?? "")
-                : `Warm ${discoveredExtras.length} discovered image${discoveredExtras.length === 1 ? "" : "s"}`
-            }
+            title={writeGuard.title(
+              `Warm ${discoveredExtras.length} discovered image${discoveredExtras.length === 1 ? "" : "s"}`,
+            )}
           >
             <span>
               <Button
@@ -2236,11 +2232,9 @@ function AppImagesSection({
         </Tooltip>
         {pins.length > 0 && (
           <Tooltip
-            title={
-              !writeGuard.allowed
-                ? (writeGuard.reason ?? "")
-                : `Clear all ${pins.length} pin${pins.length === 1 ? "" : "s"} for this app`
-            }
+            title={writeGuard.title(
+              `Clear all ${pins.length} pin${pins.length === 1 ? "" : "s"} for this app`,
+            )}
           >
             <span>
               <Button
@@ -2294,13 +2288,9 @@ function AppImagesSection({
                 </TableCell>
                 <TableCell align="right">
                   <Tooltip
-                    title={
-                      !dangerGuard.allowed
-                        ? (dangerGuard.reason ?? "")
-                        : img.in_use
-                          ? "Cannot remove: image is in use"
-                          : "Remove"
-                    }
+                    title={dangerGuard.title(
+                      img.in_use ? "Cannot remove: image is in use" : "Remove",
+                    )}
                   >
                     <span>
                       <IconButton
@@ -2341,11 +2331,7 @@ function AppImagesSection({
                 </TableCell>
                 <TableCell align="right">
                   <Tooltip
-                    title={
-                      !writeGuard.allowed
-                        ? (writeGuard.reason ?? "")
-                        : "Pull and pin to this app"
-                    }
+                    title={writeGuard.title("Pull and pin to this app")}
                   >
                     <span>
                       <Button
@@ -2388,7 +2374,7 @@ function AppImagesSection({
           <Button onClick={() => setRemoving(null)} disabled={mutating}>
             Cancel
           </Button>
-          <Tooltip title={dangerGuard.reason ?? ""}>
+          <Tooltip title={dangerGuard.title()}>
             <span>
               <Button
                 onClick={submitRemove}
@@ -2424,7 +2410,7 @@ function AppImagesSection({
           <Button onClick={() => setClearAllOpen(false)} disabled={mutating}>
             Cancel
           </Button>
-          <Tooltip title={writeGuard.reason ?? ""}>
+          <Tooltip title={writeGuard.title()}>
             <span>
               <Button
                 onClick={submitClearAll}
@@ -2464,7 +2450,7 @@ function ClearFaultsButton({
         title={
           guard.allowed
             ? `Clear all active faults for this app (${tier} action)`
-            : (guard.reason ?? "")
+            : (guard.title())
         }
       >
         <span>
@@ -2623,7 +2609,7 @@ function AppRemovalDialog({
         <Button onClick={handleClose} disabled={loading}>
           Cancel
         </Button>
-        <Tooltip title={dangerGuard.reason ?? ""}>
+        <Tooltip title={dangerGuard.title()}>
           <span>
             <Button
               variant="contained"
@@ -2718,7 +2704,7 @@ export default function AppDetail() {
         <Typography variant="body2">{name}</Typography>
         <Box sx={{ flexGrow: 1 }} />
         {data?.status === "not_installed" && (
-          <Tooltip title={dangerGuard.reason ?? ""}>
+          <Tooltip title={dangerGuard.title()}>
             <span>
               <Button
                 size="small"
@@ -2735,7 +2721,7 @@ export default function AppDetail() {
           data?.status !== "installing" &&
           data?.status !== "uninstalling" &&
           data?.status !== "deregistering" && (
-            <Tooltip title={dangerGuard.reason ?? ""}>
+            <Tooltip title={dangerGuard.title()}>
               <span>
                 <Button
                   size="small"
@@ -2756,7 +2742,7 @@ export default function AppDetail() {
         >
           Logs
         </Button>
-        <Tooltip title={writeGuard.reason ?? ""}>
+        <Tooltip title={writeGuard.title()}>
           <span>
             <Button
               size="small"
@@ -2808,7 +2794,7 @@ export default function AppDetail() {
             <Alert
               severity="info"
               action={
-                <Tooltip title={writeGuard.reason ?? ""}>
+                <Tooltip title={writeGuard.title()}>
                   <span>
                     <Button
                       color="inherit"
@@ -2853,7 +2839,7 @@ export default function AppDetail() {
             <Alert
               severity="warning"
               action={
-                <Tooltip title={writeGuard.reason ?? ""}>
+                <Tooltip title={writeGuard.title()}>
                   <span>
                     <Button
                       color="inherit"
@@ -2975,7 +2961,7 @@ export default function AppDetail() {
                                 )}
                               </TableCell>
                               <TableCell align="right">
-                                <Tooltip title={writeGuard.reason ?? ""}>
+                                <Tooltip title={writeGuard.title()}>
                                   <span>
                                     <Button
                                       size="small"

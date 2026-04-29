@@ -106,7 +106,7 @@ function ConfirmDeleteHeldDialog({
         <Button onClick={onCancel} disabled={loading}>
           Cancel
         </Button>
-        <Tooltip title={dangerGuard.reason ?? ""}>
+        <Tooltip title={dangerGuard.title()}>
           <span>
             <Button
               variant="contained"
@@ -197,7 +197,7 @@ function RestoreHeldVolumeDialog({
         <Button onClick={handleClose} disabled={loading}>
           Cancel
         </Button>
-        <Tooltip title={writeGuard.reason ?? ""}>
+        <Tooltip title={writeGuard.title()}>
           <span>
             <Button
               variant="contained"
@@ -270,7 +270,7 @@ function ConfirmDeleteSiteDialog({
         <Button onClick={onCancel} disabled={loading}>
           Cancel
         </Button>
-        <Tooltip title={dangerGuard.reason ?? ""}>
+        <Tooltip title={dangerGuard.title()}>
           <span>
             <Button
               variant="contained"
@@ -444,7 +444,7 @@ function CreateSiteVolumeDialog({
         <Button onClick={handleClose} disabled={loading}>
           Cancel
         </Button>
-        <Tooltip title={writeGuard.reason ?? ""}>
+        <Tooltip title={writeGuard.title()}>
           <span>
             <Button
               variant="contained"
@@ -822,7 +822,7 @@ export default function Volumes() {
             <Typography variant="subtitle1" sx={{ fontWeight: 600, flexGrow: 1 }}>
               Site Volumes
             </Typography>
-            <Tooltip title={writeGuard.reason ?? ""}>
+            <Tooltip title={writeGuard.title()}>
               <span>
                 <Button
                   size="small"
@@ -894,7 +894,7 @@ export default function Volumes() {
                               </IconButton>
                             </span>
                           </Tooltip>
-                          <Tooltip title={writeGuard.reason ?? "Snapshot"}>
+                          <Tooltip title={writeGuard.title("Snapshot")}>
                             <span>
                               <IconButton
                                 size="small"
@@ -911,7 +911,7 @@ export default function Volumes() {
                             </span>
                           </Tooltip>
                           {v.kind === "snapshot" && (
-                            <Tooltip title={writeGuard.reason ?? "Promote to read-write volume"}>
+                            <Tooltip title={writeGuard.title("Promote to read-write volume")}>
                               <span>
                                 <IconButton
                                   size="small"
@@ -923,7 +923,7 @@ export default function Volumes() {
                               </span>
                             </Tooltip>
                           )}
-                          <Tooltip title={dangerGuard.reason ?? "Delete"}>
+                          <Tooltip title={dangerGuard.title("Delete")}>
                             <span>
                               <IconButton
                                 size="small"
@@ -1002,7 +1002,7 @@ export default function Volumes() {
                               </IconButton>
                             </span>
                           </Tooltip>
-                          <Tooltip title={writeGuard.reason ?? "Snapshot"}>
+                          <Tooltip title={writeGuard.title("Snapshot")}>
                             <span>
                               <IconButton
                                 size="small"
@@ -1035,7 +1035,7 @@ export default function Volumes() {
             <Typography variant="subtitle1" sx={{ fontWeight: 600, flexGrow: 1 }}>
               External Volume Requests
             </Typography>
-            <Tooltip title={writeGuard.reason ?? ""}>
+            <Tooltip title={writeGuard.title()}>
               <span>
                 <Button
                   size="small"
@@ -1099,7 +1099,7 @@ export default function Volumes() {
                           <TableCell align="right" sx={{ px: 0.5, whiteSpace: "nowrap" }}>
                             {mapping ? (
                               <>
-                                <Tooltip title={writeGuard.reason ?? "Remap"}>
+                                <Tooltip title={writeGuard.title("Remap")}>
                                   <span>
                                     <IconButton
                                       size="small"
@@ -1110,7 +1110,7 @@ export default function Volumes() {
                                     </IconButton>
                                   </span>
                                 </Tooltip>
-                                <Tooltip title={writeGuard.reason ?? "Unmap"}>
+                                <Tooltip title={writeGuard.title("Unmap")}>
                                   <span>
                                     <IconButton
                                       size="small"
@@ -1123,7 +1123,7 @@ export default function Volumes() {
                                 </Tooltip>
                               </>
                             ) : (
-                              <Tooltip title={writeGuard.reason ?? ""}>
+                              <Tooltip title={writeGuard.title()}>
                                 <span>
                                   <Button
                                     size="small"
@@ -1213,7 +1213,7 @@ export default function Volumes() {
                               </IconButton>
                             </span>
                           </Tooltip>
-                          <Tooltip title={writeGuard.reason ?? "Restore as site volume"}>
+                          <Tooltip title={writeGuard.title("Restore as site volume")}>
                             <span>
                               <IconButton
                                 size="small"
@@ -1224,7 +1224,7 @@ export default function Volumes() {
                               </IconButton>
                             </span>
                           </Tooltip>
-                          <Tooltip title={dangerGuard.reason ?? "Confirm delete"}>
+                          <Tooltip title={dangerGuard.title("Confirm delete")}>
                             <span>
                               <IconButton
                                 size="small"

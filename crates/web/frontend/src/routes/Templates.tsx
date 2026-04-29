@@ -135,7 +135,7 @@ export default function Templates() {
         <Typography variant="h5" sx={{ flexGrow: 1 }}>
           Templates
         </Typography>
-        <Tooltip title={writeGuard.reason ?? ""}>
+        <Tooltip title={writeGuard.title()}>
           <span>
             <Button
               size="small"
@@ -203,7 +203,7 @@ export default function Templates() {
                     {new Date(t.created_at).toLocaleString()}
                   </TableCell>
                   <TableCell align="right" sx={{ px: 0.5 }}>
-                    <Tooltip title={writeGuard.reason ?? "Remove template"}>
+                    <Tooltip title={writeGuard.title("Remove template")}>
                       <span>
                         <IconButton
                           size="small"
@@ -274,7 +274,7 @@ export default function Templates() {
           >
             Cancel
           </Button>
-          <Tooltip title={writeGuard.reason ?? ""}>
+          <Tooltip title={writeGuard.title()}>
             <span>
               <Button
                 variant="contained"
@@ -306,7 +306,7 @@ export default function Templates() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setConfirmRemove(null)}>Cancel</Button>
-          <Tooltip title={writeGuard.reason ?? ""}>
+          <Tooltip title={writeGuard.title()}>
             <span>
               <Button
                 color="error"

@@ -190,7 +190,7 @@ function SnapshotsDialog({
                           <TableRow key={i}>
                             <TableCell sx={{ px: 0.5 }}>
                               {id ? (
-                                <Tooltip title={writeGuard.reason ?? `Restore snapshot "${id}"`}>
+                                <Tooltip title={writeGuard.title(`Restore snapshot "${id}"`)}>
                                   <span>
                                     <IconButton
                                       size="small"
@@ -357,7 +357,7 @@ function CreateStrategyDialog({
       </DialogContent>
       <DialogActions>
         <Button onClick={handleClose} disabled={loading}>Cancel</Button>
-        <Tooltip title={writeGuard.reason ?? ""}>
+        <Tooltip title={writeGuard.title()}>
           <span>
             <Button
               variant="contained"
@@ -426,7 +426,7 @@ function RegisterBackupAppDialog({
       </DialogContent>
       <DialogActions>
         <Button onClick={handleClose} disabled={loading}>Cancel</Button>
-        <Tooltip title={writeGuard.reason ?? ""}>
+        <Tooltip title={writeGuard.title()}>
           <span>
             <Button
               variant="contained"
@@ -516,7 +516,7 @@ export default function Backups() {
         <Box>
           <Box sx={{ display: "flex", alignItems: "center", mb: 1, gap: 1 }}>
             <Typography variant="subtitle1" sx={{ fontWeight: 600, flexGrow: 1 }}>Strategies</Typography>
-            <Tooltip title={writeGuard.reason ?? ""}>
+            <Tooltip title={writeGuard.title()}>
               <span>
                 <Button
                   size="small"
@@ -583,7 +583,7 @@ export default function Backups() {
                             <HistoryIcon sx={{ fontSize: 16 }} />
                           </IconButton>
                         </Tooltip>
-                        <Tooltip title={writeGuard.reason ?? "Run backup now"}>
+                        <Tooltip title={writeGuard.title("Run backup now")}>
                           <span>
                             <IconButton
                               size="small"
@@ -594,7 +594,7 @@ export default function Backups() {
                             </IconButton>
                           </span>
                         </Tooltip>
-                        <Tooltip title={writeGuard.reason ?? "Delete strategy"}>
+                        <Tooltip title={writeGuard.title("Delete strategy")}>
                           <span>
                             <IconButton
                               size="small"
@@ -620,7 +620,7 @@ export default function Backups() {
         <Box>
           <Box sx={{ display: "flex", alignItems: "center", mb: 1, gap: 1 }}>
             <Typography variant="subtitle1" sx={{ fontWeight: 600, flexGrow: 1 }}>Backup Apps</Typography>
-            <Tooltip title={writeGuard.reason ?? ""}>
+            <Tooltip title={writeGuard.title()}>
               <span>
                 <Button
                   size="small"
@@ -664,7 +664,7 @@ export default function Backups() {
                         <Link to={`/apps/${a.app}`}>{a.app}</Link>
                       </TableCell>
                       <TableCell align="right" sx={{ px: 0.5 }}>
-                        <Tooltip title={writeGuard.reason ?? "Deregister"}>
+                        <Tooltip title={writeGuard.title("Deregister")}>
                           <span>
                             <IconButton
                               size="small"

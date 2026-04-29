@@ -94,7 +94,7 @@ export default function Registries() {
             </IconButton>
           </span>
         </Tooltip>
-        <Tooltip title={writeGuard.reason ?? ""}>
+        <Tooltip title={writeGuard.title()}>
           <span>
             <Button
               variant="contained"
@@ -144,7 +144,7 @@ export default function Registries() {
                 <TableRow key={r} hover>
                   <TableCell sx={{ fontFamily: "monospace" }}>{r}</TableCell>
                   <TableCell align="right">
-                    <Tooltip title={dangerGuard.reason ?? "Remove"}>
+                    <Tooltip title={dangerGuard.title("Remove")}>
                       <span>
                         <IconButton
                           size="small"
@@ -190,7 +190,7 @@ export default function Registries() {
           <Button onClick={() => setDialogOpen(false)} disabled={mutating}>
             Cancel
           </Button>
-          <Tooltip title={writeGuard.reason ?? ""}>
+          <Tooltip title={writeGuard.title()}>
             <span>
               <Button
                 onClick={submitAdd}
@@ -220,7 +220,7 @@ export default function Registries() {
           <Button onClick={() => setRemoving(null)} disabled={mutating}>
             Cancel
           </Button>
-          <Tooltip title={dangerGuard.reason ?? ""}>
+          <Tooltip title={dangerGuard.title()}>
             <span>
               <Button
                 onClick={submitRemove}

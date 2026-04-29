@@ -90,7 +90,7 @@ export default function Keys() {
             </IconButton>
           </span>
         </Tooltip>
-        <Tooltip title={dangerGuard.reason ?? ""}>
+        <Tooltip title={dangerGuard.title()}>
           <span>
             <Button
               variant="contained"
@@ -148,7 +148,7 @@ export default function Keys() {
                     {k.added_at ? new Date(k.added_at).toLocaleString() : "—"}
                   </TableCell>
                   <TableCell align="right">
-                    <Tooltip title={dangerGuard.reason ?? "Revoke"}>
+                    <Tooltip title={dangerGuard.title("Revoke")}>
                       <span>
                         <IconButton
                           size="small"
@@ -202,7 +202,7 @@ export default function Keys() {
           <Button onClick={() => setDialogOpen(false)} disabled={mutating}>
             Cancel
           </Button>
-          <Tooltip title={dangerGuard.reason ?? ""}>
+          <Tooltip title={dangerGuard.title()}>
             <span>
               <Button
                 onClick={submitAdd}
@@ -235,7 +235,7 @@ export default function Keys() {
           <Button onClick={() => setRevoking(null)} disabled={mutating}>
             Cancel
           </Button>
-          <Tooltip title={dangerGuard.reason ?? ""}>
+          <Tooltip title={dangerGuard.title()}>
             <span>
               <Button
                 onClick={submitRevoke}

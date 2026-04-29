@@ -83,7 +83,7 @@ function ConfirmDeleteSiteServiceDialog({
         <Button onClick={onCancel} disabled={loading}>
           Cancel
         </Button>
-        <Tooltip title={dangerGuard.reason ?? ""}>
+        <Tooltip title={dangerGuard.title()}>
           <span>
             <Button
               variant="contained"
@@ -163,7 +163,7 @@ function CreateSiteServiceDialog({
         <Button onClick={handleClose} disabled={loading}>
           Cancel
         </Button>
-        <Tooltip title={writeGuard.reason ?? ""}>
+        <Tooltip title={writeGuard.title()}>
           <span>
             <Button
               variant="contained"
@@ -299,7 +299,7 @@ function AddEndpointDialog({
         <Button onClick={handleClose} disabled={loading}>
           Cancel
         </Button>
-        <Tooltip title={writeGuard.reason ?? ""}>
+        <Tooltip title={writeGuard.title()}>
           <span>
             <Button
               variant="contained"
@@ -547,7 +547,7 @@ function MapExternalServiceDialog({
         <Button onClick={handleClose} disabled={loading}>
           Cancel
         </Button>
-        <Tooltip title={writeGuard.reason ?? ""}>
+        <Tooltip title={writeGuard.title()}>
           <span>
             <Button
               variant="contained"
@@ -677,7 +677,7 @@ export default function Services() {
             <Typography variant="subtitle1" sx={{ fontWeight: 600, flexGrow: 1 }}>
               Site Services
             </Typography>
-            <Tooltip title={writeGuard.reason ?? ""}>
+            <Tooltip title={writeGuard.title()}>
               <span>
                 <Button
                   size="small"
@@ -721,7 +721,7 @@ export default function Services() {
                         </Typography>
                       )}
                       <Box sx={{ flexGrow: 1 }} />
-                      <Tooltip title={writeGuard.reason ?? "Add endpoint"}>
+                      <Tooltip title={writeGuard.title("Add endpoint")}>
                         <span>
                           <Button
                             size="small"
@@ -733,7 +733,7 @@ export default function Services() {
                           </Button>
                         </span>
                       </Tooltip>
-                      <Tooltip title={dangerGuard.reason ?? "Delete"}>
+                      <Tooltip title={dangerGuard.title("Delete")}>
                         <span>
                           <IconButton
                             size="small"
@@ -782,7 +782,7 @@ export default function Services() {
                                 [{ep.remote_host}]:{ep.remote_port}
                               </TableCell>
                               <TableCell align="right" sx={{ px: 0.5 }}>
-                                <Tooltip title={dangerGuard.reason ?? "Remove"}>
+                                <Tooltip title={dangerGuard.title("Remove")}>
                                   <span>
                                     <IconButton
                                       size="small"
@@ -871,7 +871,7 @@ export default function Services() {
             <Typography variant="subtitle1" sx={{ fontWeight: 600, flexGrow: 1 }}>
               External Service Requests
             </Typography>
-            <Tooltip title={writeGuard.reason ?? ""}>
+            <Tooltip title={writeGuard.title()}>
               <span>
                 <Button
                   size="small"
@@ -936,7 +936,7 @@ export default function Services() {
                           >
                             {mapping ? (
                               <>
-                                <Tooltip title={writeGuard.reason ?? "Remap"}>
+                                <Tooltip title={writeGuard.title("Remap")}>
                                   <span>
                                     <IconButton
                                       size="small"
@@ -947,7 +947,7 @@ export default function Services() {
                                     </IconButton>
                                   </span>
                                 </Tooltip>
-                                <Tooltip title={writeGuard.reason ?? "Unmap"}>
+                                <Tooltip title={writeGuard.title("Unmap")}>
                                   <span>
                                     <IconButton
                                       size="small"
@@ -962,7 +962,7 @@ export default function Services() {
                                 </Tooltip>
                               </>
                             ) : (
-                              <Tooltip title={writeGuard.reason ?? ""}>
+                              <Tooltip title={writeGuard.title()}>
                                 <span>
                                   <Button
                                     size="small"

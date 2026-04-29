@@ -107,7 +107,7 @@ export default function Apps() {
       {/* Apps */}
       <Box sx={{ display: "flex", alignItems: "center", mb: 2, gap: 1 }}>
         <Typography variant="h5" sx={{ flexGrow: 1 }}>Apps</Typography>
-        <Tooltip title={writeGuard.reason ?? ""}>
+        <Tooltip title={writeGuard.title()}>
           <span>
             <Button
               size="small"
@@ -172,7 +172,7 @@ export default function Apps() {
                       )}
                       {(app.status === "installing" ||
                         app.status === "operating") && (
-                        <Tooltip title={writeGuard.reason ?? "Cancel operation"}>
+                        <Tooltip title={writeGuard.title("Cancel operation")}>
                           <span>
                             <IconButton
                               size="small"
@@ -331,7 +331,7 @@ export default function Apps() {
                             {new Date(s.opened_at).toLocaleString()}
                           </TableCell>
                           <TableCell align="right" sx={{ px: 0.5 }}>
-                            <Tooltip title={dangerGuard.reason ?? "Stop shell"}>
+                            <Tooltip title={dangerGuard.title("Stop shell")}>
                               <span>
                                 <IconButton
                                   size="small"
@@ -386,7 +386,7 @@ export default function Apps() {
                             {new Date(f.opened_at).toLocaleString()}
                           </TableCell>
                           <TableCell align="right" sx={{ px: 0.5 }}>
-                            <Tooltip title={dangerGuard.reason ?? "Stop forward"}>
+                            <Tooltip title={dangerGuard.title("Stop forward")}>
                               <span>
                                 <IconButton
                                   size="small"

@@ -140,7 +140,7 @@ export default function TemplateDetail() {
         <Typography variant="h5" sx={{ flexGrow: 1, fontFamily: "monospace" }}>
           {template.name}
         </Typography>
-        <Tooltip title={writeGuard.reason ?? ""}>
+        <Tooltip title={writeGuard.title()}>
           <span>
             <Button
               size="small"
@@ -153,7 +153,7 @@ export default function TemplateDetail() {
             </Button>
           </span>
         </Tooltip>
-        <Tooltip title={writeGuard.reason ?? ""}>
+        <Tooltip title={writeGuard.title()}>
           <span>
             <Button
               size="small"
@@ -165,7 +165,7 @@ export default function TemplateDetail() {
             </Button>
           </span>
         </Tooltip>
-        <Tooltip title={writeGuard.reason ?? ""}>
+        <Tooltip title={writeGuard.title()}>
           <span>
             <Button
               size="small"
@@ -277,7 +277,7 @@ export default function TemplateDetail() {
           >
             Cancel
           </Button>
-          <Tooltip title={writeGuard.reason ?? ""}>
+          <Tooltip title={writeGuard.title()}>
             <span>
               <Button
                 variant="contained"
@@ -309,7 +309,7 @@ export default function TemplateDetail() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setConfirmRemove(false)}>Cancel</Button>
-          <Tooltip title={writeGuard.reason ?? ""}>
+          <Tooltip title={writeGuard.title()}>
             <span>
               <Button
                 color="error"

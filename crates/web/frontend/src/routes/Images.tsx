@@ -154,13 +154,11 @@ export default function Images() {
           </span>
         </Tooltip>
         <Tooltip
-          title={
-            !dangerGuard.allowed
-              ? dangerGuard.reason ?? ""
-              : prunable.length === 0
-                ? "Nothing to clean up"
-                : `Remove ${prunable.length} unused image${prunable.length === 1 ? "" : "s"}`
-          }
+          title={dangerGuard.title(
+            prunable.length === 0
+              ? "Nothing to clean up"
+              : `Remove ${prunable.length} unused image${prunable.length === 1 ? "" : "s"}`,
+          )}
         >
           <span>
             <Button
@@ -255,13 +253,9 @@ export default function Images() {
                   </TableCell>
                   <TableCell align="right">
                     <Tooltip
-                      title={
-                        !dangerGuard.allowed
-                          ? dangerGuard.reason ?? ""
-                          : img.in_use
-                            ? "Cannot remove: image is in use"
-                            : "Remove"
-                      }
+                      title={dangerGuard.title(
+                        img.in_use ? "Cannot remove: image is in use" : "Remove",
+                      )}
                     >
                       <span>
                         <IconButton
@@ -353,7 +347,7 @@ export default function Images() {
                     </Stack>
                   </TableCell>
                   <TableCell align="right">
-                    <Tooltip title={writeGuard.reason ?? "Clear pin"}>
+                    <Tooltip title={writeGuard.title("Clear pin")}>
                       <span>
                         <IconButton
                           size="small"
@@ -399,7 +393,7 @@ export default function Images() {
           <Button onClick={() => setRemoving(null)} disabled={mutating}>
             Cancel
           </Button>
-          <Tooltip title={dangerGuard.reason ?? ""}>
+          <Tooltip title={dangerGuard.title()}>
             <span>
               <Button
                 onClick={submitRemove}
@@ -440,7 +434,7 @@ export default function Images() {
           >
             Cancel
           </Button>
-          <Tooltip title={writeGuard.reason ?? ""}>
+          <Tooltip title={writeGuard.title()}>
             <span>
               <Button
                 onClick={submitClearPin}
@@ -479,7 +473,7 @@ export default function Images() {
           <Button onClick={() => setBulkOpen(false)} disabled={mutating}>
             Cancel
           </Button>
-          <Tooltip title={dangerGuard.reason ?? ""}>
+          <Tooltip title={dangerGuard.title()}>
             <span>
               <Button
                 onClick={submitBulk}
