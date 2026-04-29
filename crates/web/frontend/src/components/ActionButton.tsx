@@ -10,11 +10,11 @@ import { type SafetyMode, useGuard } from "./SafetyModeProvider";
 
 interface CommonProps {
   /** Tier required to invoke. "read" buttons are always allowed; "write" and
-   *  "dangerous" disable themselves outside the matching safety mode and show
-   *  the tier as a coloured prefix in the tooltip. */
+   *  "dangerous" disable themselves outside the matching safety mode and
+   *  show a coloured dashed/dotted outline so the requirement is visible at a
+   *  glance, with a not-allowed cursor on hover. */
   safety: SafetyMode;
-  /** Action description appended after the tier prefix in the tooltip. When
-   *  safety="read" and tooltip is omitted, no tooltip is shown. */
+  /** Tooltip shown on hover. Rendered verbatim — no tier prefix. */
   tooltip?: ReactNode;
   /** Disabled for reasons unrelated to safety (loading, invalid form, etc). */
   disabled?: boolean;
@@ -40,6 +40,28 @@ interface IconProps extends CommonProps {
   children: ReactNode;
 }
 
+/** Forbidden styling: tier-specific dashed (write) or dotted (dangerous)
+ *  outline in the matching faded palette colour. Outline doesn't affect
+ *  layout, so allowed/forbidden states have identical metrics. */
+function forbiddenSx(safety: SafetyMode, allowed: boolean, useBorder: boolean) {
+  if (allowed || safety === "read") return null;
+  const borderStyle = safety === "write" ? "dashed" : "dotted";
+  const borderColor = safety === "write" ? "warning.light" : "error.light";
+  if (useBorder) {
+    return {
+      "&.Mui-disabled": { borderStyle, borderColor },
+    };
+  }
+  return {
+    "&.Mui-disabled": {
+      outlineStyle: borderStyle,
+      outlineColor: borderColor,
+      outlineWidth: "1px",
+      outlineOffset: "-3px",
+    },
+  };
+}
+
 function TextActionButton({
   variant,
   safety,
@@ -55,10 +77,13 @@ function TextActionButton({
   children,
 }: TextProps & { variant: "contained" | "outlined" }) {
   const guard = useGuard(safety);
-  const title = guard.title(tooltip);
+  const forbidden = !guard.allowed;
+  // Outlined buttons already have a solid border, so swap its style/colour
+  // rather than stacking an outline on top.
+  const safetySx = forbiddenSx(safety, guard.allowed, variant === "outlined");
   return (
-    <Tooltip title={title ?? ""}>
-      <span>
+    <Tooltip title={tooltip ?? ""}>
+      <span style={forbidden ? { cursor: "not-allowed" } : undefined}>
         <Button
           variant={variant}
           startIcon={startIcon}
@@ -66,9 +91,9 @@ function TextActionButton({
           size={size}
           type={type}
           fullWidth={fullWidth}
-          sx={sx}
+          sx={[safetySx, sx].filter(Boolean) as ButtonProps["sx"]}
           onClick={onClick}
-          disabled={disabled || !guard.allowed}
+          disabled={disabled || forbidden}
         >
           {children}
         </Button>
@@ -101,16 +126,17 @@ export function IconActionButton({
   children,
 }: IconProps) {
   const guard = useGuard(safety);
-  const title = guard.title(tooltip);
+  const forbidden = !guard.allowed;
+  const safetySx = forbiddenSx(safety, guard.allowed, false);
   return (
-    <Tooltip title={title ?? ""}>
-      <span>
+    <Tooltip title={tooltip ?? ""}>
+      <span style={forbidden ? { cursor: "not-allowed" } : undefined}>
         <IconButton
           size={size}
           color={color}
-          sx={sx}
+          sx={[safetySx, sx].filter(Boolean) as IconButtonProps["sx"]}
           onClick={onClick}
-          disabled={disabled || !guard.allowed}
+          disabled={disabled || forbidden}
           aria-label={ariaLabel}
         >
           {children}

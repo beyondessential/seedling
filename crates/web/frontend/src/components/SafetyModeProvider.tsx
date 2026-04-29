@@ -1,4 +1,3 @@
-import { Box } from "@mui/material";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
 export type SafetyMode = "read" | "write" | "dangerous";
@@ -116,34 +115,10 @@ export interface GuardResult {
   allowed: boolean;
   mode: SafetyMode;
   required: SafetyMode;
-  /** Tooltip title that always renders the required tier as a coloured
-   *  prefix (when not "read"), optionally followed by an action description. */
-  title: (action?: ReactNode) => ReactNode;
-}
-
-function GuardTitle({ tier, action }: { tier: SafetyTier; action?: ReactNode }) {
-  const label = tier === "dangerous" ? "Dangerous" : "Write";
-  const color = tier === "dangerous" ? "warning.light" : "info.light";
-  return (
-    <>
-      <Box component="span" sx={{ color, fontWeight: 600 }}>
-        [{label}]
-      </Box>
-      {action ? <> {action}</> : null}
-    </>
-  );
 }
 
 export function useGuard(required: SafetyMode): GuardResult {
   const { mode } = useSafetyMode();
   const allowed = RANK[mode] >= RANK[required];
-  return {
-    allowed,
-    mode,
-    required,
-    title: (action) =>
-      required === "read"
-        ? (action ?? null)
-        : <GuardTitle tier={required} action={action} />,
-  };
+  return { allowed, mode, required };
 }
