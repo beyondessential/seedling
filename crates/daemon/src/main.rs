@@ -917,7 +917,13 @@ async fn main() {
     // gateway so only Caddy + host processes can reach it. Token-in-path
     // protects against host-local enumeration; the URL we hand to Caddy
     // includes both. See runtime::tls::serve.
-    let (cert_endpoint_url, _cert_serve_handle) = {
+    // The cert serve endpoint exists to feed live certs to Caddy via the
+    // proxy-bridge IPv6 gateway. Under --stub-backends Caddy isn't running,
+    // and the fixed bind address would collide with any concurrent real
+    // daemon on the same host, so skip the listener entirely.
+    let (cert_endpoint_url, _cert_serve_handle) = if args.stub_backends {
+        (None, tokio::spawn(async {}))
+    } else {
         let token_path = data_dir.join("tls-cert-endpoint.token");
         let token = seedling_core::runtime::tls::serve::load_or_create_token(&token_path)
             .unwrap_or_else(|e| {
@@ -1114,8 +1120,10 @@ async fn main() {
     // Pre-build the volume-shell image so it is warm before the first
     // operator opens a volume shell session. Building takes longer than a
     // pull; doing it eagerly at startup is preferable to making the first
-    // operator wait when they're already trying to do something.
-    {
+    // operator wait when they're already trying to do something. Skipped
+    // under --stub-backends since the build shells out to podman directly,
+    // bypassing the ContainerRuntime trait.
+    if !args.stub_backends {
         let cr = Arc::clone(&driver.container);
         let build_dir = data_dir.to_path_buf();
         tokio::spawn(async move {
