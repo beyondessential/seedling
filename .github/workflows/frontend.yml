@@ -41,3 +41,61 @@ jobs:
         run: npm ci
       - name: Vitest
         run: npm test
+
+  e2e:
+    name: Playwright
+    runs-on: ubuntu-latest
+    # The Playwright fixture spawns the daemon + seedling-web pair, so this
+    # job builds the workspace binaries from source. cargo + node side by
+    # side: defaults set the working directory to crates/web/frontend, so
+    # cargo steps override it explicitly.
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: crates/web/frontend/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libsystemd-dev
+        working-directory: ${{ github.workspace }}
+      - name: npm ci
+        run: npm ci
+      - name: Build frontend bundle
+        # crates/web/build.rs needs frontend/dist to embed into seedling-web.
+        # Build it here, then pass SKIP_FRONTEND_BUILD to the cargo step so
+        # build.rs reuses this dist instead of running its own npm install.
+        run: npm run build
+      - name: Build daemon + web + ctl
+        # SKIP_FRONTEND_BUILD avoids the redundant npm install + vite build
+        # that crates/web/build.rs would otherwise run; we just produced
+        # crates/web/frontend/dist in the previous step.
+        env:
+          SKIP_FRONTEND_BUILD: "1"
+        run: cargo build -p seedling -p seedling-web -p seedling-ctl --locked
+        working-directory: ${{ github.workspace }}
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('crates/web/frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+      - name: Playwright tests
+        run: npm run test:e2e
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          # upload-artifact resolves paths relative to GITHUB_WORKSPACE,
+          # not the job's working-directory, so use full repo paths.
+          path: |
+            crates/web/frontend/playwright-report
+            crates/web/frontend/test-results
+          retention-days: 7
+          if-no-files-found: ignore
