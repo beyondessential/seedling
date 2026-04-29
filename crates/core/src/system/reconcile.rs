@@ -123,7 +123,11 @@ mod site_ingress_tls_hostname_tests {
     #[test]
     fn skips_unattached_ingress() {
         let snap = site_proxy::SiteIngressSnapshot {
-            ingresses: vec![discovered("tailscale", "host.ts.net", TlsProvider::Tailscale)],
+            ingresses: vec![discovered(
+                "tailscale",
+                "host.ts.net",
+                TlsProvider::Tailscale,
+            )],
             attachments: vec![],
         };
         assert!(site_ingress_tls_hostnames(&snap).is_empty());
@@ -132,7 +136,11 @@ mod site_ingress_tls_hostname_tests {
     #[test]
     fn includes_attached_ingress() {
         let snap = site_proxy::SiteIngressSnapshot {
-            ingresses: vec![discovered("tailscale", "host.ts.net", TlsProvider::Tailscale)],
+            ingresses: vec![discovered(
+                "tailscale",
+                "host.ts.net",
+                TlsProvider::Tailscale,
+            )],
             attachments: vec![forward("tailscale", 443)],
         };
         assert_eq!(

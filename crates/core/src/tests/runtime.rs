@@ -289,4 +289,3 @@ fn rt_signal_is_callable() {
     "#,
     );
 }
-

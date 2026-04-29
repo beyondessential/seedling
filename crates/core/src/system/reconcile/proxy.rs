@@ -279,9 +279,7 @@ pub(super) fn collect_http_routes(
             // empty upstream list for its prefix; Caddy responds with 502
             // until a pod comes up, which is the right behaviour during
             // rollouts.
-            let entry = by_prefix
-                .entry(binding.route.prefix.clone())
-                .or_default();
+            let entry = by_prefix.entry(binding.route.prefix.clone()).or_default();
             if let Some(ips) = pod_ips_for_resource.get(&resource_name) {
                 for ip in ips {
                     entry.push(format!("[{}]:{}", ip, binding.pod_port.get()));

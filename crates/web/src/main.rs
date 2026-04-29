@@ -31,7 +31,7 @@ use state::AppState;
 use web_sessions::WebSessionRegistry;
 use wt_cert::CertStore;
 
-const DEFAULT_HTTP_PORT: u16 = 8080;
+const DEFAULT_HTTP_PORT: u16 = 7894;
 const DEFAULT_WT_PORT: u16 = 7893;
 
 #[derive(Parser)]

@@ -23,8 +23,7 @@ use super::{
     BoxError, BoxFuture, ContainerFilter, ContainerHealth, ContainerRuntime, ContainerSpec,
     ContainerState, ContainerStatus, ContainerSummary, DataPlane, DataPlaneRules, ExecHandle,
     ImageSummary, NetworkProxy, NetworkSummary, ProcessManager, ProxyConfig, ServiceRoute,
-    TransientUnitSpec, UnitState, UnitSummary,
-    types::ActiveState,
+    TransientUnitSpec, UnitState, UnitSummary, types::ActiveState,
 };
 
 /// Stub `ContainerRuntime`. Pretends every started container is healthy and
@@ -175,7 +174,10 @@ impl ContainerRuntime for StubContainerRuntime {
                 {
                     continue;
                 }
-                let labels: HashMap<String, String> = c.spec.labels.iter()
+                let labels: HashMap<String, String> = c
+                    .spec
+                    .labels
+                    .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect();
                 out.push(ContainerSummary {
@@ -369,10 +371,7 @@ impl ContainerRuntime for StubContainerRuntime {
         .boxed()
     }
 
-    fn volume_mountpoint<'a>(
-        &'a self,
-        name: &'a str,
-    ) -> BoxFuture<'a, Result<PathBuf, BoxError>> {
+    fn volume_mountpoint<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<PathBuf, BoxError>> {
         async move { Ok(self.volumes_root.join(name)) }.boxed()
     }
 
@@ -521,7 +520,11 @@ impl ProcessManager for StubProcessManager {
     fn stop_unit<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {
         async move {
             let container_name = name.strip_suffix(".service").unwrap_or(name).to_owned();
-            self.container.state.lock().containers.remove(&container_name);
+            self.container
+                .state
+                .lock()
+                .containers
+                .remove(&container_name);
             if let Some(u) = self.state.lock().units.get_mut(name) {
                 u.state = ActiveState::Inactive;
                 u.sub = "dead".to_owned();

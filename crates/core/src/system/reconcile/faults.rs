@@ -376,11 +376,7 @@ impl Reconciler {
     /// stops auto-recovering until the operator clears it (typically by
     /// fixing config and reinstalling, which generates a new instance ID and
     /// therefore a fresh fault scope).
-    pub(super) fn file_crash_loop_faults(
-        &self,
-        app: &AppName,
-        update: &pods::PodActuationUpdate,
-    ) {
+    pub(super) fn file_crash_loop_faults(&self, app: &AppName, update: &pods::PodActuationUpdate) {
         let app = app.clone();
         let crash_loops: Vec<ResourceInstance> = update.crash_loops.to_vec();
         let unit_healthy: Vec<ResourceInstance> = update.unit_healthy.to_vec();

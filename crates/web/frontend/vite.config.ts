@@ -2,7 +2,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-const RUST_HTTP = "http://localhost:8080";
+const RUST_HTTP = "http://localhost:7894";
 
 export default defineConfig({
   plugins: [react()],
