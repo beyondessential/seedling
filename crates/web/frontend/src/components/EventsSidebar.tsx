@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
-import { Link } from "react-router-dom";
+import ArticleIcon from "@mui/icons-material/Article";
 import {
   Box,
   Chip,
@@ -8,6 +7,9 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
+import { useCallback, useEffect, useRef } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { IconActionButton } from "./ActionButton";
 import { useSessionContext } from "./SessionProvider";
 import { useOiQuery } from "../hooks/useOi";
 import type { SeedlingEvent } from "../lib/types";
@@ -110,6 +112,7 @@ function EventRow({ ev }: { ev: SeedlingEvent }) {
 }
 
 export function EventsSidebar() {
+  const navigate = useNavigate();
   const { events, sidebarWidth, setSidebarWidth } = useSessionContext();
   const { data: infra, refetch: refetchInfra } = useOiQuery<InfraStatus>("/infra/status", {});
   const dragging = useRef(false);
@@ -222,16 +225,15 @@ export function EventsSidebar() {
                 variant="outlined"
                 sx={{ fontSize: "0.65rem", height: 18, "& .MuiChip-label": { px: 0.75 } }}
               />
-              <Tooltip title={`View ${label} logs`}>
-                <Typography
-                  component={Link}
-                  to={`/infra/${key}/logs`}
-                  variant="caption"
-                  sx={{ color: "text.disabled", "&:hover": { color: "text.secondary" }, ml: "auto" }}
+              <Box sx={{ ml: "auto" }}>
+                <IconActionButton
+                  safety="read"
+                  tooltip={`View ${label} logs`}
+                  onClick={() => navigate(`/infra/${key}/logs`)}
                 >
-                  logs
-                </Typography>
-              </Tooltip>
+                  <ArticleIcon sx={{ fontSize: 14 }} />
+                </IconActionButton>
+              </Box>
             </Box>
           );
         })}
