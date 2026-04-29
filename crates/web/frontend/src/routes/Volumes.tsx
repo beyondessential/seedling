@@ -108,13 +108,14 @@ function ConfirmDeleteHeldDialog({
         <Button onClick={onCancel} disabled={loading}>
           Cancel
         </Button>
-        <SolidActionButton
-          safety="dangerous"
+        <Button
+          variant="contained"
+          color="error"
           onClick={onConfirm}
           disabled={loading}
         >
           {loading ? "Deleting…" : "Delete permanently"}
-        </SolidActionButton>
+        </Button>
       </DialogActions>
     </Dialog>
   );
@@ -261,14 +262,14 @@ function ConfirmDeleteSiteDialog({
         <Button onClick={onCancel} disabled={loading}>
           Cancel
         </Button>
-        <SolidActionButton
-          safety="dangerous"
+        <Button
+          variant="contained"
           color={isBind ? "primary" : isSnapshot ? "error" : "warning"}
           onClick={onConfirm}
           disabled={loading}
         >
           {buttonLabel}
-        </SolidActionButton>
+        </Button>
       </DialogActions>
     </Dialog>
   );
