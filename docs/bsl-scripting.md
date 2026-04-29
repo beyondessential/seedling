@@ -170,6 +170,8 @@ rt.restart(deployment)          // rotate a Deployment's instances per on_update
 rt.signal(target, "SIGHUP")     // deliver a POSIX signal to PID 1 of every running instance
 rt.warm_certs(resources)        // pre-provision TLS certs for ingresses
 rt.warm_images(resources)       // pre-pull container images without starting them
+rt.write(volume, path, contents)         // write a file into a volume at action time
+rt.exec(target, argv, options?)          // run argv inside a running container, returns Executed
 
 // Started methods — all block until state is reached (deadline in seconds):
 started.scheduled(deadline?)
@@ -180,6 +182,10 @@ started.terminated_eventually() // no deadline, returns Termination
 started.ready_eventually()      // no deadline, returns Started
 
 termination.ensure_success()    // throws if the resource failed
+
+executed.exit_code()            // int — exit code of the rt.exec command
+executed.success()              // bool — true if exit code is 0
+executed.ensure_success()       // throws with the exit code if non-zero
 ```
 
 ### Collections
@@ -206,6 +212,7 @@ col.select(#{ name_patterns: ["worker-*"] })
 | `HAS_SNAPSHOTS` | bool | Whether volume storage supports copy-on-write snapshots |
 | `NODE_NAME` | string | Identifier of the node running the application |
 | `TIMEZONE` | string | IANA timezone of the host (e.g. `Pacific/Auckland`); `UTC` when unknown |
+| `IDLE_CMD` | array | A no-op long-running command (`["sleep", "infinity"]`) for containers whose only purpose is to host `rt.exec` calls |
 
 ### Enum constants
 
@@ -402,6 +409,67 @@ Behaviour:
 - The call is at-most-once across replays: if the runtime restarts mid-action and replays the closure, a previously-delivered signal is not re-sent.
 
 Common signals: `SIGHUP` (reload config — postgres, nginx), `SIGUSR1` (log rotation), `SIGINT`/`SIGTERM` for cooperative shutdown when the deployment's declared `stop_signal` isn't right for this one-off invocation.
+
+## Writing files at action time: `rt.write`
+
+Static `Volume.write(...)` declares files that the runtime materialises into the volume every time it is provisioned. `rt.write(volume, path, contents)` is its action-time sibling: a one-shot write performed during the action, useful for seeding parameter-derived configuration, dropping a marker file, or staging input for a follow-up command:
+
+```rhai
+let cfg = app.volume("config");
+
+app.on_action("regenerate-config", |rt, _p| {
+    rt.write(cfg, "/app.conf", `host=${host.value()}\nport=${port.value()}\n`);
+    rt.restart(app.deployment("api"));
+}, #{ description: "Regenerate /app.conf from current params and restart the API" });
+```
+
+Behaviour:
+
+- Target may be a named or anonymous `Volume`, or an `ExternalVolume` resolved from an operation-scoped `kind: "volume"` param.
+- Path validation matches static `Volume.write`: absolute, no `..`, must not be the volume root.
+- The call is at-most-once across replays.
+- Unlike static `Volume.write`, contents are NOT reapplied on container restart — `rt.write` is point-in-time. For tmpfs volumes the file is wiped at the next container start; that's allowed and is up to the script author to reason about.
+- Calling `rt.write` outside an action closure is a script error.
+
+## Running a command inside a container: `rt.exec`
+
+`rt.exec(target, argv, options?)` runs a command in an existing running container without paying the cost of starting a new one for each invocation. Useful for sequences of commands that share a container's filesystem, or for poking a management endpoint:
+
+```rhai
+app.on_action("seed-db", |rt, _p| {
+    let host = app.job()
+        .image("ghcr.io/example/dbtools:1.0")
+        .command(IDLE_CMD);
+    let started = rt.start(host);
+
+    rt.exec(started, ["create-schema"]).ensure_success();
+    rt.exec(started, ["load-fixtures"], #{
+        env: #{ FIXTURE_SET: "smoke" },
+    }).ensure_success();
+
+    rt.stop(started);
+});
+```
+
+The returned `Executed` exposes:
+
+- `executed.exit_code()` → int
+- `executed.success()` → bool (true iff exit code is 0)
+- `executed.ensure_success()` → throws with the exit code if non-zero
+
+Discarding the return value is fine if the script doesn't care about the result; the command runs either way.
+
+`rt.exec` rules:
+
+- The target must resolve to exactly one running container. The accepted forms are a `Started` (returned by an earlier `rt.start`), a named `Deployment`, or a named `Job`.
+- Anonymous `Deployment` / `Job` handles must be passed via the `Started` returned by `rt.start` — `rt.exec(app.job()...)` directly is a script error because there is no instance yet to target.
+- `Deployment.scale(N)` with `N > 1` (or any range whose upper bound is `> 1`) is rejected without consulting the registry. Use a `Job` or split the work into a single-replica deployment when you need exec.
+- `argv` must be a non-empty array of strings.
+- `options.env` is a string-to-string map of env-var overrides layered on top of the container's own environment. Keys must be POSIX env names (`[A-Za-z_][A-Za-z0-9_]*`). Other option keys are reserved.
+- Stdout and stderr go to the container's log stream; they are not captured by the script.
+- The call is at-most-once across replays: the recorded exit code is recovered from the action log on replay rather than re-running the command.
+
+The `IDLE_CMD` constant is provided as a sugar for the "container as exec host" pattern: it's `["sleep", "infinity"]`, used as a deployment or job's `command(...)` so the container starts, does nothing, and stays alive while the action runs `rt.exec` against it.
 
 ## Action params with `kind: "volume"`
 

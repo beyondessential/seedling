@@ -35,6 +35,15 @@ builder method (`.image()`, `.env()`, `.scale()`, `.write()`, etc.) on a frozen 
 is a script error. This prevents action closures from silently mutating the production
 resource configuration through shared internal state.
 
+The rule applies regardless of how the action gets hold of the handle:
+
+- Re-fetching by name inside the closure (`app.deployment("web").image(...)`) errors loudly.
+- Capturing a static handle in an outer-scope `let` and using it inside the closure
+  (`let web = app.deployment("web"); app.on_action(..., |_rt, _p| { web.image(...); })`)
+  also errors. Builder calls on a captured static handle would otherwise silently land in
+  a discarded copy of the AppDef rebuilt during action replay, so the rule applies to
+  both paths.
+
 To use a resource with modified configuration inside an action, create an anonymous
 resource instead:
 
@@ -48,6 +57,11 @@ app.on_action("migrate", |rt, _param| {
     rt.start(helper);
 });
 ```
+
+`rt.write` and `rt.exec` are not builder methods and do not interact with this rule:
+they are runtime side-effects performed during the action against an already-existing
+resource (a static volume, a running container) and are allowed against any of the
+contexts above.
 
 ### Notes
 

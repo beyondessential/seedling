@@ -55,7 +55,7 @@ This log enables:
 ### Action Execution Log
 
 A record of progress through a lifecycle operation's action closure.
-Each entry records which `rt.start()`, `rt.stop()`, or `rt.reconcile()` call was made, and which barrier was reached and whether it has been satisfied.
+Each entry records which `rt.*` call was made (start, stop, query, signal, write, exec, warm_certs, warm_images), and — for calls that have one — which barrier was reached and whether it has been satisfied. Side-effecting calls without a barrier (`rt.signal`, `rt.write`, `rt.exec`) record their outcome (signal name; write path; exit code) so replay can decide whether to skip and what value to recover.
 
 This log enables replay: if the runtime restarts mid-operation, it re-executes the closure from the top, and completed calls are idempotent while satisfied barriers return immediately, effectively fast-forwarding to the point where execution was interrupted.
 
@@ -130,11 +130,11 @@ If the runtime process restarts (cleanly or due to a crash, including full node 
 1. The BSL script is re-evaluated to reconstruct the AppDef.
 2. The action execution log is read from persistent storage.
 3. The action closure is re-executed from the top.
-4. `rt.start()`, `rt.stop()`, and `rt.reconcile()` calls that are already recorded in the log are idempotent: they update the desired state but don't duplicate work.
+4. `rt.*` calls that are already recorded in the log are not re-issued: state-changing calls (`rt.start`, `rt.stop`, `rt.reconcile`) update the desired state without duplicating work, side-effecting calls (`rt.signal`, `rt.write`, `rt.exec`) are skipped, and `rt.exec` recovers its exit code from the log entry so script branches that depend on it remain deterministic.
 5. Barrier calls whose conditions are already satisfied (according to the current world observation history) return immediately.
 6. Execution fast-forwards to the first unsatisfied barrier, where it suspends normally.
 
-This works because BSL closures have no side effects beyond `rt.*` calls: no filesystem access, no network calls, no randomness.
+This works because BSL closures' side effects are confined to `rt.*` calls — every filesystem write or in-container command runs through `rt.write` or `rt.exec`, both of which the action log captures for replay. Closures otherwise have no out-of-band side effects: no direct filesystem access, no network calls, no randomness.
 Re-execution is deterministic given the same AppDef and parameters.
 
 ## Fault Handling
