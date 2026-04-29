@@ -24,6 +24,7 @@ pub mod jool;
 pub(crate) mod journal;
 pub(crate) mod podman;
 pub mod resolver;
+pub mod stub;
 pub(crate) mod systemd;
 pub mod volume_store;
 
@@ -301,6 +302,11 @@ pub fn node_prefix_from_machine_id() -> std::io::Result<Ipv6Net> {
         .expect("48 is a valid IPv6 prefix length"))
 }
 
+/// Result of `System::setup` / `System::setup_stubbed`: the assembled system
+/// handle alongside the live Caddy admin client (or a placeholder under stub
+/// mode).
+pub type SystemSetup = (Arc<System>, Arc<tokio::sync::RwLock<reqwest::Client>>);
+
 impl System {
     // r[infra.proxy.startup]
     /// Initialize all system backends, ensure Caddy is running, and return the
@@ -312,10 +318,7 @@ impl System {
         node_prefix: Ipv6Net,
         data_dir: &Path,
         use_btrfs: bool,
-    ) -> Result<
-        (Arc<Self>, Arc<tokio::sync::RwLock<reqwest::Client>>),
-        Box<dyn std::error::Error + Send + Sync>,
-    > {
+    ) -> Result<SystemSetup, BoxError> {
         let container: Arc<dyn ContainerRuntime> = Arc::new(podman::PodmanRuntime::new().await?);
         let process: Arc<dyn ProcessManager> = Arc::new(systemd::SystemdManager::connect().await?);
         let data_plane_arc: Arc<dyn DataPlane> =
@@ -332,6 +335,43 @@ impl System {
         let system = Arc::new(Self {
             container,
             process,
+            proxy,
+            data_plane: data_plane_arc,
+            volume_store,
+        });
+        Ok((system, caddy_admin_client))
+    }
+
+    /// Setup variant that uses in-memory stubs for every backend. Lets the
+    /// daemon boot without podman / systemd / nftables / Caddy. The
+    /// `caddy_admin_client` is a vestigial reqwest::Client that points at
+    /// nowhere — fine because the stub `NetworkProxy` doesn't use it. Every
+    /// host-system effect is faked; OI handlers, reconciliation, DB, and
+    /// event emission remain real. Intended for end-to-end UI tests
+    /// (Playwright) and as a foundation for future integration tests of
+    /// individual subsystems.
+    pub fn setup_stubbed(data_dir: &Path, use_btrfs: bool) -> Result<SystemSetup, BoxError> {
+        let volumes_root = data_dir.join("stub-volumes");
+        std::fs::create_dir_all(&volumes_root)?;
+
+        let container = Arc::new(stub::StubContainerRuntime::new(volumes_root));
+        let process = Arc::new(stub::StubProcessManager::new(Arc::clone(&container)));
+        let data_plane_arc: Arc<dyn DataPlane> = Arc::new(stub::StubDataPlane);
+        let proxy: Arc<dyn NetworkProxy> = Arc::new(stub::StubNetworkProxy);
+
+        let volume_store = volume_store::VolumeStore::new(data_dir, use_btrfs)?;
+
+        // The caddy_admin_client field on Reconciler holds the live HTTP
+        // client used during blue/green Caddy upgrades. Stub mode never
+        // upgrades Caddy, so a placeholder client suffices.
+        let placeholder_client = reqwest::Client::builder()
+            .build()
+            .expect("default reqwest client builds");
+        let caddy_admin_client = Arc::new(tokio::sync::RwLock::new(placeholder_client));
+
+        let system = Arc::new(Self {
+            container: container as Arc<dyn ContainerRuntime>,
+            process: process as Arc<dyn ProcessManager>,
             proxy,
             data_plane: data_plane_arc,
             volume_store,

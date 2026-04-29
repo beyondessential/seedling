@@ -62,6 +62,15 @@ struct Args {
     #[arg(long)]
     without_btrfs: bool,
 
+    /// Boot with in-memory fakes for the host-system backends (container
+    /// runtime, systemd, nftables, Caddy). The OI, DB, scheduler, and event
+    /// stream all run normally; only host-system effects are faked. Skips
+    /// NAT64 setup, the DNS forwarder, and IPv4/IPv6 egress probes — egress
+    /// is reported as `false` for both. Intended for end-to-end UI tests
+    /// (Playwright) and for integration tests of individual subsystems.
+    #[arg(long)]
+    stub_backends: bool,
+
     // i[transport.listen]
     /// Network interface(s) to bind the OI on (comma-separated names).
     /// All IPv4 and IPv6 addresses of each interface are used.
@@ -299,11 +308,23 @@ async fn main() {
 
     // r[impl infra.nat64.mode]
     // r[impl infra.nat64.detection]
-    let nat64_active = should_activate_nat64(args.nat64).await;
-    tracing::info!(nat64_mode = %args.nat64, nat64_active, "NAT64 decision");
+    let nat64_active = if args.stub_backends {
+        false
+    } else {
+        should_activate_nat64(args.nat64).await
+    };
+    tracing::info!(
+        nat64_mode = %args.nat64,
+        nat64_active,
+        stub_backends = args.stub_backends,
+        "NAT64 decision",
+    );
 
     // r[impl infra.nat64.translator]
-    if nat64_active && let Err(e) = seedling_core::system::jool::setup_nat64().await {
+    if !args.stub_backends
+        && nat64_active
+        && let Err(e) = seedling_core::system::jool::setup_nat64().await
+    {
         // r[impl infra.nat64.translator.lifecycle]
         tracing::error!(error = %e, "failed to set up NAT64 translator; exiting");
         std::process::exit(1);
@@ -312,8 +333,11 @@ async fn main() {
     // r[impl infra.nat64.ipv6-egress]
     // l[impl const.host-has-ipv4]
     // l[impl const.host-has-ipv6]
-    let ipv4_egress = detect_ipv4_egress().await;
-    let ipv6_egress = detect_ipv6_egress().await;
+    let (ipv4_egress, ipv6_egress) = if args.stub_backends {
+        (false, false)
+    } else {
+        (detect_ipv4_egress().await, detect_ipv6_egress().await)
+    };
 
     // l[impl const.host-has-ipv4]
     // l[impl const.host-has-ipv6]
@@ -349,7 +373,15 @@ async fn main() {
     // containers inherit the host's split DNS / MagicDNS / search
     // domains. `--dns-upstreams` overrides this and points CoreDNS
     // straight at the operator-supplied servers.
-    let (dns_upstreams, forwarder_handle) = if args.dns_upstreams.is_empty() {
+    let (dns_upstreams, forwarder_handle) = if args.stub_backends {
+        // The DNS forwarder binds a socket on the resolver-bridge gateway
+        // address, which only exists when the proxy network is real. With
+        // stub backends there's no bridge to bind to, so skip the forwarder
+        // entirely. The resolver itself isn't started either; this value is
+        // only consumed for log output and CoreDNS config that no stub
+        // container ever reads.
+        (Vec::new(), None)
+    } else if args.dns_upstreams.is_empty() {
         let gw = resolver_gateway_addr(&node_prefix);
         let forwarder_listen = std::net::SocketAddr::new(std::net::IpAddr::V6(gw), 53);
         let host_stub: std::net::SocketAddr =
@@ -370,12 +402,20 @@ async fn main() {
     };
     let _dns_forwarder_handle = forwarder_handle;
 
-    let (driver, caddy_admin_client) = System::setup(node_prefix, &data_dir, use_btrfs)
-        .await
-        .unwrap_or_else(|e| {
-            tracing::error!("system setup failed: {e}");
+    let (driver, caddy_admin_client) = if args.stub_backends {
+        tracing::info!("booting with stubbed system backends (no podman/systemd/nftables)");
+        System::setup_stubbed(&data_dir, use_btrfs).unwrap_or_else(|e| {
+            tracing::error!("stubbed system setup failed: {e}");
             std::process::exit(1);
-        });
+        })
+    } else {
+        System::setup(node_prefix, &data_dir, use_btrfs)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::error!("system setup failed: {e}");
+                std::process::exit(1);
+            })
+    };
 
     // ---------------------------------------------------------------------------
     // App registry — load registered apps from DB
