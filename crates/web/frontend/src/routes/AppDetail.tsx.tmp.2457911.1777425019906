@@ -58,7 +58,7 @@ import {
 } from "../components/ImageReferences";
 import { MapVolumeDialog } from "../components/MapVolumeDialog";
 import { OiErrorAlert } from "../components/OiErrorAlert";
-import { useSafetyMode } from "../components/SafetyModeProvider";
+import { useGuard, useSafetyMode } from "../components/SafetyModeProvider";
 import { useSessionContext } from "../components/SessionProvider";
 import { SnapshotVolumeDialog } from "../components/SnapshotVolumeDialog";
 import { TlsHostnamesTable } from "../components/TlsHostnamesTable";
@@ -174,9 +174,7 @@ function HealthcheckIndicator({
   );
 }
 
-function containerHealthcheck(
-  def: ResourceDef | undefined,
-): HealthcheckSummary | null {
+function containerHealthcheck(def: ResourceDef | undefined): HealthcheckSummary | null {
   if (!def) return null;
   if (def.kind !== "deployment" && def.kind !== "job") return null;
   return def.container.healthcheck ?? null;
@@ -415,7 +413,6 @@ function ResourcesSection({
   resources: AppResource[];
   onRefresh: () => void;
 }) {
-  const navigate = useNavigate();
   const { execute, loading: scaling } = useOiAction();
   const { execute: executeRestart, loading: restarting } = useOiAction();
   const { execute: executeStop, loading: stopping } = useOiAction();
@@ -542,15 +539,15 @@ function ResourcesSection({
               />
             )}
             {(r.type === "deployment" || r.type === "job") && (
-              <IconActionButton
-                safety="read"
-                tooltip="View resource logs"
-                onClick={() =>
-                  navigate(`/apps/${appName}/logs?resource=${r.name}`)
-                }
-              >
-                <ArticleIcon sx={{ fontSize: 14 }} />
-              </IconActionButton>
+              <Tooltip title="View resource logs">
+                <IconButton
+                  size="small"
+                  component={Link}
+                  to={`/apps/${appName}/logs?resource=${r.name}`}
+                >
+                  <ArticleIcon sx={{ fontSize: 14 }} />
+                </IconButton>
+              </Tooltip>
             )}
             {!r.dynamic && r.scale && (
               <>
@@ -607,10 +604,7 @@ function ResourcesSection({
               <>
                 <IconActionButton
                   safety="read"
-                  color={shellReadOnly ? undefined : "warning"}
-                  tooltip={
-                    shellReadOnly ? "Open shell (read-only)" : "Open shell"
-                  }
+                  tooltip={shellReadOnly ? "Open shell (read-only)" : "Open shell"}
                   onClick={() =>
                     openVolumeShell(
                       [{ kind: "app", app: appName, volume: r.name }],
@@ -641,6 +635,7 @@ function ResourcesSection({
                 <IconActionButton
                   safety="write"
                   tooltip="Unstop resource"
+                  color="success"
                   onClick={() => void unstopResource(r.type, r.name)}
                   disabled={stopping}
                 >
@@ -711,17 +706,15 @@ function ResourcesSection({
                       </TableCell>
                       <TableCell width={40} align="right" sx={{ px: 0.5 }}>
                         {(r.type === "deployment" || r.type === "job") && (
-                          <IconActionButton
-                            safety="read"
-                            tooltip="View instance logs"
-                            onClick={() =>
-                              navigate(
-                                `/apps/${appName}/logs?resource=${r.name}&instance=${inst.display_name}`,
-                              )
-                            }
-                          >
-                            <ArticleIcon sx={{ fontSize: 14 }} />
-                          </IconActionButton>
+                          <Tooltip title="View instance logs">
+                            <IconButton
+                              size="small"
+                              component={Link}
+                              to={`/apps/${appName}/logs?resource=${r.name}&instance=${inst.display_name}`}
+                            >
+                              <ArticleIcon sx={{ fontSize: 14 }} />
+                            </IconButton>
+                          </Tooltip>
                         )}
                       </TableCell>
                     </TableRow>
@@ -864,17 +857,22 @@ function ParamsSection({
         />
       </TableCell>
       <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
-        <IconActionButton
-          safety="write"
-          tooltip="Save"
-          onClick={() => void saveAdd()}
-          disabled={loading || !addName.trim()}
-        >
-          <CheckIcon fontSize="small" />
-        </IconActionButton>
-        <IconActionButton safety="read" tooltip="Cancel" onClick={cancelAdd}>
-          <ClearIcon fontSize="small" />
-        </IconActionButton>
+        <Tooltip title="Save">
+          <span>
+            <IconButton
+              size="small"
+              onClick={() => void saveAdd()}
+              disabled={loading || !addName.trim()}
+            >
+              <CheckIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Tooltip title="Cancel">
+          <IconButton size="small" onClick={cancelAdd}>
+            <ClearIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
       </TableCell>
     </TableRow>
   ) : null;
@@ -1366,7 +1364,9 @@ function ActionInvokeDialog({
                                 )}
                                 {isPassword && (
                                   <Tooltip
-                                    title={showPasswords[key] ? "Hide" : "Show"}
+                                    title={
+                                      showPasswords[key] ? "Hide" : "Show"
+                                    }
                                   >
                                     <IconButton
                                       size="small"
@@ -1403,7 +1403,11 @@ function ActionInvokeDialog({
           onClick={handleSubmit}
           disabled={loading || hasWeakPassword}
         >
-          {loading ? "Running…" : action.kind === "install" ? "Install" : "Run"}
+          {loading
+            ? "Running…"
+            : action.kind === "install"
+              ? "Install"
+              : "Run"}
         </SolidActionButton>
       </DialogActions>
     </Dialog>
@@ -1468,20 +1472,6 @@ function InstallSection({
         >
           {loading ? "Installing…" : "Install"}
         </SolidActionButton>
-        {installAction && (
-          <Typography
-            variant="caption"
-            sx={{ color: "text.secondary", textAlign: "center", maxWidth: 480 }}
-          >
-            Runs the app's{" "}
-            <Box component="code" sx={{ fontFamily: "monospace" }}>
-              on_install
-            </Box>{" "}
-            action
-            {installAction.description ? ` — ${installAction.description}` : ""}
-            .
-          </Typography>
-        )}
         {operationFailures.length > 0 && (
           <Alert severity="error" sx={{ width: "100%", mt: 2 }}>
             <Typography variant="subtitle2" gutterBottom>
@@ -1550,9 +1540,7 @@ function SchedulesSection({ actions }: { actions: AppAction[] }) {
           {rows.map((r) => (
             <TableRow key={`${r.action}::${r.cronexpr}`}>
               <TableCell sx={{ fontFamily: "monospace" }}>{r.action}</TableCell>
-              <TableCell sx={{ fontFamily: "monospace" }}>
-                {r.cronexpr}
-              </TableCell>
+              <TableCell sx={{ fontFamily: "monospace" }}>{r.cronexpr}</TableCell>
               <TableCell
                 sx={{ color: r.last_fired_at ? undefined : "text.disabled" }}
               >
@@ -1594,6 +1582,7 @@ function ActionsSection({
   const [openingShell, setOpeningShell] = useState<AppAction | null>(null);
   const { openShell } = useSessionContext();
 
+  const canInstall = status === "not_installed" && !hasScriptError;
   const canInvoke =
     !hasScriptError &&
     status !== "not_installed" &&
@@ -1626,107 +1615,109 @@ function ActionsSection({
             </TableRow>
           </TableHead>
           <TableBody>
-            {/* The install action is invoked from the dedicated Install
-                button in InstallSection, and the App detail Actions
-                section only renders for already-installed apps anyway —
-                so hide the install row, which would otherwise sit there
-                permanently un-invokable. */}
-            {actions
-              .filter((a) => a.kind !== "install")
-              .map((a) => {
-                const isInvokable =
-                  a.kind !== "shell" && a.kind !== "lifecycle";
-                const isRunning = a.name === operatingAction;
-                const canRun = isInvokable && canInvoke;
-                return (
-                  <TableRow key={a.name}>
-                    <TableCell sx={{ fontFamily: "monospace" }}>
-                      <Box
-                        sx={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 0.5,
-                        }}
-                      >
-                        <span>{a.name}</span>
-                        {a.schedules.length > 0 && (
-                          <Tooltip
-                            title={
-                              <span style={{ whiteSpace: "pre-line" }}>
-                                {a.schedules
-                                  .map((s) => `schedule: ${s.cronexpr}`)
-                                  .join("\n")}
-                              </span>
+            {actions.map((a) => {
+              const isInvokable = a.kind !== "shell" && a.kind !== "lifecycle";
+              const isRunning = a.name === operatingAction;
+              const canRun =
+                a.kind === "install" ? canInstall : isInvokable && canInvoke;
+              return (
+                <TableRow key={a.name}>
+                  <TableCell sx={{ fontFamily: "monospace" }}>
+                    <Box
+                      sx={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 0.5,
+                      }}
+                    >
+                      <span>{a.name}</span>
+                      {a.schedules.length > 0 && (
+                        <Tooltip
+                          title={
+                            <span style={{ whiteSpace: "pre-line" }}>
+                              {a.schedules
+                                .map((s) => `schedule: ${s.cronexpr}`)
+                                .join("\n")}
+                            </span>
+                          }
+                        >
+                          <Chip
+                            label={
+                              a.schedules.length === 1
+                                ? "scheduled"
+                                : `scheduled ×${a.schedules.length}`
                             }
-                          >
-                            <Chip
-                              label={
-                                a.schedules.length === 1
-                                  ? "scheduled"
-                                  : `scheduled ×${a.schedules.length}`
-                              }
-                              size="small"
-                              variant="outlined"
-                              color="info"
-                              sx={{
-                                fontSize: "0.65rem",
-                                height: 18,
-                                "& .MuiChip-label": { px: 0.75 },
-                              }}
-                            />
-                          </Tooltip>
-                        )}
-                      </Box>
-                    </TableCell>
-                    <TableCell>
-                      <Chip label={a.kind} size="small" variant="outlined" />
-                    </TableCell>
-                    <TableCell sx={{ color: "text.secondary" }}>
-                      {a.description}
-                    </TableCell>
-                    <TableCell align="right">
-                      {/* w[shells.ui] */}
-                      {a.kind === "shell" ? (
+                            size="small"
+                            variant="outlined"
+                            color="info"
+                            sx={{
+                              fontSize: "0.65rem",
+                              height: 18,
+                              "& .MuiChip-label": { px: 0.75 },
+                            }}
+                          />
+                        </Tooltip>
+                      )}
+                    </Box>
+                  </TableCell>
+                  <TableCell>
+                    <Chip label={a.kind} size="small" variant="outlined" />
+                  </TableCell>
+                  <TableCell sx={{ color: "text.secondary" }}>
+                    {a.description}
+                  </TableCell>
+                  <TableCell align="right">
+                    {/* w[shells.ui] */}
+                    {a.kind === "shell" ? (
+                      <OutlinedActionButton
+                        safety="write"
+                        size="small"
+                        onClick={() => {
+                          if (Object.keys(a.params).length > 0) {
+                            setOpeningShell(a);
+                          } else {
+                            openShell(appName, a.name, {});
+                          }
+                        }}
+                        disabled={!canInvoke}
+                      >
+                        Open shell
+                      </OutlinedActionButton>
+                    ) : (
+                      isInvokable &&
+                      (isRunning ? (
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          disabled
+                          startIcon={<CircularProgress size={12} />}
+                        >
+                          Running…
+                        </Button>
+                      ) : a.kind === "install" ? (
+                        <SolidActionButton
+                          safety="write"
+                          size="small"
+                          onClick={() => setInvoking(a)}
+                          disabled={!canRun}
+                        >
+                          Install
+                        </SolidActionButton>
+                      ) : (
                         <OutlinedActionButton
                           safety="write"
                           size="small"
-                          onClick={() => {
-                            if (Object.keys(a.params).length > 0) {
-                              setOpeningShell(a);
-                            } else {
-                              openShell(appName, a.name, {});
-                            }
-                          }}
-                          disabled={!canInvoke}
+                          onClick={() => setInvoking(a)}
+                          disabled={!canRun}
                         >
-                          shell
+                          Run
                         </OutlinedActionButton>
-                      ) : (
-                        isInvokable &&
-                        (isRunning ? (
-                          <Button
-                            size="small"
-                            variant="outlined"
-                            disabled
-                            startIcon={<CircularProgress size={12} />}
-                          >
-                            Running…
-                          </Button>
-                        ) : (
-                          <OutlinedActionButton
-                            safety="write"
-                            size="small"
-                            onClick={() => setInvoking(a)}
-                            disabled={!canRun}
-                          >
-                            Run
-                          </OutlinedActionButton>
-                        ))
-                      )}
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
+                      ))
+                    )}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       </TableContainer>
@@ -1898,7 +1889,7 @@ function ShellOpenDialog({
           onClick={() => onOpen(values)}
           disabled={hasWeakPassword}
         >
-          shell
+          Open shell
         </SolidActionButton>
       </DialogActions>
     </Dialog>
@@ -1949,6 +1940,7 @@ function AppImagesSection({
   resources: AppResource[];
   onRefresh: () => void;
 }) {
+
   const { data: imagesData, refetch: refetchImages } = useOiQuery<{
     images: ImageSummary[];
   }>("/images/list", {});
@@ -2289,6 +2281,7 @@ function AppImagesSection({
           </Button>
           <SolidActionButton
             safety="dangerous"
+            color="error"
             onClick={submitRemove}
             disabled={mutating}
           >
@@ -2353,6 +2346,7 @@ function ClearFaultsButton({
         safety={tier}
         tooltip="Clear all active faults for this app"
         size="small"
+        color={tier === "dangerous" ? "error" : "primary"}
         disabled={loading}
         onClick={() => setConfirming(true)}
       >
@@ -2375,9 +2369,9 @@ function ClearFaultsButton({
             {tier === "dangerous" && (
               <>
                 {" "}
-                This is a danger-level action because the app is currently{" "}
-                <strong>{status}</strong> — clearing live signal can obscure
-                problems that operators need to see.
+                This is a danger-level action because the app is currently
+                {" "}<strong>{status}</strong> — clearing live signal can
+                obscure problems that operators need to see.
               </>
             )}
           </DialogContentText>
@@ -2503,6 +2497,7 @@ function AppRemovalDialog({
         </Button>
         <SolidActionButton
           safety="dangerous"
+          color="error"
           onClick={handleConfirm}
           disabled={loading}
         >
@@ -2592,6 +2587,7 @@ export default function AppDetail() {
           <OutlinedActionButton
             safety="dangerous"
             size="small"
+            color="error"
             onClick={() => setRemovalOpen(true)}
             disabled={loading}
           >
@@ -2605,6 +2601,7 @@ export default function AppDetail() {
             <OutlinedActionButton
               safety="dangerous"
               size="small"
+              color="error"
               onClick={() => setRemovalOpen(true)}
               disabled={loading}
             >
@@ -2669,7 +2666,8 @@ export default function AppDetail() {
               severity="info"
               action={
                 <OutlinedActionButton
-                  safety="dangerous"
+                  safety="write"
+                  color="inherit"
                   size="small"
                   disabled={cancellingAction}
                   onClick={async () => {
@@ -2711,6 +2709,7 @@ export default function AppDetail() {
               action={
                 <OutlinedActionButton
                   safety="write"
+                  color="inherit"
                   size="small"
                   disabled={unstoppingAll}
                   onClick={async () => {
