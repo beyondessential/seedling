@@ -1,3 +1,4 @@
+import { alpha, type Theme } from "@mui/material/styles";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
 export type SafetyMode = "read" | "write" | "dangerous";
@@ -121,4 +122,21 @@ export function useGuard(required: SafetyMode): GuardResult {
   const { mode } = useSafetyMode();
   const allowed = RANK[mode] >= RANK[required];
   return { allowed, mode, required };
+}
+
+/** Diagonal-stripe background painted in the tier's palette colour. Used by
+ *  forbidden action buttons (greyscaled at rest, colour on hover) and by the
+ *  safety-mode indicator + its dropdown items (always colour). The stripe
+ *  angle encodes the tier — write leans 135°, dangerous leans 45° — so the
+ *  two are distinguishable from the pattern alone. */
+export function safetyStripeBackground(
+  theme: Theme,
+  tier: SafetyTier,
+  opts?: { stripeAlpha?: number; gapAlpha?: number },
+): string {
+  const palette = tier === "write" ? "warning" : "error";
+  const angle = tier === "write" ? "135deg" : "45deg";
+  const stripe = alpha(theme.palette[palette].light, opts?.stripeAlpha ?? 0.24);
+  const gap = alpha(theme.palette[palette].light, opts?.gapAlpha ?? 0.07);
+  return `repeating-linear-gradient(${angle}, ${stripe}, ${stripe} 6px, ${gap} 6px, ${gap} 12px)`;
 }

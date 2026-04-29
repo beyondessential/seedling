@@ -6,9 +6,14 @@ import {
   type ButtonProps,
   type IconButtonProps,
 } from "@mui/material";
-import { alpha, type Theme } from "@mui/material/styles";
+import { type Theme } from "@mui/material/styles";
 import { type ReactNode } from "react";
-import { type SafetyMode, useGuard } from "./SafetyModeProvider";
+import {
+  type SafetyMode,
+  type SafetyTier,
+  safetyStripeBackground,
+  useGuard,
+} from "./SafetyModeProvider";
 
 interface CommonProps {
   /** Tier required to invoke. "read" buttons are always allowed; "write" and
@@ -72,29 +77,23 @@ function forbiddenSpanSx(
   externallyDisabled: boolean,
 ) {
   if (allowed || safety === "read" || externallyDisabled) return null;
-  const palette: "warning" | "error" = safety === "write" ? "warning" : "error";
-  const angle = safety === "write" ? "135deg" : "45deg";
-  return (theme: Theme) => {
-    const stripe = alpha(theme.palette[palette].light, 0.24);
-    const gap = alpha(theme.palette[palette].light, 0.07);
-    return {
-      cursor: "not-allowed",
-      // MUI's default disabled colour is too pale to read against the
-      // striped background, so override it to the normal text colour.
-      // Doubled `&&` for specificity over MUI's own .Mui-disabled rule.
-      "&& .Mui-disabled": {
-        color: "text.primary",
-        background: `repeating-linear-gradient(${angle}, ${stripe}, ${stripe} 6px, ${gap} 6px, ${gap} 12px)`,
-        filter: "grayscale(0.8)",
-        transition: theme.transitions.create("filter", {
-          duration: theme.transitions.duration.shortest,
-        }),
-      },
-      "&&:hover .Mui-disabled": {
-        filter: "grayscale(0)",
-      },
-    };
-  };
+  return (theme: Theme) => ({
+    cursor: "not-allowed",
+    // MUI's default disabled colour is too pale to read against the
+    // striped background, so override it to the normal text colour.
+    // Doubled `&&` for specificity over MUI's own .Mui-disabled rule.
+    "&& .Mui-disabled": {
+      color: "text.primary",
+      background: safetyStripeBackground(theme, safety as SafetyTier),
+      filter: "grayscale(0.8)",
+      transition: theme.transitions.create("filter", {
+        duration: theme.transitions.duration.shortest,
+      }),
+    },
+    "&&:hover .Mui-disabled": {
+      filter: "grayscale(0)",
+    },
+  });
 }
 
 function TextActionButton({
