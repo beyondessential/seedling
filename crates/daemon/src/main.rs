@@ -652,8 +652,9 @@ async fn main() {
     // contents are already gone after a host reboot, but a daemon restart
     // alone leaves the directory tree intact — clear it so each fresh run
     // starts from an empty slate, matching the spec's "tmpfs contents do not
-    // survive" guarantee.
-    {
+    // survive" guarantee. Skipped under --stub-backends since stub volumes
+    // live under {data_dir}/stub-volumes, not /run.
+    if !args.stub_backends {
         let tmpfs_root = std::path::Path::new(seedling_core::system::actuator::TMPFS_VOLUMES_DIR);
         if tmpfs_root.exists()
             && let Err(e) = std::fs::remove_dir_all(tmpfs_root)
