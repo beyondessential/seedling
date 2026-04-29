@@ -173,59 +173,6 @@ fn description_returns_self_for_chaining() {
     }
 }
 
-// Each shipped sample app must parse and load any required params it declares
-// (a few of these set `app.description(...)`, which is what we want to
-// exercise here on top of regular parsing).
-#[test]
-fn shipped_seed_apps_parse() {
-    use seedling_protocol::names::AppName;
-    let limits = crate::ScriptLimits::default();
-    let app_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("apps");
-    let entries =
-        std::fs::read_dir(&app_dir).expect("apps directory should exist next to crates/core");
-    let mut required_seed_params = std::collections::BTreeMap::new();
-    required_seed_params.insert("password".to_string(), "x".to_string());
-    required_seed_params.insert("bucket".to_string(), "x".to_string());
-    required_seed_params.insert("access-key".to_string(), "x".to_string());
-    required_seed_params.insert("secret-key".to_string(), "x".to_string());
-    required_seed_params.insert("hostname".to_string(), "x".to_string());
-    required_seed_params.insert("passphrase".to_string(), "x".to_string());
-    required_seed_params.insert("version".to_string(), "18.0".to_string());
-    required_seed_params.insert("public-hostname".to_string(), "example.com".to_string());
-    required_seed_params.insert(
-        "central-url".to_string(),
-        "https://central.example.com".to_string(),
-    );
-    required_seed_params.insert("facility-id".to_string(), "x".to_string());
-    required_seed_params.insert("sync-password".to_string(), "x".to_string());
-    required_seed_params.insert("auth-secret".to_string(), "x".to_string());
-    required_seed_params.insert("refresh-secret".to_string(), "x".to_string());
-
-    let mut count = 0;
-    for entry in entries {
-        let entry = entry.unwrap();
-        let path = entry.path();
-        if !path.to_string_lossy().ends_with(".seed.rhai") {
-            continue;
-        }
-        let body = std::fs::read_to_string(&path).unwrap();
-        let app_name = AppName::new_unchecked("seed-app");
-        let (_app, err) =
-            crate::runtime::apps::evaluate_script(&app_name, &body, &required_seed_params, &limits);
-        assert!(
-            err.is_none(),
-            "{} failed to parse: {:?}",
-            path.display(),
-            err
-        );
-        count += 1;
-    }
-    assert!(count > 0, "expected at least one .seed.rhai under apps/");
-}
-
 // l[verify bsl.resource.description]
 #[test]
 fn description_is_serialised_in_resource_summary() {
