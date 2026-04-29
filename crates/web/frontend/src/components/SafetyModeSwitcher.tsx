@@ -2,7 +2,6 @@ import LockIcon from "@mui/icons-material/Lock";
 import ShieldIcon from "@mui/icons-material/Shield";
 import WarningIcon from "@mui/icons-material/Warning";
 import {
-  Box,
   Button,
   Chip,
   Dialog,
@@ -15,9 +14,7 @@ import {
   Menu,
   MenuItem,
   Tooltip,
-  Typography,
 } from "@mui/material";
-import { alpha } from "@mui/material/styles";
 import { useEffect, useState, type MouseEvent } from "react";
 import {
   ELEVATION_DURATION_MS,
@@ -85,26 +82,14 @@ export function SafetyModeSwitcher({ peerElevation }: { peerElevation?: PeerElev
   const [pendingDangerous, setPendingDangerous] = useState(false);
 
   // w[impl sessions.safety-mode]
-  const peerTier = peerElevation?.tier ?? null;
-  const peerWarning = (() => {
-    if (!peerElevation || peerTier === null) return null;
-    const parts: string[] = [];
-    if (peerElevation.dangerousCount > 0) {
-      parts.push(
-        `${peerElevation.dangerousCount} other session${
-          peerElevation.dangerousCount === 1 ? "" : "s"
-        } in dangerous mode`,
-      );
-    }
-    if (peerElevation.writeCount > 0) {
-      parts.push(
-        `${peerElevation.writeCount} other session${
-          peerElevation.writeCount === 1 ? "" : "s"
-        } in write mode`,
-      );
-    }
-    return parts.join("; ");
-  })();
+  // Per-tier peer counts drive the inline indicator on the matching menu
+  // item. The session-count icon in the navbar already flags peer
+  // elevation globally, so we don't repeat that signal alongside the
+  // mode chip itself.
+  const peerCountAt = (tier: SafetyTier): number =>
+    tier === "dangerous"
+      ? (peerElevation?.dangerousCount ?? 0)
+      : (peerElevation?.writeCount ?? 0);
 
   const openMenu = (e: MouseEvent<HTMLElement>) => setAnchorEl(e.currentTarget);
   const closeMenu = () => setAnchorEl(null);
@@ -134,31 +119,7 @@ export function SafetyModeSwitcher({ peerElevation }: { peerElevation?: PeerElev
       : MODE_TOOLTIP[mode];
 
   return (
-    <Box sx={{ display: "flex", alignItems: "center" }}>
-      {peerWarning && (
-        <Tooltip title={`${peerWarning}. Coordinate before issuing your own changes.`}>
-          <Chip
-            icon={<WarningIcon fontSize="small" />}
-            label={
-              peerTier === "dangerous"
-                ? `Peer in dangerous mode`
-                : `Peer in write mode`
-            }
-            size="small"
-            color={peerTier === "dangerous" ? "error" : "warning"}
-            variant="outlined"
-            sx={{
-              mr: 1,
-              fontFamily: "monospace",
-              borderColor: peerTier === "dangerous" ? "error.light" : "warning.light",
-              color: peerTier === "dangerous" ? "error.light" : "warning.light",
-              "& .MuiChip-icon": {
-                color: peerTier === "dangerous" ? "error.light" : "warning.light",
-              },
-            }}
-          />
-        </Tooltip>
-      )}
+    <>
       <Tooltip title={tooltip}>
         <Chip
           icon={<ModeIcon mode={mode} />}
@@ -191,36 +152,6 @@ export function SafetyModeSwitcher({ peerElevation }: { peerElevation?: PeerElev
         />
       </Tooltip>
       <Menu anchorEl={anchorEl} open={!!anchorEl} onClose={closeMenu}>
-        {peerWarning && (
-          <Box
-            sx={(theme) => ({
-              px: 2,
-              py: 1,
-              maxWidth: 320,
-              borderLeft: `3px solid ${
-                peerTier === "dangerous"
-                  ? theme.palette.error.main
-                  : theme.palette.warning.main
-              }`,
-              backgroundColor:
-                peerTier === "dangerous"
-                  ? alpha(theme.palette.error.main, 0.08)
-                  : alpha(theme.palette.warning.main, 0.08),
-            })}
-          >
-            <Typography
-              variant="caption"
-              sx={{ display: "flex", alignItems: "center", gap: 0.5, fontWeight: 600 }}
-              color={peerTier === "dangerous" ? "error" : "warning.dark"}
-            >
-              <WarningIcon fontSize="inherit" />
-              Peer activity
-            </Typography>
-            <Typography variant="caption" sx={{ display: "block", color: "text.secondary" }}>
-              {peerWarning}.
-            </Typography>
-          </Box>
-        )}
         {(["read", "write", "dangerous"] as const).map((m) => {
           const secondary =
             m !== "read" && m === mode && remainingText !== null
@@ -228,6 +159,8 @@ export function SafetyModeSwitcher({ peerElevation }: { peerElevation?: PeerElev
               : m !== "read"
                 ? `${MODE_TOOLTIP[m]} · auto-reverts after ${ELEVATION_MINUTES} min`
                 : MODE_TOOLTIP[m];
+          // w[impl sessions.safety-mode]
+          const peerCount = m !== "read" ? peerCountAt(m) : 0;
           return (
             <MenuItem
               key={m}
@@ -252,6 +185,16 @@ export function SafetyModeSwitcher({ peerElevation }: { peerElevation?: PeerElev
                 <ModeIcon mode={m} />
               </ListItemIcon>
               <ListItemText primary={MODE_LABEL[m]} secondary={secondary} />
+              {peerCount > 0 && (
+                <Chip
+                  label={`${peerCount} other operator${
+                    peerCount === 1 ? "" : "s"
+                  } already at this level`}
+                  size="small"
+                  color={m === "dangerous" ? "error" : "warning"}
+                  sx={{ ml: 2, fontFamily: "monospace" }}
+                />
+              )}
             </MenuItem>
           );
         })}
@@ -273,6 +216,6 @@ export function SafetyModeSwitcher({ peerElevation }: { peerElevation?: PeerElev
           </Button>
         </DialogActions>
       </Dialog>
-    </Box>
+    </>
   );
 }
