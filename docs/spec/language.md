@@ -53,6 +53,13 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - A list of instances of a resource type is known as a _collection_
 > - A single instance of a resource type is called a _resource_
 
+> l[bsl.resource.description]
+> Every Resource has a `description(text: string)` builder method which attaches a free-form human-readable description to the resource. The description is surfaced to operators in the management interfaces (CLI, web UI, OI), and is particularly useful for naming the purpose of anonymous resources (such as anonymous jobs spawned inside an action closure) so they are recognisable in operation logs.
+>
+> The description is purely informational and has no behavioural effect. Calling `description()` more than once on the same resource replaces the previous value. The description is `None` by default.
+>
+> The method returns the same resource builder so calls may be chained.
+
 # Collection
 
 > l[collection.interface]
@@ -249,6 +256,13 @@ This is currently the only value.
 >
 > Names are also used to select resources using the Collection methods.
 > Named resources created in the action context are references to existing static resources, not new definitions; see `l[app.resources.context.named]`.
+
+> l[app.description]
+> The `app.description(text: string)` method attaches a free-form human-readable description to the application as a whole. The description is surfaced to operators in the management interfaces (CLI, web UI, OI) alongside the app name.
+>
+> The description is purely informational and has no behavioural effect. Calling `description()` more than once on the app replaces the previous value. The description is `None` by default.
+>
+> The method returns `app` so calls may be chained.
 
 # Parameter
 
