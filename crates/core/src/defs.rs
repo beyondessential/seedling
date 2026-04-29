@@ -144,6 +144,14 @@ fn available_threads() -> i64 {
         .unwrap_or(1)
 }
 
+/// Memory the script may plan around: 90% of the host's `MemTotal`,
+/// reserving 10% for the daemon itself, the runtime, and the kernel's
+/// page cache. Always at least `1` byte to keep the
+/// `AVAILABLE_MEMORY > 0` invariant from the spec.
+fn available_memory_bytes() -> i64 {
+    (read_mem_total_bytes().saturating_mul(9) / 10).max(1)
+}
+
 /// Read `MemTotal` from `/proc/meminfo` and return the value in bytes.
 ///
 /// Falls back to `1` (the minimum positive value permitted by the spec)
@@ -184,7 +192,7 @@ pub fn scope() -> (Scope<'static>, app::App) {
     scope.push_constant("AVAILABLE_THREADS", available_threads());
 
     // l[impl const.available-memory]
-    scope.push_constant("AVAILABLE_MEMORY", read_mem_total_bytes());
+    scope.push_constant("AVAILABLE_MEMORY", available_memory_bytes());
 
     // l[impl const.cpu-architecture]
     scope.push_constant("CPU_ARCHITECTURE", std::env::consts::ARCH.to_owned());
@@ -206,9 +214,6 @@ pub fn scope() -> (Scope<'static>, app::App) {
 
     // l[impl const.timezone]
     scope.push_constant("TIMEZONE", facts.timezone.clone());
-
-    // l[impl const.default-deadline]
-    scope.push_constant("DEFAULT_DEADLINE", 30_i64);
 
     // l[impl const.on-update.rolling]
     // l[impl const.on-update.replace]

@@ -18,28 +18,28 @@ use crate::runtime::{LifecycleState, ResourceInstance, restart_gens};
 
 /// Default deadline for `.scheduled()` — a pod not scheduled inside this
 /// window almost always indicates a cluster-level problem, not a slow workload.
-// l[impl const.default-deadline]
+// l[impl rt.started.default-deadlines]
 pub const DEFAULT_SCHEDULED_DEADLINE_SECS: u64 = 30;
 
 /// Default deadline for `.running()` — same reasoning as `.scheduled()`.
-// l[impl const.default-deadline]
+// l[impl rt.started.default-deadlines]
 pub const DEFAULT_RUNNING_DEADLINE_SECS: u64 = 30;
 
 /// Default deadline for `.ready()`. Bounded by default because an unready
 /// resource is usually a deployment bug; callers that legitimately need to
 /// wait indefinitely (e.g. Let's Encrypt cert provisioning under rate limit)
 /// opt in to `.ready_eventually()`.
-// l[impl const.default-deadline]
+// l[impl rt.started.default-deadlines]
 pub const DEFAULT_READY_DEADLINE_SECS: u64 = 30;
 
 /// Default deadline for `.terminated()`. Sized for long-running jobs (the
 /// common caller): 6 hours covers almost every realistic batch workload.
 /// Callers that truly have no bound on duration use `.terminated_eventually()`.
-// l[impl const.default-deadline]
+// l[impl rt.started.default-deadlines]
 pub const DEFAULT_TERMINATED_DEADLINE_SECS: u64 = 6 * 3600;
 
 /// Default deadline for `rt.stop()` — stops should settle quickly.
-// l[impl const.default-deadline]
+// l[impl rt.started.default-deadlines]
 pub const DEFAULT_STOP_DEADLINE_SECS: u64 = 30;
 
 // ---------------------------------------------------------------------------
