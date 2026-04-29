@@ -174,7 +174,9 @@ function HealthcheckIndicator({
   );
 }
 
-function containerHealthcheck(def: ResourceDef | undefined): HealthcheckSummary | null {
+function containerHealthcheck(
+  def: ResourceDef | undefined,
+): HealthcheckSummary | null {
   if (!def) return null;
   if (def.kind !== "deployment" && def.kind !== "job") return null;
   return def.container.healthcheck ?? null;
@@ -606,7 +608,9 @@ function ResourcesSection({
                 <IconActionButton
                   safety="read"
                   color={shellReadOnly ? undefined : "warning"}
-                  tooltip={shellReadOnly ? "Open shell (read-only)" : "Open shell"}
+                  tooltip={
+                    shellReadOnly ? "Open shell (read-only)" : "Open shell"
+                  }
                   onClick={() =>
                     openVolumeShell(
                       [{ kind: "app", app: appName, volume: r.name }],
@@ -1362,9 +1366,7 @@ function ActionInvokeDialog({
                                 )}
                                 {isPassword && (
                                   <Tooltip
-                                    title={
-                                      showPasswords[key] ? "Hide" : "Show"
-                                    }
+                                    title={showPasswords[key] ? "Hide" : "Show"}
                                   >
                                     <IconButton
                                       size="small"
@@ -1401,11 +1403,7 @@ function ActionInvokeDialog({
           onClick={handleSubmit}
           disabled={loading || hasWeakPassword}
         >
-          {loading
-            ? "Running…"
-            : action.kind === "install"
-              ? "Install"
-              : "Run"}
+          {loading ? "Running…" : action.kind === "install" ? "Install" : "Run"}
         </SolidActionButton>
       </DialogActions>
     </Dialog>
@@ -1475,8 +1473,13 @@ function InstallSection({
             variant="caption"
             sx={{ color: "text.secondary", textAlign: "center", maxWidth: 480 }}
           >
-            Runs the app's <Box component="code" sx={{ fontFamily: "monospace" }}>install</Box> action
-            {installAction.description ? ` — ${installAction.description}` : ""}.
+            Runs the app's{" "}
+            <Box component="code" sx={{ fontFamily: "monospace" }}>
+              on_install
+            </Box>{" "}
+            action
+            {installAction.description ? ` — ${installAction.description}` : ""}
+            .
           </Typography>
         )}
         {operationFailures.length > 0 && (
@@ -1547,7 +1550,9 @@ function SchedulesSection({ actions }: { actions: AppAction[] }) {
           {rows.map((r) => (
             <TableRow key={`${r.action}::${r.cronexpr}`}>
               <TableCell sx={{ fontFamily: "monospace" }}>{r.action}</TableCell>
-              <TableCell sx={{ fontFamily: "monospace" }}>{r.cronexpr}</TableCell>
+              <TableCell sx={{ fontFamily: "monospace" }}>
+                {r.cronexpr}
+              </TableCell>
               <TableCell
                 sx={{ color: r.last_fired_at ? undefined : "text.disabled" }}
               >
@@ -1626,99 +1631,102 @@ function ActionsSection({
                 section only renders for already-installed apps anyway —
                 so hide the install row, which would otherwise sit there
                 permanently un-invokable. */}
-            {actions.filter((a) => a.kind !== "install").map((a) => {
-              const isInvokable = a.kind !== "shell" && a.kind !== "lifecycle";
-              const isRunning = a.name === operatingAction;
-              const canRun = isInvokable && canInvoke;
-              return (
-                <TableRow key={a.name}>
-                  <TableCell sx={{ fontFamily: "monospace" }}>
-                    <Box
-                      sx={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 0.5,
-                      }}
-                    >
-                      <span>{a.name}</span>
-                      {a.schedules.length > 0 && (
-                        <Tooltip
-                          title={
-                            <span style={{ whiteSpace: "pre-line" }}>
-                              {a.schedules
-                                .map((s) => `schedule: ${s.cronexpr}`)
-                                .join("\n")}
-                            </span>
-                          }
-                        >
-                          <Chip
-                            label={
-                              a.schedules.length === 1
-                                ? "scheduled"
-                                : `scheduled ×${a.schedules.length}`
-                            }
-                            size="small"
-                            variant="outlined"
-                            color="info"
-                            sx={{
-                              fontSize: "0.65rem",
-                              height: 18,
-                              "& .MuiChip-label": { px: 0.75 },
-                            }}
-                          />
-                        </Tooltip>
-                      )}
-                    </Box>
-                  </TableCell>
-                  <TableCell>
-                    <Chip label={a.kind} size="small" variant="outlined" />
-                  </TableCell>
-                  <TableCell sx={{ color: "text.secondary" }}>
-                    {a.description}
-                  </TableCell>
-                  <TableCell align="right">
-                    {/* w[shells.ui] */}
-                    {a.kind === "shell" ? (
-                      <OutlinedActionButton
-                        safety="write"
-                        size="small"
-                        onClick={() => {
-                          if (Object.keys(a.params).length > 0) {
-                            setOpeningShell(a);
-                          } else {
-                            openShell(appName, a.name, {});
-                          }
+            {actions
+              .filter((a) => a.kind !== "install")
+              .map((a) => {
+                const isInvokable =
+                  a.kind !== "shell" && a.kind !== "lifecycle";
+                const isRunning = a.name === operatingAction;
+                const canRun = isInvokable && canInvoke;
+                return (
+                  <TableRow key={a.name}>
+                    <TableCell sx={{ fontFamily: "monospace" }}>
+                      <Box
+                        sx={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 0.5,
                         }}
-                        disabled={!canInvoke}
                       >
-                        shell
-                      </OutlinedActionButton>
-                    ) : (
-                      isInvokable &&
-                      (isRunning ? (
-                        <Button
-                          size="small"
-                          variant="outlined"
-                          disabled
-                          startIcon={<CircularProgress size={12} />}
-                        >
-                          Running…
-                        </Button>
-                      ) : (
+                        <span>{a.name}</span>
+                        {a.schedules.length > 0 && (
+                          <Tooltip
+                            title={
+                              <span style={{ whiteSpace: "pre-line" }}>
+                                {a.schedules
+                                  .map((s) => `schedule: ${s.cronexpr}`)
+                                  .join("\n")}
+                              </span>
+                            }
+                          >
+                            <Chip
+                              label={
+                                a.schedules.length === 1
+                                  ? "scheduled"
+                                  : `scheduled ×${a.schedules.length}`
+                              }
+                              size="small"
+                              variant="outlined"
+                              color="info"
+                              sx={{
+                                fontSize: "0.65rem",
+                                height: 18,
+                                "& .MuiChip-label": { px: 0.75 },
+                              }}
+                            />
+                          </Tooltip>
+                        )}
+                      </Box>
+                    </TableCell>
+                    <TableCell>
+                      <Chip label={a.kind} size="small" variant="outlined" />
+                    </TableCell>
+                    <TableCell sx={{ color: "text.secondary" }}>
+                      {a.description}
+                    </TableCell>
+                    <TableCell align="right">
+                      {/* w[shells.ui] */}
+                      {a.kind === "shell" ? (
                         <OutlinedActionButton
                           safety="write"
                           size="small"
-                          onClick={() => setInvoking(a)}
-                          disabled={!canRun}
+                          onClick={() => {
+                            if (Object.keys(a.params).length > 0) {
+                              setOpeningShell(a);
+                            } else {
+                              openShell(appName, a.name, {});
+                            }
+                          }}
+                          disabled={!canInvoke}
                         >
-                          Run
+                          shell
                         </OutlinedActionButton>
-                      ))
-                    )}
-                  </TableCell>
-                </TableRow>
-              );
-            })}
+                      ) : (
+                        isInvokable &&
+                        (isRunning ? (
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            disabled
+                            startIcon={<CircularProgress size={12} />}
+                          >
+                            Running…
+                          </Button>
+                        ) : (
+                          <OutlinedActionButton
+                            safety="write"
+                            size="small"
+                            onClick={() => setInvoking(a)}
+                            disabled={!canRun}
+                          >
+                            Run
+                          </OutlinedActionButton>
+                        ))
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
           </TableBody>
         </Table>
       </TableContainer>
@@ -1941,7 +1949,6 @@ function AppImagesSection({
   resources: AppResource[];
   onRefresh: () => void;
 }) {
-
   const { data: imagesData, refetch: refetchImages } = useOiQuery<{
     images: ImageSummary[];
   }>("/images/list", {});
@@ -2368,9 +2375,9 @@ function ClearFaultsButton({
             {tier === "dangerous" && (
               <>
                 {" "}
-                This is a danger-level action because the app is currently
-                {" "}<strong>{status}</strong> — clearing live signal can
-                obscure problems that operators need to see.
+                This is a danger-level action because the app is currently{" "}
+                <strong>{status}</strong> — clearing live signal can obscure
+                problems that operators need to see.
               </>
             )}
           </DialogContentText>
