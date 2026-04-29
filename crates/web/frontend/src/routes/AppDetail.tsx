@@ -1470,6 +1470,15 @@ function InstallSection({
         >
           {loading ? "Installing…" : "Install"}
         </SolidActionButton>
+        {installAction && (
+          <Typography
+            variant="caption"
+            sx={{ color: "text.secondary", textAlign: "center", maxWidth: 480 }}
+          >
+            Runs the app's <Box component="code" sx={{ fontFamily: "monospace" }}>install</Box> action
+            {installAction.description ? ` — ${installAction.description}` : ""}.
+          </Typography>
+        )}
         {operationFailures.length > 0 && (
           <Alert severity="error" sx={{ width: "100%", mt: 2 }}>
             <Typography variant="subtitle2" gutterBottom>
@@ -1580,7 +1589,6 @@ function ActionsSection({
   const [openingShell, setOpeningShell] = useState<AppAction | null>(null);
   const { openShell } = useSessionContext();
 
-  const canInstall = status === "not_installed" && !hasScriptError;
   const canInvoke =
     !hasScriptError &&
     status !== "not_installed" &&
@@ -1613,11 +1621,15 @@ function ActionsSection({
             </TableRow>
           </TableHead>
           <TableBody>
-            {actions.map((a) => {
+            {/* The install action is invoked from the dedicated Install
+                button in InstallSection, and the App detail Actions
+                section only renders for already-installed apps anyway —
+                so hide the install row, which would otherwise sit there
+                permanently un-invokable. */}
+            {actions.filter((a) => a.kind !== "install").map((a) => {
               const isInvokable = a.kind !== "shell" && a.kind !== "lifecycle";
               const isRunning = a.name === operatingAction;
-              const canRun =
-                a.kind === "install" ? canInstall : isInvokable && canInvoke;
+              const canRun = isInvokable && canInvoke;
               return (
                 <TableRow key={a.name}>
                   <TableCell sx={{ fontFamily: "monospace" }}>
@@ -1692,15 +1704,6 @@ function ActionsSection({
                         >
                           Running…
                         </Button>
-                      ) : a.kind === "install" ? (
-                        <SolidActionButton
-                          safety="write"
-                          size="small"
-                          onClick={() => setInvoking(a)}
-                          disabled={!canRun}
-                        >
-                          Install
-                        </SolidActionButton>
                       ) : (
                         <OutlinedActionButton
                           safety="write"
