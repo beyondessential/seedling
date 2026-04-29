@@ -108,7 +108,9 @@ Calling `app.action("does-not-exist")` throws. Calling
 `migrate.call(#{})` succeeds because `batch-size` has a default;
 calling it without `params` would also use defaults.
 
-## Spec changes (`docs/spec/language.md`)
+## Spec changes
+
+### `docs/spec/language.md`
 
 1. Edit `l[action.type]`: drop the "Action implements Collection /
    opaque Resource" sentence added by `8f6c0302`. Replace with: "Action
@@ -137,6 +139,74 @@ calling it without `params` would also use defaults.
    default and add a note that this schedules the App's static
    resources but does not invoke any custom action closures (start,
    on_install, etc. are handled by their own dispatch).
+6. `col(val)` Collection coercion table (around lines 105–106): drop
+   `Action` from the list of values that coerce to a Collection, and
+   drop "and actions" from the App-coerces-to-Collection wording. The
+   ResourceType enum row that lists `Action` (around line 213) stays —
+   `Action` is still a valid name for action-log identity records and
+   for `apps history` filtering — but document it as "internal /
+   audit-log only", not script-selectable. *Confirm with felix*
+   whether to drop it from the script-facing enum entirely; the easier
+   path is to leave it but remove all the ways it can reach
+   `extract_instances`.
+
+### `docs/spec/runtime.md`
+
+7. Rewrite `r[operation.composition]` (lines 494–497): replace the
+   "calling `rt.start()` on a resource of type Action" wording with
+   "calling `Action.call(params?)` on an Action handle obtained from
+   `app.action(name)` or the return of `app.on_action()`." Keep the
+   inline-execution and shared-barriers semantics.
+8. `r[operation.composition.cycles]` (lines 499–501) is already
+   correct in spirit (cycle detection required); tighten it to say
+   the check uses the action *name* against an active call stack and
+   throws *before* the closure runs. The error message must name the
+   chain.
+9. Add `r[operation.composition.params]` next to the above: the
+   runtime applies the called action's param schema in the same way
+   as operator invocation (defaults, required-fields, reserved-key
+   rejection, volume binding resolution). Schema validation
+   determinism is required for replay.
+10. Update `r[history.action-log.entries]` (lines 303–310) to add a
+    `SubActionInvoked` entry kind: emitted before each `.call()` runs,
+    capturing `(action_name, validated_params)` and a `call_index`.
+    Entry replays as already-invoked: on replay the FnPtr is
+    re-entered but params are recovered from the log rather than
+    re-validated, so a schema change between operation start and
+    replay does not desync.
+
+### `docs/spec/interface.md`
+
+11. No changes required — `i[action.invoke]` and the install path are
+    operator-driven and unaffected. (Sanity check: confirm there are
+    no statements forbidding what we're now allowing.)
+
+### `docs/spec/web.md`
+
+12. No changes required.
+
+### `docs/runtime-overview.md`
+
+13. Rewrite the "Action Composition" subsection (lines 100–106):
+    replace "Action closures can invoke other actions" + the
+    `on_upgrade` example (which is the dropped-pre-`aa514239` API)
+    with the new `Action.call` flow, the `app.action(name)` getter,
+    the no-recursion guarantee, and the `SubActionInvoked` log line.
+
+### `docs/bsl-scripting.md`
+
+14. Replace the "Sharing logic between actions" section (lines
+    501–526, added in the previous correction commit) with the real
+    `app.action(name).call(params?)` example. Keep the closure pattern
+    as a *secondary* hint for code that doesn't care about the action
+    metadata (param schema, schedule, history entry); lead with
+    `.call()` for the primary "invoke another action" story.
+
+### `docs/backup-app.md`, `docs/resource-context-rules.md`, `docs/networking.md`, `docs/threat-model.md`, `docs/skill/*`
+
+15. No changes required — these docs only ever use `app.on_action(...)`
+    as an action-definition primitive; none reference Action handles
+    as resources or describe action invocation.
 
 ## Implementation outline
 
@@ -286,17 +356,20 @@ the changelog so anyone with private scripts using either knows.
 
 ## Sequencing
 
-1. Spec edits (`docs/spec/language.md`) and bsl-scripting guide
-   updates land first so the design is visible.
-2. Implement the App-as-Collection cleanup (drop actions from
-   `AppBag`, drop Collection methods from `Action`,
-   `extract_instances` defensive error). This is mechanical and
-   self-contained.
-3. Extract param validation into a shared module.
-4. Wire the operation ctx to retain captured actions; expose
-   `call_action` on the runtime; register `app.action()` and
-   `Action.call()`.
-5. Tests.
-6. Update `docs/bsl-scripting.md` with the real example (replacing
-   the placeholder section currently in the guide).
+1. Spec edits — `docs/spec/language.md` items 1–6 and
+   `docs/spec/runtime.md` items 7–10 — land first so the design is
+   visible to anyone reading the spec mid-implementation.
+2. App-as-Collection cleanup: drop actions from `AppBag`, drop
+   Collection methods from `Action`, change `extract_instances`'s
+   fall-through to a clear error. Mechanical and self-contained.
+3. Extract param validation from `oi/handler/actions.rs` into a
+   shared module so the OI path and the new script path use the same
+   code.
+4. Wire the operation ctx to retain captured actions and an
+   `action_stack`; expose `RuntimeInstance::call_action`; register
+   `app.action()` and `Action.call()`; emit `SubActionInvoked` log
+   entries.
+5. Tests (unit + integration + replay).
+6. Update `docs/bsl-scripting.md` and `docs/runtime-overview.md` to
+   the new example and narrative (items 13, 14).
 7. `unplan` commit removing this file.
