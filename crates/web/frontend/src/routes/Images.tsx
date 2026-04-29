@@ -12,7 +12,6 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
-  IconButton,
   Paper,
   Stack,
   Table,
@@ -27,11 +26,15 @@ import {
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
+  IconActionButton,
+  OutlinedActionButton,
+  SolidActionButton,
+} from "../components/ActionButton";
+import {
   ImageReferencesCell,
   primaryReference,
 } from "../components/ImageReferences";
 import { OiErrorAlert } from "../components/OiErrorAlert";
-import { useGuard } from "../components/SafetyModeProvider";
 import { useOiQuery } from "../hooks/useOi";
 import { useOiAction } from "../hooks/useOiAction";
 import type { ImagePin, ImageSummary } from "../lib/types";
@@ -69,8 +72,6 @@ export default function Images() {
     useOiQuery<PinsResponse>("/images/pins/list", {});
   const { execute, loading: mutating, error: mutateError, clearError } =
     useOiAction();
-  const dangerGuard = useGuard("dangerous");
-  const writeGuard = useGuard("write");
 
   const [removing, setRemoving] = useState<ImageSummary | null>(null);
   const [clearingPin, setClearingPin] = useState<ImagePin | null>(null);
@@ -142,42 +143,32 @@ export default function Images() {
         <Typography variant="h5" sx={{ flexGrow: 1 }}>
           Container Images
         </Typography>
-        <Tooltip title="Refresh">
-          <span>
-            <IconButton
-              onClick={refreshAll}
-              disabled={loading || pinsLoading}
-              size="small"
-            >
-              <RefreshIcon />
-            </IconButton>
-          </span>
-        </Tooltip>
-        <Tooltip
-          title={dangerGuard.title(
+        <IconActionButton
+          safety="read"
+          tooltip="Refresh"
+          onClick={refreshAll}
+          disabled={loading || pinsLoading}
+        >
+          <RefreshIcon />
+        </IconActionButton>
+        <OutlinedActionButton
+          safety="dangerous"
+          tooltip={
             prunable.length === 0
               ? "Nothing to clean up"
-              : `Remove ${prunable.length} unused image${prunable.length === 1 ? "" : "s"}`,
-          )}
+              : `Remove ${prunable.length} unused image${prunable.length === 1 ? "" : "s"}`
+          }
+          size="small"
+          startIcon={<CleaningServicesIcon />}
+          color="warning"
+          onClick={() => {
+            clearError();
+            setBulkOpen(true);
+          }}
+          disabled={mutating || prunable.length === 0}
         >
-          <span>
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<CleaningServicesIcon />}
-              color="warning"
-              onClick={() => {
-                clearError();
-                setBulkOpen(true);
-              }}
-              disabled={
-                !dangerGuard.allowed || mutating || prunable.length === 0
-              }
-            >
-              Clear unused
-            </Button>
-          </span>
-        </Tooltip>
+          Clear unused
+        </OutlinedActionButton>
       </Box>
       <Typography
         variant="body2"
@@ -252,24 +243,19 @@ export default function Images() {
                     </Stack>
                   </TableCell>
                   <TableCell align="right">
-                    <Tooltip
-                      title={dangerGuard.title(
-                        img.in_use ? "Cannot remove: image is in use" : "Remove",
-                      )}
+                    <IconActionButton
+                      safety="dangerous"
+                      tooltip={
+                        img.in_use ? "Cannot remove: image is in use" : "Remove"
+                      }
+                      disabled={img.in_use}
+                      onClick={() => {
+                        clearError();
+                        setRemoving(img);
+                      }}
                     >
-                      <span>
-                        <IconButton
-                          size="small"
-                          onClick={() => {
-                            clearError();
-                            setRemoving(img);
-                          }}
-                          disabled={!dangerGuard.allowed || img.in_use}
-                        >
-                          <DeleteOutlineIcon fontSize="small" />
-                        </IconButton>
-                      </span>
-                    </Tooltip>
+                      <DeleteOutlineIcon fontSize="small" />
+                    </IconActionButton>
                   </TableCell>
                 </TableRow>
               ))}
@@ -347,20 +333,16 @@ export default function Images() {
                     </Stack>
                   </TableCell>
                   <TableCell align="right">
-                    <Tooltip title={writeGuard.title("Clear pin")}>
-                      <span>
-                        <IconButton
-                          size="small"
-                          onClick={() => {
-                            clearError();
-                            setClearingPin(p);
-                          }}
-                          disabled={!writeGuard.allowed}
-                        >
-                          <LinkOffIcon fontSize="small" />
-                        </IconButton>
-                      </span>
-                    </Tooltip>
+                    <IconActionButton
+                      safety="write"
+                      tooltip="Clear pin"
+                      onClick={() => {
+                        clearError();
+                        setClearingPin(p);
+                      }}
+                    >
+                      <LinkOffIcon fontSize="small" />
+                    </IconActionButton>
                   </TableCell>
                 </TableRow>
               ))}
@@ -393,18 +375,14 @@ export default function Images() {
           <Button onClick={() => setRemoving(null)} disabled={mutating}>
             Cancel
           </Button>
-          <Tooltip title={dangerGuard.title()}>
-            <span>
-              <Button
-                onClick={submitRemove}
-                variant="contained"
-                color="error"
-                disabled={mutating || !dangerGuard.allowed}
-              >
-                Remove
-              </Button>
-            </span>
-          </Tooltip>
+          <SolidActionButton
+            safety="dangerous"
+            color="error"
+            onClick={submitRemove}
+            disabled={mutating}
+          >
+            Remove
+          </SolidActionButton>
         </DialogActions>
       </Dialog>
 
@@ -434,17 +412,13 @@ export default function Images() {
           >
             Cancel
           </Button>
-          <Tooltip title={writeGuard.title()}>
-            <span>
-              <Button
-                onClick={submitClearPin}
-                variant="contained"
-                disabled={mutating || !writeGuard.allowed}
-              >
-                Clear pin
-              </Button>
-            </span>
-          </Tooltip>
+          <SolidActionButton
+            safety="write"
+            onClick={submitClearPin}
+            disabled={mutating}
+          >
+            Clear pin
+          </SolidActionButton>
         </DialogActions>
       </Dialog>
 
@@ -473,18 +447,14 @@ export default function Images() {
           <Button onClick={() => setBulkOpen(false)} disabled={mutating}>
             Cancel
           </Button>
-          <Tooltip title={dangerGuard.title()}>
-            <span>
-              <Button
-                onClick={submitBulk}
-                variant="contained"
-                color="warning"
-                disabled={mutating || !dangerGuard.allowed}
-              >
-                Remove {prunable.length}
-              </Button>
-            </span>
-          </Tooltip>
+          <SolidActionButton
+            safety="dangerous"
+            color="warning"
+            onClick={submitBulk}
+            disabled={mutating}
+          >
+            Remove {prunable.length}
+          </SolidActionButton>
         </DialogActions>
       </Dialog>
     </Box>

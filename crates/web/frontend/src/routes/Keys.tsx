@@ -10,7 +10,6 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
-  IconButton,
   Paper,
   Stack,
   Table,
@@ -20,12 +19,14 @@ import {
   TableHead,
   TableRow,
   TextField,
-  Tooltip,
   Typography,
 } from "@mui/material";
 import { useState } from "react";
+import {
+  IconActionButton,
+  SolidActionButton,
+} from "../components/ActionButton";
 import { OiErrorAlert } from "../components/OiErrorAlert";
-import { useGuard } from "../components/SafetyModeProvider";
 import { useOiQuery } from "../hooks/useOi";
 import { useOiAction } from "../hooks/useOiAction";
 import type { AuthorizedKey } from "../lib/types";
@@ -36,7 +37,6 @@ export default function Keys() {
     useOiQuery<AuthorizedKey[]>("/keys/list", {});
   const { execute, loading: mutating, error: mutateError, clearError } =
     useOiAction();
-  const dangerGuard = useGuard("dangerous");
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [fingerprint, setFingerprint] = useState("");
@@ -83,26 +83,22 @@ export default function Keys() {
         <Typography variant="h5" sx={{ flexGrow: 1 }}>
           Authorised OI Keys
         </Typography>
-        <Tooltip title="Refresh">
-          <span>
-            <IconButton onClick={refetch} disabled={loading} size="small">
-              <RefreshIcon />
-            </IconButton>
-          </span>
-        </Tooltip>
-        <Tooltip title={dangerGuard.title()}>
-          <span>
-            <Button
-              variant="contained"
-              size="small"
-              startIcon={<AddIcon />}
-              onClick={openAdd}
-              disabled={!dangerGuard.allowed}
-            >
-              Authorise key
-            </Button>
-          </span>
-        </Tooltip>
+        <IconActionButton
+          safety="read"
+          tooltip="Refresh"
+          onClick={refetch}
+          disabled={loading}
+        >
+          <RefreshIcon />
+        </IconActionButton>
+        <SolidActionButton
+          safety="dangerous"
+          size="small"
+          startIcon={<AddIcon />}
+          onClick={openAdd}
+        >
+          Authorise key
+        </SolidActionButton>
       </Box>
       <Typography
         variant="body2"
@@ -148,20 +144,16 @@ export default function Keys() {
                     {k.added_at ? new Date(k.added_at).toLocaleString() : "—"}
                   </TableCell>
                   <TableCell align="right">
-                    <Tooltip title={dangerGuard.title("Revoke")}>
-                      <span>
-                        <IconButton
-                          size="small"
-                          onClick={() => {
-                            clearError();
-                            setRevoking(k);
-                          }}
-                          disabled={!dangerGuard.allowed}
-                        >
-                          <DeleteOutlineIcon fontSize="small" />
-                        </IconButton>
-                      </span>
-                    </Tooltip>
+                    <IconActionButton
+                      safety="dangerous"
+                      tooltip="Revoke"
+                      onClick={() => {
+                        clearError();
+                        setRevoking(k);
+                      }}
+                    >
+                      <DeleteOutlineIcon fontSize="small" />
+                    </IconActionButton>
                   </TableCell>
                 </TableRow>
               ))}
@@ -202,17 +194,13 @@ export default function Keys() {
           <Button onClick={() => setDialogOpen(false)} disabled={mutating}>
             Cancel
           </Button>
-          <Tooltip title={dangerGuard.title()}>
-            <span>
-              <Button
-                onClick={submitAdd}
-                variant="contained"
-                disabled={!fingerprintValid || mutating || !dangerGuard.allowed}
-              >
-                Authorise
-              </Button>
-            </span>
-          </Tooltip>
+          <SolidActionButton
+            safety="dangerous"
+            onClick={submitAdd}
+            disabled={!fingerprintValid || mutating}
+          >
+            Authorise
+          </SolidActionButton>
         </DialogActions>
       </Dialog>
       <Dialog open={revoking !== null} onClose={() => setRevoking(null)} fullWidth maxWidth="sm">
@@ -235,18 +223,14 @@ export default function Keys() {
           <Button onClick={() => setRevoking(null)} disabled={mutating}>
             Cancel
           </Button>
-          <Tooltip title={dangerGuard.title()}>
-            <span>
-              <Button
-                onClick={submitRevoke}
-                variant="contained"
-                color="error"
-                disabled={mutating || !dangerGuard.allowed}
-              >
-                Revoke
-              </Button>
-            </span>
-          </Tooltip>
+          <SolidActionButton
+            safety="dangerous"
+            color="error"
+            onClick={submitRevoke}
+            disabled={mutating}
+          >
+            Revoke
+          </SolidActionButton>
         </DialogActions>
       </Dialog>
     </Box>

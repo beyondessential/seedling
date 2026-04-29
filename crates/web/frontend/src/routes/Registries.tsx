@@ -10,7 +10,6 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
-  IconButton,
   Paper,
   Stack,
   Table,
@@ -20,12 +19,14 @@ import {
   TableHead,
   TableRow,
   TextField,
-  Tooltip,
   Typography,
 } from "@mui/material";
 import { useState } from "react";
+import {
+  IconActionButton,
+  SolidActionButton,
+} from "../components/ActionButton";
 import { OiErrorAlert } from "../components/OiErrorAlert";
-import { useGuard } from "../components/SafetyModeProvider";
 import { useOiQuery } from "../hooks/useOi";
 import { useOiAction } from "../hooks/useOiAction";
 
@@ -43,8 +44,6 @@ export default function Registries() {
     useOiQuery<RegistriesResponse>("/registries/list", {});
   const { execute, loading: mutating, error: mutateError, clearError } =
     useOiAction();
-  const writeGuard = useGuard("write");
-  const dangerGuard = useGuard("dangerous");
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [registry, setRegistry] = useState("");
@@ -87,26 +86,22 @@ export default function Registries() {
         <Typography variant="h5" sx={{ flexGrow: 1 }}>
           Container Registry Allowlist
         </Typography>
-        <Tooltip title="Refresh">
-          <span>
-            <IconButton onClick={refetch} disabled={loading} size="small">
-              <RefreshIcon />
-            </IconButton>
-          </span>
-        </Tooltip>
-        <Tooltip title={writeGuard.title()}>
-          <span>
-            <Button
-              variant="contained"
-              size="small"
-              startIcon={<AddIcon />}
-              onClick={openAdd}
-              disabled={!writeGuard.allowed}
-            >
-              Add registry
-            </Button>
-          </span>
-        </Tooltip>
+        <IconActionButton
+          safety="read"
+          tooltip="Refresh"
+          onClick={refetch}
+          disabled={loading}
+        >
+          <RefreshIcon />
+        </IconActionButton>
+        <SolidActionButton
+          safety="write"
+          size="small"
+          startIcon={<AddIcon />}
+          onClick={openAdd}
+        >
+          Add registry
+        </SolidActionButton>
       </Box>
       <Typography
         variant="body2"
@@ -144,20 +139,16 @@ export default function Registries() {
                 <TableRow key={r} hover>
                   <TableCell sx={{ fontFamily: "monospace" }}>{r}</TableCell>
                   <TableCell align="right">
-                    <Tooltip title={dangerGuard.title("Remove")}>
-                      <span>
-                        <IconButton
-                          size="small"
-                          onClick={() => {
-                            clearError();
-                            setRemoving(r);
-                          }}
-                          disabled={!dangerGuard.allowed}
-                        >
-                          <DeleteOutlineIcon fontSize="small" />
-                        </IconButton>
-                      </span>
-                    </Tooltip>
+                    <IconActionButton
+                      safety="dangerous"
+                      tooltip="Remove"
+                      onClick={() => {
+                        clearError();
+                        setRemoving(r);
+                      }}
+                    >
+                      <DeleteOutlineIcon fontSize="small" />
+                    </IconActionButton>
                   </TableCell>
                 </TableRow>
               ))}
@@ -190,17 +181,13 @@ export default function Registries() {
           <Button onClick={() => setDialogOpen(false)} disabled={mutating}>
             Cancel
           </Button>
-          <Tooltip title={writeGuard.title()}>
-            <span>
-              <Button
-                onClick={submitAdd}
-                variant="contained"
-                disabled={!registryValid || mutating || !writeGuard.allowed}
-              >
-                Add
-              </Button>
-            </span>
-          </Tooltip>
+          <SolidActionButton
+            safety="write"
+            onClick={submitAdd}
+            disabled={!registryValid || mutating}
+          >
+            Add
+          </SolidActionButton>
         </DialogActions>
       </Dialog>
       <Dialog open={removing !== null} onClose={() => setRemoving(null)} fullWidth maxWidth="sm">
@@ -220,18 +207,14 @@ export default function Registries() {
           <Button onClick={() => setRemoving(null)} disabled={mutating}>
             Cancel
           </Button>
-          <Tooltip title={dangerGuard.title()}>
-            <span>
-              <Button
-                onClick={submitRemove}
-                variant="contained"
-                color="error"
-                disabled={mutating || !dangerGuard.allowed}
-              >
-                Remove
-              </Button>
-            </span>
-          </Tooltip>
+          <SolidActionButton
+            safety="dangerous"
+            color="error"
+            onClick={submitRemove}
+            disabled={mutating}
+          >
+            Remove
+          </SolidActionButton>
         </DialogActions>
       </Dialog>
     </Box>

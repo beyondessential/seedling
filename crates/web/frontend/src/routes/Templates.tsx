@@ -9,7 +9,6 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
-  IconButton,
   Paper,
   Stack,
   Table,
@@ -19,13 +18,15 @@ import {
   TableHead,
   TableRow,
   TextField,
-  Tooltip,
   Typography,
 } from "@mui/material";
 import { useCallback, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import {
+  IconActionButton,
+  SolidActionButton,
+} from "../components/ActionButton";
 import { OiErrorAlert } from "../components/OiErrorAlert";
-import { useGuard } from "../components/SafetyModeProvider";
 import { ScriptEditor } from "../components/ScriptEditor";
 import { useEventRefresh } from "../hooks/useEventRefresh";
 import { useOiQuery } from "../hooks/useOi";
@@ -60,7 +61,6 @@ export default function Templates() {
   } = useOiQuery<TemplateSummary[]>("/templates/list", {});
   const { execute, loading: acting, error: actionError } = useOiAction();
   const { execute: removeExec, error: removeError } = useOiAction();
-  const writeGuard = useGuard("write");
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [name, setName] = useState("");
@@ -135,26 +135,22 @@ export default function Templates() {
         <Typography variant="h5" sx={{ flexGrow: 1 }}>
           Templates
         </Typography>
-        <Tooltip title={writeGuard.title()}>
-          <span>
-            <Button
-              size="small"
-              variant="contained"
-              startIcon={<AddIcon />}
-              onClick={() => setDialogOpen(true)}
-              disabled={!writeGuard.allowed}
-            >
-              Upload template
-            </Button>
-          </span>
-        </Tooltip>
-        <Tooltip title="Refresh">
-          <span>
-            <IconButton onClick={refetch} disabled={loading} size="small">
-              <RefreshIcon />
-            </IconButton>
-          </span>
-        </Tooltip>
+        <SolidActionButton
+          safety="write"
+          size="small"
+          startIcon={<AddIcon />}
+          onClick={() => setDialogOpen(true)}
+        >
+          Upload template
+        </SolidActionButton>
+        <IconActionButton
+          safety="read"
+          tooltip="Refresh"
+          onClick={refetch}
+          disabled={loading}
+        >
+          <RefreshIcon />
+        </IconActionButton>
       </Box>
       {error && <OiErrorAlert error={error} />}
       {removeError && <OiErrorAlert error={removeError} />}
@@ -203,21 +199,17 @@ export default function Templates() {
                     {new Date(t.created_at).toLocaleString()}
                   </TableCell>
                   <TableCell align="right" sx={{ px: 0.5 }}>
-                    <Tooltip title={writeGuard.title("Remove template")}>
-                      <span>
-                        <IconButton
-                          size="small"
-                          color="error"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setConfirmRemove(t.name);
-                          }}
-                          disabled={!writeGuard.allowed}
-                        >
-                          <DeleteIcon sx={{ fontSize: 16 }} />
-                        </IconButton>
-                      </span>
-                    </Tooltip>
+                    <IconActionButton
+                      safety="write"
+                      tooltip="Remove template"
+                      color="error"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setConfirmRemove(t.name);
+                      }}
+                    >
+                      <DeleteIcon sx={{ fontSize: 16 }} />
+                    </IconActionButton>
                   </TableCell>
                 </TableRow>
               ))}
@@ -274,17 +266,13 @@ export default function Templates() {
           >
             Cancel
           </Button>
-          <Tooltip title={writeGuard.title()}>
-            <span>
-              <Button
-                variant="contained"
-                onClick={handleCreate}
-                disabled={!canSubmit || !writeGuard.allowed}
-              >
-                {acting ? "Uploading…" : "Upload"}
-              </Button>
-            </span>
-          </Tooltip>
+          <SolidActionButton
+            safety="write"
+            onClick={handleCreate}
+            disabled={!canSubmit}
+          >
+            {acting ? "Uploading…" : "Upload"}
+          </SolidActionButton>
         </DialogActions>
       </Dialog>
       <Dialog
@@ -306,18 +294,13 @@ export default function Templates() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setConfirmRemove(null)}>Cancel</Button>
-          <Tooltip title={writeGuard.title()}>
-            <span>
-              <Button
-                color="error"
-                variant="contained"
-                onClick={() => confirmRemove && void handleRemove(confirmRemove)}
-                disabled={!writeGuard.allowed}
-              >
-                Remove
-              </Button>
-            </span>
-          </Tooltip>
+          <SolidActionButton
+            safety="write"
+            color="error"
+            onClick={() => confirmRemove && void handleRemove(confirmRemove)}
+          >
+            Remove
+          </SolidActionButton>
         </DialogActions>
       </Dialog>
     </Box>

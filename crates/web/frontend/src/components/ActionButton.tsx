@@ -16,12 +16,12 @@ interface CommonProps {
   /** Action description appended after the tier prefix in the tooltip. When
    *  safety="read" and tooltip is omitted, no tooltip is shown. */
   tooltip?: ReactNode;
-  onClick?: () => void;
   /** Disabled for reasons unrelated to safety (loading, invalid form, etc). */
   disabled?: boolean;
 }
 
 interface TextProps extends CommonProps {
+  onClick?: ButtonProps["onClick"];
   startIcon?: ReactNode;
   color?: ButtonProps["color"];
   size?: ButtonProps["size"];
@@ -32,6 +32,7 @@ interface TextProps extends CommonProps {
 }
 
 interface IconProps extends CommonProps {
+  onClick?: IconButtonProps["onClick"];
   size?: IconButtonProps["size"];
   color?: IconButtonProps["color"];
   "aria-label"?: string;

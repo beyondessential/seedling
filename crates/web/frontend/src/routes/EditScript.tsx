@@ -7,14 +7,13 @@ import {
   DialogContent,
   DialogTitle,
   Stack,
-  Tooltip,
   Typography,
 } from "@mui/material";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { SolidActionButton } from "../components/ActionButton";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { PlanDiff } from "../components/PlanDiff";
-import { useGuard } from "../components/SafetyModeProvider";
 import { ScriptEditor } from "../components/ScriptEditor";
 import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
@@ -43,7 +42,6 @@ export default function EditScript() {
   const { execute: planExec, loading: planning, error: planError } = useOiAction();
   const { execute: discoverExec } = useOiAction();
   const { execute: saveExec, loading: saving, error: saveError } = useOiAction();
-  const writeGuard = useGuard("write");
   const [script, setScript] = useState("");
   const [plan, setPlan] = useState<PlanResponse | null>(null);
   const [unwarmedHandlerImages, setUnwarmedHandlerImages] = useState<string[]>(
@@ -153,18 +151,14 @@ export default function EditScript() {
         >
           Cancel
         </Button>
-        <Tooltip title={writeGuard.title()}>
-          <span>
-            <Button
-              size="small"
-              variant="contained"
-              onClick={handleReview}
-              disabled={!canReview || !writeGuard.allowed}
-            >
-              {planning ? "Planning…" : unchanged ? "No changes" : "Review & apply"}
-            </Button>
-          </span>
-        </Tooltip>
+        <SolidActionButton
+          safety="write"
+          size="small"
+          onClick={handleReview}
+          disabled={!canReview}
+        >
+          {planning ? "Planning…" : unchanged ? "No changes" : "Review & apply"}
+        </SolidActionButton>
       </Box>
       <Stack spacing={1}>
         {fetchError && <OiErrorAlert error={fetchError} />}
@@ -205,23 +199,19 @@ export default function EditScript() {
           <Button onClick={handleCancel} disabled={saving}>
             Back to editor
           </Button>
-          <Tooltip title={writeGuard.title()}>
-            <span>
-              <Button
-                variant="contained"
-                onClick={handleConfirm}
-                disabled={saving || planHasErrors || !writeGuard.allowed}
-              >
-                {saving ? (
-                  <>
-                    <CircularProgress size={14} sx={{ mr: 1 }} /> Applying…
-                  </>
-                ) : (
-                  "Apply"
-                )}
-              </Button>
-            </span>
-          </Tooltip>
+          <SolidActionButton
+            safety="write"
+            onClick={handleConfirm}
+            disabled={saving || planHasErrors}
+          >
+            {saving ? (
+              <>
+                <CircularProgress size={14} sx={{ mr: 1 }} /> Applying…
+              </>
+            ) : (
+              "Apply"
+            )}
+          </SolidActionButton>
         </DialogActions>
       </Dialog>
     </Box>
