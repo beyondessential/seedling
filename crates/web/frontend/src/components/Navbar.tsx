@@ -10,7 +10,7 @@ import KeyIcon from "@mui/icons-material/Key";
 import PeopleAltIcon from "@mui/icons-material/PeopleAlt";
 import StorageIcon from "@mui/icons-material/Storage";
 import { AppBar, Badge, Box, Chip, IconButton, Toolbar, Tooltip, Typography } from "@mui/material";
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useEventRefresh } from "../hooks/useEventRefresh";
 import { useOiQuery } from "../hooks/useOi";
@@ -49,6 +49,12 @@ const isHeldVolumeEvent = (ev: SeedlingEvent) =>
 
 export function Navbar() {
   const { data } = useOiQuery<StatusSummary>("/server/status", {});
+  // Surface the server's hostname in the browser tab title, so an operator
+  // with multiple Seedling tabs open can tell at a glance which site each
+  // one is pointing at without flicking through them.
+  useEffect(() => {
+    document.title = data?.hostname ? `${data.hostname} · Seedling` : "Seedling";
+  }, [data?.hostname]);
   const { data: faults, refetch: refetchFaults } = useOiQuery<FaultRecord[]>("/faults/list", {});
   const { data: clients, refetch: refetchClients } =
     useOiQuery<ConnectedClients>("/connected-clients/list", {});
