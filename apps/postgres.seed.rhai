@@ -16,6 +16,8 @@
 // from the upstream GitHub release at install time (and via a standalone
 // action) into an app volume.
 
+app.description("PostgreSQL database server with pgtune-style sizing, exported unix socket, and pg_upgrade-driven major version upgrades");
+
 // ── Params ────────────────────────────────────────────────────────────────────
 
 let version = app.param("version")
@@ -189,16 +191,21 @@ host    all       all   ::/0          scram-sha-256
 
 // ── Resources ─────────────────────────────────────────────────────────────────
 
-let data = app.external_volume("data");
+let data = app.external_volume("data")
+    .description("Persistent cluster data directory; one subdirectory per major version (/data/pg{major})");
 
 let socket = app.volume("socket")
+    .description("PostgreSQL unix socket directory shared with other apps (mode 0640, owner postgres)")
     .exported(#{ description: "PostgreSQL unix socket directory (/var/run/postgresql)" });
 
-let config_vol = app.volume("config");
+let config_vol = app.volume("config")
+    .description("Generated postgresql.conf and pg_hba.conf");
 
-let bin = app.volume("bin");
+let bin = app.volume("bin")
+    .description("bestool-psql binaries fetched from the upstream GitHub release");
 
 let pg_svc = app.service("postgres")
+    .description("PostgreSQL wire protocol service (TCP 5432)")
     .exported(#{ description: "PostgreSQL wire protocol (TCP 5432)" });
 
 // Worst-case PID budget: one backend per connection plus background workers,
@@ -209,6 +216,7 @@ let pids_budget = || {
 };
 
 app.deployment("postgres")
+    .description("Long-running PostgreSQL server")
     .image(pg_image.call())
     .scale(1)
     .on_update(OnUpdate.Replace)
@@ -257,7 +265,8 @@ app.deployment("postgres")
 // Staged via an anonymous tmpfs so the rendered content comes from the script
 // (which has the param values) rather than being built with shell quoting.
 let render_config = |rt| {
-    let staging = app.volume().tmpfs();
+    let staging = app.volume().tmpfs()
+        .description("Generated postgresql.conf and pg_hba.conf staged in RAM before being installed into the config volume");
     staging.write("/postgresql.conf", pg_conf_content.call());
     staging.write("/pg_hba.conf", pg_hba_content.call());
 
@@ -265,6 +274,7 @@ let render_config = |rt| {
     // with mode 0640 (no per-file ownership/mode in volume.write yet), and
     // the postgres process inside the deployment container runs as uid 999.
     rt.start(app.job()
+        .description("Install rendered postgresql.conf and pg_hba.conf into the config volume with postgres ownership")
         .image(pg_image.call())
         .writable_rootfs()
         .cap_add("CHOWN")
@@ -285,6 +295,7 @@ let render_config = |rt| {
 // Debian-family postgres image the shell jobs run inside.
 let build_bestool_psql = |rt| {
     rt.start(app.job()
+        .description("Fetch the bestool-psql release archive from GitHub and install the binaries into the bin volume")
         .image(fetch_image)
         .writable_rootfs()
         // apt's privilege-drop dance (setuid to _apt for HTTP fetches,
@@ -331,7 +342,8 @@ install -m 0755 bestool-psql-audit /app/bin/bin/bestool-psql-audit
 // exist before 18. UTF-8 is always the cluster encoding regardless of
 // locale.
 let initdb_if_missing = |rt, major| {
-    let pwfile = app.volume().tmpfs();
+    let pwfile = app.volume().tmpfs()
+        .description("Cluster bootstrap password staged in RAM and discarded after initdb");
     pwfile.write("/pwfile", password.value());
 
     let locale_args = if major >= 18 {
@@ -341,6 +353,7 @@ let initdb_if_missing = |rt, major| {
     };
 
     rt.start(app.job()
+        .description(`Bootstrap the PostgreSQL ${major} cluster on first install (initdb /data/pg${major})`)
         .image(`docker.io/library/postgres:${major}`)
         .writable_rootfs()
         .cap_add("CHOWN")
@@ -412,6 +425,7 @@ app.on_action("build-bestool-psql", |rt, _param| {
 
 app.on_action("status", |rt, _param| {
     rt.start(app.job()
+        .description("Probe the running PostgreSQL instance via pg_isready over the unix socket")
         .image(pg_image.call())
         .writable_rootfs()
         .mount("/var/run/postgresql", socket)
@@ -422,6 +436,7 @@ app.on_action("status", |rt, _param| {
 
 app.on_action("vacuum", |rt, _param| {
     rt.start(app.job()
+        .description("Run vacuumdb --all --analyze across every database")
         .image(pg_image.call())
         .writable_rootfs()
         .mount("/var/run/postgresql", socket)
@@ -469,6 +484,7 @@ done`
     };
 
     rt.start(app.job()
+        .description("Dump the cluster into the operator-chosen output volume in the requested format")
         .image(pg_image.call())
         .writable_rootfs()
         .mount("/var/run/postgresql", socket)
@@ -497,6 +513,7 @@ app.on_action("create-database", |rt, param| {
     let dbname = param["name"];
     let owner = if "owner" in param { param["owner"] } else { "postgres" };
     rt.start(app.job()
+        .description(`Create database "${dbname}" owned by "${owner}"`)
         .image(pg_image.call())
         .writable_rootfs()
         .mount("/var/run/postgresql", socket)
@@ -616,6 +633,7 @@ version.on_change(|rt, old| {
             // pg_upgrade in the tianon image, which ships both major binaries.
             // Workdir must be writable: pg_upgrade writes log files there.
             rt.start(app.job()
+                .description(`pg_upgrade hardlink-copy from PostgreSQL ${cur} to ${next} via docker.io/tianon/postgres-upgrade`)
                 .image(`docker.io/tianon/postgres-upgrade:${cur}-to-${next}`)
                 .writable_rootfs()
                 .cap_add("CHOWN")
@@ -647,6 +665,7 @@ gosu postgres pg_upgrade \
         // Post-upgrade analyze is highly recommended; fire-and-forget-ish.
         // Any operator-relevant failure surfaces through the normal action log.
         rt.start(app.job()
+            .description("Post-pg_upgrade analyze-in-stages to refresh planner statistics on the new major")
             .image(pg_image.call())
             .writable_rootfs()
             .mount("/var/run/postgresql", socket)
@@ -694,10 +713,12 @@ password.on_change(|rt, _old| {
     // returns `()`, so bind the value first, then mutate it, then use it.
     let escaped = password.value();
     escaped.replace("'", "''");
-    let staging = app.volume().tmpfs();
+    let staging = app.volume().tmpfs()
+        .description("ALTER USER SQL staged in RAM for password rotation; never lands on a persistent volume");
     staging.write("/alter.sql", `ALTER USER postgres WITH PASSWORD '${escaped}';`);
 
     rt.start(app.job()
+        .description("Apply rotated postgres superuser password via ALTER USER")
         .image(pg_image.call())
         .writable_rootfs()
         .mount("/var/run/postgresql", socket)

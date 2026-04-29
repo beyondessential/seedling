@@ -14,6 +14,8 @@
 // Run the "connect" action after rotating credentials or changing
 // bucket/prefix/endpoint/region.
 
+app.description("Backup provider using Kopia (kopia.io) backed by an S3-compatible object store; one app instance per Kopia repository");
+
 // ── Image ─────────────────────────────────────────────────────────────────────
 
 let version = app.param("version")
@@ -99,8 +101,10 @@ let retention_annual = app.param("retention-annual")
 // Persistent Kopia state: repository config, content cache, and logs.
 // Populated by the install (or connect) action; read by every other action
 // so they do not need to re-connect to the repository on every run.
-let config = app.volume("config");
-let cache = app.volume("cache");
+let config = app.volume("config")
+    .description("Persistent Kopia repository config (kopia.config) and logs");
+let cache = app.volume("cache")
+    .description("Local Kopia content cache, populated lazily as snapshots are read or written");
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -220,6 +224,7 @@ app.on_action("save-snapshot", |rt, param| {
     let source = app.external_volume(param["source_volume"]);
     let backup = param["backup"];
     rt.start(kopia_job.call()
+        .description(`Upload a snapshot of ${backup["app"]}/${backup["volume"]} to the Kopia repository`)
         .mount("/source", source)
         .command(["sh", "-c",
             "kopia snapshot create" +
@@ -238,6 +243,7 @@ app.on_action("list-snapshots", |rt, param| {
     let output_file = param["output_filename"];
     let backup = param["backup"];
     rt.start(kopia_job.call()
+        .description("List Kopia snapshots filtered by app/volume tags into kopia.json")
         .mount("/output", output)
         .command(["sh", "-c",
             "kopia snapshot list --json" +
@@ -249,6 +255,7 @@ app.on_action("list-snapshots", |rt, param| {
         ])
     ).terminated(300).ensure_success();
     rt.start(app.job()
+        .description("Reshape kopia.json into the Seedling backup-listing format using jq")
         .image(alpine)
         .writable_rootfs()
         .mount("/output", output)
@@ -266,6 +273,7 @@ app.on_action("restore-snapshot", |rt, param| {
     let dest = app.external_volume(param["destination_volume"]);
     let backup = param["backup"];
     rt.start(kopia_job.call()
+        .description(`Restore Kopia snapshot ${param["snapshot"]} into the destination volume`)
         .mount("/destination", dest)
         .command([
              "kopia", "snapshot", "restore", param["snapshot"], "/destination"

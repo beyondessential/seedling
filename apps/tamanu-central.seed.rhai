@@ -21,6 +21,8 @@
 //   - The frontend keeps serving cached pages through the brief outage and
 //     rolls to the new tag as part of `rt.start(app)` afterwards.
 
+app.description("Tamanu central server: API workers, scheduled tasks, optional FHIR workers, frontend, and optional patient portal");
+
 // ── Params ────────────────────────────────────────────────────────────────────
 
 let version = app.param("version")
@@ -76,7 +78,8 @@ let patient_portal_fqdn = app.param("patient-portal-fqdn")
 
 // Postgres unix socket. The operator maps this to the `socket` volume
 // exported by the postgres app via the external-volume mapping table.
-let pg_socket = app.external_volume("pg-socket");
+let pg_socket = app.external_volume("pg-socket")
+    .description("PostgreSQL unix socket — operator maps to the postgres app's exported socket volume");
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -202,7 +205,8 @@ let api_max_replicas = || {
 
 // ── Resources ─────────────────────────────────────────────────────────────────
 
-let config_vol = app.volume("config");
+let config_vol = app.volume("config")
+    .description("Generated production.json5 and local.json5 plus default.reference.json5 for operator inspection");
 
 // Common env + mounts for every server-image container (api, tasks, fhir-*).
 // Tamanu reads /config/production.json5 and /config/local.json5 by default
@@ -213,6 +217,7 @@ let configure_server = |c| c
     .mount("/var/run/postgresql", pg_socket);
 
 let web_svc = app.service("web")
+    .description("Tamanu central HTTP service — routes /api, /v1, and / to the API and frontend deployments")
     .exported(#{ description: "Tamanu central HTTPS endpoint (HTTP routing)" })
     .http(80);
 
@@ -229,6 +234,7 @@ if public_hostname.is_set() {
 // Patient portal: separate ingress on its own hostname when enabled.
 let portal_svc = if portal_on.call() {
     let s = app.service("portal-web")
+        .description("Tamanu patient portal HTTP service — separate hostname from the central API")
         .exported(#{ description: "Tamanu patient portal HTTPS endpoint" })
         .http(80);
     s.ingress(patient_portal_fqdn.value(), 443)
@@ -239,6 +245,7 @@ let portal_svc = if portal_on.call() {
 
 // API workers handle /api/* and /v1/* on the central HTTP service.
 configure_server.call(app.deployment("api")
+    .description("Tamanu central API workers serving /api and /v1")
     .image(server_image.call())
     .scale(1..api_max_replicas.call())
     .arg(["startApi"])
@@ -248,6 +255,7 @@ configure_server.call(app.deployment("api")
 
 // Scheduled tasks: cron-style internal jobs the central server fires.
 configure_server.call(app.deployment("tasks")
+    .description("Tamanu scheduled-task worker (cron-style internal jobs)")
     .image(server_image.call())
     .scale(1)
     .arg(["startTasks"])
@@ -258,11 +266,13 @@ configure_server.call(app.deployment("tasks")
 // use day-to-day; gating them keeps the default footprint small.
 if fhir_on.call() {
     configure_server.call(app.deployment("fhir-refresh")
+        .description("FHIR materialised-resource refresh worker")
         .image(server_image.call())
         .scale(1)
         .arg(["startFhirWorker", "--topics=fhir.refresh.allFromUpstream,fhir.refresh.entireResource,fhir.refresh.fromUpstream"])
     );
     configure_server.call(app.deployment("fhir-resolve")
+        .description("FHIR resolver worker")
         .image(server_image.call())
         .scale(1)
         .arg(["startFhirWorker", "--topics=fhir.resolver"])
@@ -270,6 +280,7 @@ if fhir_on.call() {
 }
 
 app.deployment("frontend")
+    .description("Tamanu central single-page-app frontend (rolling restarts)")
     .image(frontend_image.call())
     .scale(1)
     .cap_add("NET_BIND_SERVICE")
@@ -278,6 +289,7 @@ app.deployment("frontend")
 // Patient portal deployment + routing (when enabled).
 if portal_on.call() {
     app.deployment("patient-portal")
+        .description("Patient-facing portal SPA + API")
         .image(portal_image.call())
         .scale(1)
         .env("TZ", timezone.value())
@@ -297,6 +309,7 @@ if portal_on.call() {
 // loads files named default / <NODE_ENV> / local / etc., never *.reference.*).
 let copy_image_defaults = |rt| {
     rt.start(app.job()
+        .description("Copy the image's default.json5 to /config/default.reference.json5 for operator inspection")
         .image(server_image.call())
         .writable_rootfs()
         .cap_add("DAC_READ_SEARCH")
@@ -319,11 +332,13 @@ install -m 0640 "$src" /config/default.reference.json5
 // tmpfs so the rendered content comes from the script (which has the param
 // values) rather than being built up with shell quoting.
 let render_config = |rt| {
-    let staging = app.volume().tmpfs();
+    let staging = app.volume().tmpfs()
+        .description("Rendered production.json5 and local.json5 staged in RAM before being installed into the config volume");
     staging.write("/production.json5", production_json.call());
     staging.write("/local.json5", local_json.call());
 
     rt.start(app.job()
+        .description("Install rendered production.json5 and local.json5 into the config volume")
         .image(server_image.call())
         .writable_rootfs()
         .cap_add("CHOWN")
@@ -344,7 +359,8 @@ let render_config = |rt| {
 // passwords are set on the roles — every connection from these apps comes
 // in via the socket, where trust auth applies.
 let provision_db = |rt| {
-    let staging = app.volume().tmpfs();
+    let staging = app.volume().tmpfs()
+        .description("DB provisioning SQL staged in RAM (creates roles and the central database)");
     let dbn = db_name.value();
     let dbu = db_user.value();
     // Mutate-in-place: see the comment on `json_str` for why a chain doesn't work.
@@ -365,6 +381,7 @@ let provision_db = |rt| {
     staging.write("/createdb.sql", `CREATE DATABASE "${escape.call(dbn)}" OWNER "${escape.call(dbu)}";`);
 
     rt.start(app.job()
+        .description("Provision the Tamanu central role and database via psql")
         .image(psql_image)
         .writable_rootfs()
         .mount("/var/run/postgresql", pg_socket)
@@ -383,6 +400,7 @@ let provision_db = |rt| {
 // schema is already at the target revision is a no-op.
 let migrate_db = |rt| {
     rt.start(app.job()
+        .description("Run Tamanu's schema migration against the central database")
         .image(server_image.call())
         .writable_rootfs()
         .env("TZ", timezone.value())
@@ -398,7 +416,8 @@ let migrate_db = |rt| {
 // to the central server. `--skip-if-not-needed` makes the command a no-op if
 // any user already exists, so this is safe to re-run on subsequent installs.
 let provision_admin = |rt, email, display_name, password| {
-    let staging = app.volume().tmpfs();
+    let staging = app.volume().tmpfs()
+        .description("Initial admin provisioning JSON5 staged in RAM (contains the admin password)");
     staging.write("/provision.json5", `{
   users: {
     ${json_str.call(email)}: {
@@ -410,6 +429,7 @@ let provision_admin = |rt, email, display_name, password| {
 }
 `);
     rt.start(app.job()
+        .description("Provision the initial admin user via Tamanu's `provision` subcommand")
         .image(server_image.call())
         .writable_rootfs()
         .env("TZ", timezone.value())
