@@ -208,15 +208,12 @@ let api_max_replicas = || {
 let config_vol = app.volume("config").description("Tamanu configuration files");
 config_vol.write("/production.json5", INITIAL_CONFIG);
 
-let tmp_vol = app.volume("tmp").tmpfs();
-
 // Common options for every server-image container (api, tasks, fhir-*).
 let configure_server = |c| c
     .image(server_image.call())
     .env("TZ", timezone.value())
     .mount("/config", config_vol)
-    .mount("/var/run/postgresql", pg_socket)
-    .mount("/tmp", tmp_vol);
+    .mount("/var/run/postgresql", pg_socket);
 
 let web_svc = app.service("web").exported().http(80);
 if public_hostname.is_set() {
