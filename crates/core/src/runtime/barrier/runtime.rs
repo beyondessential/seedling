@@ -624,15 +624,17 @@ impl RuntimeInstance {
             }
         }
 
-        // l[impl rt.start]
-        // Anything else is a script bug: rt.start was called with a value
-        // that isn't a recognised resource, App, or Collection. Returning
-        // an empty vector silently masked the bug for `rt.start(action)`
-        // and similar calls; surface it instead.
-        Err(RegistryError::message(format!(
-            "rt.start: unsupported value {} (expected a resource, App, or Collection)",
-            resources.type_name()
-        )))
+        // Anything else is a non-instance-bearing value: Volumes,
+        // ExternalVolumes, ExternalServices, and other items that
+        // legitimately appear in a Collection (e.g. via `col(app)`)
+        // but contribute nothing to the action log. Silently skipping
+        // them lets `rt.start(app)`, `rt.warm_certs(app)`, etc. accept
+        // the App's full Collection without each caller filtering.
+        // Direct misuse (`rt.start(some_volume)`) is also accepted as
+        // a no-op for symmetry with the pre-Action-call behaviour;
+        // the Action arm above catches the one case where silent
+        // dropping would mask a real script bug.
+        Ok(vec![])
     }
 
     // r[impl desired-state.during-operation]

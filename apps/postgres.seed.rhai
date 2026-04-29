@@ -218,7 +218,6 @@ let pids_budget = || {
 app.deployment("postgres")
     .description("Long-running PostgreSQL server")
     .image(pg_image.call())
-    .scale(1)
     .on_update(OnUpdate.Replace)
     .cap_add("CHOWN")
     .cap_add("DAC_OVERRIDE")
@@ -369,19 +368,20 @@ if [ ! -f /data/pg${major}/PG_VERSION ]; then
   mkdir -p /data/pg${major}
   chown ${postgres_uid}:${postgres_uid} /data/pg${major}
   chmod 0700 /data/pg${major}
-  # The pwfile is written by seedling as root with mode 0640 (volume.write
-  # has no way to specify per-file ownership/mode yet), so postgres can't
-  # read it after gosu drops privileges. Make it world-readable for this
-  # one-shot job; the file lives only on the per-instance tmpfs volume
-  # /run/seedling/tmpfs-volumes/<id> which is removed when the job exits.
   chmod 0644 /pw/pwfile
   gosu postgres initdb -D /data/pg${major} -U postgres \
     --encoding=UTF8 ${locale_args} \
     --auth-local=trust --auth-host=scram-sha-256 --data-checksums \
     --pwfile=/pw/pwfile
 fi
-`])
+    `])
     ).terminated(900).ensure_success();
+
+    // The pwfile is written by seedling as root with mode 0640 (volume.write
+    // has no way to specify per-file ownership/mode yet), so postgres can't
+    // read it after gosu drops privileges. Make it world-readable for this
+    // one-shot job; the file lives only on the per-instance tmpfs volume
+    // /run/seedling/tmpfs-volumes/<id> which is removed when the job exits.
 };
 
 // Reload postgresql.conf without restarting. Postgres maps SIGHUP to

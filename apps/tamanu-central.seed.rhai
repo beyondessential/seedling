@@ -365,6 +365,7 @@ let warmup = app.on_action("warm-images", |rt, param| {
 });
 
 app.on_install(|rt, params| {
+    // what
     rt.warm_certs(app);
     warmup.invoke();
 
