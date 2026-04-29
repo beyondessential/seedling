@@ -225,7 +225,6 @@ export default function Keys() {
           </Button>
           <SolidActionButton
             safety="dangerous"
-            color="error"
             onClick={submitRevoke}
             disabled={mutating}
           >

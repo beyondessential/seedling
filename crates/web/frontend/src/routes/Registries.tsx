@@ -209,7 +209,6 @@ export default function Registries() {
           </Button>
           <SolidActionButton
             safety="dangerous"
-            color="error"
             onClick={submitRemove}
             disabled={mutating}
           >

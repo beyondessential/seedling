@@ -110,7 +110,6 @@ function ConfirmDeleteHeldDialog({
         </Button>
         <SolidActionButton
           safety="dangerous"
-          color="error"
           onClick={onConfirm}
           disabled={loading}
         >

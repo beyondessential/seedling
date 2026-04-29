@@ -42,6 +42,22 @@ interface IconProps extends CommonProps {
   children: ReactNode;
 }
 
+/** Default MUI palette for each tier when the button is enabled. The tier
+ *  controls the colour: read = primary (the project's green), write =
+ *  warning (orange), dangerous = error (red). Callers may still override
+ *  with an explicit `color` prop for the rare case where the tier-default
+ *  doesn't fit (e.g. color="inherit" on a button inside an Alert). */
+function defaultColor(safety: SafetyMode): "primary" | "warning" | "error" {
+  switch (safety) {
+    case "read":
+      return "primary";
+    case "write":
+      return "warning";
+    case "dangerous":
+      return "error";
+  }
+}
+
 /** Wrapping-span styling when the button is forbidden by the current safety
  *  mode: not-allowed cursor on hover, plus a tier-coloured diagonal-stripe
  *  background painted onto the inner disabled button. The stripes are
@@ -104,7 +120,7 @@ function TextActionButton({
         <Button
           variant={variant}
           startIcon={startIcon}
-          color={color}
+          color={color ?? defaultColor(safety)}
           size={size}
           type={type}
           fullWidth={fullWidth}
@@ -150,7 +166,7 @@ export function IconActionButton({
       <Box component="span" sx={spanSx ?? undefined}>
         <IconButton
           size={size}
-          color={color}
+          color={color ?? defaultColor(safety)}
           sx={sx}
           onClick={onClick}
           disabled={disabled || forbidden}

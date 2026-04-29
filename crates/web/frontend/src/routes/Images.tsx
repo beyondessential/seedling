@@ -377,7 +377,6 @@ export default function Images() {
           </Button>
           <SolidActionButton
             safety="dangerous"
-            color="error"
             onClick={submitRemove}
             disabled={mutating}
           >

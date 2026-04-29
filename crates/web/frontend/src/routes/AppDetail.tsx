@@ -2279,7 +2279,6 @@ function AppImagesSection({
           </Button>
           <SolidActionButton
             safety="dangerous"
-            color="error"
             onClick={submitRemove}
             disabled={mutating}
           >
@@ -2495,7 +2494,6 @@ function AppRemovalDialog({
         </Button>
         <SolidActionButton
           safety="dangerous"
-          color="error"
           onClick={handleConfirm}
           disabled={loading}
         >
