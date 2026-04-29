@@ -154,20 +154,92 @@ async function killGracefully(proc: ChildProcessWithoutNullStreams): Promise<voi
   });
 }
 
-export async function startStack(opts: StartOptions = {}): Promise<StackHandle> {
+/** Resolve the workspace target/debug binaries the fixture relies on. */
+export function locateBinaries(opts: StartOptions = {}) {
   const workspaceRoot = opts.workspaceRoot ?? DEFAULT_WORKSPACE;
-  const silent = opts.silent ?? true;
-
   const daemonBin = join(workspaceRoot, "target", "debug", "seedling");
   const webBin = join(workspaceRoot, "target", "debug", "seedling-web");
   const ctlBin = join(workspaceRoot, "target", "debug", "seedling-ctl");
   for (const bin of [daemonBin, webBin, ctlBin]) {
     if (!existsSync(bin)) {
-      throw new Error(
-        `missing binary ${bin} — run 'cargo build' (or 'just build') first`,
-      );
+      throw new Error(`missing binary ${bin} — run 'cargo build' (or 'just build') first`);
     }
   }
+  return { daemonBin, webBin, ctlBin };
+}
+
+/** Free an ephemeral 127.0.0.1 port. Re-exported so tests can build their
+ *  own scenarios without copying the helper. */
+export const freePort = getFreePort;
+
+/** Spawn seedling-web only, pointed at an arbitrary daemon address. Used by
+ *  tests that want to observe seedling-web's own behaviour (e.g. retry
+ *  loops) before bringing a daemon up. The caller is responsible for
+ *  stopping the process and removing the temp directory. */
+export interface WebOnlyHandle {
+  proc: ChildProcessWithoutNullStreams;
+  watch: ProcWatch;
+  baseUrl: string;
+  root: string;
+  stop: () => Promise<void>;
+}
+
+export async function spawnWebPointedAt(
+  daemonAddr: string,
+  opts: StartOptions = {},
+): Promise<WebOnlyHandle> {
+  const { webBin, ctlBin } = locateBinaries(opts);
+  const silent = opts.silent ?? true;
+
+  const root = mkdtempSync(join(tmpdir(), "seedling-e2e-webonly-"));
+  const stateDir = join(root, "state");
+  mkdirSync(join(stateDir, "seedling"), { recursive: true });
+  const { keyPath } = generateClientKey(ctlBin, stateDir);
+
+  const httpPort = await getFreePort();
+  const wtPort = await getFreePort();
+  const proc = spawn(
+    webBin,
+    [
+      "--dev-no-auth",
+      "--daemon-trust-any",
+      "--http-port",
+      String(httpPort),
+      "--wt-port",
+      String(wtPort),
+      "--daemon-addr",
+      daemonAddr,
+      "--key-file",
+      keyPath,
+    ],
+    {
+      env: {
+        ...process.env,
+        SEEDLING_WEB_LOG: process.env.SEEDLING_WEB_LOG ?? "seedling_web=info,warn",
+      },
+    },
+  );
+  const watch = pipeOutput(proc, "web", silent);
+  const baseUrl = `http://127.0.0.1:${httpPort}`;
+  return {
+    proc,
+    watch,
+    baseUrl,
+    root,
+    async stop() {
+      await killGracefully(proc).catch(() => {});
+      try {
+        rmSync(root, { recursive: true, force: true });
+      } catch {
+        // best effort
+      }
+    },
+  };
+}
+
+export async function startStack(opts: StartOptions = {}): Promise<StackHandle> {
+  const silent = opts.silent ?? true;
+  const { daemonBin, webBin, ctlBin } = locateBinaries(opts);
 
   const root = mkdtempSync(join(tmpdir(), "seedling-e2e-"));
   const dataDir = join(root, "daemon");
