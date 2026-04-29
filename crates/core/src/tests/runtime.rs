@@ -32,6 +32,7 @@ fn rt_methods_are_defined() {
 }
 
 // l[verify rt.lifecyle]
+// l[verify rt.started.default-deadlines]
 #[test]
 fn rt_lifecycle_states_accessible() {
     exercise(
@@ -243,3 +244,49 @@ fn termination_type_is_opaque() {
     "#,
     );
 }
+
+// l[verify rt.started.ready-eventually]
+#[test]
+fn started_ready_eventually_is_callable() {
+    exercise(
+        r#"
+        app.on_start(|rt, _param| {
+            let dep = app.deployment("web").image("docker.io/library/nginx:latest");
+            // ready_eventually should be callable; under the stubbed runtime
+            // it resolves without suspending. Companion barrier-suspension
+            // semantics are exercised by terminated_eventually tests.
+            rt.start(dep).ready_eventually();
+        });
+    "#,
+    );
+}
+
+// l[verify rt.restart]
+#[test]
+fn rt_restart_is_callable() {
+    exercise(
+        r#"
+        app.on_start(|rt, _param| {
+            let dep = app.deployment("web").image("docker.io/library/nginx:latest");
+            rt.restart(dep);
+        });
+    "#,
+    );
+}
+
+// l[verify rt.signal]
+#[test]
+fn rt_signal_is_callable() {
+    exercise(
+        r#"
+        app.on_start(|rt, _param| {
+            let dep = app.deployment("web").image("docker.io/library/nginx:latest");
+            let started = rt.start(dep);
+            // Both canonical and bare signal names are accepted.
+            rt.signal(started, "SIGTERM");
+            rt.signal(started, "HUP");
+        });
+    "#,
+    );
+}
+

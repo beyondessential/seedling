@@ -4,6 +4,8 @@ use defs::resource::ResourceKind;
 // l[verify ingress.type]
 // l[verify ingress.termination]
 // l[verify ingress.service]
+// l[verify const.terminate.https]
+// l[verify const.output.http1]
 #[test]
 fn ingress_builder_chain() {
     let app = run_test_script_app(
@@ -24,6 +26,8 @@ fn ingress_builder_chain() {
 }
 
 // l[verify ingress.termination]
+// l[verify const.terminate.tls]
+// l[verify const.output.tcp]
 #[test]
 fn ingress_terminate_tls_to_tcp() {
     run_test_script_app(
@@ -34,6 +38,8 @@ fn ingress_terminate_tls_to_tcp() {
 }
 
 // l[verify ingress.termination]
+// l[verify const.terminate.dtls]
+// l[verify const.output.udp]
 #[test]
 fn ingress_terminate_dtls_to_udp() {
     run_test_script_app(
@@ -44,6 +50,7 @@ fn ingress_terminate_dtls_to_udp() {
 }
 
 // l[verify ingress.termination]
+// l[verify const.output.http2]
 #[test]
 fn ingress_terminate_https_to_http2() {
     run_test_script_app(
