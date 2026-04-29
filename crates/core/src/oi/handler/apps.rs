@@ -794,6 +794,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     let mut desc = json!({
         "status": status.name(),
         "generation": generation,
+        "description": def.description,
         "faults": app_faults_json,
         "resources": resources_json,
         "dynamic_resources": dynamic_resources_json,

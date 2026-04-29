@@ -326,6 +326,7 @@ export interface AppVolume {
 export interface DeclaredExternalVolume {
   app: string;
   name: string;
+  description?: string;
 }
 
 export interface ExternalMapping {
@@ -439,6 +440,7 @@ export interface AppService {
 export interface DeclaredExternalService {
   app: string;
   name: string;
+  description?: string;
 }
 
 export type ServiceRef =

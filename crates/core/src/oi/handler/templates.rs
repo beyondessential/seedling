@@ -269,6 +269,7 @@ pub(crate) fn preview_template(state: &OiState, params: PreviewParams) -> Handle
     }
 
     Ok(json!({
+        "description": def.description,
         "resources": resources_json,
         "params": params_json,
         "actions": actions_json,

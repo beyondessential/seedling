@@ -44,6 +44,7 @@ pub struct ServiceSummary {
     pub http: bool,
     pub exported: bool,
     pub export_description: Option<String>,
+    pub description: Option<String>,
 }
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -61,6 +62,7 @@ pub struct IngressSummary {
     pub dtls: bool,
     pub http_terminate: Option<&'static str>,
     pub redirect: Option<RedirectSummary>,
+    pub description: Option<String>,
 }
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -76,6 +78,7 @@ pub struct DeploymentSummary {
     pub scale: ScaleSummary,
     pub on_update: &'static str,
     pub on_terminate: &'static str,
+    pub description: Option<String>,
 }
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -83,6 +86,7 @@ pub struct JobSummary {
     pub container: ContainerSummary,
     pub pod: PodSummary,
     pub deadline: Option<u64>,
+    pub description: Option<String>,
 }
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -166,13 +170,18 @@ pub struct VolumeSummary {
     pub writes: BTreeMap<String, String>,
     pub exported: bool,
     pub export_description: Option<String>,
+    pub description: Option<String>,
 }
 
 #[derive(Serialize, Debug, PartialEq)]
-pub struct ExternalVolumeSummary {}
+pub struct ExternalVolumeSummary {
+    pub description: Option<String>,
+}
 
 #[derive(Serialize, Debug, PartialEq)]
-pub struct ExternalServiceSummary {}
+pub struct ExternalServiceSummary {
+    pub description: Option<String>,
+}
 
 // ---------------------------------------------------------------------------
 // Resource → Summary
@@ -203,6 +212,7 @@ impl Service {
                 .exported
                 .as_ref()
                 .and_then(|opts| opts.description.clone()),
+            description: def.description.clone(),
         }
     }
 }
@@ -230,6 +240,7 @@ impl Ingress {
                 HttpTermination::Http2 => "http2",
             }),
             redirect: def.redirect.as_ref().map(RedirectDef::summary),
+            description: def.description.clone(),
         }
     }
 }
@@ -262,6 +273,7 @@ impl Deployment {
             on_terminate: match def.on_terminate {
                 OnTerminate::Recreate => "recreate",
             },
+            description: def.description.clone(),
         }
     }
 }
@@ -275,6 +287,7 @@ impl Job {
             container: container.summary(),
             pod: pod.summary(),
             deadline: def.deadline,
+            description: def.description.clone(),
         }
     }
 }
@@ -407,19 +420,24 @@ impl Volume {
                 .exported
                 .as_ref()
                 .and_then(|opts| opts.description.clone()),
+            description: def.description.clone(),
         }
     }
 }
 
 impl ExternalVolume {
     pub fn summary(&self) -> ExternalVolumeSummary {
-        ExternalVolumeSummary {}
+        ExternalVolumeSummary {
+            description: self.def.lock().description.clone(),
+        }
     }
 }
 
 impl ExternalService {
     pub fn summary(&self) -> ExternalServiceSummary {
-        ExternalServiceSummary {}
+        ExternalServiceSummary {
+            description: self.def.lock().description.clone(),
+        }
     }
 }
 

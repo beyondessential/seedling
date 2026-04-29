@@ -33,6 +33,7 @@ fn deployment_summary_with_image(image: Option<&str>, scale: (u16, u16)) -> Depl
         },
         on_update: "rolling",
         on_terminate: "recreate",
+        description: None,
     }
 }
 
@@ -87,6 +88,7 @@ fn ingress_summary_captures_http_termination_string() {
         dtls: false,
         http_terminate: Some("http2"),
         redirect: None,
+        description: None,
     };
     let json = serde_json::to_value(&s).unwrap();
     assert_eq!(json["http_terminate"], "http2");
