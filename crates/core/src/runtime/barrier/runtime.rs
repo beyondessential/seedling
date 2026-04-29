@@ -5,9 +5,9 @@ use seedling_protocol::names::AppName;
 
 use crate::defs::app::AppDef;
 use crate::defs::container::canonicalise_signal_name;
-use crate::defs::volume::OperationVolumeBinding;
+use crate::defs::volume::{ExternalVolume, OperationVolumeBinding, Volume, validate_volume_write_path};
 use crate::runtime::barrier::{
-    ActionLogEntry, BarrierCondition, BarrierRecord, CallKind, SharedContext,
+    ActionLogEntry, BarrierCondition, BarrierRecord, CallKind, SharedContext, VolumeWriteTarget,
 };
 use crate::runtime::registry::{InstanceRegistry, RegistryError};
 use crate::runtime::{LifecycleState, ResourceInstance, restart_gens};
@@ -976,6 +976,82 @@ impl RuntimeInstance {
         Ok(())
     }
 
+    // l[impl rt.write]
+    // r[impl rt.write]
+    /// Write a file into a volume at action runtime. Replay-safe: an entry
+    /// committed in a prior pass is skipped on the next replay so the write
+    /// is performed at most once. Resolution of the target volume to a host
+    /// path goes through the operation's `volume_writer` hook (set by the
+    /// operation loop in `oi/handler/actions/lifecycle.rs`).
+    fn do_write(
+        &mut self,
+        target: VolumeWriteTarget,
+        target_resource: ResourceInstance,
+        path: &str,
+        contents: &str,
+    ) -> Result<(), Box<EvalAltResult>> {
+        validate_volume_write_path(path)?;
+
+        // Probe mode: rt.write has no image content and no discovery-relevant
+        // side effect; return immediately without touching the log.
+        // r[impl image.discover]
+        if let Some(ctx) = &self.ctx
+            && ctx.lock().probe_mode()
+        {
+            return Ok(());
+        }
+
+        if is_barrier_hit_pending()
+            && let Some(ctx) = &self.ctx
+            && let Some(cond) = ctx.lock().pending_barrier.clone()
+        {
+            return Err(make_barrier_error(cond));
+        }
+
+        let ctx = match &self.ctx {
+            None => return Ok(()),
+            Some(c) => Arc::clone(c),
+        };
+
+        // r[impl operation.cancel]
+        if ctx.lock().cancel_token.is_cancelled() {
+            return Err(make_cancel_error());
+        }
+
+        // r[impl barrier.replay]
+        // On replay, skip a write that was already performed at this call site.
+        {
+            let mut g = ctx.lock();
+            if g.is_replaying() {
+                g.call_index += 1;
+                return Ok(());
+            }
+        }
+
+        let writer = ctx.lock().volume_writer.clone();
+        if let Some(writer) = writer {
+            let app = self.app_name.as_str().to_owned();
+            writer.write(&app, target, path, contents).map_err(
+                |e| -> Box<EvalAltResult> { format!("rt.write: {e}").into() },
+            )?;
+        }
+
+        {
+            let mut g = ctx.lock();
+            let idx = g.call_index;
+            g.pending.push(ActionLogEntry {
+                call_index: idx,
+                call_kind: CallKind::Write,
+                resources: vec![target_resource],
+                barrier: None,
+                extra: Some(path.to_owned()),
+            });
+            g.call_index += 1;
+        }
+
+        Ok(())
+    }
+
     // r[impl barrier.replay.rt-stop]
     fn do_stop(
         &mut self,
@@ -1257,8 +1333,96 @@ impl CustomType for RuntimeInstance {
                         resources_with_defs.into_iter().map(|(r, _)| r).collect();
                     this.do_signal(resources, signal)
                 },
+            )
+            // l[impl rt.write]
+            .with_fn(
+                "write",
+                |this: &mut Self,
+                 target: Dynamic,
+                 path: &str,
+                 contents: &str|
+                 -> Result<(), Box<EvalAltResult>> {
+                    if !is_in_action_closure() {
+                        return Err("rt.write may only be called inside an action closure".into());
+                    }
+                    let (write_target, instance) = resolve_volume_write_target(this, target)?;
+                    this.do_write(write_target, instance, path, contents)
+                },
             );
     }
+}
+
+// l[impl rt.write]
+/// Resolve a BSL `Volume` or `ExternalVolume` argument into a runtime
+/// [`VolumeWriteTarget`] plus the [`ResourceInstance`] used for log keying.
+fn resolve_volume_write_target(
+    rt: &RuntimeInstance,
+    target: Dynamic,
+) -> Result<(VolumeWriteTarget, ResourceInstance), Box<EvalAltResult>> {
+    use crate::defs::resource::ResourceKind;
+    use crate::runtime::identity::{InstanceId, InstanceVariant};
+
+    if let Some(vol) = target.clone().try_cast::<Volume>() {
+        let tmpfs = vol.def.lock().tmpfs;
+        if let Some(name) = vol.name.as_deref() {
+            let display =
+                crate::runtime::identity::VolumeName::for_app(rt.app_name.as_str(), name);
+            let instance = ResourceInstance::new_singleton(
+                rt.app_name.clone(),
+                ResourceKind::Volume,
+                name,
+            );
+            let _ = display;
+            return Ok((
+                VolumeWriteTarget::NamedVolume {
+                    name: name.to_owned(),
+                    tmpfs,
+                },
+                instance,
+            ));
+        }
+        if let Some(anon_id) = vol.anon_id.as_deref() {
+            let id = InstanceId(uuid::Uuid::new_v5(
+                &uuid::Uuid::NAMESPACE_OID,
+                anon_id.as_bytes(),
+            ));
+            let instance = ResourceInstance {
+                id,
+                app: rt.app_name.clone(),
+                kind: ResourceKind::Volume,
+                name: None,
+                variant: InstanceVariant::Singleton,
+                display_name: anon_id.to_owned(),
+            };
+            return Ok((
+                VolumeWriteTarget::AnonymousVolume {
+                    anon_id: anon_id.to_owned(),
+                    tmpfs,
+                },
+                instance,
+            ));
+        }
+        return Err("rt.write: volume has neither a name nor an anon_id".into());
+    }
+
+    if let Some(ext) = target.try_cast::<ExternalVolume>() {
+        let binding = ext.operation_binding.ok_or_else(|| -> Box<EvalAltResult> {
+            "rt.write: external volume has no operation-scoped binding; rt.write is only supported for operation-bound external volumes".into()
+        })?;
+        let instance = ResourceInstance::new_singleton(
+            rt.app_name.clone(),
+            ResourceKind::ExternalVolume,
+            ext.name.as_str(),
+        );
+        return Ok((
+            VolumeWriteTarget::ExternalBound {
+                host_path: binding.host_path,
+            },
+            instance,
+        ));
+    }
+
+    Err("rt.write: target must be a Volume or ExternalVolume".into())
 }
 
 // ---------------------------------------------------------------------------

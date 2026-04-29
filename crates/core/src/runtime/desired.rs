@@ -135,6 +135,11 @@ impl OperationProgress {
                 // Signal is a transient side-effect; it does not affect the
                 // computed desired state.
                 CallKind::Signal => {}
+                // l[impl rt.write]
+                // Write is a transient side-effect on a volume's contents; it
+                // does not affect any resource's lifecycle, so it does not
+                // contribute to the computed desired state.
+                CallKind::Write => {}
             }
         }
         this

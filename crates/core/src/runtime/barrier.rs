@@ -60,6 +60,12 @@ pub enum CallKind {
     /// replay, an already-committed signal is not re-sent.
     // l[impl rt.signal]
     Signal,
+    /// `rt.write(...)` — write a file into a volume at action runtime. The
+    /// target volume is recorded as the entry's single resource; the path is
+    /// stored in `extra`. On replay, an already-committed write is not
+    /// re-executed.
+    // l[impl rt.write]
+    Write,
 }
 
 // r[impl history.action-log.entries]
@@ -123,6 +129,11 @@ pub struct ReplayContext {
     /// where no real container runtime is present.
     // l[impl rt.signal]
     pub container_signaler: Option<Arc<dyn ContainerSignaler>>,
+    /// Hook for `rt.write()`. The runtime calls this synchronously to write a
+    /// file into a volume during action execution. `None` in test / stub
+    /// contexts where no real filesystem is involved.
+    // l[impl rt.write]
+    pub volume_writer: Option<Arc<dyn VolumeWriter>>,
 }
 
 /// Synchronous side-effect handle the BSL `rt.signal` call uses to actually
@@ -135,6 +146,37 @@ pub trait ContainerSignaler: Send + Sync {
     /// Returns `Ok(true)` when the signal was sent, `Ok(false)` when the
     /// container was already gone (no error condition for replay safety).
     fn signal(&self, container_name: &str, signal: &str) -> Result<bool, String>;
+}
+
+/// Identifies which volume a runtime-time `rt.write` should land in. Resolved
+/// to a host path by the [`VolumeWriter`] impl in the operation loop.
+// l[impl rt.write]
+#[derive(Debug, Clone)]
+pub enum VolumeWriteTarget {
+    /// A named static volume scoped to the current app.
+    NamedVolume { name: String, tmpfs: bool },
+    /// An anonymous volume created earlier in the action closure.
+    AnonymousVolume { anon_id: String, tmpfs: bool },
+    /// An external volume bound by the operation (`l[action.params.volume]`).
+    ExternalBound { host_path: std::path::PathBuf },
+}
+
+/// Synchronous side-effect handle the BSL `rt.write` call uses to materialise
+/// a file into a volume at action runtime. Implemented in the operation loop
+/// on top of the system actuator's `safe_volume_write`; stubbed out in
+/// language-only tests where no real filesystem is involved.
+// l[impl rt.write]
+pub trait VolumeWriter: Send + Sync {
+    /// Resolve `target` to a host path and write `contents` to `path` within
+    /// it. The implementation must enforce `openat2(RESOLVE_BENEATH)`-style
+    /// path confinement so the write cannot escape the volume root.
+    fn write(
+        &self,
+        app: &str,
+        target: VolumeWriteTarget,
+        path: &str,
+        contents: &str,
+    ) -> Result<(), String>;
 }
 
 impl fmt::Debug for ReplayContext {
@@ -179,6 +221,7 @@ impl ReplayContext {
             anon_counter: 0,
             probe_images: None,
             container_signaler: None,
+            volume_writer: None,
         }
     }
 

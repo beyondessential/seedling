@@ -7,7 +7,7 @@ use crate::runtime::barrier::runtime::is_in_action_closure;
 use super::{Freezable, Holder, export::ExportOptions, resource::ResourceName};
 
 // l[impl volume.write.validation]
-fn validate_volume_write_path(path: &str) -> Result<(), Box<EvalAltResult>> {
+pub(crate) fn validate_volume_write_path(path: &str) -> Result<(), Box<EvalAltResult>> {
     if path.contains('\0') {
         return Err("volume write path must not contain null bytes".into());
     }

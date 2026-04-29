@@ -329,6 +329,7 @@ fn run_action_with_volumes(
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
+            volume_writer: None,
         },
         &mut scope,
     );
@@ -582,6 +583,7 @@ fn external_volume_in_action_picks_up_operation_binding() {
             operation_volume_bindings: bindings,
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
+            volume_writer: None,
         },
         &mut scope,
     );
@@ -748,6 +750,7 @@ fn frozen_static_volume_cannot_be_modified_in_action() {
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
+            volume_writer: None,
         },
         &mut scope,
     );
@@ -810,6 +813,7 @@ fn captured_static_volume_cannot_be_modified_in_action() {
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
+            volume_writer: None,
         },
         &mut scope,
     );

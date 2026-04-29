@@ -265,6 +265,10 @@ pub struct OperationContext<'a, W: WorldStateOracle + 'static> {
     /// no real container runtime exists.
     // l[impl rt.signal]
     pub container_signaler: Option<std::sync::Arc<dyn crate::runtime::barrier::ContainerSignaler>>,
+    /// Hook for `rt.write()`. `None` in language-only test contexts where no
+    /// real filesystem is involved.
+    // l[impl rt.write]
+    pub volume_writer: Option<std::sync::Arc<dyn crate::runtime::barrier::VolumeWriter>>,
 }
 
 /// The `log` carries committed entries across calls; pass the same `log`
@@ -296,6 +300,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         operation_volume_bindings,
         cancel_token,
         container_signaler,
+        volume_writer,
     } = op;
 
     // Save the operation ID string before it is moved into the replay context.
@@ -319,6 +324,8 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     )));
     // l[impl rt.signal]
     ctx.lock().container_signaler = container_signaler;
+    // l[impl rt.write]
+    ctx.lock().volume_writer = volume_writer;
 
     // Clear the thread-local barrier-hit flag at the start of each pass.
     clear_barrier_hit();
