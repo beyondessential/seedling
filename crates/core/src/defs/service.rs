@@ -15,6 +15,8 @@ use super::{
 pub struct ServiceDef {
     pub http: Option<HttpServiceDef>,
     pub exported: Option<ExportOptions>,
+    // l[impl bsl.resource.description]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -304,6 +306,8 @@ impl CustomType for HttpServiceRoute {
 #[derive(Debug, Clone)]
 pub struct ExternalService {
     pub name: ResourceName,
+    // l[impl bsl.resource.description]
+    pub description: Option<String>,
 }
 
 impl CustomType for ExternalService {

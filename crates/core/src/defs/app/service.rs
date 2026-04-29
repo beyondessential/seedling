@@ -82,6 +82,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                 d.resources.entry(id.clone()).or_insert_with(|| {
                     Resource::ExternalService(ExternalService {
                         name: rname.clone(),
+                        description: None,
                     })
                 });
                 d

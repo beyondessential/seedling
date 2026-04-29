@@ -17,6 +17,8 @@ pub struct IngressDef {
     pub dtls: bool,
     pub http_terminate: Option<HttpTermination>,
     pub redirect: Option<RedirectDef>,
+    // l[impl bsl.resource.description]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -66,6 +68,7 @@ impl Ingress {
                     dtls: false,
                     http_terminate: None,
                     redirect: None,
+                    description: None,
                 }
                 .into(),
             ),

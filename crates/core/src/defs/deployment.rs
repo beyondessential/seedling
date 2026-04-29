@@ -17,6 +17,8 @@ pub struct DeploymentDef {
     pub scale: Range<u16>,
     pub on_update: OnUpdate,
     pub on_terminate: OnTerminate,
+    // l[impl bsl.resource.description]
+    pub description: Option<String>,
 }
 
 impl Default for DeploymentDef {
@@ -26,6 +28,7 @@ impl Default for DeploymentDef {
             scale: 1..1,
             on_update: OnUpdate::default(),
             on_terminate: OnTerminate::default(),
+            description: None,
         }
     }
 }

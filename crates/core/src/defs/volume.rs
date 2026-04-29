@@ -39,6 +39,8 @@ pub struct VolumeDef {
     pub tmpfs: bool,
     pub writes: Vec<(String, String)>,
     pub exported: Option<ExportOptions>,
+    // l[impl bsl.resource.description]
+    pub description: Option<String>,
 }
 
 // l[impl volume.type]
@@ -230,6 +232,8 @@ pub struct ExternalVolume {
     /// than a static external volume mapping.
     // l[impl volume.external.dynamic]
     pub operation_binding: Option<OperationVolumeBinding>,
+    // l[impl bsl.resource.description]
+    pub description: Option<String>,
 }
 
 impl CustomType for ExternalVolume {

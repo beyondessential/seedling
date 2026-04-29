@@ -11,6 +11,8 @@ use super::{
 pub struct JobDef {
     pub pod: Holder<PodDef>,
     pub deadline: Option<u64>,
+    // l[impl bsl.resource.description]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone)]
