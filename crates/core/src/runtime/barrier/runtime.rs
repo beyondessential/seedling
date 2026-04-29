@@ -976,6 +976,90 @@ impl RuntimeInstance {
         Ok(())
     }
 
+    // l[impl rt.exec]
+    // r[impl rt.exec]
+    /// Run a command inside a running container. Blocks until the command
+    /// exits and returns an `Executed` carrying the exit code. Replay-safe:
+    /// an entry committed in a prior pass is not re-executed; the recorded
+    /// exit code is recovered from the entry. Delivery goes through the
+    /// operation's `executor` hook.
+    fn do_exec(
+        &mut self,
+        target: ResourceInstance,
+        argv: Vec<String>,
+        env: Vec<(String, String)>,
+    ) -> Result<Executed, Box<EvalAltResult>> {
+        if argv.is_empty() {
+            return Err("rt.exec: argv must be non-empty".into());
+        }
+
+        // r[impl image.discover]
+        if let Some(ctx) = &self.ctx
+            && ctx.lock().probe_mode()
+        {
+            return Ok(Executed { exit_code: 0 });
+        }
+
+        if is_barrier_hit_pending()
+            && let Some(ctx) = &self.ctx
+            && let Some(cond) = ctx.lock().pending_barrier.clone()
+        {
+            return Err(make_barrier_error(cond));
+        }
+
+        let ctx = match &self.ctx {
+            None => return Ok(Executed { exit_code: 0 }),
+            Some(c) => Arc::clone(c),
+        };
+
+        // r[impl operation.cancel]
+        if ctx.lock().cancel_token.is_cancelled() {
+            return Err(make_cancel_error());
+        }
+
+        // r[impl barrier.replay]
+        // On replay, recover the exit code from the committed entry without
+        // re-issuing the exec.
+        {
+            let mut g = ctx.lock();
+            if g.is_replaying() {
+                let recovered = g
+                    .committed_entry()
+                    .and_then(|e| e.extra.as_deref())
+                    .and_then(|s| s.parse::<i32>().ok());
+                g.call_index += 1;
+                if let Some(exit_code) = recovered {
+                    return Ok(Executed { exit_code });
+                }
+                return Err("rt.exec: replay log entry missing exit code".into());
+            }
+        }
+
+        let executor = ctx.lock().executor.clone();
+        let exit_code = if let Some(executor) = executor {
+            executor
+                .exec(&target.display_name, &argv, &env)
+                .map_err(|e| -> Box<EvalAltResult> { format!("rt.exec: {e}").into() })?
+        } else {
+            0
+        };
+
+        {
+            let mut g = ctx.lock();
+            let idx = g.call_index;
+            g.pending.push(ActionLogEntry {
+                call_index: idx,
+                call_kind: CallKind::Exec,
+                resources: vec![target],
+                barrier: None,
+                extra: Some(exit_code.to_string()),
+            });
+            g.call_index += 1;
+        }
+
+        Ok(Executed { exit_code })
+    }
+
     // l[impl rt.write]
     // r[impl rt.write]
     /// Write a file into a volume at action runtime. Replay-safe: an entry
@@ -1348,8 +1432,172 @@ impl CustomType for RuntimeInstance {
                     let (write_target, instance) = resolve_volume_write_target(this, target)?;
                     this.do_write(write_target, instance, path, contents)
                 },
+            )
+            // l[impl rt.exec]
+            .with_fn(
+                "exec",
+                |this: &mut Self,
+                 target: Dynamic,
+                 args: rhai::Array|
+                 -> Result<Executed, Box<EvalAltResult>> {
+                    if !is_in_action_closure() {
+                        return Err("rt.exec may only be called inside an action closure".into());
+                    }
+                    let argv = exec_argv_from_array(args)?;
+                    let instance = resolve_exec_target(this, target)?;
+                    this.do_exec(instance, argv, Vec::new())
+                },
+            )
+            .with_fn(
+                "exec",
+                |this: &mut Self,
+                 target: Dynamic,
+                 args: rhai::Array,
+                 options: Map|
+                 -> Result<Executed, Box<EvalAltResult>> {
+                    if !is_in_action_closure() {
+                        return Err("rt.exec may only be called inside an action closure".into());
+                    }
+                    let argv = exec_argv_from_array(args)?;
+                    let env = parse_exec_options(options)?;
+                    let instance = resolve_exec_target(this, target)?;
+                    this.do_exec(instance, argv, env)
+                },
             );
     }
+}
+
+// l[impl rt.exec]
+fn exec_argv_from_array(args: rhai::Array) -> Result<Vec<String>, Box<EvalAltResult>> {
+    if args.is_empty() {
+        return Err("rt.exec: argv must be non-empty".into());
+    }
+    let mut out = Vec::with_capacity(args.len());
+    for v in args {
+        let s = v.into_string().map_err(|t| -> Box<EvalAltResult> {
+            format!("rt.exec: argv entry must be a string, got {t}").into()
+        })?;
+        out.push(s);
+    }
+    Ok(out)
+}
+
+// l[impl rt.exec]
+fn parse_exec_options(options: Map) -> Result<Vec<(String, String)>, Box<EvalAltResult>> {
+    let mut env = Vec::new();
+    for (key, value) in options {
+        match key.as_str() {
+            "env" => {
+                let env_map = value.try_cast::<Map>().ok_or_else(|| -> Box<EvalAltResult> {
+                    "rt.exec: options.env must be a map".into()
+                })?;
+                for (k, v) in env_map {
+                    let k_str = k.to_string();
+                    if !is_valid_env_var_name(&k_str) {
+                        return Err(format!(
+                            "rt.exec: invalid env var name '{k_str}'; must match [A-Za-z_][A-Za-z0-9_]*"
+                        )
+                        .into());
+                    }
+                    let v_str = v.into_string().map_err(|t| -> Box<EvalAltResult> {
+                        format!("rt.exec: env value for '{k_str}' must be a string, got {t}").into()
+                    })?;
+                    env.push((k_str, v_str));
+                }
+            }
+            other => {
+                return Err(format!(
+                    "rt.exec: unknown option '{other}' (supported: env)"
+                )
+                .into());
+            }
+        }
+    }
+    Ok(env)
+}
+
+fn is_valid_env_var_name(s: &str) -> bool {
+    let mut chars = s.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+// l[impl rt.exec]
+/// Resolve a BSL `Started`, `Deployment`, or `Job` argument to the single
+/// container instance the exec should run in. Rejects targets that resolve
+/// to zero or more than one instance, or that are anonymous and have not
+/// been started (those must be passed via the `Started` returned by
+/// `rt.start`).
+fn resolve_exec_target(
+    rt: &RuntimeInstance,
+    target: Dynamic,
+) -> Result<ResourceInstance, Box<EvalAltResult>> {
+    use crate::defs::deployment::Deployment;
+    use crate::defs::job::Job;
+    use crate::defs::resource::ResourceKind;
+
+    if let Some(started) = target.clone().try_cast::<Started>() {
+        if started.resources.len() != 1 {
+            return Err(format!(
+                "rt.exec: target Started must carry exactly one container instance, got {}",
+                started.resources.len()
+            )
+            .into());
+        }
+        let r = started.resources.into_iter().next().unwrap();
+        if !matches!(r.kind, ResourceKind::Deployment | ResourceKind::Job) {
+            return Err(format!(
+                "rt.exec: target must be a Deployment or Job, got {:?}",
+                r.kind
+            )
+            .into());
+        }
+        return Ok(r);
+    }
+
+    if let Some(dep) = target.clone().try_cast::<Deployment>() {
+        if dep.name.as_str().is_empty() {
+            return Err("rt.exec: anonymous deployments must be passed via the Started returned by rt.start, not directly".into());
+        }
+        let scale = dep.def.lock().scale.clone();
+        if scale.end > 1 {
+            return Err(format!(
+                "rt.exec: deployment '{}' has scale upper bound {}; rt.exec requires scale 1 (so the target is unambiguous)",
+                dep.name, scale.end
+            )
+            .into());
+        }
+        let with_defs = rt
+            .extract_instances(Dynamic::from(dep))
+            .map_err(|e| -> Box<EvalAltResult> { format!("rt.exec: {e}").into() })?;
+        let mut iter = with_defs.into_iter();
+        let first = iter.next().ok_or_else(|| -> Box<EvalAltResult> {
+            "rt.exec: target deployment resolved to no instances".into()
+        })?;
+        if iter.next().is_some() {
+            return Err("rt.exec: target deployment resolved to more than one instance".into());
+        }
+        return Ok(first.0);
+    }
+
+    if let Some(job) = target.try_cast::<Job>() {
+        if job.name.as_str().is_empty() {
+            return Err("rt.exec: anonymous jobs must be passed via the Started returned by rt.start, not directly".into());
+        }
+        let with_defs = rt
+            .extract_instances(Dynamic::from(job))
+            .map_err(|e| -> Box<EvalAltResult> { format!("rt.exec: {e}").into() })?;
+        let mut iter = with_defs.into_iter();
+        let first = iter.next().ok_or_else(|| -> Box<EvalAltResult> {
+            "rt.exec: target job resolved to no instances".into()
+        })?;
+        if iter.next().is_some() {
+            return Err("rt.exec: target job resolved to more than one instance".into());
+        }
+        return Ok(first.0);
+    }
+
+    Err("rt.exec: target must be a Started, Deployment, or Job".into())
 }
 
 // l[impl rt.write]
@@ -1760,6 +2008,47 @@ impl CustomType for Termination {
                     } else {
                         Err(Box::new(EvalAltResult::ErrorRuntime(
                             "Resource did not terminate successfully".into(),
+                            rhai::Position::NONE,
+                        )))
+                    }
+                },
+            );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Executed
+// ---------------------------------------------------------------------------
+
+// l[impl rt.executed.type]
+#[derive(Debug, Clone)]
+pub struct Executed {
+    pub exit_code: i32,
+}
+
+impl CustomType for Executed {
+    fn build(mut builder: TypeBuilder<Self>) {
+        builder
+            .with_name("Executed")
+            // l[impl rt.executed.exit-code]
+            .with_fn("exit_code", |this: &mut Self| -> i64 {
+                this.exit_code as i64
+            })
+            // l[impl rt.executed.success]
+            .with_fn("success", |this: &mut Self| -> bool { this.exit_code == 0 })
+            // l[impl rt.executed.ensure-success]
+            .with_fn(
+                "ensure_success",
+                |this: &mut Self| -> Result<(), Box<EvalAltResult>> {
+                    if this.exit_code == 0 {
+                        Ok(())
+                    } else {
+                        Err(Box::new(EvalAltResult::ErrorRuntime(
+                            format!(
+                                "rt.exec command failed with exit code {}",
+                                this.exit_code
+                            )
+                            .into(),
                             rhai::Position::NONE,
                         )))
                     }

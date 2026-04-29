@@ -123,6 +123,7 @@ pub fn register(engine: &mut Engine) {
     engine.build_type::<runtime::RuntimeInstance>();
     engine.build_type::<runtime::Started>();
     engine.build_type::<runtime::Termination>();
+    engine.build_type::<runtime::Executed>();
     engine.build_type::<collection::Collection>();
     engine.build_type::<shell::ShellControl>();
 
