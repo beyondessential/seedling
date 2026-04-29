@@ -1005,6 +1005,23 @@ This spec defines the semantics of the Runtime Instance as far as BSL is concern
 >
 > Typical use cases: `SIGHUP` to reload configuration without restart (postgres, nginx), `SIGUSR1` to trigger log rotation, `SIGTERM`/`SIGINT` for cooperative shutdown when the deployment's `stop_signal` is not what the action wants for this one-off invocation.
 
+> l[rt.write]
+> The `rt.write(target: Volume | ExternalVolume, path: string, contents: string)` method writes a file into the given volume at action runtime, parallel to the static `Volume.write`.
+>
+> The target may be:
+>
+> - a named (static) `Volume` declared at the top level,
+> - an anonymous `Volume` created earlier in the same action closure, or
+> - an `ExternalVolume`, including those resolved from operation-scoped volume bindings (see `l[action.params.volume]`).
+>
+> The path must be absolute, must not contain `..` components, and must not resolve to the volume root; these are the same validation rules as `l[volume.write.validation]`.
+>
+> Unlike static `Volume.write`, `rt.write` does NOT reapply on container restart. It is a point-in-time write at action time. For tmpfs volumes that means the contents are erased on the next container start; this is allowed and is the user's responsibility to reason about.
+>
+> The call is _at-most-once_ across replays: when the runtime restarts mid-operation and replays the action closure, a previously-completed `rt.write` is not re-executed.
+>
+> Calling `rt.write` outside an action closure is a script error.
+
 ## Waiting on resource state
 
 > l[rt.started.type]

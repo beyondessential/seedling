@@ -315,6 +315,11 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[rt.signal]
 > The runtime persists each [`rt.signal`](language.md#l--rt.signal) invocation to the action execution log so the call is not re-delivered when an interrupted operation replays. The persisted entry records the target instances and the signal name. On replay, the runtime treats a signal entry as already delivered and does not re-issue it; this is the at-most-once-across-replays guarantee from `l[rt.signal]`.
 
+> r[rt.write]
+> The runtime persists each [`rt.write`](language.md#l--rt.write) invocation to the action execution log. The persisted entry records the target volume and the write path; the file contents are not stored in the log. On replay, the runtime treats a write entry at the same call site as already applied and does not re-execute it; this is the at-most-once-across-replays guarantee from `l[rt.write]`.
+>
+> The runtime resolves the target volume to a host filesystem mountpoint using the same mechanism the actuator uses to apply static `Volume.write` content, then writes through a kernel-confined `openat2(RESOLVE_BENEATH)` so a malicious or buggy path cannot escape the volume's root.
+
 # Audit Log
 
 > r[audit.log]
