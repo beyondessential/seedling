@@ -17,15 +17,19 @@ fmt:
 check:
     cargo clippy && cargo fmt --check
 
-# Run Rust tests (uses nextest if available, falls back to cargo test)
+# Run Rust tests (uses nextest if available, falls back to cargo test).
+# Args filter the unit / integration pass; doc tests always run unfiltered
+# since nextest does not execute them and target-selecting flags like --lib
+# cannot be combined with --doc.
 test *args:
     #!/usr/bin/env bash
     set -euo pipefail
     if command -v cargo-nextest >/dev/null 2>&1; then
         cargo nextest run {{ args }}
     else
-        cargo test {{ args }}
+        cargo test --lib --bins --tests {{ args }}
     fi
+    cargo test --doc
 
 # Watch source files and rebuild on changes
 watch-build:
