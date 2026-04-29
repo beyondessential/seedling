@@ -160,6 +160,11 @@ These are not guaranteed to be constant forever, only for the duration of one sc
 >
 > When the host's local timezone cannot be determined, the value is `UTC`.
 
+> l[const.idle-cmd]
+> `IDLE_CMD` is an array of strings that, when used as a container's `command()`, makes the container start, do nothing, and stay alive until told to stop. It is intended for containers whose only purpose is to host one or more `rt.exec` invocations during an action, where there is no natural long-running process to wait on.
+>
+> The exact array contents are an implementation detail and may change in future releases.
+
 ## OnUpdate
 
 `OnUpdate` defines strategies for when [Deployments](#l--deployment.type) update.

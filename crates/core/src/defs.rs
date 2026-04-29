@@ -215,6 +215,13 @@ pub fn scope() -> (Scope<'static>, app::App) {
     // l[impl const.timezone]
     scope.push_constant("TIMEZONE", facts.timezone.clone());
 
+    // l[impl const.idle-cmd]
+    let idle_cmd: rhai::Array = vec![
+        rhai::Dynamic::from("sleep".to_owned()),
+        rhai::Dynamic::from("infinity".to_owned()),
+    ];
+    scope.push_constant("IDLE_CMD", idle_cmd);
+
     // l[impl const.on-update.rolling]
     // l[impl const.on-update.replace]
     scope.push_constant("OnUpdate", enums::OnUpdate::rhai_constant());

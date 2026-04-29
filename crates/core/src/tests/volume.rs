@@ -1068,6 +1068,34 @@ fn rt_write_outside_action_is_script_error() {
     );
 }
 
+// l[verify const.idle-cmd]
+#[test]
+fn idle_cmd_constant_usable_as_command() {
+    let app = run_test_script_app(
+        r#"
+        app.deployment("idle-host")
+            .image("docker.io/library/busybox:latest")
+            .command(IDLE_CMD);
+        "#,
+    );
+    let def = app.def.load();
+    let dep = def
+        .resources
+        .values()
+        .find_map(|r| match r {
+            defs::resource::Resource::Deployment(d) if &*d.name == "idle-host" => Some(d.clone()),
+            _ => None,
+        })
+        .expect("idle-host deployment");
+    let pod = dep.def.lock().pod.clone();
+    let cmd = pod.lock().container.lock().command.clone();
+    assert_eq!(
+        cmd,
+        Some(vec!["sleep".to_owned(), "infinity".to_owned()]),
+        "IDLE_CMD must wire through to the container command"
+    );
+}
+
 // l[verify rt.write] r[verify rt.write]
 #[test]
 fn rt_write_skipped_on_replay() {
