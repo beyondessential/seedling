@@ -21,7 +21,13 @@
 //   - The frontend keeps serving cached pages through the brief outage and
 //     rolls to the new tag as part of `rt.start(app)` afterwards.
 
-app.description("Tamanu central server: API workers, scheduled tasks, optional FHIR workers, frontend, and optional patient portal");
+app.description(`
+Tamanu central server: where all the data lives, and the core of the Tamanu system.
+
+Facility servers, mobile clients, and API clients all talk to it to synchronise and
+query patient and clinical data. This is also where emails and other communications
+are sent from, and the home of the patient portal integration.
+`);
 
 // ── Params ────────────────────────────────────────────────────────────────────
 
