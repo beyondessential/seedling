@@ -48,12 +48,17 @@ import {
 import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
+  IconActionButton,
+  OutlinedActionButton,
+  SolidActionButton,
+} from "../components/ActionButton";
+import {
   ImageReferencesCell,
   primaryReference,
 } from "../components/ImageReferences";
 import { MapVolumeDialog } from "../components/MapVolumeDialog";
 import { OiErrorAlert } from "../components/OiErrorAlert";
-import { useGuard, useSafetyMode } from "../components/SafetyModeProvider";
+import { useSafetyMode } from "../components/SafetyModeProvider";
 import { useSessionContext } from "../components/SessionProvider";
 import { SnapshotVolumeDialog } from "../components/SnapshotVolumeDialog";
 import { TlsHostnamesTable } from "../components/TlsHostnamesTable";
@@ -169,7 +174,9 @@ function HealthcheckIndicator({
   );
 }
 
-function containerHealthcheck(def: ResourceDef | undefined): HealthcheckSummary | null {
+function containerHealthcheck(
+  def: ResourceDef | undefined,
+): HealthcheckSummary | null {
   if (!def) return null;
   if (def.kind !== "deployment" && def.kind !== "job") return null;
   return def.container.healthcheck ?? null;
@@ -408,12 +415,12 @@ function ResourcesSection({
   resources: AppResource[];
   onRefresh: () => void;
 }) {
+  const navigate = useNavigate();
   const { execute, loading: scaling } = useOiAction();
   const { execute: executeRestart, loading: restarting } = useOiAction();
   const { execute: executeStop, loading: stopping } = useOiAction();
   const { openVolumeShell } = useSessionContext();
   const { mode } = useSafetyMode();
-  const writeGuard = useGuard("write");
   // w[impl volumes.shell-ui.read-only]
   const shellReadOnly = mode === "read";
   const [snapshotTarget, setSnapshotTarget] = useState<{
@@ -535,15 +542,15 @@ function ResourcesSection({
               />
             )}
             {(r.type === "deployment" || r.type === "job") && (
-              <Tooltip title="View resource logs">
-                <IconButton
-                  size="small"
-                  component={Link}
-                  to={`/apps/${appName}/logs?resource=${r.name}`}
-                >
-                  <ArticleIcon sx={{ fontSize: 14 }} />
-                </IconButton>
-              </Tooltip>
+              <IconActionButton
+                safety="read"
+                tooltip="View resource logs"
+                onClick={() =>
+                  navigate(`/apps/${appName}/logs?resource=${r.name}`)
+                }
+              >
+                <ArticleIcon sx={{ fontSize: 14 }} />
+              </IconActionButton>
             )}
             {!r.dynamic && r.scale && (
               <>
@@ -556,37 +563,23 @@ function ResourcesSection({
                   · scale
                 </Typography>
                 <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-                  <Tooltip title={writeGuard.reason ?? "Scale down"}>
-                    <span>
-                      <IconButton
-                        size="small"
-                        onClick={() => void scale(r.name, r.scale!.current - 1)}
-                        disabled={
-                          scaling ||
-                          r.scale.current <= r.scale.low ||
-                          !writeGuard.allowed
-                        }
-                      >
-                        <RemoveIcon sx={{ fontSize: 14 }} />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
+                  <IconActionButton
+                    safety="write"
+                    tooltip="Scale down"
+                    onClick={() => void scale(r.name, r.scale!.current - 1)}
+                    disabled={scaling || r.scale.current <= r.scale.low}
+                  >
+                    <RemoveIcon sx={{ fontSize: 14 }} />
+                  </IconActionButton>
                   <Typography variant="caption">{r.scale.current}</Typography>
-                  <Tooltip title={writeGuard.reason ?? "Scale up"}>
-                    <span>
-                      <IconButton
-                        size="small"
-                        onClick={() => void scale(r.name, r.scale!.current + 1)}
-                        disabled={
-                          scaling ||
-                          r.scale.current >= r.scale.high ||
-                          !writeGuard.allowed
-                        }
-                      >
-                        <AddIcon sx={{ fontSize: 14 }} />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
+                  <IconActionButton
+                    safety="write"
+                    tooltip="Scale up"
+                    onClick={() => void scale(r.name, r.scale!.current + 1)}
+                    disabled={scaling || r.scale.current >= r.scale.high}
+                  >
+                    <AddIcon sx={{ fontSize: 14 }} />
+                  </IconActionButton>
                   <Typography
                     variant="caption"
                     sx={{
@@ -599,85 +592,69 @@ function ResourcesSection({
               </>
             )}
             {!r.dynamic && r.type === "deployment" && (
-              <Tooltip title={writeGuard.reason ?? "Restart deployment"}>
-                <span>
-                  <IconButton
-                    size="small"
-                    onClick={() => void restart(r.name)}
-                    disabled={restarting || !writeGuard.allowed}
-                  >
-                    <RefreshIcon sx={{ fontSize: 14 }} />
-                  </IconButton>
-                </span>
-              </Tooltip>
+              <IconActionButton
+                safety="write"
+                tooltip="Restart deployment"
+                onClick={() => void restart(r.name)}
+                disabled={restarting}
+              >
+                <RefreshIcon sx={{ fontSize: 14 }} />
+              </IconActionButton>
             )}
             {/* w[volumes.shell-ui] */}
             {/* w[impl volumes.shell-ui.read-only] */}
             {!r.dynamic && r.type === "volume" && (
               <>
-                <Tooltip
-                  title={shellReadOnly ? "Open shell (read-only)" : "Open shell"}
+                <IconActionButton
+                  safety="read"
+                  color={shellReadOnly ? undefined : "warning"}
+                  tooltip={
+                    shellReadOnly ? "Open shell (read-only)" : "Open shell"
+                  }
+                  onClick={() =>
+                    openVolumeShell(
+                      [{ kind: "app", app: appName, volume: r.name }],
+                      `${appName}.${r.name}`,
+                      { readOnly: shellReadOnly },
+                    )
+                  }
                 >
-                  <span>
-                    <IconButton
-                      size="small"
-                      onClick={() =>
-                        openVolumeShell(
-                          [{ kind: "app", app: appName, volume: r.name }],
-                          `${appName}.${r.name}`,
-                          { readOnly: shellReadOnly },
-                        )
-                      }
-                    >
-                      <TerminalIcon sx={{ fontSize: 14 }} />
-                    </IconButton>
-                  </span>
-                </Tooltip>
-                <Tooltip title={writeGuard.reason ?? "Snapshot"}>
-                  <span>
-                    <IconButton
-                      size="small"
-                      onClick={() =>
-                        setSnapshotTarget({
-                          source: `${appName}/${r.name}`,
-                          label: `${appName}/${r.name}`,
-                        })
-                      }
-                      disabled={!writeGuard.allowed}
-                    >
-                      <CameraAltIcon sx={{ fontSize: 14 }} />
-                    </IconButton>
-                  </span>
-                </Tooltip>
+                  <TerminalIcon sx={{ fontSize: 14 }} />
+                </IconActionButton>
+                <IconActionButton
+                  safety="write"
+                  tooltip="Snapshot"
+                  onClick={() =>
+                    setSnapshotTarget({
+                      source: `${appName}/${r.name}`,
+                      label: `${appName}/${r.name}`,
+                    })
+                  }
+                >
+                  <CameraAltIcon sx={{ fontSize: 14 }} />
+                </IconActionButton>
               </>
             )}
             {!r.dynamic &&
               STOPPABLE_KINDS.has(r.type) &&
               (r.stopped ? (
-                <Tooltip title={writeGuard.reason ?? "Unstop resource"}>
-                  <span>
-                    <IconButton
-                      size="small"
-                      onClick={() => void unstopResource(r.type, r.name)}
-                      disabled={stopping || !writeGuard.allowed}
-                      color="success"
-                    >
-                      <PlayArrowIcon sx={{ fontSize: 14 }} />
-                    </IconButton>
-                  </span>
-                </Tooltip>
+                <IconActionButton
+                  safety="write"
+                  tooltip="Unstop resource"
+                  onClick={() => void unstopResource(r.type, r.name)}
+                  disabled={stopping}
+                >
+                  <PlayArrowIcon sx={{ fontSize: 14 }} />
+                </IconActionButton>
               ) : (
-                <Tooltip title={writeGuard.reason ?? "Stop resource"}>
-                  <span>
-                    <IconButton
-                      size="small"
-                      onClick={() => void stopResource(r.type, r.name)}
-                      disabled={stopping || !writeGuard.allowed}
-                    >
-                      <PauseIcon sx={{ fontSize: 14 }} />
-                    </IconButton>
-                  </span>
-                </Tooltip>
+                <IconActionButton
+                  safety="write"
+                  tooltip="Stop resource"
+                  onClick={() => void stopResource(r.type, r.name)}
+                  disabled={stopping}
+                >
+                  <PauseIcon sx={{ fontSize: 14 }} />
+                </IconActionButton>
               ))}
           </Box>
           <FaultList faults={r.faults} />
@@ -734,15 +711,17 @@ function ResourcesSection({
                       </TableCell>
                       <TableCell width={40} align="right" sx={{ px: 0.5 }}>
                         {(r.type === "deployment" || r.type === "job") && (
-                          <Tooltip title="View instance logs">
-                            <IconButton
-                              size="small"
-                              component={Link}
-                              to={`/apps/${appName}/logs?resource=${r.name}&instance=${inst.display_name}`}
-                            >
-                              <ArticleIcon sx={{ fontSize: 14 }} />
-                            </IconButton>
-                          </Tooltip>
+                          <IconActionButton
+                            safety="read"
+                            tooltip="View instance logs"
+                            onClick={() =>
+                              navigate(
+                                `/apps/${appName}/logs?resource=${r.name}&instance=${inst.display_name}`,
+                              )
+                            }
+                          >
+                            <ArticleIcon sx={{ fontSize: 14 }} />
+                          </IconActionButton>
                         )}
                       </TableCell>
                     </TableRow>
@@ -772,10 +751,8 @@ function ParamsSection({
   // Params cannot be mutated while the app has an operation in flight; the
   // backend rejects with operation_in_progress. Disable the edit/add
   // affordances and explain why, rather than letting users hit a server error.
-  const writeGuard = useGuard("write");
   const operationInFlight = status === "installing" || status === "operating";
-  const editsDisabled = operationInFlight || !writeGuard.allowed;
-  const editsDisabledReason = !writeGuard.allowed ? writeGuard.reason : null;
+  const editsDisabled = operationInFlight;
   const { execute, loading, error, clearError } = useOiAction();
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -887,22 +864,17 @@ function ParamsSection({
         />
       </TableCell>
       <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
-        <Tooltip title="Save">
-          <span>
-            <IconButton
-              size="small"
-              onClick={() => void saveAdd()}
-              disabled={loading || !addName.trim()}
-            >
-              <CheckIcon fontSize="small" />
-            </IconButton>
-          </span>
-        </Tooltip>
-        <Tooltip title="Cancel">
-          <IconButton size="small" onClick={cancelAdd}>
-            <ClearIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
+        <IconActionButton
+          safety="write"
+          tooltip="Save"
+          onClick={() => void saveAdd()}
+          disabled={loading || !addName.trim()}
+        >
+          <CheckIcon fontSize="small" />
+        </IconActionButton>
+        <IconActionButton safety="read" tooltip="Cancel" onClick={cancelAdd}>
+          <ClearIcon fontSize="small" />
+        </IconActionButton>
       </TableCell>
     </TableRow>
   ) : null;
@@ -926,18 +898,15 @@ function ParamsSection({
           >
             No params.
           </Typography>
-          <Tooltip title={editsDisabledReason ?? ""}>
-            <span>
-              <Button
-                size="small"
-                startIcon={<AddIcon fontSize="small" />}
-                onClick={startAdd}
-                disabled={editsDisabled}
-              >
-                Set param
-              </Button>
-            </span>
-          </Tooltip>
+          <OutlinedActionButton
+            safety="write"
+            size="small"
+            startIcon={<AddIcon fontSize="small" />}
+            onClick={startAdd}
+            disabled={editsDisabled}
+          >
+            Set param
+          </OutlinedActionButton>
         </Box>
         {adding && (
           <TableContainer component={Paper} variant="outlined">
@@ -956,18 +925,15 @@ function ParamsSection({
       {error && <OiErrorAlert error={error} />}
       <Box sx={{ display: "flex", justifyContent: "flex-end" }}>
         {!adding && (
-          <Tooltip title={editsDisabledReason ?? ""}>
-            <span>
-              <Button
-                size="small"
-                startIcon={<AddIcon fontSize="small" />}
-                onClick={startAdd}
-                disabled={editsDisabled}
-              >
-                Set param
-              </Button>
-            </span>
-          </Tooltip>
+          <OutlinedActionButton
+            safety="write"
+            size="small"
+            startIcon={<AddIcon fontSize="small" />}
+            onClick={startAdd}
+            disabled={editsDisabled}
+          >
+            Set param
+          </OutlinedActionButton>
         )}
       </Box>
       <TableContainer component={Paper} variant="outlined">
@@ -1146,51 +1112,35 @@ function ParamsSection({
                     })()}
                   </TableCell>
                   <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
-                    <Tooltip
-                      title={
-                        editsDisabledReason ??
-                        (p.value == null && !p.is_set ? "Set" : "Edit")
-                      }
+                    <IconActionButton
+                      safety="write"
+                      tooltip={p.value == null && !p.is_set ? "Set" : "Edit"}
+                      onClick={() => startEdit(p)}
+                      disabled={loading || editsDisabled}
                     >
-                      <span>
-                        <IconButton
-                          size="small"
-                          onClick={() => startEdit(p)}
-                          disabled={loading || editsDisabled}
-                        >
-                          <EditIcon fontSize="small" />
-                        </IconButton>
-                      </span>
-                    </Tooltip>
+                      <EditIcon fontSize="small" />
+                    </IconActionButton>
                     {p.value != null && !p.required && (
-                      <Tooltip title={editsDisabledReason ?? "Unset"}>
-                        <span>
-                          <IconButton
-                            size="small"
-                            onClick={() => void unset(p.name)}
-                            disabled={loading || editsDisabled}
-                          >
-                            <DeleteOutlineIcon fontSize="small" />
-                          </IconButton>
-                        </span>
-                      </Tooltip>
+                      <IconActionButton
+                        safety="write"
+                        tooltip="Unset"
+                        onClick={() => void unset(p.name)}
+                        disabled={loading || editsDisabled}
+                      >
+                        <DeleteOutlineIcon fontSize="small" />
+                      </IconActionButton>
                     )}
                     {p.value != null &&
                       p.required &&
                       p.default_value != null && (
-                        <Tooltip
-                          title={editsDisabledReason ?? "Reset to default"}
+                        <IconActionButton
+                          safety="write"
+                          tooltip="Reset to default"
+                          onClick={() => void unset(p.name)}
+                          disabled={loading || editsDisabled}
                         >
-                          <span>
-                            <IconButton
-                              size="small"
-                              onClick={() => void unset(p.name)}
-                              disabled={loading || editsDisabled}
-                            >
-                              <RestoreIcon fontSize="small" />
-                            </IconButton>
-                          </span>
-                        </Tooltip>
+                          <RestoreIcon fontSize="small" />
+                        </IconActionButton>
                       )}
                   </TableCell>
                 </TableRow>
@@ -1233,7 +1183,6 @@ function ActionInvokeDialog({
   onSuccess: () => void;
 }) {
   const { execute, loading, error, clearError } = useOiAction();
-  const writeGuard = useGuard("write");
   const [values, setValues] = useState<Record<string, string>>(() =>
     Object.fromEntries(
       Object.entries(action.params).map(
@@ -1417,9 +1366,7 @@ function ActionInvokeDialog({
                                 )}
                                 {isPassword && (
                                   <Tooltip
-                                    title={
-                                      showPasswords[key] ? "Hide" : "Show"
-                                    }
+                                    title={showPasswords[key] ? "Hide" : "Show"}
                                   >
                                     <IconButton
                                       size="small"
@@ -1451,21 +1398,13 @@ function ActionInvokeDialog({
         <Button onClick={handleClose} disabled={loading}>
           Cancel
         </Button>
-        <Tooltip title={writeGuard.reason ?? ""}>
-          <span>
-            <Button
-              variant="contained"
-              onClick={handleSubmit}
-              disabled={loading || hasWeakPassword || !writeGuard.allowed}
-            >
-              {loading
-                ? "Running…"
-                : action.kind === "install"
-                  ? "Install"
-                  : "Run"}
-            </Button>
-          </span>
-        </Tooltip>
+        <SolidActionButton
+          safety="write"
+          onClick={handleSubmit}
+          disabled={loading || hasWeakPassword}
+        >
+          {loading ? "Running…" : action.kind === "install" ? "Install" : "Run"}
+        </SolidActionButton>
       </DialogActions>
     </Dialog>
   );
@@ -1485,7 +1424,6 @@ function InstallSection({
   onRefresh: () => void;
 }) {
   const { execute, loading } = useOiAction();
-  const writeGuard = useGuard("write");
   const [dialogOpen, setDialogOpen] = useState(false);
 
   const hasParams =
@@ -1522,18 +1460,28 @@ function InstallSection({
         >
           This app has not been installed yet.
         </Typography>
-        <Tooltip title={writeGuard.reason ?? ""}>
-          <span>
-            <Button
-              variant="contained"
-              size="large"
-              onClick={() => void handleInstall()}
-              disabled={loading || hasScriptError || !writeGuard.allowed}
-            >
-              {loading ? "Installing…" : "Install"}
-            </Button>
-          </span>
-        </Tooltip>
+        <SolidActionButton
+          safety="write"
+          size="large"
+          onClick={() => void handleInstall()}
+          disabled={loading || hasScriptError}
+        >
+          {loading ? "Installing…" : "Install"}
+        </SolidActionButton>
+        {installAction && (
+          <Typography
+            variant="caption"
+            sx={{ color: "text.secondary", textAlign: "center", maxWidth: 480 }}
+          >
+            Runs the app's{" "}
+            <Box component="code" sx={{ fontFamily: "monospace" }}>
+              on_install
+            </Box>{" "}
+            action
+            {installAction.description ? ` — ${installAction.description}` : ""}
+            .
+          </Typography>
+        )}
         {operationFailures.length > 0 && (
           <Alert severity="error" sx={{ width: "100%", mt: 2 }}>
             <Typography variant="subtitle2" gutterBottom>
@@ -1602,7 +1550,9 @@ function SchedulesSection({ actions }: { actions: AppAction[] }) {
           {rows.map((r) => (
             <TableRow key={`${r.action}::${r.cronexpr}`}>
               <TableCell sx={{ fontFamily: "monospace" }}>{r.action}</TableCell>
-              <TableCell sx={{ fontFamily: "monospace" }}>{r.cronexpr}</TableCell>
+              <TableCell sx={{ fontFamily: "monospace" }}>
+                {r.cronexpr}
+              </TableCell>
               <TableCell
                 sx={{ color: r.last_fired_at ? undefined : "text.disabled" }}
               >
@@ -1643,9 +1593,7 @@ function ActionsSection({
   const [invoking, setInvoking] = useState<AppAction | null>(null);
   const [openingShell, setOpeningShell] = useState<AppAction | null>(null);
   const { openShell } = useSessionContext();
-  const writeGuard = useGuard("write");
 
-  const canInstall = status === "not_installed" && !hasScriptError;
   const canInvoke =
     !hasScriptError &&
     status !== "not_installed" &&
@@ -1678,110 +1626,107 @@ function ActionsSection({
             </TableRow>
           </TableHead>
           <TableBody>
-            {actions.map((a) => {
-              const isInvokable = a.kind !== "shell" && a.kind !== "lifecycle";
-              const isRunning = a.name === operatingAction;
-              const canRun =
-                a.kind === "install" ? canInstall : isInvokable && canInvoke;
-              return (
-                <TableRow key={a.name}>
-                  <TableCell sx={{ fontFamily: "monospace" }}>
-                    <Box
-                      sx={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 0.5,
-                      }}
-                    >
-                      <span>{a.name}</span>
-                      {a.schedules.length > 0 && (
-                        <Tooltip
-                          title={
-                            <span style={{ whiteSpace: "pre-line" }}>
-                              {a.schedules
-                                .map((s) => `schedule: ${s.cronexpr}`)
-                                .join("\n")}
-                            </span>
-                          }
-                        >
-                          <Chip
-                            label={
-                              a.schedules.length === 1
-                                ? "scheduled"
-                                : `scheduled ×${a.schedules.length}`
+            {/* The install action is invoked from the dedicated Install
+                button in InstallSection, and the App detail Actions
+                section only renders for already-installed apps anyway —
+                so hide the install row, which would otherwise sit there
+                permanently un-invokable. */}
+            {actions
+              .filter((a) => a.kind !== "install")
+              .map((a) => {
+                const isInvokable =
+                  a.kind !== "shell" && a.kind !== "lifecycle";
+                const isRunning = a.name === operatingAction;
+                const canRun = isInvokable && canInvoke;
+                return (
+                  <TableRow key={a.name}>
+                    <TableCell sx={{ fontFamily: "monospace" }}>
+                      <Box
+                        sx={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 0.5,
+                        }}
+                      >
+                        <span>{a.name}</span>
+                        {a.schedules.length > 0 && (
+                          <Tooltip
+                            title={
+                              <span style={{ whiteSpace: "pre-line" }}>
+                                {a.schedules
+                                  .map((s) => `schedule: ${s.cronexpr}`)
+                                  .join("\n")}
+                              </span>
                             }
-                            size="small"
-                            variant="outlined"
-                            color="info"
-                            sx={{
-                              fontSize: "0.65rem",
-                              height: 18,
-                              "& .MuiChip-label": { px: 0.75 },
-                            }}
-                          />
-                        </Tooltip>
-                      )}
-                    </Box>
-                  </TableCell>
-                  <TableCell>
-                    <Chip label={a.kind} size="small" variant="outlined" />
-                  </TableCell>
-                  <TableCell sx={{ color: "text.secondary" }}>
-                    {a.description}
-                  </TableCell>
-                  <TableCell align="right">
-                    {/* w[shells.ui] */}
-                    {a.kind === "shell" ? (
-                      <Tooltip title={writeGuard.reason ?? ""}>
-                        <span>
+                          >
+                            <Chip
+                              label={
+                                a.schedules.length === 1
+                                  ? "scheduled"
+                                  : `scheduled ×${a.schedules.length}`
+                              }
+                              size="small"
+                              variant="outlined"
+                              color="info"
+                              sx={{
+                                fontSize: "0.65rem",
+                                height: 18,
+                                "& .MuiChip-label": { px: 0.75 },
+                              }}
+                            />
+                          </Tooltip>
+                        )}
+                      </Box>
+                    </TableCell>
+                    <TableCell>
+                      <Chip label={a.kind} size="small" variant="outlined" />
+                    </TableCell>
+                    <TableCell sx={{ color: "text.secondary" }}>
+                      {a.description}
+                    </TableCell>
+                    <TableCell align="right">
+                      {/* w[shells.ui] */}
+                      {a.kind === "shell" ? (
+                        <OutlinedActionButton
+                          safety="write"
+                          size="small"
+                          onClick={() => {
+                            if (Object.keys(a.params).length > 0) {
+                              setOpeningShell(a);
+                            } else {
+                              openShell(appName, a.name, {});
+                            }
+                          }}
+                          disabled={!canInvoke}
+                        >
+                          shell
+                        </OutlinedActionButton>
+                      ) : (
+                        isInvokable &&
+                        (isRunning ? (
                           <Button
                             size="small"
                             variant="outlined"
-                            onClick={() => {
-                              if (Object.keys(a.params).length > 0) {
-                                setOpeningShell(a);
-                              } else {
-                                openShell(appName, a.name, {});
-                              }
-                            }}
-                            disabled={!canInvoke || !writeGuard.allowed}
+                            disabled
+                            startIcon={<CircularProgress size={12} />}
                           >
-                            Open shell
+                            Running…
                           </Button>
-                        </span>
-                      </Tooltip>
-                    ) : (
-                      isInvokable &&
-                      (isRunning ? (
-                        <Button
-                          size="small"
-                          variant="outlined"
-                          disabled
-                          startIcon={<CircularProgress size={12} />}
-                        >
-                          Running…
-                        </Button>
-                      ) : (
-                        <Tooltip title={writeGuard.reason ?? ""}>
-                          <span>
-                            <Button
-                              size="small"
-                              variant={
-                                a.kind === "install" ? "contained" : "outlined"
-                              }
-                              onClick={() => setInvoking(a)}
-                              disabled={!canRun || !writeGuard.allowed}
-                            >
-                              {a.kind === "install" ? "Install" : "Run"}
-                            </Button>
-                          </span>
-                        </Tooltip>
-                      ))
-                    )}
-                  </TableCell>
-                </TableRow>
-              );
-            })}
+                        ) : (
+                          <OutlinedActionButton
+                            safety="write"
+                            size="small"
+                            onClick={() => setInvoking(a)}
+                            disabled={!canRun}
+                          >
+                            Run
+                          </OutlinedActionButton>
+                        ))
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
           </TableBody>
         </Table>
       </TableContainer>
@@ -1822,7 +1767,6 @@ function ShellOpenDialog({
   onClose: () => void;
   onOpen: (params: Record<string, string>) => void;
 }) {
-  const writeGuard = useGuard("write");
   const [values, setValues] = useState<Record<string, string>>(() =>
     Object.fromEntries(
       Object.entries(action.params).map(
@@ -1949,17 +1893,13 @@ function ShellOpenDialog({
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
-        <Tooltip title={writeGuard.reason ?? ""}>
-          <span>
-            <Button
-              variant="contained"
-              onClick={() => onOpen(values)}
-              disabled={hasWeakPassword || !writeGuard.allowed}
-            >
-              Open shell
-            </Button>
-          </span>
-        </Tooltip>
+        <SolidActionButton
+          safety="write"
+          onClick={() => onOpen(values)}
+          disabled={hasWeakPassword}
+        >
+          shell
+        </SolidActionButton>
       </DialogActions>
     </Dialog>
   );
@@ -2009,9 +1949,6 @@ function AppImagesSection({
   resources: AppResource[];
   onRefresh: () => void;
 }) {
-  const dangerGuard = useGuard("dangerous");
-  const writeGuard = useGuard("write");
-
   const { data: imagesData, refetch: refetchImages } = useOiQuery<{
     images: ImageSummary[];
   }>("/images/list", {});
@@ -2203,59 +2140,38 @@ function AppImagesSection({
         </Typography>
         {/* w[impl routes.images.discover] */}
         {discoveredExtras.length > 0 && (
-          <Tooltip
-            title={
-              !writeGuard.allowed
-                ? (writeGuard.reason ?? "")
-                : `Warm ${discoveredExtras.length} discovered image${discoveredExtras.length === 1 ? "" : "s"}`
-            }
+          <SolidActionButton
+            safety="write"
+            tooltip={`Warm ${discoveredExtras.length} discovered image${discoveredExtras.length === 1 ? "" : "s"}`}
+            size="small"
+            onClick={warmAllDiscovered}
+            disabled={mutating || warmingAll}
           >
-            <span>
-              <Button
-                size="small"
-                variant="contained"
-                onClick={warmAllDiscovered}
-                disabled={!writeGuard.allowed || mutating || warmingAll}
-              >
-                {warmingAll ? "Warming…" : "Warm all discovered"}
-              </Button>
-            </span>
-          </Tooltip>
+            {warmingAll ? "Warming…" : "Warm all discovered"}
+          </SolidActionButton>
         )}
-        <Tooltip title="Run handler probe to discover images that actions might pull">
-          <span>
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={runDiscover}
-              disabled={mutating || discovering}
-            >
-              {discovering ? "Discovering…" : "Discover from handlers"}
-            </Button>
-          </span>
-        </Tooltip>
+        <OutlinedActionButton
+          safety="read"
+          tooltip="Run handler probe to discover images that actions might pull"
+          size="small"
+          onClick={runDiscover}
+          disabled={mutating || discovering}
+        >
+          {discovering ? "Discovering…" : "Discover from handlers"}
+        </OutlinedActionButton>
         {pins.length > 0 && (
-          <Tooltip
-            title={
-              !writeGuard.allowed
-                ? (writeGuard.reason ?? "")
-                : `Clear all ${pins.length} pin${pins.length === 1 ? "" : "s"} for this app`
-            }
+          <OutlinedActionButton
+            safety="write"
+            tooltip={`Clear all ${pins.length} pin${pins.length === 1 ? "" : "s"} for this app`}
+            size="small"
+            onClick={() => {
+              clearError();
+              setClearAllOpen(true);
+            }}
+            disabled={mutating}
           >
-            <span>
-              <Button
-                size="small"
-                variant="outlined"
-                onClick={() => {
-                  clearError();
-                  setClearAllOpen(true);
-                }}
-                disabled={!writeGuard.allowed || mutating}
-              >
-                Clear all pins
-              </Button>
-            </span>
-          </Tooltip>
+            Clear all pins
+          </OutlinedActionButton>
         )}
       </Box>
       {mutateError && <OiErrorAlert error={mutateError} />}
@@ -2293,28 +2209,19 @@ function AppImagesSection({
                   </Stack>
                 </TableCell>
                 <TableCell align="right">
-                  <Tooltip
-                    title={
-                      !dangerGuard.allowed
-                        ? (dangerGuard.reason ?? "")
-                        : img.in_use
-                          ? "Cannot remove: image is in use"
-                          : "Remove"
+                  <IconActionButton
+                    safety="dangerous"
+                    tooltip={
+                      img.in_use ? "Cannot remove: image is in use" : "Remove"
                     }
+                    onClick={() => {
+                      clearError();
+                      setRemoving(img);
+                    }}
+                    disabled={img.in_use}
                   >
-                    <span>
-                      <IconButton
-                        size="small"
-                        onClick={() => {
-                          clearError();
-                          setRemoving(img);
-                        }}
-                        disabled={!dangerGuard.allowed || img.in_use}
-                      >
-                        <DeleteOutlineIcon fontSize="small" />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
+                    <DeleteOutlineIcon fontSize="small" />
+                  </IconActionButton>
                 </TableCell>
               </TableRow>
             ))}
@@ -2340,23 +2247,15 @@ function AppImagesSection({
                   />
                 </TableCell>
                 <TableCell align="right">
-                  <Tooltip
-                    title={
-                      !writeGuard.allowed
-                        ? (writeGuard.reason ?? "")
-                        : "Pull and pin to this app"
-                    }
+                  <OutlinedActionButton
+                    safety="write"
+                    tooltip="Pull and pin to this app"
+                    size="small"
+                    onClick={() => warmReference(ref)}
+                    disabled={mutating}
                   >
-                    <span>
-                      <Button
-                        size="small"
-                        onClick={() => warmReference(ref)}
-                        disabled={!writeGuard.allowed || mutating}
-                      >
-                        Warm
-                      </Button>
-                    </span>
-                  </Tooltip>
+                    Warm
+                  </OutlinedActionButton>
                 </TableCell>
               </TableRow>
             ))}
@@ -2388,18 +2287,13 @@ function AppImagesSection({
           <Button onClick={() => setRemoving(null)} disabled={mutating}>
             Cancel
           </Button>
-          <Tooltip title={dangerGuard.reason ?? ""}>
-            <span>
-              <Button
-                onClick={submitRemove}
-                variant="contained"
-                color="error"
-                disabled={mutating || !dangerGuard.allowed}
-              >
-                Remove
-              </Button>
-            </span>
-          </Tooltip>
+          <SolidActionButton
+            safety="dangerous"
+            onClick={submitRemove}
+            disabled={mutating}
+          >
+            Remove
+          </SolidActionButton>
         </DialogActions>
       </Dialog>
 
@@ -2424,17 +2318,13 @@ function AppImagesSection({
           <Button onClick={() => setClearAllOpen(false)} disabled={mutating}>
             Cancel
           </Button>
-          <Tooltip title={writeGuard.reason ?? ""}>
-            <span>
-              <Button
-                onClick={submitClearAll}
-                variant="contained"
-                disabled={mutating || !writeGuard.allowed}
-              >
-                Clear all pins
-              </Button>
-            </span>
-          </Tooltip>
+          <SolidActionButton
+            safety="write"
+            onClick={submitClearAll}
+            disabled={mutating}
+          >
+            Clear all pins
+          </SolidActionButton>
         </DialogActions>
       </Dialog>
     </>
@@ -2455,30 +2345,19 @@ function ClearFaultsButton({
   // phase it's danger-level because the operator may be silencing live signal
   // about a running workload's problems.
   const tier = status === "not_installed" ? "write" : "dangerous";
-  const guard = useGuard(tier);
   const { execute, loading, error, clearError } = useOiAction();
   const [confirming, setConfirming] = useState(false);
   return (
     <>
-      <Tooltip
-        title={
-          guard.allowed
-            ? `Clear all active faults for this app (${tier} action)`
-            : (guard.reason ?? "")
-        }
+      <OutlinedActionButton
+        safety={tier}
+        tooltip="Clear all active faults for this app"
+        size="small"
+        disabled={loading}
+        onClick={() => setConfirming(true)}
       >
-        <span>
-          <Button
-            size="small"
-            color={tier === "dangerous" ? "error" : "primary"}
-            variant="outlined"
-            disabled={!guard.allowed || loading}
-            onClick={() => setConfirming(true)}
-          >
-            Clear all
-          </Button>
-        </span>
-      </Tooltip>
+        Clear all
+      </OutlinedActionButton>
       <Dialog
         open={confirming}
         onClose={() => {
@@ -2496,9 +2375,9 @@ function ClearFaultsButton({
             {tier === "dangerous" && (
               <>
                 {" "}
-                This is a danger-level action because the app is currently
-                {" "}<strong>{status}</strong> — clearing live signal can
-                obscure problems that operators need to see.
+                This is a danger-level action because the app is currently{" "}
+                <strong>{status}</strong> — clearing live signal can obscure
+                problems that operators need to see.
               </>
             )}
           </DialogContentText>
@@ -2581,7 +2460,6 @@ function AppRemovalDialog({
   onSuccess: () => void;
 }) {
   const { execute, loading, error, clearError } = useOiAction();
-  const dangerGuard = useGuard("dangerous");
 
   const handleConfirm = async () => {
     try {
@@ -2623,24 +2501,19 @@ function AppRemovalDialog({
         <Button onClick={handleClose} disabled={loading}>
           Cancel
         </Button>
-        <Tooltip title={dangerGuard.reason ?? ""}>
-          <span>
-            <Button
-              variant="contained"
-              color="error"
-              onClick={handleConfirm}
-              disabled={loading || !dangerGuard.allowed}
-            >
-              {loading
-                ? kind === "uninstall"
-                  ? "Uninstalling…"
-                  : "Removing…"
-                : kind === "uninstall"
-                  ? "Uninstall"
-                  : "Deregister"}
-            </Button>
-          </span>
-        </Tooltip>
+        <SolidActionButton
+          safety="dangerous"
+          onClick={handleConfirm}
+          disabled={loading}
+        >
+          {loading
+            ? kind === "uninstall"
+              ? "Uninstalling…"
+              : "Removing…"
+            : kind === "uninstall"
+              ? "Uninstall"
+              : "Deregister"}
+        </SolidActionButton>
       </DialogActions>
     </Dialog>
   );
@@ -2671,8 +2544,6 @@ export default function AppDetail() {
   // i[impl action.cancel]
   const { execute: executeCancelAction, loading: cancellingAction } =
     useOiAction();
-  const writeGuard = useGuard("write");
-  const dangerGuard = useGuard("dangerous");
   const { data, loading, error, refetch } = useOiQuery<AppDetail>(
     "/apps/show",
     { app: name },
@@ -2718,63 +2589,52 @@ export default function AppDetail() {
         <Typography variant="body2">{name}</Typography>
         <Box sx={{ flexGrow: 1 }} />
         {data?.status === "not_installed" && (
-          <Tooltip title={dangerGuard.reason ?? ""}>
-            <span>
-              <Button
-                size="small"
-                color="error"
-                onClick={() => setRemovalOpen(true)}
-                disabled={loading || !dangerGuard.allowed}
-              >
-                Deregister
-              </Button>
-            </span>
-          </Tooltip>
+          <OutlinedActionButton
+            safety="dangerous"
+            size="small"
+            onClick={() => setRemovalOpen(true)}
+            disabled={loading}
+          >
+            Deregister
+          </OutlinedActionButton>
         )}
         {data?.status !== "not_installed" &&
           data?.status !== "installing" &&
           data?.status !== "uninstalling" &&
           data?.status !== "deregistering" && (
-            <Tooltip title={dangerGuard.reason ?? ""}>
-              <span>
-                <Button
-                  size="small"
-                  color="error"
-                  onClick={() => setRemovalOpen(true)}
-                  disabled={loading || !dangerGuard.allowed}
-                >
-                  Uninstall
-                </Button>
-              </span>
-            </Tooltip>
+            <OutlinedActionButton
+              safety="dangerous"
+              size="small"
+              onClick={() => setRemovalOpen(true)}
+              disabled={loading}
+            >
+              Uninstall
+            </OutlinedActionButton>
           )}
-        <Button
+        <OutlinedActionButton
+          safety="read"
           size="small"
           startIcon={<ArticleIcon />}
-          component={Link}
-          to={`/apps/${name}/logs`}
+          onClick={() => navigate(`/apps/${name}/logs`)}
         >
           Logs
-        </Button>
-        <Tooltip title={writeGuard.reason ?? ""}>
-          <span>
-            <Button
-              size="small"
-              startIcon={<EditIcon />}
-              onClick={() => navigate(`/apps/${name}/script`)}
-              disabled={!writeGuard.allowed}
-            >
-              Edit script
-            </Button>
-          </span>
-        </Tooltip>
-        <Tooltip title="Refresh">
-          <span>
-            <IconButton onClick={refetch} disabled={loading} size="small">
-              <RefreshIcon />
-            </IconButton>
-          </span>
-        </Tooltip>
+        </OutlinedActionButton>
+        <OutlinedActionButton
+          safety="write"
+          size="small"
+          startIcon={<EditIcon />}
+          onClick={() => navigate(`/apps/${name}/script`)}
+        >
+          Edit script
+        </OutlinedActionButton>
+        <IconActionButton
+          safety="read"
+          tooltip="Refresh"
+          onClick={refetch}
+          disabled={loading}
+        >
+          <RefreshIcon />
+        </IconActionButton>
       </Box>
       {error && <OiErrorAlert error={error} />}
       {loading && !data && (
@@ -2808,27 +2668,23 @@ export default function AppDetail() {
             <Alert
               severity="info"
               action={
-                <Tooltip title={writeGuard.reason ?? ""}>
-                  <span>
-                    <Button
-                      color="inherit"
-                      size="small"
-                      disabled={cancellingAction || !writeGuard.allowed}
-                      onClick={async () => {
-                        try {
-                          await executeCancelAction("/apps/action/cancel", {
-                            app: name,
-                          });
-                          refetch();
-                        } catch {
-                          // surfaced by useOiAction globally
-                        }
-                      }}
-                    >
-                      Cancel
-                    </Button>
-                  </span>
-                </Tooltip>
+                <OutlinedActionButton
+                  safety="dangerous"
+                  size="small"
+                  disabled={cancellingAction}
+                  onClick={async () => {
+                    try {
+                      await executeCancelAction("/apps/action/cancel", {
+                        app: name,
+                      });
+                      refetch();
+                    } catch {
+                      // surfaced by useOiAction globally
+                    }
+                  }}
+                >
+                  Cancel
+                </OutlinedActionButton>
               }
             >
               Operation in progress:{" "}
@@ -2853,25 +2709,21 @@ export default function AppDetail() {
             <Alert
               severity="warning"
               action={
-                <Tooltip title={writeGuard.reason ?? ""}>
-                  <span>
-                    <Button
-                      color="inherit"
-                      size="small"
-                      disabled={unstoppingAll || !writeGuard.allowed}
-                      onClick={async () => {
-                        try {
-                          await executeUnstopAll("/apps/unstop", { app: name });
-                          refetch();
-                        } catch {
-                          // surfaced by useOiAction globally
-                        }
-                      }}
-                    >
-                      Unstop all
-                    </Button>
-                  </span>
-                </Tooltip>
+                <OutlinedActionButton
+                  safety="write"
+                  size="small"
+                  disabled={unstoppingAll}
+                  onClick={async () => {
+                    try {
+                      await executeUnstopAll("/apps/unstop", { app: name });
+                      refetch();
+                    } catch {
+                      // surfaced by useOiAction globally
+                    }
+                  }}
+                >
+                  Unstop all
+                </OutlinedActionButton>
               }
             >
               Partially running —{" "}
@@ -2975,29 +2827,25 @@ export default function AppDetail() {
                                 )}
                               </TableCell>
                               <TableCell align="right">
-                                <Tooltip title={writeGuard.reason ?? ""}>
-                                  <span>
-                                    <Button
-                                      size="small"
-                                      onClick={() =>
-                                        setMapDialogState(
-                                          mapping
-                                            ? {
-                                                mode: "remap",
-                                                existing: mapping,
-                                              }
-                                            : {
-                                                mode: "prefill",
-                                                volName: r.name,
-                                              },
-                                        )
-                                      }
-                                      disabled={!writeGuard.allowed}
-                                    >
-                                      {mapping ? "Remap" : "Map"}
-                                    </Button>
-                                  </span>
-                                </Tooltip>
+                                <OutlinedActionButton
+                                  safety="write"
+                                  size="small"
+                                  onClick={() =>
+                                    setMapDialogState(
+                                      mapping
+                                        ? {
+                                            mode: "remap",
+                                            existing: mapping,
+                                          }
+                                        : {
+                                            mode: "prefill",
+                                            volName: r.name,
+                                          },
+                                    )
+                                  }
+                                >
+                                  {mapping ? "Remap" : "Map"}
+                                </OutlinedActionButton>
                               </TableCell>
                             </TableRow>
                           );

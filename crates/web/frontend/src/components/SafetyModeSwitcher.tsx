@@ -18,6 +18,7 @@ import {
 import { useEffect, useState, type MouseEvent } from "react";
 import {
   ELEVATION_DURATION_MS,
+  safetyStripeBackground,
   useSafetyMode,
   type SafetyMode,
 } from "./SafetyModeProvider";
@@ -109,7 +110,7 @@ export function SafetyModeSwitcher() {
           onClick={openMenu}
           clickable
           variant={mode === "read" ? "outlined" : "filled"}
-          sx={{
+          sx={(theme) => ({
             mr: 1,
             pl: "0.5em",
             fontFamily: "monospace",
@@ -118,7 +119,17 @@ export function SafetyModeSwitcher() {
               borderColor: "rgba(255,255,255,0.5)",
               "& .MuiChip-icon": { color: "common.white" },
             }),
-          }}
+            // The active-tier indicator wears the same stripe pattern as the
+            // dropdown items, but with stronger alpha so the stripes read
+            // against the chip's already-coloured fill rather than washing
+            // out into it.
+            ...(mode !== "read" && {
+              backgroundImage: safetyStripeBackground(theme, mode, {
+                stripeAlpha: 0.5,
+                gapAlpha: 0,
+              }),
+            }),
+          })}
         />
       </Tooltip>
       <Menu anchorEl={anchorEl} open={!!anchorEl} onClose={closeMenu}>
@@ -130,7 +141,25 @@ export function SafetyModeSwitcher() {
                 ? `${MODE_TOOLTIP[m]} · auto-reverts after ${ELEVATION_MINUTES} min`
                 : MODE_TOOLTIP[m];
           return (
-            <MenuItem key={m} selected={m === mode} onClick={() => pick(m)}>
+            <MenuItem
+              key={m}
+              selected={m === mode}
+              onClick={() => pick(m)}
+              sx={(theme) =>
+                m === "read"
+                  ? {}
+                  : {
+                      backgroundImage: safetyStripeBackground(theme, m),
+                      filter: "grayscale(0.8)",
+                      transition: theme.transitions.create("filter", {
+                        duration: theme.transitions.duration.shortest,
+                      }),
+                      "&:hover, &.Mui-selected, &.Mui-selected:hover": {
+                        filter: "grayscale(0)",
+                      },
+                    }
+              }
+            >
               <ListItemIcon>
                 <ModeIcon mode={m} />
               </ListItemIcon>

@@ -17,6 +17,8 @@
 // Scaling: API scales 1..(AVAILABLE_THREADS / 2); the frontend is fixed at 1
 // (rolling restarts handle blue/green rotation by themselves).
 
+app.description("Tamanu facility server: API workers, scheduled tasks, sync worker, and frontend; syncs to a central server");
+
 // ── Params ────────────────────────────────────────────────────────────────────
 
 let version = app.param("version")
@@ -86,7 +88,8 @@ let db_user = app.param("db-user")
 
 // Postgres unix socket. The operator maps this to the `socket` volume
 // exported by the postgres app via the external-volume mapping table.
-let pg_socket = app.external_volume("pg-socket");
+let pg_socket = app.external_volume("pg-socket")
+    .description("PostgreSQL unix socket — operator maps to the postgres app's exported socket volume");
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -203,10 +206,12 @@ let api_max_replicas = || {
 
 // ── Resources ─────────────────────────────────────────────────────────────────
 
-let config_vol = app.volume("config");
+let config_vol = app.volume("config")
+    .description("Generated production.json5 and local.json5 plus default.reference.json5 for operator inspection");
 
 // Public-facing HTTPS service: routes /api, /v1, and / to deployments.
 let web_svc = app.service("web")
+    .description("Tamanu facility HTTP service — routes /api, /v1, and / to the API and frontend deployments")
     .exported(#{ description: "Tamanu facility HTTPS endpoint (HTTP routing)" })
     .http(80);
 
@@ -222,7 +227,8 @@ if public_hostname.is_set() {
 
 // Internal sync API service: only reachable inside the node, used by the api
 // deployment to talk to the sync worker. Not exported.
-let sync_svc = app.service("sync-api");
+let sync_svc = app.service("sync-api")
+    .description("Internal-only HTTP service the API workers use to reach the sync worker via localmount");
 
 // Common env + mounts for every server-image container (api, tasks, sync).
 let configure_server = |c| c
@@ -235,6 +241,7 @@ let configure_server = |c| c
 // mount the internal sync service so the api process can reach the sync
 // worker over the localmount endpoint.
 configure_server.call(app.deployment("api")
+    .description("Tamanu facility API workers serving /api and /v1")
     .image(server_image.call())
     .scale(1..api_max_replicas.call())
     .arg(["startApi"])
@@ -245,6 +252,7 @@ configure_server.call(app.deployment("api")
 
 // Scheduled tasks worker.
 configure_server.call(app.deployment("tasks")
+    .description("Tamanu scheduled-task worker (cron-style internal jobs)")
     .image(server_image.call())
     .scale(1)
     .arg(["startTasks"])
@@ -252,6 +260,7 @@ configure_server.call(app.deployment("tasks")
 
 // Sync worker: exposes an internal HTTP API on port 3000 for the api workers.
 configure_server.call(app.deployment("sync")
+    .description("Tamanu sync worker pulling/pushing records to the central server")
     .image(server_image.call())
     .scale(1)
     .arg(["startSync"])
@@ -261,6 +270,7 @@ configure_server.call(app.deployment("sync")
 // Frontend: fixed at 1 replica — rolling restarts handle blue/green rotation
 // without needing a sibling.
 app.deployment("frontend")
+    .description("Tamanu facility single-page-app frontend (rolling restarts)")
     .image(frontend_image.call())
     .scale(1)
     .cap_add("NET_BIND_SERVICE")
@@ -274,6 +284,7 @@ app.deployment("frontend")
 // loads files named default / <NODE_ENV> / local / etc., never *.reference.*).
 let copy_image_defaults = |rt| {
     rt.start(app.job()
+        .description("Copy the image's default.json5 to /config/default.reference.json5 for operator inspection")
         .image(server_image.call())
         .writable_rootfs()
         .cap_add("DAC_READ_SEARCH")
@@ -293,11 +304,13 @@ install -m 0640 "$src" /config/default.reference.json5
 };
 
 let render_config = |rt| {
-    let staging = app.volume().tmpfs();
+    let staging = app.volume().tmpfs()
+        .description("Rendered production.json5 and local.json5 staged in RAM before being installed into the config volume");
     staging.write("/production.json5", production_json.call());
     staging.write("/local.json5", local_json.call());
 
     rt.start(app.job()
+        .description("Install rendered production.json5 and local.json5 into the config volume")
         .image(server_image.call())
         .writable_rootfs()
         .cap_add("CHOWN")
@@ -318,7 +331,8 @@ let render_config = |rt| {
 // passwords are set on the roles — every connection from these apps comes
 // in via the socket, where trust auth applies.
 let provision_db = |rt| {
-    let staging = app.volume().tmpfs();
+    let staging = app.volume().tmpfs()
+        .description("DB provisioning SQL staged in RAM (creates roles and the facility database)");
     let dbn = db_name.value();
     let dbu = db_user.value();
     // Mutate-in-place: see the comment on `json_str` for why a chain doesn't work.
@@ -340,6 +354,7 @@ END $$;
 `);
 
     rt.start(app.job()
+        .description("Provision the Tamanu facility role and database via psql")
         .image(psql_image)
         .writable_rootfs()
         .mount("/var/run/postgresql", pg_socket)
@@ -355,6 +370,7 @@ END $$;
 
 let migrate_db = |rt| {
     rt.start(app.job()
+        .description("Run Tamanu's schema migration against the facility database")
         .image(server_image.call())
         .writable_rootfs()
         .env("TZ", timezone.value())

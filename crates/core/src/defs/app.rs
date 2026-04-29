@@ -125,6 +125,9 @@ pub(crate) fn append_action_schedule(action_name: &ActionName, expr: &str) {
 #[derive(Debug, Default, Clone)]
 pub struct AppDef {
     pub name: AppName,
+    /// Free-form description of the application, set via `app.description()`.
+    // l[impl app.description]
+    pub description: Option<String>,
     /// Parameters declared by the BSL script via `app.param()`, with optional schema metadata.
     pub params: BTreeMap<ParamName, ParamDef>,
     pub resources: BTreeMap<ResourceId, Resource>,
@@ -179,6 +182,17 @@ impl std::fmt::Debug for App {
 impl CustomType for App {
     fn build(mut builder: TypeBuilder<Self>) {
         builder.with_name("App");
+
+        // l[impl app.description]
+        builder.with_fn("description", |this: &mut App, desc: &str| -> App {
+            let desc_owned = desc.to_owned();
+            this.def.rcu(|d| {
+                let mut d = (**d).clone();
+                d.description = Some(desc_owned.clone());
+                d
+            });
+            this.clone()
+        });
 
         param::on_app(&mut builder);
         service::on_app(&mut builder);

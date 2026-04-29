@@ -10,6 +10,7 @@ fn map_with(entries: &[(&str, Dynamic)]) -> Map {
     m
 }
 
+// l[verify deployment.healthcheck]
 // l[verify deployment.healthcheck.kind]
 #[test]
 fn parse_command_healthcheck_with_defaults() {

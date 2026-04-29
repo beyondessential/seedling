@@ -17,7 +17,6 @@ import {
   FormControl,
   FormControlLabel,
   FormLabel,
-  IconButton,
   InputLabel,
   MenuItem,
   Paper,
@@ -32,15 +31,18 @@ import {
   TableHead,
   TableRow,
   TextField,
-  Tooltip,
   Typography,
 } from "@mui/material";
 import { useState } from "react";
+import {
+  IconActionButton,
+  SolidActionButton,
+} from "../components/ActionButton";
 import { OiErrorAlert } from "../components/OiErrorAlert";
-import { useGuard } from "../components/SafetyModeProvider";
 import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
 import type {
+  AppService,
   AttachmentProtocol,
   SiteIngress,
   SiteIngressAttachment,
@@ -84,7 +86,6 @@ function CreateSiteIngressDialog({
   const [hostname, setHostname] = useState("");
   const [description, setDescription] = useState("");
   const [tlsProvider, setTlsProvider] = useState<SiteIngressTlsProvider>("acme");
-  const guard = useGuard("dangerous");
   const { execute, loading, error } = useOiAction();
   const onSubmit = async () => {
     const params: Record<string, unknown> = {
@@ -152,17 +153,13 @@ function CreateSiteIngressDialog({
         <Button onClick={onCancel} disabled={loading}>
           Cancel
         </Button>
-        <Tooltip title={guard.reason ?? ""}>
-          <span>
-            <Button
-              variant="contained"
-              onClick={onSubmit}
-              disabled={loading || !valid || !guard.allowed}
-            >
-              {loading ? "Creating…" : "Create"}
-            </Button>
-          </span>
-        </Tooltip>
+        <SolidActionButton
+          safety="write"
+          onClick={onSubmit}
+          disabled={loading || !valid}
+        >
+          {loading ? "Creating…" : "Create"}
+        </SolidActionButton>
       </DialogActions>
     </Dialog>
   );
@@ -179,7 +176,6 @@ function ConfirmDeleteSiteIngressDialog({
   onConfirm: () => void;
   loading: boolean;
 }) {
-  const guard = useGuard("dangerous");
   return (
     <Dialog open onClose={loading ? undefined : onCancel} maxWidth="xs" fullWidth>
       <DialogTitle>Delete site ingress?</DialogTitle>
@@ -197,18 +193,13 @@ function ConfirmDeleteSiteIngressDialog({
         <Button onClick={onCancel} disabled={loading}>
           Cancel
         </Button>
-        <Tooltip title={guard.reason ?? ""}>
-          <span>
-            <Button
-              variant="contained"
-              color="error"
-              onClick={onConfirm}
-              disabled={loading || !guard.allowed}
-            >
-              {loading ? "Deleting…" : "Delete"}
-            </Button>
-          </span>
-        </Tooltip>
+        <SolidActionButton
+          safety="dangerous"
+          onClick={onConfirm}
+          disabled={loading}
+        >
+          {loading ? "Deleting…" : "Delete"}
+        </SolidActionButton>
       </DialogActions>
     </Dialog>
   );
@@ -226,13 +217,13 @@ function AttachDialog({
   const [kind, setKind] = useState<"forward" | "redirect">("forward");
   const [port, setPort] = useState("443");
   const [protocol, setProtocol] = useState<AttachmentProtocol>("http");
-  const [targetApp, setTargetApp] = useState("");
-  const [targetService, setTargetService] = useState("");
+  const [target, setTarget] = useState("");
   const [redirectUrl, setRedirectUrl] = useState("");
   const [redirectCode, setRedirectCode] = useState<number>(307);
   const [preservePath, setPreservePath] = useState(true);
-  const guard = useGuard("dangerous");
   const { execute, loading, error } = useOiAction();
+  const { data: appServices } = useOiQuery<AppService[]>("/services/app/list", {});
+  const [targetApp, targetService] = target ? target.split("\0") : ["", ""];
   const onSubmit = async () => {
     const portNum = Number.parseInt(port, 10);
     if (!Number.isFinite(portNum) || portNum < 1 || portNum > 65535) return;
@@ -310,22 +301,58 @@ function AttachDialog({
             </FormControl>
           </Stack>
           {kind === "forward" ? (
-            <Stack direction="row" spacing={2}>
-              <TextField
-                label="Target app"
-                size="small"
-                value={targetApp}
-                onChange={(e) => setTargetApp(e.target.value)}
-                fullWidth
-              />
-              <TextField
-                label="Target service"
-                size="small"
-                value={targetService}
-                onChange={(e) => setTargetService(e.target.value)}
-                fullWidth
-              />
-            </Stack>
+            (appServices ?? []).length > 0 ? (
+              <FormControl size="small" fullWidth>
+                <InputLabel id="att-target">Target app / service</InputLabel>
+                <Select
+                  labelId="att-target"
+                  label="Target app / service"
+                  value={target}
+                  onChange={(e) => setTarget(e.target.value)}
+                  sx={{ fontFamily: "monospace" }}
+                >
+                  {(appServices ?? []).map((s) => (
+                    <MenuItem
+                      key={`${s.app}\0${s.service_name}`}
+                      value={`${s.app}\0${s.service_name}`}
+                      sx={{ fontFamily: "monospace" }}
+                    >
+                      {s.app}
+                      <Typography
+                        component="span"
+                        sx={{ color: "text.secondary", mx: 0.5 }}
+                      >
+                        /
+                      </Typography>
+                      {s.service_name}
+                      {s.http && (
+                        <Typography
+                          component="span"
+                          variant="caption"
+                          sx={{ color: "text.secondary", ml: 1 }}
+                        >
+                          http
+                        </Typography>
+                      )}
+                      {!s.exported && (
+                        <Typography
+                          component="span"
+                          variant="caption"
+                          sx={{ color: "warning.main", ml: 1 }}
+                        >
+                          not exported
+                        </Typography>
+                      )}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            ) : (
+              <Typography variant="body2" sx={{ color: "text.secondary" }}>
+                No app services available. Register an app that exports a
+                service before attaching a forward.
+              </Typography>
+            )
           ) : (
             <Stack spacing={2}>
               <TextField
@@ -371,17 +398,13 @@ function AttachDialog({
         <Button onClick={onCancel} disabled={loading}>
           Cancel
         </Button>
-        <Tooltip title={guard.reason ?? ""}>
-          <span>
-            <Button
-              variant="contained"
-              onClick={onSubmit}
-              disabled={loading || !valid || !guard.allowed}
-            >
-              {loading ? "Attaching…" : "Attach"}
-            </Button>
-          </span>
-        </Tooltip>
+        <SolidActionButton
+          safety="write"
+          onClick={onSubmit}
+          disabled={loading || !valid}
+        >
+          {loading ? "Attaching…" : "Attach"}
+        </SolidActionButton>
       </DialogActions>
     </Dialog>
   );
@@ -398,7 +421,6 @@ function IngressRow({
   onDetach: (i: SiteIngress, att: SiteIngressAttachment) => void;
   onDelete: (i: SiteIngress) => void;
 }) {
-  const guard = useGuard("dangerous");
   const isDiscovered = ingress.source === "discovered";
   return (
     <TableRow>
@@ -441,17 +463,13 @@ function IngressRow({
                 <Box component="span" sx={{ fontFamily: "monospace", fontSize: "0.85em" }}>
                   {describeAttachment(att)}
                 </Box>
-                <Tooltip title="Detach">
-                  <span>
-                    <IconButton
-                      size="small"
-                      onClick={() => onDetach(ingress, att)}
-                      disabled={!guard.allowed}
-                    >
-                      <LinkOffIcon fontSize="small" />
-                    </IconButton>
-                  </span>
-                </Tooltip>
+                <IconActionButton
+                  safety="dangerous"
+                  tooltip="Detach"
+                  onClick={() => onDetach(ingress, att)}
+                >
+                  <LinkOffIcon fontSize="small" />
+                </IconActionButton>
               </Box>
             ))}
           </Stack>
@@ -459,34 +477,25 @@ function IngressRow({
       </TableCell>
       <TableCell align="right">
         <Box sx={{ display: "flex", flexDirection: "row", gap: 0.5, justifyContent: "flex-end" }}>
-          <Tooltip title="Attach forward or redirect">
-            <span>
-              <IconButton
-                size="small"
-                onClick={() => onAttach(ingress)}
-                disabled={!guard.allowed}
-              >
-                <AddIcon fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
-          <Tooltip
-            title={
+          <IconActionButton
+            safety="write"
+            tooltip="Attach forward or redirect"
+            onClick={() => onAttach(ingress)}
+          >
+            <AddIcon fontSize="small" />
+          </IconActionButton>
+          <IconActionButton
+            safety="dangerous"
+            tooltip={
               isDiscovered
                 ? "Discovered ingresses are managed by the provider and cannot be deleted here"
                 : "Delete this manual site ingress"
             }
+            onClick={() => onDelete(ingress)}
+            disabled={isDiscovered}
           >
-            <span>
-              <IconButton
-                size="small"
-                onClick={() => onDelete(ingress)}
-                disabled={isDiscovered || !guard.allowed}
-              >
-                <DeleteOutlineIcon fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
+            <DeleteOutlineIcon fontSize="small" />
+          </IconActionButton>
         </Box>
       </TableCell>
     </TableRow>
@@ -559,16 +568,22 @@ export default function Ingresses() {
         <Typography variant="h5" sx={{ flexGrow: 1 }}>
           Site ingresses
         </Typography>
-        <IconButton onClick={refresh} aria-label="Refresh">
+        <IconActionButton
+          safety="read"
+          tooltip="Refresh"
+          onClick={refresh}
+          aria-label="Refresh"
+          size="medium"
+        >
           <RefreshIcon />
-        </IconButton>
-        <Button
-          variant="contained"
+        </IconActionButton>
+        <SolidActionButton
+          safety="write"
           startIcon={<AddIcon />}
           onClick={() => setCreateOpen(true)}
         >
           New ingress
-        </Button>
+        </SolidActionButton>
       </Box>
 
       {tailscaleStaleOnly && (

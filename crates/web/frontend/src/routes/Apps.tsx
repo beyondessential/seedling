@@ -4,7 +4,6 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 import StopIcon from "@mui/icons-material/Stop";
 import {
   Box,
-  Button,
   Chip,
   CircularProgress,
   Divider,
@@ -22,8 +21,11 @@ import {
 } from "@mui/material";
 import { useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import {
+  IconActionButton,
+  SolidActionButton,
+} from "../components/ActionButton";
 import { OiErrorAlert } from "../components/OiErrorAlert";
-import { useGuard } from "../components/SafetyModeProvider";
 import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
 import { useEventRefresh } from "../hooks/useEventRefresh";
@@ -68,8 +70,6 @@ export default function Apps() {
   const { execute: stopShell } = useOiAction();
   const { execute: stopForward } = useOiAction();
   const { execute: cancelOp, loading: cancelling } = useOiAction();
-  const writeGuard = useGuard("write");
-  const dangerGuard = useGuard("dangerous");
 
   const matchApps = useCallback((ev: SeedlingEvent) => APP_LIST_EVENTS.has(ev.type), []);
   const matchSessions = useCallback((ev: SeedlingEvent) => SESSION_EVENTS.has(ev.type), []);
@@ -107,27 +107,22 @@ export default function Apps() {
       {/* Apps */}
       <Box sx={{ display: "flex", alignItems: "center", mb: 2, gap: 1 }}>
         <Typography variant="h5" sx={{ flexGrow: 1 }}>Apps</Typography>
-        <Tooltip title={writeGuard.reason ?? ""}>
-          <span>
-            <Button
-              size="small"
-              variant="contained"
-              startIcon={<AddIcon />}
-              component={Link}
-              to="/apps/new"
-              disabled={!writeGuard.allowed}
-            >
-              New app
-            </Button>
-          </span>
-        </Tooltip>
-        <Tooltip title="Refresh">
-          <span>
-            <IconButton onClick={refetchApps} disabled={appsLoading} size="small">
-              <RefreshIcon />
-            </IconButton>
-          </span>
-        </Tooltip>
+        <SolidActionButton
+          safety="write"
+          size="small"
+          startIcon={<AddIcon />}
+          onClick={() => navigate("/apps/new")}
+        >
+          New app
+        </SolidActionButton>
+        <IconActionButton
+          safety="read"
+          tooltip="Refresh"
+          onClick={refetchApps}
+          disabled={appsLoading}
+        >
+          <RefreshIcon />
+        </IconActionButton>
       </Box>
       {appsError && <OiErrorAlert error={appsError} />}
       {appsLoading && !apps && (
@@ -172,21 +167,17 @@ export default function Apps() {
                       )}
                       {(app.status === "installing" ||
                         app.status === "operating") && (
-                        <Tooltip title={writeGuard.reason ?? "Cancel operation"}>
-                          <span>
-                            <IconButton
-                              size="small"
-                              color="error"
-                              disabled={cancelling || !writeGuard.allowed}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                void handleCancelOp(app.name);
-                              }}
-                            >
-                              <CancelIcon sx={{ fontSize: 16 }} />
-                            </IconButton>
-                          </span>
-                        </Tooltip>
+                        <IconActionButton
+                          safety="dangerous"
+                          tooltip="Cancel operation"
+                          disabled={cancelling}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleCancelOp(app.name);
+                          }}
+                        >
+                          <CancelIcon sx={{ fontSize: 16 }} />
+                        </IconActionButton>
                       )}
                     </Box>
                   </TableCell>
@@ -331,18 +322,13 @@ export default function Apps() {
                             {new Date(s.opened_at).toLocaleString()}
                           </TableCell>
                           <TableCell align="right" sx={{ px: 0.5 }}>
-                            <Tooltip title={dangerGuard.reason ?? "Stop shell"}>
-                              <span>
-                                <IconButton
-                                  size="small"
-                                  color="error"
-                                  onClick={() => void handleStopShell(s.session_id)}
-                                  disabled={!dangerGuard.allowed}
-                                >
-                                  <StopIcon sx={{ fontSize: 16 }} />
-                                </IconButton>
-                              </span>
-                            </Tooltip>
+                            <IconActionButton
+                              safety="dangerous"
+                              tooltip="Stop shell"
+                              onClick={() => void handleStopShell(s.session_id)}
+                            >
+                              <StopIcon sx={{ fontSize: 16 }} />
+                            </IconActionButton>
                           </TableCell>
                         </TableRow>
                       ))}
@@ -386,18 +372,13 @@ export default function Apps() {
                             {new Date(f.opened_at).toLocaleString()}
                           </TableCell>
                           <TableCell align="right" sx={{ px: 0.5 }}>
-                            <Tooltip title={dangerGuard.reason ?? "Stop forward"}>
-                              <span>
-                                <IconButton
-                                  size="small"
-                                  color="error"
-                                  onClick={() => void handleStopForward(f.forward_id)}
-                                  disabled={!dangerGuard.allowed}
-                                >
-                                  <StopIcon sx={{ fontSize: 16 }} />
-                                </IconButton>
-                              </span>
-                            </Tooltip>
+                            <IconActionButton
+                              safety="dangerous"
+                              tooltip="Stop forward"
+                              onClick={() => void handleStopForward(f.forward_id)}
+                            >
+                              <StopIcon sx={{ fontSize: 16 }} />
+                            </IconActionButton>
                           </TableCell>
                         </TableRow>
                       ))}

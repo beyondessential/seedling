@@ -39,6 +39,8 @@ pub struct VolumeDef {
     pub tmpfs: bool,
     pub writes: Vec<(String, String)>,
     pub exported: Option<ExportOptions>,
+    // l[impl bsl.resource.description]
+    pub description: Option<String>,
 }
 
 // l[impl volume.type]
@@ -137,6 +139,15 @@ impl CustomType for Volume {
                     this.def.lock().exported = Some(ExportOptions::from_rhai_map(options)?);
                     Ok(this.clone())
                 },
+            )
+            // l[impl bsl.resource.description]
+            .with_fn(
+                "description",
+                |this: &mut Self, desc: &str| -> Result<Volume, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
+                    this.def.lock().description = Some(desc.to_owned());
+                    Ok(this.clone())
+                },
             );
     }
 }
@@ -223,6 +234,13 @@ where
 }
 
 // l[impl volume.external]
+#[derive(Debug, Default, Clone)]
+pub struct ExternalVolumeDef {
+    // l[impl bsl.resource.description]
+    pub description: Option<String>,
+}
+
+// l[impl volume.external]
 #[derive(Debug, Clone)]
 pub struct ExternalVolume {
     pub name: ResourceName,
@@ -230,11 +248,18 @@ pub struct ExternalVolume {
     /// than a static external volume mapping.
     // l[impl volume.external.dynamic]
     pub operation_binding: Option<OperationVolumeBinding>,
+    pub def: Holder<ExternalVolumeDef>,
 }
 
 impl CustomType for ExternalVolume {
     fn build(mut builder: TypeBuilder<Self>) {
-        builder.with_name("ExternalVolume");
+        builder
+            .with_name("ExternalVolume")
+            // l[impl bsl.resource.description]
+            .with_fn("description", |this: &mut Self, desc: &str| -> Self {
+                this.def.lock().description = Some(desc.to_owned());
+                this.clone()
+            });
     }
 }
 

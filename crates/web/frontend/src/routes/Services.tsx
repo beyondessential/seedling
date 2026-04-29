@@ -17,7 +17,6 @@ import {
   FormControl,
   FormControlLabel,
   FormLabel,
-  IconButton,
   InputLabel,
   MenuItem,
   Paper,
@@ -32,17 +31,21 @@ import {
   TableHead,
   TableRow,
   TextField,
-  Tooltip,
   Typography,
 } from "@mui/material";
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import {
+  IconActionButton,
+  OutlinedActionButton,
+  SolidActionButton,
+} from "../components/ActionButton";
 import { OiErrorAlert } from "../components/OiErrorAlert";
-import { useGuard } from "../components/SafetyModeProvider";
 import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
 import { formatServiceTarget, looksLikeIpv6Literal } from "../lib/services";
 import type {
+  AppService,
   DeclaredExternalService,
   ExportedService,
   ExternalServiceMapping,
@@ -64,7 +67,6 @@ function ConfirmDeleteSiteServiceDialog({
   onConfirm: () => void;
   loading: boolean;
 }) {
-  const dangerGuard = useGuard("dangerous");
   return (
     <Dialog open onClose={loading ? undefined : onCancel} maxWidth="xs" fullWidth>
       <DialogTitle>Delete site service?</DialogTitle>
@@ -82,18 +84,13 @@ function ConfirmDeleteSiteServiceDialog({
         <Button onClick={onCancel} disabled={loading}>
           Cancel
         </Button>
-        <Tooltip title={dangerGuard.reason ?? ""}>
-          <span>
-            <Button
-              variant="contained"
-              color="error"
-              onClick={onConfirm}
-              disabled={loading || !dangerGuard.allowed}
-            >
-              {loading ? "Deleting…" : "Delete"}
-            </Button>
-          </span>
-        </Tooltip>
+        <SolidActionButton
+          safety="dangerous"
+          onClick={onConfirm}
+          disabled={loading}
+        >
+          {loading ? "Deleting…" : "Delete"}
+        </SolidActionButton>
       </DialogActions>
     </Dialog>
   );
@@ -109,7 +106,6 @@ function CreateSiteServiceDialog({
   onSuccess: () => void;
 }) {
   const { execute, loading, error, clearError } = useOiAction();
-  const writeGuard = useGuard("write");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
 
@@ -162,17 +158,13 @@ function CreateSiteServiceDialog({
         <Button onClick={handleClose} disabled={loading}>
           Cancel
         </Button>
-        <Tooltip title={writeGuard.reason ?? ""}>
-          <span>
-            <Button
-              variant="contained"
-              onClick={() => void handleSubmit()}
-              disabled={loading || !name || !writeGuard.allowed}
-            >
-              {loading ? "Creating…" : "Create"}
-            </Button>
-          </span>
-        </Tooltip>
+        <SolidActionButton
+          safety="write"
+          onClick={() => void handleSubmit()}
+          disabled={loading || !name}
+        >
+          {loading ? "Creating…" : "Create"}
+        </SolidActionButton>
       </DialogActions>
     </Dialog>
   );
@@ -188,7 +180,6 @@ function AddEndpointDialog({
   onSuccess: () => void;
 }) {
   const { execute, loading, error, clearError } = useOiAction();
-  const writeGuard = useGuard("write");
   const [servicePort, setServicePort] = useState("");
   const [protocol, setProtocol] = useState<SiteServiceProtocol>("tcp");
   const [remoteHost, setRemoteHost] = useState("");
@@ -298,23 +289,13 @@ function AddEndpointDialog({
         <Button onClick={handleClose} disabled={loading}>
           Cancel
         </Button>
-        <Tooltip title={writeGuard.reason ?? ""}>
-          <span>
-            <Button
-              variant="contained"
-              onClick={() => void handleSubmit()}
-              disabled={
-                loading ||
-                !servicePort ||
-                !remoteHost ||
-                !remotePort ||
-                !writeGuard.allowed
-              }
-            >
-              {loading ? "Adding…" : "Add endpoint"}
-            </Button>
-          </span>
-        </Tooltip>
+        <SolidActionButton
+          safety="write"
+          onClick={() => void handleSubmit()}
+          disabled={loading || !servicePort || !remoteHost || !remotePort}
+        >
+          {loading ? "Adding…" : "Add endpoint"}
+        </SolidActionButton>
       </DialogActions>
     </Dialog>
   );
@@ -325,6 +306,7 @@ function MapExternalServiceDialog({
   onClose,
   onSuccess,
   siteServices,
+  declared,
   existing,
   prefill,
 }: {
@@ -332,28 +314,37 @@ function MapExternalServiceDialog({
   onClose: () => void;
   onSuccess: () => void;
   siteServices: SiteService[];
+  declared: DeclaredExternalService[];
   existing?: ExternalServiceMapping;
   prefill?: { app: string; name: string };
 }) {
   const { execute, loading, error, clearError } = useOiAction();
-  const writeGuard = useGuard("write");
+  const { data: appServices } = useOiQuery<AppService[]>("/services/app/list", {});
 
-  const [app, setApp] = useState(existing?.app ?? prefill?.app ?? "");
-  const [slot, setSlot] = useState(existing?.external_name ?? prefill?.name ?? "");
+  const isRemap = existing != null;
+  const isFixed = isRemap || prefill != null;
+
+  const initialApp = existing?.app ?? prefill?.app ?? "";
+  const initialSlot = existing?.external_name ?? prefill?.name ?? "";
+
+  const [slotKey, setSlotKey] = useState(
+    initialApp && initialSlot ? `${initialApp}\0${initialSlot}` : "",
+  );
   const [kind, setKind] = useState<"site" | "app">(
     existing?.target.kind ?? "site",
   );
   const [siteName, setSiteName] = useState(
     existing?.target.kind === "site" ? existing.target.name : "",
   );
-  const [targetApp, setTargetApp] = useState(
-    existing?.target.kind === "app" ? existing.target.app : "",
-  );
-  const [targetService, setTargetService] = useState(
-    existing?.target.kind === "app" ? existing.target.service : "",
+  const [targetKey, setTargetKey] = useState(
+    existing?.target.kind === "app"
+      ? `${existing.target.app}\0${existing.target.service}`
+      : "",
   );
 
-  const isRemap = existing != null;
+  const app = isFixed ? initialApp : slotKey.split("\0")[0] ?? "";
+  const slot = isFixed ? initialSlot : slotKey.split("\0")[1] ?? "";
+  const [targetApp, targetService] = targetKey ? targetKey.split("\0") : ["", ""];
 
   const handleClose = () => {
     clearError();
@@ -388,26 +379,47 @@ function MapExternalServiceDialog({
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 0.5 }}>
           {error && <OiErrorAlert error={error} />}
-          <Stack direction="row" spacing={2}>
+          {isFixed ? (
             <TextField
-              label="App"
+              label="App / Slot"
               size="small"
-              value={app}
-              onChange={(e) => setApp(e.target.value)}
-              disabled={isRemap || prefill != null}
-              sx={{ flex: 1 }}
+              value={`${app} / ${slot}`}
+              disabled
               slotProps={{ htmlInput: { style: { fontFamily: "monospace" } } }}
             />
-            <TextField
-              label="Slot"
-              size="small"
-              value={slot}
-              onChange={(e) => setSlot(e.target.value)}
-              disabled={isRemap || prefill != null}
-              sx={{ flex: 1 }}
-              slotProps={{ htmlInput: { style: { fontFamily: "monospace" } } }}
-            />
-          </Stack>
+          ) : declared.length > 0 ? (
+            <FormControl size="small" fullWidth>
+              <InputLabel>App / Slot</InputLabel>
+              <Select
+                label="App / Slot"
+                value={slotKey}
+                onChange={(e) => setSlotKey(e.target.value)}
+                sx={{ fontFamily: "monospace" }}
+                autoFocus
+              >
+                {declared.map((d) => (
+                  <MenuItem
+                    key={`${d.app}\0${d.name}`}
+                    value={`${d.app}\0${d.name}`}
+                    sx={{ fontFamily: "monospace" }}
+                  >
+                    {d.app}
+                    <Typography
+                      component="span"
+                      sx={{ color: "text.secondary", mx: 0.5 }}
+                    >
+                      /
+                    </Typography>
+                    {d.name}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          ) : (
+            <Typography variant="body2" sx={{ color: "text.secondary" }}>
+              No external service slots declared by any registered app.
+            </Typography>
+          )}
           <FormControl>
             <FormLabel>Target kind</FormLabel>
             <RadioGroup
@@ -458,25 +470,55 @@ function MapExternalServiceDialog({
                 slotProps={{ htmlInput: { style: { fontFamily: "monospace" } } }}
               />
             )
+          ) : (appServices ?? []).length > 0 ? (
+            <FormControl size="small" fullWidth>
+              <InputLabel>Target app / service</InputLabel>
+              <Select
+                label="Target app / service"
+                value={targetKey}
+                onChange={(e) => setTargetKey(e.target.value)}
+                sx={{ fontFamily: "monospace" }}
+              >
+                {(appServices ?? []).map((s) => (
+                  <MenuItem
+                    key={`${s.app}\0${s.service_name}`}
+                    value={`${s.app}\0${s.service_name}`}
+                    sx={{ fontFamily: "monospace" }}
+                  >
+                    {s.app}
+                    <Typography
+                      component="span"
+                      sx={{ color: "text.secondary", mx: 0.5 }}
+                    >
+                      /
+                    </Typography>
+                    {s.service_name}
+                    {s.http && (
+                      <Typography
+                        component="span"
+                        variant="caption"
+                        sx={{ color: "text.secondary", ml: 1 }}
+                      >
+                        http
+                      </Typography>
+                    )}
+                    {!s.exported && (
+                      <Typography
+                        component="span"
+                        variant="caption"
+                        sx={{ color: "warning.main", ml: 1 }}
+                      >
+                        not exported
+                      </Typography>
+                    )}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
           ) : (
-            <Stack direction="row" spacing={2}>
-              <TextField
-                label="Target app"
-                size="small"
-                value={targetApp}
-                onChange={(e) => setTargetApp(e.target.value)}
-                sx={{ flex: 1 }}
-                slotProps={{ htmlInput: { style: { fontFamily: "monospace" } } }}
-              />
-              <TextField
-                label="Target service"
-                size="small"
-                value={targetService}
-                onChange={(e) => setTargetService(e.target.value)}
-                sx={{ flex: 1 }}
-                slotProps={{ htmlInput: { style: { fontFamily: "monospace" } } }}
-              />
-            </Stack>
+            <Typography variant="body2" sx={{ color: "text.secondary" }}>
+              No app services available.
+            </Typography>
           )}
         </Stack>
       </DialogContent>
@@ -484,17 +526,13 @@ function MapExternalServiceDialog({
         <Button onClick={handleClose} disabled={loading}>
           Cancel
         </Button>
-        <Tooltip title={writeGuard.reason ?? ""}>
-          <span>
-            <Button
-              variant="contained"
-              onClick={() => void handleSubmit()}
-              disabled={loading || !canSubmit || !writeGuard.allowed}
-            >
-              {loading ? (isRemap ? "Remapping…" : "Mapping…") : isRemap ? "Remap" : "Map"}
-            </Button>
-          </span>
-        </Tooltip>
+        <SolidActionButton
+          safety="write"
+          onClick={() => void handleSubmit()}
+          disabled={loading || !canSubmit}
+        >
+          {loading ? (isRemap ? "Remapping…" : "Mapping…") : isRemap ? "Remap" : "Map"}
+        </SolidActionButton>
       </DialogActions>
     </Dialog>
   );
@@ -527,8 +565,6 @@ export default function Services() {
   } = useOiQuery<DeclaredExternalService[]>("/services/external/declared", {});
 
   const { execute, error: actionError } = useOiAction();
-  const writeGuard = useGuard("write");
-  const dangerGuard = useGuard("dangerous");
 
   const [createOpen, setCreateOpen] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
@@ -594,13 +630,14 @@ export default function Services() {
         <Typography variant="h5" sx={{ flexGrow: 1 }}>
           Services
         </Typography>
-        <Tooltip title="Refresh">
-          <span>
-            <IconButton onClick={refreshAll} disabled={anyLoading} size="small">
-              <RefreshIcon />
-            </IconButton>
-          </span>
-        </Tooltip>
+        <IconActionButton
+          safety="read"
+          tooltip="Refresh"
+          onClick={refreshAll}
+          disabled={anyLoading}
+        >
+          <RefreshIcon />
+        </IconActionButton>
       </Box>
       {actionError && (
         <Alert severity="error" sx={{ mb: 2 }}>
@@ -614,18 +651,14 @@ export default function Services() {
             <Typography variant="subtitle1" sx={{ fontWeight: 600, flexGrow: 1 }}>
               Site Services
             </Typography>
-            <Tooltip title={writeGuard.reason ?? ""}>
-              <span>
-                <Button
-                  size="small"
-                  startIcon={<AddIcon />}
-                  onClick={() => setCreateOpen(true)}
-                  disabled={!writeGuard.allowed}
-                >
-                  New
-                </Button>
-              </span>
-            </Tooltip>
+            <OutlinedActionButton
+              safety="write"
+              size="small"
+              startIcon={<AddIcon />}
+              onClick={() => setCreateOpen(true)}
+            >
+              New
+            </OutlinedActionButton>
           </Box>
           {siteError && <OiErrorAlert error={siteError} />}
           {siteLoading && !siteSvcs && <CircularProgress size={20} />}
@@ -658,29 +691,22 @@ export default function Services() {
                         </Typography>
                       )}
                       <Box sx={{ flexGrow: 1 }} />
-                      <Tooltip title={writeGuard.reason ?? "Add endpoint"}>
-                        <span>
-                          <Button
-                            size="small"
-                            startIcon={<AddIcon />}
-                            onClick={() => setAddEndpointTarget(svc)}
-                            disabled={!writeGuard.allowed}
-                          >
-                            Add endpoint
-                          </Button>
-                        </span>
-                      </Tooltip>
-                      <Tooltip title={dangerGuard.reason ?? "Delete"}>
-                        <span>
-                          <IconButton
-                            size="small"
-                            onClick={() => setDeleteTarget(svc)}
-                            disabled={!dangerGuard.allowed}
-                          >
-                            <DeleteOutlineIcon sx={{ fontSize: 16 }} />
-                          </IconButton>
-                        </span>
-                      </Tooltip>
+                      <OutlinedActionButton
+                        safety="write"
+                        tooltip="Add endpoint"
+                        size="small"
+                        startIcon={<AddIcon />}
+                        onClick={() => setAddEndpointTarget(svc)}
+                      >
+                        Add endpoint
+                      </OutlinedActionButton>
+                      <IconActionButton
+                        safety="dangerous"
+                        tooltip="Delete"
+                        onClick={() => setDeleteTarget(svc)}
+                      >
+                        <DeleteOutlineIcon sx={{ fontSize: 16 }} />
+                      </IconActionButton>
                     </Box>
                     {svc.endpoints.length === 0 ? (
                       <Typography
@@ -719,25 +745,21 @@ export default function Services() {
                                 [{ep.remote_host}]:{ep.remote_port}
                               </TableCell>
                               <TableCell align="right" sx={{ px: 0.5 }}>
-                                <Tooltip title={dangerGuard.reason ?? "Remove"}>
-                                  <span>
-                                    <IconButton
-                                      size="small"
-                                      onClick={() =>
-                                        void removeEndpoint(
-                                          svc,
-                                          ep.service_port,
-                                          ep.protocol,
-                                          ep.remote_host,
-                                          ep.remote_port,
-                                        )
-                                      }
-                                      disabled={!dangerGuard.allowed}
-                                    >
-                                      <DeleteOutlineIcon sx={{ fontSize: 14 }} />
-                                    </IconButton>
-                                  </span>
-                                </Tooltip>
+                                <IconActionButton
+                                  safety="dangerous"
+                                  tooltip="Remove"
+                                  onClick={() =>
+                                    void removeEndpoint(
+                                      svc,
+                                      ep.service_port,
+                                      ep.protocol,
+                                      ep.remote_host,
+                                      ep.remote_port,
+                                    )
+                                  }
+                                >
+                                  <DeleteOutlineIcon sx={{ fontSize: 14 }} />
+                                </IconActionButton>
                               </TableCell>
                             </TableRow>
                           ))}
@@ -808,18 +830,14 @@ export default function Services() {
             <Typography variant="subtitle1" sx={{ fontWeight: 600, flexGrow: 1 }}>
               External Service Requests
             </Typography>
-            <Tooltip title={writeGuard.reason ?? ""}>
-              <span>
-                <Button
-                  size="small"
-                  startIcon={<AddIcon />}
-                  onClick={() => setMapOpen(true)}
-                  disabled={!writeGuard.allowed}
-                >
-                  Map
-                </Button>
-              </span>
-            </Tooltip>
+            <OutlinedActionButton
+              safety="write"
+              size="small"
+              startIcon={<AddIcon />}
+              onClick={() => setMapOpen(true)}
+            >
+              Map
+            </OutlinedActionButton>
           </Box>
           {declaredError && <OiErrorAlert error={declaredError} />}
           {mappingsError && <OiErrorAlert error={mappingsError} />}
@@ -873,48 +891,34 @@ export default function Services() {
                           >
                             {mapping ? (
                               <>
-                                <Tooltip title={writeGuard.reason ?? "Remap"}>
-                                  <span>
-                                    <IconButton
-                                      size="small"
-                                      onClick={() => setRemapTarget(mapping)}
-                                      disabled={!writeGuard.allowed}
-                                    >
-                                      <EditIcon sx={{ fontSize: 16 }} />
-                                    </IconButton>
-                                  </span>
-                                </Tooltip>
-                                <Tooltip title={writeGuard.reason ?? "Unmap"}>
-                                  <span>
-                                    <IconButton
-                                      size="small"
-                                      onClick={() =>
-                                        void unmap(d.app, d.name)
-                                      }
-                                      disabled={!writeGuard.allowed}
-                                    >
-                                      <LinkOffIcon sx={{ fontSize: 16 }} />
-                                    </IconButton>
-                                  </span>
-                                </Tooltip>
+                                <IconActionButton
+                                  safety="write"
+                                  tooltip="Remap"
+                                  onClick={() => setRemapTarget(mapping)}
+                                >
+                                  <EditIcon sx={{ fontSize: 16 }} />
+                                </IconActionButton>
+                                <IconActionButton
+                                  safety="write"
+                                  tooltip="Unmap"
+                                  onClick={() => void unmap(d.app, d.name)}
+                                >
+                                  <LinkOffIcon sx={{ fontSize: 16 }} />
+                                </IconActionButton>
                               </>
                             ) : (
-                              <Tooltip title={writeGuard.reason ?? ""}>
-                                <span>
-                                  <Button
-                                    size="small"
-                                    onClick={() =>
-                                      setPrefillTarget({
-                                        app: d.app,
-                                        name: d.name,
-                                      })
-                                    }
-                                    disabled={!writeGuard.allowed}
-                                  >
-                                    Map
-                                  </Button>
-                                </span>
-                              </Tooltip>
+                              <OutlinedActionButton
+                                safety="write"
+                                size="small"
+                                onClick={() =>
+                                  setPrefillTarget({
+                                    app: d.app,
+                                    name: d.name,
+                                  })
+                                }
+                              >
+                                Map
+                              </OutlinedActionButton>
                             )}
                           </TableCell>
                         </TableRow>
@@ -970,6 +974,7 @@ export default function Services() {
             setPrefillTarget(null);
           }}
           siteServices={siteSvcs ?? []}
+          declared={declared ?? []}
           existing={remapTarget ?? undefined}
           prefill={prefillTarget ?? undefined}
         />

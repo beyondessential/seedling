@@ -229,6 +229,7 @@ fn resolve_attachment(
         // redirect; redirect attachments are independent entries on
         // their own (port, protocol).
         redirect: None,
+        description: None,
     };
 
     match &att.target {
@@ -491,6 +492,7 @@ mod tests {
             dtls: false,
             http_terminate: Some(HttpTermination::Http1),
             redirect: None,
+            description: None,
         }
     }
 

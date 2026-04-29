@@ -4,13 +4,12 @@ import {
   CircularProgress,
   Stack,
   TextField,
-  Tooltip,
   Typography,
 } from "@mui/material";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { SolidActionButton } from "../components/ActionButton";
 import { OiErrorAlert } from "../components/OiErrorAlert";
-import { useGuard } from "../components/SafetyModeProvider";
 import { ScriptEditor } from "../components/ScriptEditor";
 import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
@@ -27,7 +26,6 @@ export default function EditTemplate() {
   } = useOiQuery<Template>("/templates/show", { name });
 
   const { execute: saveExec, loading: saving, error: saveError } = useOiAction();
-  const writeGuard = useGuard("write");
 
   const [body, setBody] = useState("");
   const [description, setDescription] = useState("");
@@ -113,18 +111,14 @@ export default function EditTemplate() {
         >
           Cancel
         </Button>
-        <Tooltip title={writeGuard.reason ?? ""}>
-          <span>
-            <Button
-              size="small"
-              variant="contained"
-              onClick={handleSave}
-              disabled={!canSave || !writeGuard.allowed}
-            >
-              {saving ? "Saving…" : unchanged ? "No changes" : "Save"}
-            </Button>
-          </span>
-        </Tooltip>
+        <SolidActionButton
+          safety="write"
+          size="small"
+          onClick={handleSave}
+          disabled={!canSave}
+        >
+          {saving ? "Saving…" : unchanged ? "No changes" : "Save"}
+        </SolidActionButton>
       </Box>
       <Stack spacing={1}>
         {fetchError && <OiErrorAlert error={fetchError} />}

@@ -8,13 +8,12 @@ import {
   DialogTitle,
   Stack,
   TextField,
-  Tooltip,
   Typography,
 } from "@mui/material";
 import { useState } from "react";
 import { useOiAction } from "../hooks/useOiAction";
+import { SolidActionButton } from "./ActionButton";
 import { OiErrorAlert } from "./OiErrorAlert";
-import { useGuard } from "./SafetyModeProvider";
 
 /// Promote a read-only snapshot site volume to a fresh read-write managed
 /// site volume. Backed by /volumes/site/promote. The source snapshot is
@@ -33,7 +32,6 @@ export function PromoteSnapshotDialog({
   onSuccess: () => void;
 }) {
   const { execute, loading, error, clearError } = useOiAction();
-  const writeGuard = useGuard("write");
   const [name, setName] = useState(() => defaultPromotedName(source));
 
   const handleClose = () => {
@@ -85,18 +83,14 @@ export function PromoteSnapshotDialog({
         <Button onClick={handleClose} disabled={loading}>
           Cancel
         </Button>
-        <Tooltip title={writeGuard.reason ?? ""}>
-          <span>
-            <Button
-              variant="contained"
-              startIcon={<UpgradeIcon />}
-              onClick={() => void handleSubmit()}
-              disabled={loading || !name.trim() || !writeGuard.allowed}
-            >
-              {loading ? "Promoting…" : "Promote"}
-            </Button>
-          </span>
-        </Tooltip>
+        <SolidActionButton
+          safety="write"
+          startIcon={<UpgradeIcon />}
+          onClick={() => void handleSubmit()}
+          disabled={loading || !name.trim()}
+        >
+          {loading ? "Promoting…" : "Promote"}
+        </SolidActionButton>
       </DialogActions>
     </Dialog>
   );

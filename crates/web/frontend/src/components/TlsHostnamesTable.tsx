@@ -3,7 +3,6 @@ import {
   Box,
   Chip,
   CircularProgress,
-  IconButton,
   Paper,
   Stack,
   Table,
@@ -17,7 +16,7 @@ import {
 } from "@mui/material";
 import { useEffect } from "react";
 import { Link as RouterLink } from "react-router-dom";
-import { useGuard } from "./SafetyModeProvider";
+import { IconActionButton } from "./ActionButton";
 import { useOiQuery } from "../hooks/useOi";
 import { useOiAction } from "../hooks/useOiAction";
 import { OiErrorAlert } from "./OiErrorAlert";
@@ -161,7 +160,6 @@ export function TlsHostnamesTable({
   const { data, loading, error, refetch } =
     useOiQuery<TlsHostnamesResponse>("/tls/hostnames/list", params);
   const { execute, error: actionError, clearError } = useOiAction();
-  const writeGuard = useGuard("write");
 
   // Auto-refresh so newly-arriving attempts/blocks/cert state surface
   // without operator interaction. 5s feels live, is cheap.
@@ -311,17 +309,13 @@ export function TlsHostnamesTable({
                     </TableCell>
                     <TableCell align="right">
                       {isAcmeDns && (
-                        <Tooltip title={writeGuard.reason ?? "Renew now"}>
-                          <span>
-                            <IconButton
-                              size="small"
-                              disabled={!writeGuard.allowed}
-                              onClick={() => onRetry(row.hostname)}
-                            >
-                              <RefreshIcon fontSize="small" />
-                            </IconButton>
-                          </span>
-                        </Tooltip>
+                        <IconActionButton
+                          safety="write"
+                          tooltip="Renew now"
+                          onClick={() => onRetry(row.hostname)}
+                        >
+                          <RefreshIcon fontSize="small" />
+                        </IconActionButton>
                       )}
                     </TableCell>
                   </TableRow>

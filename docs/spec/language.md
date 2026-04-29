@@ -53,6 +53,13 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - A list of instances of a resource type is known as a _collection_
 > - A single instance of a resource type is called a _resource_
 
+> l[bsl.resource.description]
+> Every Resource has a `description(text: string)` builder method which attaches a free-form human-readable description to the resource. The description is surfaced to operators in the management interfaces (CLI, web UI, OI), and is particularly useful for naming the purpose of anonymous resources (such as anonymous jobs spawned inside an action closure) so they are recognisable in operation logs.
+>
+> The description is purely informational and has no behavioural effect. Calling `description()` more than once on the same resource replaces the previous value. The description is `None` by default.
+>
+> The method returns the same resource builder so calls may be chained.
+
 # Collection
 
 > l[collection.interface]
@@ -153,16 +160,6 @@ These are not guaranteed to be constant forever, only for the duration of one sc
 >
 > When the host's local timezone cannot be determined, the value is `UTC`.
 
-> l[const.default-deadline]
-> The default deadlines for `started.<state>()` barriers with no explicit `deadline` argument are:
->
-> - `scheduled`, `running`, `ready`: short (on the order of tens of seconds), because these barriers guard correctness signals — a resource that has not reached these states in that window usually indicates a cluster-level problem rather than a slow workload.
-> - `terminated`: long (on the order of hours), because `terminated` is routinely called on Jobs that run for extended periods.
->
-> Every default deadline is a positive non-zero number of seconds. The exact values are set by the control plane and are not specified here.
->
-> Callers with an unbounded wait requirement use [`started.terminated_eventually()`](#l--rt.started.terminated-eventually) or [`started.ready_eventually()`](#l--rt.started.ready-eventually) instead of passing a very large deadline.
-
 ## OnUpdate
 
 `OnUpdate` defines strategies for when [Deployments](#l--deployment.type) update.
@@ -259,6 +256,13 @@ This is currently the only value.
 >
 > Names are also used to select resources using the Collection methods.
 > Named resources created in the action context are references to existing static resources, not new definitions; see `l[app.resources.context.named]`.
+
+> l[app.description]
+> The `app.description(text: string)` method attaches a free-form human-readable description to the application as a whole. The description is surfaced to operators in the management interfaces (CLI, web UI, OI) alongside the app name.
+>
+> The description is purely informational and has no behavioural effect. Calling `description()` more than once on the app replaces the previous value. The description is `None` by default.
+>
+> The method returns `app` so calls may be chained.
 
 # Parameter
 
@@ -1005,9 +1009,19 @@ This spec defines the semantics of the Runtime Instance as far as BSL is concern
 > l[rt.started.state-methods]
 > `Started` has a number of methods of the form `started.<state>(deadline?: number)` which block until all resources have entered the state `<state>` (one of `scheduled`, `running`, `ready`, `terminated`).
 >
-> The argument `deadline` must be a positive integer number of seconds; if it's zero or absent, the default deadline for that state is used (see [`DEFAULT_DEADLINE`](#l--const.default-deadline)).
+> The argument `deadline` must be a positive integer number of seconds; if it's zero or absent, the default deadline for that state is used (see [default deadlines](#l--rt.started.default-deadlines)).
 >
 > If the deadline is reached before the method returns, an exception is thrown.
+
+> l[rt.started.default-deadlines]
+> The default deadlines for `started.<state>()` barriers with no explicit `deadline` argument are:
+>
+> - `scheduled`, `running`, `ready`: short (on the order of tens of seconds), because these barriers guard correctness signals — a resource that has not reached these states in that window usually indicates a cluster-level problem rather than a slow workload.
+> - `terminated`: long (on the order of hours), because `terminated` is routinely called on Jobs that run for extended periods.
+>
+> Every default deadline is a positive non-zero number of seconds. The exact values are set by the control plane and are not specified here.
+>
+> Callers with an unbounded wait requirement use [`started.terminated_eventually()`](#l--rt.started.terminated-eventually) or [`started.ready_eventually()`](#l--rt.started.ready-eventually) instead of passing a very large deadline.
 
 > l[rt.started.terminated]
 > The `started.terminated()` state method returns a [Termination](#l--rt.termination.type).

@@ -558,7 +558,7 @@ pub(crate) fn list_external_mappings(
 }
 
 pub(crate) fn list_declared_external_services(state: &OiState) -> HandlerResult {
-    use crate::defs::resource::ResourceKind;
+    use crate::defs::resource::{Resource, ResourceKind};
 
     let reg = state.registry.read();
     let mut items: Vec<serde_json::Value> = reg
@@ -566,9 +566,17 @@ pub(crate) fn list_declared_external_services(state: &OiState) -> HandlerResult 
         .flat_map(|entry| {
             let def = entry.app.def.load();
             def.resources
-                .keys()
-                .filter(|id| id.kind == ResourceKind::ExternalService)
-                .map(|id| json!({ "app": entry.name, "name": id.name.as_str() }))
+                .iter()
+                .filter(|(id, _)| id.kind == ResourceKind::ExternalService)
+                .map(|(id, resource)| {
+                    let mut item = json!({ "app": entry.name, "name": id.name.as_str() });
+                    if let Resource::ExternalService(es) = resource
+                        && let Some(desc) = es.def.lock().description.clone()
+                    {
+                        item["description"] = json!(desc);
+                    }
+                    item
+                })
                 .collect::<Vec<_>>()
         })
         .collect();

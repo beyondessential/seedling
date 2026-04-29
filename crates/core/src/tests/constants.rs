@@ -1,16 +1,5 @@
 use super::*;
 
-// l[verify const.default-deadline]
-#[test]
-fn default_deadline_is_available() {
-    run_test_script_app(
-        r#"
-        let d = DEFAULT_DEADLINE;
-        if d <= 0 { throw "DEFAULT_DEADLINE must be positive non-zero"; }
-    "#,
-    );
-}
-
 // l[verify const.available-threads]
 #[test]
 fn available_threads_is_positive() {

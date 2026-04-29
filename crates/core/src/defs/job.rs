@@ -11,6 +11,8 @@ use super::{
 pub struct JobDef {
     pub pod: Holder<PodDef>,
     pub deadline: Option<u64>,
+    // l[impl bsl.resource.description]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -47,6 +49,15 @@ impl CustomType for Job {
                     return Err("deadline must be a positive number of seconds".into());
                 }
                 this.def.lock().deadline = Some(seconds as u64);
+                Ok(this.clone())
+            },
+        );
+        // l[impl bsl.resource.description]
+        builder.with_fn(
+            "description",
+            |this: &mut Self, desc: &str| -> Result<Job, Box<EvalAltResult>> {
+                this.ensure_unfrozen()?;
+                this.def.lock().description = Some(desc.to_owned());
                 Ok(this.clone())
             },
         );

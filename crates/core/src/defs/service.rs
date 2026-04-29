@@ -15,6 +15,8 @@ use super::{
 pub struct ServiceDef {
     pub http: Option<HttpServiceDef>,
     pub exported: Option<ExportOptions>,
+    // l[impl bsl.resource.description]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -127,6 +129,15 @@ impl CustomType for Service {
                  port: i64|
                  -> Result<Ingress, Box<EvalAltResult>> {
                     declare_ingress(this, hostname, port)
+                },
+            )
+            // l[impl bsl.resource.description]
+            .with_fn(
+                "description",
+                |this: &mut Self, desc: &str| -> Result<Service, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
+                    this.def.lock().description = Some(desc.to_owned());
+                    Ok(this.clone())
                 },
             );
     }
@@ -301,9 +312,17 @@ impl CustomType for HttpServiceRoute {
 }
 
 // l[impl service.external]
+#[derive(Debug, Default, Clone)]
+pub struct ExternalServiceDef {
+    // l[impl bsl.resource.description]
+    pub description: Option<String>,
+}
+
+// l[impl service.external]
 #[derive(Debug, Clone)]
 pub struct ExternalService {
     pub name: ResourceName,
+    pub def: Holder<ExternalServiceDef>,
 }
 
 impl CustomType for ExternalService {
@@ -343,7 +362,12 @@ impl CustomType for ExternalService {
                         port,
                     })
                 },
-            );
+            )
+            // l[impl bsl.resource.description]
+            .with_fn("description", |this: &mut Self, desc: &str| -> Self {
+                this.def.lock().description = Some(desc.to_owned());
+                this.clone()
+            });
     }
 }
 

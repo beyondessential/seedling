@@ -17,6 +17,8 @@ pub struct IngressDef {
     pub dtls: bool,
     pub http_terminate: Option<HttpTermination>,
     pub redirect: Option<RedirectDef>,
+    // l[impl bsl.resource.description]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -66,6 +68,7 @@ impl Ingress {
                     dtls: false,
                     http_terminate: None,
                     redirect: None,
+                    description: None,
                 }
                 .into(),
             ),
@@ -195,6 +198,15 @@ impl CustomType for Ingress {
                 },
             )
             // l[impl ingress.service]
-            .with_fn("service", |this: &mut Self| this.service.clone());
+            .with_fn("service", |this: &mut Self| this.service.clone())
+            // l[impl bsl.resource.description]
+            .with_fn(
+                "description",
+                |this: &mut Self, desc: &str| -> Result<Ingress, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
+                    this.def.lock().description = Some(desc.to_owned());
+                    Ok(this.clone())
+                },
+            );
     }
 }

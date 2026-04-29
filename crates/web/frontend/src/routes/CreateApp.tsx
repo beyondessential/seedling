@@ -8,13 +8,12 @@ import {
   DialogTitle,
   Stack,
   TextField,
-  Tooltip,
   Typography,
 } from "@mui/material";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { SolidActionButton } from "../components/ActionButton";
 import { OiErrorAlert } from "../components/OiErrorAlert";
-import { useGuard } from "../components/SafetyModeProvider";
 import { ScriptEditor } from "../components/ScriptEditor";
 import { ScriptInventory } from "../components/ScriptInventory";
 import { useOiAction } from "../hooks/useOiAction";
@@ -35,7 +34,6 @@ export default function CreateApp() {
   const navigate = useNavigate();
   const { execute: previewExec, loading: previewing, error: previewError } = useOiAction();
   const { execute: createExec, loading: creating, error: createError } = useOiAction();
-  const writeGuard = useGuard("write");
   const [name, setName] = useState("");
   const [script, setScript] = useState("");
   const [nameTouched, setNameTouched] = useState(false);
@@ -102,18 +100,14 @@ export default function CreateApp() {
         <Button size="small" component={Link} to="/" disabled={previewing || creating}>
           Cancel
         </Button>
-        <Tooltip title={writeGuard.reason ?? ""}>
-          <span>
-            <Button
-              size="small"
-              variant="contained"
-              onClick={handleReview}
-              disabled={!canReview || !writeGuard.allowed}
-            >
-              {previewing ? "Previewing…" : "Review & create"}
-            </Button>
-          </span>
-        </Tooltip>
+        <SolidActionButton
+          safety="write"
+          size="small"
+          onClick={handleReview}
+          disabled={!canReview}
+        >
+          {previewing ? "Previewing…" : "Review & create"}
+        </SolidActionButton>
       </Box>
       <Stack spacing={2}>
         {previewError && <OiErrorAlert error={previewError} />}
@@ -162,23 +156,19 @@ export default function CreateApp() {
           <Button onClick={handleCancel} disabled={creating}>
             Back to editor
           </Button>
-          <Tooltip title={writeGuard.reason ?? ""}>
-            <span>
-              <Button
-                variant="contained"
-                onClick={handleConfirm}
-                disabled={creating || preview?.script_error !== null || !writeGuard.allowed}
-              >
-                {creating ? (
-                  <>
-                    <CircularProgress size={14} sx={{ mr: 1 }} /> Creating…
-                  </>
-                ) : (
-                  "Create app"
-                )}
-              </Button>
-            </span>
-          </Tooltip>
+          <SolidActionButton
+            safety="write"
+            onClick={handleConfirm}
+            disabled={creating || preview?.script_error !== null}
+          >
+            {creating ? (
+              <>
+                <CircularProgress size={14} sx={{ mr: 1 }} /> Creating…
+              </>
+            ) : (
+              "Create app"
+            )}
+          </SolidActionButton>
         </DialogActions>
       </Dialog>
     </Box>
