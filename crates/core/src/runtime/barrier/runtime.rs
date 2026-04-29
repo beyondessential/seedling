@@ -5,7 +5,9 @@ use seedling_protocol::names::AppName;
 
 use crate::defs::app::AppDef;
 use crate::defs::container::canonicalise_signal_name;
-use crate::defs::volume::{ExternalVolume, OperationVolumeBinding, Volume, validate_volume_write_path};
+use crate::defs::volume::{
+    ExternalVolume, OperationVolumeBinding, Volume, validate_volume_write_path,
+};
 use crate::runtime::barrier::{
     ActionLogEntry, BarrierCondition, BarrierRecord, CallKind, SharedContext, VolumeWriteTarget,
 };
@@ -1115,9 +1117,9 @@ impl RuntimeInstance {
         let writer = ctx.lock().volume_writer.clone();
         if let Some(writer) = writer {
             let app = self.app_name.as_str().to_owned();
-            writer.write(&app, target, path, contents).map_err(
-                |e| -> Box<EvalAltResult> { format!("rt.write: {e}").into() },
-            )?;
+            writer
+                .write(&app, target, path, contents)
+                .map_err(|e| -> Box<EvalAltResult> { format!("rt.write: {e}").into() })?;
         }
 
         {
@@ -1488,9 +1490,11 @@ fn parse_exec_options(options: Map) -> Result<Vec<(String, String)>, Box<EvalAlt
     for (key, value) in options {
         match key.as_str() {
             "env" => {
-                let env_map = value.try_cast::<Map>().ok_or_else(|| -> Box<EvalAltResult> {
-                    "rt.exec: options.env must be a map".into()
-                })?;
+                let env_map = value
+                    .try_cast::<Map>()
+                    .ok_or_else(|| -> Box<EvalAltResult> {
+                        "rt.exec: options.env must be a map".into()
+                    })?;
                 for (k, v) in env_map {
                     let k_str = k.to_string();
                     if !is_valid_env_var_name(&k_str) {
@@ -1506,10 +1510,7 @@ fn parse_exec_options(options: Map) -> Result<Vec<(String, String)>, Box<EvalAlt
                 }
             }
             other => {
-                return Err(format!(
-                    "rt.exec: unknown option '{other}' (supported: env)"
-                )
-                .into());
+                return Err(format!("rt.exec: unknown option '{other}' (supported: env)").into());
             }
         }
     }
@@ -1613,13 +1614,9 @@ fn resolve_volume_write_target(
     if let Some(vol) = target.clone().try_cast::<Volume>() {
         let tmpfs = vol.def.lock().tmpfs;
         if let Some(name) = vol.name.as_deref() {
-            let display =
-                crate::runtime::identity::VolumeName::for_app(rt.app_name.as_str(), name);
-            let instance = ResourceInstance::new_singleton(
-                rt.app_name.clone(),
-                ResourceKind::Volume,
-                name,
-            );
+            let display = crate::runtime::identity::VolumeName::for_app(rt.app_name.as_str(), name);
+            let instance =
+                ResourceInstance::new_singleton(rt.app_name.clone(), ResourceKind::Volume, name);
             let _ = display;
             return Ok((
                 VolumeWriteTarget::NamedVolume {
@@ -2044,11 +2041,8 @@ impl CustomType for Executed {
                         Ok(())
                     } else {
                         Err(Box::new(EvalAltResult::ErrorRuntime(
-                            format!(
-                                "rt.exec command failed with exit code {}",
-                                this.exit_code
-                            )
-                            .into(),
+                            format!("rt.exec command failed with exit code {}", this.exit_code)
+                                .into(),
                             rhai::Position::NONE,
                         )))
                     }

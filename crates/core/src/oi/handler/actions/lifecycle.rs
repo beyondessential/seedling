@@ -127,9 +127,7 @@ impl crate::runtime::barrier::VolumeWriter for OperationVolumeWriter {
     }
 }
 
-fn make_volume_writer(
-    state: &OiState,
-) -> Option<Arc<dyn crate::runtime::barrier::VolumeWriter>> {
+fn make_volume_writer(state: &OiState) -> Option<Arc<dyn crate::runtime::barrier::VolumeWriter>> {
     Some(Arc::new(OperationVolumeWriter {
         driver: Arc::clone(&state.driver),
     }))

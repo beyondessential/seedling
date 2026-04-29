@@ -4,7 +4,9 @@ use parking_lot::Mutex;
 
 use super::*;
 use crate::runtime::barrier::CallKind;
-use crate::runtime::barrier::replay::{ActionLog, InMemoryActionLog, OperationContext, OperationResult, run_operation};
+use crate::runtime::barrier::replay::{
+    ActionLog, InMemoryActionLog, OperationContext, OperationResult, run_operation,
+};
 
 #[derive(Debug, Clone)]
 struct RecordedExec {
@@ -397,7 +399,7 @@ fn rt_exec_rejects_invalid_env_var_name() {
     }
 }
 
-// l[verify rt.executed.exit-code] l[verify rt.executed.success]
+// l[verify rt.executed.type] l[verify rt.executed.exit-code] l[verify rt.executed.success]
 #[test]
 fn executed_methods_reflect_exit_code() {
     let exec = Arc::new(RecordingExecutor::with_exits(vec![0, 7]));

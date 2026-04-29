@@ -1049,7 +1049,10 @@ fn rt_write_rejects_path_traversal() {
     match result {
         OperationResult::Failed(e) => {
             let msg = e.to_string();
-            assert!(msg.contains("'..'"), "error should mention dotdot, got: {msg}");
+            assert!(
+                msg.contains("'..'"),
+                "error should mention dotdot, got: {msg}"
+            );
         }
         other => panic!("expected Failed for path traversal, got {other:?}"),
     }
