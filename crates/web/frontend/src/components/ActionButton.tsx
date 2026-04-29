@@ -47,9 +47,15 @@ interface IconProps extends CommonProps {
  *  background painted onto the inner disabled button. The stripes are
  *  greyscaled at rest and fade to colour on hover so the resting button
  *  reads as a neutral disabled affordance and the tier reveals itself when
- *  the operator's pointer lands on it. */
-function forbiddenSpanSx(safety: SafetyMode, allowed: boolean) {
-  if (allowed || safety === "read") return null;
+ *  the operator's pointer lands on it. Suppressed when the button is
+ *  disabled for non-safety reasons (loading, invalid form, etc) so the
+ *  tier styling doesn't lie about why a transient block is in effect. */
+function forbiddenSpanSx(
+  safety: SafetyMode,
+  allowed: boolean,
+  externallyDisabled: boolean,
+) {
+  if (allowed || safety === "read" || externallyDisabled) return null;
   const palette: "warning" | "error" = safety === "write" ? "warning" : "error";
   const angle = safety === "write" ? "135deg" : "45deg";
   return (theme: Theme) => {
@@ -91,7 +97,7 @@ function TextActionButton({
 }: TextProps & { variant: "contained" | "outlined" }) {
   const guard = useGuard(safety);
   const forbidden = !guard.allowed;
-  const spanSx = forbiddenSpanSx(safety, guard.allowed);
+  const spanSx = forbiddenSpanSx(safety, guard.allowed, disabled === true);
   return (
     <Tooltip title={tooltip ?? ""}>
       <Box component="span" sx={spanSx ?? undefined}>
@@ -138,7 +144,7 @@ export function IconActionButton({
 }: IconProps) {
   const guard = useGuard(safety);
   const forbidden = !guard.allowed;
-  const spanSx = forbiddenSpanSx(safety, guard.allowed);
+  const spanSx = forbiddenSpanSx(safety, guard.allowed, disabled === true);
   return (
     <Tooltip title={tooltip ?? ""}>
       <Box component="span" sx={spanSx ?? undefined}>
