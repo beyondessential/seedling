@@ -491,14 +491,7 @@ app.on_action("reconfigure", |rt, _param| {
         rt.restart(app.deployment("fhir-refresh"));
         rt.restart(app.deployment("fhir-resolve"));
     }
-    if portal_on.call() {
-        rt.restart(app.deployment("patient-portal"));
-    }
 }, #{ description: "Regenerate local.json5 from current params and restart the API + workers" });
-
-app.on_action("migrate", |rt, _param| {
-    upgrade_db.call(rt);
-}, #{ description: "Run pending schema migrations against the database" });
 
 let warmup = app.on_action("warm-images", |rt, param| {
     let target = if "target-version" in param && param["target-version"] != "" {
@@ -525,22 +518,6 @@ let warmup = app.on_action("warm-images", |rt, param| {
     },
 });
 
-app.on_action("restart-api", |rt, _param| {
-    rt.restart(app.deployment("api"));
-}, #{ description: "Restart the API workers" });
-
-app.on_action("restart-frontend", |rt, _param| {
-    rt.restart(app.deployment("frontend"));
-}, #{ description: "Restart the frontend" });
-
-app.on_action("restart-workers", |rt, _param| {
-    rt.restart(app.deployment("tasks"));
-    if fhir_on.call() {
-        rt.restart(app.deployment("fhir-refresh"));
-        rt.restart(app.deployment("fhir-resolve"));
-    }
-}, #{ description: "Restart the tasks and FHIR workers" });
-
 // ── Shells ────────────────────────────────────────────────────────────────────
 
 app.on_shell("bash", |_rt, shell, _param| {
@@ -558,19 +535,22 @@ app.on_shell("bash", |_rt, shell, _param| {
 
 // ── Version changes ───────────────────────────────────────────────────────────
 
-// API + worker deployments are stopped so the migration has exclusive database
-// access; the frontend keeps serving cached pages through the brief outage.
-// `rt.start(app)` afterwards rolls the frontend (rolling update) and brings
-// the API + workers back up on the new image.
 version.on_change(|rt, old| {
     // warming images keeps the rest of the upgrade fast and also gates on
     // all the images' availability *before* we start taking things down.
     rt.start(warmup).terminated().ensure_success();
 
-    rt.stop(old.select(#{
+    // bring down everything non-essential
+    let old_tasks = rt.stop(old.select(#{
         types: [ResourceType.Deployment],
         names: ["tasks", "fhir-refresh", "fhir-resolve"],
     }));
+
+    // swap the frontends
+    rt.start([
+        app.deployment("frontend"),
+    ]).running();
+    rt.stop(old.deployment("frontend"));
 
     rt.stop(old.select(#{
         types: [ResourceType.Deployment],

@@ -193,13 +193,28 @@ Files and roughly the change in each:
     so volume binding can resolve site volumes the same way.
 
 - Action-log / history
-  - Sub-action calls do not get their own history entry; their
-    `rt.*` calls extend the outer operation's action log via the
-    existing `call_index` counter.
-  - Optional (recommended): emit a `SubActionInvoked` log entry
-    capturing `(action_name, params)` so operators can see the
-    nested call in `apps history`. This is purely informational and
-    does not gate replay.
+  - Sub-action calls do not get their own operation_id or top-level
+    history entry; their `rt.*` calls extend the outer operation's
+    action log via the existing `call_index` counter.
+  - On every `.call()` we emit a `SubActionInvoked` log entry
+    capturing `(action_name, validated_params)` immediately before
+    the closure runs. This is recorded with a `call_index` so it
+    replays deterministically and so `apps history` can render the
+    nested call chain to operators.
+
+- No-recursion enforcement
+  - The operation ctx gains an `action_stack: Vec<ActionName>`
+    representing the chain of currently-executing actions. The
+    operator-invoked action sits at the bottom of the stack; each
+    `.call()` pushes the called name on entry and pops it on exit
+    (via an RAII guard so a panic / propagated exception still pops).
+  - `.call(name)` checks `action_stack.contains(name)` *before*
+    pushing; if it does, throw with a message naming the cycle —
+    e.g. `"action 'bar' is already on the call stack: start → foo →
+    bar"`. This catches direct self-call (`bar` calling `bar`) and
+    any indirect cycle (`foo → bar → foo`).
+  - The check is on `ActionName`, not closure identity, so renaming
+    a closure does not bypass it.
 
 - `extract_instances` defensive change covers any future regression.
 
@@ -234,6 +249,15 @@ Unit tests at `crates/core/src/tests/action.rs`:
 9. Exception from the called closure propagates to the caller.
 10. Replay test: an operation calling a sub-action with params
     survives a runtime restart at any point in the call.
+11. Direct self-call (`bar.call()` from inside `bar`) throws with
+    a cycle error.
+12. Indirect cycle (`foo` → `bar` → `foo`) throws when the second
+    `foo.call()` is attempted; the error names the chain.
+13. `app.action("install")` throws "no such action".
+14. `app.action("start").call()` succeeds and runs the on_start
+    closure.
+15. `SubActionInvoked` log entries appear in `apps history` for each
+    nested `.call()` and replay deterministically.
 
 ## Migration
 
@@ -242,25 +266,23 @@ no-op), and no observed users of `app.select(#{ types:
 [ResourceType.Action] })`. Removing both is safe. We add the change to
 the changelog so anyone with private scripts using either knows.
 
-## Open questions
+## Resolved decisions
 
-- **Calling `start` or `install`?** `app.action("start")` would
-  resolve since `on_start` registers under name `"start"` in
-  `def.actions`. Allowing scripts to call the start action from inside
-  another action is probably fine — but `app.action("install")` would
-  not resolve because install lives in a separate slot. Recommend:
-  document that only names registered with `on_action` / `on_start`
-  are reachable; install is not.
-- **History visibility.** Should sub-action calls show up in `apps
-  history` as a tree, or only as the outer operation? Recommend:
-  outer-only by default; emit a `SubActionInvoked` informational entry
-  so the detail is recoverable but the top-level history stays flat.
-- **Recursion bound.** Should we cap call depth to detect runaway
-  recursion? Recommend a soft cap (e.g. 32) that throws a clear error;
-  cheap to add.
-- **Returning a value.** Should `.call()` return anything? Recommend:
-  return unit. Actions are side-effect commands. Failure is signalled
-  by exceptions.
+- **Calling `start`**: allowed. `app.action("start")` resolves because
+  `on_start` registers under the name `"start"` in `def.actions`.
+- **Calling `install`**: not allowed. Install lives in a separate slot
+  (`captured.install`, not in `def.actions`), so `app.action("install")`
+  naturally throws "no such action" — keep that as the surfaced error.
+- **History visibility**: outer-only at the top level; emit a
+  `SubActionInvoked` log entry per `.call()` so the nested chain is
+  inspectable in `apps history` without polluting the operation list.
+- **Recursion**: forbidden, as a hard error. A `.call(name)` is
+  rejected (before the closure runs) if `name` is already anywhere
+  on the active call stack — direct self-call or indirect cycle.
+  See the "No-recursion enforcement" bullet under Implementation
+  outline.
+- **Return value**: unit. Actions are side-effect commands; failure
+  is signalled by exceptions.
 
 ## Sequencing
 
