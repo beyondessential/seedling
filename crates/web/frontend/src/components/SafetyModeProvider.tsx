@@ -115,9 +115,9 @@ export function useSafetyMode() {
 export interface GuardResult {
   allowed: boolean;
   mode: SafetyMode;
-  required: SafetyTier;
+  required: SafetyMode;
   /** Tooltip title that always renders the required tier as a coloured
-   *  prefix, optionally followed by an action description. */
+   *  prefix (when not "read"), optionally followed by an action description. */
   title: (action?: ReactNode) => ReactNode;
 }
 
@@ -134,13 +134,16 @@ function GuardTitle({ tier, action }: { tier: SafetyTier; action?: ReactNode }) 
   );
 }
 
-export function useGuard(required: SafetyTier): GuardResult {
+export function useGuard(required: SafetyMode): GuardResult {
   const { mode } = useSafetyMode();
   const allowed = RANK[mode] >= RANK[required];
   return {
     allowed,
     mode,
     required,
-    title: (action) => <GuardTitle tier={required} action={action} />,
+    title: (action) =>
+      required === "read"
+        ? (action ?? null)
+        : <GuardTitle tier={required} action={action} />,
   };
 }
