@@ -178,7 +178,17 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > The web interface must provide a connected-clients view showing all active web UI sessions, open CLI shell sessions, and active port forwards. Each entry must show at minimum the client identity, the connected or opened timestamp, and — for shells and forwards — the associated app. Web UI session entries must additionally surface a `last_seen` timestamp updated by [sessions.heartbeat](#w--sessions.heartbeat) so operators can distinguish a fresh session from one waiting to age out.
 
 > w[sessions.heartbeat]
-> The web interface must periodically send a heartbeat over the active WebTransport session at an interval no greater than one third of the [stale cutoff](#w--sessions.stale-cutoff) so a single missed heartbeat does not retire a still-connected session. The heartbeat is delivered as the OI method `/connected-clients/heartbeat` and updates the corresponding session's `last_seen` timestamp on the server. The browser must additionally attempt a best-effort heartbeat-or-close on `pagehide` so a deliberate tab close does not require waiting for the cutoff.
+> The web interface must periodically send a heartbeat over the active WebTransport session at an interval no greater than one third of the [stale cutoff](#w--sessions.stale-cutoff) so a single missed heartbeat does not retire a still-connected session. The heartbeat is delivered as the OI method `/connected-clients/heartbeat` and updates the corresponding session's `last_seen` timestamp on the server. The heartbeat parameters carry the session's current [safety mode](#w--sessions.safety-mode); the server records the reported mode on the session so other operators can observe it via [`/connected-clients/list`](#w--routes.sessions). The browser must additionally attempt a best-effort heartbeat-or-close on `pagehide` so a deliberate tab close does not require waiting for the cutoff.
+
+> w[sessions.safety-mode]
+> Each web session has a safety mode — one of `read`, `write`, or `dangerous` — chosen by the operator that controls which client-side actions are enabled. The web interface must:
+>
+> - Report the active mode in every [heartbeat](#w--sessions.heartbeat) and send a heartbeat immediately when the operator changes mode so peer sessions see the change without waiting for the next heartbeat tick.
+> - Surface the recorded mode for every web session in [`/connected-clients/list`](#w--routes.sessions) and as a field on the [`WebSessionStarted`](#w--sessions.events) event for new sessions; emit a `WebSessionModeChanged` event whenever a session's recorded mode changes.
+> - Display each peer session's current mode alongside its other fields in the connected-clients view.
+> - Visually flag the session-count indicator and the local mode switcher whenever any *other* session is in `write` or `dangerous` mode, so an operator notices when a peer is performing mutations even if their own session is read-only. The flag must distinguish the highest peer tier (write vs dangerous) by colour, matching the safety-mode palette used elsewhere.
+>
+> The mode is purely advisory: the server records and broadcasts what each client reports but does not gate any OI request on it.
 
 > w[sessions.stale-cutoff]
 > The web frontend must consider a web session stale when its `last_seen` is older than ten minutes (matching the write-mode elevation window). The server must drop stale sessions from `/connected-clients/list` and emit a `WebSessionStopped` event when it does so, so other operators see the same staleness without polling. A session with no observed heartbeat yet (the WebTransport session has just opened) is not stale; its `last_seen` defaults to its `connected_at` so the cutoff measurement is well-defined.
@@ -205,7 +215,7 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > Private key material, ACME account keys, and DNS-provider credentials must never be returned to the client.
 
 > w[sessions.events]
-> The web interface must emit `WebSessionStarted` and `WebSessionStopped` events on the event feed when a WebTransport session is established or closed. Clients must use these events, together with the OI events `ShellStarted`, `ShellExited`, `ForwardStarted`, and `ForwardStopped`, to keep the connected-clients count up to date without polling.
+> The web interface must emit `WebSessionStarted`, `WebSessionStopped`, and `WebSessionModeChanged` events on the event feed when a WebTransport session is established, closed, or reports a new [safety mode](#w--sessions.safety-mode). Clients must use these events, together with the OI events `ShellStarted`, `ShellExited`, `ForwardStarted`, and `ForwardStopped`, to keep the connected-clients view up to date without polling.
 
 # Bind Configuration
 
