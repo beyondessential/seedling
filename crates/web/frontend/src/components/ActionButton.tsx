@@ -50,13 +50,14 @@ interface IconProps extends CommonProps {
 function forbiddenSpanSx(safety: SafetyMode, allowed: boolean) {
   if (allowed || safety === "read") return null;
   const palette: "warning" | "error" = safety === "write" ? "warning" : "error";
+  const angle = safety === "write" ? "135deg" : "45deg";
   return (theme: Theme) => {
     const stripe = alpha(theme.palette[palette].light, 0.32);
     const gap = alpha(theme.palette[palette].light, 0.1);
     return {
       cursor: "not-allowed",
       "&:hover .Mui-disabled": {
-        background: `repeating-linear-gradient(45deg, ${stripe}, ${stripe} 6px, ${gap} 6px, ${gap} 12px)`,
+        background: `repeating-linear-gradient(${angle}, ${stripe}, ${stripe} 6px, ${gap} 6px, ${gap} 12px)`,
       },
     };
   };
