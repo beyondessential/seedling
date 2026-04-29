@@ -98,6 +98,8 @@ fn https_vhost_goes_in_https_server_redirect_in_http() {
     assert_eq!(redirect["handle"][0]["status_code"], 308);
 }
 
+// r[verify tls.strategy.acme-dns]
+// r[verify tls.policy.apply]
 #[test]
 fn tls_acme_subjects_appear_in_automation() {
     let config = ProxyConfig {

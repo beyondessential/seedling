@@ -22,8 +22,8 @@ fn dep(name: &str) -> ResourceInstance {
     ResourceInstance::new_singleton(app_name(), ResourceKind::Deployment, name)
 }
 
-// r[barrier.suspension]
-// r[barrier.resume]
+// r[verify barrier.suspension]
+// r[verify barrier.resume]
 #[test]
 fn db_action_log_barrier_suspends_then_resumes() {
     let (engine, mut scope, app, ast) = {
