@@ -53,8 +53,8 @@ function forbiddenSpanSx(safety: SafetyMode, allowed: boolean) {
   const palette: "warning" | "error" = safety === "write" ? "warning" : "error";
   const angle = safety === "write" ? "135deg" : "45deg";
   return (theme: Theme) => {
-    const stripe = alpha(theme.palette[palette].light, 0.32);
-    const gap = alpha(theme.palette[palette].light, 0.1);
+    const stripe = alpha(theme.palette[palette].light, 0.24);
+    const gap = alpha(theme.palette[palette].light, 0.07);
     return {
       cursor: "not-allowed",
       // MUI's default disabled colour is too pale to read against the
@@ -63,7 +63,7 @@ function forbiddenSpanSx(safety: SafetyMode, allowed: boolean) {
       "&& .Mui-disabled": {
         color: "text.primary",
         background: `repeating-linear-gradient(${angle}, ${stripe}, ${stripe} 6px, ${gap} 6px, ${gap} 12px)`,
-        filter: "grayscale(0.7)",
+        filter: "grayscale(0.8)",
         transition: theme.transitions.create("filter", {
           duration: theme.transitions.duration.shortest,
         }),
