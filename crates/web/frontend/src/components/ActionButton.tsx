@@ -44,9 +44,10 @@ interface IconProps extends CommonProps {
 
 /** Wrapping-span styling when the button is forbidden by the current safety
  *  mode: not-allowed cursor on hover, plus a tier-coloured diagonal-stripe
- *  background painted onto the inner disabled button. The pattern only
- *  appears on hover so the resting state matches the normal MUI disabled
- *  look. */
+ *  background painted onto the inner disabled button. The stripes are
+ *  greyscaled at rest and fade to colour on hover so the resting button
+ *  reads as a neutral disabled affordance and the tier reveals itself when
+ *  the operator's pointer lands on it. */
 function forbiddenSpanSx(safety: SafetyMode, allowed: boolean) {
   if (allowed || safety === "read") return null;
   const palette: "warning" | "error" = safety === "write" ? "warning" : "error";
@@ -56,8 +57,15 @@ function forbiddenSpanSx(safety: SafetyMode, allowed: boolean) {
     const gap = alpha(theme.palette[palette].light, 0.1);
     return {
       cursor: "not-allowed",
-      "&:hover .Mui-disabled": {
+      ".Mui-disabled": {
         background: `repeating-linear-gradient(${angle}, ${stripe}, ${stripe} 6px, ${gap} 6px, ${gap} 12px)`,
+        filter: "grayscale(1)",
+        transition: theme.transitions.create("filter", {
+          duration: theme.transitions.duration.shortest,
+        }),
+      },
+      "&:hover .Mui-disabled": {
+        filter: "grayscale(0)",
       },
     };
   };
