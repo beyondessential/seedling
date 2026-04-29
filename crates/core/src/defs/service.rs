@@ -2,6 +2,8 @@ use std::sync::Weak;
 
 use rhai::{CustomType, EvalAltResult, Map, TypeBuilder};
 
+use crate::runtime::barrier::runtime::is_in_action_closure;
+
 use super::{
     Freezable, Holder, Port,
     app::AppDef,
@@ -30,8 +32,11 @@ pub struct Service {
 }
 
 impl super::Freezable for Service {
+    // l[impl app.resources.context.immutable]
     fn is_frozen(&self) -> bool {
-        self.frozen
+        // Anonymous services use an empty name as a sentinel (see app/service.rs);
+        // they remain mutable inside the action that creates them.
+        self.frozen || (!self.name.is_empty() && is_in_action_closure())
     }
 }
 

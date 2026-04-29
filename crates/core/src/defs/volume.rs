@@ -2,6 +2,8 @@ use std::path::{Component, PathBuf};
 
 use rhai::{CustomType, EvalAltResult, Map, TypeBuilder};
 
+use crate::runtime::barrier::runtime::is_in_action_closure;
+
 use super::{Freezable, Holder, export::ExportOptions, resource::ResourceName};
 
 // l[impl volume.write.validation]
@@ -76,8 +78,11 @@ impl Volume {
 }
 
 impl super::Freezable for Volume {
+    // l[impl app.resources.context.immutable]
     fn is_frozen(&self) -> bool {
-        self.frozen
+        // The action-context check catches static volumes captured from outer scope,
+        // which keep `frozen=false` because only the in-action re-fetch stamps the flag.
+        self.frozen || (self.name.is_some() && is_in_action_closure())
     }
 }
 

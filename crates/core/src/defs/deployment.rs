@@ -2,6 +2,8 @@ use std::ops::Range;
 
 use rhai::{CustomType, EvalAltResult, TypeBuilder};
 
+use crate::runtime::barrier::runtime::is_in_action_closure;
+
 use super::{
     Freezable, Holder,
     container::parse_healthcheck,
@@ -41,8 +43,10 @@ pub struct Deployment {
 }
 
 impl Freezable for Deployment {
+    // l[impl app.resources.context.immutable]
     fn is_frozen(&self) -> bool {
-        self.frozen
+        // Anonymous deployments use an empty name as a sentinel (see app/deployment.rs).
+        self.frozen || (!self.name.is_empty() && is_in_action_closure())
     }
 }
 

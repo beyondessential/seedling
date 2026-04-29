@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use rhai::{CustomType, EvalAltResult, TypeBuilder};
 
+use crate::runtime::barrier::runtime::is_in_action_closure;
+
 use super::{
     Freezable, Holder, Port,
     enums::{Output, Terminate},
@@ -43,8 +45,9 @@ pub struct Ingress {
 }
 
 impl super::Freezable for Ingress {
+    // l[impl app.resources.context.immutable]
     fn is_frozen(&self) -> bool {
-        self.frozen
+        self.frozen || is_in_action_closure()
     }
 }
 
