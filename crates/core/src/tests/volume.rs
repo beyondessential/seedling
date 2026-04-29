@@ -702,6 +702,7 @@ fn operation_bindings_cleared_after_guard_drops() {
 }
 
 // l[verify app.resources.context.named]
+// l[verify app.resources.context.immutable]
 #[test]
 fn frozen_static_volume_cannot_be_modified_in_action() {
     use crate::runtime::{
@@ -761,4 +762,86 @@ fn frozen_static_volume_cannot_be_modified_in_action() {
         }
         other => panic!("expected Failed, got {other:?}"),
     }
+}
+
+// l[verify app.resources.context.immutable]
+#[test]
+fn captured_static_volume_cannot_be_modified_in_action() {
+    use crate::runtime::{
+        EphemeralInstanceRegistry, TestWorldOracle,
+        barrier::OperationId,
+        barrier::replay::{InMemoryActionLog, OperationContext, OperationResult, run_operation},
+    };
+
+    let (engine, mut scope, app, ast) = run_test_script(
+        r#"
+        let vol = app.volume("foo");
+        vol.write("/outside", "content");
+        app.on_action("act", |_rt, _param| {
+            vol.write("/inside", "content");
+        });
+    "#,
+    );
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    let log = InMemoryActionLog::new();
+    let registry: Arc<dyn crate::runtime::InstanceRegistry> =
+        Arc::new(EphemeralInstanceRegistry::new());
+
+    let result = run_operation(
+        OperationContext {
+            engine: &engine,
+            script_ast: &ast,
+            operation_id: OperationId::new(),
+            app: &app,
+            action_name: "act",
+            log: &log,
+            world: oracle,
+            registry,
+            active_progress: None,
+            tick_notify: None,
+            params: serde_json::Map::new(),
+            is_shell: false,
+            db: None,
+            source_generation: 0,
+            target_generation: 0,
+            script_limits: None,
+            cipher: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
+        },
+        &mut scope,
+    );
+
+    match result {
+        OperationResult::Failed(e) => {
+            let msg = e.to_string();
+            assert!(
+                msg.contains("cannot modify") || msg.contains("static"),
+                "error should mention immutability, got: {msg}"
+            );
+        }
+        other => panic!("expected Failed for captured static volume write, got {other:?}"),
+    }
+
+    // The static-context write outside the action must still take effect.
+    let def = app.def.load();
+    let vol_def = def
+        .resources
+        .values()
+        .find_map(|r| match r {
+            defs::resource::Resource::Volume(v)
+                if v.name.as_deref().map(|n| n.as_str()) == Some("foo") =>
+            {
+                Some(v.def.lock().clone())
+            }
+            _ => None,
+        })
+        .expect("foo volume should exist");
+    assert_eq!(
+        vol_def.writes,
+        vec![("/outside".to_owned(), "content".to_owned())],
+        "static-context write should be present, /inside must not be persisted"
+    );
 }
