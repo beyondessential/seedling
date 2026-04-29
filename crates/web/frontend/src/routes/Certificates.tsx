@@ -14,7 +14,6 @@ import {
   DialogContent,
   DialogTitle,
   FormControlLabel,
-  IconButton,
   MenuItem,
   Paper,
   Stack,
@@ -25,12 +24,15 @@ import {
   TableHead,
   TableRow,
   TextField,
-  Tooltip,
   Typography,
 } from "@mui/material";
 import { useState } from "react";
+import {
+  IconActionButton,
+  OutlinedActionButton,
+  SolidActionButton,
+} from "../components/ActionButton";
 import { OiErrorAlert } from "../components/OiErrorAlert";
-import { useGuard, type GuardResult } from "../components/SafetyModeProvider";
 import { TlsHostnamesTable } from "../components/TlsHostnamesTable";
 import type { OiQueryError } from "../hooks/useOi";
 import { useOiQuery } from "../hooks/useOi";
@@ -80,8 +82,6 @@ export default function Certificates() {
   } = useOiQuery<TlsCertificatesResponse>("/tls/certificates/list", {});
 
   const { execute, error: actionError, clearError } = useOiAction();
-  const writeGuard = useGuard("write");
-  const dangerGuard = useGuard("dangerous");
 
   const [providerDialog, setProviderDialog] = useState(false);
   const [policyDialog, setPolicyDialog] = useState(false);
@@ -109,13 +109,14 @@ export default function Certificates() {
         <Typography variant="h5" sx={{ flexGrow: 1 }}>
           TLS Certificates
         </Typography>
-        <Tooltip title="Refresh">
-          <span>
-            <IconButton onClick={refreshAll} disabled={anyLoading} size="small">
-              <RefreshIcon />
-            </IconButton>
-          </span>
-        </Tooltip>
+        <IconActionButton
+          safety="read"
+          tooltip="Refresh"
+          onClick={refreshAll}
+          disabled={anyLoading}
+        >
+          <RefreshIcon />
+        </IconActionButton>
       </Box>
       <Typography
         variant="body2"
@@ -140,7 +141,6 @@ export default function Certificates() {
           loading={settingsLoading}
           error={settingsError}
           onSaved={refetchSettings}
-          writeGuard={writeGuard}
         />
 
         <PoliciesSection
@@ -156,7 +156,6 @@ export default function Certificates() {
             clearError();
             setRemovingPolicy(hostname);
           }}
-          writeGuard={writeGuard}
         />
 
         <ManualCertsSection
@@ -199,8 +198,6 @@ export default function Certificates() {
               // surfaced via actionError
             }
           }}
-          writeGuard={writeGuard}
-          dangerGuard={dangerGuard}
         />
 
         <DnsProvidersSection
@@ -215,8 +212,6 @@ export default function Certificates() {
             clearError();
             setRemovingProvider(name);
           }}
-          writeGuard={writeGuard}
-          dangerGuard={dangerGuard}
         />
       </Stack>
 
@@ -283,6 +278,7 @@ export default function Certificates() {
         }
         confirmLabel="Delete"
         confirmColor="error"
+        safety="dangerous"
         onClose={() => setDeletingCert(null)}
         onConfirm={async () => {
           if (!deletingCert) return;
@@ -305,6 +301,7 @@ export default function Certificates() {
         }
         confirmLabel="Delete"
         confirmColor="error"
+        safety="dangerous"
         onClose={() => setRemovingProvider(null)}
         onConfirm={async () => {
           if (!removingProvider) return;
@@ -329,6 +326,7 @@ export default function Certificates() {
         }
         confirmLabel="Clear"
         confirmColor="warning"
+        safety="write"
         onClose={() => setRemovingPolicy(null)}
         onConfirm={async () => {
           if (!removingPolicy) return;
@@ -354,7 +352,6 @@ interface SettingsSectionProps {
   loading: boolean;
   error: OiQueryError | null;
   onSaved: () => void;
-  writeGuard: GuardResult;
 }
 
 function SettingsSection({
@@ -362,7 +359,6 @@ function SettingsSection({
   loading,
   error,
   onSaved,
-  writeGuard,
 }: SettingsSectionProps) {
   const [editing, setEditing] = useState(false);
   const [emailDraft, setEmailDraft] = useState("");
@@ -459,17 +455,14 @@ function SettingsSection({
                 {profileSummary}
               </Typography>
             </Box>
-            <Tooltip title={writeGuard.title()}>
-              <span>
-                <Button
-                  size="small"
-                  onClick={startEdit}
-                  disabled={!writeGuard.allowed || loading}
-                >
-                  Edit
-                </Button>
-              </span>
-            </Tooltip>
+            <OutlinedActionButton
+              safety="write"
+              size="small"
+              onClick={startEdit}
+              disabled={loading}
+            >
+              Edit
+            </OutlinedActionButton>
           </Stack>
         </Paper>
       )}
@@ -523,9 +516,9 @@ function SettingsSection({
           <Button onClick={closeEdit} disabled={saving}>
             Cancel
           </Button>
-          <Button onClick={submit} variant="contained" disabled={saving}>
+          <SolidActionButton safety="write" onClick={submit} disabled={saving}>
             Save
-          </Button>
+          </SolidActionButton>
         </DialogActions>
       </Dialog>
     </Box>
@@ -543,7 +536,6 @@ interface PoliciesSectionProps {
   providers: TlsDnsProvider[];
   onAdd: () => void;
   onClear: (hostname: string) => void;
-  writeGuard: GuardResult;
 }
 
 function PoliciesSection({
@@ -553,7 +545,6 @@ function PoliciesSection({
   providers,
   onAdd,
   onClear,
-  writeGuard,
 }: PoliciesSectionProps) {
   return (
     <Box>
@@ -561,18 +552,15 @@ function PoliciesSection({
         <Typography variant="subtitle1" sx={{ fontWeight: 600, flexGrow: 1 }}>
           Per-domain policies
         </Typography>
-        <Tooltip title={writeGuard.title()}>
-          <span>
-            <Button
-              size="small"
-              startIcon={<AddIcon />}
-              onClick={onAdd}
-              disabled={!writeGuard.allowed || providers.length === 0}
-            >
-              Bind domain
-            </Button>
-          </span>
-        </Tooltip>
+        <OutlinedActionButton
+          safety="write"
+          size="small"
+          startIcon={<AddIcon />}
+          onClick={onAdd}
+          disabled={providers.length === 0}
+        >
+          Bind domain
+        </OutlinedActionButton>
       </Box>
       <Typography variant="caption" sx={{ color: "text.secondary", mb: 1, display: "block" }}>
         Domains absent here use the default Caddy issuance strategy (TLS/HTTP/internal).
@@ -618,17 +606,13 @@ function PoliciesSection({
                     </Typography>
                   </TableCell>
                   <TableCell align="right">
-                    <Tooltip title={writeGuard.title("Clear policy")}>
-                      <span>
-                        <IconButton
-                          size="small"
-                          disabled={!writeGuard.allowed}
-                          onClick={() => onClear(p.hostname)}
-                        >
-                          <DeleteOutlineIcon fontSize="small" />
-                        </IconButton>
-                      </span>
-                    </Tooltip>
+                    <IconActionButton
+                      safety="write"
+                      tooltip="Clear policy"
+                      onClick={() => onClear(p.hostname)}
+                    >
+                      <DeleteOutlineIcon fontSize="small" />
+                    </IconActionButton>
                   </TableCell>
                 </TableRow>
               ))}
@@ -654,8 +638,6 @@ interface ManualCertsSectionProps {
   onShowCsr: (cert: TlsCertificate) => void;
   onUploadCsrCert: (cert: TlsCertificate) => void;
   onCancelCsr: (cert: TlsCertificate) => void;
-  writeGuard: GuardResult;
-  dangerGuard: GuardResult;
 }
 
 function ManualCertsSection({
@@ -668,8 +650,6 @@ function ManualCertsSection({
   onShowCsr,
   onUploadCsrCert,
   onCancelCsr,
-  writeGuard,
-  dangerGuard,
 }: ManualCertsSectionProps) {
   return (
     <Box>
@@ -677,29 +657,21 @@ function ManualCertsSection({
         <Typography variant="subtitle1" sx={{ fontWeight: 600, flexGrow: 1 }}>
           Stored certificates
         </Typography>
-        <Tooltip title={writeGuard.title()}>
-          <span>
-            <Button
-              size="small"
-              onClick={onGenerateCsr}
-              disabled={!writeGuard.allowed}
-            >
-              Generate CSR
-            </Button>
-          </span>
-        </Tooltip>
-        <Tooltip title={writeGuard.title()}>
-          <span>
-            <Button
-              size="small"
-              startIcon={<AddIcon />}
-              onClick={onUpload}
-              disabled={!writeGuard.allowed}
-            >
-              Upload manual cert
-            </Button>
-          </span>
-        </Tooltip>
+        <OutlinedActionButton
+          safety="write"
+          size="small"
+          onClick={onGenerateCsr}
+        >
+          Generate CSR
+        </OutlinedActionButton>
+        <OutlinedActionButton
+          safety="write"
+          size="small"
+          startIcon={<AddIcon />}
+          onClick={onUpload}
+        >
+          Upload manual cert
+        </OutlinedActionButton>
       </Box>
       <Typography variant="caption" sx={{ color: "text.secondary", mb: 1, display: "block" }}>
         Manually-uploaded and CSR-derived certificates. The runtime auto-binds each
@@ -762,48 +734,38 @@ function ManualCertsSection({
                     <TableCell align="right">
                       {pending ? (
                         <>
-                          <Tooltip title="Show CSR PEM again">
-                            <span>
-                              <Button size="small" onClick={() => onShowCsr(c)}>
-                                Show CSR
-                              </Button>
-                            </span>
-                          </Tooltip>
-                          <Tooltip title={writeGuard.title("Upload signed cert")}>
-                            <span>
-                              <Button
-                                size="small"
-                                disabled={!writeGuard.allowed}
-                                onClick={() => onUploadCsrCert(c)}
-                              >
-                                Upload cert
-                              </Button>
-                            </span>
-                          </Tooltip>
-                          <Tooltip title={writeGuard.title("Cancel CSR (deletes the keypair)")}>
-                            <span>
-                              <IconButton
-                                size="small"
-                                disabled={!writeGuard.allowed}
-                                onClick={() => onCancelCsr(c)}
-                              >
-                                <DeleteOutlineIcon fontSize="small" />
-                              </IconButton>
-                            </span>
-                          </Tooltip>
+                          <OutlinedActionButton
+                            safety="read"
+                            tooltip="Show CSR PEM again"
+                            size="small"
+                            onClick={() => onShowCsr(c)}
+                          >
+                            Show CSR
+                          </OutlinedActionButton>
+                          <OutlinedActionButton
+                            safety="write"
+                            tooltip="Upload signed cert"
+                            size="small"
+                            onClick={() => onUploadCsrCert(c)}
+                          >
+                            Upload cert
+                          </OutlinedActionButton>
+                          <IconActionButton
+                            safety="write"
+                            tooltip="Cancel CSR (deletes the keypair)"
+                            onClick={() => onCancelCsr(c)}
+                          >
+                            <DeleteOutlineIcon fontSize="small" />
+                          </IconActionButton>
                         </>
                       ) : (
-                        <Tooltip title={dangerGuard.title("Delete")}>
-                          <span>
-                            <IconButton
-                              size="small"
-                              disabled={!dangerGuard.allowed}
-                              onClick={() => onDelete(c)}
-                            >
-                              <DeleteOutlineIcon fontSize="small" />
-                            </IconButton>
-                          </span>
-                        </Tooltip>
+                        <IconActionButton
+                          safety="dangerous"
+                          tooltip="Delete"
+                          onClick={() => onDelete(c)}
+                        >
+                          <DeleteOutlineIcon fontSize="small" />
+                        </IconActionButton>
                       )}
                     </TableCell>
                   </TableRow>
@@ -827,8 +789,6 @@ interface DnsProvidersSectionProps {
   error: OiQueryError | null;
   onAdd: () => void;
   onDelete: (name: string) => void;
-  writeGuard: GuardResult;
-  dangerGuard: GuardResult;
 }
 
 function DnsProvidersSection({
@@ -837,8 +797,6 @@ function DnsProvidersSection({
   error,
   onAdd,
   onDelete,
-  writeGuard,
-  dangerGuard,
 }: DnsProvidersSectionProps) {
   return (
     <Box>
@@ -846,18 +804,14 @@ function DnsProvidersSection({
         <Typography variant="subtitle1" sx={{ fontWeight: 600, flexGrow: 1 }}>
           DNS providers
         </Typography>
-        <Tooltip title={writeGuard.title()}>
-          <span>
-            <Button
-              size="small"
-              startIcon={<AddIcon />}
-              onClick={onAdd}
-              disabled={!writeGuard.allowed}
-            >
-              Add
-            </Button>
-          </span>
-        </Tooltip>
+        <OutlinedActionButton
+          safety="write"
+          size="small"
+          startIcon={<AddIcon />}
+          onClick={onAdd}
+        >
+          Add
+        </OutlinedActionButton>
       </Box>
       <Typography variant="caption" sx={{ color: "text.secondary", mb: 1, display: "block" }}>
         Credentials used by the ACME-DNS-01 strategy. Stored encrypted at
@@ -893,17 +847,13 @@ function DnsProvidersSection({
                     </Typography>
                   </TableCell>
                   <TableCell align="right">
-                    <Tooltip title={dangerGuard.title("Delete provider")}>
-                      <span>
-                        <IconButton
-                          size="small"
-                          disabled={!dangerGuard.allowed}
-                          onClick={() => onDelete(p.name)}
-                        >
-                          <DeleteOutlineIcon fontSize="small" />
-                        </IconButton>
-                      </span>
-                    </Tooltip>
+                    <IconActionButton
+                      safety="dangerous"
+                      tooltip="Delete provider"
+                      onClick={() => onDelete(p.name)}
+                    >
+                      <DeleteOutlineIcon fontSize="small" />
+                    </IconActionButton>
                   </TableCell>
                 </TableRow>
               ))}
@@ -1022,13 +972,13 @@ function UpsertProviderDialog({
         <Button onClick={close} disabled={submitting}>
           Cancel
         </Button>
-        <Button
+        <SolidActionButton
+          safety="write"
           onClick={submit}
-          variant="contained"
           disabled={!valid || submitting}
         >
           Save
-        </Button>
+        </SolidActionButton>
       </DialogActions>
     </Dialog>
   );
@@ -1141,14 +1091,14 @@ function SetAcmeDnsPolicyDialog({
         <Button onClick={close} disabled={submitting}>
           Cancel
         </Button>
-        <Button
+        <SolidActionButton
+          safety="write"
           onClick={submit}
-          variant="contained"
           disabled={!valid || submitting}
           startIcon={isExact ? <BoltIcon /> : undefined}
         >
           Save
-        </Button>
+        </SolidActionButton>
       </DialogActions>
     </Dialog>
   );
@@ -1277,21 +1227,21 @@ function UploadManualCertDialog({
       </DialogContent>
       <DialogActions>
         {result ? (
-          <Button onClick={acceptAndClose} variant="contained">
+          <SolidActionButton safety="read" onClick={acceptAndClose}>
             OK
-          </Button>
+          </SolidActionButton>
         ) : (
           <>
             <Button onClick={close} disabled={submitting}>
               Cancel
             </Button>
-            <Button
+            <SolidActionButton
+              safety="write"
               onClick={submit}
-              variant="contained"
               disabled={!valid || submitting}
             >
               Upload
-            </Button>
+            </SolidActionButton>
           </>
         )}
       </DialogActions>
@@ -1441,9 +1391,9 @@ function CsrBeginDialog({ open, onClose, onSubmitted }: CsrBeginDialogProps) {
         <Button onClick={close} disabled={submitting}>
           Cancel
         </Button>
-        <Button onClick={submit} variant="contained" disabled={!valid || submitting}>
+        <SolidActionButton safety="write" onClick={submit} disabled={!valid || submitting}>
           Generate
-        </Button>
+        </SolidActionButton>
       </DialogActions>
     </Dialog>
   );
@@ -1503,12 +1453,12 @@ function CsrShowDialog({ open, csrId, csrPem, onClose }: CsrShowDialogProps) {
             }}
           />
           <Box sx={{ display: "flex", gap: 1, justifyContent: "flex-end" }}>
-            <Button onClick={download} variant="outlined">
+            <OutlinedActionButton safety="read" onClick={download}>
               Download
-            </Button>
-            <Button onClick={copy} variant="outlined">
+            </OutlinedActionButton>
+            <OutlinedActionButton safety="read" onClick={copy}>
               {copied ? "Copied" : "Copy"}
-            </Button>
+            </OutlinedActionButton>
           </Box>
         </Stack>
       </DialogContent>
@@ -1608,21 +1558,21 @@ function CsrUploadCertDialog({
       </DialogContent>
       <DialogActions>
         {warnings ? (
-          <Button onClick={acceptAndClose} variant="contained">
+          <SolidActionButton safety="read" onClick={acceptAndClose}>
             OK
-          </Button>
+          </SolidActionButton>
         ) : (
           <>
             <Button onClick={close} disabled={submitting}>
               Cancel
             </Button>
-            <Button
+            <SolidActionButton
+              safety="write"
               onClick={submit}
-              variant="contained"
               disabled={!valid || submitting}
             >
               Upload
-            </Button>
+            </SolidActionButton>
           </>
         )}
       </DialogActions>
@@ -1636,6 +1586,7 @@ interface ConfirmDialogProps {
   body: string;
   confirmLabel: string;
   confirmColor: "error" | "warning" | "primary";
+  safety: "write" | "dangerous";
   onClose: () => void;
   onConfirm: () => void;
 }
@@ -1646,6 +1597,7 @@ function ConfirmDialog({
   body,
   confirmLabel,
   confirmColor,
+  safety,
   onClose,
   onConfirm,
 }: ConfirmDialogProps) {
@@ -1657,9 +1609,13 @@ function ConfirmDialog({
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
-        <Button onClick={onConfirm} variant="contained" color={confirmColor}>
+        <SolidActionButton
+          safety={safety}
+          color={confirmColor}
+          onClick={onConfirm}
+        >
           {confirmLabel}
-        </Button>
+        </SolidActionButton>
       </DialogActions>
     </Dialog>
   );
