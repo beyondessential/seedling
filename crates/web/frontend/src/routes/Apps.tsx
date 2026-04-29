@@ -168,9 +168,8 @@ export default function Apps() {
                       {(app.status === "installing" ||
                         app.status === "operating") && (
                         <IconActionButton
-                          safety="write"
+                          safety="dangerous"
                           tooltip="Cancel operation"
-                          color="error"
                           disabled={cancelling}
                           onClick={(e) => {
                             e.stopPropagation();
@@ -326,7 +325,6 @@ export default function Apps() {
                             <IconActionButton
                               safety="dangerous"
                               tooltip="Stop shell"
-                              color="error"
                               onClick={() => void handleStopShell(s.session_id)}
                             >
                               <StopIcon sx={{ fontSize: 16 }} />
@@ -377,7 +375,6 @@ export default function Apps() {
                             <IconActionButton
                               safety="dangerous"
                               tooltip="Stop forward"
-                              color="error"
                               onClick={() => void handleStopForward(f.forward_id)}
                             >
                               <StopIcon sx={{ fontSize: 16 }} />

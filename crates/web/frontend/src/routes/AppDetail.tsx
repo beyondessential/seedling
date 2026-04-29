@@ -636,7 +636,6 @@ function ResourcesSection({
                 <IconActionButton
                   safety="write"
                   tooltip="Unstop resource"
-                  color="success"
                   onClick={() => void unstopResource(r.type, r.name)}
                   disabled={stopping}
                 >
@@ -2343,7 +2342,6 @@ function ClearFaultsButton({
         safety={tier}
         tooltip="Clear all active faults for this app"
         size="small"
-        color={tier === "dangerous" ? "error" : "primary"}
         disabled={loading}
         onClick={() => setConfirming(true)}
       >
@@ -2583,7 +2581,6 @@ export default function AppDetail() {
           <OutlinedActionButton
             safety="dangerous"
             size="small"
-            color="error"
             onClick={() => setRemovalOpen(true)}
             disabled={loading}
           >
@@ -2597,7 +2594,6 @@ export default function AppDetail() {
             <OutlinedActionButton
               safety="dangerous"
               size="small"
-              color="error"
               onClick={() => setRemovalOpen(true)}
               disabled={loading}
             >
@@ -2662,8 +2658,7 @@ export default function AppDetail() {
               severity="info"
               action={
                 <OutlinedActionButton
-                  safety="write"
-                  color="inherit"
+                  safety="dangerous"
                   size="small"
                   disabled={cancellingAction}
                   onClick={async () => {
@@ -2705,7 +2700,6 @@ export default function AppDetail() {
               action={
                 <OutlinedActionButton
                   safety="write"
-                  color="inherit"
                   size="small"
                   disabled={unstoppingAll}
                   onClick={async () => {

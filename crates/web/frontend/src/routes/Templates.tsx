@@ -200,9 +200,8 @@ export default function Templates() {
                   </TableCell>
                   <TableCell align="right" sx={{ px: 0.5 }}>
                     <IconActionButton
-                      safety="write"
+                      safety="dangerous"
                       tooltip="Remove template"
-                      color="error"
                       onClick={(e) => {
                         e.stopPropagation();
                         setConfirmRemove(t.name);
@@ -294,13 +293,13 @@ export default function Templates() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setConfirmRemove(null)}>Cancel</Button>
-          <SolidActionButton
-            safety="write"
+          <Button
+            variant="contained"
             color="error"
             onClick={() => confirmRemove && void handleRemove(confirmRemove)}
           >
             Remove
-          </SolidActionButton>
+          </Button>
         </DialogActions>
       </Dialog>
     </Box>

@@ -158,9 +158,8 @@ export default function TemplateDetail() {
           Edit
         </OutlinedActionButton>
         <OutlinedActionButton
-          safety="write"
+          safety="dangerous"
           size="small"
-          color="error"
           startIcon={<DeleteIcon />}
           onClick={() => setConfirmRemove(true)}
         >
@@ -293,13 +292,13 @@ export default function TemplateDetail() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setConfirmRemove(false)}>Cancel</Button>
-          <SolidActionButton
-            safety="write"
+          <Button
+            variant="contained"
             color="error"
             onClick={() => void handleRemove()}
           >
             Remove
-          </SolidActionButton>
+          </Button>
         </DialogActions>
       </Dialog>
     </Box>

@@ -277,7 +277,6 @@ export default function Certificates() {
             : ""
         }
         confirmLabel="Delete"
-        confirmColor="error"
         safety="dangerous"
         onClose={() => setDeletingCert(null)}
         onConfirm={async () => {
@@ -300,7 +299,6 @@ export default function Certificates() {
             : ""
         }
         confirmLabel="Delete"
-        confirmColor="error"
         safety="dangerous"
         onClose={() => setRemovingProvider(null)}
         onConfirm={async () => {
@@ -325,7 +323,6 @@ export default function Certificates() {
             : ""
         }
         confirmLabel="Clear"
-        confirmColor="warning"
         safety="write"
         onClose={() => setRemovingPolicy(null)}
         onConfirm={async () => {
@@ -1585,7 +1582,6 @@ interface ConfirmDialogProps {
   title: string;
   body: string;
   confirmLabel: string;
-  confirmColor: "error" | "warning" | "primary";
   safety: "write" | "dangerous";
   onClose: () => void;
   onConfirm: () => void;
@@ -1596,7 +1592,6 @@ function ConfirmDialog({
   title,
   body,
   confirmLabel,
-  confirmColor,
   safety,
   onClose,
   onConfirm,
@@ -1609,11 +1604,7 @@ function ConfirmDialog({
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
-        <SolidActionButton
-          safety={safety}
-          color={confirmColor}
-          onClick={onConfirm}
-        >
+        <SolidActionButton safety={safety} onClick={onConfirm}>
           {confirmLabel}
         </SolidActionButton>
       </DialogActions>
