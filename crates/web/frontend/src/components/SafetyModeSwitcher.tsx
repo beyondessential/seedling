@@ -151,7 +151,12 @@ export function SafetyModeSwitcher({ peerElevation }: { peerElevation?: PeerElev
           })}
         />
       </Tooltip>
-      <Menu anchorEl={anchorEl} open={!!anchorEl} onClose={closeMenu}>
+      <Menu
+        anchorEl={anchorEl}
+        open={!!anchorEl}
+        onClose={closeMenu}
+        slotProps={{ list: { disablePadding: true } }}
+      >
         {(["read", "write", "dangerous"] as const).map((m) => {
           const secondary =
             m !== "read" && m === mode && remainingText !== null
