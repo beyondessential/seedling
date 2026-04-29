@@ -10,7 +10,7 @@ use wtransport::{Endpoint, ServerConfig, VarInt};
 
 use crate::EventBroker;
 use crate::state::AppState;
-use crate::web_sessions::WebSessionEntry;
+use crate::web_sessions::{HeartbeatOutcome, SafetyMode, WebSessionEntry};
 use crate::{proxy, state};
 
 /// Run a WebTransport server on `addr`, restarting when `rotation_rx` fires (cert rotated).
@@ -102,12 +102,20 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
     // w[impl sessions.events]
     let session_id = Uuid::new_v4();
     let connected_at = jiff::Timestamp::now();
+    // w[impl sessions.safety-mode]
+    // Sessions register as `read` until the browser's first heartbeat reports
+    // its current mode (the elevation is sessionStorage-backed, so a refresh
+    // can resume in `write` or `dangerous`). This matches the server-side
+    // default and means peers can never see an elevated mode that the
+    // operator hasn't actually opted into for *this* WT session.
+    let initial_mode = SafetyMode::default();
     state.web_sessions.insert(WebSessionEntry {
         id: session_id,
         connected_at,
         // w[impl sessions.stale-cutoff]
         last_seen: connected_at,
         actor: Arc::clone(&actor),
+        safety_mode: initial_mode,
     });
     state
         .event_broker
@@ -116,6 +124,7 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
                 "type": "WebSessionStarted",
                 "timestamp": connected_at.to_string(),
                 "session_id": session_id.to_string(),
+                "safety_mode": initial_mode.as_str(),
             })
             .to_string()
             .as_str(),
@@ -142,9 +151,29 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
             // w[impl sessions.heartbeat]
             if peeked.method == "/connected-clients/heartbeat" {
                 let now = jiff::Timestamp::now();
-                let alive = state3.web_sessions.touch(&session_id, now);
+                // w[impl sessions.safety-mode]
+                let reported_mode = parse_heartbeat_mode(&peeked.modified_line);
+                let outcome = state3.web_sessions.touch(&session_id, now, reported_mode);
+                if let HeartbeatOutcome::Alive {
+                    mode_change: Some(new_mode),
+                } = outcome
+                {
+                    state3
+                        .event_broker
+                        .publish(Arc::from(
+                            json!({
+                                "type": "WebSessionModeChanged",
+                                "timestamp": now.to_string(),
+                                "session_id": session_id.to_string(),
+                                "safety_mode": new_mode.as_str(),
+                            })
+                            .to_string()
+                            .as_str(),
+                        ))
+                        .await;
+                }
                 let response = json!({
-                    "result": { "alive": alive, "now": now.to_string() }
+                    "result": { "alive": outcome.alive(), "now": now.to_string() }
                 });
                 let _ = wt_send
                     .write_all((response.to_string() + "\n").as_bytes())
@@ -263,6 +292,18 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
             .as_str(),
         ))
         .await;
+}
+
+// w[impl sessions.safety-mode]
+/// Extract the optional `safety_mode` field from a heartbeat request body.
+/// `peeked_line` is the JSON wire bytes after actor injection — the
+/// `safety_mode` value sits under `params`. Unknown or absent values fall back
+/// to `read` so a malformed client can never silently elevate the recorded
+/// mode for its session.
+fn parse_heartbeat_mode(peeked_line: &[u8]) -> Option<SafetyMode> {
+    let value: serde_json::Value = serde_json::from_slice(peeked_line).ok()?;
+    let raw = value.get("params")?.get("safety_mode")?.as_str();
+    Some(SafetyMode::parse(raw))
 }
 
 fn extract_query_param(path_with_query: &str, key: &str) -> Option<String> {

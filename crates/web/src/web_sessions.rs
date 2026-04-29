@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, fmt, sync::Arc, time::Duration};
 
 use jiff::{SignedDuration, Timestamp};
 use parking_lot::Mutex;
@@ -13,11 +13,52 @@ pub const STALE_CUTOFF: SignedDuration = SignedDuration::from_secs(600);
 /// How often the reaper task runs.
 pub const REAPER_TICK: Duration = Duration::from_secs(60);
 
+// w[sessions.safety-mode]
+/// The advisory safety tier reported by a browser session. The server records
+/// and broadcasts whatever the client reports without enforcing it on any OI
+/// request.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum SafetyMode {
+    #[default]
+    Read,
+    Write,
+    Dangerous,
+}
+
+impl SafetyMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Write => "write",
+            Self::Dangerous => "dangerous",
+        }
+    }
+
+    /// Parse a client-supplied mode string. Unknown or absent values fall back
+    /// to `read` — the safest default if a peer ever reports something we
+    /// don't understand.
+    pub fn parse(value: Option<&str>) -> Self {
+        match value {
+            Some("write") => Self::Write,
+            Some("dangerous") => Self::Dangerous,
+            _ => Self::Read,
+        }
+    }
+}
+
+impl fmt::Display for SafetyMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 pub struct WebSessionEntry {
     pub id: Uuid,
     pub connected_at: Timestamp,
     pub last_seen: Timestamp,
     pub actor: Arc<Actor>,
+    // w[impl sessions.safety-mode]
+    pub safety_mode: SafetyMode,
 }
 
 #[derive(Default)]
@@ -39,17 +80,23 @@ impl WebSessionRegistry {
     }
 
     // w[impl sessions.heartbeat]
-    /// Update `last_seen` to `now` for a session. Returns true if the session
-    /// existed; false if it had already been removed (e.g. reaped between the
-    /// browser's last heartbeat being sent and arriving).
-    pub fn touch(&self, id: &Uuid, now: Timestamp) -> bool {
+    /// Update `last_seen` to `now` for a session, and apply the reported
+    /// safety mode if one was supplied. Returns the heartbeat outcome so the
+    /// caller can decide whether to publish a `WebSessionModeChanged` event.
+    pub fn touch(&self, id: &Uuid, now: Timestamp, mode: Option<SafetyMode>) -> HeartbeatOutcome {
         let mut guard = self.sessions.lock();
-        if let Some(entry) = guard.get_mut(id) {
-            entry.last_seen = now;
-            true
-        } else {
-            false
-        }
+        let Some(entry) = guard.get_mut(id) else {
+            return HeartbeatOutcome::Missing;
+        };
+        entry.last_seen = now;
+        // w[impl sessions.safety-mode]
+        let mode_change = mode.and_then(|new_mode| {
+            (entry.safety_mode != new_mode).then(|| {
+                entry.safety_mode = new_mode;
+                new_mode
+            })
+        });
+        HeartbeatOutcome::Alive { mode_change }
     }
 
     // w[impl sessions.stale-cutoff]
@@ -83,8 +130,25 @@ impl WebSessionRegistry {
                     "actor_kind": e.actor.kind,
                     "actor_id": e.actor.id,
                     "actor_display": e.actor.display,
+                    // w[impl sessions.safety-mode]
+                    "safety_mode": e.safety_mode.as_str(),
                 })
             })
             .collect()
+    }
+}
+
+/// Result of [`WebSessionRegistry::touch`]. `mode_change` is `Some(new_mode)`
+/// when the heartbeat reported a mode that differs from what was recorded —
+/// the caller publishes a `WebSessionModeChanged` event in that case.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum HeartbeatOutcome {
+    Missing,
+    Alive { mode_change: Option<SafetyMode> },
+}
+
+impl HeartbeatOutcome {
+    pub fn alive(self) -> bool {
+        matches!(self, Self::Alive { .. })
     }
 }
