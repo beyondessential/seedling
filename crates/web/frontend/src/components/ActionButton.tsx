@@ -57,14 +57,18 @@ function forbiddenSpanSx(safety: SafetyMode, allowed: boolean) {
     const gap = alpha(theme.palette[palette].light, 0.1);
     return {
       cursor: "not-allowed",
-      ".Mui-disabled": {
+      // MUI's default disabled colour is too pale to read against the
+      // striped background, so override it to the normal text colour.
+      // Doubled `&&` for specificity over MUI's own .Mui-disabled rule.
+      "&& .Mui-disabled": {
+        color: "text.primary",
         background: `repeating-linear-gradient(${angle}, ${stripe}, ${stripe} 6px, ${gap} 6px, ${gap} 12px)`,
         filter: "grayscale(1)",
         transition: theme.transitions.create("filter", {
           duration: theme.transitions.duration.shortest,
         }),
       },
-      "&:hover .Mui-disabled": {
+      "&&:hover .Mui-disabled": {
         filter: "grayscale(0)",
       },
     };
