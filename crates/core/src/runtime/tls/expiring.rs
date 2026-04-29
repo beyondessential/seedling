@@ -232,12 +232,7 @@ mod tests {
     fn no_fault_for_acme_dns_origin() {
         let (db, _) = fresh_db();
         let now = Timestamp::now().as_second();
-        insert_cert(
-            &db,
-            "foo.example.com",
-            TlsCertOrigin::AcmeDns,
-            now + 1 * 86400,
-        );
+        insert_cert(&db, "foo.example.com", TlsCertOrigin::AcmeDns, now + 86400);
 
         sweep(&db, &[target("alpha", "foo.example.com")]).unwrap();
         assert_eq!(active_count(&db, FAULT_KIND), 0);

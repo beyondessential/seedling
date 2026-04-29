@@ -824,7 +824,7 @@ mod tests {
     fn ari_window_takes_precedence_over_fallback() {
         let now = 1_000_000;
         // ARI says renew at now+1 day even though the cert is fresh.
-        let mut cert = fake_cert("host.example.com", 1, now - 1 * 86400, now + 89 * 86400);
+        let mut cert = fake_cert("host.example.com", 1, now - 86400, now + 89 * 86400);
         cert.ari_window_start = Some(now + 86400);
         let s = snap(
             vec![policy_acme("host.example.com", "p")],

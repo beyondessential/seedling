@@ -222,7 +222,7 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
     // get shadowed. Sort by prefix length descending; ties (rare) keep
     // their input order.
     let mut routes = vh.routes.clone();
-    routes.sort_by(|a, b| b.prefix.len().cmp(&a.prefix.len()));
+    routes.sort_by_key(|r| std::cmp::Reverse(r.prefix.len()));
     routes
         .iter()
         .map(|route| {
