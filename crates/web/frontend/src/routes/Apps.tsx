@@ -40,7 +40,7 @@ const APP_LIST_EVENTS: Set<string> = new Set([
 ]);
 
 const SESSION_EVENTS: Set<string> = new Set([
-  "WebSessionStarted", "WebSessionStopped",
+  "WebSessionStarted", "WebSessionStopped", "WebSessionModeChanged",
   "ShellStarted", "ShellExited",
   "ForwardStarted", "ForwardStopped",
 ]);
@@ -230,6 +230,8 @@ export default function Apps() {
                     <TableHead>
                       <TableRow>
                         <TableCell>User</TableCell>
+                        {/* w[impl sessions.safety-mode] */}
+                        <TableCell>Mode</TableCell>
                         <TableCell>Connected</TableCell>
                         <TableCell>Last seen</TableCell>
                       </TableRow>
@@ -239,6 +241,21 @@ export default function Apps() {
                         <TableRow key={s.id}>
                           <TableCell sx={{ color: "text.secondary" }}>
                             {s.actor_display ?? s.actor_id ?? s.actor_kind ?? "—"}
+                          </TableCell>
+                          <TableCell>
+                            <Chip
+                              label={s.safety_mode}
+                              size="small"
+                              variant={s.safety_mode === "read" ? "outlined" : "filled"}
+                              color={
+                                s.safety_mode === "dangerous"
+                                  ? "error"
+                                  : s.safety_mode === "write"
+                                    ? "warning"
+                                    : "default"
+                              }
+                              sx={{ fontFamily: "monospace" }}
+                            />
                           </TableCell>
                           <TableCell sx={{ color: "text.secondary" }}>
                             {new Date(s.connected_at).toLocaleString()}

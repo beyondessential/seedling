@@ -10,7 +10,7 @@ import KeyIcon from "@mui/icons-material/Key";
 import PeopleAltIcon from "@mui/icons-material/PeopleAlt";
 import StorageIcon from "@mui/icons-material/Storage";
 import { AppBar, Badge, Box, Chip, IconButton, Toolbar, Tooltip, Typography } from "@mui/material";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useEventRefresh } from "../hooks/useEventRefresh";
 import { useOiQuery } from "../hooks/useOi";
@@ -29,6 +29,7 @@ const isFaultEvent = (ev: SeedlingEvent) =>
 const isSessionEvent = (ev: SeedlingEvent) =>
   ev.type === "WebSessionStarted" ||
   ev.type === "WebSessionStopped" ||
+  ev.type === "WebSessionModeChanged" ||
   ev.type === "ShellStarted" ||
   ev.type === "ShellExited" ||
   ev.type === "ForwardStarted" ||
@@ -60,7 +61,7 @@ export function Navbar() {
     useOiQuery<ConnectedClients>("/connected-clients/list", {});
   const { data: heldVols, refetch: refetchHeld } =
     useOiQuery<HeldVolume[]>("/volumes/held/list", {});
-  const { reconnecting, sidebarOpen, setSidebarOpen } = useSessionContext();
+  const { reconnecting, sidebarOpen, setSidebarOpen, webSessionId } = useSessionContext();
 
   const matchFaults = useCallback(isFaultEvent, []);
   const matchSessions = useCallback(isSessionEvent, []);
@@ -75,6 +76,49 @@ export function Navbar() {
     (clients?.web.length ?? 0) +
     (clients?.shells.length ?? 0) +
     (clients?.forwards.length ?? 0);
+
+  // w[impl sessions.safety-mode]
+  // Compute the highest safety tier any *other* web session is currently in.
+  // We exclude our own session (identified by webSessionId, set after the
+  // first heartbeat round-trip) so promoting our own mode does not flag the
+  // navbar against ourselves.
+  const peerElevation = useMemo<{
+    tier: "write" | "dangerous" | null;
+    writeCount: number;
+    dangerousCount: number;
+  }>(() => {
+    const peers = (clients?.web ?? []).filter((s) => s.id !== webSessionId);
+    let writeCount = 0;
+    let dangerousCount = 0;
+    for (const s of peers) {
+      if (s.safety_mode === "dangerous") dangerousCount++;
+      else if (s.safety_mode === "write") writeCount++;
+    }
+    const tier: "write" | "dangerous" | null =
+      dangerousCount > 0 ? "dangerous" : writeCount > 0 ? "write" : null;
+    return { tier, writeCount, dangerousCount };
+  }, [clients?.web, webSessionId]);
+
+  const sessionsBadgeColor: "primary" | "warning" | "error" =
+    peerElevation.tier === "dangerous"
+      ? "error"
+      : peerElevation.tier === "write"
+        ? "warning"
+        : "primary";
+
+  const sessionsTooltip = peerElevation.tier
+    ? `${sessionCount} connected client${sessionCount === 1 ? "" : "s"} · ${
+        peerElevation.dangerousCount > 0
+          ? `${peerElevation.dangerousCount} in dangerous mode`
+          : ""
+      }${
+        peerElevation.dangerousCount > 0 && peerElevation.writeCount > 0 ? ", " : ""
+      }${
+        peerElevation.writeCount > 0
+          ? `${peerElevation.writeCount} in write mode`
+          : ""
+      }`
+    : `${sessionCount} connected client${sessionCount === 1 ? "" : "s"}`;
 
   return (
     <AppBar position="fixed">
@@ -94,16 +138,23 @@ export function Navbar() {
         >
           Seedling
         </Typography>
-        <Tooltip title={`${sessionCount} connected client${sessionCount === 1 ? "" : "s"}`}>
+        <Tooltip title={sessionsTooltip}>
           <IconButton
             size="small"
             component={Link}
             to="/"
-            sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
+            sx={{
+              color: peerElevation.tier
+                ? peerElevation.tier === "dangerous"
+                  ? "error.light"
+                  : "warning.light"
+                : "rgba(255,255,255,0.6)",
+              mr: 0.5,
+            }}
           >
             <Badge
               badgeContent={sessionCount}
-              color="primary"
+              color={sessionsBadgeColor}
               sx={{
                 "& .MuiBadge-badge": {
                   fontSize: "0.6rem",
@@ -248,7 +299,7 @@ export function Navbar() {
             sx={{ mr: 1, fontFamily: "monospace" }}
           />
         )}
-        <SafetyModeSwitcher />
+        <SafetyModeSwitcher peerElevation={peerElevation} />
         {data?.hostname && (
           <Typography variant="body2" sx={{ opacity: 0.85, mr: 1, fontFamily: "monospace" }}>
             {data.hostname}
