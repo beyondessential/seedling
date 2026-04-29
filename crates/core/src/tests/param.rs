@@ -307,6 +307,7 @@ fn param_used_in_closure_captures_injected_value() {
             cancel_token: std::sync::Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -361,6 +362,7 @@ fn on_change_inside_action_closure_throws() {
             cancel_token: std::sync::Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );

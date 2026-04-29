@@ -988,4 +988,43 @@ impl ContainerRuntime for PodmanRuntime {
                 .map_err(Into::into)
         })
     }
+
+    // l[impl rt.exec]
+    fn exec_command<'a>(
+        &'a self,
+        name: &'a str,
+        argv: &'a [String],
+        extra_env: &'a [(String, String)],
+    ) -> BoxFuture<'a, Result<i32, BoxError>> {
+        Box::pin(async move {
+            // Subprocess `podman exec` is the simplest path that satisfies the
+            // BSL contract: run the command, forward stdio to the daemon's log
+            // sink (journald in production), and return the exit code. The
+            // libpod REST exec/start endpoint upgrades to a streaming protocol
+            // we don't need; subprocess avoids parsing it.
+            let mut cmd = tokio::process::Command::new("podman");
+            cmd.arg("exec");
+            for (k, v) in extra_env {
+                cmd.args(["--env", &format!("{k}={v}")]);
+            }
+            cmd.arg(name);
+            for a in argv {
+                cmd.arg(a);
+            }
+            let status = cmd.status().await.map_err(|e| -> BoxError {
+                ProtocolSnafu {
+                    message: format!("podman exec spawn failed: {e}"),
+                }
+                .build()
+                .into()
+            })?;
+            // status.code() is None when the process was killed by a signal;
+            // mirror the Unix convention of 128 + signum so callers see a
+            // non-zero exit and don't silently treat it as success.
+            Ok(status.code().unwrap_or_else(|| {
+                use std::os::unix::process::ExitStatusExt;
+                128 + status.signal().unwrap_or(0)
+            }))
+        })
+    }
 }

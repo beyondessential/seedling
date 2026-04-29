@@ -277,6 +277,7 @@ pub(crate) async fn open_shell_session(
                     cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
                     container_signaler: None,
                     volume_writer: None,
+                    executor: None,
                 },
                 &mut scope,
             );

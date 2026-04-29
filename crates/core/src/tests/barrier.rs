@@ -85,6 +85,7 @@ fn barrier_satisfied_on_first_pass() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -134,6 +135,7 @@ fn barrier_suspends_then_resumes() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -166,6 +168,7 @@ fn barrier_suspends_then_resumes() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -217,6 +220,7 @@ fn sequential_barriers() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -248,6 +252,7 @@ fn sequential_barriers() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -279,6 +284,7 @@ fn sequential_barriers() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -340,6 +346,7 @@ fn barrier_succeeds_after_deadline_when_oracle_reached() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -384,6 +391,7 @@ fn barrier_succeeds_after_deadline_when_oracle_reached() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -434,6 +442,7 @@ fn barrier_deadline_zero_expires_on_second_pass() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -463,6 +472,7 @@ fn barrier_deadline_zero_expires_on_second_pass() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -515,6 +525,7 @@ fn replay_idempotency() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -546,6 +557,7 @@ fn replay_idempotency() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -611,6 +623,7 @@ fn rt_stop_acts_as_barrier() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -642,6 +655,7 @@ fn rt_stop_acts_as_barrier() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -695,6 +709,7 @@ fn warm_certs_barrier_uses_cert_oracle() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -745,6 +760,7 @@ fn warm_certs_barrier_suspends_when_cert_not_valid() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -798,6 +814,7 @@ fn warm_images_barrier_uses_image_oracle() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -847,6 +864,7 @@ fn warm_images_barrier_suspends_when_image_absent() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -917,6 +935,7 @@ fn terminated_eventually_never_times_out() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -969,6 +988,7 @@ fn terminated_eventually_never_times_out() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -1020,6 +1040,7 @@ fn cancel_aborts_with_cancelled_result() {
             cancel_token,
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -1100,6 +1121,7 @@ fn rt_stop_deadline_is_enforced() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -1129,6 +1151,7 @@ fn rt_stop_deadline_is_enforced() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );

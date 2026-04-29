@@ -200,6 +200,18 @@ pub trait ContainerRuntime: Send + Sync + 'static {
         name: &'a str,
         signal: &'a str,
     ) -> BoxFuture<'a, Result<bool, BoxError>>;
+
+    // l[impl rt.exec]
+    /// Run a command (`argv`) inside the running container `name` and wait
+    /// for it to exit. `extra_env` is layered on top of the container's
+    /// environment. Stdout and stderr are forwarded to the container's log
+    /// sink, not captured. Returns the command's exit code.
+    fn exec_command<'a>(
+        &'a self,
+        name: &'a str,
+        argv: &'a [String],
+        extra_env: &'a [(String, String)],
+    ) -> BoxFuture<'a, Result<i32, BoxError>>;
 }
 
 pub trait ProcessManager: Send + Sync + 'static {

@@ -66,6 +66,13 @@ pub enum CallKind {
     /// re-executed.
     // l[impl rt.write]
     Write,
+    /// `rt.exec(...)` — run a command inside a running container at action
+    /// runtime. The target container instance is recorded as the entry's
+    /// single resource; the exit code is stored in `extra` (decimal). On
+    /// replay, an already-committed exec is not re-executed; the recorded
+    /// exit code is returned through the Executed handle.
+    // l[impl rt.exec]
+    Exec,
 }
 
 // r[impl history.action-log.entries]
@@ -134,6 +141,11 @@ pub struct ReplayContext {
     /// contexts where no real filesystem is involved.
     // l[impl rt.write]
     pub volume_writer: Option<Arc<dyn VolumeWriter>>,
+    /// Hook for `rt.exec()`. The runtime calls this synchronously to run a
+    /// command inside a running container during action execution. `None` in
+    /// test / stub contexts where no real container runtime is present.
+    // l[impl rt.exec]
+    pub executor: Option<Arc<dyn Executor>>,
 }
 
 /// Synchronous side-effect handle the BSL `rt.signal` call uses to actually
@@ -179,6 +191,23 @@ pub trait VolumeWriter: Send + Sync {
     ) -> Result<(), String>;
 }
 
+/// Synchronous side-effect handle the BSL `rt.exec` call uses to run a
+/// command inside a running container at action runtime. Implemented in the
+/// operation loop on top of `ContainerRuntime::exec_command`; stubbed out in
+/// language-only tests where no real container runtime is present.
+// l[impl rt.exec]
+pub trait Executor: Send + Sync {
+    /// Run `argv` inside the running container `name`, layering `extra_env`
+    /// on top of the container's environment. Blocks until the command exits
+    /// and returns the exit code.
+    fn exec(
+        &self,
+        name: &str,
+        argv: &[String],
+        extra_env: &[(String, String)],
+    ) -> Result<i32, String>;
+}
+
 impl fmt::Debug for ReplayContext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ReplayContext")
@@ -222,6 +251,7 @@ impl ReplayContext {
             probe_images: None,
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         }
     }
 

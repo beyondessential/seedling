@@ -410,6 +410,15 @@ impl ContainerRuntime for StubContainerRuntime {
     ) -> BoxFuture<'a, Result<bool, BoxError>> {
         async move { Ok(self.state.lock().containers.contains_key(name)) }.boxed()
     }
+
+    fn exec_command<'a>(
+        &'a self,
+        _name: &'a str,
+        _argv: &'a [String],
+        _extra_env: &'a [(String, String)],
+    ) -> BoxFuture<'a, Result<i32, BoxError>> {
+        async move { Ok(0) }.boxed()
+    }
 }
 
 /// Stub `ProcessManager`. Records transient and persistent unit state in

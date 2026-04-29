@@ -86,6 +86,7 @@ fn db_action_log_barrier_suspends_then_resumes() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -125,6 +126,7 @@ fn db_action_log_barrier_suspends_then_resumes() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -196,6 +198,7 @@ fn db_action_log_sequential_barriers() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -227,6 +230,7 @@ fn db_action_log_sequential_barriers() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -258,6 +262,7 @@ fn db_action_log_sequential_barriers() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );

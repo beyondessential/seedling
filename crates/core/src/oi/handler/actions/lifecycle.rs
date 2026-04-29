@@ -135,6 +135,38 @@ fn make_volume_writer(
     }))
 }
 
+// l[impl rt.exec]
+/// Adapter from the system actuator's async `exec_command` to the
+/// synchronous `Executor` trait expected by the BSL runtime.
+struct OperationExecutor {
+    container: Arc<dyn crate::system::ContainerRuntime>,
+}
+
+impl crate::runtime::barrier::Executor for OperationExecutor {
+    fn exec(
+        &self,
+        name: &str,
+        argv: &[String],
+        extra_env: &[(String, String)],
+    ) -> Result<i32, String> {
+        let container = Arc::clone(&self.container);
+        let name = name.to_owned();
+        let argv: Vec<String> = argv.to_vec();
+        let extra_env: Vec<(String, String)> = extra_env.to_vec();
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async move { container.exec_command(&name, &argv, &extra_env).await })
+        });
+        result.map_err(|e| e.to_string())
+    }
+}
+
+fn make_executor(state: &OiState) -> Option<Arc<dyn crate::runtime::barrier::Executor>> {
+    Some(Arc::new(OperationExecutor {
+        container: Arc::clone(&state.driver.container),
+    }))
+}
+
 // l[impl action.params.volume]
 /// For every `kind: "volume"` param in the action's schema, look up the
 /// operator-supplied site volume name, build an
@@ -259,6 +291,7 @@ fn run_operation_loop(
     cancel_token: Arc<CancelToken>,
     container_signaler: Option<Arc<dyn crate::runtime::barrier::ContainerSignaler>>,
     volume_writer: Option<Arc<dyn crate::runtime::barrier::VolumeWriter>>,
+    executor: Option<Arc<dyn crate::runtime::barrier::Executor>>,
 ) -> bool {
     let app_name = &op_ctx.app;
     let action_name = &op_ctx.action_name;
@@ -346,6 +379,7 @@ fn run_operation_loop(
                 cancel_token: Arc::clone(&cancel_token),
                 container_signaler: container_signaler.clone(),
                 volume_writer: volume_writer.clone(),
+                executor: executor.clone(),
             },
             &mut scope,
         );
@@ -812,6 +846,7 @@ pub fn spawn_accepted_operation(
 
             let signaler = make_container_signaler(&state);
             let writer = make_volume_writer(&state);
+            let executor = make_executor(&state);
             tokio::task::spawn_blocking(move || {
                 let db = match open_operation_dbs(&db_path, &app_name) {
                     Some(d) => d,
@@ -832,6 +867,7 @@ pub fn spawn_accepted_operation(
                     cancel_token,
                     signaler,
                     writer,
+                    executor,
                 )
             })
             .await
@@ -937,6 +973,7 @@ pub(crate) async fn run_operation_for_backup(
         let cancel_token = Arc::clone(&cancel_token);
         let signaler = make_container_signaler(state);
         let writer = make_volume_writer(state);
+        let executor = make_executor(state);
         tokio::task::spawn_blocking(move || {
             let db = match open_operation_dbs(&db_path, &op_ctx.app) {
                 Some(d) => d,
@@ -960,6 +997,7 @@ pub(crate) async fn run_operation_for_backup(
                 cancel_token,
                 signaler,
                 writer,
+                executor,
             )
         })
         .await

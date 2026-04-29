@@ -330,6 +330,7 @@ fn run_action_with_volumes(
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -584,6 +585,7 @@ fn external_volume_in_action_picks_up_operation_binding() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -751,6 +753,7 @@ fn frozen_static_volume_cannot_be_modified_in_action() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -814,6 +817,7 @@ fn captured_static_volume_cannot_be_modified_in_action() {
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
+            executor: None,
         },
         &mut scope,
     );
@@ -922,6 +926,7 @@ fn run_action_with_writer(
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: Some(writer as Arc<dyn crate::runtime::barrier::VolumeWriter>),
+            executor: None,
         },
         &mut scope,
     )

@@ -140,6 +140,10 @@ impl OperationProgress {
                 // does not affect any resource's lifecycle, so it does not
                 // contribute to the computed desired state.
                 CallKind::Write => {}
+                // l[impl rt.exec]
+                // Exec is a transient side-effect inside a running container;
+                // it does not affect the computed desired state.
+                CallKind::Exec => {}
             }
         }
         this
