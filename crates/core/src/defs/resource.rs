@@ -97,6 +97,26 @@ impl Resource {
         }
     }
 
+    // l[impl bsl.resource.description]
+    pub fn description(&self) -> Option<String> {
+        match self {
+            Self::Service(s) => s.def.lock().description.clone(),
+            // HttpService is a per-call view of a Service; defer to the
+            // wrapped Service so chaining `service.http().description(...)`
+            // never silently drops the description on the floor.
+            Self::HttpService(h) => match &h.service {
+                super::service::BoundService::App(s) => s.def.lock().description.clone(),
+                super::service::BoundService::External(e) => e.def.lock().description.clone(),
+            },
+            Self::Ingress(i) => i.def.lock().description.clone(),
+            Self::Deployment(d) => d.def.lock().description.clone(),
+            Self::Job(j) => j.def.lock().description.clone(),
+            Self::Volume(v) => v.def.lock().description.clone(),
+            Self::ExternalVolume(v) => v.def.lock().description.clone(),
+            Self::ExternalService(s) => s.def.lock().description.clone(),
+        }
+    }
+
     pub fn to_dynamic(&self) -> Dynamic {
         match self {
             Self::Service(s) => Dynamic::from(s.clone()),

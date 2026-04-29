@@ -617,11 +617,18 @@ impl RuntimeInstance {
         if let (Some(db), Some(ctx)) = (&self.db, &self.ctx) {
             let op_id = ctx.lock().operation_id.0.clone();
             for (instance, maybe_def) in &resources_with_defs {
-                if maybe_def.is_some() {
+                if let Some(resource) = maybe_def {
                     let instance = instance.clone();
                     let op_id = op_id.clone();
+                    // l[impl bsl.resource.description]
+                    let description = resource.description();
                     if let Err(e) = db.call(move |db| {
-                        crate::runtime::desired::insert_dynamic_resource(db, &instance, &op_id)
+                        crate::runtime::desired::insert_dynamic_resource(
+                            db,
+                            &instance,
+                            &op_id,
+                            description.as_deref(),
+                        )
                     }) {
                         tracing::warn!("failed to persist dynamic resource: {e}");
                     }

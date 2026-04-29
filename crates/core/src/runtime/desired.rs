@@ -281,6 +281,9 @@ pub struct DynamicResourceRecord {
     pub display_name: String,
     /// BSL-level resource name; `None` for anonymous resources.
     pub resource_name: Option<String>,
+    /// Free-form description set via `resource.description()`.
+    // l[impl bsl.resource.description]
+    pub description: Option<String>,
 }
 
 /// Persist a dynamic resource so it survives restarts.
@@ -288,11 +291,12 @@ pub fn insert_dynamic_resource(
     db: &Db,
     instance: &ResourceInstance,
     operation_id: &str,
+    description: Option<&str>,
 ) -> rusqlite::Result<()> {
     db.conn.execute(
         "INSERT OR REPLACE INTO dynamic_resources
-             (instance_id, app, operation_id, kind, display_name, resource_name)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+             (instance_id, app, operation_id, kind, display_name, resource_name, description)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         rusqlite::params![
             instance.id.to_hex(),
             instance.app,
@@ -300,6 +304,7 @@ pub fn insert_dynamic_resource(
             format!("{:?}", instance.kind),
             instance.display_name,
             instance.name,
+            description,
         ],
     )?;
     Ok(())
@@ -326,7 +331,7 @@ pub fn delete_dynamic_resources_for_operation(db: &Db, operation_id: &str) -> ru
 /// Load all dynamic resource records (e.g., for startup orphan cleanup).
 pub fn list_dynamic_resources(db: &Db) -> rusqlite::Result<Vec<DynamicResourceRecord>> {
     let mut stmt = db.conn.prepare(
-        "SELECT instance_id, app, operation_id, kind, display_name, resource_name
+        "SELECT instance_id, app, operation_id, kind, display_name, resource_name, description
          FROM dynamic_resources ORDER BY app, instance_id",
     )?;
     collect_dynamic_rows(stmt.query_map([], parse_dynamic_row)?)
@@ -338,7 +343,7 @@ pub fn list_dynamic_resources_for_app(
     app: &AppName,
 ) -> rusqlite::Result<Vec<DynamicResourceRecord>> {
     let mut stmt = db.conn.prepare(
-        "SELECT instance_id, app, operation_id, kind, display_name, resource_name
+        "SELECT instance_id, app, operation_id, kind, display_name, resource_name, description
          FROM dynamic_resources WHERE app = ?1 ORDER BY instance_id",
     )?;
     collect_dynamic_rows(stmt.query_map([app], parse_dynamic_row)?)
@@ -352,6 +357,7 @@ fn parse_dynamic_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DynamicResourc
         kind: row.get(3)?,
         display_name: row.get(4)?,
         resource_name: row.get(5)?,
+        description: row.get(6)?,
     })
 }
 

@@ -768,6 +768,8 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                     "type": kind_str,
                     "anonymous": rec.resource_name.is_none(),
                     "operation_id": rec.operation_id,
+                    // l[impl bsl.resource.description]
+                    "description": rec.description,
                     "instances": [{
                         "id": rec.instance_id,
                         "display_name": rec.display_name,
