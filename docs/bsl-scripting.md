@@ -313,7 +313,7 @@ app.on_install(|rt, param| {
         .mount("/seed", seed_vol)
         .mount("/data", data);
     rt.start(seed_job).terminated().ensure_success();
-    rt.action(app, "start");
+    rt.start(app).ready();
 }, #{
     params: #{
         "admin-password": #{
@@ -497,6 +497,27 @@ app.on_action("dump", |rt, param| {
 The operator picks the volume from the action invocation dialog (web UI) or via `seedling-ctl apps action invoke`. The binding lives only for the operation; nothing in the script needs a stable external_volume name.
 
 `kind: "volume"` is valid only on action and shell schemas. `app.param(...)` and `on_install` requirements reject it because their bindings outlive any single operation; for those, declare an `app.external_volume(name)` and have the operator wire it up via the UI's external volume mappings.
+
+## Invoking actions
+
+`app.on_action(...)` and `app.on_start(...)` return an `Action`, which is a Resource — so to invoke it, pass it to `rt.start()`. There is no separate "call this action" verb.
+
+```rhai
+let migrate = app.on_action("migrate", |rt, _p| {
+    rt.start(app.job()
+        .image("ghcr.io/example/api:v1")
+        .command(["migrate"])
+    ).terminated().ensure_success();
+});
+
+app.on_install(|rt, _p| {
+    // Run the migrate action defined above, then bring the app up.
+    rt.start(migrate).terminated().ensure_success();
+    rt.start(app).ready();
+});
+```
+
+`rt.start(app)` is the idiomatic way to run the start action: it schedules the App as a Collection, which includes the start action plus the resources it owns, and (with `.ready()`) waits for the whole thing to come up. It's also the install hook's implicit default — if you don't define `on_install`, the runtime behaves as if it called `rt.start(app)`.
 
 ## Common patterns
 

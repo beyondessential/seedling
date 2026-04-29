@@ -304,21 +304,32 @@ if portal_on.call() {
 
 // ── Helper closures (dynamic) ─────────────────────────────────────────────────
 
+let start_builder = |rt| {
+    let builder = app.job()
+        .description("Common job to do server-context tasks in actions")
+        .image(server_image.call())
+        .writable_rootfs()
+        .cap_add("DAC_READ_SEARCH")
+        .cap_add("CHOWN")
+        .cap_add("DAC_OVERRIDE")
+        .cap_add("FOWNER")
+        .mount("/staging", staging)
+        .mount("/config", config_vol)
+        .command(IDLE_CMD);
+
+    rt.start(builder).running(60);
+    builder
+};
+
 // Drops a copy of the default.json5 into the config volume as
 // `default.reference.json5` for operator convenience. The filename
 // is so node-config doesn't pick it up as an active config layer.
-let copy_image_defaults = |rt| {
-    rt.start(app.job()
-        .description("Copy the image's default.json5 to /config/default.reference.json5 for convenience")
-        .image(server_image.call())
-        .cap_add("DAC_READ_SEARCH")
-        .mount("/config", config_vol)
-        .command([
-            "install", "-v", "-m", "0640",
-            "config/default.json5",
-            "/config/default.reference.json5"
-        ])
-    ).terminated(120).ensure_success();
+let copy_default_config = |rt, builder| {
+    rt.exec(builder, [
+        "install", "-v", "-m", "0640",
+        "config/default.json5",
+        "/config/default.reference.json5"
+    ]).ensure_success();
 };
 
 let render_config = |rt| {
@@ -329,6 +340,7 @@ let render_config = |rt| {
         .description("Install rendered local.json5 into the config volume")
         .image(server_image.call())
         .writable_rootfs()
+        .cap_add("DAC_READ_SEARCH")
         .cap_add("CHOWN")
         .cap_add("DAC_OVERRIDE")
         .cap_add("FOWNER")
@@ -368,34 +380,34 @@ let setup_db = |rt| {
     `);
     staging.write("/createdb.sql", `CREATE DATABASE "${escape.call(dbn)}" OWNER "${escape.call(dbu)}";`);
 
-    rt.start(app.job()
-        .description("Provision the Tamanu central role and database via psql")
+    let psql = app.job()
+        .description("DB provisioning")
         .image(psql_image)
         .writable_rootfs()
         .mount("/var/run/postgresql", pg_socket)
         .mount("/staging", staging)
         .env("PGHOST", "/var/run/postgresql")
         .env("PGUSER", "postgres")
-        .command(["sh", "-c",
-            "psql -d postgres -v ON_ERROR_STOP=1 -f /staging/setup.sql && " +
-            "psql -d postgres -v ON_ERROR_STOP=1 -f /staging/createdb.sql || true"
-        ])
-    ).terminated(120).ensure_success();
+        .command(IDLE_CMD);
+    rt.start(psql).ready();
+    rt.exec(psql, ["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-f", "/staging/setup.sql"]).ensure_success();
+    rt.exec(psql, ["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-f", "/staging/createdb.sql"]).exit_code();
+    rt.stop(psql);
 };
 
 // Run the schema migration against the current database using the current
 // image. Tamanu's `migrate` subcommand is idempotent — running it when the
 // schema is already at the target revision is a no-op.
-let migrate_db = |rt| {
+let upgrade_db = |rt| {
     rt.start(app.job()
-        .description("Run Tamanu's schema migration against the central database")
+        .description("App-based automated upgrade steps (including migrations)")
         .image(server_image.call())
         .writable_rootfs()
         .env("TZ", timezone.value())
         .env("TAMANU_VERSION", version.value())
         .mount("/config", config_vol)
         .mount("/var/run/postgresql", pg_socket)
-        .arg(["migrate"])
+        .arg(["upgrade"])
     ).terminated_eventually().ensure_success();
 };
 
@@ -437,10 +449,10 @@ app.on_install(|rt, param| {
     rt.start(app.select(#{ types: [ResourceType.Ingress, ResourceType.Service] }));
     rt.start(app.deployment("frontend")).ready();
 
-    copy_image_defaults.call(rt);
+    copy_default_config.call(rt);
     render_config.call(rt);
     setup_db.call(rt);
-    migrate_db.call(rt);
+    upgrade_db.call(rt);
     provision_admin.call(rt,
         param["admin-email"],
         param["admin-display-name"],
@@ -485,13 +497,9 @@ app.on_action("reconfigure", |rt, _param| {
 }, #{ description: "Regenerate local.json5 from current params and restart the API + workers" });
 
 app.on_action("migrate", |rt, _param| {
-    migrate_db.call(rt);
+    upgrade_db.call(rt);
 }, #{ description: "Run pending schema migrations against the database" });
 
-// Pre-pull the container images for a target version into local storage so
-// the actual version change can rotate without paying registry-fetch latency
-// inside the migration window. The images are pinned to this app until they
-// are observed in use, matching what `version.on_change` does at upgrade time.
 app.on_action("warm-images", |rt, param| {
     let target = if "target-version" in param && param["target-version"] != "" {
         param["target-version"]
@@ -507,12 +515,12 @@ app.on_action("warm-images", |rt, param| {
     }
     rt.warm_images(warm).ready(600);
 }, #{
-    description: "Pre-pull the central, frontend, and (if enabled) patient-portal images for a target version",
+    description: "Pre-pull the images for a target version",
     params: #{
         "target-version": #{
             kind: "text",
             required: false,
-            description: "Tamanu image tag to warm (e.g. v2.10.0); defaults to the currently configured version",
+            description: "Tamanu image tag to warm; defaults to the currently configured version",
         },
     },
 });
@@ -555,6 +563,9 @@ app.on_shell("bash", |_rt, shell, _param| {
 // `rt.start(app)` afterwards rolls the frontend (rolling update) and brings
 // the API + workers back up on the new image.
 version.on_change(|rt, old| {
+    // warming images keeps the rest of the upgrade fast
+    // and also gates on all the images' availability
+    // *before* we start taking things down.
     let warm = [
         app.job().image(server_image.call()),
         app.job().image(frontend_image.call()),
@@ -564,15 +575,21 @@ version.on_change(|rt, old| {
     }
     rt.warm_images(warm).ready(600);
 
-    copy_image_defaults.call(rt);
-    render_config.call(rt);
+    rt.stop(old.select(#{
+        types: [ResourceType.Deployment],
+        names: ["tasks", "fhir-refresh", "fhir-resolve"],
+    }));
 
     rt.stop(old.select(#{
         types: [ResourceType.Deployment],
-        names: ["api", "tasks", "fhir-refresh", "fhir-resolve", "patient-portal"],
+        names: ["api", "patient-portal"],
     }));
 
-    migrate_db.call(rt);
+    let builder = start_builder.call(rt);
+    copy_default_config.call(rt, builder);
+    render_config.call(rt, builder);
+
+    upgrade_db.call(rt);
 
     rt.start(app).ready(300);
 });

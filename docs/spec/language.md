@@ -866,7 +866,7 @@ This is currently the only value.
 >
 > If it is not defined, it defaults to the equivalent of:
 > ```rhai
-> rt.action(app, "start");
+> rt.start(app);
 > ```
 
 > l[action.install.requirements]
