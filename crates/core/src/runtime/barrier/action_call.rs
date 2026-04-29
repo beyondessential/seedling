@@ -1,9 +1,11 @@
-//! Implementation of `Action.call(params?)` — sub-action invocation.
+//! Implementation of `Action.invoke(params?)` — sub-action invocation.
 //!
 //! The Rhai surface lives in `crate::defs::action::Action`; this module
 //! holds the orchestration: cycle detection, param validation,
 //! `SubActionInvoked` log entry, and dispatch through the captured
-//! [`FnPtr`].
+//! [`FnPtr`]. The method is named `invoke` rather than `call` because
+//! the Rhai engine intercepts `.call(...)` for function-pointer
+//! dispatch before user-registered methods are consulted.
 //!
 //! # Spec
 //! - l[impl action.call]
@@ -40,9 +42,11 @@ pub fn call_action(
 ) -> Result<(), Box<EvalAltResult>> {
     // l[impl action.call]
     if !is_in_action_closure() {
-        return Err("Action.call() may only be called inside an action closure"
-            .to_string()
-            .into());
+        return Err(
+            "Action.invoke() may only be called inside an action closure"
+                .to_string()
+                .into(),
+        );
     }
 
     // r[impl operation.composition.cycles]
@@ -55,13 +59,13 @@ pub fn call_action(
     let fnptr: FnPtr = action_call_lookup(action_name)
         .map_err(|e| -> Box<EvalAltResult> { e.to_string().into() })?
         .ok_or_else(|| -> Box<EvalAltResult> {
-            format!("Action.call: no such action {:?}", action_name.as_str()).into()
+            format!("Action.invoke: no such action {:?}", action_name.as_str()).into()
         })?;
 
     let rt = active_rt().ok_or_else(|| -> Box<EvalAltResult> {
         // Should be impossible while is_in_action_closure() is true,
         // but defend against drift in the lifecycle wiring.
-        "Action.call: active runtime instance is not set"
+        "Action.invoke: active runtime instance is not set"
             .to_string()
             .into()
     })?;
@@ -111,7 +115,7 @@ fn action_schema(
 ) -> Result<Option<BTreeMap<ParamName, ParamDef>>, Box<EvalAltResult>> {
     let def_holder =
         crate::runtime::barrier::runtime::action_def().ok_or_else(|| -> Box<EvalAltResult> {
-            "Action.call: action-def context is missing"
+            "Action.invoke: action-def context is missing"
                 .to_string()
                 .into()
         })?;
@@ -169,7 +173,7 @@ fn cycle_error(action_name: &ActionName, stack: &[ActionName]) -> Box<EvalAltRes
         .collect::<Vec<_>>()
         .join(" → ");
     format!(
-        "Action.call: cycle detected — {chain} → {} would re-enter an action already on the call stack",
+        "Action.invoke: cycle detected — {chain} → {} would re-enter an action already on the call stack",
         action_name.as_str()
     )
     .into()
@@ -215,7 +219,7 @@ fn rhai_dynamic_to_json(v: Dynamic) -> Result<JsonValue, Box<EvalAltResult>> {
         Ok(JsonValue::Object(rhai_map_to_json(map)?))
     } else {
         Err(format!(
-            "Action.call: param value is of unsupported type {}",
+            "Action.invoke: param value is of unsupported type {}",
             v.type_name()
         )
         .into())

@@ -89,14 +89,18 @@ impl CustomType for Action {
                 },
             )
             // l[impl action.call]
+            // The Rhai engine special-cases `.call(...)` for function-pointer
+            // dispatch and intercepts it before user-registered methods are
+            // looked up (see make_method_call in rhai/src/func/call.rs), so
+            // this surface uses `.invoke(...)` instead.
             .with_fn(
-                "call",
+                "invoke",
                 |ctx: NativeCallContext, this: &mut Self| -> Result<(), Box<EvalAltResult>> {
                     crate::runtime::barrier::action_call::call_action(&ctx, &this.name, Map::new())
                 },
             )
             .with_fn(
-                "call",
+                "invoke",
                 |ctx: NativeCallContext,
                  this: &mut Self,
                  params: Map|

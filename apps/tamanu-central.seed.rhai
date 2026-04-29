@@ -546,8 +546,11 @@ version.on_change(|rt, old| {
         names: ["tasks", "fhir-refresh", "fhir-resolve"],
     }));
 
-    // swap the frontends
-    rt.start(app.deployment("frontend")).ready();
+    // swap the frontends.
+    let newfront = rt.start(app.deployment("frontend"));
+    newfront.running();
+    rt.signal(old.deployment("frontend"), "SIGTERM");
+    newfront.ready();
     rt.stop(old.deployment("frontend"));
 
     rt.stop(old.select(#{

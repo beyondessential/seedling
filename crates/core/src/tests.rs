@@ -7,6 +7,7 @@ use crate::runtime::barrier::shell::ShellControl;
 use crate::{defs, setup_language as setup};
 
 mod action;
+mod action_call;
 mod app;
 mod barrier;
 mod bsl;

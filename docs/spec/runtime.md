@@ -309,7 +309,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - The barrier condition, if a barrier was reached (which resources, which state, what deadline).
 > - Whether the barrier has been satisfied.
 >
-> The runtime must additionally emit a `SubActionInvoked` entry immediately before each [`Action.call()`](language.md#l--action.call) runs the called closure. The entry records the called action's name and the validated params map. On replay, the entry is treated as already-emitted: the runtime re-enters the FnPtr but recovers the params from the log rather than re-validating, so a schema change between operation start and replay does not desync the call. The `SubActionInvoked` entries are exposed in `apps history` so operators can inspect the nested call chain.
+> The runtime must additionally emit a `SubActionInvoked` entry immediately before each [`Action.invoke()`](language.md#l--action.call) runs the called closure. The entry records the called action's name and the validated params map. On replay, the entry is treated as already-emitted: the runtime re-enters the FnPtr but recovers the params from the log rather than re-validating, so a schema change between operation start and replay does not desync the call. The `SubActionInvoked` entries are exposed in `apps history` so operators can inspect the nested call chain.
 
 > r[history.action-log.replay]
 > The action execution log must contain enough information to replay an interrupted lifecycle operation from the beginning and fast-forward to the interruption point.
@@ -494,7 +494,7 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 ## Action Composition
 
 > r[operation.composition]
-> An action closure may invoke other actions by calling [`Action.call(params?)`](language.md#l--action.call) on an Action handle obtained from [`app.action(name)`](language.md#l--action.lookup) or returned by `app.on_action()` / `app.on_start()`.
+> An action closure may invoke other actions by calling [`Action.invoke(params?)`](language.md#l--action.call) on an Action handle obtained from [`app.action(name)`](language.md#l--action.lookup) or returned by `app.on_action()` / `app.on_start()`.
 > The invoked action's closure runs inline within the calling operation, sharing its `rt`, its operation_id, and its action log.
 > Barriers within the invoked action are barriers of the overall operation.
 
