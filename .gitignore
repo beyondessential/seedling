@@ -8,3 +8,5 @@ TODO.txt
 *.log
 crates/web/frontend/node_modules/
 crates/web/frontend/dist/
+crates/web/frontend/test-results/
+crates/web/frontend/playwright-report/
