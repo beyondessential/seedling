@@ -130,6 +130,20 @@ pub fn register(engine: &mut Engine) {
     engine.register_fn("col", collection::col);
 }
 
+/// Best-effort count of compute threads available to the daemon process.
+///
+/// `std::thread::available_parallelism` honours cgroup CPU quotas, sched
+/// affinity, and platform limits, which matches the spec's framing
+/// ("amount of compute threads available to the application", not
+/// "total cores on the host"). Falls back to `1` on the rare platform
+/// where the query is unsupported, which keeps the constant within its
+/// spec invariant of positive non-zero.
+fn available_threads() -> i64 {
+    std::thread::available_parallelism()
+        .map(|n| i64::try_from(n.get()).unwrap_or(i64::MAX))
+        .unwrap_or(1)
+}
+
 /// Read `MemTotal` from `/proc/meminfo` and return the value in bytes.
 ///
 /// Falls back to `1` (the minimum positive value permitted by the spec)
@@ -167,7 +181,7 @@ pub fn scope() -> (Scope<'static>, app::App) {
     let facts = crate::sysconst::get();
 
     // l[impl const.available-threads]
-    scope.push_constant("AVAILABLE_THREADS", 16_i64);
+    scope.push_constant("AVAILABLE_THREADS", available_threads());
 
     // l[impl const.available-memory]
     scope.push_constant("AVAILABLE_MEMORY", read_mem_total_bytes());
