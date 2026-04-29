@@ -152,3 +152,76 @@ impl HeartbeatOutcome {
         matches!(self, Self::Alive { .. })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn actor() -> Arc<Actor> {
+        Arc::new(Actor {
+            kind: Some("password".to_owned()),
+            id: Some("admin".to_owned()),
+            display: Some("admin".to_owned()),
+            session: Some("session".to_owned()),
+        })
+    }
+
+    fn entry(id: Uuid, now: Timestamp) -> WebSessionEntry {
+        WebSessionEntry {
+            id,
+            connected_at: now,
+            last_seen: now,
+            actor: actor(),
+            safety_mode: SafetyMode::Read,
+        }
+    }
+
+    // w[verify sessions.safety-mode]
+    #[test]
+    fn safety_mode_parse_falls_back_to_read() {
+        assert_eq!(SafetyMode::parse(Some("write")), SafetyMode::Write);
+        assert_eq!(SafetyMode::parse(Some("dangerous")), SafetyMode::Dangerous);
+        assert_eq!(SafetyMode::parse(Some("read")), SafetyMode::Read);
+        // Unknown / absent / hostile values must never silently elevate.
+        assert_eq!(SafetyMode::parse(Some("DANGEROUS")), SafetyMode::Read);
+        assert_eq!(SafetyMode::parse(Some("")), SafetyMode::Read);
+        assert_eq!(SafetyMode::parse(None), SafetyMode::Read);
+    }
+
+    // w[verify sessions.safety-mode]
+    #[test]
+    fn touch_returns_mode_change_only_when_different() {
+        let registry = WebSessionRegistry::new();
+        let id = Uuid::new_v4();
+        let now = Timestamp::now();
+        registry.insert(entry(id, now));
+
+        // Same mode: no change reported.
+        let outcome = registry.touch(&id, now, Some(SafetyMode::Read));
+        assert_eq!(outcome, HeartbeatOutcome::Alive { mode_change: None });
+
+        // Different mode: change carries the new value.
+        let outcome = registry.touch(&id, now, Some(SafetyMode::Write));
+        assert_eq!(
+            outcome,
+            HeartbeatOutcome::Alive {
+                mode_change: Some(SafetyMode::Write)
+            }
+        );
+
+        // Heartbeat without a reported mode never overwrites the stored one.
+        let outcome = registry.touch(&id, now, None);
+        assert_eq!(outcome, HeartbeatOutcome::Alive { mode_change: None });
+        let listed = registry.list();
+        assert_eq!(listed[0]["safety_mode"], "write");
+    }
+
+    // w[verify sessions.heartbeat]
+    #[test]
+    fn touch_on_missing_session_returns_missing() {
+        let registry = WebSessionRegistry::new();
+        let outcome = registry.touch(&Uuid::new_v4(), Timestamp::now(), Some(SafetyMode::Write));
+        assert_eq!(outcome, HeartbeatOutcome::Missing);
+        assert!(!outcome.alive());
+    }
+}
