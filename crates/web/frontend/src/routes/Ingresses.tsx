@@ -17,7 +17,6 @@ import {
   FormControl,
   FormControlLabel,
   FormLabel,
-  IconButton,
   InputLabel,
   MenuItem,
   Paper,
@@ -32,12 +31,14 @@ import {
   TableHead,
   TableRow,
   TextField,
-  Tooltip,
   Typography,
 } from "@mui/material";
 import { useState } from "react";
+import {
+  IconActionButton,
+  SolidActionButton,
+} from "../components/ActionButton";
 import { OiErrorAlert } from "../components/OiErrorAlert";
-import { useGuard } from "../components/SafetyModeProvider";
 import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
 import type {
@@ -85,7 +86,6 @@ function CreateSiteIngressDialog({
   const [hostname, setHostname] = useState("");
   const [description, setDescription] = useState("");
   const [tlsProvider, setTlsProvider] = useState<SiteIngressTlsProvider>("acme");
-  const guard = useGuard("write");
   const { execute, loading, error } = useOiAction();
   const onSubmit = async () => {
     const params: Record<string, unknown> = {
@@ -153,17 +153,13 @@ function CreateSiteIngressDialog({
         <Button onClick={onCancel} disabled={loading}>
           Cancel
         </Button>
-        <Tooltip title={guard.title()}>
-          <span>
-            <Button
-              variant="contained"
-              onClick={onSubmit}
-              disabled={loading || !valid || !guard.allowed}
-            >
-              {loading ? "Creating…" : "Create"}
-            </Button>
-          </span>
-        </Tooltip>
+        <SolidActionButton
+          safety="write"
+          onClick={onSubmit}
+          disabled={loading || !valid}
+        >
+          {loading ? "Creating…" : "Create"}
+        </SolidActionButton>
       </DialogActions>
     </Dialog>
   );
@@ -180,7 +176,6 @@ function ConfirmDeleteSiteIngressDialog({
   onConfirm: () => void;
   loading: boolean;
 }) {
-  const guard = useGuard("dangerous");
   return (
     <Dialog open onClose={loading ? undefined : onCancel} maxWidth="xs" fullWidth>
       <DialogTitle>Delete site ingress?</DialogTitle>
@@ -198,18 +193,14 @@ function ConfirmDeleteSiteIngressDialog({
         <Button onClick={onCancel} disabled={loading}>
           Cancel
         </Button>
-        <Tooltip title={guard.title()}>
-          <span>
-            <Button
-              variant="contained"
-              color="error"
-              onClick={onConfirm}
-              disabled={loading || !guard.allowed}
-            >
-              {loading ? "Deleting…" : "Delete"}
-            </Button>
-          </span>
-        </Tooltip>
+        <SolidActionButton
+          safety="dangerous"
+          color="error"
+          onClick={onConfirm}
+          disabled={loading}
+        >
+          {loading ? "Deleting…" : "Delete"}
+        </SolidActionButton>
       </DialogActions>
     </Dialog>
   );
@@ -231,7 +222,6 @@ function AttachDialog({
   const [redirectUrl, setRedirectUrl] = useState("");
   const [redirectCode, setRedirectCode] = useState<number>(307);
   const [preservePath, setPreservePath] = useState(true);
-  const guard = useGuard("write");
   const { execute, loading, error } = useOiAction();
   const { data: appServices } = useOiQuery<AppService[]>("/services/app/list", {});
   const [targetApp, targetService] = target ? target.split("\0") : ["", ""];
@@ -409,17 +399,13 @@ function AttachDialog({
         <Button onClick={onCancel} disabled={loading}>
           Cancel
         </Button>
-        <Tooltip title={guard.title()}>
-          <span>
-            <Button
-              variant="contained"
-              onClick={onSubmit}
-              disabled={loading || !valid || !guard.allowed}
-            >
-              {loading ? "Attaching…" : "Attach"}
-            </Button>
-          </span>
-        </Tooltip>
+        <SolidActionButton
+          safety="write"
+          onClick={onSubmit}
+          disabled={loading || !valid}
+        >
+          {loading ? "Attaching…" : "Attach"}
+        </SolidActionButton>
       </DialogActions>
     </Dialog>
   );
@@ -436,8 +422,6 @@ function IngressRow({
   onDetach: (i: SiteIngress, att: SiteIngressAttachment) => void;
   onDelete: (i: SiteIngress) => void;
 }) {
-  const writeGuard = useGuard("write");
-  const dangerGuard = useGuard("dangerous");
   const isDiscovered = ingress.source === "discovered";
   return (
     <TableRow>
@@ -480,17 +464,13 @@ function IngressRow({
                 <Box component="span" sx={{ fontFamily: "monospace", fontSize: "0.85em" }}>
                   {describeAttachment(att)}
                 </Box>
-                <Tooltip title={dangerGuard.title("Detach")}>
-                  <span>
-                    <IconButton
-                      size="small"
-                      onClick={() => onDetach(ingress, att)}
-                      disabled={!dangerGuard.allowed}
-                    >
-                      <LinkOffIcon fontSize="small" />
-                    </IconButton>
-                  </span>
-                </Tooltip>
+                <IconActionButton
+                  safety="dangerous"
+                  tooltip="Detach"
+                  onClick={() => onDetach(ingress, att)}
+                >
+                  <LinkOffIcon fontSize="small" />
+                </IconActionButton>
               </Box>
             ))}
           </Stack>
@@ -498,34 +478,25 @@ function IngressRow({
       </TableCell>
       <TableCell align="right">
         <Box sx={{ display: "flex", flexDirection: "row", gap: 0.5, justifyContent: "flex-end" }}>
-          <Tooltip title={writeGuard.title("Attach forward or redirect")}>
-            <span>
-              <IconButton
-                size="small"
-                onClick={() => onAttach(ingress)}
-                disabled={!writeGuard.allowed}
-              >
-                <AddIcon fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
-          <Tooltip
-            title={
+          <IconActionButton
+            safety="write"
+            tooltip="Attach forward or redirect"
+            onClick={() => onAttach(ingress)}
+          >
+            <AddIcon fontSize="small" />
+          </IconActionButton>
+          <IconActionButton
+            safety="dangerous"
+            tooltip={
               isDiscovered
                 ? "Discovered ingresses are managed by the provider and cannot be deleted here"
-                : (dangerGuard.title("Delete this manual site ingress"))
+                : "Delete this manual site ingress"
             }
+            onClick={() => onDelete(ingress)}
+            disabled={isDiscovered}
           >
-            <span>
-              <IconButton
-                size="small"
-                onClick={() => onDelete(ingress)}
-                disabled={isDiscovered || !dangerGuard.allowed}
-              >
-                <DeleteOutlineIcon fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
+            <DeleteOutlineIcon fontSize="small" />
+          </IconActionButton>
         </Box>
       </TableCell>
     </TableRow>
@@ -538,7 +509,6 @@ export default function Ingresses() {
     "/ingresses/site/discovery/status",
     {},
   );
-  const guard = useGuard("write");
   const { execute: executeDetach, error: detachError } = useOiAction();
   const {
     execute: executeRemove,
@@ -599,21 +569,22 @@ export default function Ingresses() {
         <Typography variant="h5" sx={{ flexGrow: 1 }}>
           Site ingresses
         </Typography>
-        <IconButton onClick={refresh} aria-label="Refresh">
+        <IconActionButton
+          safety="read"
+          tooltip="Refresh"
+          onClick={refresh}
+          aria-label="Refresh"
+          size="medium"
+        >
           <RefreshIcon />
-        </IconButton>
-        <Tooltip title={guard.title()}>
-          <span>
-            <Button
-              variant="contained"
-              startIcon={<AddIcon />}
-              onClick={() => setCreateOpen(true)}
-              disabled={!guard.allowed}
-            >
-              New ingress
-            </Button>
-          </span>
-        </Tooltip>
+        </IconActionButton>
+        <SolidActionButton
+          safety="write"
+          startIcon={<AddIcon />}
+          onClick={() => setCreateOpen(true)}
+        >
+          New ingress
+        </SolidActionButton>
       </Box>
 
       {tailscaleStaleOnly && (
