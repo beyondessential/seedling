@@ -1,7 +1,8 @@
 import { alpha, type Theme } from "@mui/material/styles";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import type { SafetyMode } from "../lib/types";
 
-export type SafetyMode = "read" | "write" | "dangerous";
+export type { SafetyMode };
 export type SafetyTier = "write" | "dangerous";
 
 const STORAGE_KEY = "seedling.safetyMode";

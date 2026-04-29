@@ -55,10 +55,10 @@ const router = createBrowserRouter([
 
 export default function App() {
   return (
-    <SessionProvider>
-      <SafetyModeProvider>
+    <SafetyModeProvider>
+      <SessionProvider>
         <RouterProvider router={router} />
-      </SafetyModeProvider>
-    </SessionProvider>
+      </SessionProvider>
+    </SafetyModeProvider>
   );
 }

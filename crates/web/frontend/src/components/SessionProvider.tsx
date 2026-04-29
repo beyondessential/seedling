@@ -4,6 +4,7 @@ import type { Session } from "../lib/session";
 import type { SeedlingEvent, VolumeRef } from "../lib/types";
 import { UniRouter } from "../lib/uni-router";
 import { Offline } from "./Offline";
+import { useSafetyMode } from "./SafetyModeProvider";
 
 const EVENTS_CACHE_SIZE = 200;
 const SIDEBAR_STORAGE_KEY = "seedling.eventsSidebar";
@@ -36,6 +37,10 @@ interface SessionCtx {
   closeShell: (id: string) => void;
   shellsSidebarWidth: number;
   setShellsSidebarWidth: (w: number) => void;
+  /** Server-assigned id for the current WT session, learned from the first
+   *  heartbeat response. Null until that round-trip completes; consumers use
+   *  it to identify the local row in /connected-clients/list. */
+  webSessionId: string | null;
 }
 
 export const SessionContext = createContext<SessionCtx>({
@@ -58,6 +63,7 @@ export const SessionContext = createContext<SessionCtx>({
   closeShell: () => undefined,
   shellsSidebarWidth: DEFAULT_SHELLS_SIDEBAR_WIDTH,
   setShellsSidebarWidth: () => undefined,
+  webSessionId: null,
 });
 
 export function useSessionContext() {
@@ -98,7 +104,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   });
   const [shellTabs, setShellTabs] = useState<ShellTab[]>([]);
   const [activeShellId, setActiveShellId] = useState<string | null>(null);
+  const [webSessionId, setWebSessionId] = useState<string | null>(null);
   const probeRan = useRef(false);
+  const { mode: safetyMode } = useSafetyMode();
+  const safetyModeRef = useRef(safetyMode);
+  useEffect(() => {
+    safetyModeRef.current = safetyMode;
+  }, [safetyMode]);
 
 
   const setSidebarOpen = useCallback((open: boolean) => {
@@ -308,11 +320,26 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // navigating away or closing the tab does not leave a session waiting for
   // the cutoff. Best-effort — the browser may have already torn down the
   // transport.
+  //
+  // w[impl sessions.safety-mode]
+  // Each heartbeat carries the local safety mode so peers can render an
+  // accurate per-session indicator. The current mode is read through a ref to
+  // avoid restarting the interval on every change; the ad-hoc heartbeat
+  // triggered by mode changes (below) handles immediate propagation.
   useEffect(() => {
     if (!session) return;
+    setWebSessionId(null);
     const sendHeartbeat = () => {
       void session.client
-        .request("/connected-clients/heartbeat", {})
+        .request("/connected-clients/heartbeat", {
+          safety_mode: safetyModeRef.current,
+        })
+        .then((res) => {
+          if (res.ok && res.value && typeof res.value === "object") {
+            const sid = (res.value as { session_id?: unknown }).session_id;
+            if (typeof sid === "string") setWebSessionId(sid);
+          }
+        })
         .catch(() => undefined);
     };
     sendHeartbeat();
@@ -331,6 +358,28 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     };
   }, [session]);
 
+  // w[impl sessions.safety-mode]
+  // Send an ad-hoc heartbeat the moment the operator changes mode so peers
+  // see the new state without waiting for the next two-minute tick. The
+  // initial-mount heartbeat is already covered by the effect above; we skip
+  // duplicating it here by tracking the previous mode.
+  const lastSentModeRef = useRef<typeof safetyMode | null>(null);
+  useEffect(() => {
+    if (!session) {
+      lastSentModeRef.current = null;
+      return;
+    }
+    if (lastSentModeRef.current === null) {
+      lastSentModeRef.current = safetyMode;
+      return;
+    }
+    if (lastSentModeRef.current === safetyMode) return;
+    lastSentModeRef.current = safetyMode;
+    void session.client
+      .request("/connected-clients/heartbeat", { safety_mode: safetyMode })
+      .catch(() => undefined);
+  }, [session, safetyMode]);
+
   return (
     <SessionContext.Provider value={{
       session, probing, reconnecting, offline, setSession,
@@ -338,6 +387,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       uniRouter,
       shellTabs, activeShellId, setActiveShellId, openShell, openVolumeShell, closeShell,
       shellsSidebarWidth, setShellsSidebarWidth,
+      webSessionId,
     }}>
       {offline ? <Offline /> : children}
     </SessionContext.Provider>

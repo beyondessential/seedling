@@ -239,7 +239,8 @@ export interface SeedlingEvent {
   forward_id?: string;
   service?: string;
   port?: number;
-  // WebSessionStarted / WebSessionStopped (web-layer events)
+  // WebSessionStarted / WebSessionStopped / WebSessionModeChanged (web-layer events)
+  safety_mode?: SafetyMode;
   // ServerBusy
   reason?: string;
   // HeldVolumeCreated / HeldVolumeDeleted / HeldVolumeRestored
@@ -256,6 +257,8 @@ export interface Actor {
   session?: string;
 }
 
+export type SafetyMode = "read" | "write" | "dangerous";
+
 export interface WebSession {
   id: string;
   connected_at: string;
@@ -268,6 +271,9 @@ export interface WebSession {
   actor_kind: string | null;
   actor_id: string | null;
   actor_display: string | null;
+  /** Last safety mode the session reported via heartbeat. New sessions
+   *  default to `read` until the browser's first heartbeat arrives. */
+  safety_mode: SafetyMode;
 }
 
 export interface ShellSession {

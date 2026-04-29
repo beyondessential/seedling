@@ -173,7 +173,15 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
                         .await;
                 }
                 let response = json!({
-                    "result": { "alive": outcome.alive(), "now": now.to_string() }
+                    "result": {
+                        "alive": outcome.alive(),
+                        "now": now.to_string(),
+                        // w[impl sessions.safety-mode]
+                        // Echoing the session id lets the browser identify
+                        // its own row in /connected-clients/list and skip
+                        // it when computing peer-elevation warnings.
+                        "session_id": session_id.to_string(),
+                    }
                 });
                 let _ = wt_send
                     .write_all((response.to_string() + "\n").as_bytes())
