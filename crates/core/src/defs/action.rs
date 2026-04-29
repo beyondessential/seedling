@@ -1,10 +1,9 @@
 use std::collections::{BTreeMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 
-use rhai::{CustomType, Dynamic, EvalAltResult, Map, TypeBuilder};
+use rhai::{CustomType, EvalAltResult, TypeBuilder};
 use seedling_protocol::names::{ActionName, AppName, ParamName, ShellName};
 
-use super::collection::{Collection, col};
 use super::install::ParamDef;
 
 // l[impl action.option-params]
@@ -88,23 +87,7 @@ impl CustomType for Action {
                     super::app::append_action_schedule(&this.name, expr);
                     Ok(this.clone())
                 },
-            )
-            // l[impl collection.one]
-            .with_fn("one", |this: &mut Self| -> Dynamic {
-                col(Dynamic::from(this.clone())).one()
-            })
-            // l[impl collection.only]
-            .with_fn("only", |this: &mut Self, other: Dynamic| -> Collection {
-                col(Dynamic::from(this.clone())).only(other)
-            })
-            // l[impl collection.except]
-            .with_fn("except", |this: &mut Self, other: Dynamic| -> Collection {
-                col(Dynamic::from(this.clone())).except(other)
-            })
-            // l[impl collection.select]
-            .with_fn("select", |this: &mut Self, criterion: Map| -> Collection {
-                col(Dynamic::from(this.clone())).select(&criterion)
-            });
+            );
     }
 }
 

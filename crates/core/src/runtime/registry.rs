@@ -33,6 +33,17 @@ impl From<rusqlite::Error> for RegistryError {
     }
 }
 
+impl RegistryError {
+    /// Build a `RegistryError` from a free-form message. Useful when
+    /// surfacing script-level usage errors (e.g. an unsupported value
+    /// passed to `rt.start`) through the same channel as registry
+    /// failures, since the call sites already map both to the same
+    /// `EvalAltResult` string.
+    pub fn message(msg: impl Into<String>) -> Self {
+        Self(Box::<dyn std::error::Error + Send + Sync>::from(msg.into()))
+    }
+}
+
 /// The result of resolving a scaled deployment group.
 pub struct ScaledGroup {
     /// Instances that should be kept (length == the requested count).

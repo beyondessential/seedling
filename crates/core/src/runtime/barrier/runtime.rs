@@ -548,6 +548,18 @@ impl RuntimeInstance {
         }
 
         // l[impl rt.start]
+        // l[impl action.type]
+        // Action handles are not resources; rejecting here surfaces the
+        // mistake as a clear script error instead of silently dropping
+        // the call. Action invocation goes through `Action.call(...)`.
+        if let Some(action) = resources.clone().try_cast::<crate::defs::action::Action>() {
+            return Err(RegistryError::message(format!(
+                "rt.start does not invoke actions: pass Action {:?} to .call() instead",
+                action.name.as_str()
+            )));
+        }
+
+        // l[impl rt.start]
         // l[impl collection.col]
         // App or Collection (e.g. `rt.start(app)` or `rt.start(col(app).except(...))`):
         // expand into the underlying resource handles via the standard
@@ -579,8 +591,15 @@ impl RuntimeInstance {
             }
         }
 
-        // Unknown — language-only / stub context.
-        Ok(vec![])
+        // l[impl rt.start]
+        // Anything else is a script bug: rt.start was called with a value
+        // that isn't a recognised resource, App, or Collection. Returning
+        // an empty vector silently masked the bug for `rt.start(action)`
+        // and similar calls; surface it instead.
+        Err(RegistryError::message(format!(
+            "rt.start: unsupported value {} (expected a resource, App, or Collection)",
+            resources.type_name()
+        )))
     }
 
     // r[impl desired-state.during-operation]

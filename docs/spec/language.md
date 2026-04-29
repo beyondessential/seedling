@@ -212,8 +212,9 @@ This is currently the only value.
 > - `Job`
 > - `Volume`
 > - `ExternalVolume`
+> - `Action`
 >
-> Actions are invocable handles, not resources, and so do not have a `ResourceType` value.
+> Actions are invocable handles, not resources: `ResourceType.Action` exists for action-log identity, but resource collections such as `col(app)` and `app.select(...)` do not include actions, so selecting by `ResourceType.Action` yields an empty collection. Action invocation goes through [`Action.call`](#l--action.call).
 
 # App global
 

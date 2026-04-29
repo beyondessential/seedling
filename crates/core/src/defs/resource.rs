@@ -49,6 +49,12 @@ impl ResourceKind {
             "ExternalService".into(),
             Dynamic::from(Self::ExternalService),
         );
+        // l[impl const.resource-type.enum]
+        // Action remains exposed for action-log identity records and so
+        // that scripts surviving from the actions-as-resources era still
+        // parse, but Actions are no longer enumerated by AppBag, so any
+        // `app.select(#{ types: [ResourceType.Action] })` returns an
+        // empty collection. Action invocation goes through Action.call.
         map.insert("Action".into(), Dynamic::from(Self::Action));
         map
     }

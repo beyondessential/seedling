@@ -538,7 +538,7 @@ app.on_shell("bash", |_rt, shell, _param| {
 version.on_change(|rt, old| {
     // warming images keeps the rest of the upgrade fast and also gates on
     // all the images' availability *before* we start taking things down.
-    rt.start(warmup).terminated().ensure_success();
+    warmup.call();
 
     // bring down everything non-essential
     let old_tasks = rt.stop(old.select(#{
@@ -547,9 +547,7 @@ version.on_change(|rt, old| {
     }));
 
     // swap the frontends
-    rt.start([
-        app.deployment("frontend"),
-    ]).running();
+    rt.start(app.deployment("frontend")).ready();
     rt.stop(old.deployment("frontend"));
 
     rt.stop(old.select(#{
