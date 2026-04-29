@@ -178,7 +178,7 @@ pub enum OperationResult {
 // run_operation
 // ---------------------------------------------------------------------------
 
-fn json_value_to_rhai_dynamic(v: &serde_json::Value) -> rhai::Dynamic {
+pub(super) fn json_value_to_rhai_dynamic(v: &serde_json::Value) -> rhai::Dynamic {
     match v {
         serde_json::Value::String(s) => Dynamic::from(s.clone()),
         serde_json::Value::Bool(b) => Dynamic::from(*b),
@@ -340,13 +340,18 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     let app_name = app.def.load().name.clone();
     let rt =
         RuntimeInstance::with_context(Arc::clone(&ctx), app_name.clone(), registry, db.clone());
+    // l[impl action.call]
+    // Cloned before pushing into the Rhai scope so the Action.call thread-
+    // local stash can hold its own handle. The clone is cheap — every
+    // RuntimeInstance field is Arc'd.
+    let rt_clone_for_active = rt.clone();
 
     // Re-run the BSL script with a fresh scope and App to recover the FnPtr
     // for this action. FnPtrs are not stored in AppDef (which must be Send);
     // the thread-local capture buffer collects them during the re-run and is
     // discarded immediately after. The fresh AppDef is compared against the
     // stored one as an idempotency check, then also discarded.
-    let (closure, is_param_change, is_shell) = {
+    let (closure, is_param_change, is_shell, captured_actions) = {
         let (mut fresh_scope, fresh_app) = crate::defs::scope();
         fresh_app.def.rcu(|d| {
             let mut d = (**d).clone();
@@ -364,6 +369,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         }
         check_idempotent(&fresh_app.def.load(), &app.def.load());
 
+        let captured_actions = captured.actions.clone();
         let (closure, is_install, is_shell) = if action_name == "install" {
             if let Some(c) = captured.install {
                 (c, true, false)
@@ -387,8 +393,9 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         };
         let is_param_change =
             !is_install && fresh_app.def.load().param_changes.contains(action_name);
-        (closure, is_param_change, is_shell)
-        // captured, fresh_scope, and fresh_app are all dropped here.
+        (closure, is_param_change, is_shell, captured_actions)
+        // captured (minus the cloned actions map kept in captured_actions),
+        // fresh_scope, and fresh_app are all dropped here.
     };
 
     // l[impl param.on-change.old]
@@ -463,11 +470,19 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         .compile(call_script)
         .expect("static call script must compile");
     let action_def = Arc::new(arc_swap::ArcSwap::new(app.def.load_full()));
-    let result = {
+    // l[impl action.call]
+    // The action call table makes captured FnPtrs available to
+    // app.action(name) / Action.call(...) for the duration of the
+    // outer closure body. The outer action's name seeds the call
+    // stack so a self-call is rejected as recursion.
+    let outer_name = ActionName::new_unchecked(action_name);
+    let rt_for_table = rt_clone_for_active.clone();
+    let result = crate::defs::app::with_action_call_table(captured_actions, outer_name, || {
         let _guard =
-            ActionClosureGuard::new(action_def, op_id_str.clone(), operation_volume_bindings);
+            ActionClosureGuard::new(action_def, op_id_str.clone(), operation_volume_bindings)
+                .with_active_rt(rt_for_table);
         engine.eval_ast_with_scope::<Dynamic>(scope, &call_ast)
-    };
+    });
 
     let _ = scope.remove::<Dynamic>("__bsl_rt");
     let _ = scope.remove::<Dynamic>("__bsl_closure");

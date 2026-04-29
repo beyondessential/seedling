@@ -421,6 +421,9 @@ pub fn load_action_log(
             "WarmCerts" => CallKind::WarmCerts,
             "WarmImages" => CallKind::WarmImages,
             "Signal" => CallKind::Signal,
+            "Write" => CallKind::Write,
+            "Exec" => CallKind::Exec,
+            "SubAction" => CallKind::SubAction,
             other => {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
                     1,

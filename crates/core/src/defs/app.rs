@@ -89,6 +89,98 @@ fn capture_install(fnptr: FnPtr) {
     });
 }
 
+// ---------------------------------------------------------------------------
+// Thread-local action-call table
+// ---------------------------------------------------------------------------
+
+// l[impl action.lookup]
+// l[impl action.call]
+// r[impl operation.composition]
+/// Per-operation lookup table for `Action.call`. Populated by `replay.rs`
+/// around the call to `engine.eval_ast_with_scope(...)` so that
+/// `app.action(name)` and `Action.call(...)` can find the captured FnPtrs
+/// for actions defined in the script. The stack supports the no-recursion
+/// guarantee: each `.call()` pushes its action name on entry and pops on
+/// exit (via [`SubActionFrame`] for exception safety), so a cycle is
+/// rejected before the closure runs.
+pub(crate) struct ActionCallTable {
+    pub actions: BTreeMap<ActionName, FnPtr>,
+    pub stack: Vec<ActionName>,
+}
+
+thread_local! {
+    static ACTION_CALL_TABLE: RefCell<Option<ActionCallTable>> = const { RefCell::new(None) };
+}
+
+/// Install an `ActionCallTable` for the duration of the closure passed to
+/// `f`. The outer action's name seeds the call stack so `.call(<self>)`
+/// inside it is rejected as recursion.
+pub(crate) fn with_action_call_table<R>(
+    actions: BTreeMap<ActionName, FnPtr>,
+    outer: ActionName,
+    f: impl FnOnce() -> R,
+) -> R {
+    let table = ActionCallTable {
+        actions,
+        stack: vec![outer],
+    };
+    ACTION_CALL_TABLE.with(|t| *t.borrow_mut() = Some(table));
+    let result = f();
+    ACTION_CALL_TABLE.with(|t| t.borrow_mut().take());
+    result
+}
+
+/// Look up the FnPtr for `name` in the active call table. Returns
+/// `Ok(None)` when no table is active (which is itself a script error
+/// that the caller surfaces as "must be called inside an action").
+pub(crate) fn action_call_lookup(name: &ActionName) -> Result<Option<FnPtr>, &'static str> {
+    ACTION_CALL_TABLE.with(|t| match t.borrow().as_ref() {
+        None => Err("no active action call table"),
+        Some(table) => Ok(table.actions.get(name).cloned()),
+    })
+}
+
+/// Snapshot the active call stack for cycle reporting.
+pub(crate) fn action_call_stack() -> Option<Vec<ActionName>> {
+    ACTION_CALL_TABLE.with(|t| t.borrow().as_ref().map(|table| table.stack.clone()))
+}
+
+/// RAII guard that pushes an action name on the active call stack and
+/// pops it when dropped, even if the body panics or the closure
+/// propagates an exception. Returns an error if the table is not
+/// active (caller must already have rejected this case).
+pub(crate) struct SubActionFrame {
+    name: ActionName,
+}
+
+impl SubActionFrame {
+    pub fn enter(name: ActionName) -> Self {
+        ACTION_CALL_TABLE.with(|t| {
+            if let Some(table) = t.borrow_mut().as_mut() {
+                table.stack.push(name.clone());
+            }
+        });
+        Self { name }
+    }
+}
+
+impl Drop for SubActionFrame {
+    fn drop(&mut self) {
+        ACTION_CALL_TABLE.with(|t| {
+            if let Some(table) = t.borrow_mut().as_mut() {
+                if let Some(top) = table.stack.last() {
+                    debug_assert_eq!(
+                        top, &self.name,
+                        "action call stack imbalance: expected {:?} on top, found {:?}",
+                        self.name, top
+                    );
+                }
+                table.stack.pop();
+            }
+        });
+    }
+}
+
 thread_local! {
     static APPDEF_HOLDER: RefCell<Option<Arc<arc_swap::ArcSwap<AppDef>>>> = const { RefCell::new(None) };
 }

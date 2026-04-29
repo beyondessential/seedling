@@ -143,6 +143,30 @@ fn clear_action_def() {
 }
 
 // ---------------------------------------------------------------------------
+// Thread-local: active RuntimeInstance handle for the currently-executing
+// action closure. Stashed so `Action.call()` can invoke the called action's
+// FnPtr with the same `rt` the outer closure received without threading it
+// through the Rhai scope. Set/cleared by `ActionClosureGuard`.
+// ---------------------------------------------------------------------------
+
+// l[impl action.call]
+thread_local! {
+    static ACTIVE_RT: RefCell<Option<RuntimeInstance>> = const { RefCell::new(None) };
+}
+
+pub fn active_rt() -> Option<RuntimeInstance> {
+    ACTIVE_RT.with(|cell| cell.borrow().clone())
+}
+
+fn set_active_rt(rt: RuntimeInstance) {
+    ACTIVE_RT.with(|cell| *cell.borrow_mut() = Some(rt));
+}
+
+fn clear_active_rt() {
+    ACTIVE_RT.with(|cell| *cell.borrow_mut() = None);
+}
+
+// ---------------------------------------------------------------------------
 // Thread-local: operation-scoped volume bindings, set for the duration of
 // an action closure. Populated by the runtime before invoking an action
 // that requires bindings (e.g. backup operations); empty for normal actions.
@@ -210,6 +234,14 @@ impl ActionClosureGuard {
         set_operation_volume_bindings(bindings);
         Self
     }
+
+    // l[impl action.call]
+    /// Stash the active runtime handle so `Action.call(...)` can invoke
+    /// sub-actions with the same `rt` the outer closure received.
+    pub fn with_active_rt(self, rt: RuntimeInstance) -> Self {
+        set_active_rt(rt);
+        self
+    }
 }
 
 impl Default for ActionClosureGuard {
@@ -229,6 +261,7 @@ impl Drop for ActionClosureGuard {
         ANON_VOL_OP_ID.with(|cell| *cell.borrow_mut() = None);
         ANON_VOL_COUNTER.with(|c| c.set(0));
         clear_operation_volume_bindings();
+        clear_active_rt();
     }
 }
 

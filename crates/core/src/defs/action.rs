@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 
-use rhai::{CustomType, EvalAltResult, TypeBuilder};
+use rhai::{CustomType, EvalAltResult, Map, NativeCallContext, TypeBuilder};
 use seedling_protocol::names::{ActionName, AppName, ParamName, ShellName};
 
 use super::install::ParamDef;
@@ -86,6 +86,22 @@ impl CustomType for Action {
                         .map_err(|e| -> Box<EvalAltResult> { e.into() })?;
                     super::app::append_action_schedule(&this.name, expr);
                     Ok(this.clone())
+                },
+            )
+            // l[impl action.call]
+            .with_fn(
+                "call",
+                |ctx: NativeCallContext, this: &mut Self| -> Result<(), Box<EvalAltResult>> {
+                    crate::runtime::barrier::action_call::call_action(&ctx, &this.name, Map::new())
+                },
+            )
+            .with_fn(
+                "call",
+                |ctx: NativeCallContext,
+                 this: &mut Self,
+                 params: Map|
+                 -> Result<(), Box<EvalAltResult>> {
+                    crate::runtime::barrier::action_call::call_action(&ctx, &this.name, params)
                 },
             );
     }

@@ -1,3 +1,4 @@
+pub mod action_call;
 pub mod cancel;
 pub mod oracle;
 pub mod replay;
@@ -73,6 +74,15 @@ pub enum CallKind {
     /// exit code is returned through the Executed handle.
     // l[impl rt.exec]
     Exec,
+    /// `Action.call(params?)` — a sub-action invocation. The entry has no
+    /// resources; `extra` carries a JSON payload `{"action": <name>,
+    /// "params": <validated map>}` so replay can recover the called
+    /// action's name and the post-validation params without re-running
+    /// validation (whose result must be deterministic across replays per
+    /// `r[operation.composition.params]`).
+    // r[impl operation.composition]
+    // r[impl history.action-log.entries]
+    SubAction,
 }
 
 // r[impl history.action-log.entries]

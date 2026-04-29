@@ -5,6 +5,7 @@ use seedling_protocol::names::{ActionName, ParamName};
 
 use super::super::action::{Action, ActionDef};
 use super::App;
+use crate::runtime::barrier::runtime::is_in_action_closure;
 
 pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
     // l[impl action.type]
@@ -65,6 +66,27 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                 Ok(Action::new(action_name, app_name))
             },
         );
+
+    // l[impl action.lookup]
+    builder.with_fn(
+        "action",
+        |this: &mut App, name: &str| -> Result<Action, Box<EvalAltResult>> {
+            // The lookup must run inside an action body; it has no
+            // meaningful semantics in the static context (the call
+            // table that backs `.call()` only exists for the duration
+            // of an action's invocation).
+            if !is_in_action_closure() {
+                return Err("app.action() may only be called inside an action closure".into());
+            }
+            let action_name = ActionName::new(name)
+                .map_err(|e| -> Box<EvalAltResult> { e.to_string().into() })?;
+            let def = this.def.load();
+            if !def.actions.contains_key(&action_name) {
+                return Err(format!("no such action: {name:?}").into());
+            }
+            Ok(Action::new(action_name, def.name.clone()))
+        },
+    );
 
     // l[impl action.start]
     builder

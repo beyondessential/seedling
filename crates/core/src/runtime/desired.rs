@@ -144,6 +144,12 @@ impl OperationProgress {
                 // Exec is a transient side-effect inside a running container;
                 // it does not affect the computed desired state.
                 CallKind::Exec => {}
+                // r[impl operation.composition]
+                // SubAction is a frame marker for a nested Action.call.
+                // The actual rt.* calls inside the called closure follow as
+                // their own log entries and contribute to desired state via
+                // the matching arms above.
+                CallKind::SubAction => {}
             }
         }
         this
