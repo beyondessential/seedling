@@ -646,6 +646,7 @@ function MultiVolumeShellDialog({
         {/* w[impl volumes.shell-ui.read-only] */}
         <SolidActionButton
           safety="read"
+          color={shellReadOnly ? undefined : "warning"}
           startIcon={<TerminalIcon />}
           onClick={handleOpen}
           disabled={refs.length === 0}
@@ -772,6 +773,7 @@ export default function Volumes() {
         {/* w[impl volumes.shell-ui.read-only] */}
         <OutlinedActionButton
           safety="read"
+          color={shellReadOnly ? undefined : "warning"}
           size="small"
           startIcon={<TerminalIcon />}
           onClick={() => setShellPickerOpen(true)}
@@ -856,6 +858,7 @@ export default function Volumes() {
                         <TableCell align="right" sx={{ px: 0.5, whiteSpace: "nowrap" }}>
                           <IconActionButton
                             safety="read"
+                            color={shellReadOnly ? undefined : "warning"}
                             tooltip={shellReadOnly ? "Open shell (read-only)" : "Open shell"}
                             onClick={() =>
                               openVolumeShell(
@@ -947,6 +950,7 @@ export default function Volumes() {
                           {/* w[impl volumes.shell-ui.read-only] */}
                           <IconActionButton
                             safety="read"
+                            color={shellReadOnly ? undefined : "warning"}
                             tooltip={shellReadOnly ? "Open shell (read-only)" : "Open shell"}
                             onClick={() =>
                               openVolumeShell(
@@ -1133,6 +1137,7 @@ export default function Volumes() {
                           {/* w[impl volumes.shell-ui.read-only] */}
                           <IconActionButton
                             safety="read"
+                            color={shellReadOnly ? undefined : "warning"}
                             tooltip={shellReadOnly ? "Open shell (read-only)" : "Open shell"}
                             onClick={() =>
                               openVolumeShell(

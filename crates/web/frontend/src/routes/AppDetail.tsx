@@ -605,6 +605,7 @@ function ResourcesSection({
               <>
                 <IconActionButton
                   safety="read"
+                  color={shellReadOnly ? undefined : "warning"}
                   tooltip={shellReadOnly ? "Open shell (read-only)" : "Open shell"}
                   onClick={() =>
                     openVolumeShell(
