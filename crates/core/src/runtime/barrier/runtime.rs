@@ -1079,15 +1079,32 @@ impl RuntimeInstance {
         {
             let mut g = ctx.lock();
             if g.is_replaying() {
-                let recovered = g
-                    .committed_entry()
-                    .and_then(|e| e.extra.as_deref())
-                    .and_then(|s| s.parse::<i32>().ok());
+                let entry = g.committed_entry().cloned();
                 g.call_index += 1;
+                let entry = entry.ok_or_else(|| -> Box<EvalAltResult> {
+                    "rt.exec: replay log entry missing".into()
+                })?;
+                if entry.call_kind != CallKind::Exec {
+                    return Err(format!(
+                        "rt.exec: replay log entry mismatch at call_index {}: \
+                         expected Exec, found {:?} (resources={}, extra={:?}). \
+                         The committed log is misaligned with the closure's rt.* call sequence.",
+                        entry.call_index,
+                        entry.call_kind,
+                        entry.resources.len(),
+                        entry.extra,
+                    )
+                    .into());
+                }
+                let recovered = entry.extra.as_deref().and_then(|s| s.parse::<i32>().ok());
                 if let Some(exit_code) = recovered {
                     return Ok(Executed { exit_code });
                 }
-                return Err("rt.exec: replay log entry missing exit code".into());
+                return Err(format!(
+                    "rt.exec: replay log entry at call_index {} has no parseable exit code (extra={:?})",
+                    entry.call_index, entry.extra
+                )
+                .into());
             }
         }
 
