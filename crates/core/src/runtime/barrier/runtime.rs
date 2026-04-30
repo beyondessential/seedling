@@ -1066,7 +1066,10 @@ impl RuntimeInstance {
         if let Some(ctx) = &self.ctx
             && ctx.lock().probe_mode()
         {
-            return Ok(Executed { exit_code: 0 });
+            return Ok(Executed {
+                exit_code: 0,
+                target_display: Some(target.display_name.clone()),
+            });
         }
 
         if is_barrier_hit_pending()
@@ -1077,7 +1080,12 @@ impl RuntimeInstance {
         }
 
         let ctx = match &self.ctx {
-            None => return Ok(Executed { exit_code: 0 }),
+            None => {
+                return Ok(Executed {
+                    exit_code: 0,
+                    target_display: Some(target.display_name.clone()),
+                });
+            }
             Some(c) => Arc::clone(c),
         };
 
@@ -1130,7 +1138,20 @@ impl RuntimeInstance {
                 }
                 let recovered = entry.extra.as_deref().and_then(|s| s.parse::<i32>().ok());
                 if let Some(exit_code) = recovered {
-                    return Ok(Executed { exit_code });
+                    // Recover the target name from the committed entry so
+                    // ensure_success messages name the exact instance even
+                    // on a replayed run. Falls back to the live argument
+                    // when the entry happens to carry no resources (legacy
+                    // entries from before this change).
+                    let target_display = entry
+                        .resources
+                        .first()
+                        .map(|r| r.display_name.clone())
+                        .or_else(|| Some(target.display_name.clone()));
+                    return Ok(Executed {
+                        exit_code,
+                        target_display,
+                    });
                 }
                 return Err(format!(
                     "rt.exec: replay log entry at call_index {} has no parseable exit code (extra={:?})",
@@ -1149,6 +1170,7 @@ impl RuntimeInstance {
             0
         };
 
+        let target_display = target.display_name.clone();
         {
             let mut g = ctx.lock();
             let idx = g.call_index;
@@ -1162,7 +1184,10 @@ impl RuntimeInstance {
             g.call_index += 1;
         }
 
-        Ok(Executed { exit_code })
+        Ok(Executed {
+            exit_code,
+            target_display: Some(target_display),
+        })
     }
 
     // l[impl rt.write]
@@ -1975,7 +2000,10 @@ impl Started {
         let Some(ctx) = &self.ctx else {
             // Stub context (no real world to query) — treat as success so
             // BSL parse/type-check runs don't flap.
-            return Termination { success: true };
+            return Termination {
+                success: true,
+                failed: Vec::new(),
+            };
         };
         // r[impl image.discover]
         // Probe mode: pretend every terminated resource succeeded. We
@@ -1983,14 +2011,22 @@ impl Started {
         // guarded by `termination.ensure_success()` throwing); catching
         // those would require speculatively executing both branches.
         if ctx.lock().probe_mode() {
-            return Termination { success: true };
+            return Termination {
+                success: true,
+                failed: Vec::new(),
+            };
         }
         let world = Arc::clone(&ctx.lock().world);
-        let success = self
+        let failed: Vec<String> = self
             .resources
             .iter()
-            .all(|r| world.termination_success(r).unwrap_or(false));
-        Termination { success }
+            .filter(|r| !world.termination_success(r).unwrap_or(false))
+            .map(|r| r.display_name.clone())
+            .collect();
+        Termination {
+            success: failed.is_empty(),
+            failed,
+        }
     }
 }
 
@@ -2087,6 +2123,11 @@ impl CustomType for Started {
 #[derive(Debug, Clone)]
 pub struct Termination {
     pub success: bool,
+    /// Display names of the resources that failed (or whose outcome the
+    /// world oracle could not determine). Surfaced by `ensure_success`
+    /// so the operator can grep `apps logs` / `--instance` for the
+    /// specific container without scanning the whole app's stream.
+    pub failed: Vec<String>,
 }
 
 impl CustomType for Termination {
@@ -2100,8 +2141,16 @@ impl CustomType for Termination {
                     if this.success {
                         Ok(())
                     } else {
+                        let detail = if this.failed.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" ({})", this.failed.join(", "))
+                        };
                         Err(Box::new(EvalAltResult::ErrorRuntime(
-                            "Resource did not terminate successfully".into(),
+                            format!(
+                                "rt.start.terminated: resource did not terminate successfully{detail}"
+                            )
+                            .into(),
                             rhai::Position::NONE,
                         )))
                     }
@@ -2118,6 +2167,10 @@ impl CustomType for Termination {
 #[derive(Debug, Clone)]
 pub struct Executed {
     pub exit_code: i32,
+    /// Display name of the container the command ran in. Surfaced by
+    /// `ensure_success` so the error names the exact instance an
+    /// operator can pull logs for.
+    pub target_display: Option<String>,
 }
 
 impl CustomType for Executed {
@@ -2137,9 +2190,17 @@ impl CustomType for Executed {
                     if this.exit_code == 0 {
                         Ok(())
                     } else {
+                        let target = this
+                            .target_display
+                            .as_deref()
+                            .map(|n| format!(" in {n}"))
+                            .unwrap_or_default();
                         Err(Box::new(EvalAltResult::ErrorRuntime(
-                            format!("rt.exec command failed with exit code {}", this.exit_code)
-                                .into(),
+                            format!(
+                                "rt.exec command failed with exit code {}{target}",
+                                this.exit_code
+                            )
+                            .into(),
                             rhai::Position::NONE,
                         )))
                     }
