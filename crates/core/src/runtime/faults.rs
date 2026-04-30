@@ -219,13 +219,19 @@ pub fn clear_faults_for_instance(
     Ok(())
 }
 
-pub fn has_active_faults(db: &crate::runtime::db::Db, app: &AppName) -> rusqlite::Result<bool> {
-    let count: i64 = db.conn.query_row(
+pub fn count_active_faults_for_app(
+    db: &crate::runtime::db::Db,
+    app: &AppName,
+) -> rusqlite::Result<i64> {
+    db.conn.query_row(
         "SELECT COUNT(*) FROM faults WHERE app = ?1 AND cleared_at IS NULL",
         [app],
         |r| r.get(0),
-    )?;
-    Ok(count > 0)
+    )
+}
+
+pub fn has_active_faults(db: &crate::runtime::db::Db, app: &AppName) -> rusqlite::Result<bool> {
+    Ok(count_active_faults_for_app(db, app)? > 0)
 }
 
 pub fn count_active_faults(db: &crate::runtime::db::Db) -> rusqlite::Result<i64> {

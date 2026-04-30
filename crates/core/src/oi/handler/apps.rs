@@ -423,6 +423,12 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
                         .unwrap_or(false)
                 })
             };
+            let fault_count = {
+                let name_clone = name.clone();
+                state.db.call(move |db| {
+                    faults::count_active_faults_for_app(db, &name_clone).unwrap_or(0)
+                })
+            };
             // l[impl app.description]
             let description = reg
                 .get(name.as_str())
@@ -431,6 +437,7 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
                 "name": name,
                 "status": status.name(),
                 "has_stopped_resources": has_stopped,
+                "fault_count": fault_count,
                 "description": description,
             });
             if let AppStatus::Operating { action_name } = &status {

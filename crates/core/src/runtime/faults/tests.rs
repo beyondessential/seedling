@@ -219,6 +219,34 @@ fn has_active_faults_reflects_state() {
 }
 
 #[test]
+fn count_active_faults_for_app_counts_only_uncleared() {
+    let db = Db::open_in_memory().expect("open");
+    init_test_events();
+    assert_eq!(
+        count_active_faults_for_app(&db, &app("myapp")).expect("count"),
+        0
+    );
+
+    let id1 = file_fault(&db, &app("myapp"), None, None, None, "err", "1").expect("1");
+    file_fault(&db, &app("myapp"), None, None, None, "err", "2").expect("2");
+    file_fault(&db, &app("other"), None, None, None, "err", "3").expect("3");
+    assert_eq!(
+        count_active_faults_for_app(&db, &app("myapp")).expect("count"),
+        2
+    );
+    assert_eq!(
+        count_active_faults_for_app(&db, &app("other")).expect("count"),
+        1
+    );
+
+    clear_fault(&db, &id1, &app("myapp")).expect("clear");
+    assert_eq!(
+        count_active_faults_for_app(&db, &app("myapp")).expect("count"),
+        1
+    );
+}
+
+#[test]
 fn count_active_faults_counts_all_apps() {
     let db = Db::open_in_memory().expect("open");
     init_test_events();
