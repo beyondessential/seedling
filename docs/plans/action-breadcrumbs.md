@@ -1,5 +1,54 @@
 # Plan: action breadcrumbs in the app journal
 
+## Status
+
+Shipped (commits 1fd3d4bf, 92b4f210, efa31c3b on top of the
+do_stop / check_barrier / Installing-phase fixes):
+
+- [x] `system::breadcrumb` module with `BreadcrumbKind` enum and
+      `Breadcrumb::emit`, sending journald records via
+      `systemd::journal::send`.
+- [x] `do_start` / `do_stop` / `do_warm_certs` / `do_warm_images` /
+      `do_signal` / `do_exec` / `do_write` emit on the first fresh
+      execution (skipped on replay).
+- [x] `Action.invoke` emits a `SubAction` breadcrumb with the
+      validated params.
+- [x] `pod.rs::start_pod_instance` emits a `UnitCreate` breadcrumb
+      identifying the rt.* call.
+- [x] Anonymous-resource summary (`description()` else
+      `image: <short>; cmd: <head>`) on the rt.start breadcrumb;
+      reusable via `system::breadcrumb::anon_summary`.
+- [x] Per-replay-pass marker at `run_operation` entry.
+- [x] `LogEntry` exposes `rt_call` and `script_pos`; the CLI logs
+      renderer marks breadcrumb lines with a `>` prefix.
+
+Outstanding — do NOT unplan until these are done or consciously
+dropped:
+
+- [ ] Script positions via `NativeCallContext::position()`. Requires
+      adding `ctx: NativeCallContext` as the first arg to every rt.*
+      registration site in `runtime/barrier/runtime.rs` and threading
+      `ctx.position()` through into the `Breadcrumb::script_pos` field.
+      Mechanical but touches every with_fn call. The `SEEDLING_SCRIPT_POS`
+      field is already plumbed through journald and the CLI renderer; it
+      just isn't populated yet.
+- [ ] `rt.query` and `rt.restart` breadcrumbs. `rt.query` currently
+      reuses `do_start` so its breadcrumb labels as `start` — needs a
+      separate code path or an explicit `Query` kind passed in.
+      `rt.restart` goes through `restart_gens::bump_restart_gen` and
+      doesn't have a breadcrumb hook yet.
+- [ ] Richer `apps logs` text formatter. Today's render is the
+      minimal caret-prefixed line; the plan's mock-up format
+      (column-aligned with rt-call name, target, position) hasn't
+      shipped.
+- [ ] Tests: unit tests on `BreadcrumbKind::message` formatting; an
+      integration test that captures emitted breadcrumbs during a
+      script run via a stub journald layer (the current
+      `systemd::journal::send` path silently no-ops in CI).
+- [ ] Manual verification on a real install (re-install
+      tamanu-central, scan `apps logs tamanu-central`, confirm the
+      trace reads top-to-bottom).
+
 ## Problem
 
 When an install or other lifecycle action fails, an operator currently
