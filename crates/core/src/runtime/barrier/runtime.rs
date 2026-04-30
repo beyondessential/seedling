@@ -1093,6 +1093,23 @@ impl RuntimeInstance {
             let mut g = ctx.lock();
             if g.is_replaying() {
                 let entry = g.committed_entry().cloned();
+                let summary: Vec<String> = g
+                    .committed
+                    .iter()
+                    .map(|e| {
+                        format!(
+                            "  [{}] {:?} resources={} barrier={} extra={:?}",
+                            e.call_index,
+                            e.call_kind,
+                            e.resources.len(),
+                            e.barrier
+                                .as_ref()
+                                .map(|b| format!("{:?}/sat={}", b.required_state, b.satisfied))
+                                .unwrap_or_else(|| "none".to_string()),
+                            e.extra
+                        )
+                    })
+                    .collect();
                 g.call_index += 1;
                 let entry = entry.ok_or_else(|| -> Box<EvalAltResult> {
                     "rt.exec: replay log entry missing".into()
@@ -1100,12 +1117,14 @@ impl RuntimeInstance {
                 if entry.call_kind != CallKind::Exec {
                     return Err(format!(
                         "rt.exec: replay log entry mismatch at call_index {}: \
-                         expected Exec, found {:?} (resources={}, extra={:?}). \
-                         The committed log is misaligned with the closure's rt.* call sequence.",
+                         expected Exec, found {:?} (resources={}, extra={:?}, \
+                         barrier={:?}). Full committed log:\n{}",
                         entry.call_index,
                         entry.call_kind,
                         entry.resources.len(),
                         entry.extra,
+                        entry.barrier,
+                        summary.join("\n"),
                     )
                     .into());
                 }
