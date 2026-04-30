@@ -21,6 +21,7 @@ use seedling_protocol::names::{ActionName, AppName};
 use serde_json::Map as JsonMap;
 use serde_json::Value as JsonValue;
 
+use crate::defs::resource::Resource;
 use crate::runtime::ResourceInstance;
 use crate::runtime::barrier::VolumeWriteTarget;
 
@@ -33,6 +34,10 @@ use crate::runtime::barrier::VolumeWriteTarget;
 pub enum BreadcrumbKind<'a> {
     Start {
         resources: &'a [ResourceInstance],
+        /// Optional definitions parallel to `resources`, used to surface
+        /// a human-readable summary (description() or image+command head)
+        /// for anonymous resources that have no operator-facing name.
+        defs: &'a [Option<&'a Resource>],
     },
     Stop {
         resources: &'a [ResourceInstance],
@@ -97,7 +102,7 @@ impl Breadcrumb<'_> {
         // journal entry with its SEEDLING_RESOURCE / SEEDLING_INSTANCE
         // tags so per-resource log queries pick the breadcrumb up.
         let targets: Vec<Target<'_>> = match &self.kind {
-            BreadcrumbKind::Start { resources }
+            BreadcrumbKind::Start { resources, .. }
             | BreadcrumbKind::Stop { resources }
             | BreadcrumbKind::Query { resources }
             | BreadcrumbKind::WarmCerts { resources } => {
@@ -205,8 +210,8 @@ impl BreadcrumbKind<'_> {
 
     fn message(&self) -> String {
         match self {
-            BreadcrumbKind::Start { resources } => {
-                format!("rt.start{}", fmt_resources(resources))
+            BreadcrumbKind::Start { resources, defs } => {
+                format!("rt.start{}", fmt_resources_with_defs(resources, defs))
             }
             BreadcrumbKind::Stop { resources } => {
                 format!("rt.stop{}", fmt_resources(resources))
@@ -272,6 +277,61 @@ fn fmt_resources(resources: &[ResourceInstance]) -> String {
     }
     let names: Vec<String> = resources.iter().map(target_label).collect();
     format!("({})", names.join(", "))
+}
+
+fn fmt_resources_with_defs(resources: &[ResourceInstance], defs: &[Option<&Resource>]) -> String {
+    if resources.is_empty() {
+        return "()".into();
+    }
+    let labels: Vec<String> = resources
+        .iter()
+        .enumerate()
+        .map(|(i, inst)| {
+            // Named resources get their BSL name; anonymous resources
+            // borrow from the def: prefer description(), fall back to a
+            // composed "image + cmd-head" so the operator can recognise
+            // the container without cross-referencing display names.
+            if let Some(name) = &inst.name {
+                name.clone()
+            } else {
+                let summary = defs.get(i).copied().flatten().and_then(anon_summary);
+                match summary {
+                    Some(s) => format!("<{s}>"),
+                    None => inst.display_name.clone(),
+                }
+            }
+        })
+        .collect();
+    format!("({})", labels.join(", "))
+}
+
+/// Build a short description for an anonymous resource. Prefers the
+/// operator-set `description()` and falls back to "image: <ref>; cmd:
+/// <argv[0]>" so the operator can correlate the breadcrumb with a
+/// container they recognise.
+pub fn anon_summary(resource: &Resource) -> Option<String> {
+    if let Some(desc) = resource.description() {
+        return Some(desc);
+    }
+    use crate::defs::resource::Resource as R;
+    let pod = match resource {
+        R::Job(j) => j.def.lock().pod.clone(),
+        R::Deployment(d) => d.def.lock().pod.clone(),
+        _ => return None,
+    };
+    let container = pod.lock().container.clone();
+    let container = container.lock();
+    let image = container.image.as_deref()?;
+    let short = image.rsplit('/').next().unwrap_or(image);
+    let cmd_head = container
+        .command
+        .as_ref()
+        .and_then(|argv| argv.first())
+        .cloned();
+    Some(match cmd_head {
+        Some(c) => format!("image: {short}; cmd: {c}"),
+        None => format!("image: {short}"),
+    })
 }
 
 fn target_label(inst: &ResourceInstance) -> String {

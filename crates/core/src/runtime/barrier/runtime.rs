@@ -756,8 +756,13 @@ impl RuntimeInstance {
                 });
                 g.call_index += 1;
                 drop(g);
+                let defs: Vec<Option<&crate::defs::resource::Resource>> = resources_with_defs
+                    .iter()
+                    .map(|(_, d)| d.as_ref())
+                    .collect();
                 emit_breadcrumb(crate::system::breadcrumb::BreadcrumbKind::Start {
                     resources: &resources,
+                    defs: &defs,
                 });
             }
         }
