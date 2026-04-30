@@ -178,6 +178,15 @@ export default function Apps() {
                         color={statusColor(app.status)}
                         size="small"
                       />
+                      {/* w[impl routes.apps.fault-count] */}
+                      {app.fault_count !== undefined && app.fault_count > 0 && (
+                        <Chip
+                          label={`${app.fault_count} fault${app.fault_count === 1 ? "" : "s"}`}
+                          size="small"
+                          color="error"
+                          variant="outlined"
+                        />
+                      )}
                       {app.has_stopped_resources && (
                         <Chip label="partially running" size="small" color="warning" variant="outlined" />
                       )}

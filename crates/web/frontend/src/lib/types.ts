@@ -13,6 +13,7 @@ export interface AppSummary {
   status: AppStatus;
   action_name?: string;
   has_stopped_resources?: boolean;
+  fault_count?: number;
   description?: string | null;
 }
 
