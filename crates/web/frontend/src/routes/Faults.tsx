@@ -2,6 +2,7 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 import {
   Alert,
   Box,
+  Chip,
   CircularProgress,
   IconButton,
   Stack,
@@ -13,6 +14,11 @@ import { Link } from "react-router-dom";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useOiQuery } from "../hooks/useOi";
 import { useEventRefresh } from "../hooks/useEventRefresh";
+import {
+  compactTargetLabel,
+  logsUrlForTarget,
+  parseFaultTargets,
+} from "../lib/faultTargets";
 import type { FaultRecord, SeedlingEvent } from "../lib/types";
 
 export default function Faults() {
@@ -48,36 +54,54 @@ export default function Faults() {
       )}
       {data && data.length > 0 && (
         <Stack spacing={1}>
-          {data.map((f) => (
-            <Alert key={f.id} severity="error" sx={{ fontFamily: "monospace" }}>
-              <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2, flexWrap: "wrap" }}>
-                <Box>
-                  {f.app && (
-                    <>
-                      <Link to={`/apps/${f.app}`} style={{ color: "inherit", fontWeight: 600 }}>
-                        {f.app}
-                      </Link>
-                      {" · "}
-                    </>
-                  )}
-                  <strong>{f.kind}</strong>
-                  {f.resource_name && ` · ${f.resource_type}/${f.resource_name}`}
-                  {f.instance_id && ` (${f.instance_id.slice(0, 12)})`}
-                  {" — "}
-                  {f.description}
+          {data.map((f) => {
+            const targets = parseFaultTargets(f.app, f.description);
+            return (
+              <Alert key={f.id} severity="error" sx={{ fontFamily: "monospace" }}>
+                <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2, flexWrap: "wrap" }}>
+                  <Box>
+                    {f.app && (
+                      <>
+                        <Link to={`/apps/${f.app}`} style={{ color: "inherit", fontWeight: 600 }}>
+                          {f.app}
+                        </Link>
+                        {" · "}
+                      </>
+                    )}
+                    <strong>{f.kind}</strong>
+                    {f.resource_name && ` · ${f.resource_type}/${f.resource_name}`}
+                    {f.instance_id && ` (${f.instance_id.slice(0, 12)})`}
+                    {" — "}
+                    {f.description}
+                    {f.app && targets.length > 0 && (
+                      <Box sx={{ mt: 1, display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+                        {targets.map((t) => (
+                          <Chip
+                            key={t.display_name}
+                            label={`logs: ${compactTargetLabel(f.app!, t)}`}
+                            size="small"
+                            component={Link}
+                            to={logsUrlForTarget(f.app!, t)}
+                            clickable
+                            sx={{ fontFamily: "monospace" }}
+                          />
+                        ))}
+                      </Box>
+                    )}
+                  </Box>
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      color: "text.secondary",
+                      whiteSpace: "nowrap",
+                      alignSelf: "center"
+                    }}>
+                    {new Date(f.timestamp).toLocaleString()}
+                  </Typography>
                 </Box>
-                <Typography
-                  variant="caption"
-                  sx={{
-                    color: "text.secondary",
-                    whiteSpace: "nowrap",
-                    alignSelf: "center"
-                  }}>
-                  {new Date(f.timestamp).toLocaleString()}
-                </Typography>
-              </Box>
-            </Alert>
-          ))}
+              </Alert>
+            );
+          })}
         </Stack>
       )}
     </Box>
