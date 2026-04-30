@@ -103,7 +103,7 @@ pub(super) enum ProxyCommand {
     Logs {
         #[arg(short, long)]
         follow: bool,
-        #[arg(long, default_value = "100")]
+        #[arg(short = 'n', long = "lines", default_value = "10")]
         tail: u64,
         #[arg(long)]
         json: bool,
@@ -116,7 +116,7 @@ pub(super) enum DnsCommand {
     Logs {
         #[arg(short, long)]
         follow: bool,
-        #[arg(long, default_value = "100")]
+        #[arg(short = 'n', long = "lines", default_value = "10")]
         tail: u64,
         #[arg(long)]
         json: bool,

@@ -77,13 +77,13 @@ pub(super) enum AppsCommand {
         /// Resource name (optional filter)
         resource: Option<String>,
         /// Instance display-name suffix (requires resource)
-        #[arg(long)]
+        #[arg(short, long)]
         instance: Option<String>,
         /// Follow log output
         #[arg(short, long)]
         follow: bool,
         /// Number of historical lines
-        #[arg(long, default_value = "100")]
+        #[arg(short = 'n', long = "lines", default_value = "10")]
         tail: u64,
         /// Print raw JSON instead of text
         #[arg(long)]
