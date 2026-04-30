@@ -16,7 +16,7 @@ ipnet.workspace = true
 jiff.workspace = true
 libc = "0.2.184"
 nftables = { version = "0.6.3", features = ["tokio"] }
-nix = { version = "0.31.2", features = ["term"] }
+nix = { version = "0.31.2", features = ["signal", "term"] }
 parking_lot.workspace = true
 podman-rest-client = { version = "0.13.0", features = ["uds"] }
 quinn.workspace = true

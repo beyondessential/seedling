@@ -288,7 +288,7 @@ let copy_default_config = |rt, inter| {
 };
 
 let upgrade_db = |rt, inter| {
-    rt.exec(inter, ["upgrade"]).ensure_success();
+    rt.exec(inter, ["node", "dist", "upgrade"]).ensure_success();
 };
 
 // Idempotent provisioning: create or refresh the database, the central role,

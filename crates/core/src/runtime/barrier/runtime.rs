@@ -2173,6 +2173,48 @@ pub struct Executed {
     pub target_display: Option<String>,
 }
 
+/// Symbolic name for an exit code, when one is widely known. Used in
+/// `ensure_success` error messages so an operator can interpret a
+/// code like `127` without reaching for documentation. The format
+/// mirrors systemctl's `<code>/<NAME>` convention.
+///
+/// POSIX/bash conventions are listed inline (six entries) and
+/// signal-terminated processes (128+N) defer to `nix` so the table
+/// stays in lockstep with libc. systemd's LSB codes (200..255) are
+/// out of scope here — they are set by exec failure paths in the
+/// init manager, not by anything `rt.exec` invokes.
+fn exit_code_name(code: i32) -> Option<String> {
+    let bash = match code {
+        0 => Some("SUCCESS"),
+        1 => Some("FAILURE"),
+        2 => Some("INVALIDARGUMENT"),
+        126 => Some("NOTEXECUTABLE"),
+        127 => Some("NOTFOUND"),
+        128 => Some("INVALIDEXIT"),
+        _ => None,
+    };
+    if let Some(s) = bash {
+        return Some(s.to_owned());
+    }
+
+    // Signal-terminated: shell convention is 128 + signal number.
+    if (129..=128 + 64).contains(&code)
+        && let Ok(sig) = nix::sys::signal::Signal::try_from(code - 128)
+    {
+        return Some(sig.as_str().to_owned());
+    }
+
+    None
+}
+
+/// Format an exit code as `<code>` or `<code>/<NAME>` when known.
+fn format_exit_code(code: i32) -> String {
+    match exit_code_name(code) {
+        Some(name) => format!("{code}/{name}"),
+        None => code.to_string(),
+    }
+}
+
 impl CustomType for Executed {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
@@ -2198,7 +2240,7 @@ impl CustomType for Executed {
                         Err(Box::new(EvalAltResult::ErrorRuntime(
                             format!(
                                 "rt.exec command failed with exit code {}{target}",
-                                this.exit_code
+                                format_exit_code(this.exit_code)
                             )
                             .into(),
                             rhai::Position::NONE,
@@ -2206,5 +2248,27 @@ impl CustomType for Executed {
                     }
                 },
             );
+    }
+}
+
+#[cfg(test)]
+mod exit_code_tests {
+    use super::format_exit_code;
+
+    #[test]
+    fn well_known_codes_get_a_symbolic_name() {
+        assert_eq!(format_exit_code(0), "0/SUCCESS");
+        assert_eq!(format_exit_code(1), "1/FAILURE");
+        assert_eq!(format_exit_code(127), "127/NOTFOUND");
+        assert_eq!(format_exit_code(137), "137/SIGKILL");
+        assert_eq!(format_exit_code(143), "143/SIGTERM");
+    }
+
+    #[test]
+    fn unknown_codes_print_the_bare_number() {
+        assert_eq!(format_exit_code(3), "3");
+        assert_eq!(format_exit_code(42), "42");
+        assert_eq!(format_exit_code(217), "217");
+        assert_eq!(format_exit_code(255), "255");
     }
 }
