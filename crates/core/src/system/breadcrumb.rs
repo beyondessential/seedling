@@ -52,7 +52,11 @@ pub enum BreadcrumbKind<'a> {
         refs: &'a [String],
     },
     Restart {
-        target: &'a ResourceInstance,
+        /// The deployment's BSL name. `rt.restart` operates on a named
+        /// Deployment without resolving to specific instances (the
+        /// reconciler then rotates each replica per on_update), so the
+        /// breadcrumb names the deployment rather than a single replica.
+        deployment: &'a str,
     },
     Exec {
         target: &'a ResourceInstance,
@@ -108,9 +112,14 @@ impl Breadcrumb<'_> {
             | BreadcrumbKind::WarmCerts { resources } => {
                 resources.iter().map(Target::for_instance).collect()
             }
-            BreadcrumbKind::Restart { target }
-            | BreadcrumbKind::Exec { target, .. }
-            | BreadcrumbKind::Signal { target, .. } => vec![Target::for_instance(target)],
+            BreadcrumbKind::Restart { deployment } => vec![Target {
+                resource: Some(deployment),
+                resource_kind: Some("deployment"),
+                instance: None,
+            }],
+            BreadcrumbKind::Exec { target, .. } | BreadcrumbKind::Signal { target, .. } => {
+                vec![Target::for_instance(target)]
+            }
             BreadcrumbKind::Write { target, .. } => match target {
                 VolumeWriteTarget::NamedVolume { name, .. } => vec![Target {
                     resource: Some(name.as_str()),
@@ -225,8 +234,8 @@ impl BreadcrumbKind<'_> {
             BreadcrumbKind::WarmImages { refs } => {
                 format!("rt.warm_images([{}])", refs.join(", "))
             }
-            BreadcrumbKind::Restart { target } => {
-                format!("rt.restart({})", target_label(target))
+            BreadcrumbKind::Restart { deployment } => {
+                format!("rt.restart({deployment})")
             }
             BreadcrumbKind::Exec { target, argv } => format!(
                 "rt.exec({}, [{}])",

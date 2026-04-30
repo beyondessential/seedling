@@ -41,7 +41,7 @@ pub struct BarrierCondition {
     pub deadline_secs: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CallKind {
     Start,
     Stop,

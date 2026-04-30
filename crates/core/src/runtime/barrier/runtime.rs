@@ -673,6 +673,28 @@ impl RuntimeInstance {
         &mut self,
         resources_with_defs: Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)>,
     ) -> Result<Started, Box<EvalAltResult>> {
+        self.do_start_or_query(resources_with_defs, CallKind::Start)
+    }
+
+    // l[impl rt.query]
+    fn do_query(
+        &mut self,
+        resources_with_defs: Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)>,
+    ) -> Result<Started, Box<EvalAltResult>> {
+        self.do_start_or_query(resources_with_defs, CallKind::Query)
+    }
+
+    /// Shared implementation behind `rt.start` and `rt.query`. The two
+    /// differ only in the `CallKind` they record on the action log
+    /// entry and on the breadcrumb, so `do_query` had previously been
+    /// implemented as a wrapper that forwarded into `do_start` —
+    /// which mislabelled both records as `Start`. Take the kind as a
+    /// parameter so each call surface emits its own label.
+    fn do_start_or_query(
+        &mut self,
+        resources_with_defs: Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)>,
+        call_kind: CallKind,
+    ) -> Result<Started, Box<EvalAltResult>> {
         let resources: Vec<ResourceInstance> =
             resources_with_defs.iter().map(|(r, _)| r.clone()).collect();
 
@@ -749,7 +771,7 @@ impl RuntimeInstance {
                 let idx = g.call_index;
                 g.pending.push(ActionLogEntry {
                     call_index: idx,
-                    call_kind: CallKind::Start,
+                    call_kind,
                     resources: resources.clone(),
                     barrier: None,
                     extra: None,
@@ -760,10 +782,16 @@ impl RuntimeInstance {
                     .iter()
                     .map(|(_, d)| d.as_ref())
                     .collect();
-                emit_breadcrumb(crate::system::breadcrumb::BreadcrumbKind::Start {
-                    resources: &resources,
-                    defs: &defs,
-                });
+                let breadcrumb = match call_kind {
+                    CallKind::Query => crate::system::breadcrumb::BreadcrumbKind::Query {
+                        resources: &resources,
+                    },
+                    _ => crate::system::breadcrumb::BreadcrumbKind::Start {
+                        resources: &resources,
+                        defs: &defs,
+                    },
+                };
+                emit_breadcrumb(breadcrumb);
             }
         }
 
@@ -1489,12 +1517,18 @@ impl CustomType for RuntimeInstance {
                     {
                         return Ok(());
                     }
+                    emit_breadcrumb(crate::system::breadcrumb::BreadcrumbKind::Restart {
+                        deployment: &dep_name,
+                    });
                     if let Some(db) = &this.db {
                         let app_name = this.app_name.clone();
-                        db.call(move |db| restart_gens::bump_restart_gen(db, &app_name, &dep_name))
-                            .map_err(|e| -> Box<EvalAltResult> {
-                                format!("rt.restart db error: {e}").into()
-                            })?;
+                        let dep_name_for_db = dep_name.clone();
+                        db.call(move |db| {
+                            restart_gens::bump_restart_gen(db, &app_name, &dep_name_for_db)
+                        })
+                        .map_err(|e| -> Box<EvalAltResult> {
+                            format!("rt.restart db error: {e}").into()
+                        })?;
                     }
                     Ok(())
                 },
@@ -1560,7 +1594,7 @@ impl CustomType for RuntimeInstance {
                             rhai::Position::NONE,
                         ))
                     })?;
-                    this.do_start(resources_with_defs)
+                    this.do_query(resources_with_defs)
                 },
             )
             // l[impl rt.warm-certs]
