@@ -581,6 +581,19 @@ impl RuntimeInstance {
         }
 
         // l[impl rt.start]
+        // l[impl rt.started.type]
+        // A Started handle (returned from rt.start / rt.query / etc.)
+        // exposes its underlying ResourceInstance set so it can be
+        // forwarded to rt.stop / rt.signal / rt.exec without the
+        // caller re-deriving the resources from scratch. Without this
+        // arm, the fall-through silently produced an empty list and
+        // do_stop's "all-terminated" fast path then wrote at
+        // call_index-1, clobbering the preceding entry.
+        if let Some(started) = resources.clone().try_cast::<Started>() {
+            return Ok(started.resources.into_iter().map(|r| (r, None)).collect());
+        }
+
+        // l[impl rt.start]
         // l[impl action.type]
         // Action handles are not resources; rejecting here surfaces the
         // mistake as a clear script error instead of silently dropping
