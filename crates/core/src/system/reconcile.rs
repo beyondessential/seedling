@@ -493,7 +493,28 @@ impl Reconciler {
                 AppPhase::Uninstalling => compute_uninstalling(&name, &app_def, &*self.registry),
                 AppPhase::NotInstalled => unreachable!(),
                 // r[impl desired-state.during-install]
-                AppPhase::Installed | AppPhase::Installing => compute(
+                // While Installing, the install closure drives every
+                // resource into desired state explicitly via rt.start.
+                // If the closure hasn't pushed its first entry yet
+                // (active_progress is still None), the desired state
+                // must stay empty — falling back to the steady-state
+                // computation here would have the reconciler racing
+                // ahead and starting every static resource before
+                // on_install runs the prerequisite setup steps.
+                AppPhase::Installing => match (*progress).as_ref() {
+                    Some(_) => compute(
+                        &name,
+                        &app_def,
+                        (*progress).as_ref(),
+                        &*self.registry,
+                        &effective_scales,
+                        &stopped_set,
+                    ),
+                    None => Ok(DesiredState {
+                        resources: Vec::new(),
+                    }),
+                },
+                AppPhase::Installed => compute(
                     &name,
                     &app_def,
                     (*progress).as_ref(),
