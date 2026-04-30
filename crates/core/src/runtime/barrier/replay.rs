@@ -321,6 +321,22 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
             )));
         }
     };
+    // Emit a per-pass marker so an operator scrolling `apps logs` can
+    // see where each replay begins. Suspended operations re-run from
+    // call_index 0 each pass; without this marker the duplicated
+    // breadcrumbs after a barrier wake up look like the script ran
+    // twice.
+    if !committed.is_empty() {
+        crate::system::breadcrumb::Breadcrumb {
+            app: Some(&app.def.load().name),
+            kind: crate::system::breadcrumb::BreadcrumbKind::Replay {
+                operation_id: &op_id_str,
+                committed_len: committed.len(),
+            },
+            script_pos: None,
+        }
+        .emit();
+    }
     let ctx = Arc::new(Mutex::new(ReplayContext::new(
         operation_id,
         committed,
