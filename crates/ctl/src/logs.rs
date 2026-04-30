@@ -1,3 +1,5 @@
+use std::io::{self, Write};
+
 use seedling_protocol::client::OiClient;
 
 /// Run a log streaming session against an already-connected client.
@@ -71,6 +73,8 @@ async fn run_log_session(
 
     let mut buf = Vec::new();
     let mut tmp = [0u8; 4096];
+    let stdout = io::stdout();
+    let mut out = stdout.lock();
 
     // i[ctl.logs.follow-interrupt]
     loop {
@@ -89,7 +93,11 @@ async fn run_log_session(
                 while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
                     let line = &buf[..pos];
                     if !line.is_empty() {
-                        print_entry(line, json_mode);
+                        match print_entry(&mut out, line, json_mode) {
+                            Ok(()) => {}
+                            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => return Ok(()),
+                            Err(e) => return Err(format!("write stdout: {e}")),
+                        }
                     }
                     buf.drain(..=pos);
                 }
@@ -101,21 +109,23 @@ async fn run_log_session(
 
     // Flush any remaining partial line.
     if !buf.is_empty() {
-        print_entry(&buf, json_mode);
+        match print_entry(&mut out, &buf, json_mode) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => return Ok(()),
+            Err(e) => return Err(format!("write stdout: {e}")),
+        }
     }
 
     Ok(())
 }
 
-fn print_entry(line: &[u8], json_mode: bool) {
+fn print_entry(out: &mut impl Write, line: &[u8], json_mode: bool) -> io::Result<()> {
     if json_mode {
-        println!("{}", String::from_utf8_lossy(line));
-        return;
+        return writeln!(out, "{}", String::from_utf8_lossy(line));
     }
 
     let Ok(v) = serde_json::from_slice::<serde_json::Value>(line) else {
-        println!("{}", String::from_utf8_lossy(line));
-        return;
+        return writeln!(out, "{}", String::from_utf8_lossy(line));
     };
 
     let timestamp = v.get("timestamp").and_then(|t| t.as_str()).unwrap_or("");
@@ -140,8 +150,8 @@ fn print_entry(line: &[u8], json_mode: bool) {
     let pos = v.get("script_pos").and_then(|s| s.as_str());
     let pos_suffix = pos.map(|p| format!("  ({p})")).unwrap_or_default();
     if rt_call.is_some() {
-        println!("{timestamp} {display} > {message}{pos_suffix}");
+        writeln!(out, "{timestamp} {display} > {message}{pos_suffix}")
     } else {
-        println!("{timestamp} {display} {message}{pos_suffix}");
+        writeln!(out, "{timestamp} {display} {message}{pos_suffix}")
     }
 }
