@@ -19,8 +19,8 @@ import { Link, useParams } from "react-router-dom";
 import { SessionContext } from "../components/SessionProvider";
 import type { LogEntry } from "../lib/types";
 
-const MAX_ENTRIES = 2000;
-const TAIL_OPTIONS = [50, 100, 200, 500, 0] as const;
+const MAX_ENTRIES = 20000;
+const TAIL_OPTIONS = [50, 100, 200, 500, 1000, 2000, 5000, 0] as const;
 
 const COMPONENT_LABELS: Record<string, string> = {
   proxy: "Proxy (Caddy)",
