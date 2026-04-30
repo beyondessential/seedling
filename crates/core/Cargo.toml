@@ -9,7 +9,7 @@ seedling-protocol = { path = "../protocol", features = ["rusqlite"] }
 
 arc-swap = "1.9.1"
 clap.workspace = true
-cronexpr = "1.4.0"
+cronexpr = "1.5.0"
 ed25519-dalek.workspace = true
 futures-util.workspace = true
 ipnet.workspace = true
@@ -39,10 +39,10 @@ tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 wildmatch.workspace = true
-zbus = { version = "5.14.0", features = ["tokio"] }
-zxcvbn = "3.1.0"
+zbus = { version = "5.15.0", features = ["tokio"] }
+zxcvbn = "3.1.1"
 whoami.workspace = true
-orion = "0.17.13"
+orion = "0.17.14"
 secrecy = "0.10.3"
 instant-acme = { version = "0.8.5", features = ["time"] }
 rcgen = "0.14.7"
