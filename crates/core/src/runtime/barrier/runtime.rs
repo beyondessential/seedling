@@ -1952,8 +1952,23 @@ impl Started {
             deadline_secs,
         };
 
-        // Attach to the most recent pending Start entry for these resources,
-        // or push a synthetic entry if none exists.
+        // Attach the barrier record to the most recent pending entry
+        // for these resources. The synthetic-push fallback below is
+        // only for the rare case where the closure asserts a barrier
+        // on a resource set that was never tracked via rt.start (the
+        // language spec doesn't promise that scenario works, but the
+        // code handles it without UB).
+        //
+        // On replay, pending is empty until the closure makes its
+        // first fresh rt.* call, so the attached lookup misses by
+        // default. The previous implementation then synthesised a
+        // Start at the current call_index — but the corresponding
+        // committed entry already exists (we just replayed past it),
+        // so the synthesis pushed a phantom entry one slot ahead and
+        // advanced call_index. Subsequent rt.* calls then read the
+        // wrong slot. The fix: skip the synthesis when *any*
+        // committed entry for the same resources exists. The barrier
+        // is already represented; just throw to re-suspend.
         let attached = g
             .pending
             .iter_mut()
@@ -1967,20 +1982,23 @@ impl Started {
                 started_at_secs: Some(now),
             });
         } else {
-            let idx = g.call_index;
-            g.call_index += 1;
-            g.pending.push(ActionLogEntry {
-                call_index: idx,
-                call_kind: CallKind::Start,
-                resources: self.resources.clone(),
-                barrier: Some(BarrierRecord {
-                    required_state: required,
-                    deadline_secs,
-                    satisfied: false,
-                    started_at_secs: Some(now),
-                }),
-                extra: None,
-            });
+            let already_tracked = g.committed.iter().any(|e| e.resources == self.resources);
+            if !already_tracked {
+                let idx = g.call_index;
+                g.call_index += 1;
+                g.pending.push(ActionLogEntry {
+                    call_index: idx,
+                    call_kind: CallKind::Start,
+                    resources: self.resources.clone(),
+                    barrier: Some(BarrierRecord {
+                        required_state: required,
+                        deadline_secs,
+                        satisfied: false,
+                        started_at_secs: Some(now),
+                    }),
+                    extra: None,
+                });
+            }
         }
         g.pending_barrier = Some(condition.clone());
         drop(g);
