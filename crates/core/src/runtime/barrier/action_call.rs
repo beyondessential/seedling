@@ -140,29 +140,32 @@ fn record_subaction_entry(
         return Ok(());
     };
 
+    let mut g = ctx.lock();
+    if g.is_replaying() {
+        // The committed entry at this call_index already describes
+        // this sub-action invocation; advance past it without
+        // emitting a duplicate. Match the order rt.start / rt.exec
+        // / rt.signal use: check is_replaying *before* incrementing
+        // so the boundary case (consuming the last committed entry)
+        // doesn't flip into fresh mode and double-push.
+        g.call_index += 1;
+        return Ok(());
+    }
+
+    let idx = g.call_index;
     let payload = serde_json::json!({
         "action": action_name.as_str(),
         "params": params,
     })
     .to_string();
-
-    let mut g = ctx.lock();
-    let call_index = g.call_index;
-    g.call_index += 1;
-
-    if g.is_replaying() {
-        // Skip emitting a duplicate; the committed entry already
-        // describes this sub-action invocation.
-        return Ok(());
-    }
-
     g.pending.push(ActionLogEntry {
-        call_index,
+        call_index: idx,
         call_kind: CallKind::SubAction,
         resources: Vec::new(),
         barrier: None,
         extra: Some(payload),
     });
+    g.call_index += 1;
     Ok(())
 }
 
