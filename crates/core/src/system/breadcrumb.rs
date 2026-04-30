@@ -411,3 +411,220 @@ fn send_record(
     // systemd just lose the breadcrumbs, which is harmless.
     let _ = systemd::journal::send(&refs);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::defs::resource::ResourceKind;
+    use crate::runtime::ResourceInstance;
+    use seedling_protocol::names::AppName;
+
+    fn app() -> AppName {
+        AppName::new("tamanu").unwrap()
+    }
+
+    fn deployment_inst(name: &str) -> ResourceInstance {
+        ResourceInstance::new_singleton(app(), ResourceKind::Deployment, name)
+    }
+
+    fn anon_job_inst() -> ResourceInstance {
+        ResourceInstance::new_anonymous(app(), ResourceKind::Job)
+    }
+
+    #[test]
+    fn rt_call_names_are_stable() {
+        let r = deployment_inst("api");
+        let resources = [r];
+        let defs: [Option<&Resource>; 1] = [None];
+        assert_eq!(
+            BreadcrumbKind::Start {
+                resources: &resources,
+                defs: &defs
+            }
+            .rt_call(),
+            "start"
+        );
+        assert_eq!(
+            BreadcrumbKind::Stop {
+                resources: &resources
+            }
+            .rt_call(),
+            "stop"
+        );
+        assert_eq!(
+            BreadcrumbKind::Query {
+                resources: &resources
+            }
+            .rt_call(),
+            "query"
+        );
+        assert_eq!(
+            BreadcrumbKind::Restart { deployment: "api" }.rt_call(),
+            "restart"
+        );
+        assert_eq!(
+            BreadcrumbKind::WarmCerts {
+                resources: &resources
+            }
+            .rt_call(),
+            "warm_certs"
+        );
+        let refs: [String; 0] = [];
+        assert_eq!(
+            BreadcrumbKind::WarmImages { refs: &refs }.rt_call(),
+            "warm_images"
+        );
+        assert_eq!(
+            BreadcrumbKind::Replay {
+                operation_id: "x",
+                committed_len: 0
+            }
+            .rt_call(),
+            "replay"
+        );
+    }
+
+    #[test]
+    fn start_message_uses_named_resources() {
+        let r = deployment_inst("api");
+        let resources = [r];
+        let defs: [Option<&Resource>; 1] = [None];
+        assert_eq!(
+            BreadcrumbKind::Start {
+                resources: &resources,
+                defs: &defs
+            }
+            .message(),
+            "rt.start(api)",
+        );
+    }
+
+    #[test]
+    fn start_message_falls_back_to_display_name_for_anon_with_no_def() {
+        let inst = anon_job_inst();
+        let display = inst.display_name.clone();
+        let resources = [inst];
+        let defs: [Option<&Resource>; 1] = [None];
+        assert_eq!(
+            BreadcrumbKind::Start {
+                resources: &resources,
+                defs: &defs
+            }
+            .message(),
+            format!("rt.start({display})"),
+        );
+    }
+
+    #[test]
+    fn exec_message_quotes_args_with_whitespace() {
+        let r = deployment_inst("api");
+        let argv = vec!["echo".to_owned(), "hello world".to_owned()];
+        assert_eq!(
+            BreadcrumbKind::Exec {
+                target: &r,
+                argv: &argv
+            }
+            .message(),
+            "rt.exec(api, [echo, 'hello world'])",
+        );
+    }
+
+    #[test]
+    fn signal_message_includes_signal_name() {
+        let r = deployment_inst("api");
+        assert_eq!(
+            BreadcrumbKind::Signal {
+                target: &r,
+                signal: "SIGHUP"
+            }
+            .message(),
+            "rt.signal(api, SIGHUP)",
+        );
+    }
+
+    #[test]
+    fn warm_images_message_lists_refs() {
+        let refs = vec![
+            "ghcr.io/example/api:v1".to_owned(),
+            "ghcr.io/example/worker:v1".to_owned(),
+        ];
+        assert_eq!(
+            BreadcrumbKind::WarmImages { refs: &refs }.message(),
+            "rt.warm_images([ghcr.io/example/api:v1, ghcr.io/example/worker:v1])",
+        );
+    }
+
+    #[test]
+    fn sub_action_message_formats_params() {
+        use seedling_protocol::names::ActionName;
+        let name = ActionName::new("warm-images").unwrap();
+        let mut params = JsonMap::new();
+        params.insert("target-version".into(), JsonValue::String("v2.53.3".into()));
+        let msg = BreadcrumbKind::SubAction {
+            name: &name,
+            params: &params,
+        }
+        .message();
+        assert!(
+            msg.starts_with("Action.invoke(warm-images) "),
+            "expected leading invoke + name, got: {msg}",
+        );
+        assert!(msg.contains(r#""target-version":"v2.53.3""#));
+    }
+
+    #[test]
+    fn sub_action_message_omits_params_when_empty() {
+        use seedling_protocol::names::ActionName;
+        let name = ActionName::new("warm-images").unwrap();
+        let params = JsonMap::new();
+        assert_eq!(
+            BreadcrumbKind::SubAction {
+                name: &name,
+                params: &params
+            }
+            .message(),
+            "Action.invoke(warm-images)",
+        );
+    }
+
+    #[test]
+    fn unit_create_message_names_unit_and_source() {
+        assert_eq!(
+            BreadcrumbKind::UnitCreate {
+                unit: "seedling-tamanu-api-abc12345.service",
+                source_call: "rt.start(deployment/api)",
+            }
+            .message(),
+            "created unit seedling-tamanu-api-abc12345.service from rt.start(deployment/api)",
+        );
+    }
+
+    #[test]
+    fn replay_message_records_operation_and_size() {
+        assert_eq!(
+            BreadcrumbKind::Replay {
+                operation_id: "abc-123",
+                committed_len: 7
+            }
+            .message(),
+            "replay pass: op=abc-123 committed=7",
+        );
+    }
+
+    #[test]
+    fn write_message_includes_path_and_length() {
+        let target = VolumeWriteTarget::NamedVolume {
+            name: "config".into(),
+            tmpfs: false,
+        };
+        assert_eq!(
+            BreadcrumbKind::Write {
+                target: &target,
+                path: "/etc/config",
+                len: 42
+            }
+            .message(),
+            "rt.write(config, /etc/config, len=42)",
+        );
+    }
+}
