@@ -204,7 +204,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Previous generations are retained durably so that operators and automation can retrieve any historical state of the app.
 
 > i[app.list]
-> `/apps/list` returns an array of objects with fields `name` and `status`.
+> `/apps/list` returns an array of objects with fields `name`, `status`, and `fault_count` (the number of currently active, uncleared faults filed against the app).
 
 # App Status
 
