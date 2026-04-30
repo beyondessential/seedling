@@ -130,5 +130,18 @@ fn print_entry(line: &[u8], json_mode: bool) {
         .and_then(|s| s.as_str())
         .unwrap_or("");
 
-    println!("{timestamp} {display} {message}");
+    // i[ctl.logs.display]
+    // Mark Seedling-side breadcrumbs ("rt.start(...)", "Action.invoke(...)",
+    // unit-create, replay markers) with a leading caret so the operator
+    // can distinguish them from container stdout/stderr at a glance.
+    // Script positions (when present) trail the message so the operator
+    // can jump straight to the line in the BSL script.
+    let rt_call = v.get("rt_call").and_then(|s| s.as_str());
+    let pos = v.get("script_pos").and_then(|s| s.as_str());
+    let pos_suffix = pos.map(|p| format!("  ({p})")).unwrap_or_default();
+    if rt_call.is_some() {
+        println!("{timestamp} {display} > {message}{pos_suffix}");
+    } else {
+        println!("{timestamp} {display} {message}{pos_suffix}");
+    }
 }

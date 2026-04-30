@@ -38,6 +38,15 @@ pub struct LogEntry {
     pub instance: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub infra: Option<String>,
+    /// rt.* primitive name, set when the entry is a Seedling-side
+    /// breadcrumb rather than container output. See
+    /// `system::breadcrumb` for the full set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rt_call: Option<String>,
+    /// Script position (`<line>:<col>`) of the rt.* call site, set
+    /// when Rhai surfaced one to the breadcrumb emitter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub script_pos: Option<String>,
 }
 
 /// Options for the log stream.
@@ -166,5 +175,7 @@ fn record_to_entry(timestamp_us: u64, fields: &BTreeMap<String, String>) -> LogE
         resource: fields.get("SEEDLING_RESOURCE").cloned(),
         instance: fields.get("SEEDLING_INSTANCE").cloned(),
         infra: fields.get("SEEDLING_INFRA").cloned(),
+        rt_call: fields.get("SEEDLING_RT_CALL").cloned(),
+        script_pos: fields.get("SEEDLING_SCRIPT_POS").cloned(),
     }
 }

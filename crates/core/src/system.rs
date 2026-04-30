@@ -17,6 +17,7 @@ pub mod reconcile;
 pub mod translate;
 pub mod types;
 
+pub mod breadcrumb;
 pub(crate) mod caddy;
 pub(crate) mod confined_write;
 pub(crate) mod data_plane;

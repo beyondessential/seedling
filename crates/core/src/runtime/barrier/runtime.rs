@@ -158,6 +158,24 @@ pub fn active_rt() -> Option<RuntimeInstance> {
     ACTIVE_RT.with(|cell| cell.borrow().clone())
 }
 
+/// Build a [`Breadcrumb`](crate::system::breadcrumb::Breadcrumb) for the
+/// active action context and emit it. The app name and script position
+/// are pulled from thread-local context that the closure-running scope
+/// always sets up; this is a no-op when called outside an action body.
+fn emit_breadcrumb(kind: crate::system::breadcrumb::BreadcrumbKind<'_>) {
+    let app_arc = action_def().map(|holder| holder.load_full());
+    let app_name = app_arc.as_ref().map(|d| &d.name);
+    crate::system::breadcrumb::Breadcrumb {
+        app: app_name,
+        kind,
+        // Script positions are wired in a follow-up; once the rt.*
+        // registration sites accept NativeCallContext we can pass it
+        // through and surface it here.
+        script_pos: None,
+    }
+    .emit();
+}
+
 fn set_active_rt(rt: RuntimeInstance) {
     ACTIVE_RT.with(|cell| *cell.borrow_mut() = Some(rt));
 }
@@ -737,6 +755,10 @@ impl RuntimeInstance {
                     extra: None,
                 });
                 g.call_index += 1;
+                drop(g);
+                emit_breadcrumb(crate::system::breadcrumb::BreadcrumbKind::Start {
+                    resources: &resources,
+                });
             }
         }
 
@@ -820,6 +842,10 @@ impl RuntimeInstance {
                     extra: None,
                 });
                 g.call_index += 1;
+                drop(g);
+                emit_breadcrumb(crate::system::breadcrumb::BreadcrumbKind::WarmCerts {
+                    resources: &resources,
+                });
             }
         }
 
@@ -911,6 +937,10 @@ impl RuntimeInstance {
                     extra: None,
                 });
                 g.call_index += 1;
+                drop(g);
+                emit_breadcrumb(crate::system::breadcrumb::BreadcrumbKind::WarmImages {
+                    refs: &refs,
+                });
             }
         }
 
@@ -1014,6 +1044,13 @@ impl RuntimeInstance {
                 }
                 return Ok(());
             }
+        }
+
+        for r in &expanded {
+            emit_breadcrumb(crate::system::breadcrumb::BreadcrumbKind::Signal {
+                target: r,
+                signal: canonical.as_str(),
+            });
         }
 
         let signaler = ctx.lock().container_signaler.clone();
@@ -1161,6 +1198,11 @@ impl RuntimeInstance {
             }
         }
 
+        emit_breadcrumb(crate::system::breadcrumb::BreadcrumbKind::Exec {
+            target: &target,
+            argv: &argv,
+        });
+
         let executor = ctx.lock().executor.clone();
         let exit_code = if let Some(executor) = executor {
             executor
@@ -1241,6 +1283,12 @@ impl RuntimeInstance {
                 return Ok(());
             }
         }
+
+        emit_breadcrumb(crate::system::breadcrumb::BreadcrumbKind::Write {
+            target: &target,
+            path,
+            len: contents.len(),
+        });
 
         let writer = ctx.lock().volume_writer.clone();
         if let Some(writer) = writer {
@@ -1367,6 +1415,7 @@ impl RuntimeInstance {
         let idx = g.call_index;
         // Preserve the original started_at on replay so the deadline counter
         // doesn't reset on every retry.
+        let is_first_emit = g.committed.get(idx).is_none();
         let started_at_secs = g
             .committed
             .get(idx)
@@ -1385,6 +1434,15 @@ impl RuntimeInstance {
             }),
             extra: None,
         });
+        // Drop the lock before the breadcrumb's journald send so we
+        // don't hold it across an arbitrarily slow syscall. Skip if
+        // we're re-entering rt.stop on a replay (already emitted).
+        drop(g);
+        if is_first_emit {
+            emit_breadcrumb(crate::system::breadcrumb::BreadcrumbKind::Stop {
+                resources: &resources,
+            });
+        }
 
         if all_terminated {
             Ok(())
@@ -1394,8 +1452,10 @@ impl RuntimeInstance {
                 required_state: LifecycleState::Terminated,
                 deadline_secs,
             };
-            g.pending_barrier = Some(condition.clone());
-            drop(g);
+            // Re-acquire the lock to set pending_barrier, since we
+            // dropped it above for the breadcrumb. The make_barrier_error
+            // helper expects the condition to be set on the ctx.
+            ctx.lock().pending_barrier = Some(condition.clone());
             Err(make_barrier_error(condition))
         }
     }

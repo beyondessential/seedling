@@ -20,8 +20,6 @@ export interface FaultLogTarget {
   display_name: string;
 }
 
-const SUFFIX = /-([0-9a-f]{8})$/;
-
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

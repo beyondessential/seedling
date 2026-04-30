@@ -337,6 +337,7 @@ impl Actuator {
         };
         let resource_name = instance.name.as_deref().unwrap_or(&instance.display_name);
 
+        let unit_for_breadcrumb = unit.clone();
         self.driver
             .process
             .start_transient(TransientUnitSpec {
@@ -371,6 +372,27 @@ impl Actuator {
             })
             .await
             .context(ProcessSnafu)?;
+
+        // Trace which rt.* call produced this systemd unit so the unit's
+        // own log starts with a Seedling-side breadcrumb identifying it.
+        // Anonymous resources fall back to the resource_kind/display_name
+        // since they have no operator-facing BSL name.
+        let source_call = match &instance.name {
+            Some(name) => format!("rt.start({resource_kind_str}/{name})"),
+            None => format!(
+                "rt.start(anon-{resource_kind_str}/{})",
+                instance.display_name
+            ),
+        };
+        crate::system::breadcrumb::Breadcrumb {
+            app: Some(&instance.app),
+            kind: crate::system::breadcrumb::BreadcrumbKind::UnitCreate {
+                unit: &unit_for_breadcrumb,
+                source_call: &source_call,
+            },
+            script_pos: None,
+        }
+        .emit();
 
         Ok(bridge_name)
     }

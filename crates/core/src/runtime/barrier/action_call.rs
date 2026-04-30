@@ -166,6 +166,18 @@ fn record_subaction_entry(
         extra: Some(payload),
     });
     g.call_index += 1;
+    drop(g);
+    crate::system::breadcrumb::Breadcrumb {
+        app: Some(&seedling_protocol::names::AppName::new_unchecked(
+            rt.app_name.as_str(),
+        )),
+        kind: crate::system::breadcrumb::BreadcrumbKind::SubAction {
+            name: action_name,
+            params,
+        },
+        script_pos: None,
+    }
+    .emit();
     Ok(())
 }
 
