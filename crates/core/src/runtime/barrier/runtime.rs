@@ -1276,17 +1276,16 @@ impl RuntimeInstance {
 
         let mut g = ctx.lock();
 
-        if g.is_replaying() {
-            // If the committed entry shows the barrier was already satisfied, skip.
-            let already = g
-                .committed_entry()
+        // r[impl barrier.replay]
+        // Fast-skip: if the committed entry already records the barrier as
+        // satisfied, advance and return without re-checking the world.
+        if g.is_replaying()
+            && g.committed_entry()
                 .and_then(|e| e.barrier.as_ref())
-                .is_some_and(|b| b.satisfied);
+                .is_some_and(|b| b.satisfied)
+        {
             g.call_index += 1;
-            if already {
-                return Ok(());
-            }
-            // Otherwise fall through to check the oracle.
+            return Ok(());
         }
 
         let now = (g.now_secs)();
@@ -1307,8 +1306,7 @@ impl RuntimeInstance {
             // Enforce the stop deadline against the earliest unsatisfied record
             // for these resources. Mirrors the check in check_barrier so
             // rt.stop() participates in the same suspension semantics as the
-            // Started barrier methods; before this, the deadline was stored but
-            // never read.
+            // Started barrier methods.
             let started_at = g
                 .committed
                 .iter()
@@ -1331,50 +1329,46 @@ impl RuntimeInstance {
             }
         }
 
+        // Single push site shared by fresh and replay paths. The previous
+        // implementation pre-advanced call_index in the replay block, then
+        // pushed at the post-advance slot in the not-yet-terminated branch,
+        // writing to call_index+1 instead of replacing the original entry —
+        // leaving an orphan Stop one slot ahead and shifting every later
+        // rt.* call's expected position by one. The "fast path" also reused
+        // call_index-1 to avoid claiming a new slot, for no documented
+        // reason. Both quirks are gone: rt.stop now claims one slot,
+        // advances by one, and lets INSERT OR REPLACE overwrite any prior
+        // entry at the same call_index on commit.
+        let idx = g.call_index;
+        // Preserve the original started_at on replay so the deadline counter
+        // doesn't reset on every retry.
+        let started_at_secs = g
+            .committed
+            .get(idx)
+            .and_then(|e| e.barrier.as_ref()?.started_at_secs)
+            .or(Some(now));
+        g.call_index += 1;
+        g.pending.push(ActionLogEntry {
+            call_index: idx,
+            call_kind: CallKind::Stop,
+            resources: resources.clone(),
+            barrier: Some(BarrierRecord {
+                required_state: LifecycleState::Terminated,
+                deadline_secs,
+                satisfied: all_terminated,
+                started_at_secs,
+            }),
+            extra: None,
+        });
+
         if all_terminated {
-            // If replaying, call_index was already incremented above; use index - 1.
-            // If live and this is the first call (call_index == 0), increment and use 0.
-            // If live and call_index > 0, use call_index - 1 (from a prior increment).
-            let idx = if g.call_index > 0 {
-                g.call_index - 1
-            } else {
-                let i = g.call_index;
-                g.call_index += 1;
-                i
-            };
-            g.pending.push(ActionLogEntry {
-                call_index: idx,
-                call_kind: CallKind::Stop,
-                resources: resources.clone(),
-                barrier: Some(BarrierRecord {
-                    required_state: LifecycleState::Terminated,
-                    deadline_secs,
-                    satisfied: true,
-                    started_at_secs: Some(now),
-                }),
-                extra: None,
-            });
             Ok(())
         } else {
             let condition = BarrierCondition {
-                resources: resources.clone(),
+                resources,
                 required_state: LifecycleState::Terminated,
                 deadline_secs,
             };
-            let idx = g.call_index;
-            g.call_index += 1;
-            g.pending.push(ActionLogEntry {
-                call_index: idx,
-                call_kind: CallKind::Stop,
-                resources: resources.clone(),
-                barrier: Some(BarrierRecord {
-                    required_state: LifecycleState::Terminated,
-                    deadline_secs,
-                    satisfied: false,
-                    started_at_secs: Some(now),
-                }),
-                extra: None,
-            });
             g.pending_barrier = Some(condition.clone());
             drop(g);
             Err(make_barrier_error(condition))
