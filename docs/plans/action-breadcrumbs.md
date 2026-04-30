@@ -25,29 +25,26 @@ do_stop / check_barrier / Installing-phase fixes):
 Outstanding — do NOT unplan until these are done or consciously
 dropped:
 
-- [ ] Script positions via `NativeCallContext::position()`. Requires
-      adding `ctx: NativeCallContext` as the first arg to every rt.*
-      registration site in `runtime/barrier/runtime.rs` and threading
-      `ctx.position()` through into the `Breadcrumb::script_pos` field.
-      Mechanical but touches every with_fn call. The `SEEDLING_SCRIPT_POS`
-      field is already plumbed through journald and the CLI renderer; it
-      just isn't populated yet.
+- [~] Script positions via `NativeCallContext::position()`. **Dropped
+      by felix after using the feature live** — the existing trace
+      reads clearly without the script:line:col annotations and the
+      change would touch every with_fn call site for marginal gain.
+      The `SEEDLING_SCRIPT_POS` plumbing on `LogEntry` and the CLI
+      renderer stays in place in case it's wanted later.
 - [ ] `rt.query` and `rt.restart` breadcrumbs. `rt.query` currently
       reuses `do_start` so its breadcrumb labels as `start` — needs a
       separate code path or an explicit `Query` kind passed in.
       `rt.restart` goes through `restart_gens::bump_restart_gen` and
       doesn't have a breadcrumb hook yet.
-- [ ] Richer `apps logs` text formatter. Today's render is the
-      minimal caret-prefixed line; the plan's mock-up format
-      (column-aligned with rt-call name, target, position) hasn't
-      shipped.
+- [~] Richer `apps logs` text formatter. **Dropped by felix** — the
+      caret-prefixed render is fine in practice.
 - [ ] Tests: unit tests on `BreadcrumbKind::message` formatting; an
       integration test that captures emitted breadcrumbs during a
       script run via a stub journald layer (the current
       `systemd::journal::send` path silently no-ops in CI).
-- [ ] Manual verification on a real install (re-install
+- [x] Manual verification on a real install (re-install
       tamanu-central, scan `apps logs tamanu-central`, confirm the
-      trace reads top-to-bottom).
+      trace reads top-to-bottom). **Done by felix.**
 
 ## Problem
 
