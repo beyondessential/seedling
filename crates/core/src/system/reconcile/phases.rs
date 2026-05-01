@@ -186,7 +186,6 @@ pub(super) fn compute_nftables_rules(
 
 pub(super) struct ProxyBuildResult {
     pub config: crate::system::types::ProxyConfig,
-    pub caddy_json: serde_json::Value,
     pub observations: Vec<(
         crate::runtime::identity::ResourceInstance,
         &'static str,
@@ -368,11 +367,9 @@ pub(super) fn compute_proxy_config(
     );
     crate::system::translate::proxy::augment_with_warm_certs(&mut config, all_warm);
     config.cert_endpoint_url = cert_endpoint_url.map(str::to_owned);
-    let caddy_json = super::super::caddy::build_caddy_config(&config);
 
     ProxyBuildResult {
         config,
-        caddy_json,
         observations,
         ready_observations,
         conflicts,

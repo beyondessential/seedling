@@ -1,0 +1,13 @@
+-- r[impl infra.proxy.upgrade.cache]
+-- The cache previously stored the post-build Caddy JSON document, which
+-- bakes in fields specific to whatever Caddy version was running when the
+-- cache was last written. Replaying that document against a different
+-- Caddy version (e.g. after an image upgrade with a breaking config
+-- format) can fail and leave the proxy with no config loaded.
+--
+-- The cache now stores the Seedling-internal `ProxyConfig` instead, which
+-- is rebuilt into Caddy JSON at replay time by the current code — so the
+-- replayed JSON is always in the format the running daemon knows how to
+-- emit. Wipe any pre-existing rows so the new format takes over on the
+-- next successful reconciler tick.
+DELETE FROM caddy_proxy_config;

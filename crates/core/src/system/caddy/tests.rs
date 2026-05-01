@@ -1,4 +1,4 @@
-use super::*;
+use super::config::build_caddy_config;
 use crate::system::types::{
     HttpRedirect, ProxyConfig, ProxyListener, ProxyListenerProto, ProxyRoute, ProxyRouteHandler,
     VirtualHost,

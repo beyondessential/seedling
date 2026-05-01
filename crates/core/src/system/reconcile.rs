@@ -839,7 +839,6 @@ impl Reconciler {
                 self.file_service_degraded_faults(&apps, &degraded_services_by_app);
                 let phases::ProxyBuildResult {
                     config: proxy_config,
-                    caddy_json,
                     observations: proxy_obs,
                     ready_observations: proxy_ready_obs,
                     conflicts: ingress_conflicts,
@@ -945,7 +944,8 @@ impl Reconciler {
                         self.persist_obs(proxy_ready_obs);
 
                         // r[impl infra.proxy.upgrade.cache]
-                        if let Err(e) = caddy::write_cached_proxy_json(&self.data_dir, &caddy_json)
+                        if let Err(e) =
+                            caddy::write_cached_proxy_config(&self.data_dir, &proxy_config)
                         {
                             warn!(
                                 error = %e,
