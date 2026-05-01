@@ -13,7 +13,8 @@ use crate::{
         resource::{Resource, ResourceKind},
     },
     runtime::{
-        InstanceRegistry, external_service_mappings::ExternalServiceSnapshot,
+        InstanceRegistry,
+        external_service_mappings::ExternalServiceSnapshot,
         registry::RegistryError,
         site_services::{
             SiteServiceProtocol,
@@ -246,8 +247,14 @@ pub(super) fn build_service_dnat_rules(
         let Some(target) = snapshot.mappings.get(&(app_name.clone(), ext_name.clone())) else {
             continue;
         };
-        let resolved_backends =
-            resolve_external_backends(target, svc_port, proto, snapshot, backends_by_app, resolve_ctx);
+        let resolved_backends = resolve_external_backends(
+            target,
+            svc_port,
+            proto,
+            snapshot,
+            backends_by_app,
+            resolve_ctx,
+        );
         let svc_instance = registry.get_or_create_singleton(
             app_name,
             ResourceKind::ExternalService,
@@ -586,6 +593,48 @@ mod tests {
             resolved,
             vec![(ipv6("fd5e::aa"), 9000), (ipv6("fd5e::bb"), 9000)]
         );
+    }
+
+    #[test]
+    fn resolve_site_target_synthesises_nat64_for_ipv4_literal() {
+        // r[verify service.site.address]
+        // An IPv4 literal endpoint is routed via NAT64 when active. The
+        // synthesised IPv6 address must match RFC 6052 (64:ff9b::a.b.c.d).
+        let site = SiteServiceName::new("legacy-v4").unwrap();
+        let endpoints = vec![SiteServiceEndpoint {
+            service_port: 5432,
+            protocol: SiteServiceProtocol::Tcp,
+            remote_host: "192.0.2.10".into(),
+            remote_port: 5432,
+        }];
+        let snap = snapshot_with_site(site.as_str(), endpoints);
+
+        let backends = resolve_external_backends(
+            &ServiceRef::Site { name: site.clone() },
+            5432,
+            ForwardProto::Tcp,
+            &snap,
+            &HashMap::new(),
+            &ctx(&empty_resolver()),
+        );
+        assert_eq!(backends, vec![(ipv6("64:ff9b::c000:20a"), 5432)]);
+
+        // Same input, NAT64 disabled, returns no backends.
+        let resolver = empty_resolver();
+        let no_nat64 = ResolveCtx {
+            nat64_active: false,
+            has_ipv6_egress: true,
+            resolver: &resolver,
+        };
+        let backends = resolve_external_backends(
+            &ServiceRef::Site { name: site },
+            5432,
+            ForwardProto::Tcp,
+            &snap,
+            &HashMap::new(),
+            &no_nat64,
+        );
+        assert!(backends.is_empty());
     }
 
     #[test]

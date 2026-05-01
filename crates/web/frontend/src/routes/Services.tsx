@@ -46,6 +46,8 @@ import { useOiQuery } from "../hooks/useOi";
 import {
   formatRemoteEndpoint,
   formatServiceTarget,
+  looksLikeIpv4Literal,
+  looksLikeIpv6Literal,
   looksLikeRemoteHost,
 } from "../lib/services";
 import type {
@@ -56,9 +58,45 @@ import type {
   ServiceRef,
   SiteService,
   SiteServiceProtocol,
+  SiteServiceResolverStatus,
 } from "../lib/types";
 
 const PROTOCOLS: SiteServiceProtocol[] = ["tcp", "udp", "http"];
+
+/// Render a small inline status hint next to a site-service endpoint's
+/// remote_host. IP literals are routed directly so they get no badge; DNS
+/// names show "resolved", "resolving", or "failed" based on the daemon's
+/// resolver-status snapshot.
+function renderResolverBadge(
+  host: string,
+  status: SiteServiceResolverStatus | null | undefined,
+): React.ReactElement | null {
+  if (looksLikeIpv6Literal(host) || looksLikeIpv4Literal(host)) return null;
+  const entry = status?.entries.find((e) => e.host === host);
+  let label = "resolving";
+  let color: "default" | "success" | "warning" | "error" = "default";
+  if (entry) {
+    if (entry.last_attempt_failed && entry.aaaa.length === 0 && entry.a.length === 0) {
+      label = "failed";
+      color = "error";
+    } else if (entry.aaaa.length > 0 || entry.a.length > 0) {
+      label = "resolved";
+      color = "success";
+    } else {
+      label = "no records";
+      color = "warning";
+    }
+  }
+  return (
+    <Chip
+      label={label}
+      size="small"
+      variant="outlined"
+      color={color === "default" ? undefined : color}
+      sx={{ ml: 1, height: 18, fontSize: "0.65rem" }}
+    />
+  );
+}
 
 function ConfirmDeleteSiteServiceDialog({
   service,
@@ -568,6 +606,10 @@ export default function Services() {
     error: declaredError,
     refetch: refetchDeclared,
   } = useOiQuery<DeclaredExternalService[]>("/services/external/declared", {});
+  const { data: resolverStatus } = useOiQuery<SiteServiceResolverStatus>(
+    "/services/site/resolver-status",
+    {},
+  );
 
   const { execute, error: actionError } = useOiAction();
 
@@ -750,6 +792,10 @@ export default function Services() {
                                 {formatRemoteEndpoint(
                                   ep.remote_host,
                                   ep.remote_port,
+                                )}
+                                {renderResolverBadge(
+                                  ep.remote_host,
+                                  resolverStatus,
                                 )}
                               </TableCell>
                               <TableCell align="right" sx={{ px: 0.5 }}>

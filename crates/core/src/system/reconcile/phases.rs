@@ -9,8 +9,10 @@ use seedling_protocol::names::{AppName, SiteServiceName};
 use super::{AppSnapshot, RunningPod, pods, proxy, routes, rules, site_proxy, volumes};
 use crate::{
     runtime::{
-        AppPhase, InstanceRegistry, db::DbHandle,
-        external_service_mappings::ExternalServiceSnapshot, identity::InstanceId,
+        AppPhase, InstanceRegistry,
+        db::DbHandle,
+        external_service_mappings::ExternalServiceSnapshot,
+        identity::InstanceId,
         site_services::resolve::{ResolveCtx, ResolveOutcome, resolve_endpoint},
     },
     system::{
@@ -183,6 +185,10 @@ pub(super) struct NftablesBuild {
     pub degraded_services_by_app: HashMap<AppName, std::collections::BTreeSet<String>>,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "phase function fans tick state out to per-app rule builders"
+)]
 pub(super) fn compute_nftables_rules(
     apps: &[AppSnapshot],
     running_pods_by_app: &HashMap<AppName, Vec<RunningPod>>,

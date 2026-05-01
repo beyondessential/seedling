@@ -905,10 +905,8 @@ impl Reconciler {
         });
 
         // 2. Clear faults that were in the prior set but not the current.
-        let resolved: Vec<(seedling_protocol::names::SiteServiceName, &'static str)> = prior
-            .difference(&current)
-            .cloned()
-            .collect();
+        let resolved: Vec<(seedling_protocol::names::SiteServiceName, &'static str)> =
+            prior.difference(&current).cloned().collect();
         if !resolved.is_empty() {
             self.db.call(move |db| {
                 let system = AppName::new_unchecked("_system");

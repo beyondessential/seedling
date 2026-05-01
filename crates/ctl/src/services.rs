@@ -86,7 +86,11 @@ pub(super) enum SiteCommand {
         remote: String,
     },
     /// Show the daemon's site-service DNS resolver cache
-    Resolver,
+    Resolver {
+        /// Refresh continuously, printing the cache every 5 seconds
+        #[arg(long)]
+        watch: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -233,12 +237,25 @@ async fn dispatch_site(client: &OiClient, cmd: SiteCommand) {
                     .await,
             );
         }
-        SiteCommand::Resolver => {
-            print_result(
-                client
-                    .request("/services/site/resolver-status", serde_json::json!({}))
-                    .await,
-            );
+        SiteCommand::Resolver { watch } => {
+            if !watch {
+                print_result(
+                    client
+                        .request("/services/site/resolver-status", serde_json::json!({}))
+                        .await,
+                );
+                return;
+            }
+            // 5-second cadence matches the daemon's resolver tick, so each
+            // refresh shows new state at most once per loop iteration.
+            loop {
+                print_result(
+                    client
+                        .request("/services/site/resolver-status", serde_json::json!({}))
+                        .await,
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
         }
     }
 }
@@ -346,7 +363,10 @@ fn parse_remote(s: &str) -> Result<(String, u16), String> {
     // Strip surrounding brackets if the operator wrote `[host]:port` for a
     // bare DNS name (URL-style); the host string we send to the OI doesn't
     // carry brackets.
-    let host = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host);
+    let host = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
     Ok((host.to_owned(), port))
 }
 

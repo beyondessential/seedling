@@ -56,6 +56,5 @@ pub struct OiState {
     /// the OI so handlers can refresh on add/remove and serve cache
     /// snapshots to operators. `None` in test harnesses.
     // r[impl service.site.address]
-    pub site_resolver:
-        Option<Arc<crate::runtime::site_services::resolver::SiteServiceResolver>>,
+    pub site_resolver: Option<Arc<crate::runtime::site_services::resolver::SiteServiceResolver>>,
 }

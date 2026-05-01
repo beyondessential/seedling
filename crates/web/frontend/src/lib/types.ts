@@ -382,6 +382,19 @@ export interface SiteService {
   endpoints: SiteServiceEndpoint[];
 }
 
+export interface SiteServiceResolverEntry {
+  host: string;
+  aaaa: string[];
+  a: string[];
+  last_attempt_failed: boolean;
+  age_seconds: number;
+  ttl_remaining_seconds: number;
+}
+
+export interface SiteServiceResolverStatus {
+  entries: SiteServiceResolverEntry[];
+}
+
 export type AttachmentProtocol = "tcp" | "udp" | "http" | "http2";
 
 export type SiteIngressTlsProvider = "acme" | "tailscale" | "internal" | "none";

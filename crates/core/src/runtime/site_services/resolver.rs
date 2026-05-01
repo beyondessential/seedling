@@ -256,13 +256,7 @@ impl SiteServiceResolver {
     /// Test helper: install a fully-populated cache entry without hitting
     /// the network. Mirrors what a successful lookup would have stored.
     #[cfg(test)]
-    pub fn seed_success(
-        &self,
-        host: &str,
-        aaaa: &[&str],
-        a: &[&str],
-        ttl: Duration,
-    ) -> bool {
+    pub fn seed_success(&self, host: &str, aaaa: &[&str], a: &[&str], ttl: Duration) -> bool {
         self.inner.record_success(
             host,
             aaaa.iter().map(|s| s.parse().unwrap()).collect(),
@@ -542,12 +536,7 @@ mod tests {
         // End-to-end: drive resolve_endpoint through the resolver's
         // HostnameLookup impl with both seeded entries and missing names.
         let r = mkresolver();
-        r.seed_success(
-            "v6.example",
-            &["2001:db8::1"],
-            &[],
-            Duration::from_secs(60),
-        );
+        r.seed_success("v6.example", &["2001:db8::1"], &[], Duration::from_secs(60));
         r.seed_success("v4.example", &[], &["10.0.0.1"], Duration::from_secs(60));
 
         let lookup: &dyn HostnameLookup = r.as_ref();

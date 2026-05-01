@@ -137,9 +137,7 @@ fn resolve_dns(name: &str, ctx: &ResolveCtx<'_>) -> ResolveOutcome {
 
     if !result.a.is_empty() {
         if ctx.nat64_active {
-            return ResolveOutcome::Routable(
-                result.a.iter().copied().map(synth_v4).collect(),
-            );
+            return ResolveOutcome::Routable(result.a.iter().copied().map(synth_v4).collect());
         }
         return ResolveOutcome::Unroutable {
             reason: UnroutableReason::NeedsNat64ButDisabled,
@@ -196,13 +194,7 @@ mod tests {
             Self::default()
         }
 
-        pub fn insert(
-            &mut self,
-            host: &str,
-            aaaa: &[&str],
-            a: &[&str],
-            failed: bool,
-        ) -> &mut Self {
+        pub fn insert(&mut self, host: &str, aaaa: &[&str], a: &[&str], failed: bool) -> &mut Self {
             self.entries.insert(
                 host.to_owned(),
                 HostnameLookupResult {
@@ -221,11 +213,7 @@ mod tests {
         }
     }
 
-    fn ctx<'a>(
-        nat64: bool,
-        v6_egress: bool,
-        resolver: &'a dyn HostnameLookup,
-    ) -> ResolveCtx<'a> {
+    fn ctx<'a>(nat64: bool, v6_egress: bool, resolver: &'a dyn HostnameLookup) -> ResolveCtx<'a> {
         ResolveCtx {
             nat64_active: nat64,
             has_ipv6_egress: v6_egress,
@@ -331,12 +319,7 @@ mod tests {
     #[test]
     fn dns_dual_stack_without_v6_egress_uses_a_via_nat64() {
         let mut r = StaticHostnameLookup::new();
-        r.insert(
-            "db.example.com",
-            &["2001:db8::5"],
-            &["10.0.0.1"],
-            false,
-        );
+        r.insert("db.example.com", &["2001:db8::5"], &["10.0.0.1"], false);
         let outcome = resolve_endpoint("db.example.com", &ctx(true, false, &r));
         assert_eq!(
             outcome,
