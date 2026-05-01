@@ -35,13 +35,15 @@ document.
    outside the normal `bsl.name` validator (3+ chars), so the slot is
    structurally unmistakable. The name is a hard reservation: any app may
    declare it; it has no effect unless the operator wires the matching mapping.
-2. **Authorisation gate lives on the OI mapping, not in BSL.** The OI's
-   `external_service_mappings` surface gains a new target kind that resolves
-   to the daemon's own OI listener. Inserting a mapping with that kind is
-   rejected unless the request body carries `dangerously_allow_oi_access:
-   true`. Standard `seedling-ctl services external map` and the web UI never
-   surface that flag; the only path that passes it is the dedicated bootstrap
-   command.
+2. **Authorisation gate lives entirely inside the daemon.** The OI's
+   `external_service_mappings` surface gains a new target kind that
+   resolves to the daemon's own OI listener, but mappings of that kind
+   are not creatable through any operator-facing path: `services/external/map`
+   rejects `target_kind=oi` unconditionally, and the web UI / CLI don't
+   offer it. The only path that creates such a row is the daemon's
+   internal "instantiate a built-in template" hook, which inserts the
+   mapping (and the matching authorized-key entry, and stages a client
+   keypair) atomically with the app registration.
 3. **No scoped permission model for v1.** A workload that successfully wires
    up OI access has full operator-equivalent privilege. The threat-model
    addition is "this workload is now in the operator trust boundary", not
@@ -57,11 +59,14 @@ document.
    in `templates/list` but does not occupy a row in `apps/list` until
    instantiated. Operators who don't run seedling-web inside seedling
    simply don't instantiate it.
-5. **Bootstrap is a dedicated `seedling-ctl seedling-web` subcommand**, not
-   the generic install path. It instantiates the built-in template into an
-   app named `seedling-web`, generates the mTLS keypair, authorises the
-   public half, creates the OI mapping with the dangerous flag, and
-   invokes install with the private key as a secret param.
+5. **There is no bespoke bootstrap CLI.** The operator-facing flow is just
+   the standard surfaces: `templates/instantiate` to create the
+   `seedling-web` app from the built-in template, then `apps/install/invoke`
+   when ready, then `ingresses site attach` to give the web UI a hostname.
+   Everything else — keypair generation, key authorisation, OI mapping
+   creation, client-key delivery into the install action — is performed
+   by the daemon as a side effect of instantiating a built-in template
+   that declares `external_service("oi")`.
 6. **Container image is the published seedling image at
    `ghcr.io/<repo>/seedling:<version>`.** ghcr.io is already in the default
    registry allowlist. The image carries the seedling-web binary (and any
@@ -81,13 +86,15 @@ document.
    When the daemon starts, after refreshing the built-in template's body,
    it checks for an app named `seedling-web`. If one exists, the daemon
    issues a self-`apps/update` with the embedded script content. The app
-   name `seedling-web` is reserved: only the bootstrap command can create
-   it, and only by instantiating the built-in template under the same
-   name (instantiation under any other app name is rejected). No
-   postinst hook required.
-9. **Key rotation for v1 = re-bootstrap.** No standalone rotate-key action.
-   Re-running `seedling-ctl seedling-web bootstrap` deregisters and
-   re-installs with a fresh key.
+   name `seedling-web` is reserved: the only path that creates it is
+   `templates/instantiate` against the built-in template under the same
+   name (any other app name on that instantiate call is rejected, and
+   `apps/create` rejects the name unconditionally). No postinst hook
+   required.
+9. **Key rotation for v1 = deregister + re-instantiate.** No standalone
+   rotate-key action. The deregister path revokes the keypair as part of
+   its cleanup; re-instantiating the built-in template generates a fresh
+   one.
 
 ## Architecture
 
@@ -104,7 +111,7 @@ seedlingd (host process, root)
 │   ├─ [::1]:7891             default loopback
 │   └─ [fd**::oi]:7891        new ULA on the seedling-proxy bridge
 └─ External-service resolver
-    └─ "oi" → fd**::oi:7891 (with dangerously_allow_oi_access)
+    └─ "oi" → fd**::oi:7891 (daemon-internal mapping, no operator path)
 
 seedling-web app (managed deployment)
 └─ container (ghcr.io/<repo>/seedling:<SEEDLING_VERSION>)
@@ -145,21 +152,24 @@ slot rather than re-deriving it.
 `app-service` and `site-service`. Add `oi`:
 
 - DB schema: a new `target_kind` enum value. Existing rows are unaffected.
-- Insertion validation: a row whose target_kind is `oi` is rejected unless
-  the OI request body that created it included `dangerously_allow_oi_access:
-  true`.
+- Insertion via the OI: rejected unconditionally for `target_kind=oi`. No
+  flag, no escape hatch on the operator-facing surface.
+- Insertion via the daemon's internal `instantiate_builtin_template` path:
+  permitted, and performed automatically when the AppDef declares an
+  `external_service("oi")` slot. Idempotent: re-instantiation does not
+  duplicate the row.
 - Listing: `services external list` and the web UI surface oi-targeted
-  mappings with a visible "OI listener (UNSAFE)" tag, so an operator
-  reviewing mappings sees them.
+  mappings with a visible "OI listener" tag and an indication that the
+  row is daemon-managed (i.e. operators can read but not edit it).
 - Reconciler resolution: when the desired-state computation encounters a
   pod-side mount of an `external_service("oi")` slot whose mapping has
   `target_kind=oi`, the resolved endpoint is the OI listener's bridge
   address and the OI port. The pod's network namespace gets a route to
   that address through its own existing gateway.
 
-The standard `services external map` CLI / OI handler does not accept an
-`oi` target kind — it returns an error pointing at the bootstrap command.
-Only the bootstrap command's call path passes the dangerous flag.
+Removal of an oi mapping is similarly daemon-internal: the deregister
+hook for a built-in-template-derived app deletes its mapping as part of
+teardown.
 
 ### BSL constants
 
@@ -209,6 +219,37 @@ column (new migration). On daemon startup:
    to `apps/update` with the embedded script body. This is the daemon-
    startup self-update path. Idempotent when the body matches.
 
+#### Side effects of instantiating a built-in template
+
+The apps table grows a nullable `builtin_source TEXT` column naming the
+built-in template the app was instantiated from (NULL for ordinary apps).
+When `templates/instantiate` runs against a row with `is_builtin=1`, the
+daemon performs the following side effects atomically with app
+registration, in addition to the standard registration:
+
+1. Generates an ed25519 client keypair (using the same code path as
+   `ClientIdentity::load_or_generate`).
+2. Authorises the public fingerprint in `authorized_keys`, with a label
+   like `<app> (built-in)`. The row is tagged so deregister can remove
+   it.
+3. Stores the encrypted private key under the operation's secret-param
+   storage, keyed by the synthetic install-param name `client-key`.
+   When `apps/install/invoke` later runs, the daemon merges this key
+   into the operator-supplied params before validation. The key never
+   passes through the OI on the wire.
+4. For each `external_service` slot the AppDef declares whose name is
+   `"oi"`, inserts an `external_service_mappings` row with
+   `target_kind=oi`. This is the only path that creates such rows.
+
+On `apps/remove` of an app whose `builtin_source` is non-NULL, the
+daemon's deregister hook performs the matching teardown: revoke the
+authorized-key entry, delete the synthetic client-key secret, delete the
+oi mapping(s).
+
+Re-instantiation under the same name (after a previous deregister)
+generates a new keypair and a new mapping; nothing leaks across
+generations.
+
 Script sketch (full body lives at the path above):
 
 ```rhai
@@ -216,8 +257,8 @@ app.description("Seedling web UI / WebTransport gateway");
 
 let password_hash = app.param("password-hash")
     .kind("password")
-    .required(true)
-    .description("Argon2id-hashed operator password (use `seedling-ctl seedling-web set-password` to set)");
+    .required(false)
+    .description("Argon2id-hashed operator password; required unless trust-tailscale-headers is true");
 
 let session_lifetime = app.param("session-lifetime-secs")
     .required(false)
@@ -263,15 +304,15 @@ app.deployment("web")
     });
 
 app.on_install(|rt, param| {
-    // Seed the web client key from the install param and let the deployment
-    // start. The bootstrap command authorised the public half before
-    // invoking install, so the very first connect attempt will succeed.
+    // The daemon synthesised the `client-key` install param at template-
+    // instantiation time and authorised the public half then. Write the
+    // private half into the state volume and start the deployment.
     state.write("/web.key", param["client-key"]);
     rt.start(app).ready(60);
 }, #{
     requirements: #{
         "client-key": #{ kind: "password", required: true,
-            description: "PEM-encoded ed25519 client key (set by the bootstrap command)" },
+            description: "PEM-encoded ed25519 client key (synthesised by the daemon at template-instantiation time; never operator-supplied)" },
     },
 });
 ```
@@ -290,45 +331,37 @@ Notes on this sketch:
   image. Alternative: drop the healthcheck entirely and rely on the
   service-level "WT cert in `/connect` response" check.
 
-### Bootstrap CLI: `seedling-ctl seedling-web`
+### Operator flow
 
-A new top-level subcommand group (`crates/ctl/src/main.rs` +
-`crates/ctl/src/seedling_web/mod.rs`):
+The operator-facing surface is the standard apps / templates / ingresses
+machinery. No new CLI subcommands or web UI affordances are required for
+v1 beyond what already exists; the plan adds zero operator-specific
+ergonomics.
 
-```
-seedling-ctl seedling-web bootstrap
-    [--password-prompt]
-    [--hostname <host>]      # for the site ingress; optional
-seedling-ctl seedling-web set-password
-```
+A typical bring-up sequence:
 
-`bootstrap` steps:
+1. `seedling-ctl templates list` — sees `seedling-web (built-in)`.
+2. `seedling-ctl templates instantiate --template seedling-web --app
+   seedling-web` (constraint above forces this app name). Registers the
+   app in `NotInstalled` state. Daemon performs the side effects above.
+3. (If using password auth) `seedling-ctl apps params set seedling-web
+   password-hash <argon2id-hash>`. The argon2id-hashing step is operator-
+   side; we either ship a small `seedling-ctl util hash-password` helper
+   (out of scope for this plan) or document the openssl/argon2 cli path.
+4. `seedling-ctl apps install seedling-web`. The daemon attaches the
+   synthesised `client-key` install param transparently before invoking
+   the install action. Deployment comes up.
+5. `seedling-ctl ingresses site attach <site-ingress> --port 443
+   --protocol https --to seedling-web/web`. For example, attaching the
+   discovered Tailscale site ingress (per the site-ingresses plan)
+   exposes the web UI on the host's `.ts.net` hostname with TLS supplied
+   by tailscaled.
 
-1. `templates/instantiate { template: "seedling-web", app: "seedling-web" }`
-   — registers the AppDef from the daemon's built-in template.
-2. Generate an ed25519 keypair using the same code path as
-   `ClientIdentity::load_or_generate` (`crates/protocol/src/keys.rs`).
-3. `keys/authorize { fingerprint, label: "seedling-web (in-app)" }` for the
-   public half.
-4. `services/external/map { app: "seedling-web", external_name: "oi",
-   target_kind: "oi", dangerously_allow_oi_access: true }`.
-5. (Optional, if `--hostname` given) create / update a manual site ingress
-   for the hostname and attach it as a forward to `(seedling-web, web)`.
-6. If `--password-prompt`, prompt for the operator password, hash it with
-   the same Argon2id parameters seedling-web uses today, and set the
-   `password-hash` param via `apps/params/set`.
-7. `apps/install/invoke { app: "seedling-web", params: { client-key:
-   <PEM> } }`.
+Web UI users walk the same surfaces in their respective views.
 
-The command is idempotent on re-run: each step short-circuits when its
-target already exists, except step 2 (key generation) which is skipped
-when the existing client key is still authorised.
-
-`set-password` re-prompts and updates the `password-hash` param. Triggers
-the `on_change` handler if the script declares one (otherwise a manual
-restart is needed; mirror the postgres password-rotation pattern).
-
-Key rotation in v1 is "re-run `bootstrap`"; no standalone subcommand.
+Tear-down: `seedling-ctl apps remove seedling-web`. The daemon revokes
+the keypair, removes the oi mapping, and runs the standard graceful
+deregister sequence.
 
 ### Auto-update: daemon-startup self-update on the reserved name
 
@@ -384,47 +417,58 @@ in-memory; the rotation thread regenerates as needed. In-cluster:
 
 Two directions of traffic:
 
-- **Operator browser → seedling-web**. Needs to reach the container's
-  HTTP + WT ports. Wired via standard BSL `service.ingress(...)` and a
-  hostname provided by the operator (manual site ingress + attachment, or
-  baked into the script via params).
+- **Operator browser → seedling-web**. The seedling-web BSL script
+  declares an exported service rather than a hard-coded ingress, so the
+  operator wires the front door themselves via a site ingress
+  attachment (e.g. the discovered Tailscale site ingress, or a manual
+  one with ACME-DNS). Standard site-ingresses machinery from the
+  `site-ingresses` plan; nothing seedling-web-specific needed.
 - **seedling-web → OI**. The `external_service("oi")` slot, resolved by
-  the reconciler to the new bridge address.
-
-The browser-facing side is plain seedling app territory and doesn't need
-new mechanisms. The bootstrap command's optional `--hostname` flag is a
-convenience that wires the site ingress at install time.
+  the reconciler to the new bridge address. The mapping was inserted by
+  the daemon at template-instantiation time; the operator never sees or
+  edits it.
 
 ## Threat-model addendum
 
 `docs/threat-model.md` gets a new note under "What we do not defend
 against": an authenticated workload reached via `external_service("oi")`
-with `dangerously_allow_oi_access` is operator-equivalent, in the same
-sense as N1 (an authenticated operator). The bootstrap command is the
-single intended path; the gate is the explicit dangerous flag, which the
-default surfaces don't expose.
+is operator-equivalent, in the same sense as N1 (an authenticated
+operator). The gate is "instantiation of a built-in template that
+declares the slot"; built-in templates are owned by the daemon binary,
+so the trust delegation flows from "the operator runs this version of
+seedling" to "the workload it runs has OI access". The OI surface for
+`services/external/map` rejects `target_kind=oi` unconditionally, so an
+operator cannot grant OI access to an arbitrary app via that route.
 
-The audit log already attributes every OI request to an actor; seedling-web
-will continue to populate `actor.kind = "web"` for human-driven requests
-proxied through it, and `actor.kind = "ctl"` synthesis still applies to
-the seedling-web binary's own infrequent calls to `/server/ping` etc.
+The audit log already attributes every OI request to an actor;
+seedling-web will continue to populate `actor.kind = "web"` for human-
+driven requests proxied through it, and `actor.kind = "ctl"` synthesis
+still applies to the seedling-web binary's own infrequent calls to
+`/server/ping` etc.
 
 ## Spec changes
 
-- `docs/spec/runtime.md` — add `r[service.external.mapping.oi]`: the
-  semantics of the OI target kind, the dangerous-flag gate, the resolution
-  to the bridge listen address. Also clarify
-  [generation.bumps](runtime.md#r--generation.bumps) so a script update
-  whose body is byte-identical but whose re-evaluation produces a
-  different AppDef counts as a successful update.
-- `docs/spec/interface.md` — extend `services/external/map` request shape
-  with the new target kind and the gating rule. Add the
-  built-in-template concept to the templates section: `is_builtin` flag
-  in `templates/list` / `templates/show`, rejection rules on `update` /
-  `remove`, and the `instantiate` constraint that built-in templates
-  must be instantiated under the template's own name. Reserve the
-  `seedling-web` app name. Cross-link the threat-model line about
-  operator-equivalent authority.
+- `docs/spec/runtime.md`:
+  - Add `r[service.external.mapping.oi]`: the OI target kind, the
+    rejection of operator-driven creation, the daemon-internal-only
+    insert path, and the resolution to the bridge listen address.
+  - Add `r[template.builtin]`: built-in templates are owned by the
+    daemon binary, refreshed at startup, immutable through the OI;
+    instantiation triggers the side-effect set described above
+    (keypair, authorisation, oi mapping, synthesised install param).
+    Constrain `instantiate` so a built-in template must be instantiated
+    under the template's own name.
+  - Reserve the `seedling-web` app name (`r[app.name.reserved]`).
+  - Clarify [generation.bumps](runtime.md#r--generation.bumps) so a
+    script update whose body is byte-identical but whose re-evaluation
+    produces a different AppDef counts as a successful update.
+- `docs/spec/interface.md`:
+  - Extend `services/external/map` request shape with the new
+    `target_kind=oi` and the rejection rule.
+  - Extend the templates section: `is_builtin` field on
+    `templates/list` / `templates/show`, rejection rules on `update` /
+    `remove`, and the `instantiate` constraint above. Cross-link to
+    `r[template.builtin]`.
 - `docs/spec/web.md` — no changes to the program's behaviour; the spec
   describes the binary, which is the same binary running in or out of a
   container.
@@ -438,11 +482,11 @@ the seedling-web binary's own infrequent calls to `/server/ping` etc.
    [fd**::oi]:7891 server ping` from the daemon's own pod-network namespace
    (or just from the host).
 2. **`external_service_mappings`: OI target kind.** New target_kind, new
-   migration, gating rule, listing surface, reconciler resolution. The
-   reserved BSL name "oi" gets carved out in the name validator. End of
-   phase: a hand-rolled BSL script can declare `external_service("oi")`,
-   the operator can map it via a raw OI request, and a container in that
-   pod can `nc` the OI port.
+   migration, OI rejection of `target_kind=oi`, daemon-internal insert
+   path, listing surface, reconciler resolution. The reserved BSL name
+   "oi" gets carved out in the name validator. End of phase: a
+   hand-rolled BSL script can declare `external_service("oi")`, but no
+   external surface can give it a binding.
 3. **BSL constants.** `SEEDLING_VERSION`, `SEEDLING_IMAGE`,
    `SEEDLING_OI_FINGERPRINT`. Trivial; gates phase 5 because the embedded
    script needs them.
@@ -450,15 +494,19 @@ the seedling-web binary's own infrequent calls to `/server/ping` etc.
    Add `is_builtin` to the templates table; reject operator-driven
    update / remove of built-in rows; constrain `instantiate` so a
    built-in template's app name matches the template name. Reserve the
-   `seedling-web` app name. Confirm (and amend if needed) the runtime
-   spec rule that `apps/update` bumps the generation when re-evaluation
-   diverges from the current AppDef even if the script content is
-   byte-identical. Add the BSL script source at
+   `seedling-web` app name. Add the `apps.builtin_source` column. Wire
+   the side-effect set into the templates/instantiate handler:
+   keypair generation, authorized-key insert, oi mapping insert,
+   synthesised install-param storage. Wire the matching teardown into
+   `apps/remove`. Confirm (and amend if needed) the runtime spec rule
+   that `apps/update` bumps the generation when re-evaluation diverges
+   even if the script content is byte-identical.
+5. **Embedded seedling-web script.** Add the BSL script source at
    `crates/core/src/runtime/builtin_templates/seedling-web.rhai` and the
-   startup upsert + self-update path in `seedlingd`.
-5. **Bootstrap subcommand.** Stitches steps 2–4 together end-to-end. End
-   of phase: `seedling-ctl seedling-web bootstrap` brings up a working
-   in-cluster web UI.
+   startup upsert + reserved-name self-update path in `seedlingd`. End
+   of phase: an operator can run `seedling-ctl templates instantiate`,
+   `apps install`, `ingresses site attach` against the standard surfaces
+   and end up with a working in-cluster web UI.
 6. **Packaging.** `.deb` (and a parallel rpm if/when relevant) places
    binaries under `/usr/bin/` and the systemd unit under
    `/lib/systemd/system/`. No postinst hook required (the daemon's
@@ -474,27 +522,33 @@ the seedling-web binary's own infrequent calls to `/server/ping` etc.
   constants produces a new generation when the AppDef diverges. The
   runtime spec is silent on this case — needs clarification or a small
   amendment in phase 4.
+- **Synthesised install-param delivery shape.** The plan stores the
+  daemon-generated client key as a synthetic install param the daemon
+  merges in at `apps/install/invoke` time. Alternative shapes: a runtime-
+  scoped param-binding analogous to operation-scoped volume bindings, or
+  a `rt.*` builder that exposes the key directly to the install closure
+  without it being a param at all. Choose during phase 4.
+- **Operator UX for setting the password hash.** The operator needs to
+  produce an Argon2id hash with the same parameters seedling-web uses.
+  Options: ship a `seedling-ctl util hash-password` helper, document the
+  external CLI path, or extend BSL param kinds with an
+  argon2id-on-store variant. Out of scope for this plan but worth
+  flagging.
 - **Healthcheck approach.** Adding `--health-probe` to seedling-web vs
   dropping the healthcheck and relying on container-running. Either is
   fine; dropping is cheaper.
 - **Whether `oi.address()` / `oi.port()` need to be expressible in BSL**
   vs assuming a fixed convention. The latter is simpler but couples the
   script to the daemon's address allocation. To revisit during phase 2.
-- **What should `seedling-web set-password` look like.** Today the password
-  hash is in a TOML config; as an app it's a (secret) param. The
-  set-password command becomes `apps/params/set` underneath. Decide whether
-  to keep a dedicated subcommand or expose it through the standard
-  parameter surface.
-- **Daemon → seedling-web visibility.** Today's standalone deployment has
-  the daemon agnostic to seedling-web's existence. In-cluster, the daemon
-  knows about it (it's a registered app). Consider whether
-  `seedling-ctl status` should call out the seedling-web app specifically,
-  or whether it reads as just another registered app.
+- **Daemon → seedling-web visibility.** In-cluster, the daemon knows
+  about seedling-web (it's a registered app). Consider whether
+  `seedling-ctl status` should call out the seedling-web app
+  specifically, or whether it reads as just another registered app.
 - **Co-existence with a standalone seedling-web.** During the migration
-  window, an operator may have both a systemd-managed seedling-web and an
-  in-cluster one. Both contend for HTTP/WT ports. Document the migration
-  step (stop the systemd unit before bootstrap, or use a different
-  hostname for the in-cluster instance).
+  window, an operator may have both a systemd-managed seedling-web and
+  an in-cluster one. Both contend for HTTP/WT ports. Document the
+  migration step (stop the systemd unit before instantiating, or use a
+  different hostname for the in-cluster instance).
 
 ## Critical files to touch
 
@@ -504,9 +558,9 @@ the seedling-web binary's own infrequent calls to `/server/ping` etc.
   the OI listener (if not already a side-effect of the existing
   bridge plumbing).
 - `crates/core/src/runtime/external_service_mappings.rs` — new target
-  kind + migration.
+  kind + migration; daemon-internal insert/delete helpers.
 - `crates/core/src/oi/handler/services.rs` (or wherever external service
-  mappings are handled) — request-shape extension, dangerous-flag gate.
+  mappings are handled) — reject `target_kind=oi` on the OI surface.
 - `crates/core/src/runtime/registry/...` — reconciler resolution of the
   oi target kind to the listener address.
 - `crates/core/src/defs/...` (BSL constants) — `SEEDLING_VERSION`,
@@ -515,16 +569,16 @@ the seedling-web binary's own infrequent calls to `/server/ping` etc.
   reserved app-name list for `"seedling-web"`.
 - `crates/core/src/runtime/templates.rs` — `is_builtin` column +
   migration; reject mutate/remove on built-in rows; constrain
-  `instantiate` for built-in templates.
+  `instantiate` for built-in templates; instantiate side-effects
+  (keypair, key authorisation, oi mapping, synthesised install param).
+- `crates/core/src/runtime/apps.rs` — `builtin_source` column;
+  deregister hook that runs the matching teardown for built-in-derived
+  apps; bump the generation when re-evaluation diverges with
+  byte-identical script content.
 - `crates/core/src/runtime/builtin_templates/seedling-web.rhai` — the
   embedded BSL script.
 - `crates/core/src/runtime/builtin_templates.rs` — startup upsert of the
   built-in template + self-update path on the reserved app name.
-- `crates/core/src/runtime/apps.rs` (or wherever `apps/update` lives) —
-  bump the generation when re-evaluation diverges, even with identical
-  script content.
-- `crates/ctl/src/main.rs` + `crates/ctl/src/seedling_web/mod.rs` —
-  bootstrap and set-password subcommands.
 - `crates/web/src/main.rs` — `--health-probe` (if we keep the healthcheck).
 - `docs/spec/runtime.md`, `docs/spec/interface.md`,
   `docs/threat-model.md` — spec deltas.
