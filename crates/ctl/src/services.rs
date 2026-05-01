@@ -60,8 +60,9 @@ pub(super) enum SiteCommand {
     },
     /// Add an endpoint to a site service
     ///
-    /// The remote address is given as `[ipv6]:port` (IPv6 only for now —
-    /// IPv4 and DNS support is a follow-up).
+    /// The remote address is given as `[ipv6]:port`, `<ipv4>:port`, or
+    /// `<host>:port`. DNS names are resolved at runtime by the daemon;
+    /// IPv4 and A-only DNS endpoints route via NAT64 when active.
     AddPort {
         /// Site service name
         name: String,
@@ -69,7 +70,8 @@ pub(super) enum SiteCommand {
         service_port: u16,
         /// Protocol: tcp, udp, or http
         protocol: String,
-        /// Remote backend address, e.g. `[2001:db8::1]:8080`
+        /// Remote backend, e.g. `[2001:db8::1]:8080`, `10.0.0.1:5432`,
+        /// or `db.example.com:5432`
         remote: String,
     },
     /// Remove an endpoint from a site service
@@ -80,9 +82,11 @@ pub(super) enum SiteCommand {
         service_port: u16,
         /// Protocol: tcp, udp, or http
         protocol: String,
-        /// Remote backend address, e.g. `[2001:db8::1]:8080`
+        /// Remote backend, same shapes as `add-port`
         remote: String,
     },
+    /// Show the daemon's site-service DNS resolver cache
+    Resolver,
 }
 
 #[derive(Subcommand)]
@@ -179,7 +183,7 @@ async fn dispatch_site(client: &OiClient, cmd: SiteCommand) {
             protocol,
             remote,
         } => {
-            let (remote_host, remote_port) = match parse_ipv6_remote(&remote) {
+            let (remote_host, remote_port) = match parse_remote(&remote) {
                 Ok(pair) => pair,
                 Err(msg) => {
                     eprintln!("error: {msg}");
@@ -207,7 +211,7 @@ async fn dispatch_site(client: &OiClient, cmd: SiteCommand) {
             protocol,
             remote,
         } => {
-            let (remote_host, remote_port) = match parse_ipv6_remote(&remote) {
+            let (remote_host, remote_port) = match parse_remote(&remote) {
                 Ok(pair) => pair,
                 Err(msg) => {
                     eprintln!("error: {msg}");
@@ -226,6 +230,13 @@ async fn dispatch_site(client: &OiClient, cmd: SiteCommand) {
                             "remote_port": remote_port,
                         }),
                     )
+                    .await,
+            );
+        }
+        SiteCommand::Resolver => {
+            print_result(
+                client
+                    .request("/services/site/resolver-status", serde_json::json!({}))
                     .await,
             );
         }
@@ -306,23 +317,37 @@ async fn dispatch_external(client: &OiClient, cmd: ExternalCommand) {
     }
 }
 
-/// Parse `[ipv6]:port` (or `ipv6:port` — but any address with colons in the
-/// host part needs brackets, so in practice all IPv6 literals go through the
-/// bracketed form). Returns `(host, port)`.
+/// Parse a site-service remote address into `(host, port)`. Accepted shapes:
 ///
-/// The dataplane only handles IPv6 backends today (see the PR description);
-/// IPv4 and DNS resolution will land in a follow-up, at which point this
-/// parser widens.
-fn parse_ipv6_remote(s: &str) -> Result<(String, u16), String> {
-    let addr: SocketAddr = s
-        .parse()
-        .map_err(|e| format!("invalid remote address {s:?}: {e}"))?;
-    match addr {
-        SocketAddr::V6(v6) => Ok((v6.ip().to_string(), v6.port())),
-        SocketAddr::V4(_) => Err(format!(
-            "remote {s:?} is IPv4; only IPv6 backends are supported today"
-        )),
+/// - `[ipv6]:port` — IPv6 literal (brackets required).
+/// - `<ipv4>:port` — IPv4 literal.
+/// - `<dns-name>:port` — bare DNS name.
+///
+/// IPv6 literals must be bracketed even when no port-disambiguating colon
+/// appears in the address, mirroring URL syntax. The daemon validates the
+/// host string further at the OI layer (rejecting `localhost`, underscore
+/// labels, etc).
+fn parse_remote(s: &str) -> Result<(String, u16), String> {
+    if let Ok(addr) = s.parse::<SocketAddr>() {
+        return match addr {
+            SocketAddr::V6(v6) => Ok((v6.ip().to_string(), v6.port())),
+            SocketAddr::V4(v4) => Ok((v4.ip().to_string(), v4.port())),
+        };
     }
+    let (host, port) = s
+        .rsplit_once(':')
+        .ok_or_else(|| format!("invalid remote {s:?}: expected <host>:<port>"))?;
+    if host.is_empty() {
+        return Err(format!("invalid remote {s:?}: host must not be empty"));
+    }
+    let port: u16 = port
+        .parse()
+        .map_err(|e| format!("invalid remote {s:?}: bad port: {e}"))?;
+    // Strip surrounding brackets if the operator wrote `[host]:port` for a
+    // bare DNS name (URL-style); the host string we send to the OI doesn't
+    // carry brackets.
+    let host = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host);
+    Ok((host.to_owned(), port))
 }
 
 /// Parse an external-service target in the `_site/<name>` or `<app>/<service>`
@@ -346,20 +371,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_ipv6_remote_accepts_bracketed_literal() {
-        let (host, port) = parse_ipv6_remote("[2001:db8::1]:3000").unwrap();
+    fn parse_remote_accepts_bracketed_ipv6() {
+        let (host, port) = parse_remote("[2001:db8::1]:3000").unwrap();
         assert_eq!(host, "2001:db8::1");
         assert_eq!(port, 3000);
     }
 
     #[test]
-    fn parse_ipv6_remote_rejects_ipv4() {
-        assert!(parse_ipv6_remote("10.0.0.1:80").is_err());
+    fn parse_remote_accepts_ipv4() {
+        let (host, port) = parse_remote("10.0.0.1:80").unwrap();
+        assert_eq!(host, "10.0.0.1");
+        assert_eq!(port, 80);
     }
 
     #[test]
-    fn parse_ipv6_remote_rejects_bare_dns_name() {
-        assert!(parse_ipv6_remote("example.com:80").is_err());
+    fn parse_remote_accepts_dns_name() {
+        let (host, port) = parse_remote("db.example.com:5432").unwrap();
+        assert_eq!(host, "db.example.com");
+        assert_eq!(port, 5432);
+    }
+
+    #[test]
+    fn parse_remote_strips_optional_brackets_around_dns_name() {
+        // URL-style brackets are tolerated for ergonomic consistency with
+        // IPv6 input, but the OI sees the unbracketed host.
+        let (host, port) = parse_remote("[host.example]:80").unwrap();
+        assert_eq!(host, "host.example");
+        assert_eq!(port, 80);
+    }
+
+    #[test]
+    fn parse_remote_rejects_missing_port() {
+        assert!(parse_remote("example.com").is_err());
+    }
+
+    #[test]
+    fn parse_remote_rejects_empty_host() {
+        assert!(parse_remote(":80").is_err());
     }
 
     #[test]
