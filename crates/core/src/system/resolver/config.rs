@@ -1,5 +1,7 @@
 use std::net::SocketAddr;
 
+use crate::runtime::nat64_prefix::NAT64_PREFIX_STR;
+
 /// Generates a CoreDNS Corefile.
 ///
 /// `upstreams` are the addresses CoreDNS will forward all queries to
@@ -31,7 +33,7 @@ pub(crate) fn generate_corefile(
     // r[impl infra.nat64.dns64]
     if nat64_active {
         config.push_str("    dns64 {\n");
-        config.push_str("        prefix 64:ff9b::/96\n");
+        config.push_str(&format!("        prefix {NAT64_PREFIX_STR}\n"));
         // r[impl infra.nat64.dns64.force-translation]
         if force_dns64_translation {
             config.push_str("        translate_all\n");
