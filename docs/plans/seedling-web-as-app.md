@@ -56,9 +56,9 @@ document.
 5. **Container image is a stock public base; the host binary is bind-mounted
    in.** No tarball, no synthetic registry, no `podman load`. Image is a
    pinned `docker.io/library/debian:<codename>-slim` (or alpine + musl-built
-   binary; see open questions). The host's `/usr/lib/seedling/bin/` is a
-   read-only bind site volume mounted at `/seedling/bin` in the container,
-   and the deployment runs `/seedling/bin/seedling-web`.
+   binary; see open questions). The host's `/usr/bin/seedling-web` is
+   bind-mounted as a single-file read-only volume into the container at the
+   same path; the deployment runs it directly.
 6. **OI binds an additional address for in-cluster use.** A fresh ULA on the
    existing seedling-proxy bridge (the same bridge `r--tls.cert.serve` already
    uses) — not loopback, not a brand-new bridge. The reconciler resolves a
@@ -77,12 +77,11 @@ document.
 
 ```
 host (apt-managed)
-├─ /usr/bin/seedling{,-ctl,-web}            symlinks to /usr/lib/seedling/bin/*
-├─ /usr/lib/seedling/bin/seedling{,-ctl,-web}    canonical binaries
-├─ /usr/share/seedling/seedling-web.seed.rhai    bundled BSL script
+├─ /usr/bin/seedling, seedling-ctl, seedling-web    binaries
+├─ /usr/share/seedling/seedling-web.seed.rhai       bundled BSL script
 ├─ /lib/systemd/system/seedling.service
-└─ /var/lib/seedling/                              data dir
-    ├─ oi.key, web.key, …
+└─ /var/lib/seedling/                                data dir
+    ├─ oi.key, …
     └─ db.sqlite
 
 seedlingd (host process, root)
@@ -94,11 +93,11 @@ seedlingd (host process, root)
 
 seedling-web app (managed deployment)
 └─ container (debian-slim or alpine)
-    ├─ mount  /seedling/bin  ← bind  /usr/lib/seedling/bin (ro)
+    ├─ mount  /usr/bin/seedling-web  ← bind  /usr/bin/seedling-web (ro, file)
     ├─ mount  /var/lib/seedling-web  ← managed app volume "state"
     ├─ env    SEEDLING_WEB_BINARY_HASH=<hash>
     ├─ env    SEEDLING_DAEMON_FINGERPRINT=<fp>
-    └─ command /seedling/bin/seedling-web
+    └─ command /usr/bin/seedling-web
                     --daemon-addr  [<oi external_service address>]:7891
                     --daemon-fingerprint  $SEEDLING_DAEMON_FINGERPRINT
                     --key-file     /var/lib/seedling-web/web.key
@@ -157,10 +156,9 @@ Three new constants exposed to BSL during script evaluation
 
 - `SEEDLING_VERSION` — the daemon's version string. Useful beyond
   seedling-web (any app that wants to encode a daemon-version assumption).
-- `SEEDLING_WEB_BINARY_HASH` — SHA-256 hex of
-  `/usr/lib/seedling/bin/seedling-web` at daemon startup. Empty string when
-  the file is absent (so scripts that don't use it don't crash on hosts
-  that haven't installed seedling-web).
+- `SEEDLING_WEB_BINARY_HASH` — SHA-256 hex of `/usr/bin/seedling-web` at
+  daemon startup. Empty string when the file is absent (so scripts that
+  don't use it don't crash on hosts that haven't installed seedling-web).
 - `SEEDLING_OI_FINGERPRINT` — the daemon's own SPKI fingerprint, equal to
   what `r--transport.server-identity` produces. Lets the script pin the
   daemon without an out-of-band parameter.
@@ -194,7 +192,7 @@ let trust_tailscale = app.param("trust-tailscale-headers")
     .description("Trust Tailscale identity headers when fronted by Tailscale Serve");
 
 let bin = app.external_volume("bin")
-    .description("Read-only bind of the host's /usr/lib/seedling/bin directory");
+    .description("Read-only bind of the host's /usr/bin/seedling-web binary");
 
 let state = app.volume("state")
     .description("Persistent web client key + session state");
@@ -208,13 +206,13 @@ let svc = app.service("web")
 app.deployment("web")
     .description("Seedling web UI / WebTransport gateway")
     .image("docker.io/library/debian:trixie-slim")
-    .mount("/seedling/bin", bin)
+    .mount("/usr/bin/seedling-web", bin)
     .mount("/var/lib/seedling-web", state)
     .mount_service(oi)
     .env("SEEDLING_WEB_BINARY_HASH", SEEDLING_WEB_BINARY_HASH)
     .env("SEEDLING_DAEMON_FINGERPRINT", SEEDLING_OI_FINGERPRINT)
     .env("SEEDLING_WEB_LOG", "info,seedling_web=debug")
-    .command("/seedling/bin/seedling-web")
+    .command("/usr/bin/seedling-web")
     .arg([
         "--daemon-addr", `[${oi.address()}]:${oi.port()}`,
         "--daemon-fingerprint", SEEDLING_OI_FINGERPRINT,
@@ -227,7 +225,7 @@ app.deployment("web")
     .stop_signal("SIGTERM")
     .healthcheck(#{
         kind: "command",
-        cmd: ["/seedling/bin/seedling-web", "--health-probe"],
+        cmd: ["/usr/bin/seedling-web", "--health-probe"],
         interval: 10, retries: 3, start_period: 10, on_failure: "replace",
     });
 
@@ -308,8 +306,8 @@ Auxiliary subcommands:
 In `crates/daemon/src/main.rs`, after the OI listener is up but before
 accepting external requests, the daemon:
 
-1. Computes the SHA-256 of `/usr/lib/seedling/bin/seedling-web` (skipped if
-   the file is absent — operator hasn't installed seedling-web).
+1. Computes the SHA-256 of `/usr/bin/seedling-web` (skipped if the file is
+   absent — operator hasn't installed seedling-web).
 2. Reads the bundled script at `/usr/share/seedling/seedling-web.seed.rhai`.
 3. If a registered `seedling-web` app exists and either (a) its stored
    script hash differs from the bundled script's hash, or (b) the AppDef
@@ -342,18 +340,6 @@ seedling-web specifically (since the daemon stays glibc to keep the rest of
 the system happy). Decision deferred; either the debian-slim path or
 musl-static is fine and the choice is invisible to the BSL script's
 shape.
-
-### Bind-mount granularity
-
-Bind site volumes today resolve to a host directory and bind-mount it
-whole. We mount `/usr/lib/seedling/bin` rather than the binary file itself,
-which is the cheapest option (no volume-model change). Side effect: the
-container also sees `seedling` and `seedling-ctl` binaries, which is
-harmless — they're root-only on the host filesystem and the container has
-no privilege to do anything with them.
-
-If a future use case wants single-file binds (e.g. a Unix socket file),
-that's a separate feature and not part of this plan.
 
 ### TLS / WT cert
 
@@ -436,7 +422,7 @@ the seedling-web binary's own infrequent calls to `/server/ping` etc.
    phase: `apt upgrade seedling` rolls the seedling-web deployment without
    any operator action beyond restarting `seedling.service`.
 7. **Packaging.** `.deb` (and a parallel rpm if/when relevant) places
-   binaries under `/usr/lib/seedling/bin/`, the script under
+   binaries under `/usr/bin/`, the bundled script under
    `/usr/share/seedling/`, the systemd unit under `/lib/systemd/system/`.
    Migrate the existing dev path that runs seedling-web standalone to use
    the in-cluster path on packaged installs; standalone stays available
@@ -495,7 +481,7 @@ the seedling-web binary's own infrequent calls to `/server/ping` etc.
 - `docs/spec/runtime.md`, `docs/spec/interface.md`,
   `docs/threat-model.md` — spec deltas.
 - Packaging (deb / rpm specs, eventually) — install layout under
-  `/usr/lib/seedling/bin`, `/usr/share/seedling`, `/lib/systemd/system`.
+  `/usr/bin`, `/usr/share/seedling`, `/lib/systemd/system`.
 
 ## What stays unchanged
 
