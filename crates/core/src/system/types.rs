@@ -7,6 +7,7 @@ use std::{
 
 use ipnet::Ipv6Net;
 use seedling_protocol::env::EnvVar;
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // Container observation
@@ -355,7 +356,7 @@ pub enum ForwardProto {
 /// Full-replacement config document sent to Caddy's admin API.
 /// Upstreams reference service IPv6 addresses; Caddy reaches them through
 /// the host routing table. Caddy does not join pod networks.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProxyConfig {
     /// Ports Caddy should bind inside its container.
     pub listeners: Vec<ProxyListener>,
@@ -380,7 +381,7 @@ pub struct ProxyConfig {
 
 /// A layer-4 (TCP/UDP) proxy route for non-HTTP ingresses.
 /// Caddy L4 listens on the port and forwards to service upstreams.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct L4Route {
     pub port: u16,
     pub proto: L4Proto,
@@ -388,13 +389,13 @@ pub struct L4Route {
     pub upstreams: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum L4Proto {
     Tcp,
     Udp,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ProxyListener {
     pub port: u16,
     pub proto: ProxyListenerProto,
@@ -402,7 +403,7 @@ pub struct ProxyListener {
 
 /// Protocol type for a Caddy listener.
 /// Distinct from `ForwardProto` (nftables); Caddy's model is HTTP/HTTPS/QUIC.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ProxyListenerProto {
     Http,
     Https,
@@ -410,7 +411,7 @@ pub enum ProxyListenerProto {
     Quic,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VirtualHost {
     pub hostname: String,
     pub tls_acme: bool,
@@ -419,19 +420,19 @@ pub struct VirtualHost {
     pub routes: Vec<ProxyRoute>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpRedirect {
     pub from_port: u16,
     pub code: u16,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyRoute {
     pub prefix: String,
     pub handler: ProxyRouteHandler,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ProxyRouteHandler {
     /// Forward to one or more upstream services via reverse proxy.
     ReverseProxy {
