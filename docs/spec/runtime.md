@@ -955,7 +955,14 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 >
 > `service_port` is the port on which the site service exposes this backend; `remote_host` and `remote_port` are the address traffic is forwarded to. The two ports may differ (e.g. a site service exposes 80/tcp in front of backends listening on 8080). The protocol is one of `tcp`, `udp`, or `http`.
 >
+> `remote_host` may be an IPv6 literal, an IPv4 literal, or a DNS name. Names are resolved at runtime by the daemon; address-form values are used directly. See [service.site.address](#r--service.site.address) for resolution and routing semantics.
+>
 > The `(service_port, protocol)` pairs across a site service's endpoints define the ports the service exposes. Traffic destined for `(service, service_port, protocol)` is distributed across the `(remote_host, remote_port)` pairs of all endpoints whose `(service_port, protocol)` matches, as for any other multi-backend service (see [service.routing](language.md#l--service.routing)). Two endpoints sharing a `(service_port, protocol)` are peers for that port's traffic; endpoints differing in `(service_port, protocol)` back different exposed ports on the same site service.
+
+> r[service.site.address]
+> Site service endpoints whose `remote_host` is an IPv6 literal are routed natively using that address. Endpoints whose `remote_host` is an IPv4 literal, or a DNS name resolving only to A records, must be routed through NAT64 using the IANA well-known prefix `64:ff9b::/96` (RFC 6052). Endpoints whose `remote_host` is a DNS name resolving to AAAA records are routed natively when the host has IPv6 egress; on hosts without IPv6 egress, AAAA results are ignored in favour of A results routed through NAT64. When a name resolves to both A and AAAA records and the host has IPv6 egress, the AAAA records are used.
+>
+> The runtime must report endpoints as unroutable when an IPv4 path is required but NAT64 is unavailable on the host (e.g. when the operator has explicitly disabled it and no external NAT64 is present), and as unresolvable when DNS resolution for an endpoint hostname has failed past a small consecutive-failure threshold. These conditions must surface as faults on the affected site service and must auto-clear when the underlying condition resolves. An unresolvable or unroutable endpoint must not block routing for other endpoints, services, or apps; only the affected site service's own backend pool is reduced.
 
 > r[service.site.lifecycle]
 > Site services are created, retargeted, and deleted exclusively through operator commands. Creating a site service registers its name and an optional human-readable description; endpoints are added and removed independently so operators may adjust the backing set without recreating the service.
