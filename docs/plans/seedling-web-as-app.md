@@ -48,15 +48,21 @@ document.
    "we have container-scoped permissions". Acceptable because the only
    blessed user is seedling-web itself, which is intentionally
    operator-equivalent.
-4. **Bootstrap is a dedicated `seedling-ctl seedling-web` subcommand**, not
-   the generic install path. It registers the app, generates the mTLS
-   keypair, authorises the public half, creates the OI mapping with the
-   dangerous flag, and invokes install with the private key as a secret
-   param. The BSL script is `include_str!`d into seedling-ctl rather than
-   shipped separately on disk; seedling-ctl and the daemon are version-
-   locked through apt, so the embedded script always matches the daemon
-   it'll register against.
-5. **Container image is the published seedling image at
+4. **The BSL script lives in the daemon binary as a built-in template.**
+   `seedlingd` `include_str!`s the script and registers it as a built-in
+   entry in the templates table on first startup; the daemon refreshes the
+   stored body from the embedded source on every subsequent startup, so a
+   daemon upgrade automatically propagates new template content. Built-in
+   templates cannot be removed or edited via OI. The template is visible
+   in `templates/list` but does not occupy a row in `apps/list` until
+   instantiated. Operators who don't run seedling-web inside seedling
+   simply don't instantiate it.
+5. **Bootstrap is a dedicated `seedling-ctl seedling-web` subcommand**, not
+   the generic install path. It instantiates the built-in template into an
+   app named `seedling-web`, generates the mTLS keypair, authorises the
+   public half, creates the OI mapping with the dangerous flag, and
+   invokes install with the private key as a secret param.
+6. **Container image is the published seedling image at
    `ghcr.io/<repo>/seedling:<version>`.** ghcr.io is already in the default
    registry allowlist. The image carries the seedling-web binary (and any
    shared libs, an entrypoint suitable for invoking each seedling
@@ -67,18 +73,19 @@ document.
    and rolls the deployment. Publishing the seedling image is being pursued
    independently for unrelated reasons; this plan assumes that work has
    landed.
-6. **OI binds an additional address for in-cluster use.** A fresh ULA on the
+7. **OI binds an additional address for in-cluster use.** A fresh ULA on the
    existing seedling-proxy bridge (the same bridge `r--tls.cert.serve` already
    uses) — not loopback, not a brand-new bridge. The reconciler resolves a
    bound `external_service("oi")` slot to that address.
-7. **Auto-update on apt upgrade via postinst hook.** The seedling-ctl deb's
-   postinst script runs `seedling-ctl seedling-web sync` (idempotent;
-   no-op if the app is unregistered). `sync` calls `apps/update` with the
-   embedded script. Re-evaluation against current constants produces a
-   new AppDef when `SEEDLING_VERSION` / `SEEDLING_IMAGE` changed,
-   generation bumps, deployment rolls. No daemon-side self-sync logic;
-   the daemon stays unaware of seedling-web specifically.
-8. **Key rotation for v1 = re-bootstrap.** No standalone rotate-key action.
+8. **Auto-update via daemon-startup self-update on the reserved name.**
+   When the daemon starts, after refreshing the built-in template's body,
+   it checks for an app named `seedling-web`. If one exists, the daemon
+   issues a self-`apps/update` with the embedded script content. The app
+   name `seedling-web` is reserved: only the bootstrap command can create
+   it, and only by instantiating the built-in template under the same
+   name (instantiation under any other app name is rejected). No
+   postinst hook required.
+9. **Key rotation for v1 = re-bootstrap.** No standalone rotate-key action.
    Re-running `seedling-ctl seedling-web bootstrap` deregisters and
    re-installs with a fresh key.
 
@@ -177,11 +184,32 @@ flow through the standard generation-bump pathway: a daemon upgrade
 changes `SEEDLING_VERSION` / `SEEDLING_IMAGE`, the AppDef changes,
 generations bump, the deployment rolls.
 
-### Embedded seedling-web BSL script (sketch)
+### Built-in seedling-web template
 
-Lives in the source tree at `crates/ctl/src/seedling_web/script.rhai` and
-is `include_str!`d into the seedling-ctl binary. Not shipped as a separate
-file on disk.
+The script lives in the source tree at
+`crates/core/src/runtime/builtin_templates/seedling-web.rhai` and is
+`include_str!`d into `seedlingd`. Not shipped as a separate file on disk.
+
+The templates table grows an `is_builtin BOOLEAN NOT NULL DEFAULT 0`
+column (new migration). On daemon startup:
+
+1. The seedling-web template row is upserted: its body is replaced with
+   the embedded source on every run, `is_builtin=1`, `description` set to
+   a fixed string. Operators may not modify or remove this row via the
+   OI: `templates/update` and `templates/remove` reject `is_builtin=1`
+   rows with `requirements_invalid`.
+2. The reserved app-name list grows an entry for `"seedling-web"`. The
+   `apps/create` handler rejects this name unconditionally; the only
+   creation path is through the built-in template via
+   `templates/instantiate`. Additionally, `templates/instantiate { template:
+   "seedling-web", app: <name> }` is constrained to require `app` ==
+   `"seedling-web"` so the operator can't fork the blessed slot under a
+   different name.
+3. If a `seedling-web` app already exists, the daemon issues a self-call
+   to `apps/update` with the embedded script body. This is the daemon-
+   startup self-update path. Idempotent when the body matches.
+
+Script sketch (full body lives at the path above):
 
 ```rhai
 app.description("Seedling web UI / WebTransport gateway");
@@ -265,44 +293,36 @@ Notes on this sketch:
 ### Bootstrap CLI: `seedling-ctl seedling-web`
 
 A new top-level subcommand group (`crates/ctl/src/main.rs` +
-`crates/ctl/src/seedling_web/{mod.rs,script.rhai}`):
+`crates/ctl/src/seedling_web/mod.rs`):
 
 ```
 seedling-ctl seedling-web bootstrap
     [--password-prompt]
     [--hostname <host>]      # for the site ingress; optional
-seedling-ctl seedling-web sync
-    [--quiet]                # no-op cleanly when app is unregistered
 seedling-ctl seedling-web set-password
 ```
 
 `bootstrap` steps:
 
-1. Load the embedded BSL script (`include_str!("script.rhai")`).
-2. `apps/create { app: "seedling-web", script }` — registers the AppDef.
-3. Generate an ed25519 keypair using the same code path as
+1. `templates/instantiate { template: "seedling-web", app: "seedling-web" }`
+   — registers the AppDef from the daemon's built-in template.
+2. Generate an ed25519 keypair using the same code path as
    `ClientIdentity::load_or_generate` (`crates/protocol/src/keys.rs`).
-4. `keys/authorize { fingerprint, label: "seedling-web (in-app)" }` for the
+3. `keys/authorize { fingerprint, label: "seedling-web (in-app)" }` for the
    public half.
-5. `services/external/map { app: "seedling-web", external_name: "oi",
+4. `services/external/map { app: "seedling-web", external_name: "oi",
    target_kind: "oi", dangerously_allow_oi_access: true }`.
-6. (Optional, if `--hostname` given) create / update a manual site ingress
+5. (Optional, if `--hostname` given) create / update a manual site ingress
    for the hostname and attach it as a forward to `(seedling-web, web)`.
-7. If `--password-prompt`, prompt for the operator password, hash it with
-   the same Argon2id parameters seedling-web uses today, and use the hash
-   as the `password-hash` install param.
-8. `apps/install/invoke { app: "seedling-web", params: { client-key:
-   <PEM>, password-hash: <hash>, ... } }`.
+6. If `--password-prompt`, prompt for the operator password, hash it with
+   the same Argon2id parameters seedling-web uses today, and set the
+   `password-hash` param via `apps/params/set`.
+7. `apps/install/invoke { app: "seedling-web", params: { client-key:
+   <PEM> } }`.
 
 The command is idempotent on re-run: each step short-circuits when its
-target already exists, except step 3 (key generation) which is skipped if
-the existing client key is still authorised.
-
-`sync` updates the registered app's script to whatever this seedling-ctl
-build embeds. It calls `apps/update { app: "seedling-web", script }` and
-exits cleanly with a status message if the app is unregistered (so apt
-postinst hooks don't fail on hosts that haven't bootstrapped). Used as the
-auto-update path on apt upgrade — see "Auto-update" below.
+target already exists, except step 2 (key generation) which is skipped
+when the existing client key is still authorised.
 
 `set-password` re-prompts and updates the `password-hash` param. Triggers
 the `on_change` handler if the script declares one (otherwise a manual
@@ -310,32 +330,27 @@ restart is needed; mirror the postgres password-rotation pattern).
 
 Key rotation in v1 is "re-run `bootstrap`"; no standalone subcommand.
 
-### Auto-update: apt postinst hook + `sync`
+### Auto-update: daemon-startup self-update on the reserved name
 
-The deb's postinst script runs:
+After upserting the built-in template at startup, `seedlingd` checks for
+the existence of an app named `seedling-web`. If present, it issues a
+self-call to `apps/update { app: "seedling-web", script: <embedded body>
+}`. The actor on the call is `kind: "system"`, `id: "builtin-template",
+display: "seedlingd self-update"` so the audit log distinguishes
+self-updates from operator-driven changes.
 
-```
-seedling-ctl seedling-web sync --quiet || true
-```
-
-`sync` is idempotent and harmless when the app is unregistered, so the
-postinst step is safe on both bootstrapped and non-bootstrapped hosts.
-
-When the daemon evaluates the new (possibly identical) script, the
-constants `SEEDLING_VERSION` / `SEEDLING_IMAGE` produce a different image
-ref than the previous generation, the AppDef changes, generation bumps,
-the deployment rolls. The whole pathway uses standard generation /
-reconcile machinery; no daemon-side special-case for seedling-web.
-
-The actor on the `apps/update` call distinguishes the postinst origin
-(`kind: "ctl"`, `id: "seedling-web-sync"`, `display: "apt postinst"` or
-similar) from operator-driven updates.
+When the daemon upgrades, the embedded script's constants
+(`SEEDLING_VERSION` / `SEEDLING_IMAGE`) interpolate to new values; the
+re-evaluated AppDef differs from the prior generation; the runtime bumps
+the generation and the deployment rolls. The pathway is the standard
+generation / reconcile machinery — the only daemon-side special-case is
+the existence check on `"seedling-web"`.
 
 A subtle point: today, `apps/update` re-evaluates the script and bumps
-the generation per `r--generation.bumps`. If the script content is byte-
-identical, the runtime should still bump the generation when the
-re-evaluated AppDef differs (because constants changed). This may need a
-small clarification in the runtime spec. To revisit during phase 4.
+the generation per `r--generation.bumps`. The current spec text reads
+"successful script update", which is silent on whether a byte-identical
+script with diverging re-evaluation should still bump. This needs
+clarification — see Open questions.
 
 ### Container image
 
@@ -398,10 +413,18 @@ the seedling-web binary's own infrequent calls to `/server/ping` etc.
 
 - `docs/spec/runtime.md` — add `r[service.external.mapping.oi]`: the
   semantics of the OI target kind, the dangerous-flag gate, the resolution
-  to the bridge listen address.
+  to the bridge listen address. Also clarify
+  [generation.bumps](runtime.md#r--generation.bumps) so a script update
+  whose body is byte-identical but whose re-evaluation produces a
+  different AppDef counts as a successful update.
 - `docs/spec/interface.md` — extend `services/external/map` request shape
-  with the new target kind and the gating rule. The interface spec already
-  carries the threat-model line about operator-equivalent authority; cross-link.
+  with the new target kind and the gating rule. Add the
+  built-in-template concept to the templates section: `is_builtin` flag
+  in `templates/list` / `templates/show`, rejection rules on `update` /
+  `remove`, and the `instantiate` constraint that built-in templates
+  must be instantiated under the template's own name. Reserve the
+  `seedling-web` app name. Cross-link the threat-model line about
+  operator-equivalent authority.
 - `docs/spec/web.md` — no changes to the program's behaviour; the spec
   describes the binary, which is the same binary running in or out of a
   container.
@@ -423,25 +446,26 @@ the seedling-web binary's own infrequent calls to `/server/ping` etc.
 3. **BSL constants.** `SEEDLING_VERSION`, `SEEDLING_IMAGE`,
    `SEEDLING_OI_FINGERPRINT`. Trivial; gates phase 5 because the embedded
    script needs them.
-4. **Embedded script + `apps/update` constant-aware bump.** Add the BSL
-   script alongside the seedling-ctl source as
-   `crates/ctl/src/seedling_web/script.rhai`. Confirm (and amend if
-   needed) the runtime spec rule that `apps/update` bumps the generation
-   when re-evaluation diverges from the current AppDef even if the
-   script content is byte-identical.
+4. **Built-in template machinery + `apps/update` constant-aware bump.**
+   Add `is_builtin` to the templates table; reject operator-driven
+   update / remove of built-in rows; constrain `instantiate` so a
+   built-in template's app name matches the template name. Reserve the
+   `seedling-web` app name. Confirm (and amend if needed) the runtime
+   spec rule that `apps/update` bumps the generation when re-evaluation
+   diverges from the current AppDef even if the script content is
+   byte-identical. Add the BSL script source at
+   `crates/core/src/runtime/builtin_templates/seedling-web.rhai` and the
+   startup upsert + self-update path in `seedlingd`.
 5. **Bootstrap subcommand.** Stitches steps 2–4 together end-to-end. End
    of phase: `seedling-ctl seedling-web bootstrap` brings up a working
    in-cluster web UI.
-6. **`sync` subcommand + apt postinst hook.** Auto-update on apt upgrade.
-   End of phase: `apt upgrade seedling-ctl` rolls the seedling-web
-   deployment without any operator action beyond restarting
-   `seedling.service`.
-7. **Packaging.** `.deb` (and a parallel rpm if/when relevant) places
-   binaries under `/usr/bin/`, the systemd unit under
-   `/lib/systemd/system/`. Postinst calls `seedling-ctl seedling-web
-   sync --quiet`. Migrate the existing dev path that runs seedling-web
-   standalone to use the in-cluster path on packaged installs; standalone
-   stays available for development.
+6. **Packaging.** `.deb` (and a parallel rpm if/when relevant) places
+   binaries under `/usr/bin/` and the systemd unit under
+   `/lib/systemd/system/`. No postinst hook required (the daemon's
+   startup self-update handles in-place upgrades). Migrate the existing
+   dev path that runs seedling-web standalone to use the in-cluster
+   path on packaged installs; standalone stays available for
+   development.
 
 ## Open questions
 
@@ -487,19 +511,25 @@ the seedling-web binary's own infrequent calls to `/server/ping` etc.
   oi target kind to the listener address.
 - `crates/core/src/defs/...` (BSL constants) — `SEEDLING_VERSION`,
   `SEEDLING_IMAGE`, `SEEDLING_OI_FINGERPRINT`.
-- `crates/core/src/defs/app/...` — name validator carve-out for `"oi"`.
+- `crates/core/src/defs/app/...` — name validator carve-out for `"oi"`;
+  reserved app-name list for `"seedling-web"`.
+- `crates/core/src/runtime/templates.rs` — `is_builtin` column +
+  migration; reject mutate/remove on built-in rows; constrain
+  `instantiate` for built-in templates.
+- `crates/core/src/runtime/builtin_templates/seedling-web.rhai` — the
+  embedded BSL script.
+- `crates/core/src/runtime/builtin_templates.rs` — startup upsert of the
+  built-in template + self-update path on the reserved app name.
 - `crates/core/src/runtime/apps.rs` (or wherever `apps/update` lives) —
   bump the generation when re-evaluation diverges, even with identical
   script content.
-- `crates/ctl/src/main.rs` + `crates/ctl/src/seedling_web/mod.rs` +
-  `crates/ctl/src/seedling_web/script.rhai` — bootstrap, sync,
-  set-password subcommands; embedded script.
+- `crates/ctl/src/main.rs` + `crates/ctl/src/seedling_web/mod.rs` —
+  bootstrap and set-password subcommands.
 - `crates/web/src/main.rs` — `--health-probe` (if we keep the healthcheck).
 - `docs/spec/runtime.md`, `docs/spec/interface.md`,
   `docs/threat-model.md` — spec deltas.
 - Packaging (deb / rpm specs, eventually) — install layout under
-  `/usr/bin`, `/lib/systemd/system`; postinst hook calls
-  `seedling-ctl seedling-web sync --quiet`.
+  `/usr/bin`, `/lib/systemd/system`. No postinst hook.
 
 ## What stays unchanged
 
