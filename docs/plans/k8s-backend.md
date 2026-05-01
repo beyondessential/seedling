@@ -59,7 +59,10 @@ document. To redirect any of them, edit this section first.
    HTTP-only.
 10. **cert-manager is a prerequisite.** seedling translates BSL cert config to
     cert-manager `Certificate` + `Issuer` resources. Bundling cert-manager
-    would conflict with clusters that already have it.
+    would conflict with clusters that already have it. Cert acquisition mode
+    (DNS-01, HTTP-01, TLS-ALPN-01, internal CA, manual) is the operator's
+    `Issuer` choice and is independent of how Caddy is exposed — DNS-01 in
+    particular works regardless of inbound reachability.
 11. **Watch streams for everything observable.** K8s backend uses
     `kube`-rs `watcher`/`reflector` for Pods, StatefulSets, Jobs, Services,
     Ingresses, PVCs, VolumeSnapshots, Events. The world-observation history
@@ -467,11 +470,23 @@ Caddy admin config that routes `(hostname, port, proto)` to the appropriate
 app-namespace Service ClusterIP. cert-manager `Certificate` resources provision
 TLS certs into Secrets in `seedling-system`; Caddy reads them.
 
-The Caddy `Service` type is `LoadBalancer`. Operator-supplied annotations on
-that Service drive cloud LB provisioning. seedling reads
-`Service.status.loadBalancer.ingress` to know the externally-resolvable IP /
-hostname, and exposes it as the `external_endpoints()` answer for ingress
-hostname binding.
+The Caddy `Service` is exposed via whichever K8s mechanism the operator
+chooses: `LoadBalancer` for cloud-LB-fronted clusters, internal-only LB for
+clusters that aren't internet-reachable, `NodePort` for self-managed routing,
+`hostNetwork` for bare-metal-style setups. Operator-supplied annotations on
+the Service drive whatever the chosen backend wants. seedling reads
+`Service.status.loadBalancer.ingress` (or the equivalent for non-LB types) to
+know the externally-resolvable IP/hostname, and exposes it as the
+`external_endpoints()` answer for ingress hostname binding.
+
+**Cert acquisition is orthogonal to traffic exposure.** cert-manager supports
+HTTP-01, TLS-ALPN-01, and DNS-01. The first two need the cluster reachable
+from Let's Encrypt's validation servers; the third doesn't, only requiring
+DNS API credentials for a zone the operator controls. So a cluster with no
+public IP — internal-only deployment, air-gapped LAN, etc. — can still issue
+real Let's Encrypt certs via DNS-01. seedling-mac and other no-public-routing
+contexts use the same path. We don't artificially restrict cert mode based on
+exposure model; it's the operator's `Issuer` choice.
 
 For non-HTTP ingresses (TCP/UDP/DTLS), Caddy's L4 features handle termination.
 The `Service` ports list is computed from the union of declared ingress ports.
@@ -566,11 +581,15 @@ Documented in `docs/k8s-install.md` (to write):
 
 - IPv6-capable K8s cluster (dual-stack or v6-only).
 - Cluster-level NAT64/DNS64 for v6-only clusters (Cilium NAT46, Tayga, Jool).
-- cert-manager installed.
+- cert-manager installed, configured with at least one `Issuer`. DNS-01,
+  HTTP-01, TLS-ALPN-01, internal-CA, and manual issuers all work — operator
+  chooses based on what's reachable. Public Let's Encrypt via DNS-01 is the
+  recommended setup for clusters without inbound internet reachability.
 - A `StorageClass` (default or named) for seedling's PVCs, with a matching
   `VolumeSnapshotClass` if backups are wanted.
-- A LB-provisioning controller (cloud-native, MetalLB, etc.) for the Caddy
-  Service.
+- A way to expose the Caddy Service to whatever range of clients needs to
+  reach app ingresses (cloud LB, MetalLB, NodePort, hostNetwork — any of
+  these work; cert mode is independent).
 - kubeconfig for the install operator.
 
 ### Install method
