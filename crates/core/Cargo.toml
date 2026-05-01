@@ -53,6 +53,7 @@ aws-config = "1.8.16"
 aws-credential-types = "1.2.14"
 axum.workspace = true
 iana-time-zone = "0.1.65"
+hickory-resolver = { version = "0.26.0", default-features = false, features = ["system-config", "tokio"] }
 
 [dev-dependencies]
 time = "0.3.47"
