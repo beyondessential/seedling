@@ -23,7 +23,9 @@ use crate::{
         desired::{DesiredState, EffectiveScales, compute, compute_uninstalling},
         identity::InstanceId,
         lifecycle::LifecycleState,
-        scaling, stopped,
+        scaling,
+        site_services::{resolve::ResolveCtx, resolver::SiteServiceResolver},
+        stopped,
     },
     system::{
         System, actuator::Actuator, caddy, observer::Observer, resolver, types::DataPlaneRules,
@@ -381,6 +383,19 @@ pub struct Reconciler {
     /// no longer appears.
     // r[impl ingress.site.conflict]
     prev_ingress_conflicts: std::collections::BTreeSet<(String, u16)>,
+    /// DNS resolver feeding `site_service_endpoints.remote_host` lookups
+    /// into the data plane. Optional only because the daemon's startup
+    /// path may have failed to read system DNS config; in that case the
+    /// reconciler still runs but DNS-named site service endpoints stay
+    /// unresolved.
+    // r[impl service.site.address]
+    site_resolver: Option<Arc<SiteServiceResolver>>,
+    /// Set of `(site_service_name, kind)` faults filed last tick. `kind`
+    /// is the fault kind string. The reconciler diffs this against the
+    /// current tick's set to clear faults that no longer apply.
+    // r[impl service.site.address]
+    prev_site_service_faults:
+        std::collections::BTreeSet<(seedling_protocol::names::SiteServiceName, &'static str)>,
 }
 
 impl Reconciler {
@@ -404,6 +419,7 @@ impl Reconciler {
         shells: Arc<ShellRegistry>,
         cert_endpoint_url: Option<String>,
         tls_coordinator: Option<Arc<crate::runtime::tls::issuance::Coordinator>>,
+        site_resolver: Option<Arc<SiteServiceResolver>>,
     ) -> Self {
         let observer = Observer::new(Arc::clone(&driver));
         let written_obs = seed_written_obs(&db);
@@ -450,6 +466,8 @@ impl Reconciler {
             tls_coordinator,
             resolver_health_fail_count: std::sync::atomic::AtomicU32::new(0),
             prev_ingress_conflicts: std::collections::BTreeSet::new(),
+            site_resolver,
+            prev_site_service_faults: std::collections::BTreeSet::new(),
         }
     }
 
@@ -779,6 +797,33 @@ impl Reconciler {
                 },
             );
 
+        // --- Build the per-tick site-service resolution context. The
+        //     reconciler reads the resolver cache, NAT64 activation, and
+        //     IPv6-egress flag once and passes the borrow into every
+        //     consumer (routes, nftables, fault classification). When the
+        //     site resolver isn't available (system DNS config unreadable
+        //     at startup) we substitute an empty lookup; DNS-named
+        //     endpoints will surface as `Unresolved` and produce a fault
+        //     after the consecutive-failure threshold via the resolver
+        //     loop's separate path. ---
+        // r[impl service.site.address]
+        let site_resolver_clone = self.site_resolver.clone();
+        let nat64_active = self.nat64_active;
+        let has_ipv6_egress = !self.force_dns64_translation;
+        let empty_lookup = crate::runtime::site_services::resolve::EmptyLookup;
+        let make_resolve_ctx = || -> ResolveCtx<'_> {
+            let resolver_ref: &dyn crate::runtime::site_services::resolve::HostnameLookup =
+                match site_resolver_clone.as_deref() {
+                    Some(r) => r,
+                    None => &empty_lookup,
+                };
+            ResolveCtx {
+                nat64_active,
+                has_ipv6_egress,
+                resolver: resolver_ref,
+            }
+        };
+
         // --- Compute routes (sync) ---
         let (all_routes, route_obs) = phases::compute_routes(
             &apps,
@@ -786,8 +831,26 @@ impl Reconciler {
             &self.node_prefix,
             &*self.registry,
             &ext_snapshot,
+            &make_resolve_ctx(),
         );
         self.persist_obs(route_obs);
+
+        // --- Classify site-service endpoint outcomes and reconcile the
+        //     associated `site_service_endpoint_*` faults. ---
+        // r[impl service.site.address]
+        {
+            let unresolved_hosts: HashSet<String> = self
+                .site_resolver
+                .as_deref()
+                .map(|r| r.unresolved_hosts())
+                .unwrap_or_default();
+            let fault_set = phases::classify_site_service_endpoints(
+                &ext_snapshot,
+                &make_resolve_ctx(),
+                &unresolved_hosts,
+            );
+            self.reconcile_site_service_faults(fault_set);
+        }
 
         // --- Load site-ingress snapshot (DB-backed) once per tick. ---
         // r[impl ingress.site] r[impl ingress.site.attachment]
@@ -814,6 +877,7 @@ impl Reconciler {
                 &self.node_prefix,
                 &*self.registry,
                 &ext_snapshot,
+                &make_resolve_ctx(),
             );
 
             let proxy_build = phases::compute_proxy_config(

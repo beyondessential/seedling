@@ -14,7 +14,11 @@ use crate::{
     },
     runtime::{
         InstanceRegistry, external_service_mappings::ExternalServiceSnapshot,
-        registry::RegistryError, site_services::SiteServiceProtocol,
+        registry::RegistryError,
+        site_services::{
+            SiteServiceProtocol,
+            resolve::{ResolveCtx, ResolveOutcome, resolve_endpoint},
+        },
     },
     system::{
         translate::proxy::instance_ipv6,
@@ -213,6 +217,7 @@ pub(super) fn build_service_dnat_rules(
     app_name: &AppName,
     snapshot: &ExternalServiceSnapshot,
     backends_by_app: &HashMap<AppName, AppBackendMap>,
+    resolve_ctx: &ResolveCtx<'_>,
 ) -> Result<ServiceDnatBuild, RegistryError> {
     let ServiceBackends {
         filtered: backends,
@@ -242,7 +247,7 @@ pub(super) fn build_service_dnat_rules(
             continue;
         };
         let resolved_backends =
-            resolve_external_backends(target, svc_port, proto, snapshot, backends_by_app);
+            resolve_external_backends(target, svc_port, proto, snapshot, backends_by_app, resolve_ctx);
         let svc_instance = registry.get_or_create_singleton(
             app_name,
             ResourceKind::ExternalService,
@@ -337,12 +342,14 @@ fn collect_external_bindings(
 /// matches the requested `(service_port, protocol)`; the DNAT rule is still
 /// installed (the empty backend list blackholes traffic, surfacing the
 /// misconfiguration as a connection failure rather than a silent drop).
+// r[impl service.site.address]
 pub(super) fn resolve_external_backends(
     target: &ServiceRef,
     svc_port: u16,
     proto: ForwardProto,
     snapshot: &ExternalServiceSnapshot,
     backends_by_app: &HashMap<AppName, AppBackendMap>,
+    resolve_ctx: &ResolveCtx<'_>,
 ) -> Vec<(Ipv6Addr, u16)> {
     match target {
         ServiceRef::App {
@@ -357,15 +364,20 @@ pub(super) fn resolve_external_backends(
             .site_endpoints
             .get(site_name)
             .map(|eps| {
-                eps.iter()
-                    .filter(|e| e.service_port == svc_port && protocols_match(e.protocol, proto))
-                    .filter_map(|e| {
-                        e.remote_host
-                            .parse::<Ipv6Addr>()
-                            .ok()
-                            .map(|ip| (ip, e.remote_port))
-                    })
-                    .collect()
+                let mut out: Vec<(Ipv6Addr, u16)> = Vec::new();
+                for ep in eps {
+                    if ep.service_port != svc_port || !protocols_match(ep.protocol, proto) {
+                        continue;
+                    }
+                    if let ResolveOutcome::Routable(addrs) =
+                        resolve_endpoint(&ep.remote_host, resolve_ctx)
+                    {
+                        for addr in addrs {
+                            out.push((addr, ep.remote_port));
+                        }
+                    }
+                }
+                out
             })
             .unwrap_or_default(),
     }
@@ -440,7 +452,7 @@ mod tests {
     use seedling_protocol::names::{AppName, AppServiceName, SiteServiceName};
 
     use super::*;
-    use crate::runtime::site_services::SiteServiceEndpoint;
+    use crate::runtime::site_services::{SiteServiceEndpoint, resolve::StaticHostnameLookup};
 
     fn ipv6(s: &str) -> Ipv6Addr {
         s.parse().unwrap()
@@ -454,6 +466,18 @@ mod tests {
         s.site_endpoints
             .insert(SiteServiceName::new(site_name).unwrap(), endpoints);
         s
+    }
+
+    fn empty_resolver() -> StaticHostnameLookup {
+        StaticHostnameLookup::new()
+    }
+
+    fn ctx<'a>(resolver: &'a StaticHostnameLookup) -> ResolveCtx<'a> {
+        ResolveCtx {
+            nat64_active: true,
+            has_ipv6_egress: true,
+            resolver,
+        }
     }
 
     #[test]
@@ -490,6 +514,7 @@ mod tests {
             ForwardProto::Tcp,
             &snap,
             &HashMap::new(),
+            &ctx(&empty_resolver()),
         );
         let mut sorted = backends;
         sorted.sort();
@@ -527,6 +552,7 @@ mod tests {
             ForwardProto::Tcp,
             &snap,
             &HashMap::new(),
+            &ctx(&empty_resolver()),
         );
         assert_eq!(backends, vec![(ipv6("fd5e::42"), 80)]);
     }
@@ -554,6 +580,7 @@ mod tests {
             ForwardProto::Tcp,
             &snap,
             &backends,
+            &ctx(&empty_resolver()),
         );
         assert_eq!(
             resolved,
@@ -572,6 +599,7 @@ mod tests {
             ForwardProto::Tcp,
             &snap,
             &HashMap::new(),
+            &ctx(&empty_resolver()),
         );
         assert!(empty.is_empty());
     }

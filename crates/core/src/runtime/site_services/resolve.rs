@@ -51,6 +51,17 @@ pub trait HostnameLookup {
     fn lookup(&self, host: &str) -> Option<HostnameLookupResult>;
 }
 
+/// Always-empty `HostnameLookup`. Used when the daemon failed to read system
+/// DNS config and the live resolver cache isn't available — every name
+/// resolves to `Unresolved::NotInCache`.
+pub struct EmptyLookup;
+
+impl HostnameLookup for EmptyLookup {
+    fn lookup(&self, _host: &str) -> Option<HostnameLookupResult> {
+        None
+    }
+}
+
 /// Per-tick resolution inputs. Built in the reconciler from the active NAT64
 /// flag, the host's IPv6 egress probe result, and a borrow of the resolver
 /// cache.

@@ -813,6 +813,128 @@ impl Reconciler {
         });
     }
 
+    /// Reconcile `site_service_endpoint_unresolvable` and
+    /// `site_service_endpoint_unroutable` faults against the current
+    /// per-service classification. New faults are filed with the failing
+    /// hosts in the description; stale faults (for services that no
+    /// longer have any failing endpoint of that kind) auto-clear.
+    // r[impl service.site.address]
+    pub(super) fn reconcile_site_service_faults(
+        &mut self,
+        set: super::phases::SiteServiceFaultSet,
+    ) {
+        const KIND_UNRESOLVABLE: &str = "site_service_endpoint_unresolvable";
+        const KIND_UNROUTABLE: &str = "site_service_endpoint_unroutable";
+
+        let mut current: std::collections::BTreeSet<(
+            seedling_protocol::names::SiteServiceName,
+            &'static str,
+        )> = std::collections::BTreeSet::new();
+        for name in set.unresolvable.keys() {
+            current.insert((name.clone(), KIND_UNRESOLVABLE));
+        }
+        for name in set.unroutable.keys() {
+            current.insert((name.clone(), KIND_UNROUTABLE));
+        }
+
+        let prior = std::mem::take(&mut self.prev_site_service_faults);
+
+        // 1. File faults for current entries (idempotent).
+        let unresolvable = set.unresolvable.clone();
+        let unroutable = set.unroutable.clone();
+        self.db.call(move |db| {
+            let system = AppName::new_unchecked("_system");
+            for (name, hosts) in &unresolvable {
+                let already = faults::list_active_faults(db, Some(&system))
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|f| {
+                        f.kind == KIND_UNRESOLVABLE
+                            && f.resource_type.as_deref() == Some("site_service")
+                            && f.resource_name.as_deref() == Some(name.as_str())
+                    });
+                if already {
+                    continue;
+                }
+                let desc = format!(
+                    "site service {:?} has DNS-named endpoint(s) that failed to resolve: {}",
+                    name.as_str(),
+                    hosts.join(", "),
+                );
+                if let Err(e) = faults::file_fault(
+                    db,
+                    &system,
+                    Some("site_service"),
+                    Some(name.as_str()),
+                    None,
+                    KIND_UNRESOLVABLE,
+                    &desc,
+                ) {
+                    tracing::warn!(site_service = %name.as_str(), "failed to file site_service_endpoint_unresolvable: {e}");
+                }
+            }
+            for (name, hosts) in &unroutable {
+                let already = faults::list_active_faults(db, Some(&system))
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|f| {
+                        f.kind == KIND_UNROUTABLE
+                            && f.resource_type.as_deref() == Some("site_service")
+                            && f.resource_name.as_deref() == Some(name.as_str())
+                    });
+                if already {
+                    continue;
+                }
+                let desc = format!(
+                    "site service {:?} has endpoint(s) that require NAT64 but NAT64 is not active: {}",
+                    name.as_str(),
+                    hosts.join(", "),
+                );
+                if let Err(e) = faults::file_fault(
+                    db,
+                    &system,
+                    Some("site_service"),
+                    Some(name.as_str()),
+                    None,
+                    KIND_UNROUTABLE,
+                    &desc,
+                ) {
+                    tracing::warn!(site_service = %name.as_str(), "failed to file site_service_endpoint_unroutable: {e}");
+                }
+            }
+        });
+
+        // 2. Clear faults that were in the prior set but not the current.
+        let resolved: Vec<(seedling_protocol::names::SiteServiceName, &'static str)> = prior
+            .difference(&current)
+            .cloned()
+            .collect();
+        if !resolved.is_empty() {
+            self.db.call(move |db| {
+                let system = AppName::new_unchecked("_system");
+                let active = faults::list_active_faults(db, Some(&system)).unwrap_or_default();
+                for (name, kind) in &resolved {
+                    for f in &active {
+                        if f.kind != *kind {
+                            continue;
+                        }
+                        if f.resource_type.as_deref() != Some("site_service") {
+                            continue;
+                        }
+                        if f.resource_name.as_deref() != Some(name.as_str()) {
+                            continue;
+                        }
+                        if let Err(e) = faults::clear_fault(db, &f.id, &system) {
+                            tracing::warn!(fault_id = %f.id, "failed to clear site_service fault: {e}");
+                        }
+                    }
+                }
+            });
+        }
+
+        self.prev_site_service_faults = current;
+    }
+
     pub(super) fn clear_system_fault(&self, fault_kind: &str) {
         let fault_kind = fault_kind.to_owned();
         self.db.call(move |db| {

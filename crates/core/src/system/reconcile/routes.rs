@@ -14,6 +14,7 @@ use crate::{
         InstanceRegistry, desired::DesiredState,
         external_service_mappings::ExternalServiceSnapshot, identity::ResourceInstance,
         lifecycle::LifecycleState, registry::RegistryError,
+        site_services::resolve::{ResolveCtx, ResolveOutcome, resolve_endpoint},
     },
     system::{translate::proxy::instance_ipv6, types::ServiceRoute},
 };
@@ -34,6 +35,7 @@ pub(super) fn build(
     app_name: &AppName,
     running_pods_by_app: &HashMap<AppName, Vec<RunningPod>>,
     ext_snapshot: &ExternalServiceSnapshot,
+    resolve_ctx: &ResolveCtx<'_>,
 ) -> Result<
     (
         Vec<ServiceRoute>,
@@ -128,9 +130,15 @@ pub(super) fn build(
                 .site_endpoints
                 .get(site_name)
                 .map(|eps| {
-                    eps.iter()
-                        .filter_map(|e| e.remote_host.parse::<Ipv6Addr>().ok())
-                        .collect::<Vec<_>>()
+                    let mut out: Vec<Ipv6Addr> = Vec::new();
+                    for e in eps {
+                        if let ResolveOutcome::Routable(addrs) =
+                            resolve_endpoint(&e.remote_host, resolve_ctx)
+                        {
+                            out.extend(addrs);
+                        }
+                    }
+                    out
                 })
                 .unwrap_or_default(),
         };
