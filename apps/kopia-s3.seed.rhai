@@ -1,20 +1,13 @@
-// Backup app using Kopia (kopia.io) backed by an S3-compatible object store.
-//
-// Usage:
-//   1. Register the app in Seedling.
-//   2. Set all required params (bucket, access-key, secret-key, hostname, passphrase).
-//   3. Run the install action to create the Kopia repository and apply the initial policy.
-//   4. Register as a backup provider:
-//        seedling-ctl backups apps register --name <name> --app <this-app>
-//
-// Each registered instance corresponds to one Kopia repository. If you need
-// to back up multiple independent volumes to the same bucket, use separate
-// instances with different --prefix values.
-//
-// Run the "connect" action after rotating credentials or changing
-// bucket/prefix/endpoint/region.
+app.description(`
+Backup app using [Kopia](https://kopia.io) backed by an S3-compatible object store.
 
-app.description("Backup provider using Kopia (kopia.io) backed by an S3-compatible object store; one app instance per Kopia repository");
+Each app instance corresponds to one Kopia repository. If you need
+to back up multiple independent volumes to the same bucket, use separate
+instances with different "prefix" values.
+
+Run the "connect" action after rotating credentials or changing
+bucket/prefix/endpoint/region.
+`);
 
 // ── Image ─────────────────────────────────────────────────────────────────────
 
