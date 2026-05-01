@@ -1,22 +1,5 @@
 # Windows backend — research notes
 
-## Status
-
-**Parked.** This is a research record of an exploratory design discussion, not
-an implementation plan. Nothing here is committed to the roadmap.
-
-If a Windows target becomes a real product goal, restart from this document —
-most of the analysis will still apply, except the WSL2 mirrored-mode situation
-(see below), which should be re-checked from scratch because the upstream bug
-status will probably have shifted.
-
-## Why this was explored
-
-Companion to `k8s-backend.md`. The framing for K8s is "seedling sits above
-K8s in abstraction, and incidentally avoids needing K8s on single servers".
-The natural follow-up is whether seedling can run on Windows — both for
-single-machine Windows Server use cases and Win11 workstation development.
-
 ## Three framings considered
 
 ### A. Daemon-on-Windows-host, workloads-in-WSL2
