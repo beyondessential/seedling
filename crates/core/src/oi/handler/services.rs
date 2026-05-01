@@ -92,22 +92,57 @@ impl From<EndpointParams> for SiteServiceEndpoint {
     }
 }
 
-/// The current reconciler dataplane only routes over IPv6. DNS names and
-/// IPv4 literals are parked until the follow-up that introduces v4 or DNS
-/// resolution into `ServiceRoute` / `ServiceDnatRule`. Reject them here so
-/// operators get immediate feedback rather than a mysterious blackhole.
-fn require_ipv6_remote_host(host: &str) -> Result<(), OiError> {
-    if host.parse::<std::net::Ipv6Addr>().is_ok() {
-        Ok(())
-    } else {
-        Err(OiError::new(
+/// Validate `remote_host`: accept any IP literal (v4 or v6) or a syntactically
+/// valid DNS name. Names are resolved at runtime by the daemon's
+/// site-service resolver; the reconciler turns failed resolution and
+/// missing-NAT64 routing into structured faults rather than a mysterious
+/// blackhole.
+// r[impl service.site.address]
+fn validate_remote_host(host: &str) -> Result<(), OiError> {
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return Ok(());
+    }
+    if !is_valid_dns_name(host) {
+        return Err(OiError::new(
             ErrorCode::RequirementsInvalid,
             format!(
-                "remote_host {host:?} must be an IPv6 literal \
-                 (IPv4 and DNS name support is tracked as a follow-up)"
+                "remote_host {host:?} must be an IPv6 literal, an IPv4 literal, \
+                 or a syntactically valid DNS name"
             ),
-        ))
+        ));
     }
+    Ok(())
+}
+
+/// Checks whether `s` is a syntactically plausible DNS name: 1–253 chars
+/// total, dot-separated labels of 1–63 chars each that match
+/// `[A-Za-z0-9-]+` and don't start or end with `-`. Rejects trailing dots,
+/// underscore labels, and `localhost` (the daemon resolves on the host;
+/// localhost would loop back into the daemon's own networking).
+fn is_valid_dns_name(s: &str) -> bool {
+    if s.is_empty() || s.len() > 253 || s.eq_ignore_ascii_case("localhost") {
+        return false;
+    }
+    let mut any_alpha = false;
+    for label in s.split('.') {
+        if label.is_empty() || label.len() > 63 {
+            return false;
+        }
+        if label.starts_with('-') || label.ends_with('-') {
+            return false;
+        }
+        for c in label.chars() {
+            if !(c.is_ascii_alphanumeric() || c == '-') {
+                return false;
+            }
+            if c.is_ascii_alphabetic() {
+                any_alpha = true;
+            }
+        }
+    }
+    // Reject all-numeric strings (e.g. "12345"); legitimate names always
+    // carry at least one alphabetic character somewhere.
+    any_alpha
 }
 
 #[derive(Deserialize)]
@@ -126,7 +161,7 @@ pub(crate) fn create_site_service(
     ctx: &RequestCtx,
 ) -> HandlerResult {
     for ep in &params.endpoints {
-        require_ipv6_remote_host(&ep.remote_host)?;
+        validate_remote_host(&ep.remote_host)?;
     }
     let endpoints: Vec<SiteServiceEndpoint> =
         params.endpoints.into_iter().map(Into::into).collect();
@@ -160,6 +195,9 @@ pub(crate) fn create_site_service(
         );
     }
 
+    if let Some(r) = state.site_resolver.as_deref() {
+        r.kick();
+    }
     state.tick_notify.notify_one();
     Ok(json!({ "created": true }))
 }
@@ -264,6 +302,10 @@ pub(crate) fn delete_site_service(
     // r[impl service.site.lifecycle.events]
     ctx.events.site_service_deleted(params.name.as_str());
 
+    if let Some(r) = state.site_resolver.as_deref() {
+        r.kick();
+    }
+    state.tick_notify.notify_one();
     Ok(json!({ "deleted": true }))
 }
 
@@ -282,7 +324,7 @@ pub(crate) fn add_site_service_endpoint(
     params: SiteServiceEndpointParams,
     ctx: &RequestCtx,
 ) -> HandlerResult {
-    require_ipv6_remote_host(&params.remote_host)?;
+    validate_remote_host(&params.remote_host)?;
     let name = params.name.clone();
     let ep = SiteServiceEndpoint {
         service_port: params.service_port,
@@ -305,6 +347,9 @@ pub(crate) fn add_site_service_endpoint(
         params.remote_port,
     );
 
+    if let Some(r) = state.site_resolver.as_deref() {
+        r.kick();
+    }
     state.tick_notify.notify_one();
     Ok(json!({ "added": true }))
 }
@@ -356,8 +401,37 @@ pub(crate) fn remove_site_service_endpoint(
         params.remote_port,
     );
 
+    if let Some(r) = state.site_resolver.as_deref() {
+        r.kick();
+    }
     state.tick_notify.notify_one();
     Ok(json!({ "removed": true }))
+}
+
+/// Snapshot of the site-service DNS resolver cache. Operators inspect
+/// this to confirm what addresses a DNS-named endpoint is currently
+/// routing to.
+// r[impl service.site.address]
+pub(crate) fn site_service_resolver_status(state: &OiState) -> HandlerResult {
+    let entries = state
+        .site_resolver
+        .as_deref()
+        .map(|r| r.status())
+        .unwrap_or_default();
+    let items: Vec<_> = entries
+        .iter()
+        .map(|e| {
+            json!({
+                "host": e.host,
+                "aaaa": e.aaaa.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
+                "a":    e.a.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
+                "last_attempt_failed": e.last_attempt_failed,
+                "age_seconds": e.age.as_secs(),
+                "ttl_remaining_seconds": e.ttl_remaining.as_secs(),
+            })
+        })
+        .collect();
+    Ok(json!({ "entries": items }))
 }
 
 #[derive(Deserialize)]
@@ -592,4 +666,56 @@ pub(crate) fn list_declared_external_services(state: &OiState) -> HandlerResult 
         ak.cmp(&bk)
     });
     Ok(json!(items))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_accepts_ipv6_literal() {
+        validate_remote_host("2001:db8::1").unwrap();
+        validate_remote_host("fd5e::42").unwrap();
+    }
+
+    #[test]
+    fn validate_accepts_ipv4_literal() {
+        validate_remote_host("10.0.0.1").unwrap();
+        validate_remote_host("192.0.2.10").unwrap();
+    }
+
+    #[test]
+    fn validate_accepts_dns_name() {
+        validate_remote_host("db.example.com").unwrap();
+        validate_remote_host("internal-host").unwrap();
+        validate_remote_host("a-b-c.example.co.uk").unwrap();
+    }
+
+    #[test]
+    fn validate_rejects_localhost() {
+        validate_remote_host("localhost").unwrap_err();
+        validate_remote_host("LocalHost").unwrap_err();
+    }
+
+    #[test]
+    fn validate_rejects_underscore_label() {
+        validate_remote_host("bad_underscore.example").unwrap_err();
+    }
+
+    #[test]
+    fn validate_rejects_empty() {
+        validate_remote_host("").unwrap_err();
+    }
+
+    #[test]
+    fn validate_rejects_label_starting_with_dash() {
+        validate_remote_host("-bad.example").unwrap_err();
+    }
+
+    #[test]
+    fn validate_rejects_numeric_only_string() {
+        // Looks like an IP but has only three parts; falls into the DNS
+        // shape, where all-numeric labels are rejected.
+        validate_remote_host("123.456").unwrap_err();
+    }
 }
