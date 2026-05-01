@@ -938,9 +938,39 @@ impl Reconciler {
                             "proxy_failed",
                             &format!("apply_config failed: {e}"),
                         );
+                        // r[impl fault.proxy-apply-failed]
+                        // Mirror the system-level proxy_failed fault at
+                        // resource granularity so each affected app sees
+                        // the degradation in `DescribeApp` / `GetStatus`,
+                        // not just `ListFaults` for `_system`.
+                        let app_ingresses: Vec<(AppName, String)> = apps
+                            .iter()
+                            .flat_map(|a| {
+                                a.app_def.resources.values().filter_map(|r| match r {
+                                    crate::defs::resource::Resource::Ingress(ing) => Some((
+                                        a.name.clone(),
+                                        ing.name.as_str().to_owned(),
+                                    )),
+                                    _ => None,
+                                })
+                            })
+                            .collect();
+                        let site_ingress_names: Vec<String> = site_ingress_snapshot
+                            .ingresses
+                            .iter()
+                            .filter(|ing| !ing.stale)
+                            .map(|ing| ing.name.as_str().to_owned())
+                            .collect();
+                        self.file_proxy_apply_failed_faults(
+                            app_ingresses,
+                            site_ingress_names,
+                            &format!("apply_config failed: {e}"),
+                        );
                     }
                     Ok(()) if has_proxy_config => {
                         self.clear_system_fault("proxy_failed");
+                        // r[impl fault.proxy-apply-failed]
+                        self.clear_proxy_apply_failed_faults();
                         self.persist_obs(proxy_ready_obs);
 
                         // r[impl infra.proxy.upgrade.cache]

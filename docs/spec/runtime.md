@@ -1083,6 +1083,10 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > When TLS certificate acquisition for an ingress hostname fails persistently (after the proxy's own retry policy has been exhausted), the runtime must file a fault of kind `cert_acquisition_failed` associated with that ingress, identifying the hostname and the most recent acquisition error.
 > The fault is cleared automatically when a subsequent acquisition for the same hostname is observed as `valid`.
 
+> r[fault.proxy-apply-failed]
+> When applying the runtime-built proxy configuration to the network proxy fails on a reconciliation tick, the runtime must file a fault of kind `proxy_apply_failed` against every ingress resource (app and site) whose data was included in that configuration. Each fault must identify the offending ingress and carry the most recent apply error so that operators can see which ingresses are currently degraded via the operator interface (`ListFaults`, `GetStatus`, `DescribeApp`).
+> The faults are cleared automatically when a subsequent apply for the same configuration set succeeds.
+
 > r[fault.healthcheck]
 > When a container instance has a declared [healthcheck](language.md#l--deployment.healthcheck) and has been continuously unhealthy for longer than its grace window (`start_period` plus `retries × interval`), the runtime must file a fault of kind `health_check_failed` associated with that instance.
 > The fault is cleared automatically when the instance is next observed as healthy, or when the instance is unscheduled.
