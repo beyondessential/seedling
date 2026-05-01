@@ -1,5 +1,32 @@
 # Caddy resilience plan
 
+## Status (2026-05-01)
+
+- **Fix A (rollback on rejected replay) — done.** Added
+  `CaddyStartupError::ConfigRejected`. The blue/green upgrade arm of
+  `ensure_caddy_running` now stops the new slot and returns the error
+  instead of committing the slot swap when the replay POST fails. The
+  fresh-start arm intentionally keeps warn-and-continue (no previous slot
+  to fall back to).
+- **Fix B (cache `ProxyConfig`, not raw Caddy JSON) — done.** Schema v52
+  wipes existing rows; cache helpers now persist the Seedling-internal
+  `ProxyConfig` and the replay path calls `build_caddy_config` at apply
+  time, eliminating format drift between the cached value and the running
+  Caddy version. The redundant `caddy_json` field on `ProxyBuildResult`
+  was dropped.
+- **Fix E (start_transient during systemd restart window) — addressed by
+  unrelated work.** `start_slot` already handles a lingering unit by
+  resetting/stopping it and waiting for it to unload before starting a
+  new transient. Different mechanism than the plan proposed but the
+  spurious-error symptom is gone.
+- **Fix C (immediate tick after replay failure)** — no code change made;
+  the gap was already minimal and is now narrower with A+B.
+- **Fix D (per-ingress fault on repeated apply failures)** — still
+  outstanding. Today only a system-level `proxy_failed` fault is filed.
+  Per-ingress faults remain a Phase 7 concern.
+- **Gap 1 (`is_healthy` only checks admin liveness)** — still
+  outstanding. Open question on whether a stricter endpoint exists.
+
 ## What the current code does
 
 `ensure_caddy_running` is called on every reconciler tick (10-second timeout) and at
