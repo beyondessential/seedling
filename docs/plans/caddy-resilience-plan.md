@@ -24,8 +24,12 @@
 - **Fix D (per-ingress fault on repeated apply failures)** — still
   outstanding. Today only a system-level `proxy_failed` fault is filed.
   Per-ingress faults remain a Phase 7 concern.
-- **Gap 1 (`is_healthy` only checks admin liveness)** — still
-  outstanding. Open question on whether a stricter endpoint exists.
+- **Gap 1 (`is_healthy` only checks admin liveness) — done.**
+  `is_healthy_impl` now parses the `GET /config/` response and returns
+  `false` for a JSON `null` body, so the "admin alive but no config
+  loaded" state is correctly treated as unhealthy by both the observer
+  (`observe.ingress`) and the running-with-correct-image branch in
+  `ensure_caddy_running`.
 
 ## What the current code does
 
