@@ -1196,7 +1196,17 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > The runtime must persist the last successfully applied proxy configuration so that it can
 > be applied to a replacement container during an upgrade before the traffic cutover occurs,
 > ensuring no window exists where the new container receives traffic without a valid
-> configuration.
+> configuration. The persisted configuration must be stored in a form the runtime owns and
+> can re-render — not a form whose validity depends on the version of the network proxy
+> running at cache time — so that an upgrade that brings in a breaking change in the proxy's
+> configuration format does not invalidate the cached value.
+
+> r[infra.proxy.upgrade.rollback]
+> If applying the persisted proxy configuration to a replacement container during an upgrade
+> fails (for example, because the new container rejects the configuration as malformed), the
+> runtime must abort the upgrade: it must stop the replacement container, leave the previous
+> container running and authoritative, and not commit the cutover. The runtime must report
+> the failure and retry the upgrade on a subsequent reconciliation tick.
 
 > r[infra.dataplane.output-nat]
 > The runtime must install DNAT rules in an nftables `output` chain (in addition to the
