@@ -1,5 +1,11 @@
 import { describe, expect, test } from "vitest";
-import { formatServiceTarget, looksLikeIpv6Literal } from "./services";
+import {
+  formatRemoteEndpoint,
+  formatServiceTarget,
+  looksLikeIpv4Literal,
+  looksLikeIpv6Literal,
+  looksLikeRemoteHost,
+} from "./services";
 
 describe("formatServiceTarget", () => {
   test("site target uses _site/ shorthand", () => {
@@ -34,5 +40,60 @@ describe("looksLikeIpv6Literal", () => {
 
   test("rejects empty string", () => {
     expect(looksLikeIpv6Literal("")).toBe(false);
+  });
+});
+
+describe("looksLikeIpv4Literal", () => {
+  test("accepts IPv4 dotted quads", () => {
+    expect(looksLikeIpv4Literal("10.0.0.1")).toBe(true);
+    expect(looksLikeIpv4Literal("192.168.1.42")).toBe(true);
+  });
+
+  test("rejects non-IPv4 strings", () => {
+    expect(looksLikeIpv4Literal("2001:db8::1")).toBe(false);
+    expect(looksLikeIpv4Literal("example.com")).toBe(false);
+    expect(looksLikeIpv4Literal("")).toBe(false);
+  });
+});
+
+describe("looksLikeRemoteHost", () => {
+  test("accepts IPv6 literal", () => {
+    expect(looksLikeRemoteHost("2001:db8::1")).toBe(true);
+  });
+
+  test("accepts IPv4 literal", () => {
+    expect(looksLikeRemoteHost("10.0.0.1")).toBe(true);
+  });
+
+  test("accepts DNS name", () => {
+    expect(looksLikeRemoteHost("db.example.com")).toBe(true);
+    expect(looksLikeRemoteHost("internal-host")).toBe(true);
+  });
+
+  test("rejects localhost", () => {
+    expect(looksLikeRemoteHost("localhost")).toBe(false);
+    expect(looksLikeRemoteHost("LocalHost")).toBe(false);
+  });
+
+  test("rejects empty / oversized / underscore labels", () => {
+    expect(looksLikeRemoteHost("")).toBe(false);
+    expect(looksLikeRemoteHost("a".repeat(254))).toBe(false);
+    expect(looksLikeRemoteHost("bad_underscore.example")).toBe(false);
+  });
+
+  test("rejects all-numeric strings", () => {
+    expect(looksLikeRemoteHost("123.456")).toBe(false);
+  });
+});
+
+describe("formatRemoteEndpoint", () => {
+  test("brackets IPv6 literals", () => {
+    expect(formatRemoteEndpoint("2001:db8::1", 5432)).toBe("[2001:db8::1]:5432");
+  });
+
+  test("does not bracket IPv4 or DNS hosts", () => {
+    expect(formatRemoteEndpoint("10.0.0.1", 80)).toBe("10.0.0.1:80");
+    expect(formatRemoteEndpoint("db.example.com", 5432))
+      .toBe("db.example.com:5432");
   });
 });
