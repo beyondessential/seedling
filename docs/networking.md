@@ -146,6 +146,60 @@ backend collection as service DNAT rules. This avoids a double-DNAT
 problem: nftables only processes the prerouting chain once per packet,
 so chaining mount DNAT → service DNAT would not work.
 
+## Site service backend resolution
+
+A site service endpoint's `remote_host` may be an IPv6 literal, an IPv4
+literal, or a DNS name. The data plane is IPv6-only, so non-IPv6 hosts
+have to be turned into IPv6-routable addresses before they can become
+DNAT backends.
+
+The reconciler does this through a single `resolve_endpoint` function
+(`crates/core/src/runtime/site_services/resolve.rs`) called once per
+endpoint per tick. Inputs:
+
+- `nat64_active` — whether the host has NAT64 (auto-detected upstream
+  or seedling-managed; see `--nat64`).
+- `has_ipv6_egress` — whether the host has a default IPv6 route plus a
+  non-loopback global unicast source. Same probe that decides DNS64
+  `translate_all` (see "Forcing translation on IPv4-only hosts" under
+  NAT64).
+- A read-only borrow of the resolver cache.
+
+The decision matrix is:
+
+| `remote_host` shape    | `nat64_active` | `has_ipv6_egress` | Outcome                           |
+|------------------------|---------------:|------------------:|-----------------------------------|
+| IPv6 literal           |              — |                 — | use literally                     |
+| IPv4 literal           |           true |                 — | synthesise `64:ff9b::a.b.c.d`     |
+| IPv4 literal           |          false |                 — | unroutable → fault                |
+| DNS, AAAA + IPv6 egress|              — |              true | use AAAA records literally        |
+| DNS, A + NAT64         |              — |             false | synthesise `64:ff9b::` per A      |
+| DNS, A only, no NAT64  |              — |                 — | unroutable → fault                |
+| DNS, no records yet    |              — |                 — | unresolved (no backends)          |
+| DNS, repeated failure  |              — |                 — | unresolved → fault after threshold|
+
+DNS resolution is performed by a background `SiteServiceResolver` task
+that runs alongside the reconciler. It uses the host's
+`/etc/resolv.conf` via hickory-resolver, so split-DNS, MagicDNS, and
+corporate resolvers configured on the host are honoured. The cache is
+keyed by hostname and refreshed at the minimum of the answer TTL and a
+maximum age (currently 5 minutes); the reconciler is kicked when a
+host's resolved set actually changes so route / nftables state catches
+up promptly.
+
+Endpoints that can't be turned into a routable address surface as
+faults on the affected site service:
+
+- `site_service_endpoint_unresolvable` — DNS lookup has failed past
+  the consecutive-failure threshold (currently 5).
+- `site_service_endpoint_unroutable` — the endpoint requires NAT64 but
+  NAT64 isn't active on this host.
+
+Both auto-clear on the first tick where the condition no longer
+applies. They are non-blocking: a misbehaving endpoint reduces only
+its own site service's backend pool — it never affects other site
+services or any apps.
+
 ## Ingress
 
 An Ingress exposes a service to external traffic. All ingress traffic
