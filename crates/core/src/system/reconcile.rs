@@ -947,10 +947,9 @@ impl Reconciler {
                             .iter()
                             .flat_map(|a| {
                                 a.app_def.resources.values().filter_map(|r| match r {
-                                    crate::defs::resource::Resource::Ingress(ing) => Some((
-                                        a.name.clone(),
-                                        ing.name.as_str().to_owned(),
-                                    )),
+                                    crate::defs::resource::Resource::Ingress(ing) => {
+                                        Some((a.name.clone(), ing.name.as_str().to_owned()))
+                                    }
                                     _ => None,
                                 })
                             })
