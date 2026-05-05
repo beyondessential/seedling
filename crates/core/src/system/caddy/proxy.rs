@@ -93,8 +93,19 @@ pub(crate) fn build_client(socket_path: &Path) -> Result<reqwest::Client, reqwes
 impl CaddyProxy {
     async fn is_healthy_impl(&self) -> Result<bool, CaddyError> {
         let client = self.get_client().await;
-        match client.get("http://localhost/config/").send().await {
-            Ok(resp) => Ok(resp.status().is_success()),
+        let resp = match client.get("http://localhost/config/").send().await {
+            Ok(r) if r.status().is_success() => r,
+            _ => return Ok(false),
+        };
+        // A 200 with body `null` means the admin API is alive but Caddy has
+        // no config loaded — it would route nothing. Treat as unhealthy so
+        // ensure_caddy_running restarts it and the observer reports the
+        // ingress as unreachable instead of falsely "ready". Caddy is always
+        // started with the admin-binding config (`{"admin": {...}}`), so a
+        // healthy fresh instance still returns a non-null body here.
+        match resp.json::<Value>().await {
+            Ok(Value::Null) => Ok(false),
+            Ok(_) => Ok(true),
             Err(_) => Ok(false),
         }
     }

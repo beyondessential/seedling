@@ -1090,6 +1090,10 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > When TLS certificate acquisition for an ingress hostname fails persistently (after the proxy's own retry policy has been exhausted), the runtime must file a fault of kind `cert_acquisition_failed` associated with that ingress, identifying the hostname and the most recent acquisition error.
 > The fault is cleared automatically when a subsequent acquisition for the same hostname is observed as `valid`.
 
+> r[fault.proxy-apply-failed]
+> When applying the runtime-built proxy configuration to the network proxy fails on a reconciliation tick, the runtime must file a fault of kind `proxy_apply_failed` against every ingress resource (app and site) whose data was included in that configuration. Each fault must identify the offending ingress and carry the most recent apply error so that operators can see which ingresses are currently degraded via the operator interface (`ListFaults`, `GetStatus`, `DescribeApp`).
+> The faults are cleared automatically when a subsequent apply for the same configuration set succeeds.
+
 > r[fault.healthcheck]
 > When a container instance has a declared [healthcheck](language.md#l--deployment.healthcheck) and has been continuously unhealthy for longer than its grace window (`start_period` plus `retries × interval`), the runtime must file a fault of kind `health_check_failed` associated with that instance.
 > The fault is cleared automatically when the instance is next observed as healthy, or when the instance is unscheduled.
@@ -1203,7 +1207,17 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > The runtime must persist the last successfully applied proxy configuration so that it can
 > be applied to a replacement container during an upgrade before the traffic cutover occurs,
 > ensuring no window exists where the new container receives traffic without a valid
-> configuration.
+> configuration. The persisted configuration must be stored in a form the runtime owns and
+> can re-render — not a form whose validity depends on the version of the network proxy
+> running at cache time — so that an upgrade that brings in a breaking change in the proxy's
+> configuration format does not invalidate the cached value.
+
+> r[infra.proxy.upgrade.rollback]
+> If applying the persisted proxy configuration to a replacement container during an upgrade
+> fails (for example, because the new container rejects the configuration as malformed), the
+> runtime must abort the upgrade: it must stop the replacement container, leave the previous
+> container running and authoritative, and not commit the cutover. The runtime must report
+> the failure and retry the upgrade on a subsequent reconciliation tick.
 
 > r[infra.dataplane.output-nat]
 > The runtime must install DNAT rules in an nftables `output` chain (in addition to the

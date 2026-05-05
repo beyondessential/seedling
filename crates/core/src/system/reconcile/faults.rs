@@ -950,6 +950,93 @@ impl Reconciler {
         });
     }
 
+    /// File a `proxy_apply_failed` fault against every ingress whose data
+    /// was included in the proxy config that just failed to apply. App
+    /// ingresses get a fault on their owning app; site ingresses get one
+    /// on the `_system` sentinel app, mirroring the convention used by
+    /// `ingress_conflict` and `site_ingress_target_missing`. Filing is
+    /// idempotent — an existing matching fault is left in place rather
+    /// than re-filed each tick.
+    // r[impl fault.proxy-apply-failed]
+    pub(super) fn file_proxy_apply_failed_faults(
+        &self,
+        app_ingresses: Vec<(AppName, String)>,
+        site_ingress_names: Vec<String>,
+        description: &str,
+    ) {
+        let description = description.to_owned();
+        self.db.call(move |db| {
+            let system = AppName::new_unchecked("_system");
+            for (app, ingress_name) in &app_ingresses {
+                let already = faults::list_active_faults(db, Some(app))
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|f| {
+                        f.kind == "proxy_apply_failed"
+                            && f.resource_type.as_deref() == Some("ingress")
+                            && f.resource_name.as_deref() == Some(ingress_name.as_str())
+                    });
+                if already {
+                    continue;
+                }
+                if let Err(e) = faults::file_fault(
+                    db,
+                    app,
+                    Some("ingress"),
+                    Some(ingress_name.as_str()),
+                    None,
+                    "proxy_apply_failed",
+                    &description,
+                ) {
+                    tracing::warn!(app = %app, ingress = %ingress_name, "failed to file proxy_apply_failed fault: {e}");
+                }
+            }
+            for site_name in &site_ingress_names {
+                let already = faults::list_active_faults(db, Some(&system))
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|f| {
+                        f.kind == "proxy_apply_failed"
+                            && f.resource_type.as_deref() == Some("site_ingress")
+                            && f.resource_name.as_deref() == Some(site_name.as_str())
+                    });
+                if already {
+                    continue;
+                }
+                if let Err(e) = faults::file_fault(
+                    db,
+                    &system,
+                    Some("site_ingress"),
+                    Some(site_name.as_str()),
+                    None,
+                    "proxy_apply_failed",
+                    &description,
+                ) {
+                    tracing::warn!(site_ingress = %site_name, "failed to file proxy_apply_failed fault: {e}");
+                }
+            }
+        });
+    }
+
+    /// Clear every active `proxy_apply_failed` fault, regardless of which
+    /// app or site ingress it was filed against. Called when a proxy apply
+    /// succeeds: at that point every ingress in the just-applied config is
+    /// healthy, so any lingering fault from a prior failed tick is stale.
+    // r[impl fault.proxy-apply-failed]
+    pub(super) fn clear_proxy_apply_failed_faults(&self) {
+        self.db.call(|db| {
+            let active = faults::list_active_faults(db, None).unwrap_or_default();
+            for f in active {
+                if f.kind != "proxy_apply_failed" {
+                    continue;
+                }
+                if let Err(e) = faults::clear_fault(db, &f.id, &f.app) {
+                    tracing::warn!(fault_id = %f.id, "failed to clear proxy_apply_failed fault: {e}");
+                }
+            }
+        });
+    }
+
     pub(super) fn clear_registry_faults(&self, app: &AppName) {
         let app = app.clone();
         self.db.call(move |db| {

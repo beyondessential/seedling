@@ -5,13 +5,13 @@ use std::{
 
 use ipnet::Ipv6Net;
 use rusqlite::OptionalExtension;
-use serde_json::Value;
 use snafu::{ResultExt, Snafu};
 
+use super::config::build_caddy_config;
 use super::proxy::{CaddyAddrs, CaddyProxy};
 use crate::system::{
     ContainerRuntime, NetworkProxy, ProcessManager,
-    types::{ContainerStatus, TransientRestart, TransientUnitSpec},
+    types::{ContainerStatus, ProxyConfig, TransientRestart, TransientUnitSpec},
 };
 
 pub(crate) const CADDY_BLUE: &str = "seedling-caddy-blue";
@@ -104,6 +104,12 @@ pub(crate) enum CaddyStartupError {
         source: reqwest::Error,
         backtrace: snafu::Backtrace,
     },
+    // r[impl infra.proxy.upgrade.rollback]
+    #[snafu(display("upgraded Caddy rejected the replayed proxy config: {source}"))]
+    ConfigRejected {
+        source: super::proxy::CaddyError,
+        backtrace: snafu::Backtrace,
+    },
 }
 
 /// Build the custom Caddy image from the embedded Containerfile.
@@ -168,9 +174,15 @@ fn write_active_container(conn: &rusqlite::Connection, name: &str) -> rusqlite::
     Ok(())
 }
 
-pub(crate) fn read_cached_proxy_json(
+// r[impl infra.proxy.upgrade.cache]
+/// Read the cached proxy config, if any. The cache stores the
+/// Seedling-internal `ProxyConfig` rather than the post-build Caddy JSON,
+/// so the replay path can rebuild the JSON in whatever format the current
+/// daemon emits — avoiding format drift between the cached value and a
+/// freshly-upgraded Caddy.
+pub(crate) fn read_cached_proxy_config(
     data_dir: &std::path::Path,
-) -> Result<Option<Value>, rusqlite::Error> {
+) -> Result<Option<ProxyConfig>, rusqlite::Error> {
     let conn = caddy_db_open(data_dir)?;
     let json_str: Option<String> = conn
         .query_row(
@@ -182,12 +194,13 @@ pub(crate) fn read_cached_proxy_json(
     Ok(json_str.and_then(|s| serde_json::from_str(&s).ok()))
 }
 
-pub(crate) fn write_cached_proxy_json(
+// r[impl infra.proxy.upgrade.cache]
+pub(crate) fn write_cached_proxy_config(
     data_dir: &std::path::Path,
-    json: &Value,
+    config: &ProxyConfig,
 ) -> Result<(), rusqlite::Error> {
     let conn = caddy_db_open(data_dir)?;
-    let json_str = serde_json::to_string(json).unwrap_or_default();
+    let json_str = serde_json::to_string(config).unwrap_or_default();
     conn.execute(
         "INSERT INTO caddy_proxy_config (singleton, config_json)
          VALUES (1, ?1)
@@ -525,12 +538,23 @@ pub(crate) async fn ensure_caddy_running(
                     poll_until_healthy(other, container, deadline, &other_socket).await?;
 
                 // r[impl infra.proxy.upgrade.cache]
-                // Apply the cached proxy config to the new container.
-                if let Ok(Some(json)) = read_cached_proxy_json(data_dir)
-                    && let Ok(proxy) = CaddyProxy::new(&new_addrs.admin_socket)
-                    && let Err(e) = proxy.apply_raw_json(&json).await
-                {
-                    tracing::warn!("failed to apply cached proxy config to upgraded Caddy: {e}");
+                // Replay the cached proxy config against the new container,
+                // rebuilt fresh via build_caddy_config so the JSON we POST
+                // is in whatever format the current daemon emits — not
+                // whatever was cached against the previous Caddy version.
+                if let Some(cached) = read_cached_proxy_config(data_dir).context(DbSnafu)? {
+                    let caddy_json = build_caddy_config(&cached);
+                    let proxy =
+                        CaddyProxy::new(&new_addrs.admin_socket).context(ClientBuildSnafu)?;
+                    // r[impl infra.proxy.upgrade.rollback]
+                    if let Err(e) = proxy.apply_raw_json(&caddy_json).await {
+                        tracing::warn!(
+                            error = %e,
+                            "upgraded Caddy rejected replayed config; rolling back"
+                        );
+                        stop_slot(other, process, container).await;
+                        return Err(e).context(ConfigRejectedSnafu);
+                    }
                 }
 
                 // Record the new active slot.
@@ -560,12 +584,20 @@ pub(crate) async fn ensure_caddy_running(
     let addrs = poll_until_healthy(&active, container, deadline, &active_socket).await?;
 
     // r[impl infra.proxy.upgrade.cache]
-    // Apply the cached proxy config.
-    if let Ok(Some(json)) = read_cached_proxy_json(data_dir)
+    // Replay the cached proxy config, rebuilt fresh via build_caddy_config
+    // so the POSTed JSON is in the format the running daemon emits. A
+    // rejection here is non-fatal — the next reconciler tick will push the
+    // current config — but we still warn so it is visible in logs.
+    if let Ok(Some(cached)) = read_cached_proxy_config(data_dir)
         && let Ok(proxy) = CaddyProxy::new(&addrs.admin_socket)
-        && let Err(e) = proxy.apply_raw_json(&json).await
     {
-        tracing::warn!("failed to apply cached proxy config to fresh Caddy: {e}");
+        let caddy_json = build_caddy_config(&cached);
+        if let Err(e) = proxy.apply_raw_json(&caddy_json).await {
+            tracing::warn!(
+                error = %e,
+                "fresh Caddy rejected replayed config; reconciler will push current state"
+            );
+        }
     }
 
     let conn = caddy_db_open(data_dir).context(DbSnafu)?;
