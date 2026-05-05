@@ -12,4 +12,4 @@ pub mod names;
 ///
 /// Bumping this string is the lever for incompatible protocol revisions —
 /// the handshake will then fail against peers that only offer the old id.
-pub const OI_ALPN: &[u8] = b"oi1";
+pub const OI_ALPN: &[u8] = b"bes.seedling/1";
