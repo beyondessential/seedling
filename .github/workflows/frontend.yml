@@ -77,7 +77,7 @@ jobs:
         run: cargo build -p seedling -p seedling-web -p seedling-ctl --locked
         working-directory: ${{ github.workspace }}
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('crates/web/frontend/package-lock.json') }}
@@ -89,7 +89,7 @@ jobs:
         run: npm run test:e2e
       - name: Upload Playwright report
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           # upload-artifact resolves paths relative to GITHUB_WORKSPACE,
