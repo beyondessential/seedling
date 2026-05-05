@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::runtime::db::Db;
 
+pub mod resolve;
+pub mod resolver;
+
 // r[impl service.site]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SiteServiceDef {

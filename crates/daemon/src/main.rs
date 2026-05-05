@@ -982,6 +982,16 @@ async fn main() {
         );
     }
 
+    // r[impl service.site.address]
+    // Spawn the site-service DNS resolver alongside the reconciler so
+    // operator-supplied DNS-named endpoints get periodically re-resolved
+    // and the reconciler is kicked when their addresses change.
+    let (site_resolver, _site_resolver_handle) =
+        seedling_core::runtime::site_services::resolver::SiteServiceResolver::spawn(
+            db.clone(),
+            Arc::clone(&tick_notify),
+        );
+
     let reconciler = Reconciler::new(
         Arc::clone(&driver),
         node_prefix,
@@ -998,6 +1008,7 @@ async fn main() {
         Arc::clone(&shells),
         cert_endpoint_url,
         Some(Arc::clone(&tls_coordinator)),
+        Some(Arc::clone(&site_resolver)),
     );
 
     // The reconciler and schedule ticker are spawned below, after OiState is
@@ -1043,6 +1054,7 @@ async fn main() {
         tls_coordinator: Arc::clone(&tls_coordinator),
         caddy_data_path: tokio::sync::OnceCell::new(),
         tailscale_provider: Some(Arc::clone(&tailscale_provider)),
+        site_resolver: Some(Arc::clone(&site_resolver)),
     });
 
     // ---------------------------------------------------------------------------

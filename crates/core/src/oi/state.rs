@@ -52,4 +52,9 @@ pub struct OiState {
     /// empty status in that case.
     // r[impl ingress.site.tailscale]
     pub tailscale_provider: Option<Arc<crate::runtime::tailscale::TailscaleProvider>>,
+    /// Background resolver for site-service DNS endpoints. Surfaced through
+    /// the OI so handlers can refresh on add/remove and serve cache
+    /// snapshots to operators. `None` in test harnesses.
+    // r[impl service.site.address]
+    pub site_resolver: Option<Arc<crate::runtime::site_services::resolver::SiteServiceResolver>>,
 }

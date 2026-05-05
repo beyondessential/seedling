@@ -199,6 +199,7 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/services/site/endpoint/remove" => {
             services::remove_site_service_endpoint(state, parse_params(req.params)?, ctx)
         }
+        "/services/site/resolver-status" => services::site_service_resolver_status(state),
         "/services/external/map" => {
             services::map_external_service(state, parse_params(req.params)?, ctx)
         }

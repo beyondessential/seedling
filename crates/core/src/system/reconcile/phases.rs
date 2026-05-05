@@ -1,16 +1,19 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     net::Ipv4Addr,
 };
 
 use ipnet::Ipv6Net;
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{AppName, SiteServiceName};
 
 use super::{AppSnapshot, RunningPod, pods, proxy, routes, rules, site_proxy, volumes};
 use crate::{
     runtime::{
-        AppPhase, InstanceRegistry, db::DbHandle,
-        external_service_mappings::ExternalServiceSnapshot, identity::InstanceId,
+        AppPhase, InstanceRegistry,
+        db::DbHandle,
+        external_service_mappings::ExternalServiceSnapshot,
+        identity::InstanceId,
+        site_services::resolve::{ResolveCtx, ResolveOutcome, resolve_endpoint},
     },
     system::{
         System, actuator::Actuator, observer::Observer, translate::proxy::build_proxy_config,
@@ -77,6 +80,7 @@ pub(super) fn compute_routes(
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
     ext_snapshot: &ExternalServiceSnapshot,
+    resolve_ctx: &ResolveCtx<'_>,
 ) -> (
     Vec<crate::system::types::ServiceRoute>,
     Vec<(
@@ -104,6 +108,7 @@ pub(super) fn compute_routes(
             &app.name,
             running_pods_by_app,
             ext_snapshot,
+            resolve_ctx,
         ) {
             Ok(pair) => pair,
             Err(e) => {
@@ -117,6 +122,61 @@ pub(super) fn compute_routes(
     (all_routes, all_obs)
 }
 
+/// Per-tick classification of every site-service endpoint into the kinds of
+/// faults the reconciler should file.
+// r[impl service.site.address]
+#[derive(Debug, Default, Clone)]
+pub(super) struct SiteServiceFaultSet {
+    /// Site services with at least one DNS-named endpoint whose name has
+    /// failed to resolve past the resolver's failure threshold. Hosts are
+    /// stored sorted for deterministic fault descriptions.
+    pub unresolvable: BTreeMap<SiteServiceName, Vec<String>>,
+    /// Site services with at least one endpoint that requires NAT64 to
+    /// route but NAT64 is not active on this host.
+    pub unroutable: BTreeMap<SiteServiceName, Vec<String>>,
+}
+
+/// Walk every site service endpoint and bucket the outcomes per service
+/// into faultable categories. Hosts that resolve cleanly contribute
+/// nothing.
+// r[impl service.site.address]
+pub(super) fn classify_site_service_endpoints(
+    snapshot: &ExternalServiceSnapshot,
+    resolve_ctx: &ResolveCtx<'_>,
+    unresolved_hosts: &HashSet<String>,
+) -> SiteServiceFaultSet {
+    let mut set = SiteServiceFaultSet::default();
+    for (name, endpoints) in &snapshot.site_endpoints {
+        let mut unresolvable: BTreeSet<String> = BTreeSet::new();
+        let mut unroutable: BTreeSet<String> = BTreeSet::new();
+        for ep in endpoints {
+            match resolve_endpoint(&ep.remote_host, resolve_ctx) {
+                ResolveOutcome::Routable(_) => {}
+                ResolveOutcome::Unroutable { .. } => {
+                    unroutable.insert(ep.remote_host.clone());
+                }
+                ResolveOutcome::Unresolved { .. } => {
+                    // Only fault when the resolver has actually given up
+                    // on this host. "Not yet in the cache" right after
+                    // startup is normal and shouldn't fault.
+                    if unresolved_hosts.contains(&ep.remote_host) {
+                        unresolvable.insert(ep.remote_host.clone());
+                    }
+                }
+            }
+        }
+        if !unresolvable.is_empty() {
+            set.unresolvable
+                .insert(name.clone(), unresolvable.into_iter().collect());
+        }
+        if !unroutable.is_empty() {
+            set.unroutable
+                .insert(name.clone(), unroutable.into_iter().collect());
+        }
+    }
+    set
+}
+
 /// Output of [`compute_nftables_rules`]: the rule set and the per-app set of
 /// services that fell back to "anything running" because no healthy backend
 /// was available. Callers file `service_degraded` faults from the latter.
@@ -125,6 +185,10 @@ pub(super) struct NftablesBuild {
     pub degraded_services_by_app: HashMap<AppName, std::collections::BTreeSet<String>>,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "phase function fans tick state out to per-app rule builders"
+)]
 pub(super) fn compute_nftables_rules(
     apps: &[AppSnapshot],
     running_pods_by_app: &HashMap<AppName, Vec<RunningPod>>,
@@ -133,6 +197,7 @@ pub(super) fn compute_nftables_rules(
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
     ext_snapshot: &ExternalServiceSnapshot,
+    resolve_ctx: &ResolveCtx<'_>,
 ) -> NftablesBuild {
     let backends_by_app = rules::collect_backends_by_app(running_pods_by_app);
 
@@ -161,6 +226,7 @@ pub(super) fn compute_nftables_rules(
             &app.name,
             ext_snapshot,
             &backends_by_app,
+            resolve_ctx,
         ) {
             Ok(dnat) => {
                 all_service_dnat.extend(dnat.rules);

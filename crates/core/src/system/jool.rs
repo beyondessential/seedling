@@ -2,8 +2,9 @@ use std::process::Output;
 
 use snafu::prelude::*;
 
+use crate::runtime::nat64_prefix::NAT64_PREFIX_STR;
+
 const JOOL_INSTANCE: &str = "seedling";
-const NAT64_PREFIX: &str = "64:ff9b::/96";
 
 #[derive(Debug, Snafu)]
 pub enum JoolError {
@@ -54,13 +55,13 @@ async fn ensure_instance() -> Result<(), JoolError> {
             JOOL_INSTANCE,
             "--netfilter",
             "--pool6",
-            NAT64_PREFIX,
+            NAT64_PREFIX_STR,
         ],
     )
     .await?;
 
     if output.status.success() {
-        tracing::info!("created jool NAT64 instance with prefix {NAT64_PREFIX}");
+        tracing::info!("created jool NAT64 instance with prefix {NAT64_PREFIX_STR}");
         return Ok(());
     }
 

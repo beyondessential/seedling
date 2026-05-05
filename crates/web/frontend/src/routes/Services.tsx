@@ -43,7 +43,13 @@ import {
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
-import { formatServiceTarget, looksLikeIpv6Literal } from "../lib/services";
+import {
+  formatRemoteEndpoint,
+  formatServiceTarget,
+  looksLikeIpv4Literal,
+  looksLikeIpv6Literal,
+  looksLikeRemoteHost,
+} from "../lib/services";
 import type {
   AppService,
   DeclaredExternalService,
@@ -52,9 +58,45 @@ import type {
   ServiceRef,
   SiteService,
   SiteServiceProtocol,
+  SiteServiceResolverStatus,
 } from "../lib/types";
 
 const PROTOCOLS: SiteServiceProtocol[] = ["tcp", "udp", "http"];
+
+/// Render a small inline status hint next to a site-service endpoint's
+/// remote_host. IP literals are routed directly so they get no badge; DNS
+/// names show "resolved", "resolving", or "failed" based on the daemon's
+/// resolver-status snapshot.
+function renderResolverBadge(
+  host: string,
+  status: SiteServiceResolverStatus | null | undefined,
+): React.ReactElement | null {
+  if (looksLikeIpv6Literal(host) || looksLikeIpv4Literal(host)) return null;
+  const entry = status?.entries.find((e) => e.host === host);
+  let label = "resolving";
+  let color: "default" | "success" | "warning" | "error" = "default";
+  if (entry) {
+    if (entry.last_attempt_failed && entry.aaaa.length === 0 && entry.a.length === 0) {
+      label = "failed";
+      color = "error";
+    } else if (entry.aaaa.length > 0 || entry.a.length > 0) {
+      label = "resolved";
+      color = "success";
+    } else {
+      label = "no records";
+      color = "warning";
+    }
+  }
+  return (
+    <Chip
+      label={label}
+      size="small"
+      variant="outlined"
+      color={color === "default" ? undefined : color}
+      sx={{ ml: 1, height: 18, fontSize: "0.65rem" }}
+    />
+  );
+}
 
 function ConfirmDeleteSiteServiceDialog({
   service,
@@ -203,9 +245,9 @@ function AddEndpointDialog({
       setValidationError("remote port must be 1–65535");
       return;
     }
-    if (!looksLikeIpv6Literal(remoteHost)) {
+    if (!looksLikeRemoteHost(remoteHost)) {
       setValidationError(
-        "remote host must be an IPv6 literal (IPv4 / DNS support is a follow-up)",
+        "remote host must be an IP literal (IPv6/IPv4) or a valid DNS name",
       );
       return;
     }
@@ -262,11 +304,11 @@ function AddEndpointDialog({
           </Stack>
           <Stack direction="row" spacing={2}>
             <TextField
-              label="Remote host (IPv6)"
+              label="Remote host"
               size="small"
               value={remoteHost}
               onChange={(e) => setRemoteHost(e.target.value)}
-              placeholder="2001:db8::1"
+              placeholder="2001:db8::1, 10.0.0.1, or db.example.com"
               sx={{ flex: 2 }}
               slotProps={{ htmlInput: { style: { fontFamily: "monospace" } } }}
             />
@@ -280,8 +322,9 @@ function AddEndpointDialog({
             />
           </Stack>
           <Typography variant="caption" sx={{ color: "text.secondary" }}>
-            Service port and remote port may differ. IPv4 and DNS-name
-            remotes aren't supported yet.
+            Service port and remote port may differ. IPv4 and A-only DNS
+            backends route via NAT64; status is shown in the resolver
+            cache.
           </Typography>
         </Stack>
       </DialogContent>
@@ -563,6 +606,10 @@ export default function Services() {
     error: declaredError,
     refetch: refetchDeclared,
   } = useOiQuery<DeclaredExternalService[]>("/services/external/declared", {});
+  const { data: resolverStatus } = useOiQuery<SiteServiceResolverStatus>(
+    "/services/site/resolver-status",
+    {},
+  );
 
   const { execute, error: actionError } = useOiAction();
 
@@ -742,7 +789,14 @@ export default function Services() {
                                 />
                               </TableCell>
                               <TableCell sx={{ fontFamily: "monospace" }}>
-                                [{ep.remote_host}]:{ep.remote_port}
+                                {formatRemoteEndpoint(
+                                  ep.remote_host,
+                                  ep.remote_port,
+                                )}
+                                {renderResolverBadge(
+                                  ep.remote_host,
+                                  resolverStatus,
+                                )}
                               </TableCell>
                               <TableCell align="right" sx={{ px: 0.5 }}>
                                 <IconActionButton
