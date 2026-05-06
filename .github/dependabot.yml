@@ -4,25 +4,47 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    commit-message:
+      prefix: ci
+      include: scope
+    cooldown:
+      default-days: 14
     groups:
-      actions:
-        patterns:
-          - "*"
-
-  - package-ecosystem: cargo
-    directory: /
-    schedule:
-      interval: weekly
-    groups:
-      cargo:
-        patterns:
-          - "*"
+      actions-patches:
+        update-types:
+          - patch
+          - minor
 
   - package-ecosystem: npm
     directory: /crates/web/frontend
     schedule:
       interval: weekly
+    commit-message:
+      prefix: deps
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
     groups:
-      npm:
+      deps-patches:
         patterns:
           - "*"
+        update-types:
+          - patch
+          - minor
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: deps
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+    groups:
+      deps-patches:
+        patterns:
+          - "*"
+        update-types:
+          - patch
+          - minor
