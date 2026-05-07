@@ -83,7 +83,7 @@ struct Args {
     listen: Vec<std::net::SocketAddr>,
 
     /// OI listen port, used with --interface. Conflicts with --listen.
-    #[arg(long, default_value_t = oi::DEFAULT_PORT, conflicts_with = "listen")]
+    #[arg(long, default_value_t = seedling_core::transport::endpoint::DEFAULT_PORT, conflicts_with = "listen")]
     port: u16,
 
     /// Upstream DNS servers for the in-pod CoreDNS resolver
@@ -1041,7 +1041,7 @@ async fn main() {
         scheduler: Arc::clone(&scheduler),
         tick_notify: Arc::clone(&tick_notify),
         db_path: db_path.clone(),
-        trusted_keys: seedling_core::oi::auth::new_trusted_keys(),
+        trusted_keys: seedling_core::transport::auth::new_trusted_keys(),
         shells,
         forwards: seedling_core::oi::forwards::ForwardRegistry::new(),
         container_runtime: Arc::clone(&driver.container),

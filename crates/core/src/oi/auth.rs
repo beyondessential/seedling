@@ -1,34 +1,11 @@
 use std::{
-    collections::HashSet,
     io,
     path::Path,
-    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use parking_lot::RwLock;
-use rustls::{
-    DigitallySignedStruct, DistinguishedName, SignatureScheme,
-    client::danger::HandshakeSignatureValid,
-    server::danger::{ClientCertVerified, ClientCertVerifier},
-};
-use rustls_pki_types::{CertificateDer, SubjectPublicKeyInfoDer, UnixTime};
-use subtle::ConstantTimeEq;
-
 use crate::runtime::db::Db;
-
-use seedling_protocol::keys;
-
-// ---------------------------------------------------------------------------
-// In-memory trusted key set
-// ---------------------------------------------------------------------------
-
-/// Thread-safe in-memory set of trusted client SPKI fingerprints.
-pub type TrustedKeys = Arc<RwLock<HashSet<String>>>;
-
-pub fn new_trusted_keys() -> TrustedKeys {
-    Arc::new(RwLock::new(HashSet::new()))
-}
+use crate::transport::auth::TrustedKeys;
 
 // ---------------------------------------------------------------------------
 // DB helpers
@@ -164,102 +141,10 @@ pub fn revoke_key(db: &Db, trusted: &TrustedKeys, fp: &str) -> rusqlite::Result<
     }
 }
 
-// ---------------------------------------------------------------------------
-// Client certificate verifier
-// ---------------------------------------------------------------------------
-
-fn ring_verify_tls12(
-    message: &[u8],
-    cert: &CertificateDer<'_>,
-    dss: &DigitallySignedStruct,
-) -> Result<HandshakeSignatureValid, rustls::Error> {
-    rustls::crypto::verify_tls12_signature(
-        message,
-        cert,
-        dss,
-        &rustls::crypto::ring::default_provider().signature_verification_algorithms,
-    )
-}
-
-fn ring_verify_tls13_rpk(
-    message: &[u8],
-    cert: &CertificateDer<'_>,
-    dss: &DigitallySignedStruct,
-) -> Result<HandshakeSignatureValid, rustls::Error> {
-    rustls::crypto::verify_tls13_signature_with_raw_key(
-        message,
-        &SubjectPublicKeyInfoDer::from(cert.as_ref()),
-        dss,
-        &rustls::crypto::ring::default_provider().signature_verification_algorithms,
-    )
-}
-
-fn ring_schemes() -> Vec<SignatureScheme> {
-    rustls::crypto::ring::default_provider()
-        .signature_verification_algorithms
-        .supported_schemes()
-}
-
-#[derive(Debug)]
-pub struct SeedlingClientVerifier {
-    pub trusted: TrustedKeys,
-}
-
-impl ClientCertVerifier for SeedlingClientVerifier {
-    fn root_hint_subjects(&self) -> &[DistinguishedName] {
-        &[]
-    }
-
-    fn verify_client_cert(
-        &self,
-        end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _now: UnixTime,
-    ) -> Result<ClientCertVerified, rustls::Error> {
-        let fp = keys::fingerprint(end_entity.as_ref());
-        let fp_bytes = fp.as_bytes();
-        let trusted = self.trusted.read();
-        let found = trusted.iter().any(|t| t.as_bytes().ct_eq(fp_bytes).into());
-        if found {
-            Ok(ClientCertVerified::assertion())
-        } else {
-            tracing::warn!(fingerprint = %fp, "rejected client with unrecognized key");
-            Err(rustls::Error::InvalidCertificate(
-                rustls::CertificateError::ApplicationVerificationFailure,
-            ))
-        }
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        ring_verify_tls12(message, cert, dss)
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        ring_verify_tls13_rpk(message, cert, dss)
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        ring_schemes()
-    }
-
-    fn requires_raw_public_keys(&self) -> bool {
-        true
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transport::auth::new_trusted_keys;
 
     // i[verify key.list]
     #[test]
