@@ -32,13 +32,9 @@ Refactor (lands before any grove-specific code):
 - Stays in `crates/core` rather than promoting to a new `crates/transport` crate for v0; promotion is a follow-up if multiple crates ever need server-side transport. The wire-type half (ALPN constants, dial-side `OiClient`, identity keys) remains in `crates/protocol/`.
 - ALPN handlers register with `transport` on startup: OI registers `bes.seedling/1`, grove registers `bes.grove/1`. The existing `oi/server.rs::handle_connection` body splits — generic per-connection logic moves to `transport`, OI-specific stream dispatch stays in `oi/`.
 
-`OiState` splits along the same seam:
-- New `TransportState`: endpoint handle, connection registry, identity, protocol trust registry. Owned by a top-level `Daemon` struct (renamed/replacing the current top-level container that wires everything up).
-- `OiState` (slimmed): OI-specific session/handler state — port-forward maps, log subscribers, event broadcasters.
-- New `GroveState`: publish mutex, dial-loop handle, dirty-mappings set, signed-payload cache.
-- `Daemon` holds `TransportState` + `OiState` + `GroveState`. Handlers receive only what they need (operator handlers don't see grove state, grove handlers don't see OI session state).
+For state, the smallest workable shape is to leave `OiState` alone and add `GroveState` as a sibling struct when grove lands (commit 5). The trust-set and fingerprint fields stay where they are: `OiState` owns the OI trust set, `GroveState` owns the grove trust set, and the `ProtocolTrustRegistry` (constructed at daemon startup and shared with both) is what couples them. Grove handlers capture `Arc<GroveState>` only; OI handlers continue capturing `Arc<OiState>`. The originally-planned `TransportState` / `OiState` carve-out + `Daemon` top-level container is **deferred** — it would touch every OI handler signature for limited cleanup value, and the sibling-struct approach gives the same handler-scoping property (operator handlers don't see grove state and vice versa) without the mechanical churn.
 
-This refactor is pure restructuring — no behavioural change, OI tests stay green. It lands as commit 0 (split into 0a/0b if the diff is large; see phasing).
+This refactor is pure restructuring — no behavioural change, OI tests stay green.
 
 ### Wire protocol — `bes.grove/1`
 
@@ -185,8 +181,8 @@ To modify:
 - `crates/core/src/transport/` — *new* module (commit 0). `endpoint.rs`, `auth.rs`, `connection.rs`, `framing.rs`. Holds quinn endpoint, ALPN handler registry, protocol-scoped trust registry, JSON-line framing. Replaces transport-level code currently inlined in `oi/server.rs` and `oi/auth.rs`.
 - `crates/core/src/oi/server.rs` — slimmed to OI-specific stream dispatch (port-forward, log streaming, event subscription, handler routing). Generic per-connection logic moves to `transport/`.
 - `crates/core/src/oi/auth.rs` — bootstrap-file loader stays here; trust-set machinery moves to `transport/auth.rs` as protocol-scoped sets (`OperatorTrust` for OI, `GroveTrust` for grove, registered against their ALPNs).
-- `crates/core/src/grove/` — *new* module. `state.rs` (`GroveState`: publish mutex, dial loop, dirty-mappings, signed-payload cache), `dial.rs` (connect loop), `apply.rs` (payload-apply pipeline + diff), `handler.rs` (registers `bes.grove/1` handler with transport, runs HELLO/VERSION/PEERS/abort exchange).
-- `crates/core/src/daemon.rs` (or wherever the top-level container lives — renamed/restructured if needed) — holds `TransportState` + `OiState` + `GroveState`. Handlers receive only the slice they need.
+- `crates/core/src/grove/` — *new* module. `state.rs` (`GroveState`: publish mutex, dial loop, dirty-mappings, signed-payload cache, grove trust set), `dial.rs` (connect loop), `apply.rs` (payload-apply pipeline + diff), `handler.rs` (registers `bes.grove/1` handler with transport, runs HELLO/VERSION/PEERS/abort exchange).
+- `crates/daemon/src/main.rs` — at startup, construct the shared `ProtocolTrustRegistry` and `AlpnHandlers`, then call `oi::register` and `grove::register` against them before `transport::endpoint::run`. No new top-level container struct; both states are held as `Arc<OiState>` and `Arc<GroveState>` siblings, captured into their respective handler closures.
 - `crates/core/src/oi/handler/params.rs` — extract `set_param_inner(... ParamSource)`, add `apply_grove_param_to_app` helper, rejection check on operator path.
 - `crates/core/src/oi/handler/grove.rs` — *new*. OI handlers for all `grove …` operations.
 - `crates/ctl/src/grove.rs` — *new*. CLI subcommand.
@@ -210,7 +206,7 @@ To reuse (don't reinvent):
 
 Each independently shippable, each with its own spec sections + tracey annotations. jj-friendly granularity.
 
-0. **Code restructure: extract `transport` module.** Pure refactor, no behavioural change, OI tests stay green. New `crates/core/src/transport/` (`endpoint`, `auth`, `connection`, `framing`); slim `oi/server.rs` and `oi/auth.rs` to OI-specific bits; split `OiState` into `TransportState` + `OiState`; introduce `Daemon` top-level container; OI registers itself as the `bes.seedling/1` ALPN handler through the new transport interface. Trust-set machinery becomes protocol-scoped (registry keyed by ALPN) but only `OperatorTrust` is registered at this point. Split into 0a (file moves + transport extraction) and 0b (state split) if the combined diff is unwieldy (~>600 lines).
+0. **Code restructure: extract `transport` module.** Pure refactor, no behavioural change, OI tests stay green. New `crates/core/src/transport/` (`endpoint`, `auth`); slim `oi/server.rs` and `oi/auth.rs` to OI-specific bits; OI registers itself as the `bes.seedling/1` ALPN handler through the new transport interface. Trust-set machinery becomes protocol-scoped (`ProtocolTrustRegistry` keyed by ALPN) but only OI is registered at this point. `OiState` is left alone — `GroveState` will land as a sibling in commit 5 rather than via a carve-out. *Done in `refactor(transport): extract shared QUIC endpoint, ALPN dispatch, and protocol-scoped trust`.*
 
 1. **Spec + tracey wiring.** Extract shared transport prose from `docs/spec/interface.md` into a new `docs/spec/transport.md` (`t[...]` namespace) covering RPK TLS, fingerprint pinning, ALPN as hard-version-wall, JSON-line framing, abort/error semantics, message-size caps. Update `interface.md` to reference `t[...]` for those items. Re-annotate the (now-moved) transport code from commit 0 with `t[impl ...]` instead of `i[impl ...]`. Add `docs/spec/grove.md` skeleton with all `g[...]` items including event names and "Known limitations", referencing `t[...]` for transport. Register `transport/main` and `grove/main` in `.config/tracey/config.styx`. `tracey query status` clean with stubbed requirements.
 2. **DB v53 migration.** All five tables, no consumers yet. Test: migration applies cleanly on a v52 DB.
