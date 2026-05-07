@@ -116,7 +116,7 @@ fn build_tls_config(
         .with_cert_resolver(resolver);
 
     tls_config.key_log = Arc::new(rustls::KeyLogFile::new());
-    // i[transport.alpn]
+    // t[impl alpn]
     tls_config.alpn_protocols = alpn_list;
 
     Ok(tls_config)
@@ -138,10 +138,10 @@ fn extract_negotiated_alpn(conn: &quinn::Connection) -> Option<Vec<u8>> {
     hd.protocol
 }
 
-// i[transport.quic]
-// i[transport.server-identity]
-// i[transport.client-auth]
-// i[transport.listen]
+// t[impl quic]
+// t[impl server-identity]
+// t[impl client-auth]
+// t[impl listen]
 pub async fn run(
     config: EndpointConfig,
 ) -> Result<(String, Vec<Endpoint>), Box<dyn std::error::Error + Send + Sync>> {

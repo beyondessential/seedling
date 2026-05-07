@@ -276,7 +276,7 @@ impl OiClient {
             .with_custom_certificate_verifier(verifier)
             .with_client_cert_resolver(build_client_cert_resolver(identity)?);
         tls_config.key_log = Arc::new(rustls::KeyLogFile::new());
-        // i[transport.alpn]
+        // t[impl alpn]
         tls_config.alpn_protocols = vec![OI_ALPN.to_vec()];
 
         let quic_config = quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
@@ -458,14 +458,14 @@ impl OiClient {
             cell: Arc::clone(&cell),
         });
 
-        // i[transport.fingerprint-probe]
+        // t[impl fingerprint-probe]
         let ephemeral = super::keys::ClientIdentity::ephemeral();
         let mut tls_config = TlsClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(verifier)
             .with_client_cert_resolver(build_client_cert_resolver(&ephemeral)?);
         tls_config.key_log = Arc::new(rustls::KeyLogFile::new());
-        // i[transport.alpn] — probe must be indistinguishable from a real connection.
+        // t[impl alpn] — probe must be indistinguishable from a real connection.
         tls_config.alpn_protocols = vec![OI_ALPN.to_vec()];
 
         let quic_config = quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
