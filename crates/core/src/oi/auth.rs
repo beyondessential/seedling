@@ -27,6 +27,7 @@ pub fn load_from_db(db: &Db, trusted: &TrustedKeys) -> rusqlite::Result<()> {
 /// Read `$data_dir/authorized_keys` and import any entries not already in
 /// the DB. Lines have the form `<fingerprint> <label>`; `#` and blank lines
 /// are ignored.
+// i[impl trust.bootstrap]
 pub fn import_bootstrap_file(data_dir: &Path, db: &Db, trusted: &TrustedKeys) -> io::Result<()> {
     let path = data_dir.join("authorized_keys");
     if !path.exists() {

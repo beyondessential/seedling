@@ -71,7 +71,7 @@ struct Args {
     #[arg(long)]
     stub_backends: bool,
 
-    // i[transport.listen]
+    // t[impl listen]
     /// Network interface(s) to bind the OI on (comma-separated names).
     /// All IPv4 and IPv6 addresses of each interface are used.
     /// Failure to resolve a named interface is fatal.
@@ -1290,7 +1290,7 @@ async fn main() {
         });
     }
 
-    // i[transport.listen]
+    // t[impl listen]
     let oi_addrs = resolve_oi_addrs(&args.interface, &args.listen, args.port);
     let (_fingerprint, oi_endpoints) = oi::run(
         Arc::clone(&oi_state),
@@ -1558,7 +1558,7 @@ fn revert_install_and_fault(state: &Arc<OiState>, app_name: &AppName) {
     }
 }
 
-// i[transport.listen]
+// t[impl listen]
 fn resolve_oi_addrs(
     interfaces: &[String],
     explicit: &[std::net::SocketAddr],
