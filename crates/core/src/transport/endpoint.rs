@@ -5,7 +5,7 @@
 //! per-protocol trust gate (in [`crate::transport::auth`]) has approved
 //! the client's fingerprint.
 
-use std::{net::SocketAddr, path::PathBuf, pin::Pin, sync::Arc, time::Duration};
+use std::{net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
 
 use parking_lot::RwLock;
 use quinn::Endpoint;
@@ -14,6 +14,7 @@ use rustls::ServerConfig as TlsServerConfig;
 use seedling_protocol::keys;
 
 use crate::transport::auth::{ProtocolTrustRegistry, SeedlingClientVerifier};
+use crate::transport::state::TransportState;
 
 /// Default listen port. The shared endpoint is one TCP/UDP port for all
 /// registered ALPNs.
@@ -81,11 +82,8 @@ impl AlpnHandlers {
 pub type LabelLookup = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
 pub struct EndpointConfig {
-    pub key_path: PathBuf,
+    pub state: Arc<TransportState>,
     pub addrs: Vec<SocketAddr>,
-    pub trust: Arc<ProtocolTrustRegistry>,
-    pub handlers: Arc<AlpnHandlers>,
-    pub label_lookup: Option<LabelLookup>,
 }
 
 fn build_tls_config(
@@ -144,19 +142,25 @@ fn extract_negotiated_alpn(conn: &quinn::Connection) -> Option<Vec<u8>> {
 // t[impl listen]
 pub async fn run(
     config: EndpointConfig,
-) -> Result<(String, Vec<Endpoint>), Box<dyn std::error::Error + Send + Sync>> {
-    let key = keys::load_or_generate(&config.key_path)?;
+) -> Result<Vec<Endpoint>, Box<dyn std::error::Error + Send + Sync>> {
+    let key = keys::load_or_generate(&config.state.key_path)?;
     let spki = keys::spki_der(&key);
     let fingerprint = keys::fingerprint(&spki);
+    config.state.spki_fingerprint.set(fingerprint.clone()).ok();
 
     tracing::info!("transport SPKI fingerprint: {fingerprint}");
 
-    let alpn_list = config.handlers.alpn_list();
+    let alpn_list = config.state.handlers.alpn_list();
     if alpn_list.is_empty() {
         return Err("no ALPN handlers registered".into());
     }
 
-    let tls_config = build_tls_config(&key, spki, Arc::clone(&config.trust), alpn_list)?;
+    let tls_config = build_tls_config(
+        &key,
+        spki,
+        Arc::clone(&config.state.trust_registry),
+        alpn_list,
+    )?;
     let quic_config = quinn::crypto::rustls::QuicServerConfig::try_from(tls_config)?;
     let mut transport = quinn::TransportConfig::default();
     // Send PING frames every 10 s so idle connections do not trip the idle
@@ -181,6 +185,8 @@ pub async fn run(
         tracing::warn!("SSLKEYLOGFILE is set — TLS session keys are being logged to disk");
     }
 
+    let label_lookup = config.state.label_lookup.read().clone();
+
     let mut endpoints = Vec::with_capacity(config.addrs.len());
     for addr in &config.addrs {
         let endpoint = Endpoint::server(base_server_config.clone(), *addr)?;
@@ -188,14 +194,14 @@ pub async fn run(
         let ep_clone = endpoint.clone();
         tokio::spawn(accept_loop(
             endpoint,
-            Arc::clone(&config.handlers),
-            Arc::clone(&config.trust),
-            config.label_lookup.clone(),
+            Arc::clone(&config.state.handlers),
+            Arc::clone(&config.state.trust_registry),
+            label_lookup.clone(),
         ));
         endpoints.push(ep_clone);
     }
 
-    Ok((fingerprint, endpoints))
+    Ok(endpoints)
 }
 
 async fn accept_loop(
