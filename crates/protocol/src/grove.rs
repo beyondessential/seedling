@@ -90,6 +90,13 @@ impl Payload {
         Ok(buf)
     }
 
+    /// Length in bytes of [`Self::canonical_json`]. Used by the leader
+    /// publish path to enforce the wire-format size cap before bumping
+    /// seq or computing the signature.
+    pub fn canonical_size(&self) -> Result<usize, GroveError> {
+        Ok(self.canonical_json()?.len())
+    }
+
     /// Sign the payload with the leader's signing key.
     ///
     /// Canonicalises first, so callers do not need to remember to.
