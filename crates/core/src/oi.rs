@@ -6,4 +6,4 @@ pub mod server;
 pub mod shells;
 pub mod state;
 
-pub use server::run;
+pub use server::register;

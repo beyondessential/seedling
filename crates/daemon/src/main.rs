@@ -25,6 +25,7 @@ use seedling_core::{
         reconcile::Reconciler,
         resolver::{resolver_addr, resolver_gateway_addr, spawn_dns_forwarder},
     },
+    transport::{TransportState, endpoint::EndpointConfig},
 };
 use seedling_protocol::names::AppName;
 use tokio::sync::Notify;
@@ -1033,9 +1034,12 @@ async fn main() {
     // OI server
     // ---------------------------------------------------------------------------
 
+    let transport_state = TransportState::new(data_dir.join("oi.key"));
+
     let oi_state = Arc::new(OiState {
+        transport: Arc::clone(&transport_state),
         registry: Arc::clone(&registry),
-        spki_fingerprint: std::sync::OnceLock::new(),
+        spki_fingerprint: Arc::clone(&transport_state.spki_fingerprint),
         start_time: Instant::now(),
         db: db.clone(),
         scheduler: Arc::clone(&scheduler),
@@ -1290,17 +1294,20 @@ async fn main() {
         });
     }
 
+    oi::register(&transport_state, &oi_state, &data_dir, args.max_streams).unwrap_or_else(|e| {
+        tracing::error!("OI registration failed: {e}");
+        std::process::exit(1);
+    });
+
     // t[impl listen]
     let oi_addrs = resolve_oi_addrs(&args.interface, &args.listen, args.port);
-    let (_fingerprint, oi_endpoints) = oi::run(
-        Arc::clone(&oi_state),
-        &oi_addrs,
-        &data_dir,
-        args.max_streams,
-    )
+    let oi_endpoints = seedling_core::transport::endpoint::run(EndpointConfig {
+        state: Arc::clone(&transport_state),
+        addrs: oi_addrs,
+    })
     .await
     .unwrap_or_else(|e| {
-        tracing::error!("OI server failed to start: {e}");
+        tracing::error!("transport failed to start: {e}");
         std::process::exit(1);
     });
 

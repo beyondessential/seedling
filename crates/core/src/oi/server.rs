@@ -1,6 +1,5 @@
-use std::{net::SocketAddr, path::Path, sync::Arc};
+use std::{path::Path, sync::Arc};
 
-use quinn::Endpoint;
 use serde_json::json;
 use tokio::sync::{Semaphore, mpsc};
 use tracing::Instrument;
@@ -14,10 +13,10 @@ use super::{
     state::OiState,
 };
 use crate::transport::{
-    auth::ProtocolTrustRegistry,
+    TransportState,
     endpoint::{
-        AlpnHandlers, ConnectionContext, ConnectionFuture, ConnectionHandler, EndpointConfig,
-        LabelLookup, extract_client_fp, read_json_line,
+        ConnectionContext, ConnectionFuture, ConnectionHandler, LabelLookup, extract_client_fp,
+        read_json_line,
     },
 };
 
@@ -47,19 +46,20 @@ fn synthesise_actor(state: &OiState, fp: Option<&str>) -> Arc<Actor> {
     })
 }
 
-/// Write the server's SPKI fingerprint (hex, newline-terminated) to
-/// `oi.fingerprint` in the data directory.
-// i[impl transport.server-identity.published]
-fn publish_fingerprint(data_dir: &Path, fingerprint: &str) -> std::io::Result<()> {
-    std::fs::write(data_dir.join("oi.fingerprint"), format!("{fingerprint}\n"))
-}
-
-pub async fn run(
-    state: Arc<OiState>,
-    addrs: &[SocketAddr],
+/// Register the OI as the `bes.seedling/1` ALPN handler against the shared
+/// transport state. Loads the authorised-keys set from the DB (and the
+/// bootstrap file), installs the per-connection log-label resolver,
+/// builds the OI connection handler, and registers both with
+/// [`TransportState`].
+///
+/// The actual QUIC endpoint is started by
+/// [`crate::transport::endpoint::run`] after every protocol has registered.
+pub fn register(
+    transport: &Arc<TransportState>,
+    state: &Arc<OiState>,
     data_dir: &Path,
     max_streams: usize,
-) -> Result<(String, Vec<Endpoint>), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     {
         let trusted_keys = Arc::clone(&state.trusted_keys);
         state
@@ -81,23 +81,23 @@ pub async fn run(
         );
     }
 
-    let trust = ProtocolTrustRegistry::new();
-    trust.register(OI_ALPN, Arc::clone(&state.trusted_keys));
+    transport
+        .trust_registry
+        .register(OI_ALPN, Arc::clone(&state.trusted_keys));
 
-    let handlers = AlpnHandlers::new();
     let stream_semaphore = Arc::new(Semaphore::new(max_streams));
     let oi_handler: ConnectionHandler = {
-        let state = Arc::clone(&state);
+        let state = Arc::clone(state);
         Arc::new(move |conn, ctx| -> ConnectionFuture {
             let state = Arc::clone(&state);
             let stream_semaphore = Arc::clone(&stream_semaphore);
             Box::pin(handle_connection(conn, ctx, state, stream_semaphore))
         })
     };
-    handlers.register(OI_ALPN, oi_handler);
+    transport.handlers.register(OI_ALPN, oi_handler);
 
     let label_lookup: LabelLookup = {
-        let state = Arc::clone(&state);
+        let state = Arc::clone(state);
         Arc::new(move |fp: &str| {
             let fp = fp.to_owned();
             state
@@ -105,29 +105,10 @@ pub async fn run(
                 .call(move |db| super::auth::get_label(db, &fp).ok().flatten())
         })
     };
+    *transport.label_lookup.write() = Some(label_lookup);
 
     tracing::info!(max_streams, "OI concurrency limit configured");
-
-    let (fingerprint, endpoints) = crate::transport::endpoint::run(EndpointConfig {
-        key_path: data_dir.join("oi.key"),
-        addrs: addrs.to_vec(),
-        trust: Arc::clone(&trust),
-        handlers: Arc::clone(&handlers),
-        label_lookup: Some(label_lookup),
-    })
-    .await?;
-
-    tracing::info!("OI SPKI fingerprint: {fingerprint}");
-    state.spki_fingerprint.set(fingerprint.clone()).ok();
-
-    // Publish the fingerprint so a co-located process (e.g. seedling-web) can
-    // pin it without a fingerprint probe. Non-fatal: the daemon still serves if
-    // the write fails; only the file-based bootstrap of co-located clients breaks.
-    if let Err(e) = publish_fingerprint(data_dir, &fingerprint) {
-        tracing::warn!("failed to write OI fingerprint file: {e}");
-    }
-
-    Ok((fingerprint, endpoints))
+    Ok(())
 }
 
 // i[stream.control]
