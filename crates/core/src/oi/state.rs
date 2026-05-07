@@ -20,6 +20,10 @@ pub struct OiState {
     /// `spki_fingerprint` and `trusted_keys` so existing handler code can
     /// continue to access them without indirection.
     pub transport: Arc<TransportState>,
+    /// Sibling grove state, attached after construction so its handler
+    /// closures can reach it. Set once at daemon startup, after both
+    /// `OiState` and `GroveState` have been built; never changes after.
+    pub grove: OnceLock<Arc<crate::grove::GroveState>>,
     pub registry: Arc<RwLock<AppRegistry>>,
     /// Server SPKI SHA-256 fingerprint. Set once by the transport endpoint
     /// after key generation; never changes after that. Arc-shared with

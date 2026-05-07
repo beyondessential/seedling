@@ -1038,6 +1038,7 @@ async fn main() {
 
     let oi_state = Arc::new(OiState {
         transport: Arc::clone(&transport_state),
+        grove: std::sync::OnceLock::new(),
         registry: Arc::clone(&registry),
         spki_fingerprint: Arc::clone(&transport_state.spki_fingerprint),
         start_time: Instant::now(),
@@ -1293,6 +1294,17 @@ async fn main() {
             }
         });
     }
+
+    let grove_state =
+        seedling_core::grove::GroveState::load(Arc::clone(&transport_state), db.clone())
+            .unwrap_or_else(|e| {
+                tracing::error!("loading grove state failed: {e}");
+                std::process::exit(1);
+            });
+    oi_state
+        .grove
+        .set(Arc::clone(&grove_state))
+        .unwrap_or_else(|_| panic!("OiState.grove was already set"));
 
     oi::register(&transport_state, &oi_state, &data_dir, args.max_streams).unwrap_or_else(|e| {
         tracing::error!("OI registration failed: {e}");
