@@ -16,7 +16,7 @@ ipnet.workspace = true
 jiff.workspace = true
 libc = "0.2.184"
 nftables = { version = "0.6.3", features = ["tokio"] }
-nix = { version = "0.31.2", features = ["signal", "term"] }
+nix = { version = "0.31.3", features = ["signal", "term"] }
 parking_lot.workspace = true
 podman-rest-client = { version = "0.13.0", features = ["uds"] }
 quinn.workspace = true
@@ -45,7 +45,7 @@ whoami.workspace = true
 orion = "0.17.14"
 secrecy = "0.10.3"
 instant-acme = { version = "0.8.5", features = ["time"] }
-rcgen = "0.14.7"
+rcgen = "0.14.8"
 pem = "3.0.6"
 x509-parser = "0.18.1"
 aws-sdk-route53 = "1.111.0"
@@ -53,7 +53,7 @@ aws-config = "1.8.16"
 aws-credential-types = "1.2.14"
 axum.workspace = true
 iana-time-zone = "0.1.65"
-hickory-resolver = { version = "0.26.0", default-features = false, features = ["system-config", "tokio"] }
+hickory-resolver = { version = "0.26.1", default-features = false, features = ["system-config", "tokio"] }
 
 [dev-dependencies]
 time = "0.3.47"
