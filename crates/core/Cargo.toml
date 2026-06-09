@@ -16,13 +16,13 @@ ipnet.workspace = true
 jiff.workspace = true
 libc = "0.2.184"
 nftables = { version = "0.6.3", features = ["tokio"] }
-nix = { version = "0.31.2", features = ["signal", "term"] }
+nix = { version = "0.31.3", features = ["signal", "term"] }
 parking_lot.workspace = true
 podman-rest-client = { version = "0.13.0", features = ["uds"] }
 quinn.workspace = true
 rand_core.workspace = true
 reqwest.workspace = true
-rhai = { version = "1.24.0", features = ["metadata"] }
+rhai = { version = "1.25.1", features = ["metadata"] }
 rtnetlink = "0.21.0"
 rusqlite = { version = "0.39.0", features = ["bundled"] }
 rustix = { version = "1.1.4", features = ["fs", "process"] }
@@ -39,21 +39,21 @@ tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 wildmatch.workspace = true
-zbus = { version = "5.15.0", features = ["tokio"] }
+zbus = { version = "5.16.0", features = ["tokio"] }
 zxcvbn = "3.1.1"
 whoami.workspace = true
-orion = "0.17.14"
+orion = "0.17.15"
 secrecy = "0.10.3"
 instant-acme = { version = "0.8.5", features = ["time"] }
-rcgen = "0.14.7"
+rcgen = "0.14.8"
 pem = "3.0.6"
 x509-parser = "0.18.1"
 aws-sdk-route53 = "1.111.0"
-aws-config = "1.8.16"
+aws-config = "1.8.17"
 aws-credential-types = "1.2.14"
 axum.workspace = true
 iana-time-zone = "0.1.65"
-hickory-resolver = { version = "0.26.0", default-features = false, features = ["system-config", "tokio"] }
+hickory-resolver = { version = "0.26.1", default-features = false, features = ["system-config", "tokio"] }
 
 [dev-dependencies]
 time = "0.3.47"
