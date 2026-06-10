@@ -545,3 +545,94 @@ async fn event_stream_task(
     }
     let _ = send.finish();
 }
+
+#[cfg(test)]
+mod auth_tests {
+    use std::net::SocketAddr;
+    use std::time::Duration;
+
+    use ed25519_dalek::SigningKey;
+    use quinn::Endpoint;
+    use rand_core::OsRng;
+
+    use seedling_protocol::{
+        actor::Actor,
+        client::{ClientAuth, OiClient},
+        keys::{self, ClientIdentity},
+    };
+
+    use super::{Arc, build_tls_config};
+    use crate::oi::auth::{TrustedKeys, new_trusted_keys};
+
+    /// Stand up a real OI QUIC endpoint using the production TLS wiring
+    /// ([`build_tls_config`]) and accept connections, holding any that
+    /// complete the handshake. Returns the bound address.
+    fn spawn_oi_server(trusted: TrustedKeys) -> SocketAddr {
+        let key = SigningKey::generate(&mut OsRng);
+        let spki = keys::spki_der(&key);
+        let tls = build_tls_config(&key, spki, trusted).expect("build tls config");
+        let quic = quinn::crypto::rustls::QuicServerConfig::try_from(tls).expect("quic config");
+        let server_config = quinn::ServerConfig::with_crypto(Arc::new(quic));
+        let endpoint =
+            Endpoint::server(server_config, "127.0.0.1:0".parse().unwrap()).expect("endpoint");
+        let addr = endpoint.local_addr().expect("local addr");
+        tokio::spawn(async move {
+            while let Some(incoming) = endpoint.accept().await {
+                tokio::spawn(async move {
+                    // The handshake includes mTLS client-cert verification; an
+                    // untrusted peer fails here and never yields a connection.
+                    if let Ok(conn) = incoming.await {
+                        let _ = conn.closed().await;
+                    }
+                });
+            }
+        });
+        addr
+    }
+
+    /// Connect with `identity` and report whether the peer ends up with a
+    /// usable connection. In QUIC/TLS 1.3 the client completes the handshake
+    /// optimistically before the server verifies its certificate, so a
+    /// rejected peer's `connect` may still return `Ok`; the rejection then
+    /// surfaces as the server closing the connection. We treat "still open
+    /// after a short grace period" as admitted, and "connect failed or
+    /// connection closed by the server" as rejected.
+    async fn connection_admitted(addr: SocketAddr, identity: &ClientIdentity) -> bool {
+        match OiClient::connect(addr, ClientAuth::TrustAny, identity, Actor::default()).await {
+            Err(_) => false,
+            Ok(client) => {
+                let closed = client.connection().closed();
+                // If the server accepted us it holds the connection open and
+                // this times out; if it rejected us the close arrives promptly.
+                tokio::time::timeout(Duration::from_secs(2), closed)
+                    .await
+                    .is_err()
+            }
+        }
+    }
+
+    // i[transport.client-auth]
+    // A hostile client presenting a key the daemon does not trust must not
+    // obtain a usable connection, while a trusted key is admitted.
+    #[tokio::test]
+    async fn rejects_untrusted_client_key_and_admits_trusted() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        let authorized = ClientIdentity::ephemeral();
+        let stranger = ClientIdentity::ephemeral();
+
+        let trusted = new_trusted_keys();
+        trusted.write().insert(authorized.fingerprint.clone());
+
+        let addr = spawn_oi_server(trusted);
+
+        assert!(
+            connection_admitted(addr, &authorized).await,
+            "trusted client should obtain an open connection"
+        );
+        assert!(
+            !connection_admitted(addr, &stranger).await,
+            "untrusted client must be rejected at the auth boundary"
+        );
+    }
+}
