@@ -77,6 +77,21 @@ frontend-test:
 frontend-test-watch:
     cd crates/web/frontend && npm run test:watch
 
+# Run the OWASP ZAP baseline (passive) scan against a stubbed stack (needs docker)
+dast: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    work="$(mktemp -d)"
+    # Leave the report behind for inspection; only stop the spawned processes.
+    trap 'kill $(cat "$work/pids" 2>/dev/null) 2>/dev/null || true' EXIT
+    etc/ci/dast-stack.sh "$work"
+    port="$(cat "$work/http-port")"
+    cp .zap/rules.tsv "$work/rules.tsv"
+    docker run --rm --network=host -v "$work:/zap/wrk:rw" \
+        ghcr.io/zaproxy/zaproxy:stable \
+        zap-baseline.py -t "http://127.0.0.1:$port" -c rules.tsv -r report.html
+    echo "report: $work/report.html"
+
 # Run Playwright end-to-end tests (spawns a stubbed daemon + web pair)
 frontend-e2e: build
     cd crates/web/frontend && npm run test:e2e
