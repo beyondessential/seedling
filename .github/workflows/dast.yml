@@ -1,0 +1,78 @@
+name: DAST
+
+# Dynamic application security testing: spin up a stubbed daemon + seedling-web
+# pair and run the OWASP ZAP baseline (passive) scan against the HTTP surface.
+#
+# Coverage note: seedling-web only exposes /healthz, /connect and the static
+# SPA over HTTP — the control-plane API runs over WebTransport, which ZAP
+# cannot scan. This job therefore checks security headers, cookie flags, the
+# served bundle and TLS/transport hygiene of the HTTP layer, not the OI API.
+#
+# Runs nightly (and on demand) rather than per-PR: the HTTP surface changes
+# rarely and the scan builds the workspace binaries from source.
+
+on:
+  schedule:
+    - cron: "0 13 * * *" # ~01:00 NZ
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  SKIP_FRONTEND_BUILD: "1"
+
+jobs:
+  zap-baseline:
+    name: ZAP baseline scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: crates/web/frontend/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libsystemd-dev
+      - name: Install frontend deps
+        run: npm ci
+        working-directory: crates/web/frontend
+      - name: Build frontend bundle
+        # crates/web/build.rs embeds frontend/dist into seedling-web; build it
+        # here so SKIP_FRONTEND_BUILD lets the cargo step reuse it.
+        run: npm run build
+        working-directory: crates/web/frontend
+      - name: Build daemon + web + ctl
+        run: cargo build -p seedling -p seedling-web -p seedling-ctl --locked
+      - name: Start stubbed stack
+        run: etc/ci/dast-stack.sh "$RUNNER_TEMP/dast"
+      - name: ZAP baseline scan
+        # The stack binds loopback (seedling-web refuses --dev-no-auth on
+        # non-loopback addresses), so the scanner shares the host network to
+        # reach 127.0.0.1. zap-baseline.py exits non-zero on WARN/FAIL alerts,
+        # which fails this step — findings break the build until fixed or
+        # triaged into .zap/rules.tsv.
+        run: |
+          port="$(cat "$RUNNER_TEMP/dast/http-port")"
+          wrk="$RUNNER_TEMP/dast/wrk"
+          mkdir -p "$wrk"
+          cp .zap/rules.tsv "$wrk/rules.tsv"
+          # The zap image runs as a non-root user; make the mounted report
+          # directory world-writable so it can write the reports back out.
+          chmod 0777 "$wrk"
+          docker run --rm --network=host -v "$wrk:/zap/wrk:rw" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py -t "http://127.0.0.1:${port}" \
+              -c rules.tsv -r report.html -J report.json -w report.md
+      - name: Upload ZAP report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-baseline-report
+          path: ${{ runner.temp }}/dast/wrk
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Stop stack
+        if: always()
+        run: kill $(cat "$RUNNER_TEMP/dast/pids") 2>/dev/null || true

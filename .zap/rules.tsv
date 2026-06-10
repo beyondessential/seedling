@@ -1,0 +1,18 @@
+# ZAP Baseline alert rules for seedling-web.
+#
+# Format (tab-separated): <pluginId>	<IGNORE|WARN|FAIL>	<comment>
+# IGNORE  — not reported, never affects the scan result.
+# WARN    — reported; zap-baseline.py exits non-zero, failing the CI job.
+# FAIL    — reported; fails the CI job.
+# Anything not listed keeps ZAP's default level (mostly WARN), so a new
+# finding fails the nightly scan until it is fixed or triaged into this file.
+#
+# The scan targets the plain-HTTP seedling-web listener directly. In
+# production seedling-web sits behind Caddy (see Containerfile.caddy), which
+# terminates TLS and owns transport-security headers, so alerts about TLS and
+# HSTS are out of scope for this layer and are ignored here.
+#
+# Triage new findings from the nightly report into this file: IGNORE for
+# proxy-owned or genuinely-not-applicable alerts, leaving real seedling-web
+# issues to fail the build.
+10035	IGNORE	(Strict-Transport-Security header — TLS is terminated and HSTS set by Caddy)
