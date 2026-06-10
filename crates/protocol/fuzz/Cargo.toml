@@ -1,0 +1,31 @@
+[package]
+name = "seedling-protocol-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.10"
+serde_json = "1.0.149"
+
+[dependencies.seedling-protocol]
+path = ".."
+
+[[bin]]
+name = "wire_decode"
+path = "fuzz_targets/wire_decode.rs"
+test = false
+doc = false
+bench = false
+
+# Detach from the parent workspace: a libfuzzer-sys binary only links under
+# `cargo fuzz`, so it must not be pulled into `cargo build --workspace`.
+[workspace]
+
+# Mirror the root workspace's smartstring pin so the detached workspace
+# resolves the dependency graph identically.
+[patch.crates-io]
+smartstring = { git = "https://github.com/bodil/smartstring", rev = "refs/pull/34/head" }

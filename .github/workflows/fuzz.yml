@@ -1,0 +1,43 @@
+name: Fuzz
+
+# Coverage-guided fuzzing of the protocol wire decoders. A short smoke run on
+# every PR/push guards against decode panics; the nightly run fuzzes longer.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 2 * * *" # nightly, longer run (see max_total_time below)
+
+jobs:
+  wire-decode:
+    name: Fuzz wire decoders
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/protocol/fuzz
+      - name: Fuzz
+        working-directory: crates/protocol/fuzz
+        # 60s per run on PRs/pushes; 600s on the nightly schedule.
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            secs=600
+          else
+            secs=60
+          fi
+          cargo fuzz run wire_decode -- -max_total_time=$secs
+      - name: Upload crash corpus
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: crates/protocol/fuzz/artifacts
+          if-no-files-found: ignore
+          retention-days: 7

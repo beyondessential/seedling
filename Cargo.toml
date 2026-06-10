@@ -1,6 +1,9 @@
 [workspace]
 resolver = "3"
 members = ["crates/protocol", "crates/core", "crates/daemon", "crates/ctl", "crates/web"]
+# cargo-fuzz crate: its own workspace, built only via `cargo fuzz` (nightly +
+# sanitizer linkage), never part of `cargo build --workspace`.
+exclude = ["crates/protocol/fuzz"]
 
 [workspace.package]
 version = "0.1.0"
