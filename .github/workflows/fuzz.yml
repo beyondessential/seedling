@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@nightly
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@v2.81.2
         with:
           tool: cargo-fuzz
       - uses: Swatinem/rust-cache@v2
