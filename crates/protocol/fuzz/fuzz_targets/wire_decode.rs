@@ -12,7 +12,7 @@ use seedling_protocol::{
 };
 
 fuzz_target!(|data: &[u8]| {
-    // Raw bytes at the structured wire types (serde_json + container-level
+    // Raw bytes as the structured wire types (serde_json + container-level
     // Deserialize impls).
     let _ = serde_json::from_slice::<Actor>(data);
     let _ = serde_json::from_slice::<EnvVar>(data);
