@@ -32,3 +32,6 @@ quinn.workspace = true
 rustls.workspace = true
 rust-embed.workspace = true
 wtransport.workspace = true
+
+[dev-dependencies]
+tower = { version = "0.5.3", default-features = false, features = ["util"] }
