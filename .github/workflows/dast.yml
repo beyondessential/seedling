@@ -25,13 +25,16 @@ jobs:
     name: ZAP baseline scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6.0.2
       - uses: actions/setup-node@v6
         with:
           node-version: lts/*
           cache: npm
           cache-dependency-path: crates/web/frontend/package-lock.json
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Configure toolchain
+        run: |
+          rustup toolchain install --profile minimal --no-self-update stable
+          rustup default stable
       - uses: Swatinem/rust-cache@v2
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libsystemd-dev
@@ -67,7 +70,7 @@ jobs:
               -c rules.tsv -r report.html -J report.json -w report.md
       - name: Upload ZAP report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: zap-baseline-report
           path: ${{ runner.temp }}/dast/wrk
