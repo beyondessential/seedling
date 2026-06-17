@@ -298,6 +298,14 @@ impl PodmanRuntime {
             name: Some(name.to_string()),
             driver: Some("bridge".to_string()),
             ipv6_enabled: if dual_stack { Some(true) } else { None },
+            // Explicitly disable Podman's built-in DNS. DNS for containers is owned by
+            // seedling's CoreDNS resolver plus the in-process forwarder, reached via each
+            // pod's `--dns` flag. Setting this to false stops netavark from ever spawning
+            // aardvark-dns for these networks. The libpod API already defaults an omitted
+            // field to false (unlike the `podman network create` CLI, which defaults DNS
+            // on), but we set it explicitly so the property is enforced rather than relying
+            // on that implicit default.
+            dns_enabled: Some(false),
             subnets: Some(subnets),
             ..Default::default()
         };

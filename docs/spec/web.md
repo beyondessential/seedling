@@ -15,6 +15,16 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > This endpoint is designed to sit behind a TLS-terminating reverse proxy in non-loopback deployments.
 > Browsers treat loopback origins as secure contexts, so TLS is not required for local development.
 
+> w[transport.http.security-headers]
+> Every response from the plain-HTTP endpoint carries a baseline set of browser security headers:
+>
+> - A Content Security Policy that denies framing, forbids plugin/object content, and restricts scripts to same-origin. The policy must still permit the SPA to load its own styles (which the UI toolkit injects inline at runtime), `data:` images and fonts, and to open WebTransport sessions to the configured WebTransport endpoint (a different origin to the HTTP endpoint).
+> - An explicit anti-clickjacking header denying framing, for agents that predate Content Security Policy `frame-ancestors`.
+> - Content-type sniffing disabled.
+> - A permissions policy that denies access to browser features the interface does not use.
+>
+> Transport-security headers (such as HSTS) are owned by the TLS-terminating reverse proxy, not this endpoint.
+
 > w[daemon.connect-retry]
 > If the initial connection to the seedling daemon fails at startup, the web interface must retry with exponential backoff rather than exiting.
 > The retry interval starts at one second and doubles on each attempt up to a maximum of thirty seconds.

@@ -12,7 +12,7 @@ futures-util.workspace = true
 jiff.workspace = true
 quinn.workspace = true
 rand_core.workspace = true
-rusqlite = { version = "0.39.0", features = ["bundled"], optional = true }
+rusqlite = { version = "0.40.1", features = ["bundled"], optional = true }
 rustls.workspace = true
 rustls-pki-types.workspace = true
 serde.workspace = true
