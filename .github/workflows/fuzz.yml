@@ -20,7 +20,7 @@ jobs:
         run: |
           rustup toolchain install --profile minimal --no-self-update nightly
           rustup default nightly
-      - uses: taiki-e/install-action@v2.79.7
+      - uses: taiki-e/install-action@v2.81.2
         with:
           tool: cargo-fuzz
       - uses: Swatinem/rust-cache@v2
