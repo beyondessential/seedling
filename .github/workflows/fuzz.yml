@@ -26,13 +26,19 @@ jobs:
       - name: Fuzz
         working-directory: crates/protocol/fuzz
         # 60s per run on PRs/pushes; 600s on the nightly schedule.
+        #
+        # --target is pinned to the gnu host: when install-action falls back to
+        # cargo-binstall it fetches a musl-static cargo-fuzz, whose default
+        # target is its own build triple (x86_64-unknown-linux-musl). That
+        # target's std is not installed here, so the build fails unless we
+        # override it back to the host triple.
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
             secs=600
           else
             secs=60
           fi
-          cargo fuzz run wire_decode -- -max_total_time=$secs
+          cargo fuzz run wire_decode --target x86_64-unknown-linux-gnu -- -max_total_time=$secs
       - name: Upload crash corpus
         if: failure()
         uses: actions/upload-artifact@v7
