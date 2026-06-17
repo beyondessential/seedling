@@ -24,7 +24,7 @@ rand_core.workspace = true
 reqwest.workspace = true
 rhai = { version = "1.25.1", features = ["metadata"] }
 rtnetlink = "0.21.0"
-rusqlite = { version = "0.39.0", features = ["bundled"] }
+rusqlite = { version = "0.40.1", features = ["bundled"] }
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 rustls.workspace = true
 rustls-pki-types.workspace = true

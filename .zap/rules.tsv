@@ -16,3 +16,5 @@
 # proxy-owned or genuinely-not-applicable alerts, leaving real seedling-web
 # issues to fail the build.
 10035	IGNORE	(Strict-Transport-Security header — TLS is terminated and HSTS set by Caddy)
+10027	IGNORE	(Suspicious Comments — false positive matching tokens in the minified frontend bundle)
+10049	IGNORE	(Non-Storable Content — the SPA shell is served no-store by design, see spa.delivery)
