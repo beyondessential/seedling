@@ -15,9 +15,12 @@ jobs:
     name: Fuzz wire decoders
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@nightly
-      - uses: taiki-e/install-action@v2
+      - uses: actions/checkout@v6.0.2
+      - name: Configure toolchain
+        run: |
+          rustup toolchain install --profile minimal --no-self-update nightly
+          rustup default nightly
+      - uses: taiki-e/install-action@v2.79.7
         with:
           tool: cargo-fuzz
       - uses: Swatinem/rust-cache@v2
@@ -35,7 +38,7 @@ jobs:
           cargo fuzz run wire_decode -- -max_total_time=$secs
       - name: Upload crash corpus
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-artifacts
           path: crates/protocol/fuzz/artifacts
