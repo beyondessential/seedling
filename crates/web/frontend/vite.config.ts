@@ -22,5 +22,14 @@ export default defineConfig({
     environment: "jsdom",
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     globals: true,
+    server: {
+      deps: {
+        // @mui/material's ESM build does a bare directory import of
+        // `react-transition-group/TransitionGroupContext`, which Node's native
+        // ESM resolver rejects. Inlining it routes the import through vite's
+        // resolver, which handles directory specifiers.
+        inline: ["@mui/material"],
+      },
+    },
   },
 });
