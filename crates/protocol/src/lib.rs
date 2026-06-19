@@ -4,10 +4,11 @@ pub mod client;
 pub mod env;
 pub mod error;
 pub mod events;
+pub mod grove;
 pub mod keys;
 pub mod names;
 
-// i[transport.alpn]
+// t[impl alpn]
 /// ALPN identifier negotiated for OI QUIC connections.
 ///
 /// Bumping this string is the lever for incompatible protocol revisions —

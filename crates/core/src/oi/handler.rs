@@ -15,6 +15,7 @@ mod appdef_json;
 mod apps;
 pub mod backups;
 mod faults;
+mod grove;
 mod images;
 mod ingresses;
 mod key_mgmt;
@@ -117,6 +118,20 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/keys/authorise" => key_mgmt::authorize_key(state, parse_params(req.params)?),
         // i[key.revoke]
         "/keys/revoke" => key_mgmt::revoke_key(state, parse_params(req.params)?),
+        // g[impl bootstrap.init]
+        "/grove/init" => grove::init(state, parse_params(req.params)?),
+        // g[impl membership.invite]
+        "/grove/invite" => grove::invite(state, parse_params(req.params)?),
+        // g[impl membership.revoke]
+        "/grove/revoke" => grove::revoke(state, parse_params(req.params)?),
+        // g[impl params.set]
+        "/grove/params/set" => grove::param_set(state, parse_params(req.params)?),
+        // g[impl params.set]
+        "/grove/params/unset" => grove::param_unset(state, parse_params(req.params)?),
+        // g[impl identity]
+        "/grove/status" => grove::status(state),
+        "/grove/members" => grove::members(state),
+        "/grove/params" => grove::params(state),
         // i[shell.resize]
         "/shells/resize" => super::shells::resize_shell(state, parse_params(req.params)?),
         // i[shell.list]

@@ -126,6 +126,16 @@ const SQL_V50: &str = include_str!("db/migrations/v50.sql");
 const SQL_V51: &str = include_str!("db/migrations/v51.sql");
 // r[impl infra.proxy.upgrade.cache]
 const SQL_V52: &str = include_str!("db/migrations/v52.sql");
+// g[impl identity]
+// g[impl membership.canonical]
+// g[impl versioning.seq]
+// g[impl versioning.payload-fields]
+// g[impl peers.dial]
+// g[impl params.kind]
+// g[impl params.set]
+// g[impl mapping]
+// g[impl mapping.reject-local-set]
+const SQL_V53: &str = include_str!("db/migrations/v53.sql");
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -381,6 +391,11 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 52,
         sql: SQL_V52,
+        custom_run: None,
+    },
+    Migration {
+        version: 53,
+        sql: SQL_V53,
         custom_run: None,
     },
 ];
