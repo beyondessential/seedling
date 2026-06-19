@@ -18,3 +18,7 @@
 10035	IGNORE	(Strict-Transport-Security header — TLS is terminated and HSTS set by Caddy)
 10027	IGNORE	(Suspicious Comments — false positive matching tokens in the minified frontend bundle)
 10049	IGNORE	(Non-Storable Content — the SPA shell is served no-store by design, see spa.delivery)
+10096	IGNORE	(Timestamp Disclosure — false positive matching integer literals in the minified frontend bundle)
+10109	IGNORE	(Modern Web Application — informational SPA detection, not a vulnerability)
+2	IGNORE	(Private IP Disclosure — the 10.0.0.1 in the bundle is an example placeholder in a host-entry form field, not a real address)
+10055	IGNORE	(CSP unsafe-inline — style-src 'unsafe-inline' is required by the Emotion/MUI toolkit, which injects runtime inline styles and style attributes; the rest of the CSP is kept tight in code and guarded by a unit test)
