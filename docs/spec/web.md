@@ -18,10 +18,11 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > w[transport.http.security-headers]
 > Every response from the plain-HTTP endpoint carries a baseline set of browser security headers:
 >
-> - A Content Security Policy that denies framing, forbids plugin/object content, and restricts scripts to same-origin. The policy must still permit the SPA to load its own styles (which the UI toolkit injects inline at runtime), `data:` images and fonts, and to open WebTransport sessions to the configured WebTransport endpoint (a different origin to the HTTP endpoint).
+> - A Content Security Policy that denies framing, forbids plugin/object content, and restricts scripts to same-origin. The policy must still permit the SPA to load its own styles (which the UI toolkit injects inline at runtime) and `data:` images and fonts. It must permit WebTransport sessions to the WebTransport endpoint, named as a precise origin (the request's host on the WebTransport port) rather than a scheme wildcard.
 > - An explicit anti-clickjacking header denying framing, for agents that predate Content Security Policy `frame-ancestors`.
 > - Content-type sniffing disabled.
 > - A permissions policy that denies access to browser features the interface does not use.
+> - Cross-origin isolation headers that require embedded resources to be same-origin (or to explicitly opt in) and sever the opener relationship with cross-origin windows; the console embeds no third-party content.
 >
 > Transport-security headers (such as HSTS) are owned by the TLS-terminating reverse proxy, not this endpoint.
 
