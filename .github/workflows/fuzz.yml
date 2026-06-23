@@ -15,12 +15,12 @@ jobs:
     name: Fuzz wire decoders
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v6.0.3
       - name: Configure toolchain
         run: |
           rustup toolchain install --profile minimal --no-self-update nightly
           rustup default nightly
-      - uses: taiki-e/install-action@v2.81.2
+      - uses: taiki-e/install-action@v2.81.8
         with:
           tool: cargo-fuzz
       - uses: Swatinem/rust-cache@v2

@@ -14,7 +14,7 @@ jobs:
     name: Typecheck & build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v6.0.3
       - uses: actions/setup-node@v6
         with:
           node-version: lts/*
@@ -31,7 +31,7 @@ jobs:
     name: Vitest
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v6.0.3
       - uses: actions/setup-node@v6
         with:
           node-version: lts/*
@@ -50,7 +50,7 @@ jobs:
     # side: defaults set the working directory to crates/web/frontend, so
     # cargo steps override it explicitly.
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v6.0.3
       - uses: actions/setup-node@v6
         with:
           node-version: lts/*
@@ -80,7 +80,7 @@ jobs:
         run: cargo build -p seedling -p seedling-web -p seedling-ctl --locked
         working-directory: ${{ github.workspace }}
       - name: Cache Playwright browsers
-        uses: actions/cache@v5
+        uses: actions/cache@v5.0.5
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('crates/web/frontend/package-lock.json') }}
