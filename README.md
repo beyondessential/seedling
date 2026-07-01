@@ -18,7 +18,7 @@ Seedling is a lightweight high-level container app management system.
 
 ## Non-goals
 
-Seedling is opinionated. It won't be everything for everyone. It was also written for our (BES) purposes, which necessarily informs its design.
+Seedling is opinionated. It won't be everything for everyone. It was also written for our (BES International) purposes, which necessarily informs its design.
 
 Running untrusted workloads or defending against malicious operators. [See our threat model](./docs/threat-model.md).
 
