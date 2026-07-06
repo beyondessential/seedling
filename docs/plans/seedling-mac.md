@@ -314,3 +314,140 @@ seedling-ctl logs myapp                  # works as on Linux
   the Windows native case — out of scope, would be a different product.
 - Headless / unattended Mac use. seedling-mac assumes there's a logged-in
   user; CI use cases should run a Linux build directly.
+
+# Addendum: daemon development loop
+
+## Audience and scope
+
+The plan above targets **app developers** writing BSL on macOS. This addendum
+covers **daemon developers** — people hacking on seedling itself from a Mac.
+
+The frontends are already fine natively: `seedling-ctl`, `seedling-protocol`,
+and `seedling-web` (plus the Vite frontend) have no Linux-only dependencies
+and build on darwin today. The daemon does not: `seedling-core` links
+**libsystemd** (journal reads in `system/journal.rs`, journal sends in
+`system/breadcrumb.rs` — the `SystemdManager` itself is zbus and portable),
+so `cargo build -p seedling` fails on macOS at the `libsystemd-sys`
+pkg-config step, before any of the runtime's Linux assumptions even matter.
+
+So the loop is necessarily: **edit on macOS, compile somewhere Linux, run in
+the seedling-mac VM.** Two loops for the compile step, in order of
+recommendation.
+
+## Loop A: compile inside the VM (baseline, works day one)
+
+The repo checkout lives on the Mac and is visible inside the VM through the
+virtiofs `~` share at the same path — so the dev edits in their normal macOS
+editor with zero sync. Compilation runs inside the VM:
+
+- **`CARGO_TARGET_DIR` on VM-local disk** (e.g. `/var/cache/seedling-dev/target`),
+  never on the virtiofs share. Source reads over virtiofs are fine (source
+  trees are small); a `target/` dir over virtiofs is unusable.
+- **Rust toolchain inside the VM** via rustup on first use, or baked into a
+  `-dev` flavour of the VM image (open question below).
+- **`watchexec` inside the VM needs `--poll`** — inotify events don't
+  propagate across virtiofs, so the stock `watch-build` recipe won't fire on
+  mac-side edits without it. Same applies to `watch-run` watching the target
+  dir.
+- `watch-run` itself is unchanged: it's already a Linux-side invocation.
+
+On Apple Silicon the VM is virtualised, not emulated, so rustc speed inside
+the VM is close to native — the real costs are virtiofs metadata scans on
+incremental builds and RAM pressure. Bump the dev VM to ~8 GB / all cores
+(`seedling-mac config`); the app-dev defaults (4 GB / 4 vCPU) are tight for
+`cargo build` on this workspace.
+
+## Loop B: cross-compile on the host (optimised, needs setup)
+
+Rustc runs natively on macOS targeting the VM's triple —
+`aarch64-unknown-linux-gnu` on Apple Silicon, `x86_64-unknown-linux-gnu` on
+Intel — and the binary lands on the virtiofs-shared path where the VM-side
+`watch-run --poll` picks it up (or a mac-side recipe restarts the daemon via
+`podman machine ssh`). Fastest incremental loop; no VM resources spent on
+compilation.
+
+The catch is C dependencies:
+
+- **aws-lc-sys** (rustls default crypto provider, via quinn/wtransport) and
+  **rusqlite's bundled SQLite** compile C. `cargo-zigbuild` handles both —
+  zig cc provides the Linux cross toolchain and lets us pin the glibc version
+  to the VM image's (`--target aarch64-unknown-linux-gnu.2.3x`). Host needs
+  `cmake` for aws-lc-sys.
+- **libsystemd** is the real friction: zig provides libc, not libsystemd. The
+  cross build needs a sysroot containing `libsystemd.so`, its headers, and
+  its `.pc` file, extracted from a container image of the VM's distro
+  (`podman create` + `podman cp`), with `PKG_CONFIG_SYSROOT_DIR` /
+  `PKG_CONFIG_PATH` / `PKG_CONFIG_ALLOW_CROSS=1` pointed at it. This should
+  be a one-shot `just mac-sysroot` recipe, re-run when the VM image's distro
+  version bumps.
+
+Verdict: worth building, but as a phase after Loop A works — Loop A has no
+setup cliff and is acceptable on Apple Silicon. Loop B matters most for
+heavy daemon iteration and for Intel Macs (where in-VM compiles compete with
+an already-slower machine).
+
+## Loop C: no VM — remote Linux
+
+Everything in `DEVELOP.md` as-is on any Linux box (physical, cloud, or a
+teammate's server), with the Mac as a thin client: editor via remote-SSH or
+git push/pull, `seedling-ctl` (darwin build) and the browser talking QUIC/HTTP
+to the remote daemon directly. Zero engineering, network-dependent. Fine as a
+fallback or for devs who already live in remote-dev tooling; not the
+recommended default because it abandons the offline, self-contained property
+seedling-mac exists to provide.
+
+## What works natively on macOS (no VM at all)
+
+- `cargo build` / `test` / `clippy` for `seedling-ctl`, `seedling-protocol`,
+  `seedling-web`; the Vite frontend, vitest, and (against a stubbed daemon)
+  Playwright e2e.
+- **Not** `seedling-core` / `seedling` — blocked by the libsystemd link.
+
+A possible future quality-of-life knob: feature-gate the journal integration
+so `cargo check --workspace` and clippy pass on darwin for editor/CI
+ergonomics. Explicitly **not** proposed: runtime stubs or a mock backend to
+*run* the daemon on macOS — that's the backend-trait discussion in
+`k8s-backend.md`, and faking podman/nftables/jool on a dev laptop diverges
+dev behaviour from production for no gain over the VM.
+
+## Tests
+
+Unit/integration tests for `protocol`, `web`, and the frontend run natively
+on macOS. `seedling-core` tests run inside the VM (Loop A environment):
+`podman machine ssh` + `just test`, with the same `CARGO_TARGET_DIR` note.
+Don't bother making `just test` cross-execute via zigbuild + a runner; the VM
+is right there.
+
+## Justfile sketch
+
+Names TBD; the shape:
+
+```
+mac-build:      # Loop B: cargo zigbuild --target <triple> (watchexec on host)
+mac-sysroot:    # one-shot: extract libsystemd sysroot from VM-distro container
+mac-restart:    # podman machine ssh -- systemctl restart seedling-dev
+mac-test:       # podman machine ssh -- just test  (VM-local target dir)
+```
+
+Loop A needs no new recipes beyond documenting `--poll` and
+`CARGO_TARGET_DIR`; consider folding both into `watch-build`/`watch-run`
+automatically when a virtiofs mount is detected.
+
+## Open questions
+
+- **`-dev` VM image flavour?** Baking rustup + toolchain + `just` +
+  `watchexec` into a dev variant of the CI-built image avoids per-dev setup,
+  at the cost of a second image in the pipeline. Alternative: a
+  `seedling-mac dev-setup` command that rustup-installs into the standard
+  image.
+- **inotify over virtiofs.** Confirm on current podman machine / AVF versions
+  whether events propagate (behaviour has shifted across virtiofsd versions);
+  if they do, drop `--poll`.
+- **Sysroot pinning.** The Loop B sysroot must track the VM image's distro
+  release; decide whether `mac-sysroot` derives the container tag from the
+  installed image version automatically.
+- **Daemon-under-test vs seedling-mac's own daemon.** A daemon dev's
+  `watch-run` instance and the LaunchAgent-managed production-ish daemon
+  fight over the data dir and ports. Simplest rule: daemon devs run
+  `seedling-mac config startup manual` and own the daemon lifecycle
+  themselves; document it.
