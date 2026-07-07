@@ -84,6 +84,14 @@ struct Args {
     #[cfg_attr(debug_assertions, arg(conflicts_with = "daemon_trust_any"))]
     daemon_fingerprint: Option<String>,
 
+    // w[daemon.pin]
+    /// Path to a file containing the daemon's SHA-256 SPKI fingerprint (hex) to
+    /// pin. Re-read on each connection attempt, so the daemon may publish it
+    /// after this process starts (see the daemon's `oi.fingerprint` file).
+    #[arg(long, conflicts_with = "daemon_fingerprint")]
+    #[cfg_attr(debug_assertions, arg(conflicts_with = "daemon_trust_any"))]
+    daemon_fingerprint_file: Option<std::path::PathBuf>,
+
     /// Skip daemon key verification (development only).
     #[cfg(debug_assertions)]
     #[arg(long, conflicts_with = "daemon_fingerprint")]
@@ -94,31 +102,67 @@ struct Args {
     key_file: Option<std::path::PathBuf>,
 }
 
+/// How the daemon's identity is pinned for each connection attempt.
+enum DaemonPin {
+    /// A fixed auth mode resolved once at startup (explicit fingerprint,
+    /// or trust-any in debug builds).
+    Fixed(ClientAuth),
+    /// A file the daemon publishes its fingerprint to, re-read per attempt.
+    File(std::path::PathBuf),
+}
+
+impl DaemonPin {
+    /// Resolve the auth for one connection attempt. Returns `None` when a
+    /// fingerprint file is configured but not yet readable or empty, so the
+    /// caller retries instead of failing.
+    fn resolve(&self) -> Option<ClientAuth> {
+        match self {
+            DaemonPin::Fixed(auth) => Some(auth.clone()),
+            DaemonPin::File(path) => {
+                let contents = std::fs::read_to_string(path).ok()?;
+                let fingerprint = contents.trim();
+                (!fingerprint.is_empty()).then(|| ClientAuth::Fingerprint(fingerprint.to_owned()))
+            }
+        }
+    }
+}
+
 // w[daemon.connect-retry]
 async fn connect_daemon_with_retry(
     addr: std::net::SocketAddr,
-    auth: ClientAuth,
+    pin: &DaemonPin,
     key_file: &std::path::Path,
 ) -> DaemonConn {
     let mut backoff = Duration::from_secs(1);
     loop {
-        match DaemonConn::connect(addr, auth.clone(), key_file).await {
-            Err(e) => {
+        // w[daemon.pin] — resolve the pinned fingerprint per attempt so a
+        // daemon that has not yet published its fingerprint file does not make
+        // startup fail; we retry until the file appears.
+        match pin.resolve() {
+            None => {
                 tracing::warn!(
-                    "daemon connection failed: {e} — retrying in {}s",
+                    "daemon fingerprint not yet available — retrying in {}s",
                     backoff.as_secs()
                 );
             }
-            Ok(daemon) => match daemon.probe().await {
-                Ok(()) => return daemon,
+            Some(auth) => match DaemonConn::connect(addr, auth, key_file).await {
                 Err(e) => {
                     tracing::warn!(
-                        fingerprint = %daemon.fingerprint,
-                        "daemon probe failed: {e} — if this key is not yet authorised, run: seedling-ctl user add {} seedling-web — retrying in {}s",
-                        daemon.fingerprint,
-                        backoff.as_secs(),
+                        "daemon connection failed: {e} — retrying in {}s",
+                        backoff.as_secs()
                     );
                 }
+                Ok(daemon) => match daemon.probe().await {
+                    Ok(()) => return daemon,
+                    Err(e) => {
+                        tracing::warn!(
+                            fingerprint = %daemon.fingerprint,
+                            "daemon probe failed: {e} — if this key is not yet authorised, run: seedling-ctl user add {} seedling-web — retrying in {}s",
+                            daemon.fingerprint,
+                            backoff.as_secs(),
+                        );
+                    }
+                },
             },
         }
         tokio::time::sleep(backoff).await;
@@ -199,16 +243,20 @@ async fn main() {
     #[cfg(not(debug_assertions))]
     let trust_any = false;
 
-    let daemon_auth = if trust_any {
+    // w[daemon.pin] — a fingerprint file takes precedence and is resolved per
+    // attempt; otherwise the pin is fixed at startup.
+    let daemon_pin = if let Some(path) = args.daemon_fingerprint_file {
+        DaemonPin::File(path)
+    } else if trust_any {
         tracing::warn!("--daemon-trust-any: skipping daemon key verification");
-        ClientAuth::TrustAny
+        DaemonPin::Fixed(ClientAuth::TrustAny)
     } else if let Some(fp) = args.daemon_fingerprint {
-        ClientAuth::Fingerprint(fp)
+        DaemonPin::Fixed(ClientAuth::Fingerprint(fp))
     } else if cfg!(debug_assertions) {
         tracing::warn!("no --daemon-fingerprint; trusting any daemon key (debug build)");
-        ClientAuth::TrustAny
+        DaemonPin::Fixed(ClientAuth::TrustAny)
     } else {
-        eprintln!("error: --daemon-fingerprint is required");
+        eprintln!("error: --daemon-fingerprint or --daemon-fingerprint-file is required");
         std::process::exit(1);
     };
 
@@ -216,7 +264,7 @@ async fn main() {
 
     // w[daemon.connect-retry]
     let daemon =
-        Arc::new(connect_daemon_with_retry(args.daemon_addr, daemon_auth, &key_file).await);
+        Arc::new(connect_daemon_with_retry(args.daemon_addr, &daemon_pin, &key_file).await);
 
     let cert_store = Arc::new(RwLock::new(CertStore::new()));
 
@@ -284,4 +332,41 @@ async fn main() {
     // Wait indefinitely.
     tokio::signal::ctrl_c().await.expect("ctrl-c handler");
     tracing::info!("shutting down");
+}
+
+#[cfg(test)]
+mod daemon_pin_tests {
+    use super::*;
+
+    // w[verify daemon.pin]
+    // A fingerprint file is resolved per attempt: absent or empty means "not
+    // yet available" (retry), and a real value is trimmed to the exact
+    // fingerprint the daemon published.
+    #[test]
+    fn file_pin_trims_and_resolves() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("oi.fingerprint");
+        let pin = DaemonPin::File(path.clone());
+
+        // Absent file → not yet available.
+        assert!(pin.resolve().is_none());
+
+        // Whitespace-only → still not available.
+        std::fs::write(&path, "   \n").expect("write");
+        assert!(pin.resolve().is_none());
+
+        // Real fingerprint with trailing newline → trimmed exact match.
+        std::fs::write(&path, "deadbeef\n").expect("write");
+        match pin.resolve() {
+            Some(ClientAuth::Fingerprint(fp)) => assert_eq!(fp, "deadbeef"),
+            _ => panic!("expected a Fingerprint auth"),
+        }
+    }
+
+    // w[verify daemon.pin]
+    #[test]
+    fn fixed_pin_returns_its_auth() {
+        let pin = DaemonPin::Fixed(ClientAuth::TrustAny);
+        assert!(matches!(pin.resolve(), Some(ClientAuth::TrustAny)));
+    }
 }
