@@ -30,6 +30,7 @@ Status: in production internally, but not an externally supported product.
 
 Documentation is a bit sparse at the moment.
 
+- [Deploying Seedling](./docs/deploying.md)
 - [App scripting language guide](./docs/bsl-scripting.md)
 - [Backup apps](./docs/backup-app.md)
 - [Dynamic vs static resources](./docs/resource-context-rules.md)
