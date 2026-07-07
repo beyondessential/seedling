@@ -136,6 +136,16 @@ fn extract_negotiated_alpn(conn: &quinn::Connection) -> Option<Vec<u8>> {
     hd.protocol
 }
 
+/// Write the server's SPKI fingerprint (hex, newline-terminated) next to the
+/// transport key as `oi.fingerprint`, so a co-located process (e.g.
+/// seedling-web) can pin it without a fingerprint probe.
+fn publish_fingerprint(key_path: &std::path::Path, fingerprint: &str) -> std::io::Result<()> {
+    std::fs::write(
+        key_path.with_file_name("oi.fingerprint"),
+        format!("{fingerprint}\n"),
+    )
+}
+
 // t[impl quic]
 // t[impl server-identity]
 // t[impl client-auth]
@@ -147,6 +157,12 @@ pub async fn run(
     let spki = keys::spki_der(&key);
     let fingerprint = keys::fingerprint(&spki);
     config.state.spki_fingerprint.set(fingerprint.clone()).ok();
+
+    // t[impl server-identity.published] — publish the fingerprint for local
+    // pinning. Non-fatal: the endpoint still serves if the write fails.
+    if let Err(e) = publish_fingerprint(&config.state.key_path, &fingerprint) {
+        tracing::warn!("failed to write fingerprint file: {e}");
+    }
 
     tracing::info!("transport SPKI fingerprint: {fingerprint}");
 
@@ -309,4 +325,27 @@ pub async fn read_json_line(
         }
     }
     Ok((buf[..total].to_vec(), Vec::new()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::publish_fingerprint;
+
+    // t[verify server-identity.published]
+    // The published file carries exactly the fingerprint clients pin, so a
+    // reader that trims whitespace recovers it verbatim.
+    #[test]
+    fn publishes_fingerprint_next_to_key() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let key_path = dir.path().join("oi.key");
+        publish_fingerprint(&key_path, "0123456789abcdef").expect("write fingerprint");
+
+        let contents =
+            std::fs::read_to_string(dir.path().join("oi.fingerprint")).expect("read back");
+        assert!(
+            contents.ends_with('\n'),
+            "file should be newline-terminated"
+        );
+        assert_eq!(contents.trim(), "0123456789abcdef");
+    }
 }
