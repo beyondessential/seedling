@@ -1,0 +1,82 @@
+name: Coverage
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+
+# Native GitHub code coverage (public preview): each job produces a Cobertura
+# report and uploads it via actions/upload-code-coverage; the
+# github-code-quality bot then posts a coverage summary on the pull request.
+# Requires "Code Quality" to be enabled for the repo/org (a GitHub setting), and
+# a GitHub Team or Enterprise Cloud plan.
+permissions:
+  contents: read
+  code-quality: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: coverage-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust coverage
+    runs-on: ubuntu-latest
+    env:
+      SKIP_FRONTEND_BUILD: "1"
+    steps:
+      - uses: actions/checkout@v6.0.3
+      - name: Configure toolchain
+        run: |
+          rustup toolchain install --profile minimal --no-self-update stable
+          rustup default stable
+          rustup component add llvm-tools-preview
+      - uses: taiki-e/install-action@v2.81.2
+        with:
+          tool: cargo-llvm-cov
+      # Coverage builds are instrumented, so keep them in their own cache to
+      # avoid polluting the normal build cache used by the Rust workflow.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: coverage
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libsystemd-dev
+      - name: Create frontend/dist placeholder
+        run: mkdir -p crates/web/frontend/dist
+      - name: cargo llvm-cov
+        run: cargo llvm-cov --workspace --locked --cobertura --output-path cobertura-rust.xml
+      - uses: actions/upload-code-coverage@v1
+        with:
+          file: cobertura-rust.xml
+          language: Rust
+          label: code-coverage/rust
+
+  frontend:
+    name: Frontend coverage
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/web/frontend
+    steps:
+      - uses: actions/checkout@v6.0.3
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: crates/web/frontend/package-lock.json
+      - name: npm ci
+        run: npm ci
+      - name: Vitest coverage
+        run: npx --no-install vitest run --coverage
+      - uses: actions/upload-code-coverage@v1
+        # `uses` steps run from the workspace root, not the job's
+        # working-directory, so give the full path to the report.
+        with:
+          file: crates/web/frontend/coverage/cobertura-coverage.xml
+          language: TypeScript
+          label: code-coverage/vitest
