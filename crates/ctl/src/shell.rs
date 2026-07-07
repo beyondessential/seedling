@@ -3,8 +3,78 @@ use std::time::Duration;
 use seedling_protocol::client::OiClient;
 use seedling_protocol::names::AppName;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::signal::unix::SignalKind;
 use tokio::time::Instant;
+
+/// SIGTERM source (Unix only). On other platforms `recv()` never resolves, so
+/// the graceful-terminate select branch simply never fires.
+struct TermSignal {
+    #[cfg(unix)]
+    inner: tokio::signal::unix::Signal,
+}
+
+impl TermSignal {
+    #[cfg(unix)]
+    fn new() -> std::io::Result<Self> {
+        use tokio::signal::unix::{SignalKind, signal};
+        Ok(Self {
+            inner: signal(SignalKind::terminate())?,
+        })
+    }
+    #[cfg(not(unix))]
+    fn new() -> std::io::Result<Self> {
+        Ok(Self {})
+    }
+
+    async fn recv(&mut self) {
+        #[cfg(unix)]
+        {
+            self.inner.recv().await;
+        }
+        #[cfg(not(unix))]
+        {
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+/// Terminal-resize notifier. On Unix it fires on SIGWINCH; elsewhere there is
+/// no resize signal — and the raw stdin relay rules out crossterm's event
+/// stream (it would consume the input bytes) — so it polls the terminal size on
+/// a fixed interval. Either way the caller only sends a resize when the size
+/// actually changed.
+struct ResizeWatcher {
+    #[cfg(unix)]
+    sig: tokio::signal::unix::Signal,
+    #[cfg(not(unix))]
+    tick: tokio::time::Interval,
+}
+
+impl ResizeWatcher {
+    #[cfg(unix)]
+    fn new() -> std::io::Result<Self> {
+        use tokio::signal::unix::{SignalKind, signal};
+        Ok(Self {
+            sig: signal(SignalKind::window_change())?,
+        })
+    }
+    #[cfg(not(unix))]
+    fn new() -> std::io::Result<Self> {
+        let mut tick = tokio::time::interval(Duration::from_millis(500));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        Ok(Self { tick })
+    }
+
+    async fn changed(&mut self) {
+        #[cfg(unix)]
+        {
+            self.sig.recv().await;
+        }
+        #[cfg(not(unix))]
+        {
+            self.tick.tick().await;
+        }
+    }
+}
 
 /// Drop guard that restores the terminal from raw mode.
 struct RawModeGuard;
@@ -147,21 +217,23 @@ async fn run_shell(client: &OiClient, method: &str, request_params: serde_json::
     }
     let _raw = RawModeGuard;
 
-    // 7. Signal handlers.
-    let mut sigwinch = match tokio::signal::unix::signal(SignalKind::window_change()) {
-        Ok(s) => s,
+    // 7. Resize notifier (SIGWINCH on Unix, size polling elsewhere) and the
+    //    Unix graceful-terminate signal.
+    let mut resize = match ResizeWatcher::new() {
+        Ok(r) => r,
         Err(e) => {
-            eprintln!("could not install SIGWINCH handler: {e}");
+            eprintln!("could not install resize watcher: {e}");
             return 1;
         }
     };
-    let mut sigterm = match tokio::signal::unix::signal(SignalKind::terminate()) {
+    let mut sigterm = match TermSignal::new() {
         Ok(s) => s,
         Err(e) => {
             eprintln!("could not install SIGTERM handler: {e}");
             return 1;
         }
     };
+    let mut last_size = crossterm::terminal::size().unwrap_or((80, 24));
 
     // 8. I/O relay loop.
     //    - local stdin  → session_send (raw bytes)
@@ -239,20 +311,24 @@ async fn run_shell(client: &OiClient, method: &str, request_params: serde_json::
                     _ => break -1,
                 }
             }
-            // SIGWINCH: forward new terminal dimensions to the server
-            _ = sigwinch.recv() => {
+            // Terminal resize: forward new dimensions to the server, but only
+            // when they actually changed (the non-Unix watcher polls on a timer).
+            _ = resize.changed() => {
                 let (new_cols, new_rows) = crossterm::terminal::size().unwrap_or((80, 24));
-                client
-                    .request(
-                        "/shells/resize",
-                        serde_json::json!({
-                            "session_id": session_id,
-                            "rows": new_rows,
-                            "cols": new_cols,
-                        }),
-                    )
-                    .await
-                    .ok();
+                if (new_cols, new_rows) != last_size {
+                    last_size = (new_cols, new_rows);
+                    client
+                        .request(
+                            "/shells/resize",
+                            serde_json::json!({
+                                "session_id": session_id,
+                                "rows": new_rows,
+                                "cols": new_cols,
+                            }),
+                        )
+                        .await
+                        .ok();
+                }
             }
             // SIGTERM: send ETX to the remote shell, then drain with a timeout.
             _ = sigterm.recv(), if shutdown_deadline.is_none() => {
