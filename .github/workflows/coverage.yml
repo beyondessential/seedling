@@ -35,7 +35,7 @@ jobs:
           rustup toolchain install --profile minimal --no-self-update stable
           rustup default stable
           rustup component add llvm-tools-preview
-      - uses: taiki-e/install-action@v2.81.2
+      - uses: taiki-e/install-action@v2.82.2
         with:
           tool: cargo-llvm-cov
       # Coverage builds are instrumented, so keep them in their own cache to
@@ -50,7 +50,7 @@ jobs:
         run: mkdir -p crates/web/frontend/dist
       - name: cargo llvm-cov
         run: cargo llvm-cov --workspace --locked --cobertura --output-path cobertura-rust.xml
-      - uses: actions/upload-code-coverage@v1
+      - uses: actions/upload-code-coverage@v1.3.0
         with:
           file: cobertura-rust.xml
           language: Rust
@@ -73,7 +73,7 @@ jobs:
         run: npm ci
       - name: Vitest coverage
         run: npx --no-install vitest run --coverage
-      - uses: actions/upload-code-coverage@v1
+      - uses: actions/upload-code-coverage@v1.3.0
         # `uses` steps run from the workspace root, not the job's
         # working-directory, so give the full path to the report.
         with:
