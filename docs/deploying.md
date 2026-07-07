@@ -26,7 +26,8 @@ sudo apt-get update
 sudo apt-get install seedling
 ```
 
-The package depends on `podman`, `nftables` and `libsystemd0`, and recommends
+The package depends on `podman` (5.x — podman 4 is too old and 6 is not yet
+supported), `nftables` and `libsystemd0`, and recommends
 `btrfs-progs` (for named-volume snapshots) and `jool-dkms` + `jool-tools` (for
 NAT64). Recommends are installed by default; if you run without NAT64 or on a
 non-btrfs data directory you can skip them with `--no-install-recommends`. It
