@@ -7,18 +7,17 @@ pr_labels = ["autorelease"]
 # populate the PR body without committing it.
 changelog_update = true
 # No crate is published to a registry (all are publish = false in Cargo.toml);
-# tell release-plz the same so it does not attempt a cargo publish. release-plz
-# only tags and cuts a GitHub release. Disable per-crate tags/releases by
-# default so the workspace produces a single `v<version>` tag (from the
-# seedling package below), which is what the release build workflow triggers on.
+# tell release-plz the same so it does not attempt a cargo publish.
 publish = false
-git_tag_enable = false
+# Every crate still gets a git tag, so a change to ANY of them opens a release
+# PR and bumps the shared workspace version. Only the `seedling` package cuts a
+# GitHub release (below); the other crates get plain tags (seedling-core-v*,
+# etc.) which are harmless — only `v<version>` triggers the release build.
 git_release_enable = false
 
 [[package]]
 name = "seedling"
 publish = false
-git_tag_enable = true
 git_release_enable = true
 git_tag_name = "v{{ version }}"
 git_release_name = "v{{ version }}"
