@@ -85,6 +85,13 @@ fn synthesise_actor(state: &OiState, fp: Option<&str>) -> Arc<Actor> {
     })
 }
 
+/// Write the server's SPKI fingerprint (hex, newline-terminated) to
+/// `oi.fingerprint` in the data directory.
+// i[impl transport.server-identity.published]
+fn publish_fingerprint(data_dir: &Path, fingerprint: &str) -> std::io::Result<()> {
+    std::fs::write(data_dir.join("oi.fingerprint"), format!("{fingerprint}\n"))
+}
+
 // i[transport.quic]
 // i[transport.server-identity]
 // i[transport.client-auth]
@@ -102,6 +109,13 @@ pub async fn run(
 
     tracing::info!("OI SPKI fingerprint: {fingerprint}");
     state.spki_fingerprint.set(fingerprint.clone()).ok();
+
+    // Publish the fingerprint so a co-located process (e.g. seedling-web) can
+    // pin it without a fingerprint probe. Non-fatal: the daemon still serves if
+    // the write fails; only the file-based bootstrap of co-located clients breaks.
+    if let Err(e) = publish_fingerprint(data_dir, &fingerprint) {
+        tracing::warn!("failed to write OI fingerprint file: {e}");
+    }
 
     {
         let trusted_keys = Arc::clone(&state.trusted_keys);
@@ -561,8 +575,26 @@ mod auth_tests {
         keys::{self, ClientIdentity},
     };
 
-    use super::{Arc, build_tls_config};
+    use super::{Arc, build_tls_config, publish_fingerprint};
     use crate::oi::auth::{TrustedKeys, new_trusted_keys};
+
+    // i[verify transport.server-identity.published]
+    // The published file must carry exactly the fingerprint clients pin, so a
+    // reader that trims whitespace recovers the fingerprint verbatim.
+    #[test]
+    fn publishes_fingerprint_to_data_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fingerprint = "0123456789abcdef";
+        publish_fingerprint(dir.path(), fingerprint).expect("write fingerprint");
+
+        let contents =
+            std::fs::read_to_string(dir.path().join("oi.fingerprint")).expect("read back");
+        assert!(
+            contents.ends_with('\n'),
+            "file should be newline-terminated"
+        );
+        assert_eq!(contents.trim(), fingerprint);
+    }
 
     /// Stand up a real OI QUIC endpoint using the production TLS wiring
     /// ([`build_tls_config`]) and accept connections, holding any that
