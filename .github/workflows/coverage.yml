@@ -29,7 +29,7 @@ jobs:
     env:
       SKIP_FRONTEND_BUILD: "1"
     steps:
-      - uses: actions/checkout@v6.0.3
+      - uses: actions/checkout@v7.0.0
       - name: Configure toolchain
         run: |
           rustup toolchain install --profile minimal --no-self-update stable
@@ -63,7 +63,7 @@ jobs:
       run:
         working-directory: crates/web/frontend
     steps:
-      - uses: actions/checkout@v6.0.3
+      - uses: actions/checkout@v7.0.0
       - uses: actions/setup-node@v6
         with:
           node-version: lts/*
