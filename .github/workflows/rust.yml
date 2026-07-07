@@ -19,7 +19,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.3
+      - uses: actions/checkout@v7.0.0
       - name: Configure toolchain
         run: |
           rustup toolchain install --profile minimal --no-self-update stable
@@ -42,7 +42,7 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.3
+      - uses: actions/checkout@v7.0.0
       - name: Configure toolchain
         run: |
           rustup toolchain install --profile minimal --no-self-update stable
