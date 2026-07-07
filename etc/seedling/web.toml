@@ -2,6 +2,10 @@
 #
 # This file is a dpkg conffile: your edits are preserved across package
 # upgrades. See docs/deploying.md for the full setup.
+#
+# By default seedling-web authenticates operators via Tailscale identity
+# (the shipped unit runs with --trust-tailscale-headers). Setting a password
+# hash below is only needed for a password-login deployment.
 
 [auth]
 # Argon2id PHC hash of the operator login password. Password login is disabled

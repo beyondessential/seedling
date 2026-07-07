@@ -121,6 +121,7 @@ jobs:
 
           install -Dm644 services/seedling.service     "$deb_dir/usr/lib/systemd/system/seedling.service"
           install -Dm644 services/seedling-web.service "$deb_dir/usr/lib/systemd/system/seedling-web.service"
+          install -Dm644 services/seedling-web-tailscale-serve.service "$deb_dir/usr/lib/systemd/system/seedling-web-tailscale-serve.service"
           install -Dm644 etc/logrotate.d/seedling      "$deb_dir/etc/logrotate.d/seedling"
           install -Dm644 etc/seedling/web.toml          "$deb_dir/etc/seedling/web.toml"
           install -Dm644 README.md                      "$deb_dir/usr/share/doc/seedling/README.md"
@@ -163,13 +164,17 @@ jobs:
           if [ -d /run/systemd/system ]; then
             systemctl daemon-reload || true
             if [ "$1" = configure ] && [ -z "$2" ]; then
-              # First install: start the daemon. Web stays disabled until an
-              # operator sets a password hash and enables it.
+              # First install: start the daemon and the web interface. The web
+              # interface authenticates via Tailscale headers and binds loopback,
+              # so it is inert until the operator enables the tailscale-serve unit
+              # (or configures a password + reverse proxy).
               systemctl enable --now seedling.service || true
+              systemctl enable --now seedling-web.service || true
             else
-              # Upgrade: pick up the new binary. Workloads keep running, so a
+              # Upgrade: pick up the new binaries. Workloads keep running, so a
               # restart is non-disruptive.
               systemctl try-restart seedling.service || true
+              systemctl try-restart seedling-web.service || true
             fi
           fi
 
@@ -182,6 +187,7 @@ jobs:
           set -e
           if [ "$1" = remove ] || [ "$1" = deconfigure ]; then
             if [ -d /run/systemd/system ]; then
+              systemctl --no-reload disable --now seedling-web-tailscale-serve.service || true
               systemctl --no-reload disable --now seedling-web.service || true
               systemctl --no-reload disable --now seedling.service || true
             fi

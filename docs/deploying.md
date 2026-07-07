@@ -34,8 +34,9 @@ non-btrfs data directory you can skip them with `--no-install-recommends`.
 ### What the package installs
 
 - Binaries: `/usr/bin/seedling`, `/usr/bin/seedling-web`, `/usr/bin/seedling-ctl`.
-- Units: `/usr/lib/systemd/system/seedling.service` (enabled and started on
-  install) and `seedling-web.service` (shipped **disabled**).
+- Units: `seedling.service` and `seedling-web.service` (both enabled and started
+  on install), plus `seedling-web-tailscale-serve.service` (shipped **disabled**;
+  enable it to expose the web interface over Tailscale).
 - State: `/var/lib/seedling` (data directory: database, keys, authorized keys)
   and `/var/log/seedling` (audit log, rotated by `/etc/logrotate.d/seedling`).
 - Config: `/etc/seedling/web.toml` (a conffile — your edits survive upgrades).
@@ -64,32 +65,49 @@ fingerprint (trust-on-first-use). You can read it ahead of time from
 
 ## The web interface (seedling-web)
 
-`seedling-web` is shipped disabled because it needs configuration before it can
-run: a login password and the daemon's identity. The package has already
-bootstrapped its daemon credentials on install — it pre-generated
-`/var/lib/seedling/web.key` and authorised that key in
-`/var/lib/seedling/authorized_keys` — and the unit is wired to pin the daemon
-from `/var/lib/seedling/oi.fingerprint`. So the only remaining step is the login
-password.
+`seedling-web.service` is **enabled and started on install**. Its daemon
+credentials are already bootstrapped — the package pre-generated
+`/var/lib/seedling/web.key`, authorised that key in
+`/var/lib/seedling/authorized_keys`, and the unit pins the daemon from
+`/var/lib/seedling/oi.fingerprint`. It binds loopback only and authenticates
+operators via Tailscale identity headers (`--trust-tailscale-headers`), so out
+of the box it runs but is not reachable from anywhere until you put a front-end
+in front of it.
 
-1. Set an operator password hash in `/etc/seedling/web.toml`. Generate an
-   Argon2id hash with the `argon2` CLI (from the `argon2` package):
+### Tailscale (default)
 
-   ```bash
-   printf '%s' 'your-password' | argon2 "$(head -c16 /dev/urandom | base64)" -id -e
-   ```
+Expose the loopback interface over your tailnet with `tailscale serve`, which
+terminates HTTPS (the secure context WebTransport needs) and injects the
+`Tailscale-User-*` identity headers seedling-web trusts. A unit for this ships
+**disabled**; enable it once Tailscale is up on the host:
 
-   Paste the resulting `$argon2id$...` string as `password_hash` under `[auth]`.
+```bash
+sudo systemctl enable --now seedling-web-tailscale-serve.service
+```
 
-2. Enable and start the unit:
+That runs `tailscale serve --https=443 --bg localhost:7894`. If Tailscale is not
+installed the unit is a no-op (a `ConditionPathExists=/usr/bin/tailscale` gate
+skips it rather than failing), so it is safe to leave enabled. To stop exposing
+the interface, `systemctl disable --now seedling-web-tailscale-serve.service`
+(which runs `tailscale serve --https=443 off`).
 
-   ```bash
-   sudo systemctl enable --now seedling-web.service
-   ```
+Only loopback and the local `tailscale serve` reach the web port, so the trusted
+identity headers cannot be spoofed by tailnet peers.
 
-By default the interface binds loopback only. WebTransport needs a secure
-context, so expose it behind a TLS-terminating reverse proxy, or drop in an
-override to bind an interface directly:
+### Password login (alternative)
+
+To use a password instead of Tailscale, set an Argon2id hash in
+`/etc/seedling/web.toml` (generate one with the `argon2` CLI from the `argon2`
+package):
+
+```bash
+printf '%s' 'your-password' | argon2 "$(head -c16 /dev/urandom | base64)" -id -e
+```
+
+Paste the resulting `$argon2id$...` string as `password_hash` under `[auth]`,
+drop `--trust-tailscale-headers` with a drop-in, bind a reachable interface, and
+front it with a TLS-terminating reverse proxy (WebTransport requires a secure
+context):
 
 ```bash
 sudo systemctl edit seedling-web.service

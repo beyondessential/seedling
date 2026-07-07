@@ -11,12 +11,16 @@ Settled with the user before writing this plan:
    opens a release PR that bumps the workspace version and, on merge, tags
    `v{{version}}`; that tag triggers the deb build workflow. No crates.io
    publish (all crates are `publish = false`).
-2. **Service enablement:** `seedling.service` is enabled and started on install
-   (it has working defaults). `seedling-web.service` ships **disabled** — in a
-   release build it hard-requires a pinned daemon fingerprint and a `web.toml`
-   with a password hash, so it cannot sensibly auto-start.
+2. **Service enablement:** `seedling.service` and `seedling-web.service` are both
+   enabled and started on install (both have working defaults; the only hard
+   startup requirement is the pinned daemon fingerprint, which the bootstrap
+   auto-supplies). `seedling-web` authenticates via Tailscale identity headers
+   and binds loopback, so it is inert until fronted. A separate
+   `seedling-web-tailscale-serve.service` ships **disabled**; the operator
+   enables it once Tailscale is up to expose the web interface over the tailnet.
+   Password login is the documented alternative.
 3. **Single `seedling` deb** containing all three binaries (`seedling`,
-   `seedling-web`, `seedling-ctl`), both units, and support files.
+   `seedling-web`, `seedling-ctl`), all three units, and support files.
 4. **Both PRs:** the seedling packaging PR and a `third-party-builds` PR wiring
    seedling into the APT index + install/verify tests. Both tagged TAM-6946.
 5. **Full auto-wire of the seedling-web bootstrap** on first install (see
@@ -35,10 +39,13 @@ Settled with the user before writing this plan:
   Caddy working files. SQLite is statically bundled (no libsqlite dep).
 - Audit log: `--audit-log`, default `/var/log/seedling/audit.log`. A logrotate
   stanza already exists at `etc/logrotate.d/seedling`.
-- `seedling-web`: reads a TOML config (`--config`), needs `auth.password_hash`;
-  keeps a persistent client key (`--key-file`, default under `$XDG_STATE_HOME`);
-  connects to the daemon OI at `[::1]:7891`; in release **requires**
-  `--daemon-fingerprint`. Ports: web HTTP 7894, web WT 7893, OI 7891.
+- `seedling-web`: reads an optional TOML config (`--config`); authenticates via
+  Tailscale headers (`--trust-tailscale-headers`) or, if `auth.password_hash` is
+  set, password login (starting does **not** require either). Keeps a persistent
+  client key (`--key-file`, default under `$XDG_STATE_HOME`); connects to the
+  daemon OI at `[::1]:7891`; in release **requires** a pinned daemon fingerprint
+  (`--daemon-fingerprint` or `--daemon-fingerprint-file`). Ports: web HTTP 7894,
+  web WT 7893, OI 7891.
 - Containerfiles (Caddy, volume-shell) and the web SPA are **embedded** in the
   binaries — nothing extra to package.
 - Dynamic shared-lib dep: `libsystemd0` (via the `systemd` crate; CI installs
@@ -82,12 +89,14 @@ postinst (first install), before starting the daemon:
 - `seedling.service` on start generates `oi.key`, writes `oi.fingerprint`, and
   imports `authorized_keys` → web is authorised.
 
-`seedling-web.service` ships with
-`--daemon-fingerprint-file /var/lib/seedling/oi.fingerprint` and
-`--key-file /var/lib/seedling/web.key` baked in. When the operator sets a
-`web.toml` password hash and enables the unit, it wires up with no manual
-fingerprint copying. Both services run as root (operator-trust threat model;
-avoids key-ownership juggling).
+`seedling-web.service` ships enabled with
+`--daemon-fingerprint-file /var/lib/seedling/oi.fingerprint`,
+`--key-file /var/lib/seedling/web.key`, and `--trust-tailscale-headers` baked in;
+it wires up to the daemon with no manual fingerprint copying. It binds loopback
+and is reachable only via `seedling-web-tailscale-serve.service` (shipped
+disabled), which runs `tailscale serve` to terminate HTTPS and inject the
+identity headers. All services run as root (operator-trust threat model; avoids
+key-ownership juggling).
 
 ## Repo A — seedling changes
 
@@ -97,12 +106,15 @@ avoids key-ownership juggling).
   /var/log/seedling/audit.log`, `Restart=always`, `After/Wants=network-online`,
   `[Install] WantedBy=multi-user.target`, reasonable `Protect*` hardening that
   still permits modprobe/nftables/podman/dbus.
-- `services/seedling-web.service` — `Type=simple`, root,
+- `services/seedling-web.service` — `Type=simple`, root, enabled on install,
   `ExecStart=/usr/bin/seedling-web --config /etc/seedling/web.toml
   --daemon-fingerprint-file /var/lib/seedling/oi.fingerprint
-  --key-file /var/lib/seedling/web.key`, shipped disabled.
+  --key-file /var/lib/seedling/web.key --trust-tailscale-headers`.
+- `services/seedling-web-tailscale-serve.service` — `Type=oneshot`
+  (`RemainAfterExit`), `ConditionPathExists=/usr/bin/tailscale` (no-op if absent),
+  `tailscale serve --https=443 --bg localhost:7894`; shipped disabled.
 - `etc/seedling/web.toml` — sample/`conffile` with a commented `[auth]`
-  `password_hash` placeholder.
+  `password_hash` placeholder (the alternative to Tailscale auth).
 - Reuse `etc/logrotate.d/seedling` → `/etc/logrotate.d/seedling`.
 - `[profile.dist]` in root `Cargo.toml` (release + `lto`, `codegen-units=1`,
   `strip="symbols"`) for lean deb binaries.

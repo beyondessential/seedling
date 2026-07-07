@@ -3,25 +3,27 @@ Description=Seedling web interface
 Documentation=https://github.com/beyondessential/seedling
 After=network-online.target seedling.service
 Wants=network-online.target
-# seedling-web connects to the daemon and retries with backoff, so it does not
-# hard-require the daemon; it merely prefers to start after it when co-located.
 
 [Service]
 Type=simple
 # Runs as root so it can read the daemon-owned bootstrap files under
 # /var/lib/seedling (the pinned fingerprint and its own client key). It binds
-# only the web ports and needs no other privilege.
+# only the loopback web port and needs no other privilege.
 #
-# Shipped disabled by the package: in a release build seedling-web requires a
-# pinned daemon fingerprint and an operator password hash in web.toml, so it is
-# enabled once configured, not on install. See docs/deploying.md.
+# Authenticates operators via Tailscale identity headers. It binds loopback
+# only, so it is reachable exactly via the co-located `tailscale serve`
+# front-end (seedling-web-tailscale-serve.service), which terminates HTTPS on
+# the tailnet and injects the Tailscale-User-* headers seedling-web trusts —
+# nothing untrusted can reach the loopback port to spoof them.
 #
-# By default the interface binds loopback only; expose it behind a
-# TLS-terminating reverse proxy, or drop in an override with --listen/--interface.
+# For a password-login deployment instead: set auth.password_hash in
+# /etc/seedling/web.toml, drop --trust-tailscale-headers with a drop-in, and
+# front it with a TLS-terminating reverse proxy. See docs/deploying.md.
 ExecStart=/usr/bin/seedling-web \
     --config /etc/seedling/web.toml \
     --daemon-fingerprint-file /var/lib/seedling/oi.fingerprint \
-    --key-file /var/lib/seedling/web.key
+    --key-file /var/lib/seedling/web.key \
+    --trust-tailscale-headers
 Restart=always
 RestartSec=5
 
