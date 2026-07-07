@@ -24,7 +24,11 @@ mod tls;
 mod volumes;
 
 #[derive(Parser)]
-#[command(name = "seedling-ctl", about = "Seedling operator interface CLI")]
+#[command(
+    name = "seedling-ctl",
+    version,
+    about = "Seedling operator interface CLI"
+)]
 struct Cli {
     /// OI server address
     #[arg(long, default_value = "[::1]:7891")]
@@ -39,6 +43,14 @@ struct Cli {
     #[cfg(debug_assertions)]
     #[arg(long, conflicts_with = "fingerprint")]
     trust_any: bool,
+
+    // i[key.client.path]
+    /// Path to the client identity key file. Defaults to a per-user state
+    /// directory. Override to use a distinct identity, or to pre-generate a
+    /// key at a chosen path (e.g. with `client fingerprint`) so it can be
+    /// authorised before first use.
+    #[arg(long)]
+    key_file: Option<std::path::PathBuf>,
 
     #[command(flatten)]
     logging: LoggingArgs,
@@ -177,7 +189,11 @@ async fn main() {
 
     // Load (or generate) the client identity early; `client fingerprint` needs it
     // before any server connection is attempted.
-    let key_path = ClientIdentity::default_path();
+    // i[impl key.client.path]
+    let key_path = cli
+        .key_file
+        .clone()
+        .unwrap_or_else(ClientIdentity::default_path);
     let (identity, is_new) = ClientIdentity::load_or_generate(&key_path).unwrap_or_else(|e| {
         tracing::error!(
             "could not load/generate client key at {}: {e}",

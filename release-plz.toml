@@ -1,0 +1,22 @@
+[workspace]
+pr_name = "repo: release"
+pr_branch_prefix = "release-plz/"
+pr_labels = ["autorelease"]
+# Generate changelogs so the release PR body lists the changes, but keep them
+# out of the repo: CHANGELOG.md is gitignored, so release-plz writes it to
+# populate the PR body without committing it.
+changelog_update = true
+# No crate is published to a registry (all are publish = false); release-plz
+# only tags and cuts a GitHub release. Disable per-crate tags/releases by
+# default so the workspace produces a single `v<version>` tag (from the
+# seedling package below), which is what the release build workflow triggers on.
+git_tag_enable = false
+git_release_enable = false
+
+[[package]]
+name = "seedling"
+git_tag_enable = true
+git_release_enable = true
+git_tag_name = "v{{ version }}"
+git_release_name = "v{{ version }}"
+semver_check = false

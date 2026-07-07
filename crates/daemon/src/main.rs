@@ -30,7 +30,7 @@ use seedling_protocol::names::AppName;
 use tokio::sync::Notify;
 
 #[derive(Parser)]
-#[command(name = "seedling")]
+#[command(name = "seedling", version)]
 struct Args {
     /// Directory to store persistent state
     #[arg(long, default_value = ".")]

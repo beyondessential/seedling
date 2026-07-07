@@ -20,6 +20,10 @@ Absent specification bugs, anything that is not defined here is either defined i
 > The server's key pair is generated at first startup and persisted to the data directory so that clients can pin the SPKI fingerprint across restarts.
 > Clients verify the server by its SPKI fingerprint; certificate chain validation is not used.
 
+> i[transport.server-identity.published]
+> On startup the server writes its SPKI fingerprint, hex-encoded, to `$data_dir/oi.fingerprint`.
+> This allows a co-located process to pin the server identity without performing a fingerprint probe or reading logs.
+
 > i[transport.listen]
 > The server may be configured to listen on one or more addresses at startup.
 > All configured addresses share the same server identity (key pair and SPKI fingerprint) and the same authorized key set.
@@ -742,6 +746,13 @@ Absent specification bugs, anything that is not defined here is either defined i
 > The client identity key file must be created with owner-read/write-only permissions.
 > Seedling-ctl must refuse to load a client identity key file whose group or world
 > permission bits are set, and must report an error.
+
+> i[key.client.path]
+> The client identity key file location must be configurable.
+> When unset it defaults to a per-user state directory.
+> Overriding it lets a caller maintain a distinct identity — for example, a co-located
+> service that needs its own authorized key, or pre-generating a key at a chosen path
+> to authorise it before first use.
 
 ## Registry Allowlist
 

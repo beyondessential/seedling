@@ -4667,6 +4667,7 @@ dependencies = [
  "seedling-protocol",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "toml",
  "tower",

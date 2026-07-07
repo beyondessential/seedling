@@ -1,0 +1,31 @@
+[Unit]
+Description=Seedling web interface
+Documentation=https://github.com/beyondessential/seedling
+After=network-online.target seedling.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Runs as root so it can read the daemon-owned bootstrap files under
+# /var/lib/seedling (the pinned fingerprint and its own client key). It binds
+# only the loopback web port and needs no other privilege.
+#
+# Authenticates operators via Tailscale identity headers. It binds loopback
+# only, so it is reachable exactly via the co-located `tailscale serve`
+# front-end (seedling-web-tailscale-serve.service), which terminates HTTPS on
+# the tailnet and injects the Tailscale-User-* headers seedling-web trusts —
+# nothing untrusted can reach the loopback port to spoof them.
+#
+# For a password-login deployment instead: set auth.password_hash in
+# /etc/seedling/web.toml, drop --trust-tailscale-headers with a drop-in, and
+# front it with a TLS-terminating reverse proxy. See docs/deploying.md.
+ExecStart=/usr/bin/seedling-web \
+    --config /etc/seedling/web.toml \
+    --daemon-fingerprint-file /var/lib/seedling/oi.fingerprint \
+    --key-file /var/lib/seedling/web.key \
+    --trust-tailscale-headers
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
