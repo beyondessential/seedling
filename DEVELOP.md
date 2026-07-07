@@ -33,7 +33,7 @@ just watch-web
 just frontend
 ```
 
-Open **`http://localhost:5173`** (Vite's port, not the Rust server's). Vite's dev server is configured to proxy `/connect` and `/healthz` to the Rust server at `:8080`, so API calls work and HMR is fully functional. `watch-web` restarts the Rust server automatically whenever `watch-build` produces a new binary.
+Open **`http://localhost:7890/`** (Vite's port, not the Rust server's). Vite's dev server is configured to proxy `/connect` and `/healthz` to the Rust server, so API calls work and HMR is fully functional. `watch-web` restarts the Rust server automatically whenever `watch-build` produces a new binary.
 
 `SKIP_FRONTEND_BUILD=1` is set automatically by `just build` so that cargo does not run `npm run build` on every compile. You need a `frontend/dist/` to exist for the Rust binary to compile in this mode — run `just frontend-build` once if it doesn't, or run `just build-release` for a full embedded production build.
 
