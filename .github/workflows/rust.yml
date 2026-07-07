@@ -10,6 +10,10 @@ env:
   CARGO_TERM_COLOR: always
   SKIP_FRONTEND_BUILD: "1"
 
+concurrency:
+  group: rust-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     name: Lint
@@ -22,6 +26,9 @@ jobs:
           rustup default stable
           rustup component add rustfmt clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libsystemd-dev
       - name: Create frontend/dist placeholder
@@ -31,8 +38,8 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-  build:
-    name: Build
+  test:
+    name: Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6.0.3
@@ -41,9 +48,24 @@ jobs:
           rustup toolchain install --profile minimal --no-self-update stable
           rustup default stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libsystemd-dev
       - name: Create frontend/dist placeholder
         run: mkdir -p crates/web/frontend/dist
-      - name: cargo build
-        run: cargo build --workspace --all-targets --locked
+      # --all-targets --locked compiles every target (so it also covers a plain
+      # build) and asserts Cargo.lock is in sync.
+      - name: cargo test
+        run: cargo test --workspace --all-targets --locked
+
+  rust-pass:
+    name: Rust pass
+    if: always()
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: re-actors/alls-green@release/v1
+        with:
+          jobs: ${{ toJSON(needs) }}

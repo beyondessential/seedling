@@ -103,3 +103,13 @@ jobs:
             crates/web/frontend/test-results
           retention-days: 7
           if-no-files-found: ignore
+
+  frontend-pass:
+    name: Frontend pass
+    if: always()
+    needs: [build, test, e2e]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: re-actors/alls-green@release/v1
+        with:
+          jobs: ${{ toJSON(needs) }}
