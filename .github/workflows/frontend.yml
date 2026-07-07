@@ -81,7 +81,7 @@ jobs:
         run: cargo build -p seedling -p seedling-web -p seedling-ctl --locked
         working-directory: ${{ github.workspace }}
       - name: Cache Playwright browsers
-        uses: actions/cache@v5.0.5
+        uses: actions/cache@v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('crates/web/frontend/package-lock.json') }}
