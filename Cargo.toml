@@ -47,6 +47,13 @@ wildmatch = "2.6.1"
 [patch.crates-io]
 smartstring = { git = "https://github.com/bodil/smartstring", rev = "refs/pull/34/head" }
 
+# Release profile used to build the shipped binaries (deb + tarballs).
+[profile.dist]
+inherits = "release"
+lto = true
+codegen-units = 1
+strip = "symbols"
+
 # Useful when debugging deadlocks, frame-pointers requires nightly
 #[profile.dev]
 #frame-pointers = "force-on"

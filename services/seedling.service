@@ -1,0 +1,21 @@
+[Unit]
+Description=Seedling container app management daemon
+Documentation=https://github.com/beyondessential/seedling
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The daemon runs as root by necessity: it loads the jool kernel module for
+# NAT64, programs nftables, drives systemd over D-Bus (running each workload as
+# a transient unit), and controls podman. Sandboxing that restricts these would
+# break it, so this unit deliberately does not apply Protect*/capability
+# confinement — Seedling's job is to manage the host.
+ExecStart=/usr/bin/seedling --data-dir /var/lib/seedling --audit-log /var/log/seedling/audit.log
+Restart=always
+RestartSec=5
+# Workloads keep running while the daemon is down, so a restart is cheap and
+# non-disruptive; always come back up.
+
+[Install]
+WantedBy=multi-user.target

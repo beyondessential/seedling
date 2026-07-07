@@ -1,0 +1,17 @@
+# Seedling web interface configuration.
+#
+# This file is a dpkg conffile: your edits are preserved across package
+# upgrades. See docs/deploying.md for the full setup.
+
+[auth]
+# Argon2id PHC hash of the operator login password. Password login is disabled
+# until this is set. Generate one with the `argon2` CLI (from the `argon2`
+# package), reading the password from stdin:
+#
+#   printf '%s' 'your-password' | argon2 "$(head -c16 /dev/urandom | base64)" -id -e
+#
+# then paste the resulting `$argon2id$...` string here.
+# password_hash = "$argon2id$v=19$m=19456,t=2,p=1$...$..."
+
+# Lifetime of issued session tokens, in seconds. Default: 86400 (one day).
+# session_lifetime_secs = 86400
