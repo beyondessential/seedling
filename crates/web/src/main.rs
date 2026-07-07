@@ -35,7 +35,7 @@ const DEFAULT_HTTP_PORT: u16 = 7894;
 const DEFAULT_WT_PORT: u16 = 7893;
 
 #[derive(Parser)]
-#[command(name = "seedling-web")]
+#[command(name = "seedling-web", version)]
 struct Args {
     #[command(flatten)]
     logging: lloggs::LoggingArgs,

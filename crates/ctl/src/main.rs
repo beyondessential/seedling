@@ -24,7 +24,11 @@ mod tls;
 mod volumes;
 
 #[derive(Parser)]
-#[command(name = "seedling-ctl", about = "Seedling operator interface CLI")]
+#[command(
+    name = "seedling-ctl",
+    version,
+    about = "Seedling operator interface CLI"
+)]
 struct Cli {
     /// OI server address
     #[arg(long, default_value = "[::1]:7891")]
