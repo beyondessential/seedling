@@ -6,15 +6,18 @@ pr_labels = ["autorelease"]
 # out of the repo: CHANGELOG.md is gitignored, so release-plz writes it to
 # populate the PR body without committing it.
 changelog_update = true
-# No crate is published to a registry (all are publish = false); release-plz
+# No crate is published to a registry (all are publish = false in Cargo.toml);
+# tell release-plz the same so it does not attempt a cargo publish. release-plz
 # only tags and cuts a GitHub release. Disable per-crate tags/releases by
 # default so the workspace produces a single `v<version>` tag (from the
 # seedling package below), which is what the release build workflow triggers on.
+publish = false
 git_tag_enable = false
 git_release_enable = false
 
 [[package]]
 name = "seedling"
+publish = false
 git_tag_enable = true
 git_release_enable = true
 git_tag_name = "v{{ version }}"
