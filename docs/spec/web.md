@@ -32,6 +32,11 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > Each failed attempt must produce a warning log message.
 > The web interface keeps retrying indefinitely until a connection is established and verified.
 
+> w[daemon.pin]
+> The web interface verifies the daemon by pinning its SPKI fingerprint.
+> The expected fingerprint may be supplied directly, or read from a file that the daemon publishes (see [transport.server-identity.published](interface.md#i--transport.server-identity.published)).
+> When read from a file, the fingerprint is resolved on each connection attempt, so a daemon that has not yet written the file does not cause the web interface to fail at startup — it retries per [daemon.connect-retry](#w--daemon.connect-retry) until the file appears.
+
 # Authentication
 
 > w[auth.connect]
