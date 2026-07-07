@@ -1,0 +1,102 @@
+name: Release-plz
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [labeled]
+
+concurrency:
+  group: release-plz-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # release-plz does not build our crates (all are publish = false, so there is
+  # no packaging/semver-check step), but keep the frontend build a no-op in case
+  # any cargo invocation triggers build.rs.
+  SKIP_FRONTEND_BUILD: "1"
+
+jobs:
+  release-plz-release:
+    if: github.event_name == 'push'
+    name: Tag and release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6.0.3
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+      - name: Configure toolchain
+        run: |
+          rustup toolchain install --profile minimal --no-self-update stable
+          rustup default stable
+      - name: Create frontend/dist placeholder
+        run: mkdir -p crates/web/frontend/dist
+      - uses: MarcoIeni/release-plz-action@v0.5.130
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+
+  release-plz-pr:
+    if: github.event_name == 'push'
+    name: Open or update release PR
+    needs: [release-plz-release]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6.0.3
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+      - name: Configure toolchain
+        run: |
+          rustup toolchain install --profile minimal --no-self-update stable
+          rustup default stable
+      - name: Create frontend/dist placeholder
+        run: mkdir -p crates/web/frontend/dist
+      - id: release-plz-pr
+        uses: MarcoIeni/release-plz-action@v0.5.130
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Enable auto-merge on release PR
+        if: env.HAS_TOKEN == 'true' && steps.release-plz-pr.outputs.pr != ''
+        env:
+          HAS_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN != '' }}
+          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          PR_JSON: ${{ steps.release-plz-pr.outputs.pr }}
+        run: |
+          pr_number=$(printf '%s' "$PR_JSON" | jq -r '.number // empty')
+          if [ -z "$pr_number" ]; then
+            exit 0
+          fi
+          if gh pr view "$pr_number" --json labels --jq '.labels[].name' | grep -qx release-hold; then
+            echo "release-hold label present on PR #$pr_number; skipping auto-merge"
+          else
+            gh pr merge --auto --squash "$pr_number"
+          fi
+
+  release-plz-hold:
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.action == 'labeled'
+      && github.event.label.name == 'release-hold'
+      && startsWith(github.event.pull_request.head.ref, 'release-plz/')
+    name: Disable auto-merge when release-hold is applied
+    runs-on: ubuntu-24.04
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Disable auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --disable-auto "$PR_URL" || true

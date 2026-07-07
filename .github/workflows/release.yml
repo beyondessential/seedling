@@ -1,0 +1,295 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    permissions:
+      contents: write # attach assets to the release
+      id-token: write # OIDC for AWS + attestations
+      attestations: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The `seedling` daemon is Linux-only (systemd/nftables/jool/podman via
+          # seedling-core). seedling-ctl and seedling-web depend only on
+          # seedling-protocol, so they cross-compile with no libsystemd coupling.
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+            deb: true
+            bins: seedling seedling-ctl seedling-web
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            deb: true
+            bins: seedling seedling-ctl seedling-web
+          - target: x86_64-apple-darwin
+            os: macos-15
+            deb: false
+            bins: seedling-ctl seedling-web
+          - target: aarch64-apple-darwin
+            os: macos-15
+            deb: false
+            bins: seedling-ctl seedling-web
+          - target: x86_64-pc-windows-msvc
+            os: windows-2022
+            deb: false
+            bins: seedling-ctl seedling-web
+
+    name: Build / ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v6.0.3
+
+      - name: Configure toolchain
+        run: |
+          rustup toolchain install --profile minimal --no-self-update stable
+          rustup target add ${{ matrix.target }}
+          rustup default stable
+
+      # Node builds the web SPA, which build.rs embeds into seedling-web.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: crates/web/frontend/package-lock.json
+
+      - if: runner.os == 'Linux'
+        name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libsystemd-dev zstd
+
+      # https://github.com/actions/cache/issues/752 — use GNU tar for caching.
+      - if: runner.os == 'Windows'
+        name: Use GNU tar
+        shell: cmd
+        run: echo C:\Program Files\Git\usr\bin>>"%GITHUB_PATH%"
+
+      # Avoids depending on vcruntime*.dll, absent in e.g. nanoserver.
+      - if: runner.os == 'Windows'
+        name: Statically link the CRT
+        shell: bash
+        run: echo 'RUSTFLAGS=-Ctarget-feature=+crt-static' >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: Extract version
+        id: version
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        shell: bash
+        run: |
+          pkgs=""
+          for b in ${{ matrix.bins }}; do pkgs="$pkgs -p $b"; done
+          cargo build --profile dist --target ${{ matrix.target }} $pkgs
+
+      - name: Package DEB
+        if: matrix.deb
+        shell: bash
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          target="${{ matrix.target }}"
+          case "$target" in
+            x86_64-unknown-linux-gnu)  arch=amd64 ;;
+            aarch64-unknown-linux-gnu) arch=arm64 ;;
+            *) echo "unexpected deb target $target" >&2; exit 1 ;;
+          esac
+
+          d="target/$target/dist"
+          deb_dir="target/deb"
+          rm -rf "$deb_dir"
+          mkdir -p "$deb_dir/DEBIAN"
+
+          install -Dm755 "$d/seedling"     "$deb_dir/usr/bin/seedling"
+          install -Dm755 "$d/seedling-ctl" "$deb_dir/usr/bin/seedling-ctl"
+          install -Dm755 "$d/seedling-web" "$deb_dir/usr/bin/seedling-web"
+
+          install -Dm644 services/seedling.service     "$deb_dir/usr/lib/systemd/system/seedling.service"
+          install -Dm644 services/seedling-web.service "$deb_dir/usr/lib/systemd/system/seedling-web.service"
+          install -Dm644 etc/logrotate.d/seedling      "$deb_dir/etc/logrotate.d/seedling"
+          install -Dm644 etc/seedling/web.toml          "$deb_dir/etc/seedling/web.toml"
+          install -Dm644 README.md                      "$deb_dir/usr/share/doc/seedling/README.md"
+
+          # State directories, created empty and owned by root.
+          install -dm750 "$deb_dir/var/lib/seedling"
+          install -dm750 "$deb_dir/var/log/seedling"
+
+          # Files under /etc are conffiles: operator edits survive upgrades.
+          cat > "$deb_dir/DEBIAN/conffiles" << 'EOF'
+          /etc/seedling/web.toml
+          /etc/logrotate.d/seedling
+          EOF
+
+          cat > "$deb_dir/DEBIAN/postinst" << 'EOF'
+          #!/bin/sh
+          set -e
+
+          DATA_DIR=/var/lib/seedling
+          LOG_DIR=/var/log/seedling
+
+          mkdir -p "$DATA_DIR" "$LOG_DIR"
+          chmod 750 "$DATA_DIR" "$LOG_DIR"
+
+          # Bootstrap the seedling-web identity on first install so enabling the
+          # web unit later needs no manual fingerprint exchange. Idempotent:
+          # only acts when the key is absent and never duplicates the entry.
+          if [ "$1" = configure ] && [ ! -f "$DATA_DIR/web.key" ]; then
+            if fp="$(seedling-ctl --key-file "$DATA_DIR/web.key" client fingerprint 2>/dev/null)"; then
+              if [ -n "$fp" ]; then
+                touch "$DATA_DIR/authorized_keys"
+                if ! grep -q "^$fp " "$DATA_DIR/authorized_keys" 2>/dev/null; then
+                  echo "$fp seedling-web" >> "$DATA_DIR/authorized_keys"
+                fi
+                chmod 600 "$DATA_DIR/authorized_keys"
+              fi
+            fi
+          fi
+
+          if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload || true
+            if [ "$1" = configure ] && [ -z "$2" ]; then
+              # First install: start the daemon. Web stays disabled until an
+              # operator sets a password hash and enables it.
+              systemctl enable --now seedling.service || true
+            else
+              # Upgrade: pick up the new binary. Workloads keep running, so a
+              # restart is non-disruptive.
+              systemctl try-restart seedling.service || true
+            fi
+          fi
+
+          exit 0
+          EOF
+          chmod 755 "$deb_dir/DEBIAN/postinst"
+
+          cat > "$deb_dir/DEBIAN/prerm" << 'EOF'
+          #!/bin/sh
+          set -e
+          if [ "$1" = remove ] || [ "$1" = deconfigure ]; then
+            if [ -d /run/systemd/system ]; then
+              systemctl --no-reload disable --now seedling-web.service || true
+              systemctl --no-reload disable --now seedling.service || true
+            fi
+          fi
+          exit 0
+          EOF
+          chmod 755 "$deb_dir/DEBIAN/prerm"
+
+          cat > "$deb_dir/DEBIAN/postrm" << 'EOF'
+          #!/bin/sh
+          set -e
+          if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload || true
+          fi
+          if [ "$1" = purge ]; then
+            rm -rf /var/lib/seedling /var/log/seedling
+            rmdir /etc/seedling 2>/dev/null || true
+          fi
+          exit 0
+          EOF
+          chmod 755 "$deb_dir/DEBIAN/postrm"
+
+          cat > "$deb_dir/DEBIAN/control" << EOF
+          Package: seedling
+          Version: $version
+          Section: admin
+          Priority: optional
+          Architecture: $arch
+          Depends: libc6 (>= 2.39), libgcc-s1, libsystemd0, podman, nftables, iproute2, kmod
+          Recommends: btrfs-progs, jool-dkms, jool-tools
+          Maintainer: BES Developers <support@bes.au>
+          Description: Lightweight high-level container app management
+           Seedling manages container apps on a single host using podman, systemd,
+           and nftables. This package ships the daemon (seedling), the web
+           interface (seedling-web), and the operator CLI (seedling-ctl).
+          Homepage: https://github.com/beyondessential/seedling
+          EOF
+
+          dpkg-deb --build --root-owner-group "$deb_dir" "seedling-${target}-${version}.deb"
+
+      - name: Ensure zstd is available
+        shell: bash
+        run: |
+          if command -v zstd >/dev/null 2>&1; then exit 0; fi
+          case "${{ runner.os }}" in
+            Linux)   sudo apt-get update && sudo apt-get install -y zstd ;;
+            macOS)   brew install zstd ;;
+            Windows) choco install zstandard -y --no-progress ;;
+          esac
+
+      - name: Package tarballs
+        shell: bash
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          ext=""
+          [ "${{ runner.os }}" = "Windows" ] && ext=".exe"
+          for b in ${{ matrix.bins }}; do
+            tar -C "target/${{ matrix.target }}/dist" -cf - "${b}${ext}" \
+              | zstd -19 -o "${b}-${{ matrix.target }}-${version}.tar.zst"
+          done
+
+      - name: Attest tarball provenance
+        uses: actions/attest-build-provenance@v4.1.0
+        with:
+          subject-path: "*.tar.zst"
+
+      - name: Attest deb provenance
+        if: matrix.deb
+        uses: actions/attest-build-provenance@v4.1.0
+        with:
+          subject-path: "*.deb"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.2.0
+        with:
+          aws-region: ap-southeast-2
+          role-to-assume: arn:aws:iam::143295493206:role/gha-tamanu-tools-upload
+          role-session-name: GHA@seedling=Release
+
+      - name: Upload to S3
+        shell: bash
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          for b in ${{ matrix.bins }}; do
+            f="${b}-${{ matrix.target }}-${version}.tar.zst"
+            aws s3 cp "$f" "s3://bes-ops-tools/${b}/${version}/" --no-progress
+            aws s3 cp "$f" "s3://bes-ops-tools/${b}/latest/" --no-progress
+          done
+          if [ "${{ matrix.deb }}" = "true" ]; then
+            for deb in seedling-*.deb; do
+              aws s3 cp "$deb" "s3://bes-ops-tools/seedling/${version}/" --no-progress
+            done
+          fi
+          for b in ${{ matrix.bins }}; do
+            aws cloudfront create-invalidation --distribution-id=EDAG0UBS1MN74 --paths "/${b}/*"
+          done
+
+      - name: Attach to GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          shopt -s nullglob
+          files=(*.tar.zst *.deb)
+          # release-plz creates the release alongside the tag; wait for it.
+          for _ in $(seq 1 30); do
+            if gh release view "v${version}" >/dev/null 2>&1; then break; fi
+            sleep 5
+          done
+          gh release upload "v${version}" "${files[@]}" --clobber
