@@ -22,6 +22,12 @@ export default defineConfig({
     environment: "jsdom",
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     globals: true,
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "cobertura"],
+      reportsDirectory: "coverage",
+      include: ["src/**"],
+    },
     server: {
       deps: {
         // @mui/material's ESM build does a bare directory import of
