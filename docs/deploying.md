@@ -29,7 +29,9 @@ sudo apt-get install seedling
 The package depends on `podman`, `nftables` and `libsystemd0`, and recommends
 `btrfs-progs` (for named-volume snapshots) and `jool-dkms` + `jool-tools` (for
 NAT64). Recommends are installed by default; if you run without NAT64 or on a
-non-btrfs data directory you can skip them with `--no-install-recommends`.
+non-btrfs data directory you can skip them with `--no-install-recommends`. It
+also suggests `tailscale`, used to front the web interface (see below); install
+it separately if you want that.
 
 ### What the package installs
 

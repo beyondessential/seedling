@@ -188,6 +188,7 @@ Priority: optional
 Architecture: <amd64|arm64>
 Depends: libc6 (>= 2.39), libgcc-s1, libsystemd0, podman, nftables, iproute2, kmod
 Recommends: btrfs-progs, jool-dkms, jool-tools
+Suggests: tailscale
 Maintainer: BES Developers <support@bes.au>
 Description: Lightweight high-level container app management
 Homepage: https://github.com/beyondessential/seedling

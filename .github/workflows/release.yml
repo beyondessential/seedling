@@ -218,6 +218,7 @@ jobs:
           Architecture: $arch
           Depends: libc6 (>= 2.39), libgcc-s1, libsystemd0, podman, nftables, iproute2, kmod
           Recommends: btrfs-progs, jool-dkms, jool-tools
+          Suggests: tailscale
           Maintainer: BES Developers <support@bes.au>
           Description: Lightweight high-level container app management
            Seedling manages container apps on a single host using podman, systemd,
