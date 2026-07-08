@@ -1,7 +1,10 @@
 [Unit]
 Description=Seedling web interface
 Documentation=https://github.com/beyondessential/seedling
-After=network-online.target seedling.service
+# Order after tailscaled when present so tailscale0 exists at bind time. Ordering
+# only: the service still starts if Tailscale isn't installed/enabled (see
+# ExecStartPre below).
+After=network-online.target seedling.service tailscaled.service
 Wants=network-online.target
 
 [Service]
@@ -22,14 +25,19 @@ Type=simple
 # `tailscale serve` (a TCP HTTP proxy), so the browser reaches it directly at
 # <node>.<tailnet>.ts.net:7893. It carries its own per-session token and pins
 # the server certificate, so exposing it on the tailnet needs no header trust.
-# tailscale0 is only bound when tailscaled is up; restart this unit after
-# bringing Tailscale online.
+# A missing tailscale0 is skipped (not fatal): the interface just isn't served.
 #
 # For a password-login deployment instead: set auth.password_hash in
 # /etc/seedling/web.toml, drop --trust-tailscale-headers with a drop-in, and
 # front the HTTP port with a TLS-terminating reverse proxy — but note the
 # WebTransport port still must be reachable directly (adjust --wt-interface /
 # --wt-listen for that network). See docs/deploying.md.
+#
+# Best-effort wait so tailscale0 has its address at bind time, WITHOUT blocking
+# startup: returns immediately if tailscale isn't installed or tailscaled isn't
+# active, waits at most ~30s for the tailnet IP otherwise, and the leading `-`
+# means it can never fail the unit. ($$ is a literal $ for the shell.)
+ExecStartPre=-/bin/sh -c 'command -v tailscale >/dev/null 2>&1 || exit 0; systemctl is-active --quiet tailscaled 2>/dev/null || exit 0; i=0; while [ "$$i" -lt 30 ]; do tailscale ip -4 >/dev/null 2>&1 && exit 0; i=$$((i+1)); sleep 1; done'
 ExecStart=/usr/bin/seedling-web \
     --config /etc/seedling/web.toml \
     --daemon-fingerprint-file /var/lib/seedling/oi.fingerprint \

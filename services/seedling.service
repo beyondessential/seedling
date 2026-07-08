@@ -1,7 +1,10 @@
 [Unit]
 Description=Seedling container app management daemon
 Documentation=https://github.com/beyondessential/seedling
-After=network-online.target
+# Order after tailscaled when it's present so tailscale0 exists at bind time.
+# This is ordering only: if Tailscale isn't installed/enabled the daemon still
+# starts (see ExecStartPre below).
+After=network-online.target tailscaled.service
 Wants=network-online.target
 
 [Service]
@@ -11,7 +14,19 @@ Type=simple
 # a transient unit), and controls podman. Sandboxing that restricts these would
 # break it, so this unit deliberately does not apply Protect*/capability
 # confinement — Seedling's job is to manage the host.
-ExecStart=/usr/bin/seedling --data-dir /var/lib/seedling --audit-log /var/log/seedling/audit.log
+#
+# Binds the OI on loopback and the tailnet (--interface lo,tailscale0) so
+# seedling-ctl can reach it remotely over Tailscale. The OI is mTLS with
+# authorised-key gating, so tailnet exposure is safe. A missing tailscale0 is
+# skipped (not fatal), so the daemon always comes up at least on loopback.
+#
+# Best-effort wait so the tailnet address exists when we bind, WITHOUT ever
+# blocking startup: it returns immediately if tailscale isn't installed or
+# tailscaled isn't active, waits at most ~30s for the tailnet IP otherwise, and
+# the leading `-` means even an error can't fail the unit. ($$ is a literal $
+# for the shell.)
+ExecStartPre=-/bin/sh -c 'command -v tailscale >/dev/null 2>&1 || exit 0; systemctl is-active --quiet tailscaled 2>/dev/null || exit 0; i=0; while [ "$$i" -lt 30 ]; do tailscale ip -4 >/dev/null 2>&1 && exit 0; i=$$((i+1)); sleep 1; done'
+ExecStart=/usr/bin/seedling --data-dir /var/lib/seedling --audit-log /var/log/seedling/audit.log --interface lo,tailscale0
 Restart=always
 RestartSec=5
 # Workloads keep running while the daemon is down, so a restart is cheap and

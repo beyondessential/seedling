@@ -66,6 +66,20 @@ On first connection `seedling-ctl` captures and asks you to confirm the daemon's
 fingerprint (trust-on-first-use). You can read it ahead of time from
 `/var/lib/seedling/oi.fingerprint`.
 
+The daemon's OI listens on loopback and the tailnet (the unit binds
+`--interface lo,tailscale0`), so you can run `seedling-ctl` remotely against the
+host's MagicDNS name — `--endpoint` accepts a hostname, not just an IP:
+
+```bash
+seedling-ctl --endpoint <node>.<tailnet>.ts.net:7891 status
+```
+
+The OI is mTLS with authorised-key gating, so exposing it on the tailnet is
+safe. The unit orders after `tailscaled` and waits (briefly, best-effort) for
+the tailnet address at startup, so a normal boot binds `tailscale0`
+automatically; if you enable Tailscale on an already-running host, `sudo
+systemctl restart seedling.service` to pick it up.
+
 ## The web interface (seedling-web)
 
 `seedling-web.service` is **enabled and started on install**. Its daemon
@@ -107,10 +121,11 @@ carried by `tailscale serve` (a TCP HTTP proxy), so the browser connects to it
 directly at `<node>.<tailnet>.ts.net:7893`. The unit binds it there with
 `--wt-interface lo,tailscale0`; it is gated by a per-session token and pins the
 server certificate, so exposing it on the tailnet is safe without header trust.
-`tailscale0` is only bound when tailscaled is already up, so **restart
-`seedling-web` after bringing Tailscale online** (`sudo systemctl restart
-seedling-web.service`) — otherwise the browser reaches the login page but the
-session can't connect and falls back to the password prompt.
+The unit orders after `tailscaled` and waits (briefly, best-effort) for the
+tailnet address at startup, so a normal boot binds `tailscale0` automatically.
+If you enable Tailscale on an already-running host, `sudo systemctl restart
+seedling-web.service` to pick it up — otherwise the browser reaches the login
+page but the session can't connect and falls back to the password prompt.
 
 ### Password login (alternative)
 
