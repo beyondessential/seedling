@@ -29,6 +29,21 @@ use seedling_core::{
 use seedling_protocol::names::AppName;
 use tokio::sync::Notify;
 
+/// Report a fatal startup error and exit the process.
+///
+/// Writes the message to stderr **synchronously** in addition to `tracing`:
+/// the fatal path calls `std::process::exit`, which does not run the logging
+/// guard's `Drop`, so the non-blocking `tracing` writer never flushes and a
+/// `tracing`-only message would be lost — leaving operators with the dreaded
+/// "exited 1, no output". Takes the same argument syntax as `format!`.
+macro_rules! fatal {
+    ($($arg:tt)*) => {{
+        tracing::error!($($arg)*);
+        eprintln!("fatal: {}", format_args!($($arg)*));
+        std::process::exit(1);
+    }};
+}
+
 #[derive(Parser)]
 #[command(name = "seedling", version)]
 struct Args {
@@ -233,17 +248,14 @@ async fn main() {
 
     let data_dir = args.data_dir;
 
-    std::fs::create_dir_all(&data_dir).unwrap_or_else(|e| {
-        tracing::error!("cannot create data directory {}: {e}", data_dir.display());
-        std::process::exit(1);
-    });
+    std::fs::create_dir_all(&data_dir)
+        .unwrap_or_else(|e| fatal!("cannot create data directory {}: {e}", data_dir.display()));
 
     let data_dir = std::fs::canonicalize(&data_dir).unwrap_or_else(|e| {
-        tracing::error!(
+        fatal!(
             "cannot canonicalize data directory {}: {e}",
             data_dir.display()
-        );
-        std::process::exit(1);
+        )
     });
 
     // r[impl startup.btrfs]
@@ -258,38 +270,31 @@ async fn main() {
             );
             false
         }
-        Ok(false) => {
-            tracing::error!(
-                "data directory {} is not on a BTRFS filesystem; \
-                 pass --without-btrfs to use plain directories instead",
-                data_dir.display()
-            );
-            std::process::exit(1);
-        }
+        Ok(false) => fatal!(
+            "data directory {} is not on a BTRFS filesystem; \
+             pass --without-btrfs to use plain directories instead",
+            data_dir.display()
+        ),
         Err(e) => {
-            tracing::error!(
+            fatal!(
                 "cannot determine filesystem type for {}: {e}",
                 data_dir.display()
-            );
-            std::process::exit(1);
+            )
         }
     };
 
     let db_path = data_dir.join("seedling.db");
-    let db = Db::open(&db_path).unwrap_or_else(|e| {
-        tracing::error!("cannot open database {}: {e}", db_path.display());
-        std::process::exit(1);
-    });
+    let db = Db::open(&db_path)
+        .unwrap_or_else(|e| fatal!("cannot open database {}: {e}", db_path.display()));
 
     let cipher = {
         let key_path = data_dir.join("seedling.db.key");
         let c = seedling_core::runtime::secrets::Cipher::load_or_create(&key_path).unwrap_or_else(
             |e| {
-                tracing::error!(
+                fatal!(
                     "cannot load or create secret key {}: {e}",
                     key_path.display()
-                );
-                std::process::exit(1);
+                )
             },
         );
         std::sync::Arc::new(c)
@@ -299,10 +304,8 @@ async fn main() {
     // System backends
     // ---------------------------------------------------------------------------
 
-    let node_prefix = node_prefix_from_machine_id().unwrap_or_else(|e| {
-        tracing::error!("cannot derive node prefix from machine-id: {e}");
-        std::process::exit(1);
-    });
+    let node_prefix = node_prefix_from_machine_id()
+        .unwrap_or_else(|e| fatal!("cannot derive node prefix from machine-id: {e}"));
 
     let tick_notify = Arc::new(Notify::new());
 
@@ -326,8 +329,7 @@ async fn main() {
         && let Err(e) = seedling_core::system::jool::setup_nat64().await
     {
         // r[impl infra.nat64.translator.lifecycle]
-        tracing::error!(error = %e, "failed to set up NAT64 translator; exiting");
-        std::process::exit(1);
+        fatal!("failed to set up NAT64 translator: {e}");
     }
 
     // r[impl infra.nat64.ipv6-egress]
@@ -404,17 +406,12 @@ async fn main() {
 
     let (driver, caddy_admin_client) = if args.stub_backends {
         tracing::info!("booting with stubbed system backends (no podman/systemd/nftables)");
-        System::setup_stubbed(&data_dir, use_btrfs).unwrap_or_else(|e| {
-            tracing::error!("stubbed system setup failed: {e}");
-            std::process::exit(1);
-        })
+        System::setup_stubbed(&data_dir, use_btrfs)
+            .unwrap_or_else(|e| fatal!("stubbed system setup failed: {e}"))
     } else {
         System::setup(node_prefix, &data_dir, use_btrfs)
             .await
-            .unwrap_or_else(|e| {
-                tracing::error!("system setup failed: {e}");
-                std::process::exit(1);
-            })
+            .unwrap_or_else(|e| fatal!("system setup failed: {e}"))
     };
 
     // ---------------------------------------------------------------------------
@@ -424,10 +421,7 @@ async fn main() {
     let registry = tokio::task::block_in_place(|| {
         AppRegistry::load_from_db(&db, &cipher, Arc::clone(&tick_notify), &script_limits)
     })
-    .unwrap_or_else(|e| {
-        tracing::error!("failed to load registered apps: {e}");
-        std::process::exit(1);
-    });
+    .unwrap_or_else(|e| fatal!("failed to load registered apps: {e}"));
 
     let registry = Arc::new(RwLock::new(registry));
     let db = DbHandle::from_db(db);
@@ -876,16 +870,12 @@ async fn main() {
     // ---------------------------------------------------------------------------
 
     let instance_registry: Arc<dyn InstanceRegistry> = Arc::new(DbInstanceRegistry::new(
-        DbHandle::open(&db_path).unwrap_or_else(|e| {
-            tracing::error!("cannot open instance registry db: {e}");
-            std::process::exit(1);
-        }),
+        DbHandle::open(&db_path)
+            .unwrap_or_else(|e| fatal!("cannot open instance registry db: {e}")),
     ));
 
-    let obs_db = DbHandle::open(&db_path).unwrap_or_else(|e| {
-        tracing::error!("cannot open observations db: {e}");
-        std::process::exit(1);
-    });
+    let obs_db =
+        DbHandle::open(&db_path).unwrap_or_else(|e| fatal!("cannot open observations db: {e}"));
 
     let event_tx = seedling_protocol::events::new_event_channel();
     seedling_core::runtime::faults::init(event_tx.clone());
@@ -926,10 +916,7 @@ async fn main() {
     } else {
         let token_path = data_dir.join("tls-cert-endpoint.token");
         let token = seedling_core::runtime::tls::serve::load_or_create_token(&token_path)
-            .unwrap_or_else(|e| {
-                tracing::error!("cannot load/create cert endpoint token: {e}");
-                std::process::exit(1);
-            });
+            .unwrap_or_else(|e| fatal!("cannot load/create cert endpoint token: {e}"));
 
         let gateway = seedling_core::system::proxy_bridge_gateway(&node_prefix);
         let bind_addr = std::net::SocketAddr::new(std::net::IpAddr::V6(gateway), 7892);
@@ -1299,10 +1286,7 @@ async fn main() {
         args.max_streams,
     )
     .await
-    .unwrap_or_else(|e| {
-        tracing::error!("OI server failed to start: {e}");
-        std::process::exit(1);
-    });
+    .unwrap_or_else(|e| fatal!("OI server failed to start: {e}"));
 
     tracing::info!("seedling ready");
 
@@ -1571,10 +1555,8 @@ fn resolve_oi_addrs(
     let mut addrs: Vec<std::net::SocketAddr> = explicit.to_vec();
 
     for iface_name in interfaces {
-        let all = if_addrs::get_if_addrs().unwrap_or_else(|e| {
-            tracing::error!("failed to list network interfaces: {e}");
-            std::process::exit(1);
-        });
+        let all = if_addrs::get_if_addrs()
+            .unwrap_or_else(|e| fatal!("failed to list network interfaces: {e}"));
         let iface_addrs: Vec<_> = all
             .into_iter()
             .filter(|i| &i.name == iface_name)
