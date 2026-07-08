@@ -66,6 +66,18 @@ On first connection `seedling-ctl` captures and asks you to confirm the daemon's
 fingerprint (trust-on-first-use). You can read it ahead of time from
 `/var/lib/seedling/oi.fingerprint`.
 
+The daemon's OI listens on loopback and the tailnet (the unit binds
+`--interface lo,tailscale0`), so you can run `seedling-ctl` remotely against the
+host's MagicDNS name — `--endpoint` accepts a hostname, not just an IP:
+
+```bash
+seedling-ctl --endpoint <node>.<tailnet>.ts.net:7891 status
+```
+
+The OI is mTLS with authorised-key gating, so exposing it on the tailnet is
+safe. (`tailscale0` is only bound once Tailscale is up — restart
+`seedling.service` after bringing Tailscale online.)
+
 ## The web interface (seedling-web)
 
 `seedling-web.service` is **enabled and started on install**. Its daemon

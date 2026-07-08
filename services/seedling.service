@@ -11,7 +11,13 @@ Type=simple
 # a transient unit), and controls podman. Sandboxing that restricts these would
 # break it, so this unit deliberately does not apply Protect*/capability
 # confinement — Seedling's job is to manage the host.
-ExecStart=/usr/bin/seedling --data-dir /var/lib/seedling --audit-log /var/log/seedling/audit.log
+#
+# Binds the OI on loopback and the tailnet (--interface lo,tailscale0) so
+# seedling-ctl can reach it remotely over Tailscale. The OI is mTLS with
+# authorised-key gating, so tailnet exposure is safe. tailscale0 is only bound
+# when tailscaled is up (a missing interface is skipped, not fatal); restart
+# this unit after bringing Tailscale online to pick it up.
+ExecStart=/usr/bin/seedling --data-dir /var/lib/seedling --audit-log /var/log/seedling/audit.log --interface lo,tailscale0
 Restart=always
 RestartSec=5
 # Workloads keep running while the daemon is down, so a restart is cheap and

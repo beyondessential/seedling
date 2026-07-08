@@ -30,9 +30,10 @@ mod volumes;
     about = "Seedling operator interface CLI"
 )]
 struct Cli {
-    /// OI server address
+    /// OI server address as `host:port` (a hostname, e.g. a MagicDNS name, or a
+    /// literal IP). Resolved via DNS at startup.
     #[arg(long, default_value = "[::1]:7891")]
-    endpoint: SocketAddr,
+    endpoint: String,
 
     /// SHA-256 SPKI fingerprint (hex) to pin
     #[arg(long)]
@@ -149,6 +150,16 @@ enum Command {
     },
 }
 
+/// Resolve an `host:port` endpoint (hostname — e.g. a MagicDNS name — or a
+/// literal IP) to a socket address. Returns the first resolved address.
+async fn resolve_endpoint(endpoint: &str) -> Result<SocketAddr, String> {
+    tokio::net::lookup_host(endpoint)
+        .await
+        .map_err(|e| format!("could not resolve endpoint '{endpoint}': {e}"))?
+        .next()
+        .ok_or_else(|| format!("endpoint '{endpoint}' resolved to no addresses"))
+}
+
 #[tokio::main]
 async fn main() {
     let mut _guard = lloggs::PreArgs::parse_with_env("SEEDLING_LOG")
@@ -234,6 +245,14 @@ async fn main() {
         }
     };
 
+    // Resolve the endpoint (hostname:port → SocketAddr) so MagicDNS names and
+    // other hostnames work, not just literal IPs. The known-hosts key keeps the
+    // user-supplied string so it stays stable across IP changes.
+    let endpoint_addr = resolve_endpoint(&cli.endpoint).await.unwrap_or_else(|e| {
+        tracing::error!("{e}");
+        std::process::exit(1);
+    });
+
     let client;
 
     #[cfg(debug_assertions)]
@@ -245,15 +264,20 @@ async fn main() {
 
     if trust_any {
         resolved_fingerprint = String::new();
-        client = OiClient::connect(cli.endpoint, ClientAuth::TrustAny, &identity, actor.clone())
-            .await
-            .unwrap_or_else(|e| {
-                tracing::error!("{e}");
-                std::process::exit(1);
-            });
+        client = OiClient::connect(
+            endpoint_addr,
+            ClientAuth::TrustAny,
+            &identity,
+            actor.clone(),
+        )
+        .await
+        .unwrap_or_else(|e| {
+            tracing::error!("{e}");
+            std::process::exit(1);
+        });
     } else if let Some(fp) = cli.fingerprint {
         client = OiClient::connect(
-            cli.endpoint,
+            endpoint_addr,
             ClientAuth::Fingerprint(fp.clone()),
             &identity,
             actor.clone(),
@@ -271,7 +295,7 @@ async fn main() {
             known_hosts::KnownHosts::empty(kh_path.clone())
         });
 
-        let fp = OiClient::probe_fingerprint(cli.endpoint)
+        let fp = OiClient::probe_fingerprint(endpoint_addr)
             .await
             .unwrap_or_else(|e| {
                 tracing::error!("{e}");
@@ -327,7 +351,7 @@ async fn main() {
         }
 
         client = OiClient::connect(
-            cli.endpoint,
+            endpoint_addr,
             ClientAuth::Fingerprint(fp.clone()),
             &identity,
             actor,
@@ -378,7 +402,7 @@ async fn main() {
         }
         Command::Events => {
             op::dispatch_events(
-                cli.endpoint,
+                endpoint_addr,
                 resolved_fingerprint,
                 &identity,
                 client.actor().clone(),
@@ -464,4 +488,29 @@ fn leaf_args(cmd: &clap::Command) -> String {
     }
 
     parts.join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn resolves_literal_addresses() {
+        // Literals resolve without touching DNS.
+        assert_eq!(
+            resolve_endpoint("[::1]:7891").await.expect("v6 literal"),
+            "[::1]:7891".parse().unwrap()
+        );
+        assert_eq!(
+            resolve_endpoint("127.0.0.1:7891")
+                .await
+                .expect("v4 literal"),
+            "127.0.0.1:7891".parse().unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_input_without_a_port() {
+        assert!(resolve_endpoint("example.invalid").await.is_err());
+    }
 }
