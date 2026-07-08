@@ -26,18 +26,23 @@ filter_unconventional = true
 split_commits = false
 # Only consider `v<semver>` tags (the release tags). Ignores any other tags.
 tag_pattern = "v[0-9]*"
-# Never treat the release-bump commit or merge commits as changelog content.
+# main is merge-queue-only (the branch ruleset requires PR merges, method=MERGE),
+# so every change lands as one merge commit whose message is the curated
+# Conventional-Commit PR title ending in "(#N)". Keep exactly those — one clean
+# line per PR — and drop the PRs' individual branch commits, which would
+# otherwise duplicate each entry. The release-bump commit is skipped explicitly.
 commit_parsers = [
   { message = "^chore\\(release\\)", skip = true },
-  { message = "^Merge ", skip = true },
-  { message = "^feat", group = "Features" },
-  { message = "^fix", group = "Bug fixes" },
-  { message = "^perf", group = "Performance" },
-  { message = "^refactor", group = "Refactor" },
-  { message = "^doc", group = "Documentation" },
-  { message = "^deps", group = "Dependencies" },
-  { message = "^ci", group = "CI" },
-  { message = ".*", group = "Other" },
+  { message = "^feat.*\\(#[0-9]+\\)", group = "Features" },
+  { message = "^fix.*\\(#[0-9]+\\)", group = "Bug fixes" },
+  { message = "^perf.*\\(#[0-9]+\\)", group = "Performance" },
+  { message = "^refactor.*\\(#[0-9]+\\)", group = "Refactor" },
+  { message = "^docs?.*\\(#[0-9]+\\)", group = "Documentation" },
+  { message = "^deps.*\\(#[0-9]+\\)", group = "Dependencies" },
+  { message = "^ci.*\\(#[0-9]+\\)", group = "CI" },
+  { message = ".*\\(#[0-9]+\\)", group = "Other" },
+  # Anything without a PR reference is a branch/duplicate commit; drop it.
+  { message = ".*", skip = true },
 ]
 protect_breaking_commits = true
 filter_commits = false

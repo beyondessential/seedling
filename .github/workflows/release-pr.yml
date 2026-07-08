@@ -130,12 +130,14 @@ jobs:
             pr=$(gh pr create --base main --head "${branch}" --title "${title}" --body "${body}" --label autorelease)
           fi
 
-          # Enable auto-merge unless a maintainer has parked the PR.
+          # Enable auto-merge unless a maintainer has parked the PR. No merge
+          # strategy is passed: main uses a merge queue, which owns the strategy
+          # (passing --squash/--merge/--rebase is rejected).
           pr_number=$(gh pr view "${branch}" --json number --jq '.number')
           if gh pr view "${pr_number}" --json labels --jq '.labels[].name' | grep -qx release-hold; then
             echo "release-hold present on #${pr_number}; not enabling auto-merge"
           else
-            gh pr merge --auto --squash "${pr_number}"
+            gh pr merge --auto "${pr_number}"
           fi
 
   # Pause a parked release PR: disable auto-merge when release-hold is applied.
