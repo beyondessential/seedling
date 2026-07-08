@@ -1192,9 +1192,13 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > interface.
 
 > r[infra.proxy.startup]
-> The runtime must ensure the network proxy is running and healthy before beginning the
-> reconciliation loop. On each startup, the runtime verifies proxy health and restarts the
-> proxy if necessary.
+> The runtime attempts to bring the network proxy up at startup and, on each reconciliation
+> tick, verifies its health and restarts it if necessary.
+> A failure to bring the proxy up must not prevent the runtime from starting: the operator
+> interface, database, scheduler, and reconciliation loop must come up regardless. The network
+> proxy is workload-ingress infrastructure; its unavailability degrades ingress but not the
+> control plane. When the initial bring-up fails the runtime files a system fault and the
+> reconciliation loop retries on subsequent ticks, clearing the fault once the proxy is healthy.
 
 > r[infra.proxy.upgrade]
 > When the configured proxy image digest differs from the running container's image digest,

@@ -300,9 +300,26 @@ impl System {
         let data_plane_arc: Arc<dyn DataPlane> =
             Arc::new(data_plane::NftablesDataPlane::new(node_prefix)?);
 
-        let initial =
-            caddy::ensure_caddy_running(&*container, &*process, &node_prefix, data_dir).await?;
-        let caddy_proxy = Arc::new(caddy::CaddyProxy::new(&initial.admin_socket)?);
+        // r[impl infra.proxy.startup] — bring Caddy up best-effort. A failure
+        // here (image build, container start, health check) must NOT take down
+        // the daemon: Caddy is workload-ingress infrastructure, and the
+        // reconciler re-runs ensure_caddy_running every tick — filing a
+        // `caddy_failed` fault and swapping the admin client to the live socket
+        // once it succeeds. So on failure we start with a placeholder client
+        // and let the reconciler heal it; the OI, DB, and scheduler come up
+        // regardless and the operator sees the fault.
+        let caddy_proxy =
+            match caddy::ensure_caddy_running(&*container, &*process, &node_prefix, data_dir).await
+            {
+                Ok(initial) => Arc::new(caddy::CaddyProxy::new(&initial.admin_socket)?),
+                Err(e) => {
+                    tracing::error!(
+                        "initial Caddy bring-up failed: {e} — starting without ingress; \
+                     the reconciler will retry and file a caddy_failed fault"
+                    );
+                    Arc::new(caddy::CaddyProxy::placeholder()?)
+                }
+            };
         let caddy_admin_client = caddy_proxy.admin_client_handle();
         let proxy: Arc<dyn NetworkProxy> = caddy_proxy;
 
