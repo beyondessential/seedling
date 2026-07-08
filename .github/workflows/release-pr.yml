@@ -1,0 +1,156 @@
+name: Release PR
+
+# Lightweight release automation for this fully-private workspace (every crate
+# is `publish = false`, so nothing goes to a cargo registry). release-plz can't
+# be used here: it runs `cargo package` for change detection, which cargo
+# refuses for interdependent path crates that aren't on any registry.
+#
+# Flow:
+#   1. On every push to main, compute the next semantic version from the
+#      Conventional Commits since the last `v*` tag (git-cliff). If it's higher
+#      than the current workspace version, open/update a single "release PR"
+#      that bumps `[workspace.package].version` (and Cargo.lock).
+#   2. When that PR merges, the workspace version is ahead of the newest tag, so
+#      the `tag` job creates the GitHub release (and thus the `v<version>` tag),
+#      which triggers release.yml to build and attach the assets.
+#
+# The changelog is not committed (CHANGELOG.md is gitignored); git-cliff renders
+# it only for the PR body and the GitHub release notes.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [labeled]
+
+concurrency:
+  group: release-pr-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # A PAT is required so that (a) the release PR triggers CI and (b) creating the
+  # release/tag triggers release.yml — events made with GITHUB_TOKEN don't
+  # trigger other workflows. Falls back to GITHUB_TOKEN (degraded: no downstream
+  # triggers).
+  GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+
+jobs:
+  # Cut the release once a release PR has merged: the workspace version is ahead
+  # of the newest v* tag.
+  tag:
+    if: github.event_name == 'push'
+    name: Tag and release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7.0.0
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff
+      - name: Create release for an untagged version bump
+        run: |
+          version=$(python3 -c "import tomllib; print(tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version'])")
+          if git rev-parse "v${version}" >/dev/null 2>&1; then
+            echo "v${version} already tagged; nothing to release"
+            exit 0
+          fi
+          echo "Releasing v${version}"
+          notes=$(git-cliff --unreleased --tag "v${version}" --strip all)
+          # Creates the tag at this commit, the GitHub release, and (via the PAT)
+          # triggers release.yml to build and upload assets.
+          gh release create "v${version}" \
+            --title "v${version}" \
+            --target "${GITHUB_SHA}" \
+            --notes "${notes}"
+
+  # Open/update the pending release PR when there are releasable commits.
+  release-pr:
+    if: github.event_name == 'push'
+    name: Open or update release PR
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7.0.0
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+      - name: Configure toolchain
+        run: |
+          rustup toolchain install --profile minimal --no-self-update stable
+          rustup default stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff
+      - name: Compute next version
+        id: version
+        run: |
+          current=$(python3 -c "import tomllib; print(tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version'])")
+          next=$(git-cliff --bumped-version | sed 's/^v//')
+          echo "current=${current}" >> "$GITHUB_OUTPUT"
+          echo "next=${next}" >> "$GITHUB_OUTPUT"
+          if [ "${next}" = "${current}" ]; then
+            echo "No releasable changes since v${current}"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Bump version and open/update PR
+        if: steps.version.outputs.release == 'true'
+        env:
+          NEXT: ${{ steps.version.outputs.next }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Bump the shared workspace version and sync the lockfile. `-w` touches
+          # only the workspace members' own versions, not registry deps.
+          sed -i "0,/^version = /s/^version = .*/version = \"${NEXT}\"/" Cargo.toml
+          cargo update -w
+
+          body=$(git-cliff --unreleased --tag "v${NEXT}" --strip all)
+
+          branch=release-pr
+          git switch -C "${branch}"
+          git commit -am "chore(release): v${NEXT}"
+          git push -f origin "${branch}"
+
+          title="chore(release): v${NEXT}"
+          pr=$(gh pr list --head "${branch}" --state open --json number --jq '.[0].number // empty')
+          if [ -n "${pr}" ]; then
+            gh pr edit "${pr}" --title "${title}" --body "${body}"
+          else
+            pr=$(gh pr create --base main --head "${branch}" --title "${title}" --body "${body}" --label autorelease)
+          fi
+
+          # Enable auto-merge unless a maintainer has parked the PR.
+          pr_number=$(gh pr view "${branch}" --json number --jq '.number')
+          if gh pr view "${pr_number}" --json labels --jq '.labels[].name' | grep -qx release-hold; then
+            echo "release-hold present on #${pr_number}; not enabling auto-merge"
+          else
+            gh pr merge --auto --squash "${pr_number}"
+          fi
+
+  # Pause a parked release PR: disable auto-merge when release-hold is applied.
+  hold:
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.action == 'labeled'
+      && github.event.label.name == 'release-hold'
+      && github.event.pull_request.head.ref == 'release-pr'
+    name: Disable auto-merge when release-hold is applied
+    runs-on: ubuntu-24.04
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Disable auto-merge
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --disable-auto "$PR_URL" || true
