@@ -112,7 +112,8 @@ key-ownership juggling).
   --key-file /var/lib/seedling/web.key --trust-tailscale-headers`.
 - `services/seedling-web-tailscale-serve.service` — `Type=oneshot`
   (`RemainAfterExit`), `ConditionPathExists=/usr/bin/tailscale` (no-op if absent),
-  `tailscale serve --https=443 --bg localhost:7894`; shipped disabled.
+  `tailscale serve --https=7895 --bg localhost:7894` (7895 is in the 789x range;
+  443 is reserved for app workloads); shipped disabled.
 - `etc/seedling/web.toml` — sample/`conffile` with a commented `[auth]`
   `password_hash` placeholder (the alternative to Tailscale auth).
 - Reuse `etc/logrotate.d/seedling` → `/etc/logrotate.d/seedling`.

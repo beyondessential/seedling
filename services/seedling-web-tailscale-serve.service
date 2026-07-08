@@ -16,9 +16,10 @@ Type=oneshot
 RemainAfterExit=yes
 # Publish the loopback web port (seedling-web's default 7894) over HTTPS on the
 # tailnet. tailscale serve injects the Tailscale-User-* identity headers that
-# seedling-web trusts.
-ExecStart=/usr/bin/tailscale serve --https=443 --bg localhost:7894
-ExecStop=/usr/bin/tailscale serve --https=443 off
+# seedling-web trusts. Served on 7895 (in Seedling's 789x range) — NOT 443,
+# which is reserved for app workloads (Caddy).
+ExecStart=/usr/bin/tailscale serve --https=7895 --bg localhost:7894
+ExecStop=/usr/bin/tailscale serve --https=7895 off
 
 [Install]
 WantedBy=multi-user.target

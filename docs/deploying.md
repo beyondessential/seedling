@@ -88,11 +88,14 @@ terminates HTTPS (the secure context WebTransport needs) and injects the
 sudo systemctl enable --now seedling-web-tailscale-serve.service
 ```
 
-That runs `tailscale serve --https=443 --bg localhost:7894`. If Tailscale is not
-installed the unit is a no-op (a `ConditionPathExists=/usr/bin/tailscale` gate
-skips it rather than failing), so it is safe to leave enabled. To stop exposing
-the interface, `systemctl disable --now seedling-web-tailscale-serve.service`
-(which runs `tailscale serve --https=443 off`).
+That runs `tailscale serve --https=7895 --bg localhost:7894`, so the interface
+is reachable at `https://<node>.<tailnet>.ts.net:7895/`. It uses **7895** (in
+Seedling's 789x range), not 443 — 443 is reserved for app workloads (Caddy). If
+Tailscale is not installed the unit is a no-op (a
+`ConditionPathExists=/usr/bin/tailscale` gate skips it rather than failing), so
+it is safe to leave enabled. To stop exposing the interface,
+`systemctl disable --now seedling-web-tailscale-serve.service` (which runs
+`tailscale serve --https=7895 off`).
 
 Only loopback and the local `tailscale serve` reach the web port, so the trusted
 identity headers cannot be spoofed by tailnet peers.
