@@ -127,6 +127,9 @@ async fn build_caddy_image(data_dir: &std::path::Path) -> Result<(), CaddyStartu
     let output = tokio::process::Command::new("podman")
         .args([
             "build",
+            // Run the build's RUN steps in the host network namespace so we can
+            // be fairly sure egress will work even if default podman net is broken.
+            "--network=host",
             "-t",
             CADDY_IMAGE,
             "-f",
