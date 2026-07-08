@@ -103,6 +103,16 @@ pub async fn run(
     tracing::info!("OI SPKI fingerprint: {fingerprint}");
     state.spki_fingerprint.set(fingerprint.clone()).ok();
 
+    // Publish the fingerprint beside the key so local tooling (e.g. bestool
+    // doctor) can pin this server without reading the private key.
+    let fingerprint_path = data_dir.join("oi.fingerprint");
+    if let Err(e) = std::fs::write(&fingerprint_path, format!("{fingerprint}\n")) {
+        tracing::warn!(
+            "could not write {}: {e}; local tooling will need to derive the fingerprint itself",
+            fingerprint_path.display()
+        );
+    }
+
     {
         let trusted_keys = Arc::clone(&state.trusted_keys);
         state
