@@ -175,7 +175,7 @@ export default function Keys() {
               helperText={
                 fingerprint.length > 0 && !fingerprintValid
                   ? "Expected 64 lowercase hex characters (sha256)"
-                  : "Run `seedling-ctl probe` on the client to read its fingerprint"
+                  : "Run `seedling-ctl client fingerprint` on the client to read its fingerprint"
               }
               slotProps={{ htmlInput: { style: { fontFamily: "monospace" } } }}
             />
