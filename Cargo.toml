@@ -6,7 +6,7 @@ members = ["crates/protocol", "crates/core", "crates/daemon", "crates/ctl", "cra
 exclude = ["crates/protocol/fuzz"]
 
 [workspace.package]
-version = "0.2.4"
+version = "0.3.0"
 edition = "2024"
 publish = false
 
