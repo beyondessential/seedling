@@ -294,7 +294,7 @@ jobs:
           version="${{ steps.version.outputs.version }}"
           shopt -s nullglob
           files=(*.tar.zst *.deb)
-          # release-plz creates the release alongside the tag; wait for it.
+          # release-pr.yml creates the release alongside the tag; wait for it.
           for _ in $(seq 1 30); do
             if gh release view "v${version}" >/dev/null 2>&1; then break; fi
             sleep 5

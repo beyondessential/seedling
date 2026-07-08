@@ -7,10 +7,15 @@ wire it into the BES APT repository (`third-party-builds`). Tracked as TAM-6946.
 
 Settled with the user before writing this plan:
 
-1. **Release/versioning: set up release-plz**, mirroring bestool. release-plz
-   opens a release PR that bumps the workspace version and, on merge, tags
-   `v{{version}}`; that tag triggers the deb build workflow. No crates.io
-   publish (all crates are `publish = false`).
+1. **Release/versioning: custom lightweight release automation.** (Originally
+   planned as release-plz, mirroring bestool — but release-plz runs
+   `cargo package` for change detection, which cargo refuses for this workspace's
+   interdependent path crates when none are on a registry. So a small in-repo
+   workflow replaces it.) A push to main computes the next semantic version from
+   Conventional Commits (git-cliff) and opens a release PR that bumps the
+   workspace version; on merge, the untagged bump is detected and tagged
+   `v{{version}}`, which triggers the build workflow. No crates.io publish (all
+   crates are `publish = false`).
 2. **Service enablement:** `seedling.service` and `seedling-web.service` are both
    enabled and started on install (both have working defaults; the only hard
    startup requirement is the pinned daemon fingerprint, which the bootstrap
@@ -130,13 +135,15 @@ key-ownership juggling).
   `/var/lib/seedling` and `/var/log/seedling`.
 
 ### Release automation
-- `release-plz.toml`: workspace tag template `{{package}}-v{{version}}`;
-  `seedling` package overridden to `git_tag_name = "v{{version}}"` with a GitHub
-  release; lib crates get `release = false` (no per-crate tags/releases). No
-  crates.io.
-- `.github/workflows/release-plz.yml`: mirror bestool's (push-to-main opens/
-  updates the release PR; auto-merge; `release-hold` escape hatch) minus the
-  crates.io-auth step.
+- `cliff.toml`: git-cliff config used to compute the next version from
+  Conventional Commits (only `v*` tags considered) and to render release notes.
+  The changelog is not committed (CHANGELOG.md is gitignored).
+- `.github/workflows/release-pr.yml`: on push to main, opens/updates a single
+  `release-pr` branch PR that bumps `[workspace.package].version` + Cargo.lock;
+  auto-merge with a `release-hold` escape hatch. When the version is ahead of the
+  newest `v*` tag (i.e. the PR merged), it creates the GitHub release + tag,
+  which triggers release.yml. Needs `RELEASE_PLZ_TOKEN` (a PAT) so the PR gets CI
+  and the tag triggers the build.
 - `.github/workflows/release.yml`: on `push` tag `v*`. Build matrix:
 
   | target | runner | builds | artifacts |
@@ -178,7 +185,7 @@ integrity is covered by build-provenance attestation):
   name — `seedling`, `seedling-ctl`, `seedling-web`), then CloudFront-invalidate
   each prefix.
 - Also attach every tarball (and the deb) to the GitHub release that
-  release-plz created for the tag, via `gh release upload`.
+  release-pr.yml created for the tag, via `gh release upload`.
 
 Deb `control`:
 ```

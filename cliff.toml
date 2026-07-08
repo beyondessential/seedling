@@ -1,0 +1,45 @@
+# git-cliff configuration.
+#
+# Used by the release automation (.github/workflows/release-pr.yml) to compute
+# the next semantic version from Conventional Commits and to render release
+# notes. The changelog is not committed to the repo (CHANGELOG.md is
+# gitignored); it is only rendered to populate the release PR body and the
+# GitHub release notes.
+
+[changelog]
+header = ""
+# Body rendered per release. Groups commits by type; omits the author trailer.
+body = """
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {{ commit.message | upper_first }}\
+{% endfor %}
+{% endfor %}
+"""
+trim = true
+footer = ""
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+split_commits = false
+# Only consider `v<semver>` tags (the release tags). Ignores any other tags.
+tag_pattern = "v[0-9]*"
+# Never treat the release-bump commit or merge commits as changelog content.
+commit_parsers = [
+  { message = "^chore\\(release\\)", skip = true },
+  { message = "^Merge ", skip = true },
+  { message = "^feat", group = "Features" },
+  { message = "^fix", group = "Bug fixes" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Refactor" },
+  { message = "^doc", group = "Documentation" },
+  { message = "^deps", group = "Dependencies" },
+  { message = "^ci", group = "CI" },
+  { message = ".*", group = "Other" },
+]
+protect_breaking_commits = true
+filter_commits = false
+topo_order = false
+sort_commits = "oldest"
