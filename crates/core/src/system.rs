@@ -27,6 +27,7 @@ pub(crate) mod podman;
 pub mod resolver;
 pub mod stub;
 pub(crate) mod systemd;
+pub(crate) mod unavailable;
 pub mod volume_store;
 
 pub use actuator::{ActuateError, Actuator, TMPFS_VOLUMES_DIR};
@@ -240,6 +241,21 @@ pub struct System {
     pub proxy: Arc<dyn NetworkProxy>,
     pub data_plane: Arc<dyn DataPlane>,
     pub volume_store: volume_store::VolumeStore,
+    /// `Some(reason)` when the container runtime (podman) or process manager
+    /// (systemd) could not be reached at startup and the daemon came up in a
+    /// degraded mode. In this state the backends are erroring stubs (see
+    /// [`unavailable`]): the OI, database, and reconciler run so the operator
+    /// can see the fault, but no workloads are actuated. `None` in normal
+    /// operation.
+    pub degraded: Option<String>,
+}
+
+impl System {
+    /// The reason the daemon is running in degraded mode, if it is. See
+    /// [`System::degraded`].
+    pub fn degraded_reason(&self) -> Option<&str> {
+        self.degraded.as_deref()
+    }
 }
 
 // r[infra.node.prefix]
@@ -295,8 +311,40 @@ impl System {
         data_dir: &Path,
         use_btrfs: bool,
     ) -> Result<SystemSetup, BoxError> {
-        let container: Arc<dyn ContainerRuntime> = Arc::new(podman::PodmanRuntime::new().await?);
-        let process: Arc<dyn ProcessManager> = Arc::new(systemd::SystemdManager::connect().await?);
+        // r[impl infra.node.degraded] — bring up the container runtime (podman)
+        // and process manager (systemd) best-effort. If either connection fails
+        // the daemon must NOT crash-loop: podman/systemd being down is a
+        // recoverable host-configuration problem, and a crash-loop hides it
+        // behind restart churn with no operator-visible signal. Instead we swap
+        // in erroring backends, record the reason, and let the OI, database, and
+        // reconciler come up so the operator sees a system-wide fault explaining
+        // what is broken.
+        let podman = podman::PodmanRuntime::new().await;
+        let systemd = systemd::SystemdManager::connect().await;
+        let (container, process, degraded): (
+            Arc<dyn ContainerRuntime>,
+            Arc<dyn ProcessManager>,
+            Option<String>,
+        ) = match (podman, systemd) {
+            (Ok(c), Ok(p)) => (Arc::new(c), Arc::new(p), None),
+            (podman, systemd) => {
+                let reason = match (&podman, &systemd) {
+                    (Err(e), _) => format!("container runtime (podman) unavailable: {e}"),
+                    (_, Err(e)) => format!("process manager (systemd) unavailable: {e}"),
+                    (Ok(_), Ok(_)) => unreachable!("matched the all-Ok arm above"),
+                };
+                tracing::error!(
+                    "{reason} — starting in degraded mode; the operator interface will \
+                     report a system fault and no workloads will be actuated until the \
+                     daemon is restarted with a working podman/systemd"
+                );
+                (
+                    Arc::new(unavailable::UnavailableContainerRuntime),
+                    Arc::new(unavailable::UnavailableProcessManager),
+                    Some(reason),
+                )
+            }
+        };
         let data_plane_arc: Arc<dyn DataPlane> =
             Arc::new(data_plane::NftablesDataPlane::new(node_prefix)?);
 
@@ -308,7 +356,12 @@ impl System {
         // once it succeeds. So on failure we start with a placeholder client
         // and let the reconciler heal it; the OI, DB, and scheduler come up
         // regardless and the operator sees the fault.
-        let caddy_proxy =
+        let caddy_proxy = if degraded.is_some() {
+            // No point trying to build/run Caddy through the unavailable
+            // container runtime — it would only error. Start with a placeholder;
+            // the reconciler's degraded guard files the overarching fault.
+            Arc::new(caddy::CaddyProxy::placeholder()?)
+        } else {
             match caddy::ensure_caddy_running(&*container, &*process, &node_prefix, data_dir).await
             {
                 Ok(initial) => Arc::new(caddy::CaddyProxy::new(&initial.admin_socket)?),
@@ -319,7 +372,8 @@ impl System {
                     );
                     Arc::new(caddy::CaddyProxy::placeholder()?)
                 }
-            };
+            }
+        };
         let caddy_admin_client = caddy_proxy.admin_client_handle();
         let proxy: Arc<dyn NetworkProxy> = caddy_proxy;
 
@@ -331,6 +385,7 @@ impl System {
             proxy,
             data_plane: data_plane_arc,
             volume_store,
+            degraded,
         });
         Ok((system, caddy_admin_client))
     }
@@ -368,6 +423,7 @@ impl System {
             proxy,
             data_plane: data_plane_arc,
             volume_store,
+            degraded: None,
         });
         Ok((system, caddy_admin_client))
     }
