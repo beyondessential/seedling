@@ -58,6 +58,7 @@ Absent specification bugs, anything not defined here is either defined in anothe
 
 > w[auth.tailscale]
 > When the web interface is explicitly configured to trust Tailscale identity headers, requests carrying those headers are authenticated without a password and the Tailscale user identity is used as the actor.
+> The user's display name is decoded from any MIME encoded-word (RFC 2047) form the proxy uses to carry non-ASCII names in an ASCII header; a value that is not so encoded is used as-is.
 > The web interface must not honour Tailscale identity headers unless this trust is explicitly enabled by the operator.
 > This mode is intended for deployments where the plain-HTTP endpoint is fronted by Tailscale Serve, which injects identity headers and enforces network-level access control.
 
