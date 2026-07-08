@@ -127,6 +127,13 @@ async fn build_caddy_image(data_dir: &std::path::Path) -> Result<(), CaddyStartu
     let output = tokio::process::Command::new("podman")
         .args([
             "build",
+            // Run the build's RUN steps in the host network namespace. The
+            // build only needs egress (xcaddy fetches Go modules), and podman's
+            // default build network hands the container the host's upstream
+            // resolvers, which are not reachable from inside a container netns
+            // on many hosts (e.g. a systemd-resolved/VPC/Tailscale setup) —
+            // making DNS time out. The host resolves fine, so build there.
+            "--network=host",
             "-t",
             CADDY_IMAGE,
             "-f",
