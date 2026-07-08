@@ -1179,6 +1179,15 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > The prefix follows the ULA format `fd5e:edXX:XXXX::/48`, where the 24-bit host portion is
 > derived from `/etc/machine-id`.
 
+> r[infra.node.degraded]
+> If the container runtime or the process manager cannot be reached at startup, the runtime
+> must not crash or crash-loop. It must still bring up the operator interface, database, and
+> reconciliation loop so the failure is observable, and it must file a system-wide fault whose
+> description identifies which backend is unavailable and states that no workloads will be
+> actuated until the runtime is restarted with working backends. While degraded, the runtime
+> must not attempt to actuate workloads or infrastructure that depend on the unavailable
+> backends. Recovery requires a restart; the runtime is not required to reconnect on its own.
+
 > r[infra.pod.network]
 > Each pod instance must be connected to a dedicated IPv6-only bridge network. The network
 > prefix is a /64 derived from the node prefix and the instance identity. No IPv4 subnet

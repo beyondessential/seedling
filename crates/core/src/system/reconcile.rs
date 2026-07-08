@@ -645,6 +645,23 @@ impl Reconciler {
     // r[fault.non-blocking]
     #[tracing::instrument(skip_all, level = "debug")]
     pub async fn tick(&mut self) -> bool {
+        // r[impl infra.node.degraded] — when the daemon came up without a
+        // working container runtime / process manager, every actuation would
+        // just error against the unavailable backends. File the overarching
+        // system fault (idempotent) and skip the rest of the tick so the OI
+        // stays responsive and the operator sees why nothing is running.
+        if let Some(reason) = self.driver.degraded_reason() {
+            self.file_system_fault(
+                "container_runtime_unavailable",
+                &format!(
+                    "podman/systemd could not be reached at startup, so no workloads can be \
+                     actuated. Restart seedling once the container runtime and service manager \
+                     are healthy. Details: {reason}"
+                ),
+            );
+            return true;
+        }
+
         self.reconcile_stray_shells().await;
 
         let apps = self.snapshot_all_apps();
