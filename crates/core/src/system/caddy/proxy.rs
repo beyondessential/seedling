@@ -70,6 +70,16 @@ impl CaddyProxy {
         })
     }
 
+    /// Create a `CaddyProxy` with a placeholder client, used when the initial
+    /// Caddy bring-up failed. Requests fail until the reconciler swaps in a
+    /// real client (bound to the live admin socket) once `ensure_caddy_running`
+    /// succeeds — see `Reconciler`'s `caddy_admin_client` handling.
+    pub(crate) fn placeholder() -> Result<Self, reqwest::Error> {
+        Ok(Self {
+            client: Arc::new(RwLock::new(reqwest::Client::builder().build()?)),
+        })
+    }
+
     /// Returns a handle to the shared client, so the caller can swap it
     /// atomically during a blue/green Caddy upgrade.
     pub(crate) fn admin_client_handle(&self) -> Arc<RwLock<reqwest::Client>> {
