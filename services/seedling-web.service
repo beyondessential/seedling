@@ -10,20 +10,32 @@ Type=simple
 # /var/lib/seedling (the pinned fingerprint and its own client key). It binds
 # only the loopback web port and needs no other privilege.
 #
-# Authenticates operators via Tailscale identity headers. It binds loopback
-# only, so it is reachable exactly via the co-located `tailscale serve`
-# front-end (seedling-web-tailscale-serve.service), which terminates HTTPS on
-# the tailnet and injects the Tailscale-User-* headers seedling-web trusts —
-# nothing untrusted can reach the loopback port to spoof them.
+# Authenticates operators via Tailscale identity headers. The HTTP listener
+# binds loopback only, so it is reachable exactly via the co-located
+# `tailscale serve` front-end (seedling-web-tailscale-serve.service), which
+# terminates HTTPS on the tailnet and injects the Tailscale-User-* headers
+# seedling-web trusts — nothing untrusted can reach the loopback port to spoof
+# them.
+#
+# The WebTransport listener is bound separately on the tailnet (--wt-interface
+# lo,tailscale0): WebTransport is HTTP/3 (QUIC/UDP) and cannot be carried by
+# `tailscale serve` (a TCP HTTP proxy), so the browser reaches it directly at
+# <node>.<tailnet>.ts.net:7893. It carries its own per-session token and pins
+# the server certificate, so exposing it on the tailnet needs no header trust.
+# tailscale0 is only bound when tailscaled is up; restart this unit after
+# bringing Tailscale online.
 #
 # For a password-login deployment instead: set auth.password_hash in
 # /etc/seedling/web.toml, drop --trust-tailscale-headers with a drop-in, and
-# front it with a TLS-terminating reverse proxy. See docs/deploying.md.
+# front the HTTP port with a TLS-terminating reverse proxy — but note the
+# WebTransport port still must be reachable directly (adjust --wt-interface /
+# --wt-listen for that network). See docs/deploying.md.
 ExecStart=/usr/bin/seedling-web \
     --config /etc/seedling/web.toml \
     --daemon-fingerprint-file /var/lib/seedling/oi.fingerprint \
     --key-file /var/lib/seedling/web.key \
-    --trust-tailscale-headers
+    --trust-tailscale-headers \
+    --wt-interface lo,tailscale0
 Restart=always
 RestartSec=5
 

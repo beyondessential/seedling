@@ -53,6 +53,21 @@ struct Args {
     #[arg(long)]
     listen: Vec<SocketAddr>,
 
+    // w[bind]
+    /// Interface(s) to bind the WebTransport listener on, overriding
+    /// `--interface`/`--listen` for WebTransport only (comma-separated names).
+    /// WebTransport cannot be carried by an HTTP reverse proxy, so this exposes
+    /// it directly to clients (e.g. on the tailnet) while the HTTP listener
+    /// stays on loopback behind `tailscale serve`.
+    #[arg(long, value_delimiter = ',')]
+    wt_interface: Vec<String>,
+
+    // w[bind]
+    /// Explicit WebTransport listen address(es), overriding
+    /// `--interface`/`--listen` for WebTransport only. May be repeated.
+    #[arg(long)]
+    wt_listen: Vec<SocketAddr>,
+
     /// HTTP listener port (used with --interface). Conflicts with --listen.
     #[arg(long, default_value_t = DEFAULT_HTTP_PORT, conflicts_with = "listen")]
     http_port: u16,
@@ -170,6 +185,24 @@ async fn connect_daemon_with_retry(
     }
 }
 
+// w[impl bind]
+/// Choose the bind sources for the WebTransport listener: its own
+/// interfaces/addresses when either is configured, otherwise the shared HTTP
+/// set. Lets a deployment bind WebTransport somewhere an HTTP reverse proxy
+/// can't reach (e.g. the tailnet) while HTTP stays on loopback.
+fn wt_bind_sources<'a>(
+    interface: &'a [String],
+    listen: &'a [SocketAddr],
+    wt_interface: &'a [String],
+    wt_listen: &'a [SocketAddr],
+) -> (&'a [String], &'a [SocketAddr]) {
+    if !wt_interface.is_empty() || !wt_listen.is_empty() {
+        (wt_interface, wt_listen)
+    } else {
+        (interface, listen)
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
@@ -214,13 +247,23 @@ async fn main() {
             std::process::exit(1);
         });
 
-    // Resolve WT bind addresses (same interfaces, different port).
-    let wt_port = if args.listen.is_empty() {
+    // w[impl bind] — resolve WT bind addresses. WebTransport can't be carried
+    // by an HTTP-terminating proxy, so it may need to bind a different set of
+    // addresses than HTTP (e.g. HTTP on loopback behind `tailscale serve`, WT
+    // directly on the tailnet). Use the WT-specific interfaces/addresses when
+    // given, otherwise fall back to the shared HTTP set.
+    let (wt_interface, wt_listen) = wt_bind_sources(
+        &args.interface,
+        &args.listen,
+        &args.wt_interface,
+        &args.wt_listen,
+    );
+    let wt_port = if wt_listen.is_empty() {
         args.wt_port
     } else {
         DEFAULT_WT_PORT
     };
-    let wt_addrs = resolve_bind_addrs(&args.interface, &args.listen, wt_port).unwrap_or_else(|e| {
+    let wt_addrs = resolve_bind_addrs(wt_interface, wt_listen, wt_port).unwrap_or_else(|e| {
         eprintln!("error: {e}");
         std::process::exit(1);
     });
@@ -332,6 +375,40 @@ async fn main() {
     // Wait indefinitely.
     tokio::signal::ctrl_c().await.expect("ctrl-c handler");
     tracing::info!("shutting down");
+}
+
+#[cfg(test)]
+mod bind_tests {
+    use super::*;
+
+    // w[verify bind]
+    // WebTransport falls back to the shared HTTP interfaces/addresses only when
+    // no WT-specific ones are given; either WT override takes precedence so it
+    // can be exposed where an HTTP proxy can't reach.
+    #[test]
+    fn wt_sources_fall_back_then_override() {
+        let iface = vec!["lo".to_owned()];
+        let listen: Vec<SocketAddr> = vec!["127.0.0.1:1".parse().unwrap()];
+        let wt_iface = vec!["tailscale0".to_owned()];
+        let wt_listen: Vec<SocketAddr> = vec!["[::]:2".parse().unwrap()];
+        let empty_i: Vec<String> = vec![];
+        let empty_a: Vec<SocketAddr> = vec![];
+
+        // No WT-specific config → share the HTTP set.
+        let (i, a) = wt_bind_sources(&iface, &listen, &empty_i, &empty_a);
+        assert_eq!(i, iface.as_slice());
+        assert_eq!(a, listen.as_slice());
+
+        // WT interface given → use it (and the WT address set, here empty).
+        let (i, a) = wt_bind_sources(&iface, &listen, &wt_iface, &empty_a);
+        assert_eq!(i, wt_iface.as_slice());
+        assert!(a.is_empty());
+
+        // WT listen given → use it (and the WT interface set, here empty).
+        let (i, a) = wt_bind_sources(&iface, &listen, &empty_i, &wt_listen);
+        assert!(i.is_empty());
+        assert_eq!(a, wt_listen.as_slice());
+    }
 }
 
 #[cfg(test)]
