@@ -16,6 +16,7 @@ axum.workspace = true
 dirs.workspace = true
 mime_guess.workspace = true
 reqwest.workspace = true
+rfc2047-decoder.workspace = true
 clap.workspace = true
 if-addrs.workspace = true
 jiff.workspace = true

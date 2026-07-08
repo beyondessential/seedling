@@ -31,6 +31,7 @@ parking_lot = { version = "0.12.5", features = ["deadlock_detection"] }
 quinn = "0.11.9"
 rand_core = { version = "0.6", features = ["getrandom"] }
 reqwest = { version = "0.13.4", features = ["json"] }
+rfc2047-decoder = "1.1.2"
 rustls = "0.23.40"
 rustls-pki-types = "1.14.1"
 serde = { version = "1.0.228", features = ["derive", "rc"] }

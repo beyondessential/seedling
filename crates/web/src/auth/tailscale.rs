@@ -10,7 +10,7 @@ pub fn extract_actor(headers: &HeaderMap) -> Option<Actor> {
     let display = headers
         .get(HEADER_NAME)
         .and_then(|v| v.to_str().ok())
-        .map(str::to_owned)
+        .map(decode_display_name)
         .unwrap_or_else(|| id.clone());
 
     Some(Actor {
@@ -19,6 +19,14 @@ pub fn extract_actor(headers: &HeaderMap) -> Option<Actor> {
         display: Some(display),
         session: None,
     })
+}
+
+/// Decode the display-name header. Tailscale Serve carries non-ASCII names as
+/// MIME encoded-words (RFC 2047, e.g. `=?utf-8?q?F=C3=A9lix?=`) because HTTP
+/// header values can't hold raw UTF-8. Plain ASCII names pass through unchanged;
+/// anything that fails to decode falls back to the raw header value.
+fn decode_display_name(raw: &str) -> String {
+    rfc2047_decoder::decode(raw.as_bytes()).unwrap_or_else(|_| raw.to_owned())
 }
 
 #[cfg(test)]
@@ -49,6 +57,18 @@ mod tests {
             got.session.is_none(),
             "tailscale extractor leaves session unset"
         );
+    }
+
+    // w[verify auth.tailscale]
+    #[test]
+    fn decodes_rfc2047_encoded_display_name() {
+        // Tailscale Serve carries non-ASCII names as MIME encoded-words.
+        let got = extract_actor(&headers(&[
+            (HEADER_LOGIN, "felix@example.com"),
+            (HEADER_NAME, "=?utf-8?q?F=C3=A9lix_Saparelli?="),
+        ]))
+        .expect("actor should be extracted");
+        assert_eq!(got.display.as_deref(), Some("Félix Saparelli"));
     }
 
     // w[verify auth.tailscale]
