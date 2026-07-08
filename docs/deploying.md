@@ -75,8 +75,10 @@ seedling-ctl --endpoint <node>.<tailnet>.ts.net:7891 status
 ```
 
 The OI is mTLS with authorised-key gating, so exposing it on the tailnet is
-safe. (`tailscale0` is only bound once Tailscale is up — restart
-`seedling.service` after bringing Tailscale online.)
+safe. The unit orders after `tailscaled` and waits (briefly, best-effort) for
+the tailnet address at startup, so a normal boot binds `tailscale0`
+automatically; if you enable Tailscale on an already-running host, `sudo
+systemctl restart seedling.service` to pick it up.
 
 ## The web interface (seedling-web)
 
@@ -119,10 +121,11 @@ carried by `tailscale serve` (a TCP HTTP proxy), so the browser connects to it
 directly at `<node>.<tailnet>.ts.net:7893`. The unit binds it there with
 `--wt-interface lo,tailscale0`; it is gated by a per-session token and pins the
 server certificate, so exposing it on the tailnet is safe without header trust.
-`tailscale0` is only bound when tailscaled is already up, so **restart
-`seedling-web` after bringing Tailscale online** (`sudo systemctl restart
-seedling-web.service`) — otherwise the browser reaches the login page but the
-session can't connect and falls back to the password prompt.
+The unit orders after `tailscaled` and waits (briefly, best-effort) for the
+tailnet address at startup, so a normal boot binds `tailscale0` automatically.
+If you enable Tailscale on an already-running host, `sudo systemctl restart
+seedling-web.service` to pick it up — otherwise the browser reaches the login
+page but the session can't connect and falls back to the password prompt.
 
 ### Password login (alternative)
 
