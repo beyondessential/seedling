@@ -25,6 +25,7 @@ use seedling_core::{
         reconcile::Reconciler,
         resolver::{resolver_addr, resolver_gateway_addr, spawn_dns_forwarder},
     },
+    transport::{TransportState, endpoint::EndpointConfig},
 };
 use seedling_protocol::names::AppName;
 use tokio::sync::Notify;
@@ -71,7 +72,7 @@ struct Args {
     #[arg(long)]
     stub_backends: bool,
 
-    // i[transport.listen]
+    // t[impl listen]
     /// Network interface(s) to bind the OI on (comma-separated names).
     /// All IPv4 and IPv6 addresses of each interface are used.
     /// Failure to resolve a named interface is fatal.
@@ -83,7 +84,7 @@ struct Args {
     listen: Vec<std::net::SocketAddr>,
 
     /// OI listen port, used with --interface. Conflicts with --listen.
-    #[arg(long, default_value_t = oi::DEFAULT_PORT, conflicts_with = "listen")]
+    #[arg(long, default_value_t = seedling_core::transport::endpoint::DEFAULT_PORT, conflicts_with = "listen")]
     port: u16,
 
     /// Upstream DNS servers for the in-pod CoreDNS resolver
@@ -1033,15 +1034,19 @@ async fn main() {
     // OI server
     // ---------------------------------------------------------------------------
 
+    let transport_state = TransportState::new(data_dir.join("oi.key"));
+
     let oi_state = Arc::new(OiState {
+        transport: Arc::clone(&transport_state),
+        grove: std::sync::OnceLock::new(),
         registry: Arc::clone(&registry),
-        spki_fingerprint: std::sync::OnceLock::new(),
+        spki_fingerprint: Arc::clone(&transport_state.spki_fingerprint),
         start_time: Instant::now(),
         db: db.clone(),
         scheduler: Arc::clone(&scheduler),
         tick_notify: Arc::clone(&tick_notify),
         db_path: db_path.clone(),
-        trusted_keys: seedling_core::oi::auth::new_trusted_keys(),
+        trusted_keys: seedling_core::transport::auth::new_trusted_keys(),
         shells,
         forwards: seedling_core::oi::forwards::ForwardRegistry::new(),
         container_runtime: Arc::clone(&driver.container),
@@ -1290,17 +1295,31 @@ async fn main() {
         });
     }
 
-    // i[transport.listen]
+    let grove_state =
+        seedling_core::grove::GroveState::load(Arc::clone(&transport_state), db.clone())
+            .unwrap_or_else(|e| {
+                tracing::error!("loading grove state failed: {e}");
+                std::process::exit(1);
+            });
+    oi_state
+        .grove
+        .set(Arc::clone(&grove_state))
+        .unwrap_or_else(|_| panic!("OiState.grove was already set"));
+
+    oi::register(&transport_state, &oi_state, &data_dir, args.max_streams).unwrap_or_else(|e| {
+        tracing::error!("OI registration failed: {e}");
+        std::process::exit(1);
+    });
+
+    // t[impl listen]
     let oi_addrs = resolve_oi_addrs(&args.interface, &args.listen, args.port);
-    let (_fingerprint, oi_endpoints) = oi::run(
-        Arc::clone(&oi_state),
-        &oi_addrs,
-        &data_dir,
-        args.max_streams,
-    )
+    let oi_endpoints = seedling_core::transport::endpoint::run(EndpointConfig {
+        state: Arc::clone(&transport_state),
+        addrs: oi_addrs,
+    })
     .await
     .unwrap_or_else(|e| {
-        tracing::error!("OI server failed to start: {e}");
+        tracing::error!("transport failed to start: {e}");
         std::process::exit(1);
     });
 
@@ -1558,7 +1577,7 @@ fn revert_install_and_fault(state: &Arc<OiState>, app_name: &AppName) {
     }
 }
 
-// i[transport.listen]
+// t[impl listen]
 fn resolve_oi_addrs(
     interfaces: &[String],
     explicit: &[std::net::SocketAddr],

@@ -13,7 +13,7 @@ fn open_in_memory_succeeds() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 52);
+    assert_eq!(version, 53);
 }
 
 // r[verify history.persistence]
@@ -45,7 +45,7 @@ fn params_table_exists() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 52);
+    assert_eq!(version, 53);
 }
 
 // i[verify app.persist]
@@ -64,6 +64,52 @@ fn registered_apps_table_exists() {
         count, 1,
         "registered_apps table should exist after migration"
     );
+}
+
+// g[verify identity]
+// g[verify membership.canonical]
+// g[verify mapping]
+// g[verify peers.dial]
+#[test]
+fn grove_tables_exist_after_migration() {
+    let db = Db::open_in_memory().expect("open");
+    let tables = [
+        "grove_membership",
+        "grove_peers",
+        "grove_params",
+        "grove_param_mappings",
+        "grove_versions",
+    ];
+    for table in &tables {
+        let count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                [table],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(count, 1, "table '{}' should exist", table);
+    }
+}
+
+// g[verify identity]
+#[test]
+fn grove_membership_id_is_constrained_to_one_row() {
+    let db = Db::open_in_memory().expect("open");
+    db.conn
+        .execute(
+            "INSERT INTO grove_membership (id, grove_id, role, leader_fingerprint, current_seq, current_payload, current_signature, joined_at) \
+             VALUES (1, x'00', 'leader', 'fp', 1, x'00', x'00', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("first row should insert");
+    let res = db.conn.execute(
+        "INSERT INTO grove_membership (id, grove_id, role, leader_fingerprint, current_seq, current_payload, current_signature, joined_at) \
+         VALUES (2, x'00', 'leader', 'fp', 1, x'00', x'00', '2026-01-01T00:00:00Z')",
+        [],
+    );
+    assert!(res.is_err(), "id != 1 must be rejected by CHECK constraint");
 }
 
 // r[verify history.world.entries]

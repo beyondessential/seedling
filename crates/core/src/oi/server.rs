@@ -1,70 +1,31 @@
-use std::{net::SocketAddr, path::Path, sync::Arc, time::Duration};
+use std::{path::Path, sync::Arc};
 
-use quinn::Endpoint;
-use rustls::ServerConfig as TlsServerConfig;
 use serde_json::json;
 use tokio::sync::{Semaphore, mpsc};
 use tracing::Instrument;
 
-use seedling_protocol::{OI_ALPN, actor::Actor, events::EventSenderWithActor, keys};
+use seedling_protocol::{OI_ALPN, actor::Actor, events::EventSenderWithActor};
 
 use super::{
-    auth::{SeedlingClientVerifier, TrustedKeys},
     forwards::session::{forward_port_session, handle_forward_stream},
     handler::{RequestCtx, dispatch},
     shells::{open_shell_session, open_volume_shell_session},
     state::OiState,
 };
+use crate::transport::{
+    TransportState,
+    endpoint::{
+        ConnectionContext, ConnectionFuture, ConnectionHandler, LabelLookup, extract_client_fp,
+        read_json_line,
+    },
+};
 
-/// Default maximum number of concurrently active bidirectional streams.
+/// Default maximum number of concurrently active OI bidirectional streams
+/// per connection. Per-protocol; grove will set its own.
 pub const DEFAULT_MAX_STREAMS: usize = 64;
 
 /// Maximum size of a request body read (4 MiB).
 const MAX_REQUEST_SIZE: usize = 4 * 1024 * 1024;
-
-/// Default OI listen port.
-pub const DEFAULT_PORT: u16 = 7891;
-
-fn build_tls_config(
-    key: &ed25519_dalek::SigningKey,
-    spki: Vec<u8>,
-    trusted: TrustedKeys,
-) -> Result<TlsServerConfig, Box<dyn std::error::Error + Send + Sync>> {
-    use ed25519_dalek::pkcs8::EncodePrivateKey;
-    use rustls::{server::AlwaysResolvesServerRawPublicKeys, sign::CertifiedKey};
-    use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
-
-    let pkcs8 = key
-        .to_pkcs8_der()
-        .map_err(|e| format!("key encoding: {e}"))?;
-    let private_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(pkcs8.as_bytes().to_vec()));
-    let signing_key = rustls::crypto::ring::sign::any_supported_type(&private_key)
-        .map_err(|e| format!("signing key: {e}"))?;
-
-    let cert = CertificateDer::from(spki);
-    let certified_key = Arc::new(CertifiedKey::new(vec![cert], signing_key));
-    let resolver = Arc::new(AlwaysResolvesServerRawPublicKeys::new(certified_key));
-
-    let client_verifier = Arc::new(SeedlingClientVerifier { trusted });
-
-    let mut tls_config = TlsServerConfig::builder()
-        .with_client_cert_verifier(client_verifier)
-        .with_cert_resolver(resolver);
-
-    tls_config.key_log = Arc::new(rustls::KeyLogFile::new());
-    // i[transport.alpn]
-    tls_config.alpn_protocols = vec![OI_ALPN.to_vec()];
-
-    Ok(tls_config)
-}
-
-fn extract_client_fp(conn: &quinn::Connection) -> Option<String> {
-    let id = conn.peer_identity()?;
-    let certs = id
-        .downcast::<Vec<rustls_pki_types::CertificateDer<'static>>>()
-        .ok()?;
-    certs.first().map(|c| keys::fingerprint(c.as_ref()))
-}
 
 // i[wire.actor]
 fn synthesise_actor(state: &OiState, fp: Option<&str>) -> Arc<Actor> {
@@ -85,38 +46,20 @@ fn synthesise_actor(state: &OiState, fp: Option<&str>) -> Arc<Actor> {
     })
 }
 
-/// Write the server's SPKI fingerprint (hex, newline-terminated) to
-/// `oi.fingerprint` in the data directory.
-// i[impl transport.server-identity.published]
-fn publish_fingerprint(data_dir: &Path, fingerprint: &str) -> std::io::Result<()> {
-    std::fs::write(data_dir.join("oi.fingerprint"), format!("{fingerprint}\n"))
-}
-
-// i[transport.quic]
-// i[transport.server-identity]
-// i[transport.client-auth]
-// i[transport.listen]
-pub async fn run(
-    state: Arc<OiState>,
-    addrs: &[SocketAddr],
+/// Register the OI as the `bes.seedling/1` ALPN handler against the shared
+/// transport state. Loads the authorised-keys set from the DB (and the
+/// bootstrap file), installs the per-connection log-label resolver,
+/// builds the OI connection handler, and registers both with
+/// [`TransportState`].
+///
+/// The actual QUIC endpoint is started by
+/// [`crate::transport::endpoint::run`] after every protocol has registered.
+pub fn register(
+    transport: &Arc<TransportState>,
+    state: &Arc<OiState>,
     data_dir: &Path,
     max_streams: usize,
-) -> Result<(String, Vec<Endpoint>), Box<dyn std::error::Error + Send + Sync>> {
-    let key_path = data_dir.join("oi.key");
-    let key = keys::load_or_generate(&key_path)?;
-    let spki = keys::spki_der(&key);
-    let fingerprint = keys::fingerprint(&spki);
-
-    tracing::info!("OI SPKI fingerprint: {fingerprint}");
-    state.spki_fingerprint.set(fingerprint.clone()).ok();
-
-    // Publish the fingerprint so a co-located process (e.g. seedling-web) can
-    // pin it without a fingerprint probe. Non-fatal: the daemon still serves if
-    // the write fails; only the file-based bootstrap of co-located clients breaks.
-    if let Err(e) = publish_fingerprint(data_dir, &fingerprint) {
-        tracing::warn!("failed to write OI fingerprint file: {e}");
-    }
-
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     {
         let trusted_keys = Arc::clone(&state.trusted_keys);
         state
@@ -138,63 +81,34 @@ pub async fn run(
         );
     }
 
-    let tls_config = build_tls_config(&key, spki, Arc::clone(&state.trusted_keys))?;
-    let quic_config = quinn::crypto::rustls::QuicServerConfig::try_from(tls_config)?;
-    let mut transport = quinn::TransportConfig::default();
-    // Send PING frames every 10 s so idle connections do not trip the idle
-    // timeout.  As long as seedling-ctl is alive and the network is healthy,
-    // PINGs reset the idle timer and the connection stays open indefinitely.
-    transport.keep_alive_interval(Some(Duration::from_secs(10)));
-    // 30 s: long enough that a single missed PING does not drop the
-    // connection, short enough that a genuinely dead connection is detected
-    // and cleaned up promptly.
-    transport.max_idle_timeout(Some(
-        quinn::VarInt::from_u32(30_000).into(), // 30 s in ms
-    ));
-    // Enable QUIC datagrams for UDP port-forward relay.
-    transport.datagram_receive_buffer_size(Some(65536));
-    let transport = Arc::new(transport);
-    // Build one server config and clone it per endpoint (cheap: all heavy
-    // state is behind Arcs inside quinn::ServerConfig).
-    let mut base_server_config = quinn::ServerConfig::with_crypto(Arc::new(quic_config));
-    base_server_config.transport_config(Arc::clone(&transport));
-
-    if std::env::var_os("SSLKEYLOGFILE").is_some() {
-        tracing::warn!("SSLKEYLOGFILE is set — TLS session keys are being logged to disk");
-    }
+    transport
+        .trust_registry
+        .register(OI_ALPN, Arc::clone(&state.trusted_keys));
 
     let stream_semaphore = Arc::new(Semaphore::new(max_streams));
+    let oi_handler: ConnectionHandler = {
+        let state = Arc::clone(state);
+        Arc::new(move |conn, ctx| -> ConnectionFuture {
+            let state = Arc::clone(&state);
+            let stream_semaphore = Arc::clone(&stream_semaphore);
+            Box::pin(handle_connection(conn, ctx, state, stream_semaphore))
+        })
+    };
+    transport.handlers.register(OI_ALPN, oi_handler);
+
+    let label_lookup: LabelLookup = {
+        let state = Arc::clone(state);
+        Arc::new(move |fp: &str| {
+            let fp = fp.to_owned();
+            state
+                .db
+                .call(move |db| super::auth::get_label(db, &fp).ok().flatten())
+        })
+    };
+    *transport.label_lookup.write() = Some(label_lookup);
+
     tracing::info!(max_streams, "OI concurrency limit configured");
-
-    let mut endpoints = Vec::with_capacity(addrs.len());
-    for addr in addrs {
-        let endpoint = Endpoint::server(base_server_config.clone(), *addr)?;
-        tracing::info!("OI listening on {}", endpoint.local_addr()?);
-        let ep_clone = endpoint.clone();
-        tokio::spawn(accept_loop(
-            endpoint,
-            Arc::clone(&state),
-            Arc::clone(&stream_semaphore),
-        ));
-        endpoints.push(ep_clone);
-    }
-
-    Ok((fingerprint, endpoints))
-}
-
-async fn accept_loop(endpoint: Endpoint, state: Arc<OiState>, stream_semaphore: Arc<Semaphore>) {
-    while let Some(incoming) = endpoint.accept().await {
-        let state = Arc::clone(&state);
-        let stream_semaphore = Arc::clone(&stream_semaphore);
-        tokio::spawn(async move {
-            match incoming.await {
-                Ok(conn) => {
-                    handle_connection(conn, state, stream_semaphore).await;
-                }
-                Err(e) => tracing::warn!("incoming connection failed: {e}"),
-            }
-        });
-    }
+    Ok(())
 }
 
 // i[stream.control]
@@ -203,23 +117,13 @@ async fn accept_loop(endpoint: Endpoint, state: Arc<OiState>, stream_semaphore: 
 // i[datagram.forward]
 async fn handle_connection(
     conn: quinn::Connection,
+    ctx: ConnectionContext,
     state: Arc<OiState>,
     stream_semaphore: Arc<Semaphore>,
 ) {
     let conn_id = conn.stable_id();
     let peer = conn.remote_address();
-    let client_fp = extract_client_fp(&conn);
-
-    let client: String = client_fp
-        .as_deref()
-        .and_then(|fp| {
-            let fp = fp.to_owned();
-            state
-                .db
-                .call(move |db| super::auth::get_label(db, &fp).ok().flatten())
-        })
-        .or_else(|| client_fp.clone())
-        .unwrap_or_else(|| "unauthenticated".to_owned());
+    let client = ctx.client_label;
 
     loop {
         tokio::select! {
@@ -497,36 +401,6 @@ async fn handle_bidi_stream(
     let _ = send.finish();
 }
 
-/// Reads bytes from `recv` until a `\n` is found or `max_len` is reached.
-///
-/// Returns `(line_including_newline, leftover_bytes_after_newline)`.
-/// On stream close before any data, returns `([], [])`.
-async fn read_json_line(
-    recv: &mut quinn::RecvStream,
-    max_len: usize,
-) -> Result<(Vec<u8>, Vec<u8>), quinn::ReadError> {
-    let mut buf = vec![0u8; max_len.min(65536)];
-    let mut total = 0usize;
-    loop {
-        let chunk_size = (max_len - total).min(1024);
-        if chunk_size == 0 {
-            break;
-        }
-        match recv.read(&mut buf[total..total + chunk_size]).await? {
-            Some(0) | None => break,
-            Some(n) => {
-                total += n;
-                if let Some(pos) = buf[..total].iter().position(|&b| b == b'\n') {
-                    let line = buf[..=pos].to_vec();
-                    let leftover = buf[pos + 1..total].to_vec();
-                    return Ok((line, leftover));
-                }
-            }
-        }
-    }
-    Ok((buf[..total].to_vec(), Vec::new()))
-}
-
 // i[stream.events]
 // i[event.ordering]
 async fn event_stream_task(
@@ -558,113 +432,4 @@ async fn event_stream_task(
         }
     }
     let _ = send.finish();
-}
-
-#[cfg(test)]
-mod auth_tests {
-    use std::net::SocketAddr;
-    use std::time::Duration;
-
-    use ed25519_dalek::SigningKey;
-    use quinn::Endpoint;
-    use rand_core::OsRng;
-
-    use seedling_protocol::{
-        actor::Actor,
-        client::{ClientAuth, OiClient},
-        keys::{self, ClientIdentity},
-    };
-
-    use super::{Arc, build_tls_config, publish_fingerprint};
-    use crate::oi::auth::{TrustedKeys, new_trusted_keys};
-
-    // i[verify transport.server-identity.published]
-    // The published file must carry exactly the fingerprint clients pin, so a
-    // reader that trims whitespace recovers the fingerprint verbatim.
-    #[test]
-    fn publishes_fingerprint_to_data_dir() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let fingerprint = "0123456789abcdef";
-        publish_fingerprint(dir.path(), fingerprint).expect("write fingerprint");
-
-        let contents =
-            std::fs::read_to_string(dir.path().join("oi.fingerprint")).expect("read back");
-        assert!(
-            contents.ends_with('\n'),
-            "file should be newline-terminated"
-        );
-        assert_eq!(contents.trim(), fingerprint);
-    }
-
-    /// Stand up a real OI QUIC endpoint using the production TLS wiring
-    /// ([`build_tls_config`]) and accept connections, holding any that
-    /// complete the handshake. Returns the bound address.
-    fn spawn_oi_server(trusted: TrustedKeys) -> SocketAddr {
-        let key = SigningKey::generate(&mut OsRng);
-        let spki = keys::spki_der(&key);
-        let tls = build_tls_config(&key, spki, trusted).expect("build tls config");
-        let quic = quinn::crypto::rustls::QuicServerConfig::try_from(tls).expect("quic config");
-        let server_config = quinn::ServerConfig::with_crypto(Arc::new(quic));
-        let endpoint =
-            Endpoint::server(server_config, "127.0.0.1:0".parse().unwrap()).expect("endpoint");
-        let addr = endpoint.local_addr().expect("local addr");
-        tokio::spawn(async move {
-            while let Some(incoming) = endpoint.accept().await {
-                tokio::spawn(async move {
-                    // The handshake includes mTLS client-cert verification; an
-                    // untrusted peer fails here and never yields a connection.
-                    if let Ok(conn) = incoming.await {
-                        let _ = conn.closed().await;
-                    }
-                });
-            }
-        });
-        addr
-    }
-
-    /// Connect with `identity` and report whether the peer ends up with a
-    /// usable connection. In QUIC/TLS 1.3 the client completes the handshake
-    /// optimistically before the server verifies its certificate, so a
-    /// rejected peer's `connect` may still return `Ok`; the rejection then
-    /// surfaces as the server closing the connection. We treat "still open
-    /// after a short grace period" as admitted, and "connect failed or
-    /// connection closed by the server" as rejected.
-    async fn connection_admitted(addr: SocketAddr, identity: &ClientIdentity) -> bool {
-        match OiClient::connect(addr, ClientAuth::TrustAny, identity, Actor::default()).await {
-            Err(_) => false,
-            Ok(client) => {
-                let closed = client.connection().closed();
-                // If the server accepted us it holds the connection open and
-                // this times out; if it rejected us the close arrives promptly.
-                tokio::time::timeout(Duration::from_secs(2), closed)
-                    .await
-                    .is_err()
-            }
-        }
-    }
-
-    // i[transport.client-auth]
-    // A hostile client presenting a key the daemon does not trust must not
-    // obtain a usable connection, while a trusted key is admitted.
-    #[tokio::test]
-    async fn rejects_untrusted_client_key_and_admits_trusted() {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-
-        let authorized = ClientIdentity::ephemeral();
-        let stranger = ClientIdentity::ephemeral();
-
-        let trusted = new_trusted_keys();
-        trusted.write().insert(authorized.fingerprint.clone());
-
-        let addr = spawn_oi_server(trusted);
-
-        assert!(
-            connection_admitted(addr, &authorized).await,
-            "trusted client should obtain an open connection"
-        );
-        assert!(
-            !connection_admitted(addr, &stranger).await,
-            "untrusted client must be rejected at the auth boundary"
-        );
-    }
 }

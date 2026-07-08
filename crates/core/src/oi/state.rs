@@ -8,14 +8,28 @@ use std::{
 use parking_lot::RwLock;
 
 use crate::runtime::apps::AppRegistry;
+use crate::transport::TransportState;
 
 use super::forwards::ForwardRegistry;
 
 /// Shared state for all OI request handlers.
 pub struct OiState {
+    /// Node-wide transport state. Owns the canonical SPKI fingerprint,
+    /// the per-ALPN trust registry, and the ALPN handler dispatch table;
+    /// the relevant fields are also Arc-shared into this struct's
+    /// `spki_fingerprint` and `trusted_keys` so existing handler code can
+    /// continue to access them without indirection.
+    pub transport: Arc<TransportState>,
+    /// Sibling grove state, attached after construction so its handler
+    /// closures can reach it. Set once at daemon startup, after both
+    /// `OiState` and `GroveState` have been built; never changes after.
+    pub grove: OnceLock<Arc<crate::grove::GroveState>>,
     pub registry: Arc<RwLock<AppRegistry>>,
-    /// Set once by the server after key generation; never changes after that.
-    pub spki_fingerprint: OnceLock<String>,
+    /// Server SPKI SHA-256 fingerprint. Set once by the transport endpoint
+    /// after key generation; never changes after that. Arc-shared with
+    /// [`TransportState::spki_fingerprint`] so a set in one is visible to
+    /// the other.
+    pub spki_fingerprint: Arc<OnceLock<String>>,
     pub start_time: Instant,
     pub db: crate::runtime::db::DbHandle,
     pub scheduler: Arc<parking_lot::Mutex<crate::runtime::Scheduler>>,
