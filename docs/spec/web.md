@@ -242,6 +242,8 @@ Absent specification bugs, anything not defined here is either defined in anothe
 
 > w[bind]
 > The web interface may be configured to listen on one or more addresses.
-> The plain-HTTP listener and the WebTransport listener share the same set of configured addresses but use independent ports.
+> The plain-HTTP listener and the WebTransport listener use independent ports.
+> The WebTransport listener may be configured to bind a different set of addresses than the HTTP listener: WebTransport cannot be carried by an HTTP-terminating reverse proxy, so a deployment that fronts the HTTP listener with such a proxy bound to loopback must still be able to expose the WebTransport listener directly to clients.
+> When the WebTransport addresses are not separately configured, both listeners share the same set of addresses.
 > When no addresses are explicitly configured, both listeners bind to a loopback address only.
 > Failure to bind any configured address at startup is a fatal error.

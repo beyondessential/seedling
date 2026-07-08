@@ -72,10 +72,12 @@ fingerprint (trust-on-first-use). You can read it ahead of time from
 credentials are already bootstrapped — the package pre-generated
 `/var/lib/seedling/web.key`, authorised that key in
 `/var/lib/seedling/authorized_keys`, and the unit pins the daemon from
-`/var/lib/seedling/oi.fingerprint`. It binds loopback only and authenticates
-operators via Tailscale identity headers (`--trust-tailscale-headers`), so out
-of the box it runs but is not reachable from anywhere until you put a front-end
-in front of it.
+`/var/lib/seedling/oi.fingerprint`. Its HTTP listener binds loopback only and
+authenticates operators via Tailscale identity headers
+(`--trust-tailscale-headers`), so out of the box it runs but the HTTP interface
+is not reachable until you put a front-end in front of it. Its WebTransport
+listener is bound separately on the tailnet (`--wt-interface lo,tailscale0`) —
+see below.
 
 ### Tailscale (default)
 
@@ -97,8 +99,18 @@ it is safe to leave enabled. To stop exposing the interface,
 `systemctl disable --now seedling-web-tailscale-serve.service` (which runs
 `tailscale serve --https=7895 off`).
 
-Only loopback and the local `tailscale serve` reach the web port, so the trusted
+Only loopback and the local `tailscale serve` reach the HTTP port, so the trusted
 identity headers cannot be spoofed by tailnet peers.
+
+WebTransport (used for the live session) is HTTP/3 over QUIC and **cannot** be
+carried by `tailscale serve` (a TCP HTTP proxy), so the browser connects to it
+directly at `<node>.<tailnet>.ts.net:7893`. The unit binds it there with
+`--wt-interface lo,tailscale0`; it is gated by a per-session token and pins the
+server certificate, so exposing it on the tailnet is safe without header trust.
+`tailscale0` is only bound when tailscaled is already up, so **restart
+`seedling-web` after bringing Tailscale online** (`sudo systemctl restart
+seedling-web.service`) — otherwise the browser reaches the login page but the
+session can't connect and falls back to the password prompt.
 
 ### Password login (alternative)
 
@@ -112,8 +124,10 @@ printf '%s' 'your-password' | argon2 "$(head -c16 /dev/urandom | base64)" -id -e
 
 Paste the resulting `$argon2id$...` string as `password_hash` under `[auth]`,
 drop `--trust-tailscale-headers` with a drop-in, bind a reachable interface, and
-front it with a TLS-terminating reverse proxy (WebTransport requires a secure
-context):
+front the HTTP port with a TLS-terminating reverse proxy (WebTransport requires a
+secure context). Note the WebTransport port cannot go through that proxy either,
+so bind it on the reachable interface too (`--wt-interface eth0`, or
+`--wt-listen`); the browser connects to it directly on `:7893`:
 
 ```bash
 sudo systemctl edit seedling-web.service
@@ -122,7 +136,7 @@ sudo systemctl edit seedling-web.service
 # ExecStart=/usr/bin/seedling-web --config /etc/seedling/web.toml \
 #     --daemon-fingerprint-file /var/lib/seedling/oi.fingerprint \
 #     --key-file /var/lib/seedling/web.key \
-#     --interface eth0
+#     --interface eth0 --wt-interface eth0
 ```
 
 ## Standalone binaries (no APT)
