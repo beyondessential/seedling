@@ -853,3 +853,189 @@ fn uninstall_tears_down_all_scaled_instances() {
             .all(|r| r.desired == LifecycleState::Unscheduled)
     );
 }
+
+// -----------------------------------------------------------------------
+// Stopped resources
+// -----------------------------------------------------------------------
+
+// i[verify resource.stop]
+#[test]
+fn stopped_singleton_resource_is_desired_at_unscheduled() {
+    use crate::defs::volume::Volume;
+
+    let mut app_def = make_app_def(&["web"]);
+    let vol_name = Arc::new("data".to_owned());
+    app_def.resources.insert(
+        ResourceId {
+            kind: ResourceKind::Volume,
+            name: vol_name.clone(),
+        },
+        Resource::Volume(Volume::new(Some(vol_name))),
+    );
+
+    let registry = EphemeralInstanceRegistry::new();
+    let scales = default_effective_scales(&app_def);
+    let mut stopped = StoppedSet::new();
+    stopped.insert((ResourceKind::Volume, "data".to_owned()));
+
+    let state = compute(
+        &app_name("myapp"),
+        &app_def,
+        None,
+        &registry,
+        &scales,
+        &stopped,
+    )
+    .unwrap();
+
+    let map = to_map(state);
+    assert_eq!(map["data"], LifecycleState::Unscheduled);
+    assert_eq!(map["web"], LifecycleState::Ready, "unstopped stays Ready");
+}
+
+// i[verify resource.stop]
+#[test]
+fn stopped_deployment_scales_to_zero_unscheduling_existing_instances() {
+    let app_def = make_app_def_scaled(&[("web", 1..5)]);
+    let registry = EphemeralInstanceRegistry::new();
+    let scales = custom_effective_scales(&[("web", 1, 5, 2)]);
+
+    // First tick creates two Ready instances.
+    let state = compute(
+        &app_name("myapp"),
+        &app_def,
+        None,
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
+    assert_eq!(state.resources.len(), 2);
+
+    // Stopping the deployment turns every existing instance into excess.
+    let mut stopped = StoppedSet::new();
+    stopped.insert((ResourceKind::Deployment, "web".to_owned()));
+    let state = compute(
+        &app_name("myapp"),
+        &app_def,
+        None,
+        &registry,
+        &scales,
+        &stopped,
+    )
+    .unwrap();
+    assert_eq!(state.resources.len(), 2);
+    assert!(
+        state
+            .resources
+            .iter()
+            .all(|r| r.desired == LifecycleState::Unscheduled)
+    );
+}
+
+// -----------------------------------------------------------------------
+// from_log — non-lifecycle call kinds
+// -----------------------------------------------------------------------
+
+// r[verify actuate.ingress.warm-certs]
+#[test]
+fn from_log_warm_certs_records_hostnames_without_touching_desired_state() {
+    let ingress = ResourceInstance::new_singleton(
+        app_name("myapp"),
+        ResourceKind::Ingress,
+        "warm.example.com",
+    );
+    let progress = OperationProgress::from_log(&[log_entry(CallKind::WarmCerts, vec![ingress])]);
+
+    assert!(
+        progress.is_empty(),
+        "warm certs must not schedule any resources"
+    );
+    assert!(progress.warm_cert_hostnames.contains("warm.example.com"));
+}
+
+// r[verify desired-state.during-operation]
+#[test]
+fn from_log_ignores_transient_side_effect_kinds() {
+    let target = dep("myapp", "web");
+    let entries: Vec<ActionLogEntry> = [
+        CallKind::Query,
+        CallKind::WarmImages,
+        CallKind::Signal,
+        CallKind::Write,
+        CallKind::Exec,
+        CallKind::SubAction,
+    ]
+    .into_iter()
+    .map(|kind| log_entry(kind, vec![target.clone()]))
+    .collect();
+
+    let progress = OperationProgress::from_log(&entries);
+    assert!(progress.is_empty());
+    assert!(progress.warm_cert_hostnames.is_empty());
+}
+
+// -----------------------------------------------------------------------
+// Dynamic resources
+// -----------------------------------------------------------------------
+
+// r[verify desired-state.during-operation]
+#[test]
+fn dynamic_resource_definition_comes_from_operation_progress() {
+    let app_def = make_app_def(&["web"]);
+    let (_, dynamic_def) = make_deployment("ephemeral");
+    let instance = dep("myapp", "ephemeral");
+
+    let mut progress = OperationProgress::new();
+    progress.started_dynamic(instance.clone(), dynamic_def);
+
+    let registry = EphemeralInstanceRegistry::new();
+    let state = compute(
+        &app_name("myapp"),
+        &app_def,
+        Some(&progress),
+        &registry,
+        &default_effective_scales(&app_def),
+        &StoppedSet::new(),
+    )
+    .unwrap();
+
+    assert_eq!(state.resources.len(), 1);
+    assert_eq!(state.resources[0].instance, instance);
+    assert_eq!(state.resources[0].desired, LifecycleState::Ready);
+    assert!(matches!(
+        state.resources[0].definition,
+        Resource::Deployment(_)
+    ));
+}
+
+#[test]
+fn dynamic_resource_records_round_trip_in_db() {
+    use crate::runtime::db::Db;
+
+    let db = Db::open_in_memory().expect("open");
+    let inst_a = dep("app-a", "scratch");
+    let inst_b = dep("app-b", "other");
+    insert_dynamic_resource(&db, &inst_a, "op-1", Some("scratch volume")).expect("insert a");
+    insert_dynamic_resource(&db, &inst_b, "op-2", None).expect("insert b");
+
+    let all = list_dynamic_resources(&db).expect("list all");
+    assert_eq!(all.len(), 2);
+
+    let for_a = list_dynamic_resources_for_app(&db, &app_name("app-a")).expect("list a");
+    assert_eq!(for_a.len(), 1);
+    assert_eq!(for_a[0].instance_id, inst_a.id.to_hex());
+    assert_eq!(for_a[0].operation_id, "op-1");
+    assert_eq!(for_a[0].resource_name.as_deref(), Some("scratch"));
+    assert_eq!(for_a[0].description.as_deref(), Some("scratch volume"));
+
+    delete_dynamic_resource(&db, &inst_a.id.to_hex()).expect("delete one");
+    assert!(
+        list_dynamic_resources_for_app(&db, &app_name("app-a"))
+            .expect("list a")
+            .is_empty()
+    );
+
+    delete_dynamic_resources_for_operation(&db, "op-2").expect("delete op");
+    assert!(list_dynamic_resources(&db).expect("list all").is_empty());
+}

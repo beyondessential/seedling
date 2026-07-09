@@ -23,8 +23,14 @@ fn upsert_and_load_round_trip_with_ciphertext_at_rest() {
     let db = Db::open_in_memory().expect("open");
     let cipher = Cipher::for_tests();
 
-    upsert_secret_param(&db, &cipher, &app("myapp"), &param("apikey"), &secret("hunter2"))
-        .expect("upsert");
+    upsert_secret_param(
+        &db,
+        &cipher,
+        &app("myapp"),
+        &param("apikey"),
+        &secret("hunter2"),
+    )
+    .expect("upsert");
 
     let loaded = load_secret_params_for_app(&db, &cipher, &app("myapp")).expect("load");
     assert_eq!(loaded.get("apikey").map(String::as_str), Some("hunter2"));
@@ -51,10 +57,22 @@ fn upsert_replaces_existing_value() {
     let db = Db::open_in_memory().expect("open");
     let cipher = Cipher::for_tests();
 
-    upsert_secret_param(&db, &cipher, &app("myapp"), &param("apikey"), &secret("old"))
-        .expect("first upsert");
-    upsert_secret_param(&db, &cipher, &app("myapp"), &param("apikey"), &secret("new"))
-        .expect("second upsert");
+    upsert_secret_param(
+        &db,
+        &cipher,
+        &app("myapp"),
+        &param("apikey"),
+        &secret("old"),
+    )
+    .expect("first upsert");
+    upsert_secret_param(
+        &db,
+        &cipher,
+        &app("myapp"),
+        &param("apikey"),
+        &secret("new"),
+    )
+    .expect("second upsert");
 
     let loaded = load_secret_params_for_app(&db, &cipher, &app("myapp")).expect("load");
     assert_eq!(loaded.get("apikey").map(String::as_str), Some("new"));
