@@ -150,8 +150,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 > | `requirements_invalid` | Install requirements failed validation; per-field errors are included in `message`. |
 > | `script_error` | The BSL script failed to parse or evaluate; detail is included in `message`. |
 > | `deregistering` | The app is in the `Deregistering` state. |
-> | `unauthorized` | The client's key is not in the authorized set, or the operation is not permitted. |
 > | `server_busy` | The server's stream concurrency limit has been reached; the client should retry after a delay. |
+> | `internal` | An unexpected server-side failure (for example a database error) prevented the request from completing. |
+> | `backup_app_in_use` | The backup app cannot be deregistered because a backup strategy still references it. |
 
 # Status
 
