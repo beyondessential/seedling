@@ -81,9 +81,12 @@ const empty = {
 /** Find the actual <button> under an ActionButton's tooltip label (the
  *  aria-label lands on the wrapping span, not the button element). */
 function iconButton(scope: HTMLElement, label: string): HTMLButtonElement {
-  const span = within(scope).getByLabelText(label);
-  const btn = span.querySelector("button");
-  if (!btn) throw new Error(`no button under tooltip label "${label}"`);
+  const holder = within(scope).getByLabelText(label);
+  const btn =
+    holder.tagName === "BUTTON"
+      ? (holder as HTMLButtonElement)
+      : holder.querySelector("button");
+  if (!btn) throw new Error(`no button labelled "${label}"`);
   return btn;
 }
 

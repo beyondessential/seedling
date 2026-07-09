@@ -27,12 +27,9 @@ function callsTo(request: ReturnType<typeof mount>["request"], method: string) {
   return request.mock.calls.filter((c) => c[0] === method);
 }
 
-/** Inner button of an IconActionButton, addressed by its tooltip label
- *  (the Tooltip puts the title on the wrapping span as aria-label). */
+/** Inner button of an IconActionButton, addressed by its accessible name. */
 function iconButton(label: string): HTMLButtonElement {
-  return within(screen.getByLabelText(label)).getByRole(
-    "button",
-  ) as HTMLButtonElement;
+  return screen.getByRole("button", { name: label }) as HTMLButtonElement;
 }
 
 describe("AppDetail params", () => {
@@ -66,7 +63,7 @@ describe("AppDetail params", () => {
   it("sets a param from the edit row", async () => {
     const { request } = mount(baseFixtures(makeDetail()), "write");
     expect(await screen.findByText("domain")).toBeTruthy();
-    fireEvent.click(within(screen.getAllByLabelText("Edit")[0]).getByRole("button"));
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
     const input = screen.getByDisplayValue("example.com");
     fireEvent.change(input, { target: { value: "shop.example.com" } });
     fireEvent.keyDown(input, { key: "Enter" });

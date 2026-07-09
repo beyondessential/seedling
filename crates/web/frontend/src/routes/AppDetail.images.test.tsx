@@ -56,9 +56,9 @@ describe("AppDetail images", () => {
     expect(screen.getByText("pinned")).toBeTruthy();
     expect(screen.getByText("150.0 MiB")).toBeTruthy();
     // In-use images cannot be removed.
-    const remove = within(
-      screen.getByLabelText("Cannot remove: image is in use"),
-    ).getByRole("button") as HTMLButtonElement;
+    const remove = screen.getByRole("button", {
+      name: "Cannot remove: image is in use",
+    }) as HTMLButtonElement;
     expect(remove.disabled).toBe(true);
     // Clear all pins goes through a confirm dialog.
     fireEvent.click(screen.getByRole("button", { name: "Clear all pins" }));
@@ -90,9 +90,7 @@ describe("AppDetail images", () => {
     };
     const { request } = mount(fixtures, "dangerous");
     expect(await screen.findByText("ghcr.io/acme/tool:2")).toBeTruthy();
-    fireEvent.click(
-      within(screen.getByLabelText("Remove")).getByRole("button"),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
     const dialog = await screen.findByRole("dialog");
     expect(
       within(dialog).getByText(
