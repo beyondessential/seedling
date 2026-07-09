@@ -14,6 +14,9 @@ use crate::{
     runtime::{backup_apps, backup_execution, backup_strategies, barrier::OperationId, faults},
 };
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Deserialize)]
 pub(crate) struct RegisterBackupAppParams {
     pub app: AppName,
