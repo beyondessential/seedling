@@ -1832,3 +1832,6 @@ impl ScaleEventCtx {
         });
     }
 }
+
+#[cfg(test)]
+mod tests;
