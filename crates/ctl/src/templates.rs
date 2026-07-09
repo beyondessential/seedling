@@ -177,3 +177,56 @@ fn read_script_file(path: &PathBuf) -> String {
         std::process::exit(1);
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    #[derive(Parser)]
+    struct TestCli {
+        #[command(subcommand)]
+        cmd: TemplatesCommand,
+    }
+
+    #[test]
+    fn preview_rejects_both_name_and_file() {
+        assert!(
+            TestCli::try_parse_from(["test", "preview", "mytpl", "--file", "script.bsl"]).is_err()
+        );
+        let cli = TestCli::try_parse_from(["test", "preview", "--file", "script.bsl"]).unwrap();
+        let TemplatesCommand::Preview { name, file } = cli.cmd else {
+            panic!("expected Preview");
+        };
+        assert_eq!(name, None);
+        assert_eq!(file, Some(PathBuf::from("script.bsl")));
+    }
+
+    #[test]
+    fn update_rejects_description_together_with_clear() {
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "update",
+                "mytpl",
+                "--description",
+                "d",
+                "--clear-description",
+            ])
+            .is_err()
+        );
+        let cli =
+            TestCli::try_parse_from(["test", "update", "mytpl", "--clear-description"]).unwrap();
+        let TemplatesCommand::Update {
+            description,
+            clear_description,
+            ..
+        } = cli.cmd
+        else {
+            panic!("expected Update");
+        };
+        assert_eq!(description, None);
+        assert!(clear_description);
+    }
+}
