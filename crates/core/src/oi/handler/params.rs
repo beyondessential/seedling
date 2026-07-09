@@ -425,3 +425,6 @@ pub(crate) fn unset_param(
     tracing::info!(app = %app, param = %param_name, generation, schedule, "unset_param");
     Ok(json!({ "schedule": schedule, "generation": generation }))
 }
+
+#[cfg(test)]
+mod tests;
