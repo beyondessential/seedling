@@ -40,7 +40,7 @@ import {
 } from "../components/ActionButton";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useEventRefresh } from "../hooks/useEventRefresh";
-import { useOiQuery } from "../hooks/useOi";
+import { invalidateOiQueryCache, useOiQuery } from "../hooks/useOi";
 import { useOiAction } from "../hooks/useOiAction";
 import type {
   AppSummary,
@@ -56,6 +56,10 @@ import { BACKUP_SCHEDULES } from "../lib/types";
 const BACKUP_STRATEGY_EVENTS: Set<string> = new Set([
   "OperationStarted", "OperationCompleted", "OperationFailed",
 ]);
+
+function matchesSaveSnapshot(ev: SeedlingEvent): boolean {
+  return BACKUP_STRATEGY_EVENTS.has(ev.type) && ev.action_name === "save-snapshot";
+}
 
 // Listing snapshots invokes the backup app out-of-process and can take the
 // better part of a minute. Snapshot sets change rarely during a session, so we
@@ -102,6 +106,7 @@ function SnapshotsDialog({
     { strategy: strategy.name, volume },
     { cacheMs: SNAPSHOTS_CACHE_MS },
   );
+  useEventRefresh(refetch, matchesSaveSnapshot);
 
   const { execute: doRestore, loading: restoring, error: restoreError } = useOiAction();
 
@@ -456,11 +461,14 @@ export default function Backups() {
 
   const refreshAll = () => { refetchStrat(); refetchApps(); };
 
-  const matchStrategy = useCallback(
-    (ev: SeedlingEvent) => BACKUP_STRATEGY_EVENTS.has(ev.type) && ev.action_name === "save-snapshot",
-    [],
-  );
-  useEventRefresh(refetchStrat, matchStrategy);
+  const refreshOnSnapshot = useCallback(() => {
+    // A backup run changes the snapshot sets, so any cached snapshot
+    // listings are stale: drop them, or a reopened snapshots dialog would
+    // serve the pre-backup cache for the rest of its TTL.
+    invalidateOiQueryCache("/backups/snapshots/list");
+    refetchStrat();
+  }, [refetchStrat]);
+  useEventRefresh(refreshOnSnapshot, matchesSaveSnapshot);
 
   const handleRun = async (strategyName: string) => {
     const res = await doRun("/backups/run", { strategy: strategyName }) as BackupRunResult[] | null;
