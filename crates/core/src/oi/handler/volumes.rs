@@ -7,6 +7,9 @@ use serde_json::json;
 
 use crate::oi::{handler::RequestCtx, state::OiState};
 
+#[cfg(test)]
+mod tests;
+
 pub(crate) fn list_held(state: &OiState) -> HandlerResult {
     let held = state.driver.volume_store.list_held().map_err(|e| {
         OiError::new(

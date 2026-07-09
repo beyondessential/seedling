@@ -483,6 +483,167 @@ fn reload_replaces_script_on_existing_entry() {
     assert!(entry.script_error.is_none());
 }
 
+// -----------------------------------------------------------------------
+// Persistence — registered_apps round-trips
+// -----------------------------------------------------------------------
+
+// i[verify app.persist]
+#[test]
+fn persist_and_load_round_trips_phase_and_generation() {
+    let db = Db::open_in_memory().expect("open");
+    let generation =
+        generations::bump_register(&db, &app("myapp"), trivial_script()).expect("bump register");
+
+    let mut entry = make_entry("myapp", None);
+    entry.script = trivial_script().to_owned();
+    entry.current_generation = generation;
+    *entry.phase.lock() = AppPhase::Installed;
+    AppRegistry::persist_app(&db, &entry).expect("persist");
+
+    let cipher = crate::runtime::secrets::Cipher::for_tests();
+    let registry = AppRegistry::load_from_db(
+        &db,
+        &cipher,
+        Arc::new(Notify::new()),
+        &crate::ScriptLimits::default(),
+    )
+    .expect("load registry");
+
+    let loaded = registry.get("myapp").expect("app present after reload");
+    assert_eq!(*loaded.phase.lock(), AppPhase::Installed);
+    assert_eq!(loaded.current_generation, generation);
+    assert_eq!(loaded.script, trivial_script());
+}
+
+// i[verify app.persist]
+#[test]
+fn load_from_db_skips_apps_without_a_generation() {
+    let db = Db::open_in_memory().expect("open");
+    db.conn
+        .execute(
+            "INSERT INTO registered_apps (name, installed, uninstalling, current_generation) \
+             VALUES ('broken', 0, 0, 0)",
+            [],
+        )
+        .expect("insert app");
+
+    let cipher = crate::runtime::secrets::Cipher::for_tests();
+    let registry = AppRegistry::load_from_db(
+        &db,
+        &cipher,
+        Arc::new(Notify::new()),
+        &crate::ScriptLimits::default(),
+    )
+    .expect("load registry");
+    assert!(!registry.is_registered("broken"));
+}
+
+// i[verify app.deregister]
+#[test]
+fn remove_app_deletes_persisted_row() {
+    let db = Db::open_in_memory().expect("open");
+    let generation =
+        generations::bump_register(&db, &app("myapp"), trivial_script()).expect("bump register");
+    let mut entry = make_entry("myapp", None);
+    entry.current_generation = generation;
+    AppRegistry::persist_app(&db, &entry).expect("persist");
+
+    AppRegistry::remove_app(&db, &app("myapp")).expect("remove");
+
+    let count: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM registered_apps WHERE name = 'myapp'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count");
+    assert_eq!(count, 0);
+}
+
+// i[verify app.status]
+#[test]
+fn transition_phase_updates_shared_state_and_db() {
+    let db = Db::open_in_memory().expect("open");
+    let entry = make_entry("myapp", None);
+    AppRegistry::persist_app(&db, &entry).expect("persist");
+
+    transition_phase(&entry.phase, AppPhase::Installing, &db, &app("myapp"), "");
+
+    assert_eq!(*entry.phase.lock(), AppPhase::Installing);
+    let (installed, uninstalling, installing): (bool, bool, bool) = db
+        .conn
+        .query_row(
+            "SELECT installed, uninstalling, installing FROM registered_apps WHERE name = 'myapp'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .expect("row");
+    assert_eq!((installed, uninstalling, installing), (false, false, true));
+}
+
+// i[verify app.generation]
+#[test]
+fn script_retrieval_tracks_generation_bumps() {
+    let db = Db::open_in_memory().expect("open");
+    db.conn
+        .execute(
+            "INSERT INTO registered_apps (name, installed, uninstalling, current_generation) \
+             VALUES ('myapp', 0, 0, 0)",
+            [],
+        )
+        .expect("insert app");
+    let old_script = r#"app.deployment("web").image("docker.io/library/nginx:1.25");"#;
+    let new_script = r#"app.deployment("web").image("docker.io/library/nginx:1.26");"#;
+
+    let first = generations::bump_register(&db, &app("myapp"), old_script).expect("bump 1");
+    let second = generations::bump_script_update(&db, &app("myapp"), new_script).expect("bump 2");
+    assert!(second > first, "generations are monotonic");
+
+    assert_eq!(
+        get_script_at_generation(&db, &app("myapp"), first)
+            .expect("get old")
+            .as_deref(),
+        Some(old_script)
+    );
+    let (current_gen, current_script) = get_current_script(&db, &app("myapp"))
+        .expect("get current")
+        .expect("current script present");
+    assert_eq!(current_gen, second);
+    assert_eq!(current_script, new_script);
+}
+
+// i[verify app.generation]
+#[test]
+fn script_retrieval_returns_none_for_unknown_app() {
+    let db = Db::open_in_memory().expect("open");
+    assert!(
+        get_current_script(&db, &app("ghost"))
+            .expect("get current")
+            .is_none()
+    );
+    assert!(
+        get_script_at_generation(&db, &app("ghost"), 1)
+            .expect("get at generation")
+            .is_none()
+    );
+}
+
+// r[verify generation.previous]
+#[test]
+fn script_at_later_generation_resolves_to_most_recent_script() {
+    // Param-set bumps do not change the script, so the script "at" a later
+    // generation is the most recent Register/ScriptUpdate at or before it.
+    let db = Db::open_in_memory().expect("open");
+    generations::bump_register(&db, &app("myapp"), trivial_script()).expect("bump");
+    assert_eq!(
+        get_script_at_generation(&db, &app("myapp"), 5)
+            .expect("get")
+            .as_deref(),
+        Some(trivial_script())
+    );
+}
+
 // i[verify app.update]
 #[test]
 fn reload_of_unknown_app_is_noop() {

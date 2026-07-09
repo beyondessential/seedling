@@ -320,3 +320,36 @@ pub async fn forward_port(
     // Close the control stream to signal forward teardown to the server.
     let _ = ctrl_send.finish();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_bytes_scales_units() {
+        assert_eq!(format_bytes(512), "512 B");
+        assert_eq!(format_bytes(1536), "1.5 KiB");
+        assert_eq!(format_bytes(5 * 1024 * 1024), "5.0 MiB");
+        assert_eq!(format_bytes(3 * 1024 * 1024 * 1024), "3.0 GiB");
+    }
+
+    #[test]
+    fn drains_complete_lines_and_keeps_partial_tail() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(br#"{"status":{"level":"error","message":"backend gone"}}"#);
+        buf.push(b'\n');
+        buf.extend_from_slice(b"not json at all\n");
+        buf.extend_from_slice(br#"{"other":"no status field"}"#);
+        buf.push(b'\n');
+        buf.extend_from_slice(br#"{"status":{"level":"info","#);
+        drain_status_messages(&mut buf);
+        assert_eq!(buf, br#"{"status":{"level":"info","#);
+    }
+
+    #[test]
+    fn drain_is_a_no_op_without_newline() {
+        let mut buf = b"partial".to_vec();
+        drain_status_messages(&mut buf);
+        assert_eq!(buf, b"partial");
+    }
+}

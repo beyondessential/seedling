@@ -549,3 +549,302 @@ fn podman_args_omit_health_check_flags_when_absent() {
     let args = podman_args(&spec);
     assert!(!args.iter().any(|a| a.starts_with("--health-")));
 }
+
+// -----------------------------------------------------------------------
+// podman_args — mounts and entrypoint
+// -----------------------------------------------------------------------
+
+#[test]
+fn podman_args_tmpfs_and_bind_mounts() {
+    let mut spec = bare_spec();
+    spec.mounts = vec![
+        Mount {
+            source: MountSource::Tmpfs,
+            target: "/scratch".to_string(),
+            read_only: false,
+        },
+        Mount {
+            source: MountSource::Bind("/host/data".into()),
+            target: "/data".to_string(),
+            read_only: true,
+        },
+        Mount {
+            source: MountSource::Bind("/host/rw".into()),
+            target: "/rw".to_string(),
+            read_only: false,
+        },
+    ];
+
+    let args = podman_args(&spec);
+    let mount_pos = args.iter().position(|a| a == "--mount").unwrap();
+    assert_eq!(args[mount_pos + 1], "type=tmpfs,destination=/scratch");
+
+    let volume_args: Vec<&str> = args
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| *a == "--volume")
+        .map(|(i, _)| args[i + 1].as_str())
+        .collect();
+    assert_eq!(volume_args, ["/host/data:/data:ro", "/host/rw:/rw"]);
+}
+
+#[test]
+fn podman_args_entrypoint_override_clears_image_entrypoint() {
+    let mut spec = bare_spec();
+    spec.entrypoint = vec!["/bin/custom".to_string()];
+    spec.command = vec!["--flag".to_string()];
+
+    let args = podman_args(&spec);
+    let ep_pos = args.iter().position(|a| a == "--entrypoint").unwrap();
+    assert_eq!(args[ep_pos + 1], "[]");
+
+    // Entrypoint args come right after the image, followed by cmd args.
+    let image_pos = args.iter().position(|a| a == &spec.image).unwrap();
+    assert_eq!(&args[image_pos + 1..], &["/bin/custom", "--flag"]);
+}
+
+#[test]
+fn podman_args_no_entrypoint_flag_without_override() {
+    let mut spec = bare_spec();
+    spec.command = vec!["serve".to_string()];
+    let args = podman_args(&spec);
+    assert!(!args.iter().any(|a| a == "--entrypoint"));
+}
+
+// -----------------------------------------------------------------------
+// spec_from_pod — via deployment_spec
+// -----------------------------------------------------------------------
+
+fn make_instance(app: &str, name: &str) -> ResourceInstance {
+    use crate::defs::resource::ResourceKind;
+    use crate::runtime::identity::{InstanceId, InstanceVariant};
+
+    ResourceInstance {
+        id: InstanceId::generate(),
+        app: seedling_protocol::names::AppName::new(app).unwrap(),
+        kind: ResourceKind::Deployment,
+        name: Some(name.to_string()),
+        variant: InstanceVariant::Singleton,
+        display_name: format!("{app}-{name}"),
+    }
+}
+
+fn network() -> (String, Ipv6Net) {
+    (
+        "seedling-myapp-web".to_string(),
+        "fd5e:ed12:3456:0100::/64".parse().unwrap(),
+    )
+}
+
+fn spec_for_deployment(
+    def: &crate::defs::deployment::DeploymentDef,
+    mounts: &[(u16, Ipv6Addr, u16)],
+    volumes_dir: Option<&Path>,
+    external_volumes: &HashMap<ExternalVolumeName, ResolvedExternalMount>,
+    restart_gen: u64,
+) -> ContainerSpec {
+    deployment_spec(
+        def,
+        &make_instance("myapp", "web"),
+        &BTreeMap::new(),
+        &network(),
+        mounts,
+        &[],
+        volumes_dir,
+        external_volumes,
+        restart_gen,
+    )
+}
+
+// l[verify volume.external.dynamic]
+#[test]
+fn external_volume_resolution_prefers_operation_binding_then_static_mapping() {
+    use std::sync::Arc;
+
+    use crate::defs::container::VolumeMount;
+    use crate::defs::deployment::DeploymentDef;
+    use crate::defs::volume::{ExternalVolume, ExternalVolumeDef, OperationVolumeBinding};
+
+    fn ext_vol(name: &str, binding: Option<OperationVolumeBinding>) -> ExternalVolume {
+        ExternalVolume {
+            name: Arc::new(name.to_string()),
+            operation_binding: binding,
+            def: Arc::new(parking_lot::Mutex::new(ExternalVolumeDef::default())),
+        }
+    }
+
+    let def = DeploymentDef::default();
+    {
+        let pod = def.pod.lock();
+        let mut container = pod.container.lock();
+        container.image = Some("img".to_string());
+        container.volume_mounts.insert(
+            "/op".into(),
+            VolumeMount::ExternalVolume(ext_vol(
+                "bound",
+                Some(OperationVolumeBinding {
+                    host_path: "/run/op-bind".into(),
+                    read_only: true,
+                }),
+            )),
+        );
+        container.volume_mounts.insert(
+            "/static".into(),
+            VolumeMount::ExternalVolume(ext_vol("mapped", None)),
+        );
+        container.volume_mounts.insert(
+            "/unmapped".into(),
+            VolumeMount::ExternalVolume(ext_vol("ghost", None)),
+        );
+    }
+
+    let mut external_volumes = HashMap::new();
+    external_volumes.insert(
+        ExternalVolumeName::new_unchecked("mapped"),
+        ResolvedExternalMount {
+            source: MountSource::Bind("/srv/static".into()),
+            read_only: true,
+        },
+    );
+
+    let spec = spec_for_deployment(&def, &[], None, &external_volumes, 0);
+    let mount = |target: &str| {
+        spec.mounts
+            .iter()
+            .find(|m| m.target == target)
+            .unwrap_or_else(|| panic!("mount at {target}"))
+    };
+
+    // Operation-scoped binding wins even though no static mapping exists.
+    let op = mount("/op");
+    assert!(matches!(&op.source, MountSource::Bind(p) if p == Path::new("/run/op-bind")));
+    assert!(op.read_only);
+
+    // Static mapping applies when no operation binding is present.
+    let stat = mount("/static");
+    assert!(matches!(&stat.source, MountSource::Bind(p) if p == Path::new("/srv/static")));
+    assert!(stat.read_only);
+
+    // Unmapped external volumes fall back to a named podman volume.
+    let ghost = mount("/unmapped");
+    assert!(matches!(&ghost.source, MountSource::Volume(n) if n == "ghost"));
+    assert!(!ghost.read_only);
+}
+
+// r[verify actuate.volume.tmpfs]
+// r[verify actuate.volume.storage]
+#[test]
+fn volume_mount_sources_resolve_by_volume_kind() {
+    use std::sync::Arc;
+
+    use crate::defs::container::VolumeMount;
+    use crate::defs::deployment::DeploymentDef;
+    use crate::defs::volume::Volume;
+
+    let def = DeploymentDef::default();
+    {
+        let pod = def.pod.lock();
+        let mut container = pod.container.lock();
+        container.image = Some("img".to_string());
+
+        let tmpfs_vol = Volume::new(Some(Arc::new("cache".to_string())));
+        tmpfs_vol.def.lock().tmpfs = true;
+        container
+            .volume_mounts
+            .insert("/cache".into(), VolumeMount::Volume(tmpfs_vol));
+
+        container.volume_mounts.insert(
+            "/data".into(),
+            VolumeMount::Volume(Volume::new(Some(Arc::new("data".to_string())))),
+        );
+
+        container.volume_mounts.insert(
+            "/anon".into(),
+            VolumeMount::Volume(Volume::new_anonymous("anon-1234".to_string())),
+        );
+    }
+
+    let volumes_dir = Path::new("/var/lib/seedling/volumes");
+    let spec = spec_for_deployment(&def, &[], Some(volumes_dir), &HashMap::new(), 0);
+    let source = |target: &str| {
+        &spec
+            .mounts
+            .iter()
+            .find(|m| m.target == target)
+            .unwrap_or_else(|| panic!("mount at {target}"))
+            .source
+    };
+
+    // Tmpfs volumes bind from the tmpfs-backed host dir, even with a volumes_dir set.
+    let expected_tmpfs = std::path::PathBuf::from(crate::system::actuator::TMPFS_VOLUMES_DIR)
+        .join("myapp-volume-cache");
+    assert!(matches!(source("/cache"), MountSource::Bind(p) if *p == expected_tmpfs));
+
+    // Named volumes bind from the volumes dir using the canonical display name.
+    let expected_named = volumes_dir.join("myapp-volume-data");
+    assert!(matches!(source("/data"), MountSource::Bind(p) if *p == expected_named));
+
+    // Anonymous volumes stay podman-managed under their anon id.
+    assert!(matches!(source("/anon"), MountSource::Volume(n) if n == "anon-1234"));
+}
+
+// i[verify deployment.restart]
+#[test]
+fn restart_gen_label_is_set_only_when_positive() {
+    use crate::defs::deployment::DeploymentDef;
+
+    let def = DeploymentDef::default();
+    def.pod.lock().container.lock().image = Some("img".to_string());
+
+    let spec = spec_for_deployment(&def, &[], None, &HashMap::new(), 3);
+    assert_eq!(
+        spec.labels.get("seedling.restart-gen").map(String::as_str),
+        Some("3")
+    );
+
+    let spec = spec_for_deployment(&def, &[], None, &HashMap::new(), 0);
+    assert!(!spec.labels.contains_key("seedling.restart-gen"));
+}
+
+// l[verify deployment.healthcheck]
+#[test]
+fn pod_healthcheck_and_service_mounts_translate_into_spec() {
+    use crate::defs::container::{HealthcheckDef, HealthcheckKind, HealthcheckOnFailure};
+    use crate::defs::deployment::DeploymentDef;
+    use crate::system::translate::proxy::node_mount_addr;
+
+    let def = DeploymentDef::default();
+    {
+        let pod = def.pod.lock();
+        let mut container = pod.container.lock();
+        container.image = Some("img".to_string());
+        container.healthcheck = Some(HealthcheckDef {
+            kind: HealthcheckKind::Command {
+                cmd: vec!["/bin/check".to_string()],
+            },
+            interval_secs: 7,
+            timeout_secs: 3,
+            retries: 2,
+            start_period_secs: 15,
+            on_failure: HealthcheckOnFailure::Replace,
+        });
+    }
+
+    let mount_addr: Ipv6Addr = "fd5e:ed12:3456:100::2".parse().unwrap();
+    let spec = spec_for_deployment(&def, &[(80, mount_addr, 8080)], None, &HashMap::new(), 0);
+
+    let health = spec.health.as_ref().expect("healthcheck translated");
+    assert_eq!(health.command, ["/bin/check"]);
+    assert_eq!(health.interval, Duration::from_secs(7));
+    assert_eq!(health.timeout, Duration::from_secs(3));
+    assert_eq!(health.retries, 2);
+    assert_eq!(health.start_period, Duration::from_secs(15));
+
+    // A pod with service mounts gets the `localmount` host entry pointing at
+    // the node-side mount endpoint.
+    let expected = node_mount_addr(&network().1);
+    assert_eq!(
+        spec.hosts,
+        vec![("localmount".to_string(), IpAddr::V6(expected))]
+    );
+}

@@ -97,3 +97,6 @@ pub fn migrate_to_secret(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

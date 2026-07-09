@@ -45,3 +45,32 @@ impl OiError {
 }
 
 pub type HandlerResult = Result<serde_json::Value, OiError>;
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    // i[verify wire.error-codes]
+    #[test]
+    fn error_codes_serialise_as_snake_case_strings() {
+        let cases = [
+            (ErrorCode::NotFound, "not_found"),
+            (ErrorCode::NotInstalled, "not_installed"),
+            (ErrorCode::AlreadyInstalled, "already_installed"),
+            (ErrorCode::InstallInProgress, "install_in_progress"),
+            (ErrorCode::OperationInProgress, "operation_in_progress"),
+            (ErrorCode::AlreadyQueued, "already_queued"),
+            (ErrorCode::RequirementsInvalid, "requirements_invalid"),
+            (ErrorCode::ScriptError, "script_error"),
+            (ErrorCode::Deregistering, "deregistering"),
+            (ErrorCode::ServerBusy, "server_busy"),
+            (ErrorCode::Internal, "internal"),
+            (ErrorCode::BackupAppInUse, "backup_app_in_use"),
+        ];
+        for (code, expected) in cases {
+            assert_eq!(serde_json::to_value(code).unwrap(), json!(expected));
+        }
+    }
+}

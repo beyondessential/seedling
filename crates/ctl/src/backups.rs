@@ -336,3 +336,60 @@ async fn check_missing_volumes(client: &OiClient, volumes: &[String]) -> Option<
         Some(missing.join(", "))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    #[derive(Parser)]
+    struct TestCli {
+        #[command(subcommand)]
+        cmd: BackupStrategiesCommand,
+    }
+
+    #[test]
+    fn strategy_create_collects_repeated_volume_flags() {
+        let cli = TestCli::try_parse_from([
+            "test",
+            "create",
+            "--name",
+            "daily",
+            "--via",
+            "restic",
+            "--schedule",
+            "every day",
+            "--volume",
+            "myapp/data",
+            "--volume",
+            "_site/shared",
+        ])
+        .unwrap();
+        let BackupStrategiesCommand::Create {
+            name,
+            via,
+            schedule,
+            volumes,
+            allow_missing,
+        } = cli.cmd
+        else {
+            panic!("expected Create");
+        };
+        assert_eq!(name.to_string(), "daily");
+        assert_eq!(via.to_string(), "restic");
+        assert_eq!(schedule, "every day");
+        assert_eq!(volumes, ["myapp/data", "_site/shared"]);
+        assert!(!allow_missing);
+    }
+
+    #[test]
+    fn strategy_update_distinguishes_absent_from_empty_volumes() {
+        let cli = TestCli::try_parse_from(["test", "update", "--name", "daily"]).unwrap();
+        let BackupStrategiesCommand::Update { volumes, via, .. } = cli.cmd else {
+            panic!("expected Update");
+        };
+        assert_eq!(volumes, None);
+        assert_eq!(via, None);
+    }
+}

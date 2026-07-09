@@ -63,3 +63,6 @@ pub(crate) fn clear_app_faults(state: &OiState, params: ClearAppFaultsParams) ->
         .map_err(|e| OiError::new(ErrorCode::Internal, format!("clear faults: {e}")))?;
     Ok(json!({ "app": app, "cleared": cleared }))
 }
+
+#[cfg(test)]
+mod tests;

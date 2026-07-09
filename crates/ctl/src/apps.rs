@@ -576,3 +576,58 @@ fn read_script_file(path: &PathBuf) -> String {
         std::process::exit(1);
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    #[derive(Parser)]
+    struct TestCli {
+        #[command(subcommand)]
+        cmd: AppsCommand,
+    }
+
+    // i[verify ctl.action.params]
+    // i[verify ctl.shell.params]
+    #[test]
+    fn positional_params_map_pairs_and_bare_keys() {
+        let map = parse_positional_params(&[
+            "key=value".to_owned(),
+            "verbose".to_owned(),
+            "empty=".to_owned(),
+        ]);
+        assert_eq!(map["key"], serde_json::json!("value"));
+        assert_eq!(map["verbose"], serde_json::json!(true));
+        assert_eq!(map["empty"], serde_json::json!(""));
+        assert!(parse_positional_params(&[]).is_empty());
+    }
+
+    // i[verify ctl.action.params]
+    #[test]
+    fn action_args_after_name_are_collected_as_params() {
+        let cli =
+            TestCli::try_parse_from(["test", "action", "myapp", "backup", "key=value", "verbose"])
+                .unwrap();
+        let AppsCommand::Action { app, name, params } = cli.cmd else {
+            panic!("expected Action");
+        };
+        assert_eq!(app.to_string(), "myapp");
+        assert_eq!(name.to_string(), "backup");
+        assert_eq!(params, ["key=value", "verbose"]);
+    }
+
+    #[test]
+    fn vol_id_parses_site_and_app_forms() {
+        assert_eq!(parse_vol_id("_site/data").unwrap(), ("_site", "data"));
+        assert_eq!(parse_vol_id("myapp/pgdata").unwrap(), ("myapp", "pgdata"));
+    }
+
+    #[test]
+    fn vol_id_rejects_malformed_input() {
+        assert!(parse_vol_id("noslash").is_err());
+        assert!(parse_vol_id("/data").is_err());
+        assert!(parse_vol_id("myapp/").is_err());
+    }
+}

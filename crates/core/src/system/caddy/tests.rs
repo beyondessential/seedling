@@ -439,3 +439,135 @@ fn cert_endpoint_url_without_subjects_emits_no_tls_app() {
     let json = build_caddy_config(&config);
     assert!(json["apps"]["tls"].is_null());
 }
+
+#[test]
+fn l4_routes_emit_layer4_servers_per_port_and_proto() {
+    use crate::system::types::{L4Proto, L4Route};
+
+    let config = ProxyConfig {
+        listeners: vec![],
+        virtual_hosts: vec![],
+        l4_routes: vec![
+            L4Route {
+                port: 5432,
+                proto: L4Proto::Tcp,
+                upstreams: vec!["[fd5e::1]:5432".to_string()],
+            },
+            L4Route {
+                port: 514,
+                proto: L4Proto::Udp,
+                upstreams: vec!["[fd5e::2]:514".to_string(), "[fd5e::3]:514".to_string()],
+            },
+        ],
+        warm_cert_hostnames: Default::default(),
+        cert_endpoint_url: None,
+    };
+    let json = build_caddy_config(&config);
+
+    let tcp = &json["apps"]["layer4"]["servers"]["l4_tcp_5432"];
+    assert_eq!(tcp["listen"][0], "tcp/:5432");
+    assert_eq!(
+        tcp["routes"][0]["handle"][0]["handler"], "proxy",
+        "layer4 uses the generic proxy handler"
+    );
+    assert_eq!(
+        tcp["routes"][0]["handle"][0]["upstreams"][0]["dial"][0],
+        "[fd5e::1]:5432"
+    );
+
+    let udp = &json["apps"]["layer4"]["servers"]["l4_udp_514"];
+    assert_eq!(udp["listen"][0], "udp/:514");
+    let upstreams = udp["routes"][0]["handle"][0]["upstreams"]
+        .as_array()
+        .expect("upstreams array");
+    assert_eq!(upstreams.len(), 2);
+}
+
+#[test]
+fn no_l4_routes_means_no_layer4_app() {
+    let json = build_caddy_config(&ProxyConfig::default());
+    assert!(json["apps"]["layer4"].is_null());
+}
+
+// r[verify ingress.site.attachment]
+#[test]
+fn redirect_handler_emits_static_response_with_and_without_path_preservation() {
+    let config = ProxyConfig {
+        listeners: vec![ProxyListener {
+            port: 443,
+            proto: ProxyListenerProto::Https,
+        }],
+        virtual_hosts: vec![VirtualHost {
+            hostname: "old.example.com".to_string(),
+            tls_acme: true,
+            redirect: None,
+            routes: vec![
+                ProxyRoute {
+                    prefix: "/".to_string(),
+                    handler: ProxyRouteHandler::Redirect {
+                        url: "https://new.example.com/".to_string(),
+                        code: 308,
+                        preserve_path: true,
+                    },
+                },
+                ProxyRoute {
+                    prefix: "/legacy".to_string(),
+                    handler: ProxyRouteHandler::Redirect {
+                        url: "https://archive.example.com/page".to_string(),
+                        code: 302,
+                        preserve_path: false,
+                    },
+                },
+            ],
+        }],
+        l4_routes: vec![],
+        warm_cert_hostnames: Default::default(),
+        cert_endpoint_url: None,
+    };
+    let json = build_caddy_config(&config);
+    let routes = json["apps"]["http"]["servers"]["seedling_https"]["routes"]
+        .as_array()
+        .expect("routes");
+
+    // Longest prefix first: /legacy before /.
+    let legacy = &routes[0]["handle"][0];
+    assert_eq!(legacy["handler"], "static_response");
+    assert_eq!(legacy["status_code"], 302);
+    assert_eq!(
+        legacy["headers"]["Location"][0], "https://archive.example.com/page",
+        "verbatim redirect must not append the request path"
+    );
+
+    let root = &routes[1]["handle"][0];
+    assert_eq!(root["status_code"], 308);
+    assert_eq!(
+        root["headers"]["Location"][0], "https://new.example.com{http.request.uri}",
+        "path-preserving redirect appends the request URI after trimming the trailing slash"
+    );
+}
+
+#[test]
+fn http_to_https_redirect_targets_nonstandard_https_port() {
+    let config = ProxyConfig {
+        listeners: vec![
+            ProxyListener {
+                port: 8443,
+                proto: ProxyListenerProto::Https,
+            },
+            ProxyListener {
+                port: 8080,
+                proto: ProxyListenerProto::Http,
+            },
+        ],
+        virtual_hosts: vec![https_vhost("example.com", "[fd5e::1]:3000")],
+        l4_routes: vec![],
+        warm_cert_hostnames: Default::default(),
+        cert_endpoint_url: None,
+    };
+    let json = build_caddy_config(&config);
+    let redirect = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"][0];
+    assert_eq!(
+        redirect["headers"]["Location"][0],
+        "https://{http.request.host}:8443{http.request.uri}"
+    );
+}

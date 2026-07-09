@@ -99,3 +99,6 @@ pub fn sync_registry_faults(db: &Db, entry: &AppEntry) {
         tracing::warn!(app = %entry.name, "failed to file {FAULT_KIND} fault: {e}");
     }
 }
+
+#[cfg(test)]
+mod tests;

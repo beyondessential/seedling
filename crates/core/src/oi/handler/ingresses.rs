@@ -11,6 +11,9 @@ use crate::runtime::site_ingresses::{
     self, DiscoveryProvider, SiteIngressDef, SiteIngressSource, TlsProvider,
 };
 
+#[cfg(test)]
+mod tests;
+
 /// Validate an operator-supplied hostname using the same shape as
 /// [`crate::defs::service::validate_hostname`] (which rejects wildcard
 /// labels, leading/trailing hyphens, and oversize labels). Site

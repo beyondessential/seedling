@@ -71,3 +71,6 @@ pub(crate) fn revoke_key(state: &OiState, params: RevokeKeyParams) -> HandlerRes
         )))
     }
 }
+
+#[cfg(test)]
+mod tests;

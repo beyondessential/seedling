@@ -493,3 +493,45 @@ fn read_config_arg(s: &str) -> Result<Value, String> {
         serde_json::from_str(s).map_err(|e| format!("parse inline JSON: {e}"))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    #[derive(Parser)]
+    struct TestCli {
+        #[command(subcommand)]
+        cmd: ConfigCommand,
+    }
+
+    #[test]
+    fn config_arg_accepts_inline_json() {
+        let v = read_config_arg(r#"{"region": "us-east-1"}"#).unwrap();
+        assert_eq!(v["region"], "us-east-1");
+    }
+
+    #[test]
+    fn config_arg_rejects_invalid_inline_json() {
+        let err = read_config_arg("{not json").unwrap_err();
+        assert!(err.contains("parse inline JSON"), "got: {err}");
+    }
+
+    #[test]
+    fn config_arg_reports_unreadable_file() {
+        let err = read_config_arg("@/nonexistent/seedling-test.json").unwrap_err();
+        assert!(err.starts_with("read "), "got: {err}");
+    }
+
+    #[test]
+    fn set_profile_name_and_clear_are_mutually_exclusive() {
+        assert!(TestCli::try_parse_from(["test", "set-profile", "shortlived", "--clear"]).is_err());
+        let cli = TestCli::try_parse_from(["test", "set-profile", "--clear"]).unwrap();
+        let ConfigCommand::SetProfile { name, clear } = cli.cmd else {
+            panic!("expected SetProfile");
+        };
+        assert!(clear);
+        assert_eq!(name, None);
+    }
+}
