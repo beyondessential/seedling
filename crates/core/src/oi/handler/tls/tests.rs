@@ -167,12 +167,18 @@ fn policy_set_list_clear_roundtrip() {
     assert!(msg.contains("referenced"), "{msg}");
 
     assert_eq!(
-        oi.call("/tls/policies/clear", json!({ "hostname": "*.example.com" }))
-            .unwrap()["ok"],
+        oi.call(
+            "/tls/policies/clear",
+            json!({ "hostname": "*.example.com" })
+        )
+        .unwrap()["ok"],
         true
     );
     let (code, _) = oi
-        .call("/tls/policies/clear", json!({ "hostname": "*.example.com" }))
+        .call(
+            "/tls/policies/clear",
+            json!({ "hostname": "*.example.com" }),
+        )
         .unwrap_err();
     assert_eq!(code, "not_found");
 
@@ -361,10 +367,7 @@ fn csr_flow_validation_errors() {
         )
         .unwrap();
     let active_id = uploaded["id"].as_i64().unwrap();
-    for method in [
-        "/tls/certificates/csr/get",
-        "/tls/certificates/csr/cancel",
-    ] {
+    for method in ["/tls/certificates/csr/get", "/tls/certificates/csr/cancel"] {
         let (code, msg) = oi.call(method, json!({ "id": active_id })).unwrap_err();
         assert_eq!(code, "requirements_invalid");
         assert!(msg.contains("active"), "{method}: {msg}");
@@ -434,7 +437,8 @@ fn hostname_and_attempt_rollups_start_empty() {
         json!([])
     );
     assert_eq!(
-        oi.call("/tls/certificates/attempts/list", json!({})).unwrap()["attempts"],
+        oi.call("/tls/certificates/attempts/list", json!({}))
+            .unwrap()["attempts"],
         json!([])
     );
 }

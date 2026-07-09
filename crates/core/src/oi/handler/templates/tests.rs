@@ -76,11 +76,8 @@ fn template_update_body_and_description() {
     .unwrap();
 
     assert_eq!(
-        oi.call(
-            "/templates/update",
-            json!({ "name": "demo", "body": "2;" }),
-        )
-        .unwrap()["updated"],
+        oi.call("/templates/update", json!({ "name": "demo", "body": "2;" }),)
+            .unwrap()["updated"],
         true
     );
     let shown = oi
@@ -101,7 +98,10 @@ fn template_update_body_and_description() {
     assert_eq!(shown["description"], json!(null));
 
     let (code, _) = oi
-        .call("/templates/update", json!({ "name": "ghost", "body": "2;" }))
+        .call(
+            "/templates/update",
+            json!({ "name": "ghost", "body": "2;" }),
+        )
         .unwrap_err();
     assert_eq!(code, "not_found");
 }

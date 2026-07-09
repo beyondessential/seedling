@@ -816,18 +816,28 @@ mod tests {
             "remote_host": "dns.example.com",
             "remote_port": 5353,
         });
-        assert_eq!(oi.call("/services/site/endpoint/add", ep.clone()).unwrap()["added"], true);
-        assert_eq!(site_services(&oi)[0]["endpoints"].as_array().unwrap().len(), 1);
-
         assert_eq!(
-            oi.call("/services/site/endpoint/remove", ep.clone()).unwrap()["removed"],
+            oi.call("/services/site/endpoint/add", ep.clone()).unwrap()["added"],
             true
         );
-        assert!(site_services(&oi)[0]["endpoints"].as_array().unwrap().is_empty());
+        assert_eq!(
+            site_services(&oi)[0]["endpoints"].as_array().unwrap().len(),
+            1
+        );
 
-        let (code, _) = oi
-            .call("/services/site/endpoint/remove", ep)
-            .unwrap_err();
+        assert_eq!(
+            oi.call("/services/site/endpoint/remove", ep.clone())
+                .unwrap()["removed"],
+            true
+        );
+        assert!(
+            site_services(&oi)[0]["endpoints"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+
+        let (code, _) = oi.call("/services/site/endpoint/remove", ep).unwrap_err();
         assert_eq!(code, "requirements_invalid");
     }
 
@@ -990,7 +1000,11 @@ mod tests {
             json!([])
         );
 
-        register_app(&oi, "web-app", r#"let auth = app.external_service("auth");"#);
+        register_app(
+            &oi,
+            "web-app",
+            r#"let auth = app.external_service("auth");"#,
+        );
         oi.call("/services/site/create", json!({ "name": "sso" }))
             .unwrap();
 

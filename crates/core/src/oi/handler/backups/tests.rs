@@ -9,8 +9,11 @@ const BACKUP_APP_SCRIPT: &str = r#"
 "#;
 
 fn register_backup_app(oi: &TestOi, name: &str) {
-    oi.call("/apps/create", json!({ "app": name, "script": BACKUP_APP_SCRIPT }))
-        .expect("app registration succeeds");
+    oi.call(
+        "/apps/create",
+        json!({ "app": name, "script": BACKUP_APP_SCRIPT }),
+    )
+    .expect("app registration succeeds");
     oi.call("/backups/apps/register", json!({ "app": name }))
         .expect("backup app registration succeeds");
 }
