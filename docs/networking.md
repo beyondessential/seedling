@@ -207,12 +207,14 @@ flows through Caddy, which runs in a container on the dual-stack
 `seedling-proxy` network. The proxy network has both an IPv6 /64
 (`fd5e:XXYY:ZZWW:ff00::/64`) and a fixed IPv4 /24 (`10.89.255.0/24`).
 
-Caddy uses a custom image (`localhost/seedling-caddy:latest`) built
+Caddy uses a custom image (`ghcr.io/beyondessential/seedling-caddy`) built
 with the [caddy-l4](https://github.com/mholt/caddy-l4) plugin,
-enabling it to proxy both HTTP and raw TCP/UDP streams. The
-Containerfile is at `Containerfile.caddy` in the repository root. If
-the image is not present locally, seedling builds it automatically
-from an embedded copy of the Containerfile on first startup.
+enabling it to proxy both HTTP and raw TCP/UDP streams. The image is
+prebuilt and published to GHCR by the `caddy-image` workflow (its
+Containerfile is under `docker/caddy/`); if the image is not present
+locally, seedling pulls it on first startup. It is not built on the host
+at runtime, so there is no Go toolchain, docker.io, or Go-proxy dependency
+at deploy time.
 
 Caddy runs in one of two container slots — `seedling-caddy-blue` and
 `seedling-caddy-green` — for blue/green upgrades. The active slot is

@@ -16,7 +16,10 @@ use crate::system::{
 
 pub(crate) const CADDY_BLUE: &str = "seedling-caddy-blue";
 pub(crate) const CADDY_GREEN: &str = "seedling-caddy-green";
-pub(crate) const CADDY_IMAGE: &str = "localhost/seedling-caddy:latest";
+// Prebuilt Caddy image (Caddy + caddy-l4), published to GHCR by the
+// caddy-image workflow and pulled at runtime — the daemon does not build it.
+// Keep this tag in sync with docker/caddy/Containerfile and the workflow.
+pub(crate) const CADDY_IMAGE: &str = "ghcr.io/beyondessential/seedling-caddy:2.11.3-l4.0.1.1";
 pub(crate) const CADDY_DATA_VOLUME: &str = "seedling-caddy-data";
 pub(crate) const PROXY_NETWORK: &str = "seedling-proxy";
 
@@ -39,12 +42,6 @@ fn socket_run_dir(data_dir: &Path, container_name: &str) -> PathBuf {
 pub(crate) fn admin_socket_path(data_dir: &Path, container_name: &str) -> PathBuf {
     socket_run_dir(data_dir, container_name).join("admin.sock")
 }
-
-const CADDY_CONTAINERFILE: &str = "\
-FROM docker.io/library/caddy:2.11.2-builder AS builder\n\
-RUN xcaddy build --with github.com/mholt/caddy-l4\n\
-FROM docker.io/library/caddy:2.11.2\n\
-COPY --from=builder /usr/bin/caddy /usr/bin/caddy\n";
 
 // r[impl infra.proxy.startup]
 /// Returns the /64 infrastructure prefix for the seedling-proxy network.
@@ -94,11 +91,6 @@ pub(crate) enum CaddyStartupError {
         reference: String,
         backtrace: snafu::Backtrace,
     },
-    #[snafu(display("image build failed: {message}"))]
-    Build {
-        message: String,
-        backtrace: snafu::Backtrace,
-    },
     #[snafu(display("failed to build caddy admin HTTP client: {source}"))]
     ClientBuild {
         source: reqwest::Error,
@@ -110,46 +102,6 @@ pub(crate) enum CaddyStartupError {
         source: super::proxy::CaddyError,
         backtrace: snafu::Backtrace,
     },
-}
-
-/// Build the custom Caddy image from the embedded Containerfile.
-async fn build_caddy_image(data_dir: &std::path::Path) -> Result<(), CaddyStartupError> {
-    let containerfile_path = data_dir.join("Containerfile.caddy");
-    std::fs::write(&containerfile_path, CADDY_CONTAINERFILE).context(IoSnafu)?;
-
-    // podman build needs a context directory; the Containerfile has no
-    // local COPY instructions so an empty temp dir suffices.
-    let context_dir = data_dir.join("caddy-build-ctx");
-    std::fs::create_dir_all(&context_dir).context(IoSnafu)?;
-
-    tracing::info!("building custom Caddy image (this may take a moment)");
-
-    let output = tokio::process::Command::new("podman")
-        .args([
-            "build",
-            // Run the build's RUN steps in the host network namespace so we can
-            // be fairly sure egress will work even if default podman net is broken.
-            "--network=host",
-            "-t",
-            CADDY_IMAGE,
-            "-f",
-            &containerfile_path.to_string_lossy(),
-            &context_dir.to_string_lossy(),
-        ])
-        .output()
-        .await
-        .context(IoSnafu)?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return BuildSnafu {
-            message: format!("podman build exited {}: {}", output.status, stderr.trim()),
-        }
-        .fail();
-    }
-
-    tracing::info!("custom Caddy image built successfully");
-    Ok(())
 }
 
 fn caddy_db_open(data_dir: &std::path::Path) -> Result<rusqlite::Connection, rusqlite::Error> {
@@ -473,13 +425,21 @@ pub(crate) async fn ensure_caddy_running(
         stop_slot(other, process, container).await;
     }
 
-    // 7. Ensure the image is present; build from embedded Containerfile if missing.
+    // 7. Ensure the image is present; pull the prebuilt image from the registry
+    //    if missing. The image is built and published out of band (see
+    //    docker/caddy + the caddy-image workflow); the daemon never builds it at
+    //    runtime, so there is no host Go toolchain / docker.io / Go-proxy
+    //    dependency at deploy time.
     if !container
         .image_exists(CADDY_IMAGE)
         .await
         .context(ContainerSnafu)?
     {
-        build_caddy_image(data_dir).await?;
+        tracing::info!(image = CADDY_IMAGE, "pulling Caddy image");
+        container
+            .pull_image(CADDY_IMAGE)
+            .await
+            .context(ContainerSnafu)?;
     }
 
     // 8. Get the desired image ID.

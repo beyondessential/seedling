@@ -1,0 +1,54 @@
+name: Caddy image
+
+# Builds the custom Caddy image (Caddy + caddy-l4) and publishes it to
+# ghcr.io/beyondessential/seedling-caddy. The daemon pulls this image at
+# runtime instead of compiling Caddy on the host — no runtime xcaddy build, no
+# docker.io / Go-proxy dependency at deploy time.
+#
+# Runs when the image definition changes, or on demand. The published tag must
+# match CADDY_IMAGE in crates/core/src/system/caddy/startup.rs.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - docker/caddy/**
+      - .github/workflows/caddy-image.yml
+  workflow_dispatch:
+
+concurrency:
+  group: caddy-image
+  cancel-in-progress: false
+
+env:
+  # Keep in sync with the Caddy base + caddy-l4 versions in
+  # docker/caddy/Containerfile and with CADDY_IMAGE in startup.rs.
+  TAG: "2.11.3-l4.0.1.1"
+
+jobs:
+  build:
+    name: Build and publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: docker/caddy
+          file: docker/caddy/Containerfile
+          # The daemon runs on both amd64 and arm64 hosts.
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/beyondessential/seedling-caddy:${{ env.TAG }}
+            ghcr.io/beyondessential/seedling-caddy:latest
