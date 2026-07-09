@@ -141,7 +141,7 @@ export default function Keys() {
                     {k.fingerprint}
                   </TableCell>
                   <TableCell>
-                    {k.added_at ? new Date(k.added_at).toLocaleString() : "—"}
+                    {k.added_at ? new Date(k.added_at * 1000).toLocaleString() : "—"}
                   </TableCell>
                   <TableCell align="right">
                     <IconActionButton
