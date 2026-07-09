@@ -7,8 +7,16 @@ import { AuthRequired, BackendUnreachable, connect } from "../lib/session";
 import Login from "./Login";
 
 vi.mock("../lib/session", () => {
-  class AuthRequired extends Error {}
-  class BackendUnreachable extends Error {}
+  class AuthRequired extends Error {
+    constructor() {
+      super("authentication required");
+    }
+  }
+  class BackendUnreachable extends Error {
+    constructor(detail: string) {
+      super(`backend unreachable: ${detail}`);
+    }
+  }
   return { AuthRequired, BackendUnreachable, connect: vi.fn() };
 });
 
@@ -34,7 +42,7 @@ describe("Login", () => {
   });
 
   it("shows an invalid-password error when connect rejects with AuthRequired", async () => {
-    (connect as Mock).mockRejectedValue(new AuthRequired("401"));
+    (connect as Mock).mockRejectedValue(new AuthRequired());
     renderLogin();
     fireEvent.change(screen.getByLabelText(/Password/), {
       target: { value: "wrong" },
@@ -45,9 +53,7 @@ describe("Login", () => {
   });
 
   it("shows the raw message for other connection failures", async () => {
-    (connect as Mock).mockRejectedValue(
-      new BackendUnreachable("backend unreachable: fetch failed"),
-    );
+    (connect as Mock).mockRejectedValue(new BackendUnreachable("fetch failed"));
     renderLogin();
     fireEvent.change(screen.getByLabelText(/Password/), {
       target: { value: "hunter2" },
