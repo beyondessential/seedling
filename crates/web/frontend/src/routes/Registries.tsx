@@ -60,24 +60,16 @@ export default function Registries() {
   };
 
   const submitAdd = async () => {
-    try {
-      await execute("/registries/add", { registry: trimmed });
-      setDialogOpen(false);
-      refetch();
-    } catch {
-      // surfaced via mutateError
-    }
+    if ((await execute("/registries/add", { registry: trimmed })) === null) return;
+    setDialogOpen(false);
+    refetch();
   };
 
   const submitRemove = async () => {
     if (!removing) return;
-    try {
-      await execute("/registries/remove", { registry: removing });
-      setRemoving(null);
-      refetch();
-    } catch {
-      // surfaced via mutateError
-    }
+    if ((await execute("/registries/remove", { registry: removing })) === null) return;
+    setRemoving(null);
+    refetch();
   };
 
   return (

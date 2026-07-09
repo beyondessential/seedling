@@ -293,7 +293,8 @@ function CreateStrategyDialog({
   const handleClose = () => { clearError(); onClose(); };
 
   const handleSubmit = async () => {
-    await execute("/backups/strategies/create", { name, via, schedule, volumes });
+    const result = await execute("/backups/strategies/create", { name, via, schedule, volumes });
+    if (result === null) return;
     onSuccess();
     handleClose();
   };
@@ -387,7 +388,7 @@ function RegisterBackupAppDialog({
   const handleClose = () => { clearError(); onClose(); };
 
   const handleSubmit = async () => {
-    await execute("/backups/apps/register", { app });
+    if ((await execute("/backups/apps/register", { app })) === null) return;
     onSuccess();
     handleClose();
   };
@@ -445,9 +446,9 @@ export default function Backups() {
   const { data: exportedVols } = useOiQuery<ExportedVolume[]>("/volumes/exported/list", {});
   const { data: allApps } = useOiQuery<AppSummary[]>("/apps/list", {});
 
-  const { execute: doRun, loading: running } = useOiAction();
-  const { execute: doDelete } = useOiAction();
-  const { execute: doDeregister } = useOiAction();
+  const { execute: doRun, loading: running, error: runError } = useOiAction();
+  const { execute: doDelete, error: deleteError } = useOiAction();
+  const { execute: doDeregister, error: deregisterError } = useOiAction();
 
   const [createStratOpen, setCreateStratOpen] = useState(false);
   const [registerAppOpen, setRegisterAppOpen] = useState(false);
@@ -468,12 +469,12 @@ export default function Backups() {
   };
 
   const handleDeleteStrategy = async (name: string) => {
-    await doDelete("/backups/strategies/delete", { name });
+    if ((await doDelete("/backups/strategies/delete", { name })) === null) return;
     refetchStrat();
   };
 
   const handleDeregisterApp = async (app: string) => {
-    await doDeregister("/backups/apps/deregister", { app });
+    if ((await doDeregister("/backups/apps/deregister", { app })) === null) return;
     refetchApps();
   };
 
@@ -492,6 +493,21 @@ export default function Backups() {
           <RefreshIcon />
         </IconActionButton>
       </Box>
+      {runError && (
+        <Box sx={{ mb: 2 }}>
+          <OiErrorAlert error={runError} />
+        </Box>
+      )}
+      {deleteError && (
+        <Box sx={{ mb: 2 }}>
+          <OiErrorAlert error={deleteError} />
+        </Box>
+      )}
+      {deregisterError && (
+        <Box sx={{ mb: 2 }}>
+          <OiErrorAlert error={deregisterError} />
+        </Box>
+      )}
       {runResults && (
         <Alert severity="success" onClose={() => setRunResults(null)} sx={{ mb: 2 }}>
           Backup triggered for <strong>{runResults.strategy}</strong>.{" "}

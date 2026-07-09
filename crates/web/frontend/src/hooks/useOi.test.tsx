@@ -146,9 +146,9 @@ function ActionProbe() {
       <span data-testid="error">{error?.message ?? ""}</span>
       <button
         onClick={() => {
-          void execute("/apps/restart", { app: "shop" })
-            .then((v) => setValue(JSON.stringify(v)))
-            .catch(() => undefined);
+          void execute("/apps/restart", { app: "shop" }).then((v) => {
+            if (v !== null) setValue(JSON.stringify(v));
+          });
         }}
       >
         go
@@ -169,7 +169,7 @@ describe("useOiAction", () => {
     expect(request).toHaveBeenCalledWith("/apps/restart", { app: "shop" });
   });
 
-  it("maps OI errors, rejects, and clears via clearError", async () => {
+  it("maps OI errors, returns null, and clears via clearError", async () => {
     renderProbe(<ActionProbe />, {
       "/apps/restart": { ok: false, error: { code: "busy", message: "try later" } },
     });

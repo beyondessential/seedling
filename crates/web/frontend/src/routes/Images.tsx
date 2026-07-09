@@ -95,29 +95,23 @@ export default function Images() {
 
   const submitRemove = async () => {
     if (!removing) return;
-    try {
-      await execute("/images/remove", {
-        reference: primaryReference(removing),
-      });
-      setRemoving(null);
-      refreshAll();
-    } catch {
-      /* surfaced via mutateError */
-    }
+    const result = await execute("/images/remove", {
+      reference: primaryReference(removing),
+    });
+    if (result === null) return;
+    setRemoving(null);
+    refreshAll();
   };
 
   const submitClearPin = async () => {
     if (!clearingPin) return;
-    try {
-      await execute("/images/pins/clear", {
-        app: clearingPin.app,
-        reference: clearingPin.reference,
-      });
-      setClearingPin(null);
-      refreshAll();
-    } catch {
-      /* surfaced via mutateError */
-    }
+    const result = await execute("/images/pins/clear", {
+      app: clearingPin.app,
+      reference: clearingPin.reference,
+    });
+    if (result === null) return;
+    setClearingPin(null);
+    refreshAll();
   };
 
   // w[impl routes.images]
@@ -126,12 +120,10 @@ export default function Images() {
   const submitBulk = async () => {
     let removed = 0;
     for (const img of prunable) {
-      try {
-        await execute("/images/remove", { reference: primaryReference(img) });
-        removed += 1;
-      } catch {
+      if ((await execute("/images/remove", { reference: primaryReference(img) })) === null) {
         break;
       }
+      removed += 1;
     }
     if (removed > 0) refreshAll();
     setBulkOpen(false);

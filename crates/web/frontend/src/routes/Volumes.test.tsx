@@ -228,6 +228,25 @@ describe("Volumes", () => {
   });
 
   // w[verify routes.volumes.delete-confirm]
+  it("keeps the delete dialog open and shows the error when deletion fails", async () => {
+    renderWithSession(<Volumes />, {
+      fixtures: {
+        ...populated,
+        "/volumes/site/delete": {
+          ok: false,
+          error: { code: "internal", message: "disk on fire" },
+        },
+      },
+      safetyMode: "dangerous",
+    });
+    await screen.findByText("data");
+    fireEvent.click(iconButton(row("data"), "Delete"));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Move to held" }));
+    expect(await within(dialog).findByText(/disk on fire/)).toBeTruthy();
+  });
+
+  // w[verify routes.volumes.delete-confirm]
   it("states kind-specific consequences for snapshot and bind deletion", async () => {
     const { request } = renderWithSession(<Volumes />, {
       fixtures: populated,

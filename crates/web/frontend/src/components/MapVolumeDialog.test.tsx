@@ -24,6 +24,10 @@ const fixtures = {
   "/volumes/site/list": siteVols,
   "/volumes/exported/list": exportedVols,
   "/volumes/external/declared": declared,
+  // Mutations must resolve with a non-null value: execute() treats null
+  // as failure and the dialog skips onSuccess.
+  "/volumes/external/map": { mapped: true },
+  "/volumes/external/remap": { remapped: true },
 };
 
 const emptyFixtures = {

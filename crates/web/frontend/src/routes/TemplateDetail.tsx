@@ -78,26 +78,19 @@ export default function TemplateDetail() {
 
   const handleInstantiate = async () => {
     if (!canInstantiate) return;
-    try {
-      await execute("/templates/instantiate", {
-        template: name,
-        app: appName,
-      });
-      setInstantiateOpen(false);
-      navigate(`/apps/${appName}`);
-    } catch {
-      // displayed via error
-    }
+    const result = await execute("/templates/instantiate", {
+      template: name,
+      app: appName,
+    });
+    if (result === null) return;
+    setInstantiateOpen(false);
+    navigate(`/apps/${appName}`);
   };
 
   const handleRemove = async () => {
-    try {
-      await removeExec("/templates/remove", { name });
-      setConfirmRemove(false);
-      navigate("/templates");
-    } catch {
-      // displayed via error
-    }
+    if ((await removeExec("/templates/remove", { name })) === null) return;
+    setConfirmRemove(false);
+    navigate("/templates");
   };
 
   if (loading && !template) {

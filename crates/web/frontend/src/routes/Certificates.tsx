@@ -176,14 +176,11 @@ export default function Certificates() {
           }}
           onShowCsr={async (c) => {
             clearError();
-            try {
-              const result = (await execute("/tls/certificates/csr/get", {
-                id: c.id,
-              })) as TlsCsrGetResponse;
-              setCsrShow({ id: result.id, csrPem: result.csr_pem });
-            } catch {
-              // surfaced via actionError
-            }
+            const result = (await execute("/tls/certificates/csr/get", {
+              id: c.id,
+            })) as TlsCsrGetResponse | null;
+            if (result === null) return;
+            setCsrShow({ id: result.id, csrPem: result.csr_pem });
           }}
           onUploadCsrCert={(c) => {
             clearError();
@@ -191,12 +188,8 @@ export default function Certificates() {
           }}
           onCancelCsr={async (c) => {
             clearError();
-            try {
-              await execute("/tls/certificates/csr/cancel", { id: c.id });
-              refetchCerts();
-            } catch {
-              // surfaced via actionError
-            }
+            if ((await execute("/tls/certificates/csr/cancel", { id: c.id })) === null) return;
+            refetchCerts();
           }}
         />
 
@@ -281,13 +274,9 @@ export default function Certificates() {
         onClose={() => setDeletingCert(null)}
         onConfirm={async () => {
           if (!deletingCert) return;
-          try {
-            await execute("/tls/certificates/delete", { id: deletingCert.id });
-            refetchCerts();
-            setDeletingCert(null);
-          } catch {
-            // surfaced via actionError
-          }
+          if ((await execute("/tls/certificates/delete", { id: deletingCert.id })) === null) return;
+          refetchCerts();
+          setDeletingCert(null);
         }}
       />
       <ConfirmDialog
@@ -303,15 +292,12 @@ export default function Certificates() {
         onClose={() => setRemovingProvider(null)}
         onConfirm={async () => {
           if (!removingProvider) return;
-          try {
-            await execute("/tls/dns-providers/delete", {
-              name: removingProvider,
-            });
-            refetchProviders();
-            setRemovingProvider(null);
-          } catch {
-            // surfaced via actionError
-          }
+          const result = await execute("/tls/dns-providers/delete", {
+            name: removingProvider,
+          });
+          if (result === null) return;
+          refetchProviders();
+          setRemovingProvider(null);
         }}
       />
       <ConfirmDialog
@@ -327,13 +313,9 @@ export default function Certificates() {
         onClose={() => setRemovingPolicy(null)}
         onConfirm={async () => {
           if (!removingPolicy) return;
-          try {
-            await execute("/tls/policies/clear", { hostname: removingPolicy });
-            refetchPolicies();
-            setRemovingPolicy(null);
-          } catch {
-            // surfaced via actionError
-          }
+          if ((await execute("/tls/policies/clear", { hostname: removingPolicy })) === null) return;
+          refetchPolicies();
+          setRemovingPolicy(null);
         }}
       />
     </Box>
@@ -390,14 +372,14 @@ function SettingsSection({
         : trimmedProfile.length > 0
           ? trimmedProfile
           : null;
-      await execute("/tls/settings/set", {
+      const result = await execute("/tls/settings/set", {
         contact_email: emailDraft.trim(),
         cert_profile: profile,
       });
-      onSaved();
-      setEditing(false);
-    } catch {
-      // surfaced inline via `submitError`
+      if (result !== null) {
+        onSaved();
+        setEditing(false);
+      }
     } finally {
       setSaving(false);
     }
@@ -904,7 +886,7 @@ function UpsertProviderDialog({
   const submit = async () => {
     setSubmitting(true);
     try {
-      await execute("/tls/dns-providers/upsert", {
+      const result = await execute("/tls/dns-providers/upsert", {
         name: trimmedName,
         kind: "route53",
         config: {
@@ -913,10 +895,10 @@ function UpsertProviderDialog({
           region,
         },
       });
-      reset();
-      onSubmitted();
-    } catch {
-      // surfaced inline via `error`
+      if (result !== null) {
+        reset();
+        onSubmitted();
+      }
     } finally {
       setSubmitting(false);
     }
@@ -1021,14 +1003,14 @@ function SetAcmeDnsPolicyDialog({
   const submit = async () => {
     setSubmitting(true);
     try {
-      await execute("/tls/policies/set-acme-dns", {
+      const result = await execute("/tls/policies/set-acme-dns", {
         hostname: trimmedHost,
         dns_provider: provider,
       });
-      reset();
-      onSubmitted();
-    } catch {
-      // surfaced inline via `error`
+      if (result !== null) {
+        reset();
+        onSubmitted();
+      }
     } finally {
       setSubmitting(false);
     }
@@ -1152,20 +1134,20 @@ function UploadManualCertDialog({
         primary_san?: string;
         san_dns_names?: string[];
         warnings?: string[];
-      };
-      const warns = r.warnings ?? [];
-      if (warns.length === 0) {
-        reset();
-        onSubmitted();
-      } else {
-        setResult({
-          primary_san: r.primary_san,
-          san_dns_names: r.san_dns_names,
-          warnings: warns,
-        });
+      } | null;
+      if (r !== null) {
+        const warns = r.warnings ?? [];
+        if (warns.length === 0) {
+          reset();
+          onSubmitted();
+        } else {
+          setResult({
+            primary_san: r.primary_san,
+            san_dns_names: r.san_dns_names,
+            warnings: warns,
+          });
+        }
       }
-    } catch {
-      // surfaced inline via `error` from useOiAction
     } finally {
       setSubmitting(false);
     }
@@ -1349,11 +1331,11 @@ function CsrBeginDialog({ open, onClose, onSubmitted }: CsrBeginDialogProps) {
       const result = (await execute("/tls/certificates/csr/begin", {
         hostname: hostname.trim(),
         key_type: "ecdsa_p256",
-      })) as TlsCsrBeginResponse;
-      setHostname("");
-      onSubmitted(result);
-    } catch {
-      // surfaced inline via `error`
+      })) as TlsCsrBeginResponse | null;
+      if (result !== null) {
+        setHostname("");
+        onSubmitted(result);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -1503,16 +1485,16 @@ function CsrUploadCertDialog({
       const result = (await execute("/tls/certificates/csr/upload-cert", {
         id: cert.id,
         cert_pem: certPem,
-      })) as { warnings?: string[] };
-      const warns = result?.warnings ?? [];
-      if (warns.length > 0) {
-        setWarnings(warns);
-      } else {
-        reset();
-        onSubmitted();
+      })) as { warnings?: string[] } | null;
+      if (result !== null) {
+        const warns = result.warnings ?? [];
+        if (warns.length > 0) {
+          setWarnings(warns);
+        } else {
+          reset();
+          onSubmitted();
+        }
       }
-    } catch {
-      // surfaced inline via `error`
     } finally {
       setSubmitting(false);
     }

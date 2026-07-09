@@ -453,53 +453,40 @@ function ResourcesSection({
   } | null>(null);
 
   const scale = async (deploymentName: string, value: number) => {
-    try {
-      await execute("/apps/scale", {
-        app: appName,
-        deployment: deploymentName,
-        scale: value,
-      });
-      onRefresh();
-    } catch {
-      // errors surfaced by useOiAction globally
-    }
+    const result = await execute("/apps/scale", {
+      app: appName,
+      deployment: deploymentName,
+      scale: value,
+    });
+    if (result === null) return;
+    onRefresh();
   };
 
   const restart = async (deploymentName: string) => {
-    try {
-      await executeRestart("/apps/restart", {
-        app: appName,
-        deployment: deploymentName,
-      });
-    } catch {
-      // errors surfaced by useOiAction globally
-    }
+    await executeRestart("/apps/restart", {
+      app: appName,
+      deployment: deploymentName,
+    });
   };
 
   const stopResource = async (kind: string, resourceName: string) => {
-    try {
-      await executeStop("/apps/resource/stop", {
-        app: appName,
-        kind,
-        name: resourceName,
-      });
-      onRefresh();
-    } catch {
-      // errors surfaced by useOiAction globally
-    }
+    const result = await executeStop("/apps/resource/stop", {
+      app: appName,
+      kind,
+      name: resourceName,
+    });
+    if (result === null) return;
+    onRefresh();
   };
 
   const unstopResource = async (kind: string, resourceName: string) => {
-    try {
-      await executeStop("/apps/resource/unstop", {
-        app: appName,
-        kind,
-        name: resourceName,
-      });
-      onRefresh();
-    } catch {
-      // errors surfaced by useOiAction globally
-    }
+    const result = await executeStop("/apps/resource/unstop", {
+      app: appName,
+      kind,
+      name: resourceName,
+    });
+    if (result === null) return;
+    onRefresh();
   };
 
   const snapshotDialog = snapshotTarget && (
@@ -827,43 +814,33 @@ function ParamsSection({
 
   const saveAdd = async () => {
     if (!addName.trim()) return;
-    try {
-      await execute("/apps/params/set", {
-        app: appName,
-        name: addName.trim(),
-        value: addValue,
-      });
-      setAdding(false);
-      setAddName("");
-      setAddValue("");
-      onRefresh();
-    } catch {
-      // displayed via error
-    }
+    const result = await execute("/apps/params/set", {
+      app: appName,
+      name: addName.trim(),
+      value: addValue,
+    });
+    if (result === null) return;
+    setAdding(false);
+    setAddName("");
+    setAddValue("");
+    onRefresh();
   };
 
   const save = async () => {
     if (!editing) return;
-    try {
-      await execute("/apps/params/set", {
-        app: appName,
-        name: editing,
-        value: draft,
-      });
-      setEditing(null);
-      onRefresh();
-    } catch {
-      // displayed via error
-    }
+    const result = await execute("/apps/params/set", {
+      app: appName,
+      name: editing,
+      value: draft,
+    });
+    if (result === null) return;
+    setEditing(null);
+    onRefresh();
   };
 
   const unset = async (paramName: string) => {
-    try {
-      await execute("/apps/params/unset", { app: appName, name: paramName });
-      onRefresh();
-    } catch {
-      // displayed via error
-    }
+    if ((await execute("/apps/params/unset", { app: appName, name: paramName })) === null) return;
+    onRefresh();
   };
 
   const addRow = adding ? (
@@ -1252,13 +1229,9 @@ function ActionInvokeDialog({
       action.kind === "install"
         ? { app: appName, params: values }
         : { app: appName, name: action.name, params: values };
-    try {
-      await execute(method, params);
-      onSuccess();
-      handleClose();
-    } catch {
-      // displayed via error
-    }
+    if ((await execute(method, params)) === null) return;
+    onSuccess();
+    handleClose();
   };
 
   const paramEntries = Object.entries(action.params) as [
@@ -1475,7 +1448,7 @@ function InstallSection({
     if (hasParams) {
       setDialogOpen(true);
     } else {
-      await execute("/apps/install/invoke", { app: appName, params: {} });
+      if ((await execute("/apps/install/invoke", { app: appName, params: {} })) === null) return;
       onRefresh();
     }
   };
@@ -2049,25 +2022,18 @@ function AppImagesSection({
 
   const submitRemove = async () => {
     if (!removing) return;
-    try {
-      await execute("/images/remove", {
-        reference: primaryReference(removing),
-      });
-      setRemoving(null);
-      refreshAll();
-    } catch {
-      /* surfaced via mutateError */
-    }
+    const result = await execute("/images/remove", {
+      reference: primaryReference(removing),
+    });
+    if (result === null) return;
+    setRemoving(null);
+    refreshAll();
   };
 
   const submitClearAll = async () => {
-    try {
-      await execute("/images/pins/clear", { app: appName });
-      setClearAllOpen(false);
-      refreshAll();
-    } catch {
-      /* surfaced via mutateError */
-    }
+    if ((await execute("/images/pins/clear", { app: appName })) === null) return;
+    setClearAllOpen(false);
+    refreshAll();
   };
 
   // w[impl routes.images.discover]
@@ -2078,10 +2044,8 @@ function AppImagesSection({
       const result = (await execute("/apps/images/discover", {
         app: appName,
         lenient: true,
-      })) as DiscoverResponse;
-      setDiscoverResult(result);
-    } catch {
-      /* surfaced via mutateError */
+      })) as DiscoverResponse | null;
+      if (result !== null) setDiscoverResult(result);
     } finally {
       setDiscovering(false);
     }
@@ -2102,12 +2066,8 @@ function AppImagesSection({
   }, [discoverResult, imagesData, pins]);
 
   const warmReference = async (reference: string) => {
-    try {
-      await execute("/images/pull", { reference, app: appName });
-      refreshAll();
-    } catch {
-      /* surfaced via mutateError */
-    }
+    if ((await execute("/images/pull", { reference, app: appName })) === null) return;
+    refreshAll();
   };
 
   // w[impl routes.images.discover]
@@ -2115,9 +2075,7 @@ function AppImagesSection({
     if (discoveredExtras.length === 0) return;
     setWarmingAll(true);
     for (const ref of discoveredExtras) {
-      try {
-        await execute("/images/pull", { reference: ref, app: appName });
-      } catch {
+      if ((await execute("/images/pull", { reference: ref, app: appName })) === null) {
         break;
       }
     }
@@ -2439,13 +2397,9 @@ function ClearFaultsButton({
             variant="contained"
             disabled={loading}
             onClick={async () => {
-              try {
-                await execute("/faults/clear", { app: appName });
-                setConfirming(false);
-                onCleared();
-              } catch {
-                // error state is set by useOiAction; dialog stays open
-              }
+              if ((await execute("/faults/clear", { app: appName })) === null) return;
+              setConfirming(false);
+              onCleared();
             }}
           >
             Clear faults
@@ -2500,13 +2454,9 @@ function AppRemovalDialog({
   const { execute, loading, error, clearError } = useOiAction();
 
   const handleConfirm = async () => {
-    try {
-      const method = kind === "uninstall" ? "/apps/uninstall" : "/apps/remove";
-      await execute(method, { app: appName });
-      onSuccess();
-    } catch {
-      // displayed via error
-    }
+    const method = kind === "uninstall" ? "/apps/uninstall" : "/apps/remove";
+    if ((await execute(method, { app: appName })) === null) return;
+    onSuccess();
   };
 
   const handleClose = () => {
@@ -2718,14 +2668,11 @@ export default function AppDetail() {
                   size="small"
                   disabled={cancellingAction}
                   onClick={async () => {
-                    try {
-                      await executeCancelAction("/apps/action/cancel", {
-                        app: name,
-                      });
-                      refetch();
-                    } catch {
-                      // surfaced by useOiAction globally
-                    }
+                    const result = await executeCancelAction("/apps/action/cancel", {
+                      app: name,
+                    });
+                    if (result === null) return;
+                    refetch();
                   }}
                 >
                   Cancel
@@ -2759,12 +2706,8 @@ export default function AppDetail() {
                   size="small"
                   disabled={unstoppingAll}
                   onClick={async () => {
-                    try {
-                      await executeUnstopAll("/apps/unstop", { app: name });
-                      refetch();
-                    } catch {
-                      // surfaced by useOiAction globally
-                    }
+                    if ((await executeUnstopAll("/apps/unstop", { app: name })) === null) return;
+                    refetch();
                   }}
                 >
                   Unstop all

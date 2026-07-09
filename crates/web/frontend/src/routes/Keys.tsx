@@ -54,27 +54,20 @@ export default function Keys() {
   };
 
   const submitAdd = async () => {
-    try {
-      await execute("/keys/authorise", {
-        fingerprint: fingerprint.trim(),
-        label: label.trim() || "unnamed",
-      });
-      setDialogOpen(false);
-      refetch();
-    } catch {
-      // error surfaced via mutateError
-    }
+    const result = await execute("/keys/authorise", {
+      fingerprint: fingerprint.trim(),
+      label: label.trim() || "unnamed",
+    });
+    if (result === null) return;
+    setDialogOpen(false);
+    refetch();
   };
 
   const submitRevoke = async () => {
     if (!revoking) return;
-    try {
-      await execute("/keys/revoke", { fingerprint: revoking.fingerprint });
-      setRevoking(null);
-      refetch();
-    } catch {
-      // error surfaced via mutateError
-    }
+    if ((await execute("/keys/revoke", { fingerprint: revoking.fingerprint })) === null) return;
+    setRevoking(null);
+    refetch();
   };
 
   return (
