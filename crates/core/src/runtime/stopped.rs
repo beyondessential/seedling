@@ -100,3 +100,6 @@ pub fn parse_kind(s: &str) -> Option<ResourceKind> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests;

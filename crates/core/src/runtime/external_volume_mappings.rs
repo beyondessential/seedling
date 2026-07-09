@@ -127,3 +127,6 @@ fn row_to_mapping(row: &rusqlite::Row<'_>) -> rusqlite::Result<ExternalVolumeMap
         read_only,
     })
 }
+
+#[cfg(test)]
+mod tests;

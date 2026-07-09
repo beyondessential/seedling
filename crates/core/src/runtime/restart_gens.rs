@@ -42,3 +42,6 @@ pub fn delete_restart_gens_for_app(db: &Db, app: &AppName) -> rusqlite::Result<(
     )?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

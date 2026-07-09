@@ -120,3 +120,6 @@ pub fn delete(db: &Db, name: &SiteVolumeName) -> rusqlite::Result<bool> {
         .execute("DELETE FROM site_volumes WHERE name = ?1", params![name])?;
     Ok(count > 0)
 }
+
+#[cfg(test)]
+mod tests;
