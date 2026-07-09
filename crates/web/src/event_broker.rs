@@ -115,3 +115,66 @@ async fn stream_events(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn broker() -> Arc<EventBroker> {
+        EventBroker::new(Arc::new(ActorActivityRegistry::new()))
+    }
+
+    #[tokio::test]
+    async fn publish_caches_and_broadcasts() {
+        let broker = broker();
+        let mut rx = broker.tx.subscribe();
+        broker.publish(Arc::from(r#"{"type":"Test"}"#)).await;
+
+        assert_eq!(&*rx.recv().await.unwrap(), r#"{"type":"Test"}"#);
+        let recent = broker.recent.lock().await;
+        assert_eq!(recent.len(), 1);
+        assert_eq!(&*recent[0], r#"{"type":"Test"}"#);
+    }
+
+    #[tokio::test]
+    async fn cache_evicts_oldest_beyond_capacity() {
+        let broker = broker();
+        for i in 0..=CACHE_SIZE {
+            broker.publish(Arc::from(format!("event-{i}"))).await;
+        }
+        let recent = broker.recent.lock().await;
+        assert_eq!(recent.len(), CACHE_SIZE);
+        assert_eq!(&*recent[0], "event-1");
+        assert_eq!(&*recent[CACHE_SIZE - 1], format!("event-{CACHE_SIZE}"));
+    }
+
+    #[tokio::test]
+    async fn publish_without_subscribers_does_not_error() {
+        let broker = broker();
+        broker.publish(Arc::from("orphan")).await;
+        assert_eq!(broker.recent.lock().await.len(), 1);
+    }
+
+    // w[verify sessions.actor-activity]
+    #[tokio::test]
+    async fn publish_records_actor_activity() {
+        let registry = Arc::new(ActorActivityRegistry::new());
+        let broker = EventBroker::new(Arc::clone(&registry));
+        broker
+            .publish(Arc::from(
+                serde_json::json!({
+                    "type": "OperationStarted",
+                    "timestamp": jiff::Timestamp::now().to_string(),
+                    "app": "demo",
+                    "action_name": "install",
+                    "actor": { "kind": "web", "id": "felix" },
+                })
+                .to_string(),
+            ))
+            .await;
+        let entries = registry.list_recent();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["actor_kind"], "web");
+        assert_eq!(entries[0]["last_action"], "started install on demo");
+    }
+}

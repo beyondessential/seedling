@@ -38,3 +38,55 @@ impl std::fmt::Display for ConfigError {
 }
 
 impl std::error::Error for ConfigError {}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write as _;
+
+    use super::*;
+
+    fn write_config(contents: &str) -> tempfile::NamedTempFile {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(contents.as_bytes()).unwrap();
+        file
+    }
+
+    #[test]
+    fn auth_section_without_lifetime_uses_default() {
+        let file = write_config("[auth]\n");
+        let config = Config::from_file(file.path()).unwrap();
+        assert_eq!(config.auth.password_hash, None);
+        assert_eq!(config.auth.session_lifetime_secs, 86400);
+    }
+
+    #[test]
+    fn auth_section_parses_all_fields() {
+        let file = write_config(
+            r#"
+            [auth]
+            password_hash = "$argon2id$stub"
+            session_lifetime_secs = 3600
+            "#,
+        );
+        let config = Config::from_file(file.path()).unwrap();
+        assert_eq!(config.auth.password_hash.as_deref(), Some("$argon2id$stub"));
+        assert_eq!(config.auth.session_lifetime_secs, 3600);
+    }
+
+    #[test]
+    fn invalid_toml_reports_path_in_error() {
+        let file = write_config("[auth\nbroken");
+        let err = Config::from_file(file.path()).unwrap_err();
+        assert!(
+            err.0.contains("parse") && err.0.contains(&file.path().display().to_string()),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn missing_file_reports_read_error() {
+        let err =
+            Config::from_file(std::path::Path::new("/nonexistent/seedling-web.toml")).unwrap_err();
+        assert!(err.0.starts_with("read "), "got: {err}");
+    }
+}
