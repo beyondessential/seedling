@@ -1,13 +1,5 @@
 name: Caddy image
 
-# Builds the custom Caddy image (Caddy + caddy-l4) and publishes it to
-# ghcr.io/beyondessential/seedling-caddy. The daemon pulls this image at
-# runtime instead of compiling Caddy on the host — no runtime xcaddy build, no
-# docker.io / Go-proxy dependency at deploy time.
-#
-# Runs when the image definition changes, or on demand. The published tag must
-# match CADDY_IMAGE in crates/core/src/system/caddy/startup.rs.
-
 on:
   push:
     branches:
@@ -46,7 +38,6 @@ jobs:
         with:
           context: docker/caddy
           file: docker/caddy/Containerfile
-          # The daemon runs on both amd64 and arm64 hosts.
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
