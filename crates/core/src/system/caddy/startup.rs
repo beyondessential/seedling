@@ -40,10 +40,15 @@ pub(crate) fn admin_socket_path(data_dir: &Path, container_name: &str) -> PathBu
     socket_run_dir(data_dir, container_name).join("admin.sock")
 }
 
+// Both the Caddy base version and the caddy-l4 plugin are pinned, and the two
+// must stay compatible: caddy-l4 declares a minimum Caddy version, so an
+// unpinned plugin can float to a release that demands a newer Caddy than the
+// builder provides and fail the build (`caddy-l4 requires caddy/v2@vX, but vY is
+// requested`). Bump both together.
 const CADDY_CONTAINERFILE: &str = "\
-FROM docker.io/library/caddy:2.11.2-builder AS builder\n\
-RUN xcaddy build --with github.com/mholt/caddy-l4\n\
-FROM docker.io/library/caddy:2.11.2\n\
+FROM docker.io/library/caddy:2.11.3-builder AS builder\n\
+RUN xcaddy build --with github.com/mholt/caddy-l4@v0.1.1\n\
+FROM docker.io/library/caddy:2.11.3\n\
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy\n";
 
 // r[impl infra.proxy.startup]
