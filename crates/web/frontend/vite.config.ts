@@ -22,6 +22,7 @@ export default defineConfig({
     environment: "jsdom",
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     globals: true,
+    setupFiles: ["src/test/setup.ts"],
     coverage: {
       provider: "v8",
       reporter: ["text", "cobertura"],
