@@ -648,6 +648,13 @@ function ManualCertsSection({
   onUploadCsrCert,
   onCancelCsr,
 }: ManualCertsSectionProps) {
+  // w[impl routes.certificates]
+  // Group the listing by hostname (then newest expiry first within a group).
+  const sorted = [...certs].sort(
+    (a, b) =>
+      a.hostname.localeCompare(b.hostname) || (b.not_after ?? 0) - (a.not_after ?? 0),
+  );
+  const nowSecs = Math.floor(Date.now() / 1000);
   return (
     <Box>
       <Box sx={{ display: "flex", alignItems: "center", mb: 1, gap: 1 }}>
@@ -691,13 +698,21 @@ function ManualCertsSection({
                 <TableCell>Origin</TableCell>
                 <TableCell>State</TableCell>
                 <TableCell>Issuer</TableCell>
+                <TableCell>Serial</TableCell>
                 <TableCell>Not after</TableCell>
                 <TableCell align="right" />
               </TableRow>
             </TableHead>
             <TableBody>
-              {certs.map((c) => {
+              {sorted.map((c) => {
                 const pending = c.state === "csr_pending";
+                // w[impl routes.certificates]
+                // Certificates within fourteen days of expiry are flagged.
+                const expired = c.not_after !== null && c.not_after <= nowSecs;
+                const expiringSoon =
+                  !expired &&
+                  c.not_after !== null &&
+                  c.not_after - nowSecs <= 14 * 24 * 60 * 60;
                 return (
                   <TableRow key={c.id} hover>
                     <TableCell sx={{ fontFamily: "monospace" }}>{c.id}</TableCell>
@@ -722,10 +737,19 @@ function ManualCertsSection({
                         {c.self_signed && (
                           <Chip label="self-signed" size="small" color="warning" variant="outlined" />
                         )}
+                        {expired && (
+                          <Chip label="expired" size="small" color="error" />
+                        )}
+                        {expiringSoon && (
+                          <Chip label="expires soon" size="small" color="warning" />
+                        )}
                       </Stack>
                     </TableCell>
                     <TableCell sx={{ fontFamily: "monospace", fontSize: "0.8rem" }}>
                       {c.issuer ?? "—"}
+                    </TableCell>
+                    <TableCell sx={{ fontFamily: "monospace", fontSize: "0.8rem" }}>
+                      {c.serial ?? "—"}
                     </TableCell>
                     <TableCell sx={{ fontSize: "0.85rem" }}>{formatTime(c.not_after)}</TableCell>
                     <TableCell align="right">

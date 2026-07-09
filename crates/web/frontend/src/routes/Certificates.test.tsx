@@ -133,12 +133,14 @@ describe("Certificates", () => {
     expect(screen.getByText("provider: r53-main")).toBeTruthy();
     expect(screen.getByText("acme-dns")).toBeTruthy();
 
-    // Stored certificates: manual cert with state/origin/self-signed flags.
+    // Stored certificates: manual cert with state/origin/self-signed flags,
+    // plus the serial from the certificate.
     const certRow = rowFor("shop.example.com");
     expect(within(certRow).getByText("manual")).toBeTruthy();
     expect(within(certRow).getByText("active")).toBeTruthy();
     expect(within(certRow).getByText("self-signed")).toBeTruthy();
     expect(within(certRow).getByText("CN=Example CA")).toBeTruthy();
+    expect(within(certRow).getByText("ab12cd34")).toBeTruthy();
 
     // Pending CSR row exposes the CSR actions instead of delete.
     const csrRow = rowFor("csr.example.com");
@@ -151,6 +153,41 @@ describe("Certificates", () => {
     // Providers list shows name and kind, never credentials.
     const providerRow = rowFor("r53-main");
     expect(within(providerRow).getByText("route53")).toBeTruthy();
+  });
+
+  // w[verify routes.certificates]
+  it("flags certificates near or past expiry and groups by hostname", async () => {
+    const expiring: TlsCertificate = {
+      ...manualCert,
+      id: 10,
+      hostname: "soon.example.com",
+      not_after: now + 5 * 86400,
+      serial: "0e15",
+      self_signed: false,
+    };
+    const expired: TlsCertificate = {
+      ...manualCert,
+      id: 11,
+      hostname: "soon.example.com",
+      not_after: now - 86400,
+      serial: "0e14",
+      self_signed: false,
+    };
+    renderWithSession(<Certificates />, {
+      fixtures: baseFixtures({
+        "/tls/certificates/list": { certificates: [manualCert, expiring, expired] },
+      }),
+    });
+    await screen.findAllByText("soon.example.com");
+    const soonRow = rowFor("0e15");
+    expect(within(soonRow).getByText("expires soon")).toBeTruthy();
+    // Rows for the same hostname are adjacent (grouped), newest expiry first.
+    const expiredRow = rowFor("0e14");
+    expect(within(expiredRow).getByText("expired")).toBeTruthy();
+    expect(soonRow.nextElementSibling).toBe(expiredRow);
+    // The healthy cert shows no expiry flag.
+    const healthy = rowFor("shop.example.com");
+    expect(within(healthy).queryByText(/expire/)).toBeNull();
   });
 
   it("renders the empty states", async () => {
