@@ -17,6 +17,9 @@ use crate::{
     runtime::{self, apps::evaluate_script},
 };
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Deserialize)]
 pub(crate) struct CreateParams {
     pub name: TemplateName,
