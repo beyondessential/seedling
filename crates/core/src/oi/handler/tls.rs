@@ -1070,23 +1070,8 @@ pub(crate) struct SetSettingsParams {
     /// New ACME profile. Pass `null` to clear (use the CA's default
     /// profile); pass a non-empty string to opt into a profile by name
     /// (e.g. Let's Encrypt's `shortlived`); omit to leave unchanged.
-    #[serde(default, deserialize_with = "deserialize_optional_field")]
+    #[serde(default, deserialize_with = "super::deserialize_optional_field")]
     pub cert_profile: Option<Option<String>>,
-}
-
-// `Option<Option<T>>` distinguishes "field absent" from "field present
-// but null". serde-json's default Option deserialiser collapses both
-// into None, which would make it impossible to clear the profile via
-// the same endpoint that updates it. This wrapper preserves the
-// three-state semantics.
-fn deserialize_optional_field<'de, D>(
-    deserializer: D,
-) -> std::result::Result<Option<Option<String>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::Deserialize;
-    Ok(Some(Option::<String>::deserialize(deserializer)?))
 }
 
 // i[tls.settings.set]

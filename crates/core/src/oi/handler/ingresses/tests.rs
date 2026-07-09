@@ -118,18 +118,25 @@ fn site_ingress_update_description_and_tls_provider() {
     assert_eq!(ing["description"], "front door");
     assert_eq!(ing["tls_provider"], "internal");
 
-    // Known limitation: `description: null` is indistinguishable from an
-    // absent field (plain `#[serde(default)]` on an `Option<Option<_>>`),
-    // so an explicit null currently leaves the description unchanged
-    // rather than clearing it as the param's documentation promises.
+    // An absent description leaves the existing value unchanged...
+    oi.call(
+        "/ingresses/site/update",
+        json!({ "name": "portal", "tls_provider": "acme" }),
+    )
+    .unwrap();
+    let ing = show(&oi, "portal");
+    assert_eq!(ing["description"], "front door");
+    assert_eq!(ing["tls_provider"], "acme");
+
+    // ...while an explicit null clears it.
     oi.call(
         "/ingresses/site/update",
         json!({ "name": "portal", "description": null }),
     )
     .unwrap();
     let ing = show(&oi, "portal");
-    assert_eq!(ing["description"], "front door");
-    assert_eq!(ing["tls_provider"], "internal");
+    assert_eq!(ing["description"], serde_json::Value::Null);
+    assert_eq!(ing["tls_provider"], "acme");
 
     let (code, _) = oi
         .call(
