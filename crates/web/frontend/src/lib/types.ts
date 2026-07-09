@@ -315,7 +315,8 @@ export interface ConnectedClients {
 export interface AuthorizedKey {
   fingerprint: string;
   label: string;
-  added_at: string;
+  /** Unix timestamp in seconds. */
+  added_at: number;
 }
 
 export interface SiteVolume {
