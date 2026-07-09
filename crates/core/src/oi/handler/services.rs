@@ -718,4 +718,305 @@ mod tests {
         // shape, where all-numeric labels are rejected.
         validate_remote_host("123.456").unwrap_err();
     }
+
+    use serde_json::{Value, json};
+
+    use crate::oi::test_support::TestOi;
+
+    fn register_app(oi: &TestOi, name: &str, script: &str) {
+        oi.call("/apps/create", json!({ "app": name, "script": script }))
+            .expect("app registration succeeds");
+    }
+
+    fn site_services(oi: &TestOi) -> Vec<Value> {
+        oi.call("/services/site/list", json!({}))
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .clone()
+    }
+
+    // r[verify service.site.lifecycle]
+    #[test]
+    fn site_service_create_list_delete_roundtrip() {
+        let oi = TestOi::new();
+        let created = oi
+            .call(
+                "/services/site/create",
+                json!({
+                    "name": "lab-db",
+                    "description": "lab database",
+                    "endpoints": [{
+                        "service_port": 5432,
+                        "protocol": "tcp",
+                        "remote_host": "10.0.0.5",
+                        "remote_port": 5432,
+                    }],
+                }),
+            )
+            .unwrap();
+        assert_eq!(created["created"], true);
+
+        let listed = site_services(&oi);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0]["name"], "lab-db");
+        assert_eq!(listed[0]["description"], "lab database");
+        let eps = listed[0]["endpoints"].as_array().unwrap();
+        assert_eq!(eps.len(), 1);
+        assert_eq!(eps[0]["service_port"], 5432);
+        assert_eq!(eps[0]["protocol"], "tcp");
+        assert_eq!(eps[0]["remote_host"], "10.0.0.5");
+
+        let deleted = oi
+            .call("/services/site/delete", json!({ "name": "lab-db" }))
+            .unwrap();
+        assert_eq!(deleted["deleted"], true);
+        assert!(site_services(&oi).is_empty());
+
+        let (code, _) = oi
+            .call("/services/site/delete", json!({ "name": "lab-db" }))
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid");
+    }
+
+    // r[verify service.site.address]
+    #[test]
+    fn site_service_create_rejects_invalid_remote_host() {
+        let oi = TestOi::new();
+        let (code, msg) = oi
+            .call(
+                "/services/site/create",
+                json!({
+                    "name": "loop-svc",
+                    "endpoints": [{
+                        "service_port": 80,
+                        "protocol": "http",
+                        "remote_host": "localhost",
+                        "remote_port": 8080,
+                    }],
+                }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid");
+        assert!(msg.contains("localhost"), "{msg}");
+        assert!(site_services(&oi).is_empty());
+    }
+
+    // r[verify service.site.lifecycle]
+    #[test]
+    fn site_service_endpoint_add_and_remove() {
+        let oi = TestOi::new();
+        oi.call("/services/site/create", json!({ "name": "multi-ep" }))
+            .unwrap();
+
+        let ep = json!({
+            "name": "multi-ep",
+            "service_port": 53,
+            "protocol": "udp",
+            "remote_host": "dns.example.com",
+            "remote_port": 5353,
+        });
+        assert_eq!(oi.call("/services/site/endpoint/add", ep.clone()).unwrap()["added"], true);
+        assert_eq!(site_services(&oi)[0]["endpoints"].as_array().unwrap().len(), 1);
+
+        assert_eq!(
+            oi.call("/services/site/endpoint/remove", ep.clone()).unwrap()["removed"],
+            true
+        );
+        assert!(site_services(&oi)[0]["endpoints"].as_array().unwrap().is_empty());
+
+        let (code, _) = oi
+            .call("/services/site/endpoint/remove", ep)
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid");
+    }
+
+    // r[verify service.site.lifecycle]
+    #[test]
+    fn site_service_delete_blocked_while_mapped() {
+        let oi = TestOi::new();
+        oi.call("/services/site/create", json!({ "name": "shared-api" }))
+            .unwrap();
+        oi.call(
+            "/services/external/map",
+            json!({
+                "app": "consumer",
+                "external_name": "api-slot",
+                "target": { "kind": "site", "name": "shared-api" },
+            }),
+        )
+        .unwrap();
+
+        let (code, msg) = oi
+            .call("/services/site/delete", json!({ "name": "shared-api" }))
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid");
+        assert!(msg.contains("still mapped"), "{msg}");
+
+        oi.call(
+            "/services/external/unmap",
+            json!({ "app": "consumer", "external_name": "api-slot" }),
+        )
+        .unwrap();
+        assert_eq!(
+            oi.call("/services/site/delete", json!({ "name": "shared-api" }))
+                .unwrap()["deleted"],
+            true
+        );
+    }
+
+    // r[verify service.site.address]
+    #[test]
+    fn resolver_status_empty_without_resolver() {
+        let oi = TestOi::new();
+        let status = oi
+            .call("/services/site/resolver-status", json!({}))
+            .unwrap();
+        assert_eq!(status["entries"], json!([]));
+    }
+
+    #[test]
+    fn app_and_exported_service_lists_reflect_registered_apps() {
+        let oi = TestOi::new();
+        assert_eq!(oi.call("/services/app/list", json!({})).unwrap(), json!([]));
+        assert_eq!(
+            oi.call("/services/exported/list", json!({})).unwrap(),
+            json!([])
+        );
+
+        register_app(
+            &oi,
+            "svc-app",
+            r#"
+            let api = app.service("api").exported(#{ description: "main API" });
+            api.http(8080);
+            let metrics = app.service("metrics");
+            "#,
+        );
+
+        let all = oi.call("/services/app/list", json!({})).unwrap();
+        let all = all.as_array().unwrap();
+        assert_eq!(all.len(), 2, "{all:?}");
+        let api = all.iter().find(|s| s["service_name"] == "api").unwrap();
+        assert_eq!(api["exported"], true);
+        assert_eq!(api["http"], true);
+        assert_eq!(api["description"], "main API");
+        let metrics = all.iter().find(|s| s["service_name"] == "metrics").unwrap();
+        assert_eq!(metrics["exported"], false);
+        assert_eq!(metrics["http"], false);
+
+        let exported = oi.call("/services/exported/list", json!({})).unwrap();
+        let exported = exported.as_array().unwrap();
+        assert_eq!(exported.len(), 1);
+        assert_eq!(exported[0]["service_name"], "api");
+        assert_eq!(exported[0]["app"], "svc-app");
+    }
+
+    // r[verify service.external.mapping.events]
+    #[test]
+    fn external_service_mapping_map_remap_unmap_flow() {
+        let oi = TestOi::new();
+        oi.call("/services/site/create", json!({ "name": "lab-db" }))
+            .unwrap();
+
+        oi.call(
+            "/services/external/map",
+            json!({
+                "app": "consumer",
+                "external_name": "db-conn",
+                "target": { "kind": "site", "name": "lab-db" },
+            }),
+        )
+        .unwrap();
+
+        let list = oi.call("/services/external/list", json!({})).unwrap();
+        let list = list.as_array().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0]["external_name"], "db-conn");
+        assert_eq!(list[0]["target"]["kind"], "site");
+
+        assert_eq!(
+            oi.call("/services/external/list", json!({ "app": "someone-else" }))
+                .unwrap(),
+            json!([])
+        );
+
+        oi.call(
+            "/services/external/remap",
+            json!({
+                "app": "consumer",
+                "external_name": "db-conn",
+                "target": { "kind": "app", "app": "postgres", "service": "sql" },
+            }),
+        )
+        .unwrap();
+        let list = oi.call("/services/external/list", json!({})).unwrap();
+        assert_eq!(list[0]["target"]["kind"], "app");
+
+        let (code, _) = oi
+            .call(
+                "/services/external/remap",
+                json!({
+                    "app": "consumer",
+                    "external_name": "no-such",
+                    "target": { "kind": "site", "name": "lab-db" },
+                }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid");
+
+        assert_eq!(
+            oi.call(
+                "/services/external/unmap",
+                json!({ "app": "consumer", "external_name": "db-conn" }),
+            )
+            .unwrap()["unmapped"],
+            true
+        );
+        let (code, _) = oi
+            .call(
+                "/services/external/unmap",
+                json!({ "app": "consumer", "external_name": "db-conn" }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid");
+    }
+
+    #[test]
+    fn declared_external_services_guard_unmap() {
+        let oi = TestOi::new();
+        assert_eq!(
+            oi.call("/services/external/declared", json!({})).unwrap(),
+            json!([])
+        );
+
+        register_app(&oi, "web-app", r#"let auth = app.external_service("auth");"#);
+        oi.call("/services/site/create", json!({ "name": "sso" }))
+            .unwrap();
+
+        let declared = oi.call("/services/external/declared", json!({})).unwrap();
+        let declared = declared.as_array().unwrap();
+        assert_eq!(declared.len(), 1);
+        assert_eq!(declared[0]["app"], "web-app");
+        assert_eq!(declared[0]["name"], "auth");
+
+        oi.call(
+            "/services/external/map",
+            json!({
+                "app": "web-app",
+                "external_name": "auth",
+                "target": { "kind": "site", "name": "sso" },
+            }),
+        )
+        .unwrap();
+
+        let (code, msg) = oi
+            .call(
+                "/services/external/unmap",
+                json!({ "app": "web-app", "external_name": "auth" }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid");
+        assert!(msg.contains("declared by app"), "{msg}");
+    }
 }
