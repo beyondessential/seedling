@@ -291,6 +291,20 @@ pub(super) async fn dispatch_proxy(client: &OiClient, cmd: ProxyCommand) {
     }
 }
 
+#[derive(Subcommand)]
+pub(super) enum InfraCommand {
+    /// Show infrastructure component status (proxy, resolver)
+    Status,
+}
+
+pub(super) async fn dispatch_infra(client: &OiClient, cmd: InfraCommand) {
+    match cmd {
+        InfraCommand::Status => {
+            print_result(client.request("/infra/status", serde_json::json!({})).await);
+        }
+    }
+}
+
 pub(super) async fn dispatch_dns(client: &OiClient, cmd: DnsCommand) {
     match cmd {
         DnsCommand::Logs { follow, tail, json } => {

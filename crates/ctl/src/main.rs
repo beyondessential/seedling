@@ -92,6 +92,11 @@ enum Command {
         #[command(subcommand)]
         command: op::DnsCommand,
     },
+    /// Infrastructure (proxy, resolver) status
+    Infra {
+        #[command(subcommand)]
+        command: op::InfraCommand,
+    },
     /// Shell session management
     Shells {
         #[command(subcommand)]
@@ -371,6 +376,7 @@ async fn main() {
         Command::Ingresses { command } => ingresses::dispatch(&client, command).await,
         Command::Proxy { command } => op::dispatch_proxy(&client, command).await,
         Command::Dns { command } => op::dispatch_dns(&client, command).await,
+        Command::Infra { command } => op::dispatch_infra(&client, command).await,
         Command::Shells { command } => op::dispatch_shells(&client, command).await,
         Command::Forwards { command } => op::dispatch_forwards(&client, command).await,
         Command::Registries { command } => op::dispatch_registries(&client, command).await,
