@@ -182,3 +182,93 @@ fn multiple_errors_collected() {
     let msg = result.unwrap_err().message;
     assert!(msg.contains("email") || msg.contains("name"));
 }
+
+use serde_json::json;
+
+use crate::oi::test_support::TestOi;
+
+/// [`crate::oi::test_support::MINIMAL_SCRIPT`] plus an `on_install` handler
+/// with one required requirement, so installs schedule an operation instead
+/// of completing immediately.
+const INSTALL_SCRIPT: &str = r#"
+    app.deployment("web")
+        .image("docker.io/library/nginx:1.29");
+    app.on_install(|rt, reqs| {}, #{
+        params: #{
+            "admin-email": #{ kind: "email", required: true },
+        },
+    });
+"#;
+
+// i[verify action.invoke.install]
+#[test]
+fn install_on_unknown_app_is_not_found() {
+    let oi = TestOi::new();
+    let (code, _) = oi
+        .call("/apps/install/invoke", json!({ "app": "ghost" }))
+        .unwrap_err();
+    assert_eq!(code, "not_found");
+}
+
+// i[verify action.invoke.install]
+#[test]
+fn install_without_handler_completes_immediately_and_only_once() {
+    let oi = TestOi::with_app("demo");
+    let result = oi
+        .call("/apps/install/invoke", json!({ "app": "demo" }))
+        .unwrap();
+    assert_eq!(result["schedule"], "accepted");
+
+    let (code, _) = oi
+        .call("/apps/install/invoke", json!({ "app": "demo" }))
+        .unwrap_err();
+    assert_eq!(code, "already_installed");
+}
+
+// i[verify action.invoke.install.validation]
+#[test]
+fn install_params_without_schema_are_rejected() {
+    let oi = TestOi::with_app("demo");
+    let (code, message) = oi
+        .call(
+            "/apps/install/invoke",
+            json!({ "app": "demo", "params": { "email": "a@b.co" } }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+    assert!(message.contains("no install params"), "message: {message}");
+}
+
+// i[verify action.invoke.install.validation]
+#[test]
+fn install_with_missing_required_requirement_is_rejected() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({ "app": "demo", "script": INSTALL_SCRIPT }),
+    )
+    .unwrap();
+    let (code, message) = oi
+        .call("/apps/install/invoke", json!({ "app": "demo" }))
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+    assert!(message.contains("admin-email"), "message: {message}");
+}
+
+// i[verify action.invoke.install.validation]
+#[test]
+fn install_with_invalid_requirement_value_is_rejected() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({ "app": "demo", "script": INSTALL_SCRIPT }),
+    )
+    .unwrap();
+    let (code, _) = oi
+        .call(
+            "/apps/install/invoke",
+            json!({ "app": "demo", "params": { "admin-email": "not-an-email" } }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+}

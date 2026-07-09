@@ -295,4 +295,94 @@ mod tests {
         params.insert("backup".into(), json!({ "strategy": "s" }));
         validate_action_params(&params).unwrap();
     }
+
+    use crate::oi::test_support::TestOi;
+
+    // i[verify action.invoke]
+    #[test]
+    fn invoke_on_unknown_app_is_not_found() {
+        let oi = TestOi::new();
+        let (code, _) = oi
+            .call(
+                "/apps/action/invoke",
+                json!({ "app": "ghost", "name": "backup" }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "not_found");
+    }
+
+    // i[verify action.not-installed-gate]
+    #[test]
+    fn invoke_on_uninstalled_app_is_rejected() {
+        let oi = TestOi::with_app("demo");
+        let (code, _) = oi
+            .call(
+                "/apps/action/invoke",
+                json!({ "app": "demo", "name": "backup" }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "not_installed");
+    }
+
+    // i[verify action.invoke]
+    #[test]
+    fn invoke_unknown_action_on_installed_app_is_not_found() {
+        let oi = TestOi::with_app("demo");
+        oi.install("demo");
+        let (code, message) = oi
+            .call(
+                "/apps/action/invoke",
+                json!({ "app": "demo", "name": "nope" }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "not_found");
+        assert!(message.contains("action not found"), "message: {message}");
+    }
+
+    // l[verify action.start.no-manual-invoke]
+    #[test]
+    fn invoke_start_is_rejected() {
+        let oi = TestOi::with_app("demo");
+        oi.install("demo");
+        let (code, message) = oi
+            .call(
+                "/apps/action/invoke",
+                json!({ "app": "demo", "name": "start" }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "not_found");
+        assert!(message.contains("lifecycle action"), "message: {message}");
+    }
+
+    // r[verify operation.volume-param.reserved]
+    #[test]
+    fn invoke_with_reserved_param_key_is_rejected() {
+        let oi = TestOi::with_app("demo");
+        oi.install("demo");
+        let (code, _) = oi
+            .call(
+                "/apps/action/invoke",
+                json!({
+                    "app": "demo",
+                    "name": "backup",
+                    "params": { "dest_volume": "anything" },
+                }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid");
+    }
+
+    // i[verify action.cancel]
+    #[test]
+    fn cancel_without_active_operation_is_not_found() {
+        let oi = TestOi::with_app("demo");
+        let (code, message) = oi
+            .call("/apps/action/cancel", json!({ "app": "demo" }))
+            .unwrap_err();
+        assert_eq!(code, "not_found");
+        assert!(
+            message.contains("no active operation"),
+            "message: {message}"
+        );
+    }
 }
