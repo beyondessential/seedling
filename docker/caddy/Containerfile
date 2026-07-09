@@ -1,0 +1,17 @@
+# Custom Caddy image with the caddy-l4 plugin (L4 proxying for raw TCP/UDP
+# ingress, which stock Caddy can't do).
+#
+# Built and published to ghcr.io/beyondessential/seedling-caddy by
+# .github/workflows/caddy-image.yml. The daemon PULLS this image at runtime
+# (see crates/core/src/system/caddy/startup.rs) — it does not build it.
+#
+# The Caddy base version and the caddy-l4 version must stay compatible:
+# caddy-l4 declares a minimum Caddy version, so an unpinned plugin can float to
+# a release that demands a newer Caddy than the builder provides and fail the
+# build. Bump both together, and update the tag in the workflow AND in
+# startup.rs (CADDY_IMAGE).
+FROM docker.io/library/caddy:2.11.3-builder AS builder
+RUN xcaddy build --with github.com/mholt/caddy-l4@v0.1.1
+
+FROM docker.io/library/caddy:2.11.3
+COPY --from=builder /usr/bin/caddy /usr/bin/caddy
