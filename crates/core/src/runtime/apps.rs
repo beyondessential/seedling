@@ -304,6 +304,13 @@ pub fn get_script_at_generation(
     app: &AppName,
     generation: generations::Generation,
 ) -> rusqlite::Result<Option<String>> {
+    // i[impl app.script]
+    // At-or-before resolution only applies to generations that exist (e.g.
+    // param-change generations that share the previous script); a generation
+    // that was never recorded must not resolve to any script.
+    if generations::get(db, app, generation)?.is_none() {
+        return Ok(None);
+    }
     let hash = match generations::script_hash_at(db, app, generation) {
         Ok(h) => h,
         Err(generations::Error::NotFound { .. }) => return Ok(None),

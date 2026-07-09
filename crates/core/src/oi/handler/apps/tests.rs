@@ -234,6 +234,17 @@ fn script_returns_current_and_historic_generations() {
     assert_eq!(code, "not_found");
 }
 
+// i[verify app.script]
+#[test]
+fn script_at_nonexistent_generation_is_not_found() {
+    let oi = TestOi::with_app("demo");
+    let (code, message) = oi
+        .call("/apps/script", json!({ "app": "demo", "generation": 42 }))
+        .unwrap_err();
+    assert_eq!(code, "not_found");
+    assert!(message.contains("generation 42"), "message: {message}");
+}
+
 // i[verify generation.history]
 #[test]
 fn generations_unknown_app_is_not_found() {
