@@ -57,7 +57,7 @@ import { useSafetyMode } from "../components/SafetyModeProvider";
 import { useSessionContext } from "../components/SessionProvider";
 import { SnapshotVolumeDialog } from "../components/SnapshotVolumeDialog";
 import { useOiAction } from "../hooks/useOiAction";
-import { useOiQuery } from "../hooks/useOi";
+import { useOiQuery, type OiQueryError } from "../hooks/useOi";
 import type {
   AppVolume,
   DeclaredExternalVolume,
@@ -74,11 +74,13 @@ function ConfirmDeleteHeldDialog({
   onCancel,
   onConfirm,
   loading,
+  error,
 }: {
   volume: HeldVolume;
   onCancel: () => void;
   onConfirm: () => void;
   loading: boolean;
+  error: OiQueryError | null;
 }) {
   return (
     <Dialog open onClose={loading ? undefined : onCancel} maxWidth="xs" fullWidth>
@@ -103,6 +105,11 @@ function ConfirmDeleteHeldDialog({
         }}>
           Reason it was held: {volume.reason}
         </Typography>
+        {error && (
+          <Box sx={{ mt: 2 }}>
+            <OiErrorAlert error={error} />
+          </Box>
+        )}
       </DialogContent>
       <DialogActions>
         <Button onClick={onCancel} disabled={loading}>
@@ -213,11 +220,13 @@ function ConfirmDeleteSiteDialog({
   onCancel,
   onConfirm,
   loading,
+  error,
 }: {
   volume: SiteVolume;
   onCancel: () => void;
   onConfirm: () => void;
   loading: boolean;
+  error: OiQueryError | null;
 }) {
   const isBind = volume.kind === "bind";
   const isSnapshot = volume.kind === "snapshot";
@@ -256,6 +265,11 @@ function ConfirmDeleteSiteDialog({
             be recovered from there, or permanently deleted later. Any app
             that still depends on it will start seeing it as missing.
           </Alert>
+        )}
+        {error && (
+          <Box sx={{ mt: 2 }}>
+            <OiErrorAlert error={error} />
+          </Box>
         )}
       </DialogContent>
       <DialogActions>
@@ -305,21 +319,17 @@ function CreateSiteVolumeDialog({
   };
 
   const handleSubmit = async () => {
-    try {
-      if (kind === "snapshot") {
-        await execute("/volumes/site/snapshot", { name, source });
-      } else {
-        await execute("/volumes/site/create", {
-          name,
-          kind,
-          ...(kind === "bind" ? { host_path: hostPath } : {}),
-        });
-      }
-      onSuccess();
-      handleClose();
-    } catch {
-      // displayed via error
-    }
+    const result =
+      kind === "snapshot"
+        ? await execute("/volumes/site/snapshot", { name, source })
+        : await execute("/volumes/site/create", {
+            name,
+            kind,
+            ...(kind === "bind" ? { host_path: hostPath } : {}),
+          });
+    if (result === null) return;
+    onSuccess();
+    handleClose();
   };
 
   const snapshotOptions = [
@@ -736,17 +746,18 @@ export default function Volumes() {
     if (!siteDeleteTarget) return;
     setDeleteBusy(true);
     try {
-      await execute("/volumes/site/delete", { name: siteDeleteTarget.name });
-      refetchSite();
-      refetchHeld();
-      setSiteDeleteTarget(null);
+      if ((await execute("/volumes/site/delete", { name: siteDeleteTarget.name })) !== null) {
+        refetchSite();
+        refetchHeld();
+        setSiteDeleteTarget(null);
+      }
     } finally {
       setDeleteBusy(false);
     }
   };
 
   const unmapVolume = async (app: string, external_name: string) => {
-    await execute("/volumes/external/unmap", { app, external_name });
+    if ((await execute("/volumes/external/unmap", { app, external_name })) === null) return;
     refetchMappings();
   };
 
@@ -754,9 +765,10 @@ export default function Volumes() {
     if (!heldDeleteTarget) return;
     setDeleteBusy(true);
     try {
-      await execute("/volumes/held/delete", { id: heldDeleteTarget.id });
-      refetchHeld();
-      setHeldDeleteTarget(null);
+      if ((await execute("/volumes/held/delete", { id: heldDeleteTarget.id })) !== null) {
+        refetchHeld();
+        setHeldDeleteTarget(null);
+      }
     } finally {
       setDeleteBusy(false);
     }
@@ -1247,6 +1259,7 @@ export default function Volumes() {
           onCancel={() => setSiteDeleteTarget(null)}
           onConfirm={() => void confirmDeleteSiteVol()}
           loading={deleteBusy}
+          error={actionError}
         />
       )}
       {heldDeleteTarget && (
@@ -1255,6 +1268,7 @@ export default function Volumes() {
           onCancel={() => setHeldDeleteTarget(null)}
           onConfirm={() => void confirmDeleteHeld()}
           loading={deleteBusy}
+          error={actionError}
         />
       )}
       {heldRestoreTarget && (

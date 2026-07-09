@@ -108,6 +108,20 @@ describe("Ingresses", () => {
     expect(await screen.findAllByText("(none)")).toHaveLength(2);
   });
 
+  // w[verify routes.ingresses]
+  it("shows an error alert when the ingress list query fails", async () => {
+    renderWithSession(<Ingresses />, {
+      fixtures: {
+        ...empty,
+        "/ingresses/site/list": {
+          ok: false,
+          error: { code: "internal", message: "db exploded" },
+        },
+      },
+    });
+    expect(await screen.findByText(/db exploded/)).toBeTruthy();
+  });
+
   it("splits manual and discovered ingresses and renders attachments", async () => {
     renderWithSession(<Ingresses />, { fixtures: populated });
 

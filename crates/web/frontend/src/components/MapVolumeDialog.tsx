@@ -89,20 +89,17 @@ export function MapVolumeDialog({ open, onClose, onSuccess, existing, prefill }:
       targetKind === "app"
         ? { kind: "app" as const, app: targetApp, volume: targetVolume }
         : { kind: "site" as const, name: targetVolume };
-    try {
-      await execute(
-        isRemap ? "/volumes/external/remap" : "/volumes/external/map",
-        {
-          app: resolvedApp,
-          external_name: resolvedName,
-          target,
-          read_only: readOnly,
-        },
-      );
-      onSuccess();
-    } catch {
-      // displayed via error
-    }
+    const result = await execute(
+      isRemap ? "/volumes/external/remap" : "/volumes/external/map",
+      {
+        app: resolvedApp,
+        external_name: resolvedName,
+        target,
+        read_only: readOnly,
+      },
+    );
+    if (result === null) return;
+    onSuccess();
   };
 
   return (

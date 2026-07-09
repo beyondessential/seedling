@@ -88,28 +88,21 @@ export default function Templates() {
 
   const handleCreate = async () => {
     if (!canSubmit) return;
-    try {
-      await execute("/templates/create", {
-        name,
-        body,
-        description: description.trim() === "" ? null : description.trim(),
-      });
-      setDialogOpen(false);
-      resetForm();
-      refetch();
-    } catch {
-      // displayed via error
-    }
+    const result = await execute("/templates/create", {
+      name,
+      body,
+      description: description.trim() === "" ? null : description.trim(),
+    });
+    if (result === null) return;
+    setDialogOpen(false);
+    resetForm();
+    refetch();
   };
 
   const handleRemove = async (target: string) => {
-    try {
-      await removeExec("/templates/remove", { name: target });
-      setConfirmRemove(null);
-      refetch();
-    } catch {
-      // displayed via error
-    }
+    if ((await removeExec("/templates/remove", { name: target })) === null) return;
+    setConfirmRemove(null);
+    refetch();
   };
 
   return (

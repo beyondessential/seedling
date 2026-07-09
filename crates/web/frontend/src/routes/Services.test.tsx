@@ -259,6 +259,24 @@ describe("Services", () => {
     expect(call?.[1]).toEqual({ name: "db" });
   });
 
+  it("surfaces a failed site service deletion", async () => {
+    renderWithSession(<Services />, {
+      fixtures: {
+        ...populated,
+        "/services/site/delete": {
+          ok: false,
+          error: { code: "internal", message: "db exploded" },
+        },
+      },
+      safetyMode: "dangerous",
+    });
+    await screen.findByText("db");
+    fireEvent.click(buttonByTooltip(document.body, "Delete"));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    expect(await screen.findByText(/db exploded/)).toBeTruthy();
+  });
+
   it("removes an endpoint from its row", async () => {
     const { request } = renderWithSession(<Services />, {
       fixtures: populated,

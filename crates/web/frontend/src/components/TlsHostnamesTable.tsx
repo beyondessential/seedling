@@ -170,12 +170,8 @@ export function TlsHostnamesTable({
 
   const onRetry = async (hostname: string) => {
     clearError();
-    try {
-      await execute("/tls/certificates/retry", { hostname });
-      refetch();
-    } catch {
-      // surfaced via actionError
-    }
+    if ((await execute("/tls/certificates/retry", { hostname })) === null) return;
+    refetch();
   };
 
   const rows = data?.hostnames ?? [];

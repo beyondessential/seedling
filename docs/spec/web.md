@@ -196,6 +196,9 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > w[routes.backups]
 > The web interface exposes backup management: registering and deregistering backup apps; creating, listing, showing, updating, and deleting backup strategies; triggering immediate backups; listing snapshots; and restoring snapshots.
 
+> w[routes.ingresses]
+> The web interface exposes site ingress management: listing manual and discovered ingresses separately; creating, updating, and deleting manual ingresses; attaching and detaching forward and redirect targets; and showing discovery provider status, including a warning while discovery is unhealthy. Failures of the underlying queries and mutations must be surfaced to the operator.
+
 > w[routes.sessions]
 > The web interface must provide a connected-clients view showing all active web UI sessions, open CLI shell sessions, and active port forwards. Each entry must show at minimum the client identity, the connected or opened timestamp, and — for shells and forwards — the associated app. Web UI session entries must additionally surface a `last_seen` timestamp updated by [sessions.heartbeat](#w--sessions.heartbeat) so operators can distinguish a fresh session from one waiting to age out.
 

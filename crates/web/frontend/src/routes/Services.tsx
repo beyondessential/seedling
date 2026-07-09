@@ -159,15 +159,11 @@ function CreateSiteServiceDialog({
   };
 
   const handleSubmit = async () => {
-    try {
-      const body: Record<string, unknown> = { name };
-      if (description.trim()) body.description = description.trim();
-      await execute("/services/site/create", body);
-      onSuccess();
-      handleClose();
-    } catch {
-      // shown via error
-    }
+    const body: Record<string, unknown> = { name };
+    if (description.trim()) body.description = description.trim();
+    if ((await execute("/services/site/create", body)) === null) return;
+    onSuccess();
+    handleClose();
   };
 
   return (
@@ -251,19 +247,16 @@ function AddEndpointDialog({
       );
       return;
     }
-    try {
-      await execute("/services/site/endpoint/add", {
-        name: service.name,
-        service_port: svcPort,
-        protocol,
-        remote_host: remoteHost,
-        remote_port: remPort,
-      });
-      onSuccess();
-      onClose();
-    } catch {
-      // shown via error
-    }
+    const result = await execute("/services/site/endpoint/add", {
+      name: service.name,
+      service_port: svcPort,
+      protocol,
+      remote_host: remoteHost,
+      remote_port: remPort,
+    });
+    if (result === null) return;
+    onSuccess();
+    onClose();
   };
 
   return (
@@ -400,13 +393,9 @@ function MapExternalServiceDialog({
         ? { kind: "site", name: siteName }
         : { kind: "app", app: targetApp, service: targetService };
     const path = isRemap ? "/services/external/remap" : "/services/external/map";
-    try {
-      await execute(path, { app, external_name: slot, target });
-      onSuccess();
-      onClose();
-    } catch {
-      // shown via error
-    }
+    if ((await execute(path, { app, external_name: slot, target })) === null) return;
+    onSuccess();
+    onClose();
   };
 
   const canSubmit =
@@ -638,9 +627,10 @@ export default function Services() {
     if (!deleteTarget) return;
     setDeleteBusy(true);
     try {
-      await execute("/services/site/delete", { name: deleteTarget.name });
-      refetchSite();
-      setDeleteTarget(null);
+      if ((await execute("/services/site/delete", { name: deleteTarget.name })) !== null) {
+        refetchSite();
+        setDeleteTarget(null);
+      }
     } finally {
       setDeleteBusy(false);
     }
@@ -653,18 +643,19 @@ export default function Services() {
     remote_host: string,
     remote_port: number,
   ) => {
-    await execute("/services/site/endpoint/remove", {
+    const result = await execute("/services/site/endpoint/remove", {
       name: svc.name,
       service_port,
       protocol,
       remote_host,
       remote_port,
     });
+    if (result === null) return;
     refetchSite();
   };
 
   const unmap = async (app: string, external_name: string) => {
-    await execute("/services/external/unmap", { app, external_name });
+    if ((await execute("/services/external/unmap", { app, external_name })) === null) return;
     refetchMappings();
   };
 

@@ -129,6 +129,22 @@ describe("Backups", () => {
     expect(callsTo(request, "/backups/run")).toEqual([{ strategy: "nightly" }]);
   });
 
+  it("surfaces a failed backup run instead of swallowing it", async () => {
+    renderWithSession(<Backups />, {
+      fixtures: {
+        ...populated,
+        "/backups/run": {
+          ok: false,
+          error: { code: "internal", message: "runner offline" },
+        },
+      },
+      safetyMode: "write",
+    });
+    await screen.findByText("nightly");
+    fireEvent.click(iconButton(row("nightly"), "Run backup now"));
+    expect(await screen.findByText(/runner offline/)).toBeTruthy();
+  });
+
   it("deletes a strategy from its row", async () => {
     const { request } = renderWithSession(<Backups />, {
       fixtures: populated,

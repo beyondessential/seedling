@@ -94,12 +94,8 @@ function CreateSiteIngressDialog({
       tls_provider: tlsProvider,
     };
     if (description.trim()) params.description = description.trim();
-    try {
-      await execute("/ingresses/site/create", params);
-      onCreated();
-    } catch {
-      /* error surfaced via `error` state */
-    }
+    if ((await execute("/ingresses/site/create", params)) === null) return;
+    onCreated();
   };
   const valid = name.trim() !== "" && hostname.trim() !== "";
   return (
@@ -227,29 +223,25 @@ function AttachDialog({
   const onSubmit = async () => {
     const portNum = Number.parseInt(port, 10);
     if (!Number.isFinite(portNum) || portNum < 1 || portNum > 65535) return;
-    try {
-      if (kind === "forward") {
-        await execute("/ingresses/site/attach/forward", {
-          name: ingress.name,
-          port: portNum,
-          protocol,
-          target_app: targetApp,
-          target_service: targetService,
-        });
-      } else {
-        await execute("/ingresses/site/attach/redirect", {
-          name: ingress.name,
-          port: portNum,
-          protocol,
-          redirect_url: redirectUrl,
-          redirect_code: redirectCode,
-          preserve_path: preservePath,
-        });
-      }
-      onAttached();
-    } catch {
-      /* error surfaced via `error` state */
-    }
+    const result =
+      kind === "forward"
+        ? await execute("/ingresses/site/attach/forward", {
+            name: ingress.name,
+            port: portNum,
+            protocol,
+            target_app: targetApp,
+            target_service: targetService,
+          })
+        : await execute("/ingresses/site/attach/redirect", {
+            name: ingress.name,
+            port: portNum,
+            protocol,
+            redirect_url: redirectUrl,
+            redirect_code: redirectCode,
+            preserve_path: preservePath,
+          });
+    if (result === null) return;
+    onAttached();
   };
   const portValid = (() => {
     const n = Number.parseInt(port, 10);
@@ -524,27 +516,21 @@ export default function Ingresses() {
   };
 
   const onDetach = async (ingress: SiteIngress, att: SiteIngressAttachment) => {
-    try {
-      await executeDetach("/ingresses/site/detach", {
-        name: ingress.name,
-        port: att.port,
-        protocol: att.protocol,
-      });
-      refresh();
-    } catch {
-      /* error surfaced via `detachError` */
-    }
+    const result = await executeDetach("/ingresses/site/detach", {
+      name: ingress.name,
+      port: att.port,
+      protocol: att.protocol,
+    });
+    if (result === null) return;
+    refresh();
   };
 
   const onConfirmDelete = async () => {
     if (!deleteTarget) return;
-    try {
-      await executeRemove("/ingresses/site/delete", { name: deleteTarget.name });
-      setDeleteTarget(null);
-      refresh();
-    } catch {
-      /* error surfaced via `removeError` */
-    }
+    const result = await executeRemove("/ingresses/site/delete", { name: deleteTarget.name });
+    if (result === null) return;
+    setDeleteTarget(null);
+    refresh();
   };
 
   const ingresses = list.data ?? [];
@@ -601,6 +587,16 @@ export default function Ingresses() {
       {removeError && (
         <Box sx={{ mb: 2 }}>
           <OiErrorAlert error={removeError} />
+        </Box>
+      )}
+      {list.error && (
+        <Box sx={{ mb: 2 }}>
+          <OiErrorAlert error={list.error} />
+        </Box>
+      )}
+      {discovery.error && (
+        <Box sx={{ mb: 2 }}>
+          <OiErrorAlert error={discovery.error} />
         </Box>
       )}
 
