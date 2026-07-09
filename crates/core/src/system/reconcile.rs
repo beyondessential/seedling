@@ -38,6 +38,12 @@ mod phases;
 mod site_proxy;
 mod state;
 
+/// Per-tick budget for bringing each infra component (Caddy, resolver) up. The
+/// whole ensure_* operation — image acquisition, container start, and health
+/// check — must fit within this; overrunning it is reported as a bring-up
+/// timeout for that component and the tick moves on.
+const INFRA_ENSURE_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Enumerate hostnames from the site-ingress snapshot that need TLS this
 /// tick. A hostname is only emitted when its parent ingress is non-stale,
 /// declares a non-`None` TLS provider, *and* carries at least one
@@ -713,7 +719,7 @@ impl Reconciler {
             ),
             phases::run_volumes_phase(&self.observer, &self.actuator, &self.db, &apps),
             tokio::time::timeout(
-                Duration::from_secs(10),
+                INFRA_ENSURE_TIMEOUT,
                 caddy::ensure_caddy_running(
                     &*self.driver.container,
                     &*self.driver.process,
@@ -723,7 +729,7 @@ impl Reconciler {
             ),
             // r[impl infra.resolver.startup]
             tokio::time::timeout(
-                Duration::from_secs(10),
+                INFRA_ENSURE_TIMEOUT,
                 resolver::ensure_resolver_running(
                     &*self.driver.container,
                     &*self.driver.process,
@@ -784,13 +790,25 @@ impl Reconciler {
                 }
             },
             Ok(Err(e)) => {
-                error!(error = %e, "caddy health check failed; skipping nftables and proxy this tick");
-                self.file_system_fault("caddy_failed", &format!("caddy health check failed: {e}"));
+                // `e` already names the specific failure (image pull, container
+                // start, health check, …); don't presume it was the health
+                // check.
+                error!(error = %e, "caddy bring-up failed; skipping nftables and proxy this tick");
+                self.file_system_fault("caddy_failed", &format!("caddy bring-up failed: {e}"));
                 None
             }
             Err(_) => {
-                warn!("caddy health check timed out; skipping nftables and proxy this tick");
-                self.file_system_fault("caddy_failed", "caddy health check timed out");
+                // The whole ensure_caddy_running (image acquisition, container
+                // start, and health check) exceeded the tick budget — not
+                // specifically the health check.
+                let secs = INFRA_ENSURE_TIMEOUT.as_secs();
+                warn!(
+                    "caddy bring-up did not complete within {secs}s; skipping nftables and proxy this tick"
+                );
+                self.file_system_fault(
+                    "caddy_failed",
+                    &format!("caddy bring-up did not complete within {secs}s (image pull, container start, or health check)"),
+                );
                 None
             }
         };
