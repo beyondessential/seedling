@@ -6,7 +6,7 @@ pub struct Config {
     pub auth: AuthConfig,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct AuthConfig {
     pub password_hash: Option<String>,
     #[expect(dead_code, reason = "reserved for future signed-token support")]
@@ -14,6 +14,19 @@ pub struct AuthConfig {
     /// Lifetime of long-lived session tokens in seconds. Default 86400 (1 day).
     #[serde(default = "default_session_lifetime")]
     pub session_lifetime_secs: u64,
+}
+
+// The serde field default only applies while deserialising an `[auth]` table;
+// a config with no `[auth]` section (or no config file at all) goes through
+// `Default` instead, which must agree or sessions get a zero lifetime.
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            password_hash: None,
+            session_secret: None,
+            session_lifetime_secs: default_session_lifetime(),
+        }
+    }
 }
 
 fn default_session_lifetime() -> u64 {
@@ -56,6 +69,19 @@ mod tests {
         let file = write_config("[auth]\n");
         let config = Config::from_file(file.path()).unwrap();
         assert_eq!(config.auth.password_hash, None);
+        assert_eq!(config.auth.session_lifetime_secs, 86400);
+    }
+
+    #[test]
+    fn missing_auth_section_uses_default_lifetime() {
+        let file = write_config("");
+        let config = Config::from_file(file.path()).unwrap();
+        assert_eq!(config.auth.session_lifetime_secs, 86400);
+    }
+
+    #[test]
+    fn default_config_uses_default_lifetime() {
+        let config = Config::default();
         assert_eq!(config.auth.session_lifetime_secs, 86400);
     }
 
