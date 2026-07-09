@@ -181,3 +181,6 @@ fn re_evaluate_all_apps(state: &OiState) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

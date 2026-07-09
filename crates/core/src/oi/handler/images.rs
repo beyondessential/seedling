@@ -547,3 +547,6 @@ pub(crate) fn reconcile_pins_post_update(state: &OiState, app_name: &AppName) {
         }
     });
 }
+
+#[cfg(test)]
+mod tests;
