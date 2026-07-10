@@ -10,7 +10,7 @@ Where this document is silent, the portable runtime spec applies unchanged. Wher
 > The Windows runtime supports Windows Server 2019 and later, x64 only. All mechanisms specified here (ConPTY, NRPT, WFP ALE-layer classification of loopback traffic, `skipassource` address flags, VHDX attach APIs) must be available on the platform floor; a mechanism requiring a later version must be gated behind a [capability](#win--capability.map).
 
 > win[platform.non-goals]
-> The following are explicitly out of scope for the Windows runtime v1: workload survival across host reboot ([win[boot.cold]](#win--boot.cold)), volume snapshots and the snapshot-based backup strategies, Windows containers, WSL2, horizontal scaling (replica count is fixed at 1 per Deployment), blue/green instance replacement ([win[deploy.stop-start]](#win--deploy.stop-start)), and outbound-deny network policy.
+> The following are explicitly out of scope for the Windows runtime v1: workload survival across host reboot ([win[boot.cold]](#win--boot.cold)), volume snapshots and the snapshot-based backup strategies, Windows containers, WSL2, horizontal scaling (replica count is fixed at 1 per Deployment), blue/green replacement of special services ([win[special.upgrade]](#win--special.upgrade)), and outbound-deny network policy.
 
 # Boot and Reboot Semantics
 
@@ -24,10 +24,10 @@ Where this document is silent, the portable runtime spec applies unchanged. Wher
 
 # Deploys and Replacement
 
-> win[deploy.stop-start]
-> The Windows runtime v1 admits a weaker replacement model than the Linux runtime's rolling update (`r[update.rolling]`) and healthcheck replacement (`r[autonomous.healthcheck-replace]`), which this rule replaces: deploys and health-driven replacement are stop-then-start of the single instance. No replacement instance runs alongside the old one, and no traffic shifting occurs.
+> win[deploy.replace]
+> Workload deploys and health-driven replacement retain the portable zero-downtime semantics (`r[update.rolling]`, `r[autonomous.healthcheck-replace]`), mediated by the supervisor rather than by routing: the supervisor owns the service-address listeners ([win[net.listener]](#win--net.listener)), so it brings up the replacement workload generation alongside the old one — transiently owning both generations' Job Objects, the one exception to the single-Job phrasing of [win[supervisor.ownership]](#win--supervisor.ownership) — and switches the relay target when the replacement is ready. Each generation receives its own private listener assignment ([win[net.bind-address]](#win--net.bind-address)); the service-address bind is never dropped or handed off across processes. Connections in flight to the old generation drain until closed; new connections relay to the new generation.
 >
-> The supervisor persists across the swap ([win[identity.lifecycle]](#win--identity.lifecycle)) and keeps holding the instance's service addresses ([win[net.listener]](#win--net.listener)), so inbound connections queue during the swap rather than being refused; the disruption window is the workload's stop plus start time, not a connection-refused outage.
+> The supervisor itself persists across deploys ([win[identity.lifecycle]](#win--identity.lifecycle)): a deploy changes what it runs, not who holds the addresses.
 
 # Process Model
 
@@ -166,6 +166,9 @@ The Linux runtime's per-service IPv6 addressing survives on Windows as loopback 
 
 > win[special.resolver]
 > The resolver is a special service (CoreDNS), replacing the Linux resolver infrastructure container (`r[infra.resolver]`). It binds the Seedling resolver address; the daemon renders its zone data and upstream forwarding configuration. NRPT scoping per [win[net.resolver]](#win--net.resolver) is unchanged.
+
+> win[special.upgrade]
+> Special services hold their own binds precisely so that no Seedling process sits in their data path: the daemon and every supervisor can stop or restart without dropping public traffic or DNS. The recorded trade is that special services are not blue/green replaceable — a special-service binary upgrade is stop-then-start with a brief outage. Configuration changes do not incur this: they apply via graceful reload ([win[special.ingress]](#win--special.ingress)). A zero-downtime ingress upgrade would require a Seedling-held front bind relaying to the controller, reintroducing the data-path coupling this design exists to avoid; it is explicitly rejected for v1.
 
 # Shutdown and Signals
 
