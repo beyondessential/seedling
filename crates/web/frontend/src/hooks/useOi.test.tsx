@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { SessionContext } from "../components/SessionProvider";
 import { makeFakeClient, type Fixture } from "../test/harness";
 import type { Session } from "../lib/session";
-import { useOiQuery } from "./useOi";
+import { invalidateOiQueryCache, useOiQuery } from "./useOi";
 import { useOiAction } from "./useOiAction";
 
 function renderProbe(ui: React.ReactElement, fixtures: Record<string, Fixture> = {}) {
@@ -179,5 +179,21 @@ describe("useOiAction", () => {
 
     fireEvent.click(screen.getByText("clear"));
     expect(screen.getByTestId("error").textContent).toBe("");
+  });
+});
+
+describe("invalidateOiQueryCache", () => {
+  it("removes every entry for the method and nothing else", () => {
+    sessionStorage.setItem("oiq:/backups/snapshots/list:{\"strategy\":\"a\"}", "x");
+    sessionStorage.setItem("oiq:/backups/snapshots/list:{\"strategy\":\"b\"}", "y");
+    sessionStorage.setItem("oiq:/apps/list:{}", "z");
+    sessionStorage.setItem("unrelated", "w");
+
+    invalidateOiQueryCache("/backups/snapshots/list");
+
+    expect(sessionStorage.getItem('oiq:/backups/snapshots/list:{"strategy":"a"}')).toBeNull();
+    expect(sessionStorage.getItem('oiq:/backups/snapshots/list:{"strategy":"b"}')).toBeNull();
+    expect(sessionStorage.getItem("oiq:/apps/list:{}")).toBe("z");
+    expect(sessionStorage.getItem("unrelated")).toBe("w");
   });
 });

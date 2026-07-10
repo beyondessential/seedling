@@ -36,8 +36,10 @@ function stableStringify(value: unknown): string {
   return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(",")}}`;
 }
 
+const CACHE_PREFIX = "oiq:";
+
 function cacheKey(method: string, params: unknown): string {
-  return `oiq:${method}:${stableStringify(params)}`;
+  return `${CACHE_PREFIX}${method}:${stableStringify(params)}`;
 }
 
 interface CacheEntry<T> {
@@ -69,6 +71,23 @@ function writeCache<T>(key: string, data: T, ttlMs: number): void {
   } catch {
     // sessionStorage can throw on quota exhaustion or in private-mode setups;
     // a cache miss is harmless.
+  }
+}
+
+/** Drop every cached response for `method`, regardless of params. For views
+ *  that learn through an event that a cached listing is stale before its TTL
+ *  expires: a later mount refetches live instead of serving the old entry. */
+export function invalidateOiQueryCache(method: string): void {
+  const prefix = `${CACHE_PREFIX}${method}:`;
+  try {
+    const doomed: string[] = [];
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const key = sessionStorage.key(i);
+      if (key?.startsWith(prefix)) doomed.push(key);
+    }
+    for (const key of doomed) sessionStorage.removeItem(key);
+  } catch {
+    // Same stance as read/write: a broken cache is only a cache miss.
   }
 }
 
