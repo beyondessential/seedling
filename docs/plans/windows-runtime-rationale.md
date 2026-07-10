@@ -18,6 +18,8 @@ Non-normative companion to `runtime-windows.md`. Records alternatives considered
 
 **Retreat positions for dynamic-Job identity.** If per-invocation service churn proves noisy (SIEM escalations, marked-for-delete accumulation, dispatch latency): first retreat is stable service names per `(app, job-definition)` — lifecycle-operation concurrency means same-Job instances coexist only via concurrent shell attaches, which can suffix — reducing registration to once per Job definition. Second retreat is dynamic Jobs sharing the parent app's SID (no registration; Jobs become indistinguishable from the app in the ACL/WFP model). The backup rework removes the main scheduled churn source, so the trigger may never fire.
 
+**Weaker replacement model (v1).** Blue/green replacement would require two instances of a workload to coexist while sharing service addresses — an address handoff or dual listeners in the supervisor. v1 does stop-then-start instead: the fleet is single-replica anyway, and the supervisor-held listener already bounds disruption to the workload restart window while decoupling addressing from workload lifetime. If zero-downtime replacement becomes a requirement, the gap to close is dual-workload coexistence, not addressing.
+
 **seedpod as data plane.** Recorded trade: the supervisor's reliability budget equals the workload's, and it relays all mount traffic. Mitigations if it pinches: smaller job-holder process; direct-dial mounts; both invisible to spec surfaces.
 
 ## Governance ledger

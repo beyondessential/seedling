@@ -10,7 +10,7 @@ Where this document is silent, the portable runtime spec applies unchanged. Wher
 > The Windows runtime supports Windows Server 2019 and later, x64 only. All mechanisms specified here (ConPTY, NRPT, WFP ALE-layer classification of loopback traffic, `skipassource` address flags, VHDX attach APIs) must be available on the platform floor; a mechanism requiring a later version must be gated behind a [capability](#win--capability.map).
 
 > win[platform.non-goals]
-> The following are explicitly out of scope for the Windows runtime v1: workload survival across host reboot ([win[boot.cold]](#win--boot.cold)), volume snapshots and the snapshot-based backup strategies, Windows containers, WSL2, horizontal scaling (replica count is fixed at 1 per Deployment), and outbound-deny network policy.
+> The following are explicitly out of scope for the Windows runtime v1: workload survival across host reboot ([win[boot.cold]](#win--boot.cold)), volume snapshots and the snapshot-based backup strategies, Windows containers, WSL2, horizontal scaling (replica count is fixed at 1 per Deployment), blue/green instance replacement ([win[deploy.stop-start]](#win--deploy.stop-start)), and outbound-deny network policy.
 
 # Boot and Reboot Semantics
 
@@ -21,6 +21,13 @@ Where this document is silent, the portable runtime spec applies unchanged. Wher
 
 > win[boot.replay]
 > Interrupted-operation replay at boot (per `r[operation.lifecycle.events]`) composes with cold start: the replayed operation executes against a world in which no instance from the previous boot is running. Barrier replay rules must tolerate this — a replayed `rt.start()` finds nothing to adopt and starts fresh; a replayed observation of a terminated resource is satisfied vacuously. The action log's at-most-once guarantees (e.g. `r[rt.signal]`) apply unchanged.
+
+# Deploys and Replacement
+
+> win[deploy.stop-start]
+> The Windows runtime v1 admits a weaker replacement model than the Linux runtime's rolling update (`r[update.rolling]`) and healthcheck replacement (`r[autonomous.healthcheck-replace]`), which this rule replaces: deploys and health-driven replacement are stop-then-start of the single instance. No replacement instance runs alongside the old one, and no traffic shifting occurs.
+>
+> The supervisor persists across the swap ([win[identity.lifecycle]](#win--identity.lifecycle)) and keeps holding the instance's service addresses ([win[net.listener]](#win--net.listener)), so inbound connections queue during the swap rather than being refused; the disruption window is the workload's stop plus start time, not a connection-refused outage.
 
 # Process Model
 
@@ -123,7 +130,7 @@ The Linux runtime's per-service IPv6 addressing survives on Windows as loopback 
 > A mount (A may reach B) compiles to: A dials B's service address, which is B's supervisor's listener, which relays to B's private address. This is the role DNAT plays on Linux; A needs nothing installed on its side. The relay is a raw TCP byte relay: no PROXY protocol, no protocol awareness. Client identity for HTTP traffic is conveyed at layer 7 (ingress adds X-Forwarded-For). The relay must not impose idle timeouts; long-lived streams (WebSocket upgrades) are relayed until either side closes.
 
 > win[net.resolver]
-> The resolver concept of the portable spec survives intact: the runtime serves DNS for the Seedling zone on a Seedling prefix address, and installs an NRPT rule scoping that zone (and only that zone) to the Seedling resolver. Global DNS resolution is untouched. NRPT rules are installed idempotently and removed on uninstall.
+> The resolver concept of the portable spec survives intact: the [resolver special service](#win--special.resolver) serves DNS for the Seedling zone on a Seedling prefix address, and the runtime installs an NRPT rule scoping that zone (and only that zone) to the Seedling resolver. Global DNS resolution is untouched. NRPT rules are installed idempotently and removed on uninstall.
 
 # Mount-Graph Enforcement (WFP)
 
@@ -138,12 +145,27 @@ The Linux runtime's per-service IPv6 addressing survives on Windows as loopback 
 >
 > - one allow per mount: A's instance SID may connect to B's service address;
 > - one allow per instance: the instance's own supervisor SID may connect to the instance's private address (the relay hop);
+> - one allow per ingress route: the ingress service SID may connect to the backing service address;
+> - allows for every instance SID and special-service SID to the resolver address's DNS port;
 > - bind/listen allows for each supervisor SID on its own addresses.
 >
 > SIDs are deterministic and addresses stable for the instance's life, so filters change when the mount graph changes or instances are created/removed — not on workload restarts. Dynamic-Job grants are operation-scoped per [win[identity.dynamic-jobs]](#win--identity.dynamic-jobs).
 
 > win[wfp.honesty]
 > The Windows threat-model document must state plainly: this is discretionary enforcement of the mount graph against non-privileged processes, not a sandbox. An administrative process can delete the filters. There is no per-connection authentication (parity with the Linux DNAT model, no regression). The host remains default-open to the external network; outbound-deny is out of scope for v1.
+
+# Special Services
+
+> win[special.model]
+> A **special service** is a runtime-installed, SCM-registered native service with a built-in [process profile](#win--profile.model) and its own virtual account, outside the workload model: no artifact, no supervisor, no service-address relay. Special services bind their operational addresses directly rather than receiving `BIND_ADDRESS` injection.
+>
+> Special services are demand-start like supervisors ([win[identity.scm-entry]](#win--identity.scm-entry) is preserved: seedlingd remains the only auto-start entry) and are started by the daemon in dependency order — the resolver first, ingress after its backends. Their registrations are permanent runtime installations, exempt from the identity GC sweep ([win[identity.gc]](#win--identity.gc)). Adopted native services ([win[postgres.native]](#win--postgres.native)) share the mechanics but are adopted rather than installed.
+
+> win[special.ingress]
+> The ingress controller (Caddy) is a special service, replacing the Linux proxy infrastructure container rules (`r[infra.proxy.startup]` and kin). It binds the host's public ports directly and dials backing workloads on their service addresses like any mount edge. The daemon renders its configuration from desired state and applies changes via graceful config reload; route changes must not drop established connections. Ingress lifecycle semantics (`r[lifecycle.ingress]`) apply unchanged.
+
+> win[special.resolver]
+> The resolver is a special service (CoreDNS), replacing the Linux resolver infrastructure container (`r[infra.resolver]`). It binds the Seedling resolver address; the daemon renders its zone data and upstream forwarding configuration. NRPT scoping per [win[net.resolver]](#win--net.resolver) is unchanged.
 
 # Shutdown and Signals
 
@@ -165,7 +187,8 @@ The Linux runtime's per-service IPv6 addressing survives on Windows as loopback 
 > `rt.signal(target, name)` retains POSIX signal names in BSL for portability. On the Windows runtime v1:
 >
 > - `SIGTERM`, `SIGINT`, `SIGQUIT`, `SIGKILL` map to **termination of the instance's Job Object without modifying desired state**. The reconciler's view is a process exit; whether the instance restarts follows from desired state, exactly as on Linux. This preserves the dominant script pattern (`rt.signal` → `.terminated_eventually()` → work → restart).
-> - All other signals (`SIGHUP`, `SIGUSR1`, …) are **skipped**: the action log records the delivery as `skipped (unsupported)` (reusing the at-most-once persistence of `r[rt.signal]`), and a warning event fires. A skipped signal must never be silently treated as delivered.
+> - `SIGHUP` maps to signalling the target profile's declared reload event ([win[profile.model]](#win--profile.model)). On targets whose profile declares no reload event, it is skipped as below.
+> - All other signals (`SIGUSR1`, …) are **skipped**: the action log records the delivery as `skipped (unsupported)` (reusing the at-most-once persistence of `r[rt.signal]`), and a warning event fires. A skipped signal must never be silently treated as delivered.
 >
 > Recorded caveat: Linux `SIGTERM` allows the target to flush and exit cleanly; `TerminateJobObject` does not. A script that depends on the workload's own shutdown work after a termination-intent signal is subtly wrong on Windows v1.
 
@@ -177,7 +200,7 @@ The Linux runtime's per-service IPv6 addressing survives on Windows as loopback 
 > win[capability.map]
 > The runtime exposes a capability map with a shared vocabulary across three surfaces: BSL (`rt.capability(name) -> bool`), the operator interface (`/status` capabilities field), and `seedling doctor`. Capabilities are per-node, fixed at script evaluation, and stable across replay, composing with the deterministic-replay rules and the discover probe.
 >
-> Initial vocabulary (Windows v1 values in parentheses): `signal:terminate` (true), `signal:reload` (false), `snapshots` (false), `storage:block-clone` (true iff volume root is ReFS), `net:nat64` (false). Linux v1 values are all-true except `storage:block-clone` where applicable. Scripts must branch on capabilities, not on OS identity.
+> Initial vocabulary (Windows v1 values in parentheses): `signal:terminate` (true), `snapshots` (false), `storage:block-clone` (true iff volume root is ReFS), `net:nat64` (false). Linux v1 values are all-true except `storage:block-clone` where applicable. Reload support is not a node capability: it is a property of the target's [process profile](#win--profile.model) ([win[signal.map]](#win--signal.map)). Scripts must branch on capabilities, not on OS identity.
 
 # Action Execution Context
 
