@@ -311,9 +311,8 @@ pub(crate) fn delete_site_ingress(
 #[derive(Deserialize)]
 pub(crate) struct UpdateSiteIngressParams {
     pub name: SiteIngressName,
-    /// If `Some`, sets the description (use empty string is rejected here —
-    /// pass `null` to clear).
-    #[serde(default)]
+    /// If `Some`, sets the description; pass `null` to clear.
+    #[serde(default, deserialize_with = "super::deserialize_optional_field")]
     pub description: Option<Option<String>>,
     /// If `Some`, sets the TLS provider. Tailscale is rejected for manual
     /// ingresses; manual ingresses can move freely between acme / internal /

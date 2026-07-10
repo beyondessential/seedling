@@ -42,6 +42,21 @@ fn parse_params<T: DeserializeOwned>(params: Value) -> Result<T, OiError> {
     })
 }
 
+// `Option<Option<T>>` distinguishes "field absent" from "field present
+// but null". serde-json's default Option deserialiser collapses both
+// into None, which would make it impossible to clear a value via the
+// same endpoint that updates it. This wrapper preserves the three-state
+// semantics; pair it with `#[serde(default)]` so absence stays `None`.
+pub(crate) fn deserialize_optional_field<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    Ok(Some(Option::<String>::deserialize(deserializer)?))
+}
+
 /// Parse the newline-terminated JSON request from `buf`, dispatch to a handler,
 /// and return the serialised JSON response (no trailing newline).
 pub fn dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Vec<u8> {
