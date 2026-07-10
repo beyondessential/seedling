@@ -68,7 +68,7 @@ The supervisor is also the data plane for mounts ([win[net.mount]](#win--net.mou
 > Service registration follows instance lifecycle, not deploys: the service is created when the instance is created and deleted when the instance is removed; deploys are stop/start of an existing service. Before calling `DeleteService`, the daemon and supervisor must close all handles to the service, since deletion is deferred while handles remain open; the [GC pass](#win--identity.gc) reaps registrations stuck in the marked-for-delete state.
 
 > win[identity.dynamic-jobs]
-> Dynamic-scope Jobs (action-spawned and shell-attached, per `l[job]` dynamic scope) also receive their own demand-start service and virtual account per instance. The full grant set — service registration, volume ACEs, WFP allows — is created before the Job starts and removed at operation (or shell session) end.
+> Dynamic-scope Jobs (action-spawned and shell-attached, per `l[job.type]` dynamic scope) also receive their own demand-start service and virtual account per instance. The full grant set — service registration, volume ACEs, WFP allows — is created before the Job starts and removed at operation (or shell session) end.
 >
 > Consequences the runtime must own: creation order is registration → ACEs → filters → start, teardown is the reverse, and both must be crash-safe. Scheduled actions generate service-install audit events (4697) per fire; the audit-event profile belongs in the Windows threat-model document.
 
@@ -76,7 +76,7 @@ The supervisor is also the data plane for mounts ([win[net.mount]](#win--net.mou
 > The reattachment/GC pass must sweep identity artifacts as well as processes: `seedling-`-prefixed service registrations, volume ACEs granting Seedling SIDs, and WFP filters under the Seedling provider GUID that match no live instance record or in-progress operation are removed. This extends the stuck-state recovery principle of `r[operation.cancel.stuck-recovery]` to identity residue.
 
 > win[identity.non-admin]
-> Workload processes never run elevated. The supervisor logs on as the instance's virtual account and spawns the workload inside the Job Object under a stripped token (`CreateProcessAsUser` with a restricted, no-extra-privileges token derived from its own), so the workload holds a narrower slice than the supervisor.
+> Workload processes never run elevated. The supervisor logs on as the instance's virtual account and spawns the workload inside the Job Object under a stripped token (restricted, no extra privileges, derived from the supervisor's own), so the workload holds a narrower slice than the supervisor.
 >
 > Recorded v1 limitation: workload and supervisor share a SID and are mutually unprotected — a compromised workload can kill its supervisor or interfere with the supervisor's listeners. The escalation (supervisor under its own SID, workload token derived) is deferred and invisible to the rest of the design.
 
@@ -99,7 +99,7 @@ The Linux runtime's per-service IPv6 addressing survives on Windows as loopback 
 > Exception: workloads whose bind is configuration-managed rather than env-derived (PostgreSQL's `listen_addresses`) are flagged as such in their process profile, and the runtime renders the address into their configuration instead.
 
 > win[net.bind-verify]
-> The supervisor must verify, as part of readiness, that every `BIND_ADDRESS` entry is held by a process inside the instance's Job Object (via the extended TCP/UDP table APIs). If the workload is listening elsewhere — notably on bare loopback, indicating `BIND_ADDRESS` was ignored — or an entry is unbound while the workload reports healthy, the supervisor files a fault naming the divergence. A workload that binds the wrong addresses must not be reported ready.
+> The supervisor must verify, as part of readiness, that every `BIND_ADDRESS` entry is held by a process inside the instance's Job Object. If the workload is listening elsewhere — notably on bare loopback, indicating `BIND_ADDRESS` was ignored — or an entry is unbound while the workload reports healthy, the supervisor files a fault naming the divergence. A workload that binds the wrong addresses must not be reported ready.
 
 > win[net.mount]
 > A mount (A may reach B) compiles to: A dials B's service address, which is B's supervisor's listener, which relays to B's private address. This is the role DNAT plays on Linux; A needs nothing installed on its side. The relay is a raw TCP byte relay: no PROXY protocol, no protocol awareness. Client identity for HTTP traffic is conveyed at layer 7 (ingress adds X-Forwarded-For). The relay must not impose idle timeouts; long-lived streams (WebSocket upgrades) are relayed until either side closes.
@@ -152,12 +152,12 @@ The Linux runtime's per-service IPv6 addressing survives on Windows as loopback 
 > Recorded caveat: Linux `SIGTERM` allows the target to flush and exit cleanly; `TerminateJobObject` does not. A script that depends on the workload's own shutdown work after a termination-intent signal is subtly wrong on Windows v1.
 
 > win[signal.exit-codes]
-> The runtime synthesizes the negative-exit-code convention: whenever the runtime itself terminated a process (stop ladder final rung, signal-mapped termination, session teardown), the recorded exit code is negative. `i[shell.exit]` and `Executed.exit_code()` semantics thereby hold verbatim on both platforms: negative means "terminated by the runtime", non-negative is the process's own exit code.
+> The runtime synthesizes the negative-exit-code convention: whenever the runtime itself terminated a process (stop ladder final rung, signal-mapped termination, session teardown), the recorded exit code is negative. `i[shell.exit]`'s convention thereby holds on both platforms: negative means "terminated by the runtime", non-negative is the process's own exit code. (`l[rt.executed.exit-code]` currently specifies host-convention values above 255 for signal-terminated commands; the spec restructuring aligns it with the same negative-code convention — see the plan document.)
 
 # Capabilities
 
 > win[capability.map]
-> The runtime exposes a capability map with a shared vocabulary across three surfaces: BSL (`runtime.capability(name) -> bool`), the operator interface (`/status` capabilities field), and `seedling doctor`. Capabilities are per-node, fixed at script evaluation, and stable across replay, composing with the deterministic-replay rules and the discover probe.
+> The runtime exposes a capability map with a shared vocabulary across three surfaces: BSL (`rt.capability(name) -> bool`), the operator interface (`/status` capabilities field), and `seedling doctor`. Capabilities are per-node, fixed at script evaluation, and stable across replay, composing with the deterministic-replay rules and the discover probe.
 >
 > Initial vocabulary (Windows v1 values in parentheses): `signal:terminate` (true), `signal:reload` (false), `snapshots` (false), `storage:block-clone` (true iff volume root is ReFS), `net:nat64` (false). Linux v1 values are all-true except `storage:block-clone` where applicable. Scripts must branch on capabilities, not on OS identity.
 
@@ -187,7 +187,7 @@ The Linux runtime's per-service IPv6 addressing survives on Windows as loopback 
 Windows workloads ship as read-only NTFS VHDX images inside OCI artifacts (ORAS-style, BES media types), activated by attachment rather than extraction. The Tamanu `vhdx-pack` pipeline is the reference producer; this profile is normative for what the runtime consumes.
 
 > win[artifact.profile]
-> A Windows artifact is an OCI manifest whose config blob has media type `application/vnd.au.bes.seedling.windows-vhdx.config.v1+json` and whose single layer has media type `application/vnd.au.bes.seedling.windows-vhdx.v1+zstd`. The config blob mirrors the Docker image config (`WorkingDir`, `Env`, `Entrypoint`, `Cmd`, `ExposedPorts`) plus `vhdx.rootDir`, the top-level directory inside the volume. Within a multi-platform index the manifest carries platform `unknown/unknown`; the runtime selects by config media type (or the `au.bes.tamanu.os` annotation), never by platform fields.
+> A Windows artifact is an OCI manifest whose config blob has media type `application/vnd.au.bes.seedling.windows-vhdx.config.v1+json` and whose single layer has media type `application/vnd.au.bes.seedling.windows-vhdx.v1+zstd`. The config blob mirrors the Docker image config (`WorkingDir`, `Env`, `Entrypoint`, `Cmd`, `ExposedPorts`) plus `vhdx.rootDir`, the top-level directory inside the volume. Within a multi-platform index the manifest carries platform `unknown/unknown`; the runtime selects by config media type, never by platform fields or annotations. Only Windows on x64 is supported, so the config media type identifies the artifact unambiguously.
 
 > win[artifact.verify]
 > The registry digest covers the compressed layer; the producer additionally annotates the uncompressed VHDX's SHA-256. The runtime verifies the compressed digest at pull, verifies the uncompressed digest after decompression into the store, and re-verifies it **before every attach**. A pre-attach mismatch quarantines the store entry, files a fault, and triggers a re-pull; attach never proceeds on a mismatched image, since attaching hands the blob to the kernel filesystem parser.
@@ -207,7 +207,7 @@ Windows workloads ship as read-only NTFS VHDX images inside OCI artifacts (ORAS-
 > A volume is a runtime-owned directory under the volume root, ACL'd per [win[identity.file-permissions]](#win--identity.file-permissions). NTFS is the supported floor; ReFS is detected and surfaces as `storage:block-clone` for future use. Volume snapshots are not implemented in v1; snapshot-dependent portable-spec rules are capability-gated off.
 
 > win[backup.v1]
-> Backups are performed by a single embedded method (kopia integration; cross-runtime rework, specified separately), not by the container-based backup-app strategies of the current Linux runtime. PostgreSQL is backed up via `pg_basebackup`/dump-based methods, never by filesystem copy of a live cluster. The embedded backup engine's read access to volumes is granted by explicit ACE if seedlingd runs under its own principal, or rides the SYSTEM ACE if it runs as LocalSystem (open: plan §platform).
+> Backups are performed by a single embedded method (kopia integration; cross-runtime rework, specified separately), not by the container-based backup-app strategies of the current Linux runtime. PostgreSQL is backed up via `pg_basebackup`/dump-based methods, never by filesystem copy of a live cluster. The embedded backup engine's read access to volumes is granted by explicit ACE if seedlingd runs under its own principal, or rides the SYSTEM ACE if it runs as LocalSystem (open question Q3 in the plan document).
 
 # PostgreSQL
 
