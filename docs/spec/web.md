@@ -231,9 +231,10 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > The navbar's held-volumes badge must reflect the current count of held volumes without requiring a page reload, both when new held volumes are created and when the operator confirms their deletion.
 
 > w[routes.certificates]
-> The web interface must expose TLS certificate management at `/certificates`, with three sections:
+> The web interface must expose TLS certificate management at `/certificates`, with the following sections:
 >
-> - **Per-hostname policies**: list, add (binding a hostname to ACME-DNS via a configured provider, with an optional contact email that triggers immediate auto-issuance), and clear.
+> - **Per-hostname policies**: list, add (binding a hostname or wildcard to ACME-DNS via a configured provider), and clear.
+> - **Settings**: view and edit the ACME contact email and certificate profile used for issuance.
 > - **Stored certificates**: list grouped by hostname, surfacing state, origin, issuer, expiry, and serial; certificates within fourteen days of expiry and self-signed certificates must be visually flagged.
 > - **DNS providers**: list (without credentials), add (Route 53), and delete (refused while a policy references the provider).
 >

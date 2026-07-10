@@ -923,13 +923,6 @@ function ParamsSection({
             Set param
           </OutlinedActionButton>
         </Box>
-        {adding && (
-          <TableContainer component={Paper} variant="outlined">
-            <Table size="small">
-              <TableBody>{addRow}</TableBody>
-            </Table>
-          </TableContainer>
-        )}
       </Stack>
     );
   }
