@@ -12,6 +12,7 @@ The goal is a second Seedling implementation with Windows-native primitives spea
 
 - Extract the portable parts of `runtime.md` — reconciliation, generations, lifecycle operations, barriers, history/audit, faults, scheduling, GC principles — into a shared document (`runtime-core.md` or similar). Linux infrastructure (Podman, systemd, nftables, NAT64/jool, ULA-from-machine-id, volume snapshots) stays in `runtime-linux.md`.
 - Add a `capabilities` field to `/status` in `interface.md`, and `rt.capability()` to `language.md`, with the shared vocabulary from `win[capability.map]`. Audit `i[...]` rules for ones that become capability-conditional (image endpoints are *not* among them — the OCI artifact design keeps them; snapshot/backup endpoints are, pending the backup rework).
+- Decide the BSL surface for per-deployment process-profile overrides — the `container.stop_signal` analogue required by `win[profile.source]` — and whether the existing `container.stop_signal`/`stop_timeout` map onto it or a new builder is needed.
 - Restate `i[shell.exit]` to define negative codes as "terminated by the runtime" (platform-neutral wording; no semantic change on Linux). Restate `l[rt.executed.exit-code]` to the same negative-code convention — it currently specifies host-convention values above 255 for signal-terminated commands, so on Linux this one is a semantic change, not just rewording.
 - Conformance suite keyed to rule IDs, run against both daemons in CI. The failure mode it guards against is semantic drift, not wire incompatibility.
 

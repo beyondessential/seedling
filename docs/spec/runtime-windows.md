@@ -83,6 +83,24 @@ The supervisor is also the data plane for mounts ([win[net.mount]](#win--net.mou
 > win[identity.file-permissions]
 > The owner-only file permission rules of the portable spec (`r[infra.key.file-permissions]` and kin) are restated for NTFS: Seedling-managed data directories, volume roots, and secret files carry ACLs granting the owning instance SID, SYSTEM, and Administrators, and no other principal. Inheritance from parent directories must be broken on creation. Apps cannot modify WFP state (BFE mutation requires administrative rights), other instances' processes or volumes, or ingress configuration.
 
+# Process Profiles
+
+> win[profile.model]
+> A **process profile** is the per-workload bundle of declarations the Windows runtime needs where the Linux runtime leans on container conventions:
+>
+> - the [stop method](#win--stop.methods), and for `named_event` profiles whether a reload event is supported;
+> - whether the workload's bind is env-injected or configuration-managed ([win[net.bind-address]](#win--net.bind-address));
+> - whether the workload must be spawned sharing a console and in its own process group for ctrl-event delivery (implied by the `ctrl_break`/`ctrl_c` stop methods).
+>
+> Profile properties describe the software, not the deployment — Node handles CTRL_BREAK, PostgreSQL wants its own shutdown protocol, wherever they run.
+
+> win[profile.source]
+> Profiles come from three sources, in increasing precedence:
+>
+> - **Built-in profiles** ship with the runtime for adopted native services that have no artifact ([win[postgres.native]](#win--postgres.native)).
+> - **Artifact-declared profiles**: the artifact config blob carries the profile fields alongside the runconfig fields ([win[artifact.profile]](#win--artifact.profile)), following the precedent of `StopSignal` in the Docker image config.
+> - **BSL overrides** adjust a profile per deployment, the same way `container.stop_signal` overrides an image's `StopSignal` on the Linux runtime. The concrete BSL surface is settled with the capability work (see the plan document).
+
 # Networking
 
 The Linux runtime's per-service IPv6 addressing survives on Windows as loopback aliasing: no driver, no userspace network stack.
@@ -96,7 +114,7 @@ The Linux runtime's per-service IPv6 addressing survives on Windows as loopback 
 > win[net.bind-address]
 > The workload's real listeners are not on bare loopback: the runtime allocates each instance a private address inside the Seedling prefix and injects its listener assignments as the `BIND_ADDRESS` environment variable. `BIND_ADDRESS` is a comma-separated list of `IP:PORT` entries, IPv6 addresses in brackets (e.g. `[fdxx::a]:3000,[fdxx::a]:3001`), one entry per declared listener, in declaration order. When `BIND_ADDRESS` is present it supersedes `PORT`. The instance must bind exactly the entries it is handed, and nothing else. This places every workload listener inside the [default-deny](#win--wfp.default-deny), closing the bypass in which a plain-loopback port is dialable by any local process.
 >
-> Exception: workloads whose bind is configuration-managed rather than env-derived (PostgreSQL's `listen_addresses`) are flagged as such in their process profile, and the runtime renders the address into their configuration instead.
+> Exception: workloads whose bind is configuration-managed rather than env-derived (PostgreSQL's `listen_addresses`) are flagged as such in their [process profile](#win--profile.model), and the runtime renders the address into their configuration instead.
 
 > win[net.bind-verify]
 > The supervisor must verify, as part of readiness, that every `BIND_ADDRESS` entry is held by a process inside the instance's Job Object. If the workload is listening elsewhere — notably on bare loopback, indicating `BIND_ADDRESS` was ignored — or an entry is unbound while the workload reports healthy, the supervisor files a fault naming the divergence. A workload that binds the wrong addresses must not be reported ready.
@@ -130,7 +148,7 @@ The Linux runtime's per-service IPv6 addressing survives on Windows as loopback 
 # Shutdown and Signals
 
 > win[stop.methods]
-> Each process profile declares a stop method, one of:
+> Each [process profile](#win--profile.model) declares a stop method, one of:
 >
 > - `ctrl_break` / `ctrl_c`: the supervisor delivers `GenerateConsoleCtrlEvent` to the workload's process group. Requires the supervisor to share a console with the workload and to have spawned it with `CREATE_NEW_PROCESS_GROUP`, so the group-targeted event does not strike the supervisor. `[spike]`
 > - `named_event`: the supervisor passes `SEEDLING_STOP_EVENT=<name>` in the environment and signals the named event to request shutdown. A `SEEDLING_RELOAD_EVENT` sibling may be declared for reload semantics.
@@ -187,7 +205,7 @@ The Linux runtime's per-service IPv6 addressing survives on Windows as loopback 
 Windows workloads ship as read-only NTFS VHDX images inside OCI artifacts (ORAS-style, BES media types), activated by attachment rather than extraction. The Tamanu `vhdx-pack` pipeline is the reference producer; this profile is normative for what the runtime consumes.
 
 > win[artifact.profile]
-> A Windows artifact is an OCI manifest whose config blob has media type `application/vnd.au.bes.seedling.windows-vhdx.config.v1+json` and whose single layer has media type `application/vnd.au.bes.seedling.windows-vhdx.v1+zstd`. The config blob mirrors the Docker image config (`WorkingDir`, `Env`, `Entrypoint`, `Cmd`, `ExposedPorts`) plus `vhdx.rootDir`, the top-level directory inside the volume. Within a multi-platform index the manifest carries platform `unknown/unknown`; the runtime selects by config media type, never by platform fields or annotations. Only Windows on x64 is supported, so the config media type identifies the artifact unambiguously.
+> A Windows artifact is an OCI manifest whose config blob has media type `application/vnd.au.bes.seedling.windows-vhdx.config.v1+json` and whose single layer has media type `application/vnd.au.bes.seedling.windows-vhdx.v1+zstd`. The config blob mirrors the Docker image config (`WorkingDir`, `Env`, `Entrypoint`, `Cmd`, `ExposedPorts`) plus `vhdx.rootDir`, the top-level directory inside the volume, and the [process profile](#win--profile.source) fields. Within a multi-platform index the manifest carries platform `unknown/unknown`; the runtime selects by config media type, never by platform fields or annotations. Only Windows on x64 is supported, so the config media type identifies the artifact unambiguously.
 
 > win[artifact.verify]
 > The registry digest covers the compressed layer; the producer additionally annotates the uncompressed VHDX's SHA-256. The runtime verifies the compressed digest at pull, verifies the uncompressed digest after decompression into the store, and re-verifies it **before every attach**. A pre-attach mismatch quarantines the store entry, files a fault, and triggers a re-pull; attach never proceeds on a mismatched image, since attaching hands the blob to the kernel filesystem parser.
@@ -212,4 +230,4 @@ Windows workloads ship as read-only NTFS VHDX images inside OCI artifacts (ORAS-
 # PostgreSQL
 
 > win[postgres.native]
-> PostgreSQL runs as a native SCM-managed service that the runtime manages rather than owns: profile flags `config-managed bind` ([win[net.bind-address]](#win--net.bind-address)) and `service_stop` ([win[stop.methods]](#win--stop.methods)); the daemon renders `listen_addresses` and orders it first in cold-start dependency order. Migration of existing installations is covered in the plan document.
+> PostgreSQL runs as a native SCM-managed service that the runtime manages rather than owns: its built-in [process profile](#win--profile.source) flags `config-managed bind` ([win[net.bind-address]](#win--net.bind-address)) and `service_stop` ([win[stop.methods]](#win--stop.methods)); the daemon renders `listen_addresses` and orders it first in cold-start dependency order. Migration of existing installations is covered in the plan document.
