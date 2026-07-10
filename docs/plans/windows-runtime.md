@@ -11,7 +11,6 @@ The goal is a second Seedling implementation with Windows-native primitives spea
 ### 1. Spec restructuring (prerequisite for merge, not for prototyping)
 
 - Extract the portable parts of `runtime.md` — reconciliation, generations, lifecycle operations, barriers, history/audit, faults, scheduling, GC principles — into a shared document (`runtime-core.md` or similar). Linux infrastructure (Podman, systemd, nftables, NAT64/jool, ULA-from-machine-id, volume snapshots) stays in `runtime-linux.md`.
-- Add the `runtime-windows` spec entry (`w[...]` namespace) to `.config/tracey/config.styx`.
 - Add a `capabilities` field to `/status` in `interface.md`, and `runtime.capability()` to `language.md`, with the shared vocabulary from `w[capability.map]`. Audit `i[...]` rules for ones that become capability-conditional (image endpoints are *not* among them — the OCI artifact design keeps them; snapshot/backup endpoints are, pending the backup rework).
 - Restate `i[shell.exit]` to define negative codes as "terminated by the runtime" (platform-neutral wording; no semantic change on Linux).
 - Conformance suite keyed to rule IDs, run against both daemons in CI. The failure mode it guards against is semantic drift, not wire incompatibility.
