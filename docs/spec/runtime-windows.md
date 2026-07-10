@@ -1,6 +1,6 @@
 The Seedling Windows Runtime is a second implementation of the Seedling runtime, targeting Windows Server hosts with native-process primitives instead of Linux containers. It conforms to the operator interface spec and the language spec, and to the portable portions of the runtime spec (reconciliation, generations, lifecycle operations, barriers, history, faults, scheduling), while replacing the Linux infrastructure sections (Podman, systemd units, nftables, NAT64, volume snapshots) with the mechanisms defined here.
 
-> **Draft status.** This document records design decisions from the 2026-07 design sessions. Rules marked `[spike]` depend on prototype confirmation; see the companion plan document. Rejected alternatives and fallback positions are recorded in `windows-design-rationale.md`, not here. Rule IDs use the `w[...]` namespace, tracked as the `runtime-windows` spec in tracey.
+> **Draft status.** This document records design decisions from the 2026-07 design sessions. Rules marked `[spike]` depend on prototype confirmation; see the companion plan document. Rejected alternatives and fallback positions are recorded in `docs/plans/windows-runtime-rationale.md`, not here. Rule IDs use the `w[...]` namespace, tracked as the `runtime-windows` spec in tracey.
 
 Where this document is silent, the portable runtime spec applies unchanged. Where a Linux runtime rule (`r[...]`) is cited as *replaced*, the replacement here is normative for the Windows runtime and the cited rule does not apply.
 

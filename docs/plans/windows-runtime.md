@@ -65,4 +65,4 @@ Follows the draft spec. Sequencing suggestion: supervisor process model and reat
 - Artifact format and pipeline: Tamanu `vhdx-pack` is the reference producer; uncompressed-checksum annotation queued.
 - ReFS inside artifact VHDXs: rejected (format-version drift, no benefit); NTFS normative. ReFS as *host volume* filesystem: opportunistic capability only.
 - Reboot survival, snapshots, scaling, outbound-deny: v1 non-goals per `w[platform.non-goals]`.
-- WSL2, Windows containers, wintun netstack, local accounts, AppContainer: rejected; rationale, fallback positions, and the governance ledger live in `windows-design-rationale.md`.
+- WSL2, Windows containers, wintun netstack, local accounts, AppContainer: rejected; rationale, fallback positions, and the governance ledger live in `windows-runtime-rationale.md`.
