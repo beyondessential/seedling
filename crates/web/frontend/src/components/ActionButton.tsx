@@ -114,7 +114,7 @@ function TextActionButton({
   const forbidden = !guard.allowed;
   const spanSx = forbiddenSpanSx(safety, guard.allowed, disabled === true);
   return (
-    <Tooltip title={tooltip ?? ""}>
+    <Tooltip title={tooltip ?? ""} describeChild>
       <Box component="span" sx={spanSx ?? undefined}>
         <Button
           variant={variant}
@@ -161,7 +161,7 @@ export function IconActionButton({
   const forbidden = !guard.allowed;
   const spanSx = forbiddenSpanSx(safety, guard.allowed, disabled === true);
   return (
-    <Tooltip title={tooltip ?? ""}>
+    <Tooltip title={tooltip ?? ""} describeChild>
       <Box component="span" sx={spanSx ?? undefined}>
         <IconButton
           size={size}
@@ -169,7 +169,7 @@ export function IconActionButton({
           sx={sx}
           onClick={onClick}
           disabled={disabled || forbidden}
-          aria-label={ariaLabel}
+          aria-label={ariaLabel ?? (typeof tooltip === "string" ? tooltip : undefined)}
         >
           {children}
         </IconButton>

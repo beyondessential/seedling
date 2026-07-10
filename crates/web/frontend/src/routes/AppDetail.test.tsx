@@ -142,9 +142,7 @@ describe("AppDetail page", () => {
       ]),
     );
     // Per-resource unstop on the stopped deployment row.
-    const unstop = within(screen.getByLabelText("Unstop resource")).getByRole(
-      "button",
-    );
+    const unstop = screen.getByRole("button", { name: "Unstop resource" });
     fireEvent.click(unstop);
     await waitFor(() =>
       expect(callsTo(request, "/apps/resource/unstop")).toEqual([

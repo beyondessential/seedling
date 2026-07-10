@@ -105,4 +105,28 @@ describe("ActionButton safety guards", () => {
     fireEvent.click(button("remove row"));
     expect(onClick).toHaveBeenCalledTimes(1);
   });
+
+  it("icon buttons take their accessible name from a string tooltip", () => {
+    renderWithSession(
+      <IconActionButton safety="read" tooltip="Delete strategy" onClick={vi.fn()}>
+        x
+      </IconActionButton>,
+    );
+    const btn = button("Delete strategy");
+    expect(btn.getAttribute("aria-label")).toBe("Delete strategy");
+  });
+
+  it("an explicit aria-label wins over the tooltip", () => {
+    renderWithSession(
+      <IconActionButton
+        safety="read"
+        tooltip="Remove the currently selected row"
+        aria-label="remove row"
+        onClick={vi.fn()}
+      >
+        x
+      </IconActionButton>,
+    );
+    expect(button("remove row")).toBeTruthy();
+  });
 });
