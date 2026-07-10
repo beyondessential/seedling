@@ -79,17 +79,34 @@ describe("useEventRefresh", () => {
     expect(screen.getByTestId("count").textContent).toBe("2");
   });
 
+  it("a lone event refetches exactly once", () => {
+    const { setEvents } = renderWithEvents(isFault);
+    setEvents([ev("FaultFiled", "e1")]);
+    expect(screen.getByTestId("count").textContent).toBe("1");
+    // No further events during the debounce window: no trailing refetch.
+    act(() => vi.advanceTimersByTime(2000));
+    expect(screen.getByTestId("count").textContent).toBe("1");
+  });
+
   it("only inspects events newer than the previously seen newest", () => {
     const { setEvents } = renderWithEvents(isFault);
     const matching = ev("FaultFiled", "e1");
     setEvents([matching]);
     act(() => vi.advanceTimersByTime(2000));
-    // Leading + trailing edge of the debounce for the one event.
-    expect(screen.getByTestId("count").textContent).toBe("2");
+    expect(screen.getByTestId("count").textContent).toBe("1");
     // A new non-matching event on top does not refetch, even though the old
     // matching event is still sitting in the buffer below it.
     setEvents([ev("AppUpdated", "e2"), matching]);
     act(() => vi.advanceTimersByTime(2000));
-    expect(screen.getByTestId("count").textContent).toBe("2");
+    expect(screen.getByTestId("count").textContent).toBe("1");
+  });
+
+  it("does not refetch for events already buffered at mount", () => {
+    const { setEvents } = renderWithEvents(isFault, [ev("FaultFiled", "e0")]);
+    act(() => vi.advanceTimersByTime(2000));
+    expect(screen.getByTestId("count").textContent).toBe("0");
+    // A genuinely new event afterwards still triggers a refetch.
+    setEvents([ev("FaultFiled", "e1"), ev("FaultFiled", "e0")]);
+    expect(screen.getByTestId("count").textContent).toBe("1");
   });
 });

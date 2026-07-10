@@ -18,21 +18,33 @@ export function useEventRefresh(
   // Tracking length breaks once the buffer is full (capped at 200): length
   // stays constant so new events are never detected.
   const prevFirst = useRef<SeedlingEvent | null>(null);
+  const initialised = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dirty = useRef(false);
+  // Whether matching events arrived during the debounce window, i.e. after
+  // the leading-edge refetch. Only then does the trailing edge fire — a
+  // lone event must not refetch twice.
+  const trailingPending = useRef(false);
 
   const scheduleRefetch = useCallback(() => {
     if (document.hidden) {
       dirty.current = true;
       return;
     }
-    // Leading edge: fire immediately on the first event in a quiet window.
-    if (timer.current === null) refetch();
-    // Trailing edge: also fire after the burst of events settles.
-    else clearTimeout(timer.current);
+    if (timer.current === null) {
+      // Leading edge: fire immediately on the first event in a quiet window.
+      refetch();
+      trailingPending.current = false;
+    } else {
+      clearTimeout(timer.current);
+      trailingPending.current = true;
+    }
     timer.current = setTimeout(() => {
       timer.current = null;
-      refetch();
+      if (trailingPending.current) {
+        trailingPending.current = false;
+        refetch();
+      }
     }, DEBOUNCE_MS);
   }, [refetch]);
 
@@ -50,6 +62,13 @@ export function useEventRefresh(
 
   // Check for new matching events.
   useEffect(() => {
+    // Events already buffered at mount are not "new": the consumer's
+    // initial query fetch covers them, so refetching would be redundant.
+    if (!initialised.current) {
+      initialised.current = true;
+      prevFirst.current = events[0] ?? null;
+      return;
+    }
     if (events.length === 0 || events[0] === prevFirst.current) return;
     const oldFirst = prevFirst.current;
     prevFirst.current = events[0];
