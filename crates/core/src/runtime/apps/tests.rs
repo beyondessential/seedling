@@ -631,16 +631,38 @@ fn script_retrieval_returns_none_for_unknown_app() {
 
 // r[verify generation.previous]
 #[test]
-fn script_at_later_generation_resolves_to_most_recent_script() {
-    // Param-set bumps do not change the script, so the script "at" a later
+fn script_at_param_change_generation_resolves_to_most_recent_script() {
+    // Param-set bumps do not change the script, so the script "at" such a
     // generation is the most recent Register/ScriptUpdate at or before it.
     let db = Db::open_in_memory().expect("open");
+    let cipher = crate::runtime::secrets::Cipher::for_tests();
     generations::bump_register(&db, &app("myapp"), trivial_script()).expect("bump");
+    generations::bump_param_set(
+        &db,
+        &app("myapp"),
+        &param("site"),
+        None,
+        "prod",
+        &cipher,
+        false,
+    )
+    .expect("param bump");
     assert_eq!(
-        get_script_at_generation(&db, &app("myapp"), 5)
+        get_script_at_generation(&db, &app("myapp"), 2)
             .expect("get")
             .as_deref(),
         Some(trivial_script())
+    );
+}
+
+// i[verify app.script]
+#[test]
+fn script_at_nonexistent_generation_is_none() {
+    let db = Db::open_in_memory().expect("open");
+    generations::bump_register(&db, &app("myapp"), trivial_script()).expect("bump");
+    assert_eq!(
+        get_script_at_generation(&db, &app("myapp"), 5).expect("get"),
+        None
     );
 }
 
