@@ -4,7 +4,6 @@ Non-normative companion to `runtime-windows.md`. Records alternatives considered
 
 ## Rejected approaches
 
-
 **Rejected: WSL2.** Mirrored networking has removed the UDP/proxy objections, but unattended start remains scheduled-task duct tape, the root filesystem remains ext4-in-VHDX, and the failure modes of a VM layer would be ours to own at 25 field hosts. Re-evaluate only if workload requirements change.
 
 **Rejected: Windows containers.** No trustworthy upstream images for the stack; gigabyte base layers; we would maintain a bespoke image toolchain to containerize software we already run natively.
