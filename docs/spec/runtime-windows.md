@@ -53,6 +53,9 @@ The Windows runtime uses a per-instance supervisor process (working name **seedp
 > win[supervisor.reattach]
 > Each supervisor serves a named pipe (`\\.\pipe\seedling-<instance-id>`) carrying: status reports, exit events that occurred while the daemon was down, and daemon commands. On startup and after restart, the daemon enumerates supervisor records, reattaches to each live supervisor's pipe, re-opens a waitable handle on the supervisor process, and reconciles any missed events into the observation history.
 
+> win[supervisor.pipe-trust]
+> The pipe namespace is first-come-first-served, so neither end trusts it blindly. The supervisor creates the pipe with an ACL restricting instance creation to its own SID, SYSTEM, and Administrators. The daemon verifies on every connect that the pipe server process is the recorded supervisor — matching PID and process start time against the [supervisor record](#win--supervisor.record) — before trusting anything read from the pipe. A pipe whose server fails verification is not adopted: the daemon files a fault and leaves the record to the dead-world GC rules.
+
 > win[supervisor.pipe-protocol]
 > The pipe protocol must be version-skew-tolerant: a newer daemon must interoperate with older supervisors, since upgrading a supervisor requires draining its workload. The protocol opens with a hello frame carrying a protocol version and feature bits; unknown frame types are skipped, not fatal. The protocol should be pinned early and change rarely. `[spike]`
 
@@ -138,7 +141,7 @@ The Linux runtime's per-service IPv6 addressing survives on Windows as loopback 
 > All Seedling filters, the Seedling sublayer, and associated objects are installed as **persistent** WFP objects under a fixed, documented Seedling provider GUID. Persistence places enforcement in BFE, not in seedlingd: the allow/deny structure holds with the daemon down or crashed. Fixed GUIDs enable auditing installed filters against the mount graph (`seedling doctor`), idempotent replacement on upgrade, and a provider-scoped sweep on uninstall.
 
 > win[wfp.default-deny]
-> At the ALE connect layers, connections whose remote address falls within the Seedling prefix are blocked by default. Loopback traffic classifies through ALE like any other traffic on the platform floor.
+> At the ALE connect layers, connections whose remote address falls within the Seedling prefix are blocked by default. At the bind/listen layers, binding an address within the Seedling prefix is likewise blocked by default: a process that has not been granted an address cannot squat it, so `BIND_ADDRESS` exclusivity is enforced, not merely verified ([win[net.bind-verify]](#win--net.bind-verify) remains as detection for the workload's own divergence). Loopback traffic classifies through ALE like any other traffic on the platform floor.
 
 > win[wfp.allows]
 > The mount graph compiles to allow filters keyed on (user SID, remote address):
@@ -147,7 +150,7 @@ The Linux runtime's per-service IPv6 addressing survives on Windows as loopback 
 > - one allow per instance: the instance's own supervisor SID may connect to the instance's private address (the relay hop);
 > - one allow per ingress route: the ingress service SID may connect to the backing service address;
 > - allows for every instance SID and special-service SID to the resolver address's DNS port;
-> - bind/listen allows for each supervisor SID on its own addresses.
+> - bind/listen allows: each supervisor SID on its instance's service addresses, each instance SID on its private address, each special-service SID on its operational addresses.
 >
 > SIDs are deterministic and addresses stable for the instance's life, so filters change when the mount graph changes or instances are created/removed — not on workload restarts. Dynamic-Job grants are operation-scoped per [win[identity.dynamic-jobs]](#win--identity.dynamic-jobs).
 
@@ -208,10 +211,10 @@ The Linux runtime's per-service IPv6 addressing survives on Windows as loopback 
 # Action Execution Context
 
 > win[action.exec]
-> The Linux rule "`Executed` runs inside the target's running container" is restated: the command is spawned **inside the target instance's Job Object**, as the instance's virtual account, with the instance's rendered environment and declared working directory. Same-Job membership reproduces the container property that stopping the instance kills in-flight commands. The target-must-be-running precondition is retained for conformance parity.
+> The Linux rule "`Executed` runs inside the target's running container" is restated: the command is spawned **inside the target instance's Job Object**, under the same stripped token the workload runs under ([win[identity.non-admin]](#win--identity.non-admin)), with the instance's rendered environment and declared working directory. Same-Job membership reproduces the container property that stopping the instance kills in-flight commands. The target-must-be-running precondition is retained for conformance parity.
 
 > win[action.env-hygiene]
-> The spawned command's environment is constructed from a minimal Win32 base (`SystemRoot` and peers required for process start) plus the artifact's declared `Env`, including its `PATH` entries [rebased onto the mount](#win--artifact.rebase). The daemon's environment, the host `PATH`, and machine-installed toolchains are never inherited. Commands resolve against the artifact's own runtime, not against whatever is installed on the host.
+> The spawned command's environment is constructed from a minimal Win32 base (`SystemRoot` and peers required for process start), plus the artifact's declared `Env` with its `PATH` entries [rebased onto the mount](#win--artifact.rebase), plus the runtime-rendered instance environment (`BIND_ADDRESS` and kin) — the same environment the workload itself sees. The daemon's environment, the host `PATH`, and machine-installed toolchains are never inherited. Commands resolve against the artifact's own runtime, not against whatever is installed on the host.
 
 > win[action.volume-params]
 > The operation-scoped volume binding machinery (`r[operation.volume-param]` and companions) ports unchanged as a name→path binding table; `app.external_volume()` resolves to an absolute, long-path-safe Windows path. *Note:* the backup rework may remove this machinery's only consumers across all runtimes; confirm before implementing (see plan document).
