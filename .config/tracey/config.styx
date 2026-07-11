@@ -44,6 +44,20 @@ specs (
         )
     }
     {
+        name runtime-windows-containers
+        source_url https://github.com/beyondessential/seedling
+        include (docs/spec/runtime-windows-containers.md)
+        impls (
+            {
+                name main
+                include (
+                    crates/*/src/*.rs
+                    crates/*/src/**/*.rs
+                )
+            }
+        )
+    }
+    {
         name interface
         source_url https://github.com/beyondessential/seedling
         include (docs/spec/interface.md)
