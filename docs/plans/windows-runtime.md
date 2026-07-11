@@ -38,7 +38,7 @@ Follows the draft spec. Sequencing suggestion: supervisor process model and reat
 
 ## Spikes (confirm before the corresponding rules lose their `[spike]` tag)
 
-Each spike has its own plan file with the rules at stake, experiments, exit criteria, and retreat positions.
+Each spike has its own plan file with the rules at stake, experiments, exit criteria, and retreat positions. Draft harness binaries live in `crates/spikes` (Windows-only; check/tested on Windows in CI).
 
 - **A. Stop delivery + Job Objects** — ctrl-event delivery, exit-code synthesis, dynamic-Job dispatch latency. See `windows-spike-a-stop-delivery.md`.
 - **B. ConPTY over QUIC** — shell stream mapping, resize, empty-stderr contract, Linux stderr-merge side task. See `windows-spike-b-conpty-quic.md`.
