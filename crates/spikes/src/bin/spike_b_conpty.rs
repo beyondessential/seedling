@@ -119,7 +119,7 @@ mod imp {
                 EXTENDED_STARTUPINFO_PRESENT,
                 None,
                 PCWSTR::null(),
-                &mut si.StartupInfo,
+                &si.StartupInfo,
                 &mut pi,
             );
             DeleteProcThreadAttributeList(attrs);
@@ -133,6 +133,12 @@ mod imp {
         let pty = create_pty(COORD { X: 120, Y: 30 })?;
         let pi = spawn_under_pty(&pty, "cmd.exe /c ver && echo spike-b-ok")?;
         observe("shell spawned under ConPTY");
+        unsafe {
+            // We do not wait on the workload here; the ConPTY drives it. Release
+            // the process/thread handles we own.
+            let _ = CloseHandle(pi.hProcess);
+            let _ = CloseHandle(pi.hThread);
+        }
 
         // Pump merged output to our stdout in a thread. `win[shell.conpty]` maps
         // this single stream to the stdout unidirectional stream of
