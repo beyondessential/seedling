@@ -126,7 +126,7 @@ mod imp {
                 Some(PWSTR(cmdline.as_mut_ptr())),
                 None,
                 None,
-                false.into(),
+                false,
                 windows::Win32::System::Threading::PROCESS_CREATION_FLAGS(0),
                 None,
                 PCWSTR::null(),

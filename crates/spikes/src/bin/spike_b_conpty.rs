@@ -86,15 +86,11 @@ mod imp {
         unsafe {
             // Size the attribute list, allocate, initialise, then attach the PTY.
             let mut bytes = 0usize;
-            let _ = InitializeProcThreadAttributeList(
-                LPPROC_THREAD_ATTRIBUTE_LIST::default(),
-                1,
-                0,
-                &mut bytes,
-            );
+            // First call with a null list sizes the buffer.
+            let _ = InitializeProcThreadAttributeList(None, 1, None, &mut bytes);
             let mut buffer = vec![0u8; bytes];
             let attrs = LPPROC_THREAD_ATTRIBUTE_LIST(buffer.as_mut_ptr() as *mut _);
-            InitializeProcThreadAttributeList(attrs, 1, 0, &mut bytes)?;
+            InitializeProcThreadAttributeList(Some(attrs), 1, None, &mut bytes)?;
             UpdateProcThreadAttribute(
                 attrs,
                 0,
@@ -116,10 +112,10 @@ mod imp {
             let mut pi = PROCESS_INFORMATION::default();
             let result = CreateProcessW(
                 PCWSTR::null(),
-                PWSTR(cmdline.as_mut_ptr()),
+                Some(PWSTR(cmdline.as_mut_ptr())),
                 None,
                 None,
-                false.into(),
+                false,
                 EXTENDED_STARTUPINFO_PRESENT,
                 None,
                 PCWSTR::null(),
@@ -141,11 +137,13 @@ mod imp {
         // Pump merged output to our stdout in a thread. `win[shell.conpty]` maps
         // this single stream to the stdout unidirectional stream of
         // i[stream.shell]; stderr carries nothing.
-        let output_read = pty.output_read;
+        // Move the raw handle across the thread boundary as an isize (HANDLE's
+        // *mut c_void is not Send); reconstruct the File inside the thread.
+        let output_raw = pty.output_read.0 as isize;
         let pump = std::thread::spawn(move || {
             let mut file = unsafe {
                 use std::os::windows::io::FromRawHandle;
-                std::fs::File::from_raw_handle(output_read.0 as *mut _)
+                std::fs::File::from_raw_handle(output_raw as *mut _)
             };
             let mut buf = [0u8; 4096];
             let mut seen = String::new();

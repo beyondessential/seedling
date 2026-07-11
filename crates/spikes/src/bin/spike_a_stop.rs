@@ -114,7 +114,7 @@ mod imp {
                 None,
                 None,
                 // No inherited handles: the child must not hold anything of ours.
-                false.into(),
+                false,
                 CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED,
                 None,
                 PCWSTR::null(),
