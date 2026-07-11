@@ -60,10 +60,33 @@ jobs:
       - name: cargo test
         run: cargo test --workspace --all-targets --locked
 
+  spikes-windows:
+    name: Spikes (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - name: Configure toolchain
+        run: |
+          rustup toolchain install --profile minimal --no-self-update stable
+          rustup default stable
+          rustup component add rustfmt clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: spikes-windows
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Scoped to the spikes crate: the daemon/core crates are Linux-only
+      # (systemd), so a full workspace build is not attempted on Windows.
+      - name: cargo fmt
+        run: cargo fmt -p seedling-spikes --check
+      - name: cargo clippy
+        run: cargo clippy -p seedling-spikes --all-targets --locked -- -D warnings
+      - name: cargo test
+        run: cargo test -p seedling-spikes --all-targets --locked
+
   rust-pass:
     name: Rust pass
     if: always()
-    needs: [lint, test]
+    needs: [lint, test, spikes-windows]
     runs-on: ubuntu-latest
     steps:
       - uses: re-actors/alls-green@release/v1

@@ -1,0 +1,49 @@
+[package]
+name = "seedling-spikes"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Draft spike harnesses for the Windows runtime design (docs/plans/windows-spike-*.md).
+# Windows-only: on other platforms each binary compiles to a stub main that
+# explains it must be run on Windows Server. Kept in the workspace so it is
+# format- and clippy-checked everywhere and check/test-run on Windows in CI.
+
+[dependencies]
+sha2.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_Storage_Vhd",
+    "Win32_System_Console",
+    "Win32_System_IO",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_Networking_WinSock",
+] }
+
+[[bin]]
+name = "spike-a-stop"
+path = "src/bin/spike_a_stop.rs"
+
+[[bin]]
+name = "spike-b-conpty"
+path = "src/bin/spike_b_conpty.rs"
+
+[[bin]]
+name = "spike-c-net"
+path = "src/bin/spike_c_net.rs"
+
+[[bin]]
+name = "spike-d-vhdx"
+path = "src/bin/spike_d_vhdx.rs"
+
+[[bin]]
+name = "spike-e-identity"
+path = "src/bin/spike_e_identity.rs"

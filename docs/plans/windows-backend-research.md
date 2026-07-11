@@ -1,5 +1,7 @@
 # Windows backend — research notes
 
+> **Superseded (2026-07).** These notes predate the Windows runtime design sessions. The recommendation below (daemon-in-WSL2) was rejected; the chosen direction — a native second runtime — is specified in `docs/spec/runtime-windows.md`, with plan and rationale in `windows-runtime.md` and `windows-runtime-rationale.md`.
+
 ## Three framings considered
 
 ### A. Daemon-on-Windows-host, workloads-in-WSL2
