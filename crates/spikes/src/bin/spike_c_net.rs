@@ -139,7 +139,7 @@ mod imp {
             GetExtendedTcpTable(
                 None,
                 &mut size,
-                false.into(),
+                false,
                 AF_INET6.0 as u32,
                 TCP_TABLE_OWNER_PID_ALL,
                 0,
@@ -150,7 +150,7 @@ mod imp {
             GetExtendedTcpTable(
                 Some(buf.as_mut_ptr() as *mut _),
                 &mut size,
-                false.into(),
+                false,
                 AF_INET6.0 as u32,
                 TCP_TABLE_OWNER_PID_ALL,
                 0,

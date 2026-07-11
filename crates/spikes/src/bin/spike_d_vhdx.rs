@@ -38,7 +38,7 @@ mod imp {
         VIRTUAL_DISK_ACCESS_ALL, VIRTUAL_STORAGE_TYPE, VIRTUAL_STORAGE_TYPE_DEVICE_VHDX,
         VIRTUAL_STORAGE_TYPE_VENDOR_MICROSOFT,
     };
-    use windows::core::PCWSTR;
+    use windows::core::{PCWSTR, PWSTR};
 
     fn wide(s: &str) -> Vec<u16> {
         OsStr::new(s)
@@ -87,7 +87,7 @@ mod imp {
     fn physical_path(handle: HANDLE) -> windows::core::Result<String> {
         let mut len = 512u32;
         let mut buf = vec![0u16; len as usize];
-        unsafe { GetVirtualDiskPhysicalPath(handle, &mut len, PCWSTR(buf.as_mut_ptr())).ok()? };
+        unsafe { GetVirtualDiskPhysicalPath(handle, &mut len, PWSTR(buf.as_mut_ptr())).ok()? };
         let s = String::from_utf16_lossy(&buf[..buf.iter().position(|&c| c == 0).unwrap_or(0)]);
         Ok(s)
     }

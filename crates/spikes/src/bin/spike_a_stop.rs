@@ -64,9 +64,7 @@ mod imp {
 
     // --- Child ----------------------------------------------------------
 
-    unsafe extern "system" fn child_ctrl_handler(
-        ctrl_type: u32,
-    ) -> windows::Win32::Foundation::BOOL {
+    unsafe extern "system" fn child_ctrl_handler(ctrl_type: u32) -> windows::core::BOOL {
         // CTRL_BREAK_EVENT arrives here for a process in a new group. Record the
         // request and let the main loop flush and exit; returning TRUE claims
         // the event as handled.
@@ -77,7 +75,7 @@ mod imp {
     }
 
     pub fn child() -> Outcome {
-        unsafe { SetConsoleCtrlHandler(Some(child_ctrl_handler), TRUE)? };
+        unsafe { SetConsoleCtrlHandler(Some(child_ctrl_handler), true)? };
         // Simulate a workload that runs until asked to stop, then does shutdown
         // work (the flush a script depends on) before exiting with a
         // distinctive code.
@@ -94,9 +92,7 @@ mod imp {
 
     // --- Supervisor -----------------------------------------------------
 
-    unsafe extern "system" fn supervisor_ctrl_handler(
-        _ctrl_type: u32,
-    ) -> windows::Win32::Foundation::BOOL {
+    unsafe extern "system" fn supervisor_ctrl_handler(_ctrl_type: u32) -> windows::core::BOOL {
         // Shield the supervisor: if a group-targeted event ever strikes us, we
         // must not die. Claiming it lets the harness observe that the child's
         // group event did not reach the supervisor.
@@ -114,7 +110,7 @@ mod imp {
         unsafe {
             CreateProcessW(
                 PCWSTR::null(),
-                PWSTR(cmdline.as_mut_ptr()),
+                Some(PWSTR(cmdline.as_mut_ptr())),
                 None,
                 None,
                 // No inherited handles: the child must not hold anything of ours.
@@ -139,7 +135,7 @@ mod imp {
     }
 
     pub fn supervisor() -> Outcome {
-        unsafe { SetConsoleCtrlHandler(Some(supervisor_ctrl_handler), TRUE)? };
+        unsafe { SetConsoleCtrlHandler(Some(supervisor_ctrl_handler), true)? };
 
         step(1, "CTRL_BREAK to a child's process group under a Job");
         let job = unsafe { CreateJobObjectW(None, PCWSTR::null())? };

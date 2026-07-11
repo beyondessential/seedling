@@ -123,7 +123,7 @@ mod imp {
             CreateProcessAsUserW(
                 Some(restricted),
                 PCWSTR::null(),
-                PWSTR(cmdline.as_mut_ptr()),
+                Some(PWSTR(cmdline.as_mut_ptr())),
                 None,
                 None,
                 false.into(),
