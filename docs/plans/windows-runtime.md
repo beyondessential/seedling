@@ -22,7 +22,7 @@ Replaces the flexible backup-app strategies with one embedded kopia method on al
 
 - The operation-volume machinery (`r[operation.volume-param]` family, `kind: "volume"` params, reserved `_volume`/`_filename` keys) exists almost entirely for backup apps. If the rework removes its last consumers, drop it from the portable spec and from `win[action.volume-params]` rather than porting it.
 - Scheduled backup fires were the main dynamic-Job churn source; their removal mostly defuses the per-invocation service-registration watch-items.
-- Decide seedlingd's own principal (LocalSystem vs own virtual account) — determines how the embedded backup engine gets volume read access (`win[backup.v1]`).
+- seedlingd's principal is settled (own virtual account, `win[identity.scm-entry]`): the embedded backup engine reads volumes via the daemon SID on the standard volume ACLs (`win[backup.v1]`).
 
 ### 3. Windows daemon + seedpod implementation
 
@@ -34,11 +34,7 @@ Follows the draft spec. Sequencing suggestion: supervisor process model and reat
 |---|----------|--------------|
 | Q1 | IPv4 fallback for v6-incapable dialers: 127/8 aliases vs none | Provide per-service v4 alias; verify Windows 127.x bind behavior in Spike C |
 | Q2 | Pipe protocol frame format and versioning | Length-prefixed frames, hello with version + feature bits; pin during Spike A/B |
-| Q3 | seedlingd's own service account | Prefer own virtual account for least privilege; requires explicit ACE for backup reads |
-| Q4 | Installer/packaging for seedlingd itself + upgrade path | Chocolatey package vs MSI; not blocking design |
-| Q5 | Whether `service_stop` profiles (Postgres) are reachable from `rt.signal` mapping or only from the stop ladder | Ladder only; `rt.signal(SIGTERM)` on a service-profile instance still means TerminateJobObject — revisit if a script needs "smart shutdown" semantics |
-| Q6 | Windows counterpart of `threat-model.md`: full doc or section | Full doc, seeded from `win[wfp.honesty]` + governance ledger |
-| Q7 | Migration/import path design (PM2+tarball → seedlingd, Postgres adoption, Caddy config takeover) | Idempotent, resumable per host; doctor verdict gates sequencing |
+| Q3 | Migration/import path design (PM2+tarball → seedlingd, Postgres adoption, Caddy config takeover) | Idempotent, resumable per host; doctor verdict gates sequencing |
 
 ## Spikes (confirm before the corresponding rules lose their `[spike]` tag)
 
@@ -65,4 +61,8 @@ Follows the draft spec. Sequencing suggestion: supervisor process model and reat
 - Artifact format and pipeline: Tamanu `vhdx-pack` is the reference producer; uncompressed-checksum annotation queued.
 - ReFS inside artifact VHDXs: rejected (format-version drift, no benefit); NTFS normative. ReFS as *host volume* filesystem: opportunistic capability only.
 - Reboot survival, snapshots, scaling, outbound-deny: v1 non-goals per `win[platform.non-goals]`.
+- seedlingd runs under its own virtual service account, not LocalSystem; its SID rides the standard volume ACLs. Speced in `win[identity.scm-entry]`; Spike E validates virtual-account logon under hardened GPO.
+- seedlingd ships as a single self-contained binary; no installer or package-manager distribution. Install/upgrade is placing the binary and (re)registering the service.
+- `service_stop` profiles are reachable only from the stop ladder: `rt.signal(SIGTERM)` means TerminateJobObject even on service-profile instances. Speced in `win[signal.map]`; revisit only if a script needs "smart shutdown" semantics.
+- Windows threat model: full document at `docs/threat-model-windows.md`, seeded from `win[wfp.honesty]`, `win[supervisor.pipe-trust]`, and the governance ledger.
 - WSL2, Windows containers, wintun netstack, local accounts, AppContainer: rejected; rationale, fallback positions, and the governance ledger live in `windows-runtime-rationale.md`.

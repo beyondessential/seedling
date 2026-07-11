@@ -67,7 +67,7 @@ The supervisor is also the data plane for mounts ([win[net.mount]](#win--net.mou
 # Identity and SCM Integration
 
 > win[identity.scm-entry]
-> Exactly one Seedling component is registered as an auto-start SCM service: seedlingd itself. No workload or supervisor service is boot-started ([win[boot.cold]](#win--boot.cold)).
+> Exactly one Seedling component is registered as an auto-start SCM service: seedlingd itself. It runs under its own virtual service account (`NT SERVICE\seedlingd`), not LocalSystem; access it needs beyond that account's default slice is granted by explicit ACE, chiefly its SID on the standard volume ACLs ([win[identity.file-permissions]](#win--identity.file-permissions)). No workload or supervisor service is boot-started ([win[boot.cold]](#win--boot.cold)).
 
 > win[identity.virtual-account]
 > Each supervisor is registered as a `SERVICE_DEMAND_START` SCM service named `seedling-<instance>`, configured to run as its virtual service account `NT SERVICE\seedling-<instance>`. Registration exists for identity provisioning, not supervision: the SCM mints the account with no account object, no password, no password-policy interaction, and no interactive logon, and its SID is deterministic (derived from the service name), so the daemon can compute ACLs and WFP filters before first start.
@@ -91,7 +91,7 @@ The supervisor is also the data plane for mounts ([win[net.mount]](#win--net.mou
 > Recorded v1 limitation: workload and supervisor share a SID and are mutually unprotected — a compromised workload can kill its supervisor or interfere with the supervisor's listeners. The escalation (supervisor under its own SID, workload token derived) is deferred and invisible to the rest of the design.
 
 > win[identity.file-permissions]
-> The owner-only file permission rules of the portable spec (`r[infra.key.file-permissions]` and kin) are restated for NTFS: Seedling-managed data directories, volume roots, and secret files carry ACLs granting the owning instance SID, SYSTEM, and Administrators, and no other principal. Inheritance from parent directories must be broken on creation. Apps cannot modify WFP state (BFE mutation requires administrative rights), other instances' processes or volumes, or ingress configuration.
+> The owner-only file permission rules of the portable spec (`r[infra.key.file-permissions]` and kin) are restated for NTFS: Seedling-managed data directories, volume roots, and secret files carry ACLs granting the owning instance SID, the daemon's service SID ([win[identity.scm-entry]](#win--identity.scm-entry)), SYSTEM, and Administrators, and no other principal. Inheritance from parent directories must be broken on creation. Apps cannot modify WFP state (BFE mutation requires administrative rights), other instances' processes or volumes, or ingress configuration.
 
 # Process Profiles
 
@@ -254,7 +254,7 @@ Windows workloads ship as read-only NTFS VHDX images inside OCI artifacts (ORAS-
 > A volume is a runtime-owned directory under the volume root, ACL'd per [win[identity.file-permissions]](#win--identity.file-permissions). NTFS is the supported floor; ReFS is detected and surfaces as `storage:block-clone` for future use. Volume snapshots are not implemented in v1; snapshot-dependent portable-spec rules are capability-gated off.
 
 > win[backup.v1]
-> Backups are performed by a single embedded method (kopia integration; cross-runtime rework, specified separately), not by the container-based backup-app strategies of the current Linux runtime. PostgreSQL is backed up via `pg_basebackup`/dump-based methods, never by filesystem copy of a live cluster. The embedded backup engine's read access to volumes is granted by explicit ACE if seedlingd runs under its own principal, or rides the SYSTEM ACE if it runs as LocalSystem (open question Q3 in the plan document).
+> Backups are performed by a single embedded method (kopia integration; cross-runtime rework, specified separately), not by the container-based backup-app strategies of the current Linux runtime. PostgreSQL is backed up via `pg_basebackup`/dump-based methods, never by filesystem copy of a live cluster. The embedded backup engine runs in seedlingd, whose service SID is on the standard volume ACLs ([win[identity.file-permissions]](#win--identity.file-permissions)); no further grant is needed.
 
 # PostgreSQL
 
