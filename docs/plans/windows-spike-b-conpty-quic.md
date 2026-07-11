@@ -1,6 +1,6 @@
 # Spike B: ConPTY over QUIC
 
-Budget: an afternoon. Environment: any Windows Server 2019+ box plus a
+Environment: any Windows Server 2019+ box plus a
 machine running the existing web UI; no field image needed.
 
 ## At stake

@@ -1,8 +1,8 @@
 # Spike D: Run Tamanu from a Read-Only VHDX
 
-Budget: half a day; mostly already exercised by the Tamanu `vhdx-pack`
-build work. Environment: any Windows Server 2019+ box with a produced
-Tamanu artifact.
+Mostly already exercised by the Tamanu `vhdx-pack` build work.
+Environment: any Windows Server 2019+ box with a produced Tamanu
+artifact.
 
 ## At stake
 

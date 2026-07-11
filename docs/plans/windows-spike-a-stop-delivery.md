@@ -1,6 +1,6 @@
 # Spike A: Stop Delivery + Job Objects
 
-Budget: an afternoon. Environment: any Windows Server 2019+ box; no field
+Environment: any Windows Server 2019+ box; no field
 image needed.
 
 ## At stake

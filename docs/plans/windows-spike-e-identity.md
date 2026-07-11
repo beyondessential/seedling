@@ -1,6 +1,6 @@
 # Spike E: Identity Mechanics
 
-Budget: half a day. Environment: a box carrying the hardening GPO baseline
+Environment: a box carrying the hardening GPO baseline
 from the field (or the worst-case image from Spike C); the GPO interaction
 is the point.
 

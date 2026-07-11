@@ -1,6 +1,6 @@
 # Spike C: Networking on a Worst-Case Image
 
-Budget: 1–2 days. Environment: a disk image of the least-friendly of the 5
+Environment: a disk image of the least-friendly of the 5
 deployments — real GPO baseline, real EDR, real DNS configuration. Not a
 lab box; the point is coexistence, not correctness in a vacuum.
 

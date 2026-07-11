@@ -40,11 +40,11 @@ Follows the draft spec. Sequencing suggestion: supervisor process model and reat
 
 Each spike has its own plan file with the rules at stake, experiments, exit criteria, and retreat positions.
 
-- **A. Stop delivery + Job Objects** (afternoon) — ctrl-event delivery, exit-code synthesis, dynamic-Job dispatch latency. See `windows-spike-a-stop-delivery.md`.
-- **B. ConPTY over QUIC** (afternoon) — shell stream mapping, resize, empty-stderr contract, Linux stderr-merge side task. See `windows-spike-b-conpty-quic.md`.
-- **C. Networking on a worst-case image** (1–2 days, field disk image) — aliases + `skipassource`, v4 fallback (Q1), NRPT, WFP-under-EDR coexistence, `BIND_ADDRESS` end-to-end. See `windows-spike-c-networking.md`.
-- **D. Run Tamanu from read-only VHDX** (half day) — read-only attach, per-attach verify cost, writable-app-dir hunt. See `windows-spike-d-vhdx-run.md`.
-- **E. Identity mechanics** (half day, hardened GPO image) — virtual-account logon, deterministic SIDs, stripped tokens, DeleteService ghosts, ACE inheritance. See `windows-spike-e-identity.md`.
+- **A. Stop delivery + Job Objects** — ctrl-event delivery, exit-code synthesis, dynamic-Job dispatch latency. See `windows-spike-a-stop-delivery.md`.
+- **B. ConPTY over QUIC** — shell stream mapping, resize, empty-stderr contract, Linux stderr-merge side task. See `windows-spike-b-conpty-quic.md`.
+- **C. Networking on a worst-case image** (field disk image) — aliases + `skipassource`, v4 fallback (Q1), NRPT, WFP-under-EDR coexistence, `BIND_ADDRESS` end-to-end. See `windows-spike-c-networking.md`.
+- **D. Run Tamanu from read-only VHDX** — read-only attach, per-attach verify cost, writable-app-dir hunt. See `windows-spike-d-vhdx-run.md`.
+- **E. Identity mechanics** (hardened GPO image) — virtual-account logon, deterministic SIDs, stripped tokens, DeleteService ghosts, ACE inheritance. See `windows-spike-e-identity.md`.
 
 ## Rollout
 
