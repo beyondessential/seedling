@@ -38,15 +38,13 @@ Follows the draft spec. Sequencing suggestion: supervisor process model and reat
 
 ## Spikes (confirm before the corresponding rules lose their `[spike]` tag)
 
-**A. Stop delivery + Job Objects** (afternoon). CTRL_BREAK into a `CREATE_NEW_PROCESS_GROUP` Node child sharing the supervisor's console, under a Job: clean cooperative shutdown, group event not striking the supervisor, exit-code capture, TerminateJobObject exit-code synthesis. Also measure CreateService+StartService dispatch latency for the dynamic-Job decision.
+Each spike has its own plan file with the rules at stake, experiments, exit criteria, and retreat positions.
 
-**B. ConPTY over QUIC** (afternoon). Bridge a ConPTY session across three streams with resize; confirm the merged-output behavior against what the web terminal tolerates. Side task: verify whether the Linux daemon already effectively merges stderr for TTY-attached shells (determines whether `win[shell.conpty]`'s empty-stderr note is a divergence or existing behavior).
-
-**C. Networking on a worst-case image** (1–2 days; run against a disk image of the least-friendly of the 5 deployments, not a lab box). Loopback ULA aliases + `skipassource`; v4 127.x bind behavior (Q1); NRPT rule application and removal; WFP provider/sublayer install and ALE loopback classification coexisting with the deployment's actual EDR; `BIND_ADDRESS` end-to-end with a real Tamanu build including `win[net.bind-verify]` via the extended TCP table.
-
-**D. Run Tamanu from read-only VHDX** (half day, mostly done by the Tamanu build work). Attach a produced artifact read-only, launch from the config blob, watch for writable-app-dir assumptions (temp files, logs beside code). Confirm decompressed-store digest verification cost per attach is negligible.
-
-**E. Identity mechanics** (half day). Virtual-account logon under a hardening GPO baseline; stripped-token spawn; DeleteService-with-open-handles ghost behavior and the GC sweep for it; NTFS ACE inheritance breaking on volume creation.
+- **A. Stop delivery + Job Objects** (afternoon) — ctrl-event delivery, exit-code synthesis, dynamic-Job dispatch latency. See `windows-spike-a-stop-delivery.md`.
+- **B. ConPTY over QUIC** (afternoon) — shell stream mapping, resize, empty-stderr contract, Linux stderr-merge side task. See `windows-spike-b-conpty-quic.md`.
+- **C. Networking on a worst-case image** (1–2 days, field disk image) — aliases + `skipassource`, v4 fallback (Q1), NRPT, WFP-under-EDR coexistence, `BIND_ADDRESS` end-to-end. See `windows-spike-c-networking.md`.
+- **D. Run Tamanu from read-only VHDX** (half day) — read-only attach, per-attach verify cost, writable-app-dir hunt. See `windows-spike-d-vhdx-run.md`.
+- **E. Identity mechanics** (half day, hardened GPO image) — virtual-account logon, deterministic SIDs, stripped tokens, DeleteService ghosts, ACE inheritance. See `windows-spike-e-identity.md`.
 
 ## Rollout
 
