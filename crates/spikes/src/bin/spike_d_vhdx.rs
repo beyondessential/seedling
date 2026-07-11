@@ -64,7 +64,7 @@ mod imp {
     }
 
     fn open_vhdx(path: &str) -> windows::core::Result<HANDLE> {
-        let mut storage = VIRTUAL_STORAGE_TYPE {
+        let storage = VIRTUAL_STORAGE_TYPE {
             DeviceId: VIRTUAL_STORAGE_TYPE_DEVICE_VHDX,
             VendorId: VIRTUAL_STORAGE_TYPE_VENDOR_MICROSOFT,
         };
@@ -72,7 +72,7 @@ mod imp {
         let path_w = wide(path);
         let err = unsafe {
             OpenVirtualDisk(
-                &mut storage,
+                &storage,
                 PCWSTR(path_w.as_ptr()),
                 VIRTUAL_DISK_ACCESS_ALL,
                 OPEN_VIRTUAL_DISK_FLAG_NONE,

@@ -101,7 +101,7 @@ mod imp {
                 None,
             )?;
 
-            let mut si = STARTUPINFOEXW {
+            let si = STARTUPINFOEXW {
                 StartupInfo: STARTUPINFOW {
                     cb: size_of::<STARTUPINFOEXW>() as u32,
                     ..Default::default()
