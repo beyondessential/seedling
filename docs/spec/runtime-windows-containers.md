@@ -2,29 +2,29 @@ The Seedling Windows Container Runtime is an implementation of the Seedling runt
 
 # Platform
 
-> wcr[platform]
+> wcr[platform.floor]
 > The runtime runs on Windows Server hosts providing the Host Compute Service and Host Networking Service. Workloads run as process-isolated containers sharing the host kernel.
 
 # Base Image and Composition
 
-> wcr[base]
+> wcr[base.image]
 > The runtime uses a single OS base image for all workloads, pulled from Microsoft's container registry and cached in the image store. The base pulled matches the host's OS build, so process isolation applies. When a host update changes the build, the runtime pulls the matching base for the new build.
 
-> wcr[compose]
-> When an app image is prepared into the store, the runtime composes a runnable layer chain by stacking the [base](#wcr--base) layers beneath the artifact's layers. Starting an instance stacks a discardable scratch layer over the chain; the composed chain is shared across every instance and generation of that image.
+> wcr[compose.chain]
+> When an app image is prepared into the store, the runtime composes a runnable layer chain by stacking the [base](#wcr--base.image) layers beneath the artifact's layers. Starting an instance stacks a discardable scratch layer over the chain; the composed chain is shared across every instance and generation of that image.
 
 # Containers
 
-> wcr[engine]
+> wcr[engine.lifecycle]
 > The runtime runs each instance as a process-isolated container through containerd and its runhcs shim. containerd is a runtime-managed infrastructure dependency: seedlingd starts it ahead of the workloads and infrastructure that need it, and stops it once no workload remains, so an idle host runs only seedlingd.
 
-> wcr[container]
+> wcr[container.model]
 > Each instance runs as one process-isolated container enclosing the workload's process tree, its [network compartment](#wcr--net.compartment), its mapped volumes, and its scratch layer. Stopping the container stops everything within it.
 
-> wcr[shim]
+> wcr[shim.ownership]
 > Each container is supervised by its runhcs shim, which owns the container and restarts the workload per policy on exit. The shim runs independently of containerd and seedlingd: a workload keeps running while either restarts, and a restarting containerd re-attaches to its shims. A shim's death stops its container, which seedlingd reconciles as an observed exit.
 
-> wcr[reconnect]
+> wcr[daemon.reconnect]
 > On restart, seedlingd reconnects to containerd and folds the container state and the exit events it reports into the observation history.
 
 # Networking
@@ -51,7 +51,7 @@ The Seedling Windows Container Runtime is an implementation of the Seedling runt
 
 # Volumes
 
-> wcr[volume]
+> wcr[volume.model]
 > A volume is a runtime-owned host directory mapped into the consuming instance's container at a rendered path, read-only or read-write per the consuming declaration. An instance reaches only the volumes mapped into its own container.
 
 # Shutdown and Signals
@@ -78,7 +78,7 @@ The Seedling Windows Container Runtime is an implementation of the Seedling runt
 
 # Capabilities
 
-> wcr[capability]
+> wcr[capability.map]
 > The runtime reports `storage:block-clone` true when the volume root is ReFS. Snapshot and NAT64 capabilities are reported absent.
 
 # Actions and Shells
@@ -94,11 +94,11 @@ The Seedling Windows Container Runtime is an implementation of the Seedling runt
 
 # Artifacts
 
-> wcr[artifact]
-> A Windows workload is delivered as an OCI image built without a base image: its layers carry only the workload's own filesystem, and its config declares the entrypoint, command, environment, working directory, exposed ports, and [process profile](#wcr--artifact.profile). It is an ordinary OCI image — content-addressed layers, standard manifest and config — produced, stored, signed, and replicated with standard registry tooling, and completed for execution by [composition](#wcr--compose).
+> wcr[artifact.format]
+> A Windows workload is delivered as an OCI image built without a base image: its layers carry only the workload's own filesystem, and its config declares the entrypoint, command, environment, working directory, exposed ports, and [process profile](#wcr--artifact.profile). It is an ordinary OCI image — content-addressed layers, standard manifest and config — produced, stored, signed, and replicated with standard registry tooling, and completed for execution by [composition](#wcr--compose.chain).
 
 > wcr[artifact.profile]
 > The config's process-profile fields declare the workload's [stop method](#wcr--stop.methods) and whether it supports a reload event. A BSL deployment may override these per the language spec's stop-configuration surface.
 
 > wcr[artifact.readonly]
-> The artifact's layers are read-only: [composition](#wcr--compose) stacks them beneath a discardable scratch layer, so per-instance writes are ephemeral and durable state lives in [volumes](#wcr--volume).
+> The artifact's layers are read-only: [composition](#wcr--compose.chain) stacks them beneath a discardable scratch layer, so per-instance writes are ephemeral and durable state lives in [volumes](#wcr--volume.model).
