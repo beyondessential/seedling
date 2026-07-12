@@ -1,68 +1,54 @@
 # Windows Container Runtime: Plan, Open Questions, Spikes
 
-Companion to the draft `runtime-windows-containers.md`. This design is an alternative to the process-native Windows runtime (`runtime-windows.md` / `windows-runtime.md`); the two share the portable-spec restructuring and the backup rework, and differ in the infrastructure layer. This document records only what is specific to the container design; where a workstream is shared, it points at the process-native plan rather than restating it.
+Companion to the draft `runtime-windows-containers.md`. This is one of two candidate Windows runtime designs; a design session picks one. This plan records what is specific to the container design and does not restate the shared tracks.
 
-## Where this fits
+## Shared tracks (not restated here)
 
-The goal is unchanged: a second Seedling implementation with Windows-native primitives speaking the same operator interface, so the existing CLI (`ctl`), web UI, and protocol crates carry over. The difference from the process-native draft is what supplies isolation, addressing, and mount-graph enforcement: the container boundary (HCS compute system + HNS compartment) instead of host primitives (Job Objects + per-instance SCM services/SIDs + loopback aliasing + WFP + supervisor relay).
+- **Portable-spec restructuring**: extracting the portable core of `runtime.md`, adding the capabilities surface to `/status` and the language, restating the exit-code convention, and a rule-ID-keyed conformance suite in CI. Prerequisite for merging an implementation, not for prototyping.
+- **Backup rework**: one embedded method across runtimes, specified separately. The runtime special-cases no application, so application-consistent capture is a property of the backup method and workload hooks, not of runtime behaviour.
 
-What that buys, and why this plan exists:
+## Design decisions carried into the spec
 
-- The entire per-instance and per-invocation identity apparatus (`win[identity.virtual-account]`, `win[identity.dynamic-jobs]`, the 4697 service-install audit churn and its two retreat positions) disappears — replaced by [wc[identity.container-principal]](../spec/runtime-windows-containers.md).
-- The networking/enforcement stack collapses from loopback aliasing + `skipassource` + WFP filters + a supervisor byte-relay to a fabric with per-compartment endpoints and endpoint-scoped allows; mounts become direct-dial with no relay hop, and enforcement becomes mandatory at the namespace boundary rather than discretionary.
-- The supervisor loses its data plane: it owns exit-policy, log capture, and the stop ladder only, shrinking its reliability budget.
+- **One base image, runtime-chosen.** The runtime pulls a single OS base matching the host build and layers every workload over it. No per-artifact base selection and no configurable mirror — either would multiply base downloads and defeat the point of composing locally.
+- **Composition at prepare time.** The runnable image is composed when an app image is prepared into the store; starting an instance only stacks a scratch layer. Container start stays cheap and does no per-start layer work.
+- **Lean pod.** The per-instance supervisor owns its container's lifetime and restart policy, and holds observed events in memory to hand to seedlingd on reconnect. If the pod is gone, seedlingd reconciles the instance from the observed world, exactly as it does when a Linux supervisor disappears. Durable record-keeping and logging live in seedlingd.
+- **Bind like a normal container.** Workloads bind all interfaces inside their own network compartment; there is no injected bind address, because the compartment already isolates the listener.
+- **Linux dataplane model.** Service-address and mount-graph reachability follow the portable dataplane rules, realised at the compartment boundary rather than reconstructed per workload.
 
-What it costs, and what this plan must de-risk: a Rust integration against HCS/HNS, a just-in-time layer composition step, and a new operational dependency on a build-matching OS base being present per host.
+## Workstream: Windows daemon + pod implementation
 
-## Workstreams
+Sequencing: container lifecycle and pod reconnect first (everything composes with it), then composition and the base store, then networking and mount-graph enforcement, then infra services, then actions and shells.
 
-### 1. Spec restructuring (shared; prerequisite for merging, not for prototyping)
-
-Identical to the process-native plan's workstream 1 — extract the portable core of `runtime.md` into a shared document, add the `capabilities` field to `/status` and `rt.capability()` to the language, restate the exit-code convention, and stand up a rule-ID-keyed conformance suite run against every runtime in CI. The capability vocabulary gains `isolation:namespace` and `net:compartment` ([wc[capability.map]](../spec/runtime-windows-containers.md)). No divergence from the process-native plan here.
-
-### 2. Backup rework (shared; cross-runtime, separate track)
-
-Unchanged from the process-native plan: one embedded kopia method across runtimes, and resolve the operation-volume machinery's fate before porting [wc[action.volume-params]](../spec/runtime-windows-containers.md). This design removes the last database-specific runtime behaviour, so application-consistent capture is entirely a property of the backup method plus workload hooks ([wc[backup.v1]](../spec/runtime-windows-containers.md)), not of the runtime.
-
-### 3. Windows daemon + seedpod implementation
-
-Sequencing suggestion: HCS compute-system lifecycle and supervisor reattachment first (Spike A — everything composes with it), then JIT composition and the base-image store (Spike B), then the HNS fabric and mount-graph enforcement (Spike C), then shells/actions (Spike D). Networking depends on compute systems existing; composition depends on the store; enforcement depends on endpoints.
-
-## Open questions (decisions needed, owner: spec sessions)
+## Open questions (owner: spec sessions)
 
 | # | Question | Current lean |
 |---|----------|--------------|
-| Q1 | HCS/HNS from Rust: FFI `vmcompute`/computecore directly, vendor `hcs-rs`, or bind a minimal C shim? | Direct FFI to the documented HCS/HNS flat-C surface; treat `hcs-rs` as reference, not dependency (0.1.0, stale). Pinned in Spike A. |
-| Q2 | Fabric HNS network mode (nat / l2bridge / transparent / ics) that both allocates stable per-endpoint addresses and supports endpoint-scoped allow/deny for the mount graph | Evaluate in Spike C against a worst-case field image; the mode must express `wc[fw.allows]` without a per-mount host-firewall fallback. |
-| Q3 | Default base family when the artifact omits `base` — minimal vs fuller | Lean fuller (broadest workload compatibility); minimal is an artifact opt-in. Confirm the fuller base's build-match cadence is tolerable in Spike B. |
-| Q4 | Composed/materialised-layer cache: key, invalidation, and disk budget across live generations + drained old generations | Key on (base build, app-layer digest); GC drained generations promptly; size-cap the store with pin protection. Measured in Spike B. |
-| Q5 | Supervisor-death re-adoption: can a replacement supervisor cleanly re-own an orphaned compute system (`OpenComputeSystem` + re-attach console/exit-wait) without racing HCS? | Prototype in Spike A; if re-adoption is not clean, fall back to supervisor death terminating the compute system (the process-native `win[supervisor.crash]` behaviour) and document the regression. |
+| Q1 | HCS/HNS from Rust: FFI the documented flat-C surface, vendor an existing wrapper, or bind a minimal C shim | Direct FFI to the HCS/HNS flat-C surface; treat existing wrappers as reference. Pinned in Spike A. |
+| Q2 | Which HNS network mode gives a per-instance compartment with a routable service address, endpoint-scoped mount enforcement, and host public-port publishing for ingress | Evaluate in Spike C against a worst-case field image; the mode must express the mount graph without a host-firewall fallback. |
+| Q3 | Composition mechanics: materialise the artifact filesystem into a layer (e.g. CimFS) and cache it; invalidation and store disk budget | Key composed layers on the app image digest; size-cap the store with pin protection. Measured in Spike B. |
+| Q4 | Pod reconnect: identity verification and the in-memory event handoff protocol | Prototype in Spike A; verify the pod's process identity before adopting; hand off events on connect. |
 
-## Spikes (confirm before the corresponding rules lose their `[spike]` tag)
+## Spikes
 
-- **A. Compute-system lifecycle + reattach** — create/start/stop a process-isolated compute system from Rust; supervisor breakaway; daemon reattach after restart; supervisor-death re-adoption (Q5); pipe protocol (`wc[pod.*]`). This is the load-bearing spike: it decides Q1 and whether the daemon-independence property survives.
-- **B. JIT composition + base store** — pull a build-matching base; materialise a VHDX subtree into a read-only container layer (CimFS); compose and run; measure per-composition cost and cache hit behaviour; base-drift detection for `seedling doctor` (`wc[base.*]`, `wc[compose.jit]`, `wc[artifact.compose]`).
-- **C. Fabric networking on a worst-case image** (field disk image) — one HNS fabric; per-instance compartment + endpoint + stable address; mount graph compiled to endpoint allows with default-deny; ingress host-port mapping; per-compartment resolver DNS; coexistence with field AV/EDR (`wc[net.*]`, `wc[fw.*]`, `wc[special.*]`). Confirms Q2.
-- **D. Exec + ConPTY into a running compute system** — spawn an action process inside an instance's compute system; ConPTY shell attach and resize; volume shells via a base-image compute system with volumes mapped; empty-stderr contract (`wc[action.exec]`, `wc[shell.*]`).
-- **E. Stop delivery inside a compute system** — ctrl-event delivery to the workload process group inside the container, exit-code synthesis, named-event and reload paths (`wc[stop.*]`, `wc[signal.map]`).
+- **A. Container lifecycle + pod reconnect** — create, start, stop a process-isolated container from Rust; pod independence from seedlingd; reconnect and event handoff; identity verification. Decides Q1 and whether workload-survives-seedlingd-restart holds in practice.
+- **B. Composition + base store** — pull a build-matching base; materialise an artifact filesystem into a composed layer; measure per-composition cost and cache behaviour.
+- **C. Networking on a worst-case image** (field disk image) — per-instance compartment and endpoint; service addresses; mount graph compiled to compartment-boundary enforcement with default-deny; ingress host public-port publishing; per-compartment resolver DNS; coexistence with field AV/EDR. Decides Q2.
+- **D. Exec + ConPTY + volume shells** — run an action process inside a container; ConPTY shell attach and resize; volume shells via a container with volumes mapped.
+- **E. Stop delivery** — console-control-event and named-event delivery to a workload inside its container; exit-code recording.
 
 ## Rollout
 
-- Fleet reality: ~5 deployments, ~25 Windows hosts, varying circumstances. Drift is assumed — and here drift has a new dimension: OS build number, which gates base-image availability (`wc[base.match]`).
-- Build `seedling doctor` early: per-host preflight for Containers-feature/HCS/HNS presence, base-image availability for the current build and required families, fabric creation, VHDX attach + composition, Defender exclusions, Server version — reported through the same capabilities vocabulary as `/status`, aggregatable fleet-wide. Base-drift ("host patched, matching base not yet cached, no registry egress") must be a distinct, actionable doctor verdict.
-- Pre-stage base images onto air-gapped or egress-restricted hosts as part of provisioning; the store is the single source the composer draws from, so a pre-staged base is indistinguishable from a pulled one.
-- Run doctor across all 25 hosts *before* the pilot; the resulting support matrix (including per-host build and base coverage) chooses the pilot and the sequencing.
+- Fleet reality: ~5 deployments, ~25 Windows hosts, drift assumed — including OS build number, which gates which base is usable.
+- `seedling doctor` per-host preflight: container platform present, base image cached for the current build, network fabric creation, image composition, volume mapping, Defender exclusions, Server version — reported through the capabilities surface and aggregatable fleet-wide. A host patched without a matching base cached is an actionable doctor verdict.
+- Pre-stage base images onto egress-restricted hosts during provisioning; the store is the single source the composer draws from, so a pre-staged base is indistinguishable from a pulled one.
+- Run doctor across all hosts before the pilot; the support matrix (per-host build and base coverage) chooses the pilot and the sequencing.
 
-## Migration is an operations concern, not a runtime concern
+## Migration is an operations concern
 
-The runtime special-cases no application. Whatever a field host runs today (a native PostgreSQL service, a PM2-supervised Node process, a hand-configured Caddy) is migrated by wrapping it as an ordinary artifact-backed workload and cutting over; how an operator quiesces and imports existing state is an operations runbook, out of scope for the runtime spec. There is deliberately no "adopt the host's existing database service" mechanism in this design — that coupling is what the process-native draft carries and what this draft removes.
+Whatever a field host runs today is migrated by packaging it as an ordinary artifact-backed workload and cutting over; quiescing and importing existing state is an operations runbook, out of scope for the runtime. There is deliberately no host-service-adoption mechanism in this design.
 
-## Relationship to the process-native draft
+## Cost ledger for choosing this design
 
-Both drafts target the same operator interface and share workstreams 1 and 2. They diverge only in workstream 3, and the divergence is total in the infrastructure layer: a design session should pick one, not merge them. The honest cost ledger for choosing this one over the process-native draft:
-
-- **New build risk:** HCS/HNS-from-Rust (Q1) is a larger, less-documented integration surface than the Win32 primitives (Job Objects, WFP, SCM) the process-native draft stands on. Spike A retires or confirms this risk before commitment.
-- **New operational dependency:** workloads cannot start on a host build with no matching base cached; native processes have no such dependency. Mitigated by pre-staging and doctor, but real.
-- **Retained property to prove, not assume:** daemon-independent workload survival (`wc[boot.cold]`) depends on Q5 resolving cleanly. If it does not, the fallback narrows the property to match the process-native draft's supervisor-death behaviour.
-
-Against those, the win is the collapse of the identity + networking + enforcement machinery — the process-native draft's most complex, most spike-laden, most operationally fragile third — into the container boundary, plus mandatory (rather than discretionary) isolation between workloads.
+- **Build risk:** HCS/HNS-from-Rust (Q1) is a larger, less-documented integration surface than plain Win32 process and service APIs. Spike A retires it before commitment.
+- **Operational dependency:** a workload cannot start on a host build with no matching base cached. Mitigated by pre-staging and doctor, but real.
+- **Payoff:** isolation, addressing, and mount-graph enforcement come from the container boundary instead of being reconstructed out of host primitives, and isolation between workloads is enforced by the platform rather than by discretionary host filters.
