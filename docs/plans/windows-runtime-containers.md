@@ -54,7 +54,7 @@ The `io.containerd.runhcs.v1` shim is the per-instance supervisor — it *is* th
 
 ## Spikes
 
-- **A. containerd survival + control (the decider)** — the load-bearing spike; its outcome chooses containerd (B) or the hand-rolled fallback (A). Exit criteria:
+- **A. containerd survival + control (the decider)** — the load-bearing spike; its outcome chooses containerd (B) or the hand-rolled fallback (A). See `windows-spike-containerd.md`; harness `spike-containerd`. Exit criteria:
   1. A process-isolated Windows container keeps running across a full containerd service stop/start, and containerd re-attaches to the shim and resumes reporting task state. *(This is the make-or-break; if it fails, fall back to hand-rolling the supervisor.)*
   2. seedlingd drives containerd from Rust over gRPC: create, start, stop, exec, and receive exit events.
   3. On-demand lifecycle: seedlingd starts containerd on first workload and stops it when the world empties, without disturbing the content store or pulled images.
