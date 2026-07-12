@@ -29,6 +29,10 @@ windows = { version = "0.62.2", features = [
 ] }
 
 [[bin]]
+name = "spike-containerd"
+path = "src/bin/spike_containerd.rs"
+
+[[bin]]
 name = "spike-a-stop"
 path = "src/bin/spike_a_stop.rs"
 
