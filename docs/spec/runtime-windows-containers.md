@@ -11,7 +11,7 @@ The Seedling Windows Container Runtime is an implementation of the Seedling runt
 > The runtime uses a single OS base image for all workloads, pulled from Microsoft's container registry and cached in the image store. The base pulled matches the host's OS build, so process isolation applies. When a host update changes the build, the runtime pulls the matching base for the new build.
 
 > wc[compose]
-> When an app image is prepared into the store, the runtime composes a runnable image by layering the app's filesystem over the [base](#wc--base). Starting an instance stacks a discardable scratch layer over the composed layers; the composed layers are shared across every instance and generation of that image.
+> When an app image is prepared into the store, the runtime composes a runnable layer chain by stacking the [base](#wc--base) layers beneath the artifact's layers. Starting an instance stacks a discardable scratch layer over the chain; the composed chain is shared across every instance and generation of that image.
 
 # Containers
 
@@ -41,7 +41,7 @@ The Seedling Windows Container Runtime is an implementation of the Seedling runt
 # Infrastructure Services
 
 > wc[infra.services]
-> The ingress controller and the resolver run as runtime-managed containers on the Seedling network. The runtime renders their configuration from desired state and starts them in dependency order.
+> The ingress controller and the resolver run as runtime-managed containers on the Seedling network. The runtime renders their configuration from desired state, starts them in dependency order ahead of the workloads that need them, and stops them once no workload requires them, so a host with no workloads runs no infrastructure containers.
 
 > wc[infra.ingress]
 > The ingress container binds the host's configured public ports and dials backends on their service addresses (`r[infra.proxy.startup]`, `r[lifecycle.ingress]`). Configuration changes apply by graceful reload, so established connections are not dropped.
@@ -95,13 +95,10 @@ The Seedling Windows Container Runtime is an implementation of the Seedling runt
 # Artifacts
 
 > wc[artifact]
-> A Windows workload is delivered as an OCI artifact whose config blob has media type `application/vnd.au.bes.seedling.windows.config.v1+json` and whose layer carries the workload's filesystem image. The config declares the entrypoint, command, environment, working directory, exposed ports, and the [process profile](#wc--artifact.profile).
+> A Windows workload is delivered as an OCI image built without a base image: its layers carry only the workload's own filesystem, and its config declares the entrypoint, command, environment, working directory, exposed ports, and [process profile](#wc--artifact.profile). It is an ordinary OCI image — content-addressed layers, standard manifest and config — produced, stored, signed, and replicated with standard registry tooling, and completed for execution by [composition](#wc--compose).
 
 > wc[artifact.profile]
 > The config's process-profile fields declare the workload's [stop method](#wc--stop.methods) and whether it supports a reload event. A BSL deployment may override these per the language spec's stop-configuration surface.
 
 > wc[artifact.readonly]
-> The workload's filesystem image is used read-only: [composition](#wc--compose) places it beneath the discardable scratch layer, so writable state lives in [volumes](#wc--volume).
-
-> wc[artifact.verify]
-> The runtime verifies the image digest at pull and again before composition. A mismatch quarantines the store entry and re-pulls.
+> The artifact's layers are read-only: [composition](#wc--compose) stacks them beneath a discardable scratch layer, so per-instance writes are ephemeral and durable state lives in [volumes](#wc--volume).
