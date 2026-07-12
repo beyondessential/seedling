@@ -15,17 +15,17 @@ The Seedling Windows Container Runtime is an implementation of the Seedling runt
 
 # Containers
 
+> wc[engine]
+> The runtime runs each instance as a process-isolated container through containerd and its runhcs shim. containerd is a runtime-managed infrastructure dependency: seedlingd starts it ahead of the workloads and infrastructure that need it, and stops it once no workload remains, so an idle host runs only seedlingd.
+
 > wc[container]
 > Each instance runs as one process-isolated container enclosing the workload's process tree, its [network compartment](#wc--net.compartment), its mapped volumes, and its scratch layer. Stopping the container stops everything within it.
 
-> wc[pod]
-> Each container is owned by a per-instance supervisor process, the **pod**. The pod creates the container from the [composed image](#wc--compose), starts the workload, and restarts it per policy on exit. The pod runs independently of seedlingd, so a workload keeps running while seedlingd stops, crashes, or upgrades. When the pod exits, its container stops with it, and seedlingd reconciles the instance as it would any observed exit.
+> wc[shim]
+> Each container is supervised by its runhcs shim, which owns the container and restarts the workload per policy on exit. The shim runs independently of containerd and seedlingd: a workload keeps running while either restarts, and a restarting containerd re-attaches to its shims. A shim's death stops its container, which seedlingd reconciles as an observed exit.
 
-> wc[pod.events]
-> The pod holds the lifecycle events it observes (exits, restarts, readiness) in memory and reports them to seedlingd over its connection. When seedlingd reconnects to a pod, it collects the events observed while it was away and folds them into the observation history.
-
-> wc[pod.reconnect]
-> seedlingd records, per instance, how to reach its pod and how to verify the pod's identity. On start, seedlingd reconnects to each recorded pod and verifies its identity before trusting it; a pod that fails verification or is absent is reconciled as a stopped instance.
+> wc[reconnect]
+> On restart, seedlingd reconnects to containerd and folds the container state and the exit events it reports into the observation history.
 
 # Networking
 
@@ -59,8 +59,8 @@ The Seedling Windows Container Runtime is an implementation of the Seedling runt
 > wc[stop.methods]
 > A workload's [process profile](#wc--artifact.profile) declares how it is asked to stop, one of:
 >
-> - `ctrl_break` / `ctrl_c`: the pod delivers a console control event to the workload's process group.
-> - `named_event`: the pod passes an event name in the environment and signals that event; a sibling reload event may be declared for reload.
+> - `ctrl_break` / `ctrl_c`: the shim delivers a console control event to the workload's process group.
+> - `named_event`: the shim passes an event name in the environment and signals that event; a sibling reload event may be declared for reload.
 > - `terminate`: the container is terminated directly.
 
 > wc[stop.ladder]
