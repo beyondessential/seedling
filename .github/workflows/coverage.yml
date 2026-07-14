@@ -35,7 +35,7 @@ jobs:
           rustup toolchain install --profile minimal --no-self-update stable
           rustup default stable
           rustup component add llvm-tools-preview
-      - uses: taiki-e/install-action@v2.82.2
+      - uses: taiki-e/install-action@v2.82.7
         with:
           tool: cargo-llvm-cov
       # Coverage builds are instrumented, so keep them in their own cache to
@@ -64,7 +64,7 @@ jobs:
         working-directory: crates/web/frontend
     steps:
       - uses: actions/checkout@v7.0.0
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v6.4.0
         with:
           node-version: lts/*
           cache: npm
