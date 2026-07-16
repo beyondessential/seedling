@@ -240,6 +240,11 @@ Absent specification bugs, anything not defined here is either defined in anothe
 >
 > Private key material, ACME account keys, and DNS-provider credentials must never be returned to the client.
 
+> w[routes.canopy]
+> The web interface exposes the Canopy link at `/canopy`: showing the current registration state and reporting health (via [`/canopy/status`](interface.md#i--canopy.status)); enrolling by pasting the enrolment ticket and its passphrase; and deregistering.
+> The passphrase field must be masked, and neither the ticket nor the passphrase is retained client-side after submission.
+> Deregistering is a destructive action and must be confirmed before the request is issued.
+
 > w[sessions.events]
 > The web interface must emit `WebSessionStarted`, `WebSessionStopped`, and `WebSessionModeChanged` events on the event feed when a WebTransport session is established, closed, or reports a new [safety mode](#w--sessions.safety-mode). Clients must use these events, together with the OI events `ShellStarted`, `ShellExited`, `ForwardStarted`, and `ForwardStopped`, to keep the connected-clients view up to date without polling.
 

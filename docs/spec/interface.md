@@ -153,6 +153,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > | `server_busy` | The server's stream concurrency limit has been reached; the client should retry after a delay. |
 > | `internal` | An unexpected server-side failure (for example a database error) prevented the request from completing. |
 > | `backup_app_in_use` | The backup app cannot be deregistered because a backup strategy still references it. |
+> | `already_enrolled` | `/canopy/enrol` was called but this instance already holds a Canopy registration. |
 
 # Status
 
@@ -1113,6 +1114,37 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 > `contact_email` (string) sets the operator contact email used for ACME account registration; pass an empty string to clear.
 > `cert_profile` (string or null) opts into a non-default ACME profile (e.g. Let's Encrypt's `shortlived` for ~6-day certs) per [tls.settings.cert-profile](runtime.md#r--tls.settings.cert-profile); pass `null` to clear so the CA selects its default profile, or omit the field to leave it unchanged.
 > Both updates take effect on the next renewal pass without daemon restart.
+
+# Canopy Reporting
+
+Seedling instances can report their status to Canopy, the fleet monitoring service.
+The OI exposes the enrolment lifecycle; the reporting behaviour itself is defined in the runtime spec (see [canopy.push](runtime.md#r--canopy.push)).
+
+> i[canopy.enrol]
+> `/canopy/enrol { ticket, passphrase }` enrols this Seedling instance with Canopy.
+> `ticket` is the encrypted enrolment ticket issued by Canopy when the operator creates the server record there, and `passphrase` is the accompanying secret shared out of band.
+> Enrolment mints a fresh device identity, proves possession of it to Canopy, and persists the resulting registration (see [canopy.registration](runtime.md#r--canopy.registration)).
+> On success the response is `{ server_id, device_id }`, the identities Canopy assigned.
+> A ticket that is not a valid Canopy enrolment ticket, a wrong passphrase, or a rejection from Canopy is reported as `requirements_invalid` with detail in `message`; the enrolment token is not consumed by a failed decrypt.
+
+> i[canopy.enrol.single]
+> An instance holds at most one Canopy registration.
+> `/canopy/enrol` is refused with `already_enrolled` while a registration is present; the operator must deregister first.
+> A fresh enrolment never reuses identity material from a previous registration.
+
+> i[canopy.status]
+> `/canopy/status` returns the state of the Canopy link:
+>
+> - `enrolled`: whether a registration is present.
+> - `server_id`, `device_id`, `api_url`: the stored registration's identities and endpoint; absent when not enrolled.
+> - `last_push_at`: timestamp (RFC 3339) of the most recent report attempt; absent before the first attempt.
+> - `last_push_error`: the most recent report failure; absent when the last report succeeded.
+> - `last_response`: the response Canopy returned for the most recent successful report; absent before the first success.
+
+> i[canopy.deregister]
+> `/canopy/deregister` removes the stored registration and stops status reporting.
+> It returns `{ deregistered }`, `true` when a registration was removed and `false` when none was present.
+> Deregistering does not notify Canopy; the server record there is managed by the operator.
 
 # Client Behaviour
 

@@ -1531,3 +1531,27 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > r[tls.policy.apply]
 > Changes to operator-defined TLS policy (binding a hostname to a strategy, changing its parameters, or clearing it) must take effect on a subsequent reconciliation tick without operator-initiated apply steps.
 > The runtime must rebuild the proxy configuration accordingly.
+
+# Canopy Reporting
+
+An enrolled Seedling instance periodically reports its status to Canopy, the fleet monitoring service, so operators can observe the fleet without connecting to each host.
+Enrolment is operator-initiated through the OI (see [canopy.enrol](interface.md#i--canopy.enrol)), the web interface, or the CLI.
+
+> r[canopy.registration]
+> A Canopy registration binds this instance to a server record the operator pre-created in Canopy.
+> Enrolment decrypts the operator-supplied ticket with its passphrase, mints a fresh device key, and claims the server record by proving possession of that key to Canopy.
+> The resulting registration — the device key together with the identities and endpoint Canopy assigned — is persisted in the data directory, encrypted at rest and bound to the machine so a copied registration file is useless elsewhere.
+> The device key is the instance's identity to Canopy and must never appear in logs or OI responses.
+
+> r[canopy.push]
+> While a registration is present, the runtime reports status to Canopy at a regular interval (default one minute).
+> Each report identifies this instance as the `seedling` source and carries the Seedling version, the host name, the daemon uptime, and a health section covering at minimum: the reverse proxy, the DNS resolver, and the managed apps (passing when every registered app is running, a warning when some are not).
+> An instance with no registration reports nothing and files no faults about reporting.
+
+> r[canopy.push.response]
+> The response Canopy returns to a report is logged and retained for the OI status surface (see [canopy.status](interface.md#i--canopy.status)).
+> The runtime does not yet act on response contents; it is recorded so operators can verify the channel end to end.
+
+> r[canopy.push.fault]
+> A failed report is logged as a warning and reflected in the OI status surface.
+> After five consecutive failures the runtime files a `canopy_unreachable` system fault; the fault clears on the next successful report.
