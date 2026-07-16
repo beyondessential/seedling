@@ -54,6 +54,11 @@ aws-credential-types = "1.2.14"
 axum.workspace = true
 iana-time-zone = "0.1.65"
 hickory-resolver = { version = "0.26.1", default-features = false, features = ["system-config", "tokio"] }
+bestool-canopy = "0.7.0"
+algae-cli = "1.1.6"
+base64 = "0.22.1"
+p256 = { version = "0.13.2", features = ["ecdsa", "pkcs8", "pem"] }
+futures = { version = "0.3.32", default-features = false, features = ["executor"] }
 
 [dev-dependencies]
 time = "0.3.47"

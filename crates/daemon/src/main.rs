@@ -1020,6 +1020,18 @@ async fn main() {
     // OI server
     // ---------------------------------------------------------------------------
 
+    // r[impl canopy.push]
+    // Spawn the Canopy reporting provider. It loads any stored registration
+    // and, while one is present, reports status on its own cadence; an
+    // unenrolled instance idles silently until the operator enrols via the
+    // OI, web UI, or CLI.
+    let canopy_provider = seedling_core::runtime::canopy::CanopyProvider::new(
+        &data_dir,
+        Arc::clone(&registry),
+        Arc::clone(&driver.container),
+    );
+    let _canopy_handle = Arc::clone(&canopy_provider).spawn();
+
     let oi_state = Arc::new(OiState {
         registry: Arc::clone(&registry),
         spki_fingerprint: std::sync::OnceLock::new(),
@@ -1042,6 +1054,7 @@ async fn main() {
         caddy_data_path: tokio::sync::OnceCell::new(),
         tailscale_provider: Some(Arc::clone(&tailscale_provider)),
         site_resolver: Some(Arc::clone(&site_resolver)),
+        canopy_provider: Some(canopy_provider),
     });
 
     // ---------------------------------------------------------------------------

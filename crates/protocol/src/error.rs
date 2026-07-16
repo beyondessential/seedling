@@ -19,6 +19,8 @@ pub enum ErrorCode {
     Internal,
     // i[impl backup.app.deregister]
     BackupAppInUse,
+    // i[impl canopy.enrol.single]
+    AlreadyEnrolled,
 }
 
 #[derive(Debug)]
@@ -68,6 +70,7 @@ mod tests {
             (ErrorCode::ServerBusy, "server_busy"),
             (ErrorCode::Internal, "internal"),
             (ErrorCode::BackupAppInUse, "backup_app_in_use"),
+            (ErrorCode::AlreadyEnrolled, "already_enrolled"),
         ];
         for (code, expected) in cases {
             assert_eq!(serde_json::to_value(code).unwrap(), json!(expected));

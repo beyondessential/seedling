@@ -14,6 +14,7 @@ pub mod actions;
 mod appdef_json;
 mod apps;
 pub mod backups;
+mod canopy;
 mod faults;
 mod images;
 mod ingresses;
@@ -26,6 +27,7 @@ mod templates;
 mod tls;
 mod volumes;
 
+pub(crate) use canopy::{deregister as canopy_deregister, enrol as canopy_enrol};
 pub(crate) use status::get_infra_status;
 
 /// Context derived from an incoming OI request, passed through dispatch.
@@ -342,6 +344,8 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/tls/retry-blocks/set" => tls::set_retry_block(state, parse_params(req.params)?),
         // i[tls.retry-block.clear]
         "/tls/retry-blocks/clear" => tls::clear_retry_block(state, parse_params(req.params)?),
+        // i[canopy.status]
+        "/canopy/status" => canopy::status(state),
         other => Err(OiError::not_found(format!("unknown method: {other}"))),
     };
 

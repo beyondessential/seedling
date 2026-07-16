@@ -468,6 +468,53 @@ async fn handle_bidi_stream(
         return;
     }
 
+    // i[impl canopy.enrol] — the enrolment handshake awaits network calls, so
+    // it runs here rather than in the synchronous dispatch.
+    if maybe_method.as_deref() == Some("/canopy/enrol") {
+        let result = match first_obj
+            .get("params")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+        {
+            Ok(Some(params)) => super::handler::canopy_enrol(&state, params).await,
+            Ok(None) | Err(_) => Err(seedling_protocol::error::OiError::new(
+                seedling_protocol::error::ErrorCode::RequirementsInvalid,
+                "invalid params: expected { ticket, passphrase }",
+            )),
+        };
+        let response = match result {
+            Ok(v) => serde_json::to_vec(&json!({ "result": v })).expect("serialisation"),
+            Err(e) => serde_json::to_vec(&json!({
+                "error": { "code": e.code, "message": e.message }
+            }))
+            .expect("serialisation"),
+        };
+        if let Err(e) = send.write_all(&response).await {
+            tracing::warn!("stream write error: {e}");
+        }
+        let _ = send.finish();
+        return;
+    }
+
+    // i[impl canopy.deregister] — removing the stored registration awaits
+    // filesystem work, so it also runs outside the synchronous dispatch.
+    if maybe_method.as_deref() == Some("/canopy/deregister") {
+        let result = super::handler::canopy_deregister(&state).await;
+        let response = match result {
+            Ok(v) => serde_json::to_vec(&json!({ "result": v })).expect("serialisation"),
+            Err(e) => serde_json::to_vec(&json!({
+                "error": { "code": e.code, "message": e.message }
+            }))
+            .expect("serialisation"),
+        };
+        if let Err(e) = send.write_all(&response).await {
+            tracing::warn!("stream write error: {e}");
+        }
+        let _ = send.finish();
+        return;
+    }
+
     // i[forward.request] — /forwards/start keeps the control stream open for the
     // duration of the forward; it must be handled outside the normal req/resp path.
     if maybe_method.as_deref() == Some("/forwards/start") {
