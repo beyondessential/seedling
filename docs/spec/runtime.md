@@ -1554,4 +1554,4 @@ Enrolment is operator-initiated through the OI (see [canopy.enrol](interface.md#
 
 > r[canopy.push.fault]
 > A failed report is logged as a warning and reflected in the OI status surface.
-> After five consecutive failures the runtime files a `canopy_unreachable` system fault; the fault clears on the next successful report.
+> After five consecutive failures the runtime escalates to logging at error level; the escalation resets on the next successful report.
