@@ -1,6 +1,7 @@
 import AltRouteIcon from "@mui/icons-material/AltRoute";
 import BackupIcon from "@mui/icons-material/Backup";
 import CloudQueueIcon from "@mui/icons-material/CloudQueue";
+import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import DescriptionIcon from "@mui/icons-material/Description";
 import EventNoteIcon from "@mui/icons-material/EventNote";
 import HubIcon from "@mui/icons-material/Hub";
@@ -186,6 +187,16 @@ export function Navbar() {
             sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
           >
             <CloudQueueIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Canopy enrolment">
+          <IconButton
+            size="small"
+            component={Link}
+            to="/canopy"
+            sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
+          >
+            <CloudUploadIcon fontSize="small" />
           </IconButton>
         </Tooltip>
         <Tooltip title="Container images">

@@ -319,6 +319,22 @@ export interface AuthorizedKey {
   added_at: number;
 }
 
+export interface CanopyStatus {
+  enrolled: boolean;
+  /** Present when enrolled. */
+  server_id?: string;
+  /** Present when enrolled. */
+  device_id?: string;
+  /** Present when enrolled. */
+  api_url?: string;
+  /** RFC 3339 timestamp; absent before the first report attempt. */
+  last_push_at?: string;
+  /** Absent when the last report succeeded. */
+  last_push_error?: string;
+  /** JSON value Canopy returned on the last successful report. */
+  last_response?: unknown;
+}
+
 export interface SiteVolume {
   name: string;
   kind: "managed" | "bind" | "snapshot";
