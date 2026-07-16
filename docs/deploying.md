@@ -176,3 +176,19 @@ verifiable with `gh attestation verify <file> -R beyondessential/seedling`.
 Running the daemon from a tarball means creating the state directories, the
 systemd unit, and the log rotation yourself; the package is the supported way to
 run the daemon.
+
+## Canopy fleet monitoring
+
+An enrolled instance reports its status (proxy, resolver, and app health) to
+Canopy every minute. Create the server record in Canopy first; it hands back
+an encrypted enrolment ticket plus a passphrase (shared out of band), then:
+
+```
+seedling-ctl canopy enrol <ticket> --passphrase <passphrase>
+seedling-ctl canopy status
+```
+
+The same flow is available on the web interface's Canopy page. Deregister with
+`seedling-ctl canopy deregister`; the registration lives encrypted under
+`<data-dir>/canopy/` and is bound to the machine, so restoring it onto another
+host requires a fresh enrolment.
