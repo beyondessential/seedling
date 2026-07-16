@@ -78,10 +78,7 @@ pub(crate) fn status(state: &OiState) -> HandlerResult {
 
 // i[canopy.deregister]
 pub(crate) async fn deregister(state: &Arc<OiState>) -> HandlerResult {
-    let deregistered = provider(state)?
-        .deregister()
-        .await
-        .map_err(to_oi_error)?;
+    let deregistered = provider(state)?.deregister().await.map_err(to_oi_error)?;
     Ok(json!({ "deregistered": deregistered }))
 }
 

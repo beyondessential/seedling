@@ -156,9 +156,11 @@ impl CanopyProvider {
     /// Record a registration's non-secret info and build the reporting
     /// client from its device key.
     async fn adopt_registration(&self, reg: Registration) -> Result<(), CanopyError> {
-        let (Some(server_id), Some(api_url), Some(device_key)) =
-            (reg.server_id.clone(), reg.api_url.clone(), reg.device_key.clone())
-        else {
+        let (Some(server_id), Some(api_url), Some(device_key)) = (
+            reg.server_id.clone(),
+            reg.api_url.clone(),
+            reg.device_key.clone(),
+        ) else {
             return Err(CanopyError::Internal {
                 reason: "stored registration is missing fields".into(),
             });
@@ -168,19 +170,15 @@ impl CanopyProvider {
             reason: format!("stored api_url invalid: {e}"),
         })?;
         let tailscale_url = TAILSCALE_URL.parse().expect("static URL is valid");
-        let client = CanopyClient::with_urls(
-            base_url,
-            tailscale_url,
-            Some(&device_key),
-            client_builder,
-        )
-        .await
-        .map_err(|e| CanopyError::Internal {
-            reason: format!("building canopy client: {e:#}"),
-        })?
-        .ok_or_else(|| CanopyError::Internal {
-            reason: "no route to canopy (no tailnet and no device key)".into(),
-        })?;
+        let client =
+            CanopyClient::with_urls(base_url, tailscale_url, Some(&device_key), client_builder)
+                .await
+                .map_err(|e| CanopyError::Internal {
+                    reason: format!("building canopy client: {e:#}"),
+                })?
+                .ok_or_else(|| CanopyError::Internal {
+                    reason: "no route to canopy (no tailnet and no device key)".into(),
+                })?;
 
         *self.registration.write() = Some(RegistrationInfo {
             server_id,
@@ -211,9 +209,15 @@ impl CanopyProvider {
                         consecutive_failures += 1;
                         // r[impl canopy.push.fault]
                         if consecutive_failures >= ESCALATE_AFTER_FAILURES {
-                            error!(attempt = consecutive_failures, "canopy: report failed: {reason}");
+                            error!(
+                                attempt = consecutive_failures,
+                                "canopy: report failed: {reason}"
+                            );
                         } else {
-                            warn!(attempt = consecutive_failures, "canopy: report failed: {reason}");
+                            warn!(
+                                attempt = consecutive_failures,
+                                "canopy: report failed: {reason}"
+                            );
                         }
                         let mut status = self.push_status.write();
                         status.last_push_at = Some(Timestamp::now());
@@ -310,7 +314,11 @@ impl CanopyProvider {
     }
 
     // i[impl canopy.enrol]
-    pub async fn enrol(&self, ticket_b64: &str, passphrase: &str) -> Result<(String, String), CanopyError> {
+    pub async fn enrol(
+        &self,
+        ticket_b64: &str,
+        passphrase: &str,
+    ) -> Result<(String, String), CanopyError> {
         // i[impl canopy.enrol.single]
         if self.registration.read().is_some() {
             return Err(CanopyError::AlreadyEnrolled);
@@ -343,9 +351,12 @@ impl CanopyProvider {
             });
         }
         let api_url: bestool_canopy::reqwest::Url =
-            ticket.api_url.parse().map_err(|e| CanopyError::InvalidTicket {
-                reason: format!("api_url is not a valid URL: {e}"),
-            })?;
+            ticket
+                .api_url
+                .parse()
+                .map_err(|e| CanopyError::InvalidTicket {
+                    reason: format!("api_url is not a valid URL: {e}"),
+                })?;
         if api_url.scheme() != "https" {
             return Err(CanopyError::InvalidTicket {
                 reason: format!("api_url must be https, got {:?}", api_url.scheme()),
@@ -399,11 +410,12 @@ impl CanopyProvider {
                     .into(),
             });
         }
-        let nonce_bytes = STANDARD
-            .decode(begin.nonce.trim())
-            .map_err(|e| CanopyError::Rejected {
-                reason: format!("decoding challenge nonce: {e}"),
-            })?;
+        let nonce_bytes =
+            STANDARD
+                .decode(begin.nonce.trim())
+                .map_err(|e| CanopyError::Rejected {
+                    reason: format!("decoding challenge nonce: {e}"),
+                })?;
 
         // Step 2: prove possession of the device key by signing the
         // transcript: nonce || server id bytes || SPKI DER.
@@ -445,16 +457,20 @@ impl CanopyProvider {
         info!(server_id = %complete.server_id, device_id = %complete.device_id, "canopy: enrolled");
         // Report immediately so the operator sees the channel work end to end.
         self.kick.notify_one();
-        Ok((complete.server_id.to_string(), complete.device_id.to_string()))
+        Ok((
+            complete.server_id.to_string(),
+            complete.device_id.to_string(),
+        ))
     }
 
     // i[impl canopy.deregister]
     pub async fn deregister(&self) -> Result<bool, CanopyError> {
-        let removed = registration::delete_in(&self.dir)
-            .await
-            .map_err(|e| CanopyError::Internal {
-                reason: format!("removing registration: {e:#}"),
-            })?;
+        let removed =
+            registration::delete_in(&self.dir)
+                .await
+                .map_err(|e| CanopyError::Internal {
+                    reason: format!("removing registration: {e:#}"),
+                })?;
         *self.client.write() = None;
         *self.registration.write() = None;
         *self.push_status.write() = PushStatus::default();
@@ -481,9 +497,8 @@ fn component_check(name: &str, label: &str, state: &'static str) -> Value {
 /// decrypt future must be driven to completion on one thread (see the
 /// `spawn_blocking` at the call site — scrypt key derivation is CPU-bound).
 fn decrypt_ticket(encrypted: &[u8], passphrase: &str) -> Result<EnrolTicket, CanopyError> {
-    let pass = algae_cli::passphrases::Passphrase::new(secrecy::SecretString::from(
-        passphrase.to_owned(),
-    ));
+    let pass =
+        algae_cli::passphrases::Passphrase::new(secrecy::SecretString::from(passphrase.to_owned()));
     let reader = futures_util::io::Cursor::new(encrypted.to_vec());
     let mut plaintext: Vec<u8> = Vec::new();
     futures::executor::block_on(algae_cli::streams::decrypt_stream(

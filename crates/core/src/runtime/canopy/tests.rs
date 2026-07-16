@@ -17,9 +17,8 @@ fn runtime() -> tokio::runtime::Runtime {
 }
 
 async fn encrypt_ticket(plaintext: &[u8], passphrase: &str) -> String {
-    let pass = algae_cli::passphrases::Passphrase::new(secrecy::SecretString::from(
-        passphrase.to_owned(),
-    ));
+    let pass =
+        algae_cli::passphrases::Passphrase::new(secrecy::SecretString::from(passphrase.to_owned()));
     let mut ciphertext: Vec<u8> = Vec::new();
     algae_cli::streams::encrypt_stream(
         tokio::io::BufReader::new(plaintext),
@@ -64,14 +63,10 @@ fn enrol_rejects_wrong_passphrase_and_bad_version() {
     .to_string();
     let ticket = rt.block_on(encrypt_ticket(ticket_json.as_bytes(), "correct"));
 
-    let err = rt
-        .block_on(provider.enrol(&ticket, "wrong"))
-        .unwrap_err();
+    let err = rt.block_on(provider.enrol(&ticket, "wrong")).unwrap_err();
     assert!(matches!(err, CanopyError::Decrypt { .. }), "{err}");
 
-    let err = rt
-        .block_on(provider.enrol(&ticket, "correct"))
-        .unwrap_err();
+    let err = rt.block_on(provider.enrol(&ticket, "correct")).unwrap_err();
     assert!(matches!(err, CanopyError::InvalidTicket { .. }), "{err}");
 }
 
