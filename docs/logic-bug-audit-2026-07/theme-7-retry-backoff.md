@@ -36,7 +36,7 @@ instances each have at most one of the two:
 - The web event broker consumer (`crates/web/src/event_broker.rs::run_event_broker`)
   has a correct reconnect loop with capped exponential back-off, but it is defeated by
   the §1 `subscribe_events` bug: an error response leaves `stream_events` blocked
-  forever inside `accept_uni()`, and a loop that never regains control cannot retry.
+  forever inside `accept_uni()`. A loop that never regains control cannot retry.
 
 Two distinct shapes hide under one theme:
 
@@ -81,11 +81,12 @@ written twice, and both bugs are sites that failed to use it:
   force-retry). The Tailscale bug is precisely a code path that routes around the
   single decision function.
 
-So the high-level fix for shape (a) is not new machinery; it is (1) extracting the
+So the high-level fix for shape (a) is not new machinery: (1) extract the
 `should_back_off` shape into a reusable per-key gate so `pull.rs` stops hand-rolling
-`in_flight`/`exhausted` booleans, and (2) a rule that a subsystem with a central
-decision function (`compute_state`) admits **no dispatch before the decision** —
-`dispatch_to_tailscale` must run after, or `run_tailscale` must receive the `Decision`.
+`in_flight`/`exhausted` booleans, and (2) adopt the rule that a subsystem with a
+central decision function (`compute_state`) admits **no dispatch before the decision**
+— `dispatch_to_tailscale` must run after, or `run_tailscale` must receive the
+`Decision`.
 
 **Shape (b): yes, but as a discipline, not a type.** A back-off value alone would not
 have prevented H21 or H15 — those bugs are misclassification (`Ok(0)` and `TooLarge`
