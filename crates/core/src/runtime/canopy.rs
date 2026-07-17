@@ -45,7 +45,7 @@ const PUSH_INTERVAL: Duration = Duration::from_secs(60);
 /// logging.
 const ESCALATE_AFTER_FAILURES: u32 = 5;
 
-/// How long the enrolment handshake requests may take.
+/// How long each enrolment handshake request may take.
 const ENROL_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Snafu)]
@@ -102,6 +102,11 @@ pub struct CanopyProvider {
     registration: RwLock<Option<RegistrationInfo>>,
     client: RwLock<Option<Arc<CanopyClient>>>,
     push_status: RwLock<PushStatus>,
+    /// Serialises enrolment and deregistration, so concurrent enrol calls
+    /// cannot both claim a server record (each would consume an enrolment
+    /// token, and one registration would silently overwrite the other), and
+    /// an enrolment cannot interleave with a removal.
+    lifecycle: tokio::sync::Mutex<()>,
 }
 
 impl CanopyProvider {
@@ -119,6 +124,7 @@ impl CanopyProvider {
             registration: RwLock::new(None),
             client: RwLock::new(None),
             push_status: RwLock::new(PushStatus::default()),
+            lifecycle: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -194,7 +200,13 @@ impl CanopyProvider {
         let mut consecutive_failures: u32 = 0;
         loop {
             if let Some((client, server_id)) = self.reporting_handles() {
-                match self.push_once(&client, &server_id).await {
+                let outcome = self.push_once(&client, &server_id).await;
+                if self.client.read().is_none() {
+                    // Deregistered while the report was in flight; don't
+                    // write stale push state onto an unenrolled instance.
+                    continue;
+                }
+                match outcome {
                     Ok(response) => {
                         consecutive_failures = 0;
                         // r[impl canopy.push.response]
@@ -319,6 +331,7 @@ impl CanopyProvider {
         ticket_b64: &str,
         passphrase: &str,
     ) -> Result<(String, String), CanopyError> {
+        let _lifecycle = self.lifecycle.lock().await;
         // i[impl canopy.enrol.single]
         if self.registration.read().is_some() {
             return Err(CanopyError::AlreadyEnrolled);
@@ -465,6 +478,7 @@ impl CanopyProvider {
 
     // i[impl canopy.deregister]
     pub async fn deregister(&self) -> Result<bool, CanopyError> {
+        let _lifecycle = self.lifecycle.lock().await;
         let removed =
             registration::delete_in(&self.dir)
                 .await
@@ -590,20 +604,30 @@ async fn post_step<T: serde::de::DeserializeOwned>(
     body: &impl serde::Serialize,
 ) -> Result<T, CanopyError> {
     let url = transport.url(api_url, step)?;
-    let resp = transport
-        .client()
-        .post(url)
-        .json(body)
-        .send()
-        .await
-        .map_err(|e| CanopyError::Rejected {
-            reason: format!("calling register/{step}: {e}"),
-        })?;
+    // The tailnet client carries no total request timeout of its own, so
+    // bound the request here — a wedged Canopy must not hang the operator's
+    // enrolment request indefinitely.
+    let resp = tokio::time::timeout(
+        ENROL_TIMEOUT,
+        transport.client().post(url).json(body).send(),
+    )
+    .await
+    .map_err(|_| CanopyError::Rejected {
+        reason: format!("register/{step} timed out"),
+    })?
+    .map_err(|e| CanopyError::Rejected {
+        reason: format!("calling register/{step}: {e}"),
+    })?;
 
     let status = resp.status();
-    let bytes = resp.bytes().await.map_err(|e| CanopyError::Rejected {
-        reason: format!("reading register/{step} response: {e}"),
-    })?;
+    let bytes = tokio::time::timeout(ENROL_TIMEOUT, resp.bytes())
+        .await
+        .map_err(|_| CanopyError::Rejected {
+            reason: format!("register/{step} timed out"),
+        })?
+        .map_err(|e| CanopyError::Rejected {
+            reason: format!("reading register/{step} response: {e}"),
+        })?;
 
     if status.is_success() {
         return serde_json::from_slice(&bytes).map_err(|e| CanopyError::Rejected {
