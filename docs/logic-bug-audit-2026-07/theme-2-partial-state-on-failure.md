@@ -18,7 +18,7 @@ The common invariant is **"on failure, observable state is unchanged (or equals 
 
 | Finding | Section | Severity |
 |---|---|---|
-| Failed script evaluation in `/apps/update` still triggers destructive post-reload actions (volume hold, scaling wipe, forward teardown) — C1 | [§4](../logic-bug-audit-2026-07.md#4-oi-handlers-apps-actions-params-templates-status-faults) (root cause noted in [§10](../logic-bug-audit-2026-07.md#10-runtime-appdesired-state-image-management)) | critical |
+| Failed script evaluation in `/apps/update` still triggers destructive post-reload actions (volume hold, scaling wipe, forward teardown) — C1 | [§4](../logic-bug-audit-2026-07.md#4-oi-handlers-apps-actions-params-templates-status-faults) (root cause noted in [§10](../logic-bug-audit-2026-07.md#10-runtime-appdesired-stateimage-management)) | critical |
 | App skipped on desired-state/registry error has its whole data plane torn down (and all-apps failure triggers full idle teardown) | [§12](../logic-bug-audit-2026-07.md#12-system-reconciliation-engine) | medium |
 | `register_app` leaves the app registered in memory when DB persistence fails | [§4](../logic-bug-audit-2026-07.md#4-oi-handlers-apps-actions-params-templates-status-faults) | low |
 | `set_param`/`unset_param` persist the change, then return an error and skip the event (adjacent instance of the same invariant) | [§4](../logic-bug-audit-2026-07.md#4-oi-handlers-apps-actions-params-templates-status-faults) | medium |
