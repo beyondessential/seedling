@@ -49,7 +49,7 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@v2.82.10
         with:
           tool: git-cliff
       - name: Create release for an untagged version bump
@@ -85,7 +85,7 @@ jobs:
         run: |
           rustup toolchain install --profile minimal --no-self-update stable
           rustup default stable
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@v2.82.10
         with:
           tool: git-cliff
       - name: Compute next version
