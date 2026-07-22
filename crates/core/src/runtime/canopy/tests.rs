@@ -155,6 +155,7 @@ fn deregister_removes_the_stored_registration() {
 }
 
 // r[verify canopy.push]
+// r[verify canopy.push.health]
 #[test]
 fn payload_identifies_seedling_and_covers_the_subsystems() {
     let oi = TestOi::new();

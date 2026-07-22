@@ -1548,6 +1548,10 @@ Enrolment is operator-initiated through the OI (see [canopy.enrol](interface.md#
 > Each report identifies this instance as the `seedling` source and carries the Seedling version, the host name, the daemon uptime, and a health section covering at minimum: the reverse proxy, the DNS resolver, and the managed apps (passing when every registered app is running, a warning when some are not).
 > An instance with no registration reports nothing and files no faults about reporting.
 
+> r[canopy.push.health]
+> The reverse proxy and DNS resolver checks fail when their component is not running.
+> Every health check carries a one-line summary of the state it observed, so a report is interpretable without querying the instance.
+
 > r[canopy.push.response]
 > The response Canopy returns to a report is logged and retained for the OI status surface (see [canopy.status](interface.md#i--canopy.status)).
 > The runtime does not yet act on response contents; it is recorded so operators can verify the channel end to end.

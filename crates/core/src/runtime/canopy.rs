@@ -499,6 +499,7 @@ fn client_builder() -> bestool_canopy::reqwest::ClientBuilder {
     bestool_canopy::reqwest::ClientBuilder::new()
 }
 
+// r[impl canopy.push.health]
 fn component_check(name: &str, label: &str, state: &'static str) -> Value {
     if state == "running" {
         json!({ "check": name, "result": "passed", "summary": format!("{label} running") })
