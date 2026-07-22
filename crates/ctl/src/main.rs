@@ -10,6 +10,7 @@ use seedling_protocol::{
 
 mod apps;
 mod backups;
+mod canopy;
 mod client;
 mod forward;
 mod ingresses;
@@ -131,6 +132,11 @@ enum Command {
     Tls {
         #[command(subcommand)]
         command: tls::TlsCommand,
+    },
+    /// Canopy fleet-monitoring link (enrolment, reporting status)
+    Canopy {
+        #[command(subcommand)]
+        command: canopy::CanopyCommand,
     },
     /// User/key management
     User {
@@ -384,6 +390,7 @@ async fn main() {
         Command::Backups { command } => backups::dispatch(&client, command).await,
         Command::Templates { command } => templates::dispatch(&client, command).await,
         Command::Tls { command } => tls::dispatch(&client, command).await,
+        Command::Canopy { command } => canopy::dispatch(&client, command).await,
         Command::User { command } => op::dispatch_user(&client, command).await,
         Command::Status => {
             print_result(

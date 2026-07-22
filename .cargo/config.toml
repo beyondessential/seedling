@@ -1,0 +1,5 @@
+# bestool-canopy's build script fetches Canopy's live OpenAPI spec unless
+# told to use its committed snapshot. Builds must not depend on network
+# reachability, so pin every build (local and CI) to the snapshot.
+[env]
+CANOPY_OPENAPI_OFFLINE = "1"

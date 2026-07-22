@@ -66,8 +66,15 @@ impl TestOi {
             session: None,
         });
 
+        let registry = Arc::new(RwLock::new(AppRegistry::new()));
+        let canopy_provider = crate::runtime::canopy::CanopyProvider::new(
+            data_dir.path(),
+            Arc::clone(&registry),
+            Arc::clone(&driver.container),
+        );
+
         let state = Arc::new(OiState {
-            registry: Arc::new(RwLock::new(AppRegistry::new())),
+            registry,
             spki_fingerprint: OnceLock::new(),
             start_time: Instant::now(),
             db: db.clone(),
@@ -88,6 +95,7 @@ impl TestOi {
             caddy_data_path: tokio::sync::OnceCell::new(),
             tailscale_provider: None,
             site_resolver: None,
+            canopy_provider: Some(canopy_provider),
         });
 
         let ctx = RequestCtx {

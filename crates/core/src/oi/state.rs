@@ -57,4 +57,8 @@ pub struct OiState {
     /// snapshots to operators. `None` in test harnesses.
     // r[impl service.site.address]
     pub site_resolver: Option<Arc<crate::runtime::site_services::resolver::SiteServiceResolver>>,
+    /// Canopy reporting provider. Holds the registration and the reporting
+    /// loop; the OI routes enrolment, status, and deregistration through it.
+    /// `None` in test harnesses.
+    pub canopy_provider: Option<Arc<crate::runtime::canopy::CanopyProvider>>,
 }
