@@ -5,7 +5,10 @@ use seedling_protocol::names::{
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::oi::{handler::RequestCtx, state::OiState};
+use crate::{
+    oi::{handler::RequestCtx, state::OiState},
+    runtime::identity::VolumeName,
+};
 
 #[cfg(test)]
 mod tests;
@@ -193,9 +196,19 @@ pub(crate) fn list_exported(state: &OiState) -> HandlerResult {
             if let crate::defs::resource::Resource::Volume(vol) = resource {
                 let vol_def = vol.def.lock();
                 if let Some(export_opts) = &vol_def.exported {
+                    // r[impl volume.export.host-path]
+                    // An exported volume exists to be shared, and a co-located
+                    // tool that wants to use its contents (a socket directory,
+                    // say) needs somewhere to look. Report where it lives so a
+                    // consumer doesn't have to reconstruct the layout.
+                    let host_path = state
+                        .driver
+                        .volume_store
+                        .path(&VolumeName::for_app(app_name.as_str(), id.name.as_str()));
                     let mut entry = json!({
                         "app": app_name,
                         "volume_name": id.name.as_str(),
+                        "host_path": host_path,
                     });
                     if let Some(desc) = &export_opts.description {
                         entry["description"] = json!(desc);

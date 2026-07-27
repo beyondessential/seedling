@@ -896,6 +896,9 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 >
 > Closures that throw during probing must be reported with the thrown message as their error; images accumulated before the throw must be returned alongside.
 
+> r[volume.export.host-path]
+> A listing of exported volumes must report, for each one, the path where that volume's contents live on the host. An exported volume exists so that something other than its owning app can use it, and a co-located consumer needs a path to address rather than having to reconstruct the runtime's storage layout for itself.
+
 > r[actuate.volume.start]
 > Starting a Volume instance must create the named volume if it does not already exist, then apply any declared file writes to the volume.
 
