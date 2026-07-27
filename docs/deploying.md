@@ -176,3 +176,36 @@ verifiable with `gh attestation verify <file> -R beyondessential/seedling`.
 Running the daemon from a tarball means creating the state directories, the
 systemd unit, and the log rotation yourself; the package is the supported way to
 run the daemon.
+
+## Known host issue: AppArmor denies container signals
+
+On hosts where AppArmor mediates signals between the container stack's
+profiles without matching rules (seen on Ubuntu 25.04, `apparmor
+4.1.0~beta5` with `crun 1.20` and `podman 5.4`; tracked upstream as
+[Launchpad #2040483](https://bugs.launchpad.net/bugs/2040483)), workloads
+break in two ways:
+
+- Signals between processes inside a container are denied, because
+  `no-new-privileges` (which Seedling sets on every workload container)
+  prevents the exec-time profile transition and sibling processes end up
+  under mismatched confinement. PostgreSQL 18 is a prominent casualty: its
+  latch wakeups are SIGURG between backends and io workers, so with the
+  default `io_method = worker` every connection hangs in authentication
+  until `too many clients already`. Tools that drop privileges in-process
+  (`gosu`) spin forever for the same reason.
+- Stop signals from the runtime are denied, so every container stop
+  escalates to SIGKILL after the timeout, and stateful workloads go through
+  crash recovery on each restart.
+
+The diagnostic signature is in `dmesg`:
+
+```
+apparmor="DENIED" operation="signal" ... signal=urg peer="containers-default-..."
+```
+
+Remedies, in preference order: a distribution whose AppArmor profiles carry
+the signal rules (the Launchpad fix); otherwise disable the podman profile
+(`ln -s /etc/apparmor.d/podman /etc/apparmor.d/disable/ && apparmor_parser
+-R /etc/apparmor.d/podman`) and set `runtime = "runc"` in a
+`/etc/containers/containers.conf.d/` drop-in, which restores working signal
+delivery at the cost of confining podman no further than root already is.
