@@ -286,9 +286,16 @@ let render_config = |rt| {
         .cap_add("FOWNER")
         .mount("/staging", staging)
         .mount("/config", config_vol)
+        .mount("/socket", socket)
+        // The socket volume also gets its ownership here: the server runs as
+        // postgres from the start (no root phase to chown its own dirs), and
+        // seedling creates volumes root-owned, so without this the server
+        // cannot create its socket. 3775 matches what the image's entrypoint
+        // sets when it does run as root: group-writable with the sticky bit.
         .command(["sh", "-c",
             `install -m 0640 -o ${postgres_uid} -g ${postgres_uid} /staging/postgresql.conf /config/postgresql.conf && ` +
-            `install -m 0640 -o ${postgres_uid} -g ${postgres_uid} /staging/pg_hba.conf /config/pg_hba.conf`
+            `install -m 0640 -o ${postgres_uid} -g ${postgres_uid} /staging/pg_hba.conf /config/pg_hba.conf && ` +
+            `chown ${postgres_uid}:${postgres_uid} /socket && chmod 3775 /socket`
         ])
     ).terminated(60).ensure_success();
 };
