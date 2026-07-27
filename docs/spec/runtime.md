@@ -805,6 +805,9 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > r[actuate.container.hardening]
 > Workload containers must be started with all Linux capabilities dropped, privilege escalation disabled, and a read-only root filesystem with a writable tmpfs at `/tmp`. A default PID limit of 256 and a file-descriptor limit of 65536 are applied. BSL configuration may adjust these defaults.
 
+> r[actuate.container.user]
+> A container whose definition names a user must be started as that user. Privilege escalation is disabled for every workload container, so a container that needs to run as a non-root user must be started as one rather than starting as root and dropping privileges from inside; tools that drop privileges themselves cannot be relied on to work under that restriction.
+
 > r[actuate.container.journal-metadata]
 > Workload containers must have their stdout and stderr directed to the system journal.
 > Each supervised container process must be tagged with structured journal fields that

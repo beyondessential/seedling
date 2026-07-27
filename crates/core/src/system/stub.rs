@@ -502,6 +502,7 @@ impl ProcessManager for StubProcessManager {
                             writable_rootfs: false,
                             pids_limit: 0,
                             workdir: None,
+                            user: None,
                             stop_signal: None,
                             stop_timeout_secs: None,
                         },

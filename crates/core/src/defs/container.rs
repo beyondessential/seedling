@@ -366,6 +366,11 @@ pub struct ContainerDef {
     pub writable_rootfs: bool,
     pub pids_limit: Option<u32>,
     pub workdir: Option<String>,
+    /// User (and optional group) the container process runs as, as podman's
+    /// `--user` accepts it. Running as a non-root user directly avoids relying
+    /// on an image entrypoint to drop privileges itself, which `no-new-privileges`
+    /// prevents some tools from doing.
+    pub user: Option<String>,
     pub healthcheck: Option<HealthcheckDef>,
     /// Signal sent to the container's PID 1 when systemd stops the unit. When
     /// unset, podman/systemd defaults apply (typically SIGTERM forwarded
@@ -662,6 +667,23 @@ impl ContainerDef {
                     return Err(format!("workdir must be an absolute path, got '{path}'").into());
                 }
                 ext(this).lock().workdir = Some(path);
+                Ok(this.clone())
+            },
+        );
+
+        // l[impl container.user]
+        builder.with_fn(
+            "user",
+            move |this: &mut T, spec: String| -> Result<T, Box<EvalAltResult>> {
+                this.ensure_unfrozen()?;
+                let spec = spec.trim().to_string();
+                if spec.is_empty() {
+                    return Err("user must not be empty".into());
+                }
+                if spec.chars().any(char::is_whitespace) {
+                    return Err(format!("user must not contain whitespace, got '{spec}'").into());
+                }
+                ext(this).lock().user = Some(spec);
                 Ok(this.clone())
             },
         );

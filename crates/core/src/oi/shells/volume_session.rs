@@ -357,6 +357,7 @@ pub(crate) async fn open_volume_shell_session(
         writable_rootfs: true,
         pids_limit: 1024,
         workdir,
+        user: None,
         stop_signal: None,
         stop_timeout_secs: None,
     };

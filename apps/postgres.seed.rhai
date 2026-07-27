@@ -218,6 +218,11 @@ let pids_budget = || {
 app.deployment("postgres")
     .description("Long-running PostgreSQL server")
     .image(pg_image.call())
+    // Run as postgres directly. Privilege escalation is disabled for workload
+    // containers, and the image's entrypoint drops privileges with a tool that
+    // cannot do so under that restriction, so the container starts as the
+    // target user instead of starting as root and dropping down.
+    .user(`${postgres_uid}:${postgres_uid}`)
     .on_update(OnUpdate.Replace)
     .cap_add("CHOWN")
     .cap_add("DAC_OVERRIDE")
@@ -369,7 +374,8 @@ if [ ! -f /data/pg${major}/PG_VERSION ]; then
   chown ${postgres_uid}:${postgres_uid} /data/pg${major}
   chmod 0700 /data/pg${major}
   chmod 0644 /pw/pwfile
-  gosu postgres initdb -D /data/pg${major} -U postgres \
+  setpriv --reuid=${postgres_uid} --regid=${postgres_uid} --clear-groups \
+    initdb -D /data/pg${major} -U postgres \
     --encoding=UTF8 ${locale_args} \
     --auth-local=trust --auth-host=scram-sha-256 --data-checksums \
     --pwfile=/pw/pwfile
@@ -379,7 +385,7 @@ fi
 
     // The pwfile is written by seedling as root with mode 0640 (volume.write
     // has no way to specify per-file ownership/mode yet), so postgres can't
-    // read it after gosu drops privileges. Make it world-readable for this
+    // read it once privileges are dropped. Make it world-readable for this
     // one-shot job; the file lives only on the per-instance tmpfs volume
     // /run/seedling/tmpfs-volumes/<id> which is removed when the job exits.
 };
@@ -647,7 +653,8 @@ version.on_change(|rt, old| {
 set -e
 chown -R ${postgres_uid}:${postgres_uid} /data/pg${cur} /data/pg${next}
 cd /tmp
-gosu postgres pg_upgrade \
+setpriv --reuid=${postgres_uid} --regid=${postgres_uid} --clear-groups \
+  pg_upgrade \
   --old-bindir=/usr/lib/postgresql/${cur}/bin \
   --new-bindir=/usr/lib/postgresql/${next}/bin \
   --old-datadir=/data/pg${cur} \
