@@ -805,6 +805,9 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > r[actuate.container.hardening]
 > Workload containers must be started with all Linux capabilities dropped, privilege escalation disabled, and a read-only root filesystem with a writable tmpfs at `/tmp`. A default PID limit of 256 and a file-descriptor limit of 65536 are applied. BSL configuration may adjust these defaults.
 
+> r[actuate.container.user]
+> A container whose definition names a user must be started as that user. Privilege escalation is disabled for every workload container, so a container that needs to run as a non-root user must be started as one rather than starting as root and dropping privileges from inside; tools that drop privileges themselves cannot be relied on to work under that restriction.
+
 > r[actuate.container.journal-metadata]
 > Workload containers must have their stdout and stderr directed to the system journal.
 > Each supervised container process must be tagged with structured journal fields that
@@ -892,6 +895,9 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > - **Lenient**: the same condition causes the handler to be reported as _skipped_ with the same error payload, without invoking the closure or producing any images.
 >
 > Closures that throw during probing must be reported with the thrown message as their error; images accumulated before the throw must be returned alongside.
+
+> r[volume.export.host-path]
+> A listing of exported volumes must report, for each one, the path where that volume's contents live on the host. An exported volume exists so that something other than its owning app can use it, and a co-located consumer needs a path to address rather than having to reconstruct the runtime's storage layout for itself.
 
 > r[actuate.volume.start]
 > Starting a Volume instance must create the named volume if it does not already exist, then apply any declared file writes to the volume.

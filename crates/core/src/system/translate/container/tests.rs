@@ -4,6 +4,31 @@ use seedling_protocol::env::EnvVar;
 
 use super::*;
 
+fn base_spec() -> ContainerSpec {
+    ContainerSpec {
+        name: "myapp-web".to_string(),
+        image: "docker.io/library/nginx:latest".to_string(),
+        command: vec![],
+        entrypoint: vec![],
+        env: vec![],
+        mounts: vec![],
+        network: "seedling-abc123".to_string(),
+        labels: BTreeMap::new(),
+        health: None,
+        hosts: vec![],
+        dns_servers: vec![],
+        memory: None,
+        cpus: None,
+        extra_caps: vec![],
+        writable_rootfs: false,
+        pids_limit: 256,
+        workdir: None,
+        user: None,
+        stop_signal: None,
+        stop_timeout_secs: None,
+    }
+}
+
 #[test]
 fn podman_args_basic_shape() {
     let spec = ContainerSpec {
@@ -28,6 +53,7 @@ fn podman_args_basic_shape() {
         writable_rootfs: false,
         pids_limit: 256,
         workdir: None,
+        user: None,
         stop_signal: None,
         stop_timeout_secs: None,
     };
@@ -75,6 +101,7 @@ fn podman_args_volume_mount() {
         writable_rootfs: false,
         pids_limit: 256,
         workdir: None,
+        user: None,
         stop_signal: None,
         stop_timeout_secs: None,
     };
@@ -106,6 +133,7 @@ fn podman_args_add_host_ipv6() {
         writable_rootfs: false,
         pids_limit: 256,
         workdir: None,
+        user: None,
         stop_signal: None,
         stop_timeout_secs: None,
     };
@@ -137,6 +165,7 @@ fn podman_args_hardening_defaults() {
         writable_rootfs: false,
         pids_limit: 256,
         workdir: None,
+        user: None,
         stop_signal: None,
         stop_timeout_secs: None,
     };
@@ -180,6 +209,7 @@ fn podman_args_hardening_overrides() {
         writable_rootfs: true,
         pids_limit: 1024,
         workdir: None,
+        user: None,
         stop_signal: None,
         stop_timeout_secs: None,
     };
@@ -225,6 +255,7 @@ fn podman_args_dns_servers_produce_dns_flags() {
         writable_rootfs: false,
         pids_limit: 256,
         workdir: None,
+        user: None,
         stop_signal: None,
         stop_timeout_secs: None,
     };
@@ -261,6 +292,7 @@ fn podman_args_no_dns_flags_when_unset() {
         writable_rootfs: false,
         pids_limit: 256,
         workdir: None,
+        user: None,
         stop_signal: None,
         stop_timeout_secs: None,
     };
@@ -289,6 +321,7 @@ fn podman_args_workdir() {
         writable_rootfs: false,
         pids_limit: 256,
         workdir: Some("/app".to_string()),
+        user: None,
         stop_signal: None,
         stop_timeout_secs: None,
     };
@@ -315,6 +348,7 @@ fn bare_spec() -> ContainerSpec {
         writable_rootfs: false,
         pids_limit: 256,
         workdir: None,
+        user: None,
         stop_signal: None,
         stop_timeout_secs: None,
     }
@@ -501,6 +535,7 @@ fn podman_args_emit_health_check_flags_when_declared() {
         writable_rootfs: false,
         pids_limit: 256,
         workdir: None,
+        user: None,
         stop_signal: None,
         stop_timeout_secs: None,
     };
@@ -542,6 +577,7 @@ fn podman_args_omit_health_check_flags_when_absent() {
         writable_rootfs: false,
         pids_limit: 256,
         workdir: None,
+        user: None,
         stop_signal: None,
         stop_timeout_secs: None,
     };
@@ -846,5 +882,34 @@ fn pod_healthcheck_and_service_mounts_translate_into_spec() {
     assert_eq!(
         spec.hosts,
         vec![("localmount".to_string(), IpAddr::V6(expected))]
+    );
+}
+
+#[test]
+fn user_is_passed_through_when_set() {
+    let mut spec = base_spec();
+    spec.user = Some("999:999".to_string());
+
+    let args = podman_args(&spec);
+
+    let pos = args
+        .iter()
+        .position(|a| a == "--user")
+        .expect("--user should be passed to podman");
+    assert_eq!(args[pos + 1], "999:999");
+
+    // Running as a named user has to coexist with the hardening: privilege
+    // escalation stays disabled, which is the reason a container names a user
+    // rather than dropping privileges from inside.
+    let secopt = args.iter().position(|a| a == "--security-opt").unwrap();
+    assert_eq!(args[secopt + 1], "no-new-privileges");
+}
+
+#[test]
+fn no_user_flag_when_unset() {
+    let args = podman_args(&base_spec());
+    assert!(
+        !args.iter().any(|a| a == "--user"),
+        "an unset user leaves the image's default in place"
     );
 }

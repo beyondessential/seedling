@@ -300,3 +300,34 @@ jobs:
             sleep 5
           done
           gh release upload "v${version}" "${files[@]}" --clobber
+
+  # seedling-protocol is the one crate on a registry: external tools speak the
+  # operator interface against it instead of driving seedling-ctl. The rest of
+  # the workspace stays unpublished, so this publishes that crate alone.
+  #
+  # Authentication is crates.io trusted publishing: the OIDC token below is
+  # exchanged for a short-lived registry token, so no long-lived secret is held
+  # here. It requires the crate to exist and to name this repository as a
+  # trusted publisher, both of which follow a first manual publish.
+  publish-protocol:
+    name: Publish seedling-protocol
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      - name: Publish unless this version is already on the registry
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          version=$(cargo metadata --format-version 1 --no-deps \
+            | jq -r '.packages[] | select(.name=="seedling-protocol") | .version')
+          if curl -fsSL -H 'User-Agent: seedling-release' \
+              "https://crates.io/api/v1/crates/seedling-protocol/${version}" >/dev/null 2>&1; then
+            echo "seedling-protocol ${version} is already published"
+            exit 0
+          fi
+          cargo publish -p seedling-protocol --locked

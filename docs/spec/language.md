@@ -679,6 +679,14 @@ This is currently the only value.
 > The `path` must be an absolute path.
 > If not set, the working directory is determined by the container image.
 
+> l[container.user]
+> The `container.user(spec: string)` builder method sets the user, and optionally the group, that the container process runs as.
+> The `spec` is passed to the container runtime, which accepts a numeric id, a `uid:gid` pair, or a name defined in the image.
+> It must be non-empty and contain no whitespace.
+> If not set, the user is determined by the container image.
+>
+> Setting this is how a script runs a workload as a non-root user without depending on the image's entrypoint to drop privileges itself, which [actuate.container.hardening](runtime.md#r--actuate.container.hardening) prevents some tools from doing.
+
 > l[container.stop-signal]
 > The `container.stop_signal(name: string)` builder method declares the POSIX signal sent to the container's main process when the runtime stops the container.
 > Accepted forms are the canonical `"SIGFOO"` (e.g. `"SIGINT"`, `"SIGQUIT"`, `"SIGTERM"`) and the bare `"FOO"` shorthand; unknown signal names must be rejected at script-evaluation time.
