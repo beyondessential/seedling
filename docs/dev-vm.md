@@ -1,19 +1,14 @@
 # Dev VM notes
 
-Findings from running the daemon and real apps in a Linux dev VM (Lima on
-macOS, Ubuntu 25.04 aarch64). Each of these cost real diagnosis time; check
-them before debugging something stranger.
+Gotchas for running the daemon and real apps in a Linux dev VM (Lima on
+macOS, Ubuntu 25.04 aarch64).
 
 ## Container signals are denied on Ubuntu 25.04
 
-Ubuntu's AppArmor denies signals between the container stack's profiles, and
-the `no-new-privileges` hardening on every workload container prevents the
-exec-time profile transition. Workloads hang rather than erroring: PostgreSQL
-connections stall in authentication, `gosu` spins at 100% CPU, and every
-container stop escalates to SIGKILL. See the "Known host issue" section in
-[deploying.md](deploying.md) for the mechanism and the `dmesg` signature.
-
-The remedy applied on a dev VM, both parts needed:
+Workloads hang rather than erroring: PostgreSQL connections stall, `gosu`
+spins at 100% CPU, stops escalate to SIGKILL. Mechanism and `dmesg` signature
+are in the "Known host issue" section of [deploying.md](deploying.md). The
+dev VM remedy, both parts needed:
 
 ```bash
 # podman itself is confined when launched from systemd units; unconfine it
