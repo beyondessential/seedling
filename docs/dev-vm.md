@@ -52,6 +52,16 @@ EOF
 sudo systemctl daemon-reload && sudo systemctl start seedling
 ```
 
+The package also bootstraps the host identity `bestool` uses to reach the
+daemon; on a dev VM, mint and authorise it by hand (pointing at the data
+directory the unit above uses):
+
+```bash
+fp=$(sudo seedling-ctl --key-file /etc/bestool/seedling.key client fingerprint)
+echo "$fp bestool" | sudo tee -a /home/YOU/seedling-data/authorized_keys
+sudo systemctl restart seedling
+```
+
 ## Bringing up the postgres app
 
 The app declares an external `data` volume, so install fails with

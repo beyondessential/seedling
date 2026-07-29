@@ -27,7 +27,9 @@ sudo apt-get install seedling
 ```
 
 The package depends on `podman` (5.x — podman 4 is too old and 6 is not yet
-supported), `nftables` and `libsystemd0`, and recommends
+supported), `nftables`, `libsystemd0`, and `bestool` (the BES deployment CLI,
+which drives Tamanu through the daemon on a Seedling host — see
+[Host tooling](#host-tooling-bestool)), and recommends
 `btrfs-progs` (for named-volume snapshots) and `jool-dkms` + `jool-tools` (for
 NAT64). Recommends are installed by default; if you run without NAT64 or on a
 non-btrfs data directory you can skip them with `--no-install-recommends`. It
@@ -43,6 +45,8 @@ it separately if you want that.
 - State: `/var/lib/seedling` (data directory: database, keys, authorized keys)
   and `/var/log/seedling` (audit log, rotated by `/etc/logrotate.d/seedling`).
 - Config: `/etc/seedling/web.toml` (a conffile — your edits survive upgrades).
+- Host tooling credentials: `/etc/bestool/seedling.key`, pre-generated and
+  authorised with the daemon (see [Host tooling](#host-tooling-bestool)).
 
 On first install the daemon starts immediately with sensible defaults
 (`--data-dir /var/lib/seedling`). Workloads keep running while the daemon is
@@ -112,6 +116,42 @@ safe. The unit orders after `tailscaled` and waits (briefly, best-effort) for
 the tailnet address at startup, so a normal boot binds `tailscale0`
 automatically; if you enable Tailscale on an already-running host, `sudo
 systemctl restart seedling.service` to pick it up.
+
+## Host tooling (bestool)
+
+`bestool` is a hard dependency of the package. On a Seedling host it is the
+tool that operates Tamanu — `bestool tamanu start`, `stop`, `restart`,
+`status`, `logs`, `psql`, `doctor` — and it detects the host by the presence of
+`seedling.service`, then acts through the OI instead of through the host
+service manager.
+
+So that it works on a freshly provisioned host with no operator step, the
+package bootstraps a host-wide interface identity for it, the same way it does
+for the web interface:
+
+- `/etc/bestool/seedling.key`, generated on install (and backfilled on upgrade
+  if absent), mode `0600` and owned by root.
+- Its fingerprint authorised in `/var/lib/seedling/authorized_keys` under the
+  label `bestool`.
+
+`bestool` reads that key when it can, and otherwise falls back to the invoking
+operator's own key (see [Operator access](#operator-access-seedling-ctl)).
+Because the key is root-only, the host identity is usable by `sudo bestool
+tamanu ...` and by root-run automation, and grants nothing that root does not
+already have: root can authorise any key it likes by writing to the data
+directory. A non-root operator authorises their own key as above.
+
+To see the entry, or to revoke it:
+
+```bash
+seedling-ctl user list
+seedling-ctl user remove <fingerprint>
+```
+
+Removing the key file alone does not revoke it — the daemon imports
+`authorized_keys` into its database on start, so revoke through
+`seedling-ctl user remove` (or the web interface). A `dpkg --purge seedling`
+deletes the key file along with the rest of the daemon's state.
 
 ## The web interface (seedling-web)
 
