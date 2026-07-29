@@ -52,9 +52,10 @@ EOF
 sudo systemctl daemon-reload && sudo systemctl start seedling
 ```
 
-The package also bootstraps the host identity `bestool` uses to reach the
-daemon; on a dev VM, mint and authorise it by hand (pointing at the data
-directory the unit above uses):
+The package also bootstraps the host identity that a `bestool` which reads
+`/etc/bestool/seedling.key` uses to reach the daemon (releases that don't yet
+use the operator's own key). To have it on a dev VM, mint and authorise it by
+hand, pointing at the data directory the unit above uses:
 
 ```bash
 fp=$(sudo seedling-ctl --key-file /etc/bestool/seedling.key client fingerprint)

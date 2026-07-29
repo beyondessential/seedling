@@ -134,12 +134,16 @@ for the web interface:
 - Its fingerprint authorised in `/var/lib/seedling/authorized_keys` under the
   label `bestool`.
 
-`bestool` reads that key when it can, and otherwise falls back to the invoking
-operator's own key (see [Operator access](#operator-access-seedling-ctl)).
-Because the key is root-only, the host identity is usable by `sudo bestool
-tamanu ...` and by root-run automation, and grants nothing that root does not
-already have: root can authorise any key it likes by writing to the data
-directory. A non-root operator authorises their own key as above.
+Because the key is root-only, the host identity is reachable by `sudo bestool
+tamanu ...` and by root-run automation and by nothing else, and grants nothing
+that root does not already have: root can authorise any key it likes by writing
+to the data directory.
+
+Picking the key up is `bestool`'s side of the contract, and is not in every
+release yet: a `bestool` that does not read it uses the invoking operator's own
+key instead, which has to be authorised as under
+[Operator access](#operator-access-seedling-ctl). Non-root operators authorise
+their own key either way.
 
 To see the entry, or to revoke it:
 
