@@ -20,10 +20,7 @@ Why this over shipping a filesystem blob (e.g. a VHDX):
 
 The correctness constraint is **base-independence**: restacking is sound when the layers only add the workload's own files and assume nothing about the base build (no mutation of system files, registry, COM, or services). `FROM scratch` enforces this; it also matches the target workloads (a directory of self-contained files, e.g. a bundled Node app). Workloads needing OS-level install steps do not fit and are out of scope for the format.
 
-Two producer paths yield the same consumed artifact; a spike picks between them:
-
-- **Literal `FROM scratch`** — zero base coupling, but the layers must be emitted in Windows layer form (Windows file metadata: ACLs, attributes), so the producer uses Windows-format layer tooling rather than a generic scratch build.
-- **Stock `FROM mcr/...` with the base omitted on push** — 100% standard Windows `docker build`; the pushed image is already app-layers-only (base as a foreign reference), and the runtime ignores that reference and stacks its own base. The residual risk is a layer diffed over base build *X* restacked on build *Y*, which is safe under the same base-independence constraint.
+The producer builds the image **base-less** (`FROM scratch`), emitting the workload's files as Windows-format layers (Windows file metadata: ACLs, attributes). A tempting shortcut — build `FROM mcr/...` normally and rely on the push omitting the base as a non-distributable foreign layer — does not hold: MCR now publishes the nanoserver and servercore layers as ordinary distributable layers (`application/vnd.docker.image.rootfs.diff.tar.gzip`, no `urls`), so a push uploads the base too and the runtime would stack its base under an image that already carries one. Building base-less avoids that, and drops any host-build↔base-tag coupling from the build: a `FROM scratch` layer is a diff over nothing, so it names no base version to match against the host.
 
 ## Implementation approach: containerd + runhcs shim + Windows snapshotter
 
@@ -47,7 +44,7 @@ The `io.containerd.runhcs.v1` shim is the per-instance supervisor — it *is* th
 
 | # | Question | Current lean |
 |---|----------|--------------|
-| Q1 | Producer path for the artifact: literal `FROM scratch` vs stock `FROM mcr` with base omitted | Prefer stock build for tooling simplicity; confirm restack-compat across base builds in the format spike. |
+| Q1 | Tooling to emit base-less (`FROM scratch`) Windows-format layers: `ociwclayer` export from an app directory vs a Windows builder that supports `FROM scratch` | Validate in Spike B that the emitted layers compose under the runtime's base and run. |
 | Q2 | Merged-descriptor restack: does the Windows snapshotter accept a synthesised base-plus-app chain and run it unmodified | Prototype in Spike B; if the snapshotter resists a synthesised chain, a thin custom snapshotter that always inserts the base is the fallback. |
 | Q3 | HNS network mode giving per-instance compartment, routable service address, endpoint-scoped mount enforcement, and host public-port publishing for ingress | Evaluate in Spike C against a worst-case field image; the mode must express the mount graph without a host-firewall fallback. |
 | Q4 | containerd lifecycle management: demand-start service vs seedlingd child; content-store and image GC ownership | Demand-start service driven by seedlingd; align image GC with the `/images` surface. Settled during Spike A. |
