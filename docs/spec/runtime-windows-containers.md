@@ -95,10 +95,10 @@ The Seedling Windows Container Runtime is an implementation of the Seedling runt
 # Artifacts
 
 > wcr[artifact.format]
-> A Windows workload is delivered as an OCI image built without a base image: its layers carry only the workload's own filesystem, and its config declares the entrypoint, command, environment, working directory, exposed ports, and [process profile](#wcr--artifact.profile). It is an ordinary OCI image — content-addressed layers, standard manifest and config — produced, stored, signed, and replicated with standard registry tooling, and completed for execution by [composition](#wcr--compose.chain).
+> A Windows workload is delivered as an OCI image built without a base image: its layers carry only the workload's own filesystem, and its config declares the entrypoint, command, environment, working directory, exposed ports, and — in its labels — the [process profile](#wcr--artifact.profile). It is an ordinary OCI image — content-addressed layers, standard manifest and config — produced, stored, signed, and replicated with standard registry tooling, and completed for execution by [composition](#wcr--compose.chain).
 
 > wcr[artifact.profile]
-> The config's process-profile fields declare the workload's [stop method](#wcr--stop.methods) and whether it supports a reload event. A BSL deployment may override these per the language spec's stop-configuration surface.
+> The process profile is carried in the OCI config's `Labels`, namespaced under `au.bes.seedling.`: `au.bes.seedling.stop-method` names the [stop method](#wcr--stop.methods) (for example `ctrl_break`), and `au.bes.seedling.reload-event` names the event a workload signals for reload where it supports one. A BSL deployment may override these per the language spec's stop-configuration surface.
 
 > wcr[artifact.readonly]
 > The artifact's layers are read-only: [composition](#wcr--compose.chain) stacks them beneath a discardable scratch layer, so per-instance writes are ephemeral and durable state lives in [volumes](#wcr--volume.model).
