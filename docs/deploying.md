@@ -140,10 +140,12 @@ that root does not already have: root can authorise any key it likes by writing
 to the data directory.
 
 Picking the key up is `bestool`'s side of the contract, and is not in every
-release yet: a `bestool` that does not read it uses the invoking operator's own
-key instead, which has to be authorised as under
-[Operator access](#operator-access-seedling-ctl). Non-root operators authorise
-their own key either way.
+release yet. A `bestool` that reads it still prefers an operator's own key where
+they have one, so the daemon's record of who acted names the person; it falls
+back to the host identity otherwise, re-running itself under `sudo` to reach it
+rather than asking the operator to. One that does not read it uses the
+operator's own key only, which has to be authorised as under
+[Operator access](#operator-access-seedling-ctl).
 
 To see the entry, or to revoke it:
 
