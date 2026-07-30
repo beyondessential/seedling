@@ -57,7 +57,7 @@ pub struct OfferParams {
 /// Result of `/canopy/offer`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OfferResult {
-    pub offer_id: String,
+    pub offer_id: crate::names::OfferId,
 }
 
 // i[canopy.relay]
@@ -66,6 +66,11 @@ pub struct OfferResult {
 pub struct RelayRequest {
     /// The offer this request is addressed to. A stream that races a withdrawal
     /// is rejected rather than executed against a provider just revoked.
+    ///
+    /// A string rather than an [`OfferId`](crate::names::OfferId) so that a
+    /// malformed value can be answered with an `unknown_offer` error frame
+    /// instead of failing to parse, which would reset the stream and leave the
+    /// server guessing at why.
     pub canopy: String,
     pub method: String,
     /// Request target in origin form: path and query, no scheme or authority.
