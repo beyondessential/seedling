@@ -159,6 +159,37 @@ Removing the key file alone does not revoke it — the daemon imports
 `seedling-ctl user remove` (or the web interface). A `dpkg --purge seedling`
 deletes the key file along with the rest of the daemon's state.
 
+### Reaching Canopy through bestool
+
+Seedling has no Canopy identity of its own. Giving it one would mean a second
+enrolment and a second key to rotate on every host, so instead the connected
+`bestool` offers to carry Seedling's Canopy requests: Seedling hands over a whole
+HTTP request on the interface connection, `bestool` issues it under the host's
+device identity, and hands the response back. Seedling uses that channel to
+report its own health to Canopy as the `seedling` source, alongside whatever
+`bestool` reports as its own.
+
+Nothing happens on a host where no client offers one. Seedling never dials out —
+`bestool` initiates both the connection and the offer — so a host without it, or
+without a Canopy auth path, simply has the facility sitting idle: no retry loop,
+no connection timeout, and no fault to explain.
+
+To see the current state, or to turn the facility off on a host that has a
+`bestool` but should not appear in Canopy:
+
+```bash
+seedling-ctl canopy status
+seedling-ctl canopy disable
+seedling-ctl canopy enable
+```
+
+Disabling refuses new offers and revokes any live one immediately, rather than
+waiting for the carrying client to reconnect. `seedling-ctl canopy report` sends
+a report straight away, and `seedling-ctl canopy request GET /servers/self`
+relays one request and prints the response, which is the quickest way to check
+the whole path end to end. The same state and the on/off control are on the
+web interface's Canopy page.
+
 ## The web interface (seedling-web)
 
 `seedling-web.service` is **enabled and started on install**. Its daemon
