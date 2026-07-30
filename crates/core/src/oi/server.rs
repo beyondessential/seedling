@@ -278,7 +278,8 @@ async fn handle_connection(
     // i[canopy.offer.lifetime] — an offer lives no longer than the connection
     // that made it. No actor on the event: nobody asked for this, the connection
     // simply went away.
-    for offer in state.canopy.remove_by_conn(conn_id) {
+    let ended = state.canopy.remove_by_conn(conn_id);
+    for offer in &ended {
         tracing::info!(
             offer_id = %offer.offer_id,
             agent = %offer.agent,
@@ -289,6 +290,11 @@ async fn handle_connection(
             crate::oi::canopy::WithdrawReason::Disconnected.as_str(),
             None,
         );
+    }
+    // r[impl canopy.report.fault] — losing the last offer ends the expectation
+    // to report, so a fault from when it held must not outlive it.
+    if !ended.is_empty() {
+        crate::runtime::canopy::clear_fault_if_not_expected(&state);
     }
 }
 
@@ -696,6 +702,62 @@ mod canopy_tests {
                 await_offers(&oi.state, 0).await,
                 0,
                 "an offer must not outlive the connection that made it"
+            );
+        });
+    }
+
+    // r[verify canopy.report.fault]
+    #[test]
+    fn losing_the_last_offer_clears_a_report_fault() {
+        let oi = TestOi::new();
+        oi.block_on(async {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+
+            let identity = ClientIdentity::ephemeral();
+            oi.state
+                .trusted_keys
+                .write()
+                .insert(identity.fingerprint.clone());
+            let addr = spawn_server(Arc::clone(&oi.state));
+
+            let client = OiClient::connect(addr, ClientAuth::TrustAny, &identity, Actor::default())
+                .await
+                .expect("connect");
+            client
+                .request(
+                    "/canopy/offer",
+                    json!({ "agent": "test", "endpoint": "https://example.invalid" }),
+                )
+                .await
+                .expect("the offer is accepted");
+
+            // As a failing report would have left it.
+            oi.state.db.call(|db| {
+                crate::runtime::faults::file_fault(
+                    db,
+                    &seedling_protocol::names::AppName::new_unchecked("seedling"),
+                    None,
+                    None,
+                    None,
+                    "canopy_report_failed",
+                    "canopy said no",
+                )
+                .expect("file a fault");
+            });
+
+            drop(client);
+            assert_eq!(await_offers(&oi.state, 0).await, 0);
+
+            let remaining = oi.state.db.call(|db| {
+                crate::runtime::faults::list_active_faults(db, None)
+                    .unwrap_or_default()
+                    .len()
+            });
+            assert_eq!(
+                remaining, 0,
+                "nothing is expected of an instance with no provider, so the \
+                 fault must go with the connection rather than linger until the \
+                 next scheduled tick"
             );
         });
     }

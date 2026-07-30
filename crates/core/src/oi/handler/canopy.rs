@@ -2,8 +2,12 @@
 //!
 //! Two audiences meet here. `/canopy/offer` and `/canopy/withdraw` are spoken by
 //! the client that carries the requests, and are not operator-facing. The rest —
-//! status, the setting, a raw request, an immediate report — are operator-facing
-//! and each has a CLI wrapper.
+//! the status and the setting — are operator-facing and each has a CLI wrapper.
+//!
+//! There is deliberately nothing for relaying a request: the relay carries what
+//! the runtime itself needs, and a method for relaying anything else would grant
+//! every authorised key the full authority of the carrying client's Canopy
+//! identity.
 
 use std::sync::Arc;
 
@@ -95,6 +99,9 @@ pub(crate) fn withdraw(
     tracing::info!(offer_id = %params.offer_id, "a client stopped carrying Canopy requests");
     ctx.events
         .canopy_withdrawn(params.offer_id, WithdrawReason::Requested.as_str());
+    // r[impl canopy.report.fault] — if that was the last offer, reporting is no
+    // longer expected, so a fault from when it was would misdescribe us.
+    crate::runtime::canopy::clear_fault_if_not_expected(state);
     Ok(json!({}))
 }
 
@@ -136,6 +143,8 @@ pub(crate) fn set_settings(
                 .canopy_withdrawn(offer.offer_id, WithdrawReason::Disabled.as_str());
         }
     }
+    // r[impl canopy.report.fault] — nothing is expected of a disabled instance.
+    crate::runtime::canopy::clear_fault_if_not_expected(state);
     Ok(json!({}))
 }
 
@@ -303,6 +312,81 @@ mod tests {
         assert_eq!(status["offer"]["via"], "mtls");
         assert!(status["offer"]["offered_at"].is_string());
         assert!(status["offer"]["offer_id"].is_string());
+    }
+
+    /// File the report fault, as a failing report would.
+    fn file_report_fault(oi: &TestOi) {
+        oi.state.db.call(|db| {
+            crate::runtime::faults::file_fault(
+                db,
+                &seedling_protocol::names::AppName::new_unchecked("seedling"),
+                None,
+                None,
+                None,
+                "canopy_report_failed",
+                "canopy said no",
+            )
+            .expect("file a fault");
+        });
+    }
+
+    fn active_faults(oi: &TestOi) -> usize {
+        oi.state
+            .db
+            .call(|db| crate::runtime::faults::list_active_faults(db, None).unwrap_or_default())
+            .len()
+    }
+
+    // r[verify canopy.report.fault]
+    #[test]
+    fn disabling_clears_a_report_fault_at_once() {
+        // Not at the next scheduled tick: an instance that is no longer expected
+        // to report must not be showing a fault for not reporting.
+        let oi = TestOi::new();
+        oi.state.canopy.offer(
+            1,
+            "test".into(),
+            "https://example.invalid".into(),
+            None,
+            crate::oi::canopy::test_peer(),
+        );
+        file_report_fault(&oi);
+        assert_eq!(active_faults(&oi), 1);
+
+        oi.call("/canopy/settings/set", json!({ "enabled": false }))
+            .expect("turning it off");
+        assert_eq!(active_faults(&oi), 0);
+    }
+
+    // r[verify canopy.report.fault]
+    #[test]
+    fn a_report_fault_survives_while_another_offer_still_carries() {
+        // The expectation to report has not ended, so neither has the fault.
+        let oi = TestOi::new();
+        for conn in [1, 2] {
+            oi.state.canopy.offer(
+                conn,
+                "test".into(),
+                "https://example.invalid".into(),
+                None,
+                crate::oi::canopy::test_peer(),
+            );
+        }
+        file_report_fault(&oi);
+
+        let newest = oi.state.canopy.current().expect("an offer");
+        assert!(oi.state.canopy.withdraw(newest.offer_id, newest.conn_id));
+        crate::runtime::canopy::clear_fault_if_not_expected(&oi.state);
+        assert_eq!(
+            active_faults(&oi),
+            1,
+            "one provider remains, so reporting is still expected"
+        );
+
+        let last = oi.state.canopy.current().expect("the older offer");
+        assert!(oi.state.canopy.withdraw(last.offer_id, last.conn_id));
+        crate::runtime::canopy::clear_fault_if_not_expected(&oi.state);
+        assert_eq!(active_faults(&oi), 0, "the last one ending ends it");
     }
 
     // i[verify canopy.withdraw]

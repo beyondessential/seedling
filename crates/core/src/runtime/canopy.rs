@@ -387,6 +387,19 @@ fn clear_fault(state: &Arc<OiState>) {
     });
 }
 
+// r[impl canopy.report.fault]
+/// Clear the report fault if reporting is no longer expected of this instance.
+///
+/// Called wherever the last offer can end — a withdrawal, a lost connection, or
+/// Canopy access being turned off — so the fault goes as soon as the expectation
+/// does rather than lingering until the next scheduled tick would notice. The
+/// condition is the same one [`report_once`] skips on, so the two cannot drift.
+pub(crate) fn clear_fault_if_not_expected(state: &Arc<OiState>) {
+    if !state.canopy.is_enabled() || state.canopy.current().is_none() {
+        clear_fault(state);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

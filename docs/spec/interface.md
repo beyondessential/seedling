@@ -1152,7 +1152,8 @@ Seedling has no Canopy identity of its own. Instead a connected client may offer
 
 > i[canopy.offer.disabled]
 > While Canopy access is disabled per [canopy.settings](#i--canopy.settings), `/canopy/offer` is refused with `canopy_disabled`.
-> Disabling also revokes every live offer immediately and resets any in-flight relay streams, rather than waiting for the offering clients to disconnect.
+> Disabling also revokes every live offer immediately, rather than waiting for the offering clients to disconnect, so no further request can be relayed.
+> Requests already in flight are left to finish or to reach their deadline. Their side effects at Canopy have already happened — the offering client issued them before the setting changed, and a request that has been sent cannot be unsent — so cancelling them would abandon a response without preventing anything, and they are bounded by [canopy.relay.limits](#i--canopy.relay.limits) regardless.
 
 > i[canopy.withdraw]
 > `/canopy/withdraw { offer_id }` ends an offer registered by the calling connection.

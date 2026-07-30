@@ -51,11 +51,16 @@ pub fn set_enabled(db: &Db, enabled: bool) -> rusqlite::Result<()> {
 // r[impl canopy.report.identity]
 /// Cache the server identifier Canopy resolved, so the resolution is not
 /// repeated on every report.
+///
+/// Deliberately leaves `updated_at` alone. That field is part of the settings
+/// surface and reports when an operator last changed the setting; the runtime
+/// refreshing its own cache is not such a change, and stamping it here would
+/// have the interface report a configuration change that never happened.
 pub fn set_server_id(db: &Db, server_id: Option<&str>) -> rusqlite::Result<()> {
     let stored = server_id.map(str::trim).filter(|s| !s.is_empty());
     db.conn.execute(
-        "UPDATE canopy_settings SET server_id = ?1, updated_at = ?2 WHERE singleton = 1",
-        params![stored, now_secs()],
+        "UPDATE canopy_settings SET server_id = ?1 WHERE singleton = 1",
+        params![stored],
     )?;
     Ok(())
 }
@@ -124,6 +129,25 @@ mod tests {
         assert!(
             get_settings(&db).unwrap().server_id.is_none(),
             "whitespace is not an identity"
+        );
+    }
+
+    // r[verify canopy.report.identity]
+    #[test]
+    fn caching_a_server_id_is_not_a_settings_change() {
+        // `updated_at` says when an operator last changed the setting. The
+        // runtime refreshing its own cache must not look like one.
+        let db = db();
+        set_enabled(&db, false).unwrap();
+        let after_change = get_settings(&db).unwrap().updated_at;
+        assert!(after_change > 0);
+
+        set_server_id(&db, Some("srv-123")).unwrap();
+        let settings = get_settings(&db).unwrap();
+        assert_eq!(settings.server_id.as_deref(), Some("srv-123"));
+        assert_eq!(
+            settings.updated_at, after_change,
+            "the settings surface must not report a change that did not happen"
         );
     }
 

@@ -199,7 +199,11 @@ impl CanopyState {
     /// Drop every offer, for use when Canopy access is turned off.
     ///
     /// Disabling takes effect at once rather than at the offering clients' next
-    /// reconnect, so an operator who turns Canopy off sees it stop immediately.
+    /// reconnect, so no further request can be relayed. Requests already in
+    /// flight hold their own [`Offer`] and run to completion or to their
+    /// deadline: the offering client has already issued them, and a request that
+    /// has been sent cannot be unsent, so cancelling here would drop a response
+    /// without preventing the call it answers.
     pub fn revoke_all(&self) -> Vec<Offer> {
         self.conn_to_ids.lock().clear();
         self.offers.lock().drain().map(|(_, o)| o).collect()
