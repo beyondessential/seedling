@@ -77,6 +77,7 @@ describe("Navbar", () => {
     const links: Record<string, string> = {
       "Authorised OI keys": "/keys",
       "Container registry allowlist": "/registries",
+      "Canopy access and reporting": "/canopy",
       "Container images": "/images",
       Services: "/services",
       "Site ingresses": "/ingresses",
