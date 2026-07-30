@@ -1537,3 +1537,45 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > r[tls.policy.apply]
 > Changes to operator-defined TLS policy (binding a hostname to a strategy, changing its parameters, or clearing it) must take effect on a subsequent reconciliation tick without operator-initiated apply steps.
 > The runtime must rebuild the proxy configuration accordingly.
+
+# Canopy Reporting
+
+Seedling reports its own health to Canopy so that a host is visible in the fleet view, using the relay defined in the interface spec. It reports as a source distinct from any other agent on the host, so that its checks and the issues derived from them are scoped to it alone.
+
+> r[canopy.settings.enabled]
+> Whether Canopy access is enabled is stored durably and survives restarts.
+> A Seedling instance that has never been configured has it enabled: on a host with no client offering Canopy, nothing is registered and nothing runs, so the default costs nothing.
+
+> r[canopy.report.schedule]
+> While Canopy access is enabled and at least one offer is live, the runtime reports its status every sixty seconds.
+> When Canopy access is disabled, or no offer is live, no report is attempted and no fault is filed: the absence of a provider is a deployment choice rather than a malfunction.
+> The runtime never initiates a connection of its own to obtain one.
+
+> r[canopy.report.identity]
+> Reports are addressed to a Canopy server identifier that the runtime resolves through the relay, by asking Canopy which server the offering client's identity is enrolled as.
+> The identifier is cached durably so that the resolution is not repeated on every report, and is re-resolved after any report that fails in a way suggesting the cached value is wrong or absent.
+
+> r[canopy.report.checks]
+> Each report carries a fixed set of named checks, so that the check catalog Canopy maintains does not grow with the set of applications an operator installs:
+>
+> | Check | Passed | Warning | Failed |
+> |---|---|---|---|
+> | `health/apps` | every registered app is `Running` | at least one is `Degraded` | at least one is `Faulted` |
+> | `health/faults` | no active faults | — | at least one active fault |
+> | `health/proxy` | the ingress proxy is running | — | it is stopped |
+> | `health/resolver` | the resolver is running | — | it is stopped |
+>
+> Apps that are `NotInstalled`, `Installing`, `Operating`, or `Deregistering` are transitional and do not make `health/apps` fail or warn.
+> Each check carries the names of the apps or faults responsible for its result, so an operator reading the report can act on it without a second lookup.
+
+> r[canopy.report.extra]
+> Each report also carries the Seedling version, the daemon's own uptime in seconds, the total number of registered apps, a map of app status to count, the number of lifecycle operations in progress, and the number of active faults.
+> It does not carry the hostname, the host's uptime, or the version of any managed application: those describe the host rather than Seedling, and are reported by the agent that owns them.
+
+> r[canopy.report.fault]
+> When a report fails while an offer is live, the runtime files a fault of kind `canopy_report_failed` carrying the failure detail.
+> The fault is cleared automatically when a subsequent report succeeds, and when Canopy access is disabled or the last offer ends — in both of those cases reporting is no longer expected, so a lingering fault would misdescribe the instance.
+
+> r[canopy.report.backup-prompt]
+> A report's response may instruct the instance to run backups immediately.
+> The runtime does not currently act on that instruction.

@@ -173,6 +173,15 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > w[routes.registries]
 > The web interface exposes the container registry allowlist: listing, adding, and removing registry hostnames.
 
+> w[routes.canopy]
+> The web interface provides a Canopy page at `/canopy` showing:
+>
+> - Whether Canopy access is enabled, with a control to turn it on or off.
+> - The offer that would serve the next request — the offering agent, the endpoint it reaches, and when it was offered — or an indication that no client is currently offering one.
+> - The outcome and time of the most recent status report, including the error when the last one failed.
+>
+> Registering and withdrawing offers is not exposed: those are made by the client that carries the requests, not by an operator.
+
 > w[routes.images]
 > The web interface provides a dedicated Images page at `/images` showing:
 >

@@ -89,6 +89,18 @@ Absent specification bugs, anything that is not defined here is either defined i
 > If that object contains a `"method"` key it is dispatched as a control request per [stream.control](#i--stream.control).
 > If it contains a `"forward"` key it is dispatched as a port forward data stream per [stream.forward](#i--stream.forward).
 
+> i[stream.dispatch.server]
+> All server-initiated bidirectional streams likewise begin with a newline-terminated JSON object, dispatched on the key it carries.
+> The only key defined is `"canopy"`, which dispatches the stream as a Canopy relay request per [stream.canopy](#i--stream.canopy).
+> A client that does not recognise the key must reset the stream rather than close it normally, so the server can distinguish an unsupported stream kind from an empty response.
+>
+> Server-initiated unidirectional streams are not covered by this rule: each is opened in response to a specific request and its content is defined by that request.
+
+> i[stream.canopy]
+> Each relayed Canopy request uses one server-initiated bidirectional QUIC stream.
+> Both directions carry a newline-terminated JSON header line followed by raw body bytes for the remainder of the stream's lifetime; the stream's end is the body's end, and no additional length framing is used.
+> The server writes the request header and body then half-closes its write-end; the client writes the response header and body then closes the stream.
+
 > i[stream.events]
 > After a client sends a `/events/subscribe` request, the server opens one server-initiated unidirectional QUIC stream per connection and pushes events as newline-delimited JSON objects for the duration of the connection.
 
@@ -153,6 +165,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > | `server_busy` | The server's stream concurrency limit has been reached; the client should retry after a delay. |
 > | `internal` | An unexpected server-side failure (for example a database error) prevented the request from completing. |
 > | `backup_app_in_use` | The backup app cannot be deregistered because a backup strategy still references it. |
+> | `canopy_disabled` | Canopy access is turned off for this instance; the request was refused for that reason alone. |
+> | `canopy_unavailable` | Canopy access is enabled but no provider is currently offering it, or the offering client could not reach Canopy. |
 
 # Status
 
@@ -713,6 +727,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > | `ForwardStopped` | `forward_id` |
 > | `ScaleChanged` | `app`, `deployment`, `scale`, `previous_scale`, `bounds_low`, `bounds_high` |
 > | `ServerBusy` | `reason` |
+> | `CanopyOffered` | `offer_id`, `agent`, `endpoint` |
+> | `CanopyWithdrawn` | `offer_id`, `reason` |
 >
 > The `trigger` field on `OperationStarted` is a string indicating what caused the operation:
 >
@@ -1114,6 +1130,101 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 > `cert_profile` (string or null) opts into a non-default ACME profile (e.g. Let's Encrypt's `shortlived` for ~6-day certs) per [tls.settings.cert-profile](runtime.md#r--tls.settings.cert-profile); pass `null` to clear so the CA selects its default profile, or omit the field to leave it unchanged.
 > Both updates take effect on the next renewal pass without daemon restart.
 
+# Canopy Relay
+
+Seedling has no Canopy identity of its own. Instead a connected client may offer to carry Seedling's Canopy requests, issuing them under its own identity and returning the responses. The relay is a generic HTTP conduit: Seedling supplies a method, path, headers, and body, and receives whatever Canopy answered.
+
+> i[canopy.offer]
+> `/canopy/offer { agent, endpoint, via? }` registers the calling connection as a Canopy provider.
+> `agent` names the offering program, `endpoint` is the Canopy base URL it will reach, and `via` is an optional free-form note on how it authenticates.
+> All three are recorded for operator display only; no behaviour depends on their values.
+> Returns `{ offer_id }`, an opaque identifier for the registration.
+> A `CanopyOffered` event is emitted.
+
+> i[canopy.offer.lifetime]
+> An offer remains registered until the connection that made it is lost, the offering client calls [canopy.withdraw](#i--canopy.withdraw), or Canopy access is disabled.
+> A `CanopyWithdrawn` event is emitted whenever an offer ends, carrying a `reason` that distinguishes connection loss, voluntary withdrawal, and revocation by the disabled setting.
+
+> i[canopy.offer.selection]
+> Several offers may be registered at once, across the same or different connections.
+> Relayed requests are sent to the most recently registered offer that is still live.
+> Earlier offers remain registered and become eligible again if the newer one ends.
+
+> i[canopy.offer.disabled]
+> While Canopy access is disabled per [canopy.settings](#i--canopy.settings), `/canopy/offer` is refused with `canopy_disabled`.
+> Disabling also revokes every live offer immediately and resets any in-flight relay streams, rather than waiting for the offering clients to disconnect.
+
+> i[canopy.withdraw]
+> `/canopy/withdraw { offer_id }` ends an offer registered by the calling connection.
+> Returns `{}` on success, or `not_found` if the offer does not exist or belongs to another connection.
+
+> i[canopy.relay]
+> To relay a request, the server opens a bidirectional stream per [stream.canopy](#i--stream.canopy) on the connection holding the selected offer and writes the header:
+> ```json
+> { "canopy": "<offer_id>", "method": "<string>", "path": "<string>", "headers": { } }
+> ```
+> `path` is the request target in origin form (path and query, no scheme or authority); resolving it against a base URL is the offering client's responsibility, as is supplying authentication.
+> `headers` is an object map of header name to value. The request body, if any, follows the header line as raw bytes.
+>
+> The offering client replies with either a response header line
+> ```json
+> { "status": <int>, "headers": { } }
+> ```
+> followed by the raw response body, or an error frame per [canopy.relay.error](#i--canopy.relay.error).
+>
+> Any status Canopy returned is reported as a `status`, including non-2xx ones: individual endpoints give specific codes meaning, so interpreting them is the caller's business and not the relay's.
+
+> i[canopy.relay.error]
+> When the offering client obtained no response from Canopy at all, it writes
+> ```json
+> { "error": { "code": "<string>", "message": "<string>" } }
+> ```
+> and closes the stream without a body. The following codes are defined:
+>
+> | Code | Meaning |
+> |---|---|
+> | `unknown_offer` | The `offer_id` in the request header is not one the client currently holds. |
+> | `unreachable` | The client could not obtain a response from Canopy (connection failure, timeout, or protocol error). |
+> | `invalid_request` | The request header was malformed or described a request the client cannot construct. |
+
+> i[canopy.relay.limits]
+> The server bounds each relayed request in three ways:
+>
+> - It stops reading a response body once it exceeds 16 MiB, and resets the stream.
+> - It resets the stream if no complete response arrives within 60 seconds.
+> - It allows at most 8 relayed requests to be in flight at once; further requests wait for a slot rather than opening a stream.
+>
+> Relay streams are server-initiated and so do not count against [stream.concurrency-limit](#i--stream.concurrency-limit), which bounds client-initiated request streams.
+
+> i[canopy.unavailable]
+> A relayed request attempted while Canopy access is disabled, or while no offer is live, fails immediately with `canopy_disabled` or `canopy_unavailable` respectively.
+> Requests are never queued for a provider that might appear later.
+
+> i[canopy.settings]
+> `/canopy/settings/get` returns `{ enabled, updated_at }`.
+> `/canopy/settings/set { enabled }` turns Canopy access on or off. The setting is stored durably and defaults to enabled.
+> Returns `{}` on success.
+
+> i[canopy.status]
+> `/canopy/status` returns the current state of Canopy access:
+>
+> - `enabled`: whether Canopy access is turned on.
+> - `offer`: the offer that would serve the next request, or `null` when none is live. When present, an object with fields `offer_id`, `agent`, `endpoint`, `via`, and `offered_at` (RFC 3339).
+> - `offers`: the number of live offers, which may exceed one.
+> - `server_id`: the Canopy server identifier last resolved for this instance, or `null` if none has been.
+> - `last_report`: the outcome of the most recent status report, or `null` if none has been attempted. When present, an object with fields `at` (RFC 3339), `ok` (boolean), and `error` (string, present only when `ok` is false).
+
+> i[canopy.request]
+> `/canopy/request { method, path, headers?, body? }` relays a single request and returns the response.
+> `body` is a string, sent as the request body when present.
+> Returns `{ status, headers, body }`, where `body` is the response body as a string. A body that is not valid UTF-8 is reported with `body` absent and a `body_base64` field in its place.
+> This endpoint exists so an operator can exercise the relay directly; the failure modes are those of [canopy.unavailable](#i--canopy.unavailable) and [canopy.relay.error](#i--canopy.relay.error).
+
+> i[canopy.report.invoke]
+> `/canopy/report` runs a status report immediately rather than waiting for the next scheduled one, as defined in [canopy.report.schedule](runtime.md#r--canopy.report.schedule).
+> Returns `{ ok, error? }`; `error` is present when the report failed.
+> The scheduled cadence is unaffected.
+
 # Client Behaviour
 
 > i[ctl.graceful-shutdown]
@@ -1161,3 +1272,7 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 
 > i[ctl.backup.strategy.allow-missing]
 > When creating or updating a backup strategy, the CLI checks whether each referenced volume exists. If any volume does not resolve and `--allow-missing` is not passed, the CLI must abort with an error before sending the request.
+
+> i[ctl.canopy]
+> The CLI exposes the operator-facing side of the Canopy relay: `ctl canopy status`, `ctl canopy enable`, `ctl canopy disable`, `ctl canopy report`, and `ctl canopy request <method> <path>` as thin wrappers over [canopy.status](#i--canopy.status), [canopy.settings](#i--canopy.settings), [canopy.report.invoke](#i--canopy.report.invoke), and [canopy.request](#i--canopy.request).
+> Registering and withdrawing offers is not exposed: those are made by the client that carries the requests, not by an operator.
