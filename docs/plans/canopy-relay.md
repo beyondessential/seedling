@@ -87,6 +87,17 @@ three are for operator display only; Seedling makes no decisions from them.
 The offer's lifetime is the connection's. `/canopy/withdraw { offer_id }` ends
 it early.
 
+Disabling Canopy revokes every live offer as well as refusing new ones, so the
+setting takes effect immediately rather than at the next reconnect. Each
+revoked offer emits `CanopyWithdrawn` with a reason distinguishing it from a
+voluntary withdrawal, and in-flight relay streams for it are reset.
+
+Re-enabling has to recover without a reconnect, since a healthy OI connection
+may not reconnect for weeks. bestool therefore re-attempts the offer on a slow
+timer whenever it is connected but unoffered, so an enable heals within one
+retry interval. The attempt is a single cheap control request, which is why a
+timer is preferred to having bestool watch the event feed for a setting change.
+
 ### Relay
 
 One Seedling-initiated bidirectional stream per call, framed like
@@ -134,7 +145,10 @@ Three, because an unbounded relay lets either side exhaust the other.
   streaming consumer is a Seedling-side change, not a wire change.
 - **In-flight cap.** Relay streams are server-initiated, so they never reach
   `i[stream.concurrency-limit]`, which bounds client-initiated request streams.
-  They need their own, smaller bound.
+  They get their own bound of 8 concurrent relayed calls; beyond that, a call
+  waits rather than opening a stream. Seedling's own use is a single heartbeat
+  on a timer, so the bound exists to contain a future consumer rather than to
+  shape today's traffic.
 - **Timeout.** Seedling resets a relay stream after 60 seconds, comfortably past
   `ReqwestTransport`'s own 30-second timeout, so bestool's timeout fires first
   and reports a real error rather than Seedling guessing at one.
@@ -150,7 +164,8 @@ Write these before implementing, per the repo's spec-first rule.
 - `i[stream.canopy]` — relay stream framing, both directions.
 - New `# Canopy Relay` section: `i[canopy.offer]`, `i[canopy.offer.lifetime]`,
   `i[canopy.offer.selection]` (most recently registered live offer wins),
-  `i[canopy.offer.disabled]`, `i[canopy.withdraw]`, `i[canopy.relay]`,
+  `i[canopy.offer.disabled]` (refuses new offers and revokes live ones),
+  `i[canopy.withdraw]`, `i[canopy.relay]`,
   `i[canopy.relay.error]`, `i[canopy.relay.limits]`, `i[canopy.settings]`,
   `i[canopy.status]`, `i[canopy.request]`, `i[canopy.report.invoke]`.
 - `i[wire.error-codes]` gains `canopy_disabled` and `canopy_unavailable`.
@@ -242,8 +257,9 @@ Work in a jj workspace to avoid colliding with other work in that repo.
   `bestool-tamanu`'s `Oi::open` uses. `ClientIdentity::load_or_generate` already
   takes an explicit path.
 - On connect, send `/canopy/offer`. A `canopy_disabled` rejection is logged once
-  at info and not retried until the next reconnect — the operator has said no,
-  and a tight retry loop would be noise.
+  at info, not repeatedly — the operator has said no. Whenever connected but
+  unoffered, re-attempt on a slow timer (5 minutes) so that re-enabling recovers
+  without waiting for a reconnect.
 - An `accept_bi` loop dispatching relay streams: parse the header, rebuild an
   `http::Request<Bytes>`, hand it to the `CanopyClient` the daemon already built
   at startup (`daemon.rs:90`), and write the response frame back. Bound the
