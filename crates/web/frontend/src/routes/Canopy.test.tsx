@@ -89,25 +89,17 @@ describe("Canopy", () => {
   });
 
   // w[verify routes.canopy]
-  it("reports on demand", async () => {
-    const { request } = renderWithSession(<Canopy />, {
-      fixtures: { "/canopy/status": offered },
-      safetyMode: "write",
-    });
-    fireEvent.click(await screen.findByRole("button", { name: "Report now" }));
-    await waitFor(() =>
-      expect(request.mock.calls).toContainEqual(["/canopy/report", {}]),
-    );
-  });
-
-  // w[verify routes.canopy]
-  it("does not offer to report when there is nothing to report through", async () => {
+  it("offers no way to relay a request or force a report", async () => {
+    // The relay carries what the runtime needs; a control for relaying an
+    // arbitrary request would hand any operator the carrying client's full
+    // Canopy authority.
     renderWithSession(<Canopy />, {
-      fixtures: { "/canopy/status": nothingOffering },
-      safetyMode: "write",
+      fixtures: { "/canopy/status": offered },
+      safetyMode: "dangerous",
     });
-    const button = await screen.findByRole("button", { name: "Report now" });
-    expect(button.hasAttribute("disabled")).toBe(true);
+    await screen.findByText("bestool 0.7.8");
+    expect(screen.queryByRole("button", { name: "Report now" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /request/i })).toBeNull();
   });
 
   // w[verify routes.canopy]

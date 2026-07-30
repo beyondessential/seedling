@@ -55,13 +55,9 @@ export default function Canopy() {
     error: mutateError,
   } = useOiAction();
 
+
   const setEnabled = async (enabled: boolean) => {
     if ((await execute("/canopy/settings/set", { enabled })) === null) return;
-    refetch();
-  };
-
-  const report = async () => {
-    if ((await execute("/canopy/report", {})) === null) return;
     refetch();
   };
 
@@ -177,19 +173,9 @@ export default function Canopy() {
           </Paper>
 
           <Paper variant="outlined" sx={{ p: 2 }}>
-            <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 1 }}>
-              <Typography variant="subtitle1" sx={{ flexGrow: 1 }}>
-                Reporting
-              </Typography>
-              <SolidActionButton
-                safety="write"
-                size="small"
-                disabled={mutating || !data.enabled || !data.offer}
-                onClick={report}
-              >
-                Report now
-              </SolidActionButton>
-            </Box>
+            <Typography variant="subtitle1" sx={{ mb: 1 }}>
+              Reporting
+            </Typography>
             <TableContainer>
               <Table size="small">
                 <TableBody>

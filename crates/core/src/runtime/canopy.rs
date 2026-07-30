@@ -79,9 +79,10 @@ pub fn spawn(state: Arc<OiState>) -> tokio::task::JoinHandle<()> {
 // r[impl canopy.report.fault]
 /// Attempt one report, filing or clearing the fault to match.
 ///
-/// Returns the error text on failure so an operator-invoked report can report it
-/// back rather than only leaving it in a fault.
-pub async fn report(state: &Arc<OiState>) -> Result<(), String> {
+/// Reporting is driven by the schedule alone — there is no interface for forcing
+/// one — so the error is returned only for the benefit of tests; the loop above
+/// leaves it to the fault surface and the log.
+async fn report(state: &Arc<OiState>) -> Result<(), String> {
     match report_once(state).await {
         Outcome::Skipped => {
             // Nothing is expected of an instance with no provider, so a fault

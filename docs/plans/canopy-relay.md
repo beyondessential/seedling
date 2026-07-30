@@ -44,6 +44,10 @@ section first.
    framing by stream lifetime.
 4. **Fail fast when no offer is live.** A relayed call with no registered
    provider is an immediate `Err`. Nothing is queued or replayed.
+4a. **No operator-facing request or report method.** The relay is reached only by
+   the runtime's own consumers. Relaying an arbitrary request on an operator's
+   behalf would grant them the carrying client's whole Canopy identity, and
+   forcing a report earns nothing the schedule does not already give.
 5. **Gate at offer acceptance, not at the consumer.** One setting turns the
    whole facility off, covering reporting today and the TLS and
    backup-credential consumers later.
@@ -167,7 +171,7 @@ Write these before implementing, per the repo's spec-first rule.
   `i[canopy.offer.disabled]` (refuses new offers and revokes live ones),
   `i[canopy.withdraw]`, `i[canopy.relay]`,
   `i[canopy.relay.error]`, `i[canopy.relay.limits]`, `i[canopy.settings]`,
-  `i[canopy.status]`, `i[canopy.request]`, `i[canopy.report.invoke]`.
+  `i[canopy.status]`.
 - `i[wire.error-codes]` gains `canopy_disabled` and `canopy_unavailable`.
 - `i[event.types]` gains `CanopyOffered` (`offer_id`, `agent`, `endpoint`) and
   `CanopyWithdrawn` (`offer_id`, `reason`).
@@ -205,7 +209,14 @@ hand-syncing a second copy.
   `Err`.
 
 **`crates/core/src/oi/handler/canopy.rs`** — `/canopy/offer`, `/canopy/withdraw`,
-`/canopy/status`, `/canopy/settings/set`, `/canopy/request`, `/canopy/report`.
+`/canopy/status`, `/canopy/settings/get`, `/canopy/settings/set`.
+
+There is deliberately no method for relaying an arbitrary request, and none for
+forcing a report. The relay carries what the runtime itself needs; an interface
+for relaying anything else would hand every authorised operator the full
+authority of the carrying client's Canopy identity, which is a far wider grant
+than the rest of the operator interface makes. The path is exercised end to end
+by the scheduled reports.
 
 **`crates/core/src/oi/server.rs`** — drop the connection's offers in the
 teardown path, next to the existing `forwards.remove_by_conn(conn_id)`.
@@ -235,16 +246,15 @@ own uptime, so an operator can see a restart), `appsTotal`, `appsByStatus`,
 `activeOperations`, `activeFaults`. Not `hostname` or host uptime — bestool
 already reports both. Not `tamanuVersion`.
 
-**`crates/ctl/src/canopy.rs`** — `seedling-ctl canopy status | enable | disable
-| report | request <METHOD> <PATH>`. `request` is the raw relayed call and
-doubles as the end-to-end smoke test. `/canopy/offer` and `/canopy/withdraw` are
-bestool-facing and get no CLI.
+**`crates/ctl/src/canopy.rs`** — `seedling-ctl canopy status | enable | disable`.
+`/canopy/offer` and `/canopy/withdraw` are bestool-facing and get no CLI.
 
 ## Web UI
 
 A `Canopy.tsx` route at `/canopy`, following `Registries.tsx` for shape: current
 offer (agent, endpoint, via, since) or "no provider connected", last heartbeat
-outcome, and an enable/disable control. Nothing more.
+outcome, and an enable/disable control. Nothing more — in particular no control
+for relaying a request or forcing a report.
 
 ## bestool implementation
 
@@ -278,7 +288,8 @@ carrying the frame types.
 - **core**: relay against an in-process offering client built on
   `oi/test_support.rs` — success, non-2xx passed through as a status rather than
   an error, each error-frame code, no offer, disabled, most-recent-offer-wins,
-  teardown on connection close, response cap, timeout.
+  response cap, timeout. The offer, withdraw, disabled-refusal, and
+  teardown-on-close paths need a real connection, so they are driven against one.
 - **heartbeat**: payload shape and check derivation against a stub
   `CanopyTransport`, including fault filing and clearing.
 - **bestool**: relay execution against a stub Canopy client; reconnect

@@ -1215,17 +1215,6 @@ Seedling has no Canopy identity of its own. Instead a connected client may offer
 > - `server_id`: the Canopy server identifier last resolved for this instance, or `null` if none has been.
 > - `last_report`: the outcome of the most recent status report, or `null` if none has been attempted. When present, an object with fields `at` (RFC 3339), `ok` (boolean), and `error` (string, present only when `ok` is false).
 
-> i[canopy.request]
-> `/canopy/request { method, path, headers?, body? }` relays a single request and returns the response.
-> `body` is a string, sent as the request body when present.
-> Returns `{ status, headers, body }`, where `body` is the response body as a string. A body that is not valid UTF-8 is reported with `body` absent and a `body_base64` field in its place.
-> This endpoint exists so an operator can exercise the relay directly; the failure modes are those of [canopy.unavailable](#i--canopy.unavailable) and [canopy.relay.error](#i--canopy.relay.error).
-
-> i[canopy.report.invoke]
-> `/canopy/report` runs a status report immediately rather than waiting for the next scheduled one, as defined in [canopy.report.schedule](runtime.md#r--canopy.report.schedule).
-> Returns `{ ok, error? }`; `error` is present when the report failed.
-> The scheduled cadence is unaffected.
-
 # Client Behaviour
 
 > i[ctl.graceful-shutdown]
@@ -1275,5 +1264,6 @@ Seedling has no Canopy identity of its own. Instead a connected client may offer
 > When creating or updating a backup strategy, the CLI checks whether each referenced volume exists. If any volume does not resolve and `--allow-missing` is not passed, the CLI must abort with an error before sending the request.
 
 > i[ctl.canopy]
-> The CLI exposes the operator-facing side of the Canopy relay: `ctl canopy status`, `ctl canopy enable`, `ctl canopy disable`, `ctl canopy report`, and `ctl canopy request <method> <path>` as thin wrappers over [canopy.status](#i--canopy.status), [canopy.settings](#i--canopy.settings), [canopy.report.invoke](#i--canopy.report.invoke), and [canopy.request](#i--canopy.request).
+> The CLI exposes the operator-facing side of the Canopy relay: `ctl canopy status`, `ctl canopy enable`, and `ctl canopy disable`, as thin wrappers over [canopy.status](#i--canopy.status) and [canopy.settings](#i--canopy.settings).
 > Registering and withdrawing offers is not exposed: those are made by the client that carries the requests, not by an operator.
+> Nor is issuing a request: the relay exists to carry what the runtime itself needs, and an interface for relaying an arbitrary request would hand every authorised operator the full authority of the carrying client's Canopy identity.

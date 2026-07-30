@@ -507,12 +507,10 @@ async fn handle_bidi_stream(
     let buf = [line, rest].concat();
 
     // i[canopy.offer] — registering an offer needs the connection it arrived on,
-    // and relaying needs to await, so these are dispatched here rather than in
-    // the shared sync table. Done after the actor is resolved so their events
-    // carry it like every other request's do.
-    if let Some(response) =
-        super::handler::dispatch_connection_bound(&state, &conn, &buf, &ctx).await
-    {
+    // so these are dispatched here rather than through the shared table. Done
+    // after the actor is resolved so their events carry it like every other
+    // request's do.
+    if let Some(response) = super::handler::dispatch_connection_bound(&state, &conn, &buf, &ctx) {
         if let Err(e) = send.write_all(&response).await {
             tracing::warn!("stream write error: {e}");
         }

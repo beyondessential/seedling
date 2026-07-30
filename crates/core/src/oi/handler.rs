@@ -81,11 +81,11 @@ pub fn dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Vec<u8> {
 }
 
 /// Dispatch the methods that cannot go through [`dispatch`], because they need
-/// the connection the request arrived on or because they must await.
+/// the connection the request arrived on.
 ///
 /// Returns `None` when `buf` names none of them, so the caller falls through to
 /// the shared table rather than this having to know every other method.
-pub async fn dispatch_connection_bound(
+pub fn dispatch_connection_bound(
     state: &Arc<OiState>,
     conn: &quinn::Connection,
     buf: &[u8],
@@ -102,33 +102,21 @@ pub async fn dispatch_connection_bound(
     /// The methods handled here. Listed rather than matched by prefix because
     /// the rest of the Canopy surface is ordinary and belongs in the shared
     /// table; swallowing it here would leave those methods unreachable.
-    const CONNECTION_BOUND: [&str; 4] = [
-        "/canopy/offer",
-        "/canopy/withdraw",
-        "/canopy/request",
-        "/canopy/report",
-    ];
+    const CONNECTION_BOUND: [&str; 2] = ["/canopy/offer", "/canopy/withdraw"];
     if !CONNECTION_BOUND.contains(&req.method.as_str()) {
         return None;
     }
 
-    let result: HandlerResult = async {
-        match req.method.as_str() {
-            // i[canopy.offer]
-            "/canopy/offer" => canopy::offer(state, conn, parse_params(req.params)?, ctx),
-            // i[canopy.withdraw]
-            "/canopy/withdraw" => canopy::withdraw(state, conn, parse_params(req.params)?, ctx),
-            // i[canopy.request]
-            "/canopy/request" => canopy::request(state, parse_params(req.params)?).await,
-            // i[canopy.report.invoke]
-            "/canopy/report" => canopy::report(state).await,
-            other => Err(OiError::new(
-                ErrorCode::NotFound,
-                format!("unknown method: {other}"),
-            )),
-        }
-    }
-    .await;
+    let result = (|| match req.method.as_str() {
+        // i[canopy.offer]
+        "/canopy/offer" => canopy::offer(state, conn, parse_params(req.params)?, ctx),
+        // i[canopy.withdraw]
+        "/canopy/withdraw" => canopy::withdraw(state, conn, parse_params(req.params)?, ctx),
+        other => Err(OiError::new(
+            ErrorCode::NotFound,
+            format!("unknown method: {other}"),
+        )),
+    })();
     Some(envelope(result))
 }
 

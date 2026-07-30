@@ -181,6 +181,7 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > - The outcome and time of the most recent status report, including the error when the last one failed.
 >
 > Registering and withdrawing offers is not exposed: those are made by the client that carries the requests, not by an operator.
+> Nor is relaying a request or forcing a report: the relay carries what the runtime itself needs, and a control for relaying an arbitrary request would grant any operator the full authority of the carrying client's Canopy identity.
 
 > w[routes.images]
 > The web interface provides a dedicated Images page at `/images` showing:

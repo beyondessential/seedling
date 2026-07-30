@@ -184,11 +184,15 @@ seedling-ctl canopy enable
 ```
 
 Disabling refuses new offers and revokes any live one immediately, rather than
-waiting for the carrying client to reconnect. `seedling-ctl canopy report` sends
-a report straight away, and `seedling-ctl canopy request GET /servers/self`
-relays one request and prints the response, which is the quickest way to check
-the whole path end to end. The same state and the on/off control are on the
-web interface's Canopy page.
+waiting for the carrying client to reconnect. The same state and the on/off
+control are on the web interface's Canopy page.
+
+There is deliberately no way to relay an arbitrary request through the OI. The
+relay carries what the runtime itself needs, and an interface for relaying
+anything else would hand every authorised operator the full authority of the
+carrying client's Canopy identity. The path is exercised end to end by the
+status reports the runtime already sends, whose outcome `canopy status`
+reports.
 
 ## The web interface (seedling-web)
 

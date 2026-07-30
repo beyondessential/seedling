@@ -8,7 +8,6 @@
 use std::sync::Arc;
 
 use seedling_protocol::{
-    canopy::Headers,
     error::{ErrorCode, OiError},
     names::OfferId,
 };
@@ -18,7 +17,7 @@ use serde_json::{Value, json};
 use super::{HandlerResult, RequestCtx};
 use crate::{
     oi::{
-        canopy::{QuicPeer, RelayFailure, WithdrawReason, relay_request},
+        canopy::{QuicPeer, WithdrawReason},
         state::OiState,
     },
     runtime::canopy::store,
@@ -40,16 +39,6 @@ pub(crate) struct WithdrawParams {
 #[derive(Deserialize)]
 pub(crate) struct SettingsParams {
     pub enabled: bool,
-}
-
-#[derive(Deserialize)]
-pub(crate) struct RequestParams {
-    pub method: String,
-    pub path: String,
-    #[serde(default)]
-    pub headers: Headers,
-    #[serde(default)]
-    pub body: Option<String>,
 }
 
 // i[canopy.offer]
@@ -184,77 +173,6 @@ pub(crate) fn status(state: &Arc<OiState>) -> HandlerResult {
     }))
 }
 
-// i[canopy.request]
-// i[canopy.unavailable]
-/// Relay one request and return the response, so an operator can exercise the
-/// relay without a consumer being wired to it.
-pub(crate) async fn request(state: &Arc<OiState>, params: RequestParams) -> HandlerResult {
-    if !state.canopy.is_enabled() {
-        return Err(OiError::new(
-            ErrorCode::CanopyDisabled,
-            "Canopy access is turned off for this instance",
-        ));
-    }
-    let offer = state.canopy.current().ok_or_else(|| {
-        OiError::new(
-            ErrorCode::CanopyUnavailable,
-            "no client is currently offering to reach Canopy",
-        )
-    })?;
-
-    let _slot = state.canopy.acquire_slot().await;
-    let body = params.body.unwrap_or_default();
-    let response = relay_request(
-        &offer,
-        &params.method,
-        &params.path,
-        params.headers,
-        body.as_bytes(),
-    )
-    .await
-    .map_err(|e| {
-        let code = match e {
-            // A client that answered with an error frame, or did not answer at
-            // all, is the same thing from an operator's point of view: Canopy
-            // was not reached through it.
-            RelayFailure::Client(_)
-            | RelayFailure::Peer(_)
-            | RelayFailure::Timeout
-            | RelayFailure::Frame(_) => ErrorCode::CanopyUnavailable,
-        };
-        OiError::new(code, format!("{e}"))
-    })?;
-
-    let mut result = json!({
-        "status": response.status,
-        "headers": response.headers,
-    });
-    let map = result.as_object_mut().expect("just built an object");
-    // A body that is not text still has to reach the operator somehow, and
-    // lossy conversion would show them something Canopy did not send.
-    match String::from_utf8(response.body) {
-        Ok(text) => {
-            map.insert("body".into(), Value::String(text));
-        }
-        Err(e) => {
-            use base64::Engine as _;
-            map.insert(
-                "body_base64".into(),
-                Value::String(base64::engine::general_purpose::STANDARD.encode(e.as_bytes())),
-            );
-        }
-    }
-    Ok(result)
-}
-
-// i[canopy.report.invoke]
-pub(crate) async fn report(state: &Arc<OiState>) -> HandlerResult {
-    match crate::runtime::canopy::report(state).await {
-        Ok(()) => Ok(json!({ "ok": true })),
-        Err(error) => Ok(json!({ "ok": false, "error": error })),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -385,66 +303,6 @@ mod tests {
         assert_eq!(status["offer"]["via"], "mtls");
         assert!(status["offer"]["offered_at"].is_string());
         assert!(status["offer"]["offer_id"].is_string());
-    }
-
-    /// A minimal raw-request param set aimed at an endpoint that needs no body.
-    fn probe_params() -> RequestParams {
-        RequestParams {
-            method: "GET".into(),
-            path: "/servers/self".into(),
-            headers: Headers::new(),
-            body: None,
-        }
-    }
-
-    // i[verify canopy.unavailable]
-    #[test]
-    fn a_raw_request_with_nothing_offering_says_canopy_is_unavailable() {
-        let oi = TestOi::new();
-        let err = oi
-            .block_on(request(&oi.state, probe_params()))
-            .expect_err("nothing to relay through");
-        assert!(matches!(err.code, ErrorCode::CanopyUnavailable), "{err:?}");
-    }
-
-    // i[verify canopy.unavailable]
-    #[test]
-    fn a_raw_request_while_disabled_is_refused_as_disabled() {
-        let oi = TestOi::new();
-        oi.state.canopy.set_enabled(false);
-        let err = oi
-            .block_on(request(&oi.state, probe_params()))
-            .expect_err("disabled");
-        assert!(
-            matches!(err.code, ErrorCode::CanopyDisabled),
-            "an operator who turned it off should not be told the client is missing: {err:?}"
-        );
-    }
-
-    // i[verify canopy.report.invoke]
-    #[test]
-    fn an_immediate_report_with_nothing_offering_succeeds_without_reporting() {
-        let oi = TestOi::new();
-        let result = oi
-            .block_on(report(&oi.state))
-            .expect("skipping is not an error");
-        assert_eq!(
-            result["ok"], true,
-            "no provider is a deployment choice, not a failure"
-        );
-        assert_eq!(
-            oi.call("/canopy/status", json!({})).unwrap()["last_report"],
-            Value::Null,
-            "a skipped turn is not an attempt, so it records no outcome"
-        );
-    }
-
-    // i[verify canopy.report.invoke]
-    #[test]
-    fn an_immediate_report_while_disabled_also_does_nothing() {
-        let oi = TestOi::new();
-        oi.state.canopy.set_enabled(false);
-        assert_eq!(oi.block_on(report(&oi.state)).unwrap()["ok"], true);
     }
 
     // i[verify canopy.withdraw]
