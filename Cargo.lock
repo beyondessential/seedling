@@ -5459,6 +5459,7 @@ dependencies = [
  "aws-credential-types",
  "aws-sdk-route53",
  "axum",
+ "base64",
  "bestool-canopy",
  "bytes",
  "clap",

@@ -28,6 +28,13 @@ pub use peer::{QuicPeer, RelayPeer, RelayStream};
 pub use relay::{RelayFailure, relay_request};
 pub use transport::OiCanopyTransport;
 
+/// A peer that opens no streams, for tests that register an offer to observe the
+/// bookkeeping around it rather than to relay anything through it.
+#[cfg(test)]
+pub(crate) fn test_peer() -> std::sync::Arc<dyn RelayPeer> {
+    std::sync::Arc::new(peer::NullPeer)
+}
+
 // i[canopy.offer]
 /// A live registration by a client offering to carry Canopy requests.
 #[derive(Clone)]
@@ -86,6 +93,11 @@ pub struct CanopyState {
     /// database. The database remains the source of truth across restarts;
     /// this is loaded from it at startup and updated alongside it.
     enabled: AtomicBool,
+    // i[canopy.status]
+    /// Outcome of the most recent report attempt, for the status surface. Not
+    /// persisted: after a restart there genuinely has been no attempt yet, and
+    /// reporting a stale one as current would be worse than reporting none.
+    last_report: Mutex<Option<crate::runtime::canopy::LastReport>>,
 }
 
 impl Default for CanopyState {
@@ -102,7 +114,17 @@ impl CanopyState {
             next_seq: AtomicU64::new(0),
             inflight: Semaphore::new(MAX_INFLIGHT_RELAYS),
             enabled: AtomicBool::new(true),
+            last_report: Mutex::new(None),
         }
+    }
+
+    // i[canopy.status]
+    pub fn last_report(&self) -> Option<crate::runtime::canopy::LastReport> {
+        self.last_report.lock().clone()
+    }
+
+    pub fn set_last_report(&self, report: crate::runtime::canopy::LastReport) {
+        *self.last_report.lock() = Some(report);
     }
 
     // r[impl canopy.settings.enabled]

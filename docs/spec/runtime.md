@@ -1560,13 +1560,18 @@ Seedling reports its own health to Canopy so that a host is visible in the fleet
 >
 > | Check | Passed | Warning | Failed |
 > |---|---|---|---|
-> | `health/apps` | every registered app is `Running` | at least one is `Degraded` | at least one is `Faulted` |
+> | `health/apps` | every registered app is running | at least one is degraded | at least one is faulted |
 > | `health/faults` | no active faults | — | at least one active fault |
 > | `health/proxy` | the ingress proxy is running | — | it is stopped |
 > | `health/resolver` | the resolver is running | — | it is stopped |
 >
-> Apps that are `NotInstalled`, `Installing`, `Operating`, or `Deregistering` are transitional and do not make `health/apps` fail or warn.
+> Apps in a transitional state — not installed, installing, deregistering, or running a lifecycle operation — do not make `health/apps` fail or warn.
 > Each check carries the names of the apps or faults responsible for its result, so an operator reading the report can act on it without a second lookup.
+
+> r[canopy.report.checks.undeterminable]
+> A check the runtime cannot evaluate must be reported as broken rather than as failed.
+> Reporting "the proxy is stopped" when the truth is "the runtime could not ask" would open an incident against a component that may be perfectly healthy, and a fleet-wide false alarm is worse than a missing signal.
+> A broken result neither opens nor closes the check's issue, so a known failure keeps its standing while the inability to check is itself surfaced.
 
 > r[canopy.report.extra]
 > Each report also carries the Seedling version, the daemon's own uptime in seconds, the total number of registered apps, a map of app status to count, the number of lifecycle operations in progress, and the number of active faults.
@@ -1577,5 +1582,6 @@ Seedling reports its own health to Canopy so that a host is visible in the fleet
 > The fault is cleared automatically when a subsequent report succeeds, and when Canopy access is disabled or the last offer ends — in both of those cases reporting is no longer expected, so a lingering fault would misdescribe the instance.
 
 > r[canopy.report.backup-prompt]
-> A report's response may instruct the instance to run backups immediately.
-> The runtime does not currently act on that instruction.
+> A report's response carries instructions for the reporting source, including a list of backups to run immediately.
+> That list is addressed only to the source that owns backups on a host, so a Seedling report never receives a non-empty one and the runtime does not act on it.
+> The runtime must not treat an empty list as a signal of any kind.

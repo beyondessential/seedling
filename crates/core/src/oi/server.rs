@@ -274,6 +274,22 @@ async fn handle_connection(
     for entry in entries {
         let _ = entry.stop_tx.send(true);
     }
+
+    // i[canopy.offer.lifetime] — an offer lives no longer than the connection
+    // that made it. No actor on the event: nobody asked for this, the connection
+    // simply went away.
+    for offer in state.canopy.remove_by_conn(conn_id) {
+        tracing::info!(
+            offer_id = %offer.offer_id,
+            agent = %offer.agent,
+            "a Canopy offer ended with its connection"
+        );
+        state.event_tx.canopy_withdrawn(
+            offer.offer_id,
+            crate::oi::canopy::WithdrawReason::Disconnected.as_str(),
+            None,
+        );
+    }
 }
 
 async fn handle_bidi_stream(
@@ -489,6 +505,20 @@ async fn handle_bidi_stream(
 
     let rest = recv.read_to_end(MAX_REQUEST_SIZE).await.unwrap_or_default();
     let buf = [line, rest].concat();
+
+    // i[canopy.offer] — registering an offer needs the connection it arrived on,
+    // and relaying needs to await, so these are dispatched here rather than in
+    // the shared sync table. Done after the actor is resolved so their events
+    // carry it like every other request's do.
+    if let Some(response) =
+        super::handler::dispatch_connection_bound(&state, &conn, &buf, &ctx).await
+    {
+        if let Err(e) = send.write_all(&response).await {
+            tracing::warn!("stream write error: {e}");
+        }
+        let _ = send.finish();
+        return;
+    }
 
     let response = tokio::task::block_in_place(|| dispatch(&state, &buf, &ctx));
     if let Err(e) = send.write_all(&response).await {
