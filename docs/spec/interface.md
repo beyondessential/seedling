@@ -1164,7 +1164,8 @@ Seedling has no Canopy identity of its own. Instead a connected client may offer
 > { "canopy": "<offer_id>", "method": "<string>", "path": "<string>", "headers": { } }
 > ```
 > `path` is the request target in origin form (path and query, no scheme or authority); resolving it against a base URL is the offering client's responsibility, as is supplying authentication.
-> `headers` is an object map of header name to value. The request body, if any, follows the header line as raw bytes.
+> `headers` is an object map of lower-cased header name to value. The request body, if any, follows the header line as raw bytes.
+> A header that appears more than once is represented once, with its values combined in order and separated by a comma and a space, per the field-line combination rules of RFC 9110. `Set-Cookie`, which those rules exempt, is therefore not faithfully represented; the relay is not intended to carry it.
 >
 > The offering client replies with either a response header line
 > ```json
