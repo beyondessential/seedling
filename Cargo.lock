@@ -5445,7 +5445,7 @@ dependencies = [
 
 [[package]]
 name = "seedling"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "clap",
  "futures-util",
@@ -5464,7 +5464,7 @@ dependencies = [
 
 [[package]]
 name = "seedling-core"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "arc-swap",
  "aws-config",
@@ -5523,7 +5523,7 @@ dependencies = [
 
 [[package]]
 name = "seedling-ctl"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "clap",
  "crossterm",
@@ -5541,7 +5541,7 @@ dependencies = [
 
 [[package]]
 name = "seedling-protocol"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "compact_str",
  "dirs 6.0.0",
@@ -5565,7 +5565,7 @@ dependencies = [
 
 [[package]]
 name = "seedling-web"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "argon2",
  "axum",
