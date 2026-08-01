@@ -53,10 +53,27 @@ Rules marked `[spike]` name a mechanism not yet confirmed on the platform; the c
 > wcr[infra.resolver]
 > The resolver container serves the Seedling zone on its service address (`r[infra.resolver]`); seedlingd renders its zone data and upstream forwarding.
 
+# Identity
+
+> wcr[identity.workload]
+> A workload runs under an account supplied by the [base](#wcr--base.image), non-administrative by default, so a workload that must not hold administrative rights is started without them rather than dropping them itself (`r[actuate.container.user]`). A declaration naming an account runs under that account. The account exists only inside the container: it is not a principal on the host and cannot be named in host access control.
+
+> wcr[identity.daemon]
+> seedlingd runs under its own service account, not the host's most privileged one. The runtime's own state — its database, its keys, and the [log store](#wcr--logs.sink) — is never mapped into a container, so it carries access control admitting only that account and the host's administrators, satisfying the owner-only requirements of `r[infra.key.file-permissions]` and `r[infra.db.file-permissions]`.
+
+> wcr[identity.hardening]
+> The portable container hardening requirements (`r[actuate.container.hardening]`) are met where the platform expresses them and reported absent where it does not. A limit on the number of processes in an instance applies. Capability dropping and privilege-escalation suppression have no platform equivalent and are not simulated. The root filesystem is discardable rather than read-only ([artifact.readonly](#wcr--artifact.readonly)): a workload may write to it, and those writes are lost when the instance stops, which is a weaker property than the portable rule's read-only root and is stated rather than claimed as equivalent.
+
 # Volumes
 
 > wcr[volume.model]
 > A volume is a runtime-owned host directory mapped into the consuming instance's container at a rendered path, read-only or read-write per the consuming declaration. An instance reaches only the volumes mapped into its own container.
+
+> wcr[volume.boundary]
+> The mapping is the boundary. An instance is confined to its mapped volumes because nothing else of the host's filesystem is present in its container, not because host access control excludes it: a container's [account](#wcr--identity.workload) is not a host principal, so a volume's host permissions cannot distinguish one instance from another. A volume's host permissions must therefore be treated as admitting any instance mapped that volume, and the runtime must not rely on them to separate instances.
+
+> wcr[volume.host-exposure]
+> Because a mapped volume must admit an identity that does not exist on the host, its permissions are broader than the owner-only rule the runtime applies to [its own state](#wcr--identity.daemon), and a host principal outside any container may be able to read it. This is a property of the platform's mapping model, not a configuration choice; the threat model states it and the runtime does not represent volume contents as confidential from the host.
 
 # Logs
 
