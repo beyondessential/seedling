@@ -86,7 +86,9 @@ jobs:
   rust-pass:
     name: Rust pass
     if: always()
-    needs: [lint, test, spikes-windows]
+    # spikes-windows is deliberately not required: it builds throwaway spike
+    # harnesses, and a Windows runner outage should not block every PR.
+    needs: [lint, test]
     runs-on: ubuntu-latest
     steps:
       - uses: re-actors/alls-green@release/v1
