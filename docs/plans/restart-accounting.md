@@ -66,7 +66,9 @@ The Windows container runtime is specified in `docs/spec/runtime-windows-contain
 
 `wcr[shim.ownership]` drops its restart clause; the reconciler owns restart, pacing, and the start limit, and records each attempt at the point it actions one — no counter inference needed. Two Windows-specific requirements come with it: the exit observation must be folded into history before the exited task is reaped (containerd requires deletion before the container ID is reusable), and the daemon-down gap — a workload that crashes while seedlingd is down stays down until it returns, bounded by SCM restart — is stated as a property rather than left to be discovered.
 
-## Open
+## Decided
 
-- The rate threshold and window. Wants to be loose enough that a slow-failing container gets several chances and tight enough to catch flapping on a human timescale, which is the same judgement `r[autonomous.restart.backoff]` already makes for systemd's parameters — but it is now seedling's number, and it is operator-visible.
-- Whether restart history is its own operator-interface surface or an extension of an existing one.
+Both open questions were settled when this was built.
+
+- **The rate threshold and window** are stored, not compiled in: `restart_settings` holds them, `/restarts/settings/{get,set}` reads and changes them, and the reconciler reads them each tick so a change takes effect without a restart. The default is five supervisor-actioned restarts within thirty minutes — loose enough that a container taking seconds to crash gets several chances across a deploy, tight enough that persistent flapping surfaces within an operator's working session. `threshold` is floored at 2 (at 1, every rescheduled container trips) and `window_secs` at 60 (below that is shorter than the pacing systemd already applies between attempts).
+- **Restart history is its own surface**, `/restarts/list`, with a per-instance summary folded into `app.describe` so an operator sees the count without going looking. The web route is `/restarts`, reachable from the navbar and from a per-instance chip on an app's resource table.

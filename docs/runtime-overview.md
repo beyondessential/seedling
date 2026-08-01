@@ -22,9 +22,9 @@ Steps 1–3 update the runtime's model of the world.
 Step 4 advances scripted orchestration.
 Steps 5–8 change the world.
 
-## Three Histories
+## Four Histories
 
-The runtime maintains three distinct categories of persistent records:
+The runtime maintains four distinct categories of persistent records:
 
 ### World Observation History
 
@@ -45,12 +45,25 @@ Examples:
 - A container exited and `OnTerminate=Recreate`, so a replacement was started.
 - Scale requires 2 replicas but only 1 was observed running, so another was started.
 - Caddy became unreachable, so its entire configuration was rebuilt.
-- A container has crash-looped 5 times in 60 seconds, so the runtime is backing off.
+- A crash-looping container reached the start limit, so the runtime stopped auto-recovering it.
 
 This log enables:
 - **Auditability**: operators can review what the runtime did autonomously.
 - **Rate limiting and backoff**: the runtime can detect repeated failures and avoid tight restart loops.
-- **Fault detection**: patterns like crash-looping or persistent convergence failures are derived from this log, and result in faults filed for external intervention.
+- **Fault detection**: persistent convergence failures are derived from this log, and result in faults filed for external intervention.
+
+### Restart History
+
+A record of every container restart, one row per attempt: which instance, when, the exit status of the run that ended where the platform reports one, and whether the platform's supervisor actioned the restart or the runtime initiated it.
+
+Restarts cannot be counted by watching container state. A container that goes down and comes back between two observation ticks looks running at both ends. On Linux the runtime instead reads systemd's own restart counter and records the difference, so what is recorded does not depend on how often the runtime looks.
+
+This log enables:
+- **Crash-loop detection**: a `crash_loop` fault is filed once an instance's supervisor-actioned restarts within the configured window reach the configured threshold. That threshold and window are operator-settable, because the judgement of what counts as flapping is an operational one.
+- **Seeing sub-threshold flapping**: a container that crashes twice a day forever never exhausts systemd's own start limit, so before this history existed it was silent — no fault, no record, nothing to query.
+- **Diagnosis**: the per-attempt exit statuses say whether a workload is being OOM-killed, exiting on a config error, or dying on a signal.
+
+Restarts the runtime initiates — rolling updates, health-check replacements — are recorded but excluded from the rate, so a rollout never reads as a crash burst. Records are bounded per instance rather than globally: a hard crash loop produces rows fastest exactly when they are most wanted.
 
 ### Action Execution Log
 
@@ -149,7 +162,7 @@ They are surfaced to human or agentic operators through the operator interface (
 
 Examples of faults:
 - A barrier deadline expires: the action closure expected a resource to reach a state within N seconds, and it didn't.
-- Crash-looping: a container repeatedly exits shortly after starting, and backoff has been exhausted.
+- Crash-looping: an instance's recorded restart rate reached its threshold, or the supervisor gave up restarting it.
 - Permanent divergence: a resource cannot be created (e.g. image doesn't exist, port is occupied by an external process).
 
 ## Resource Identity
