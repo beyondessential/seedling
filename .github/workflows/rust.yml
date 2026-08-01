@@ -80,8 +80,11 @@ jobs:
         run: cargo fmt -p seedling-spikes --check
       - name: cargo clippy
         run: cargo clippy -p seedling-spikes --all-targets --locked -- -D warnings
+      # --nocapture so the harnesses' recorded observations reach the log: some
+      # of the S6 tests answer open spike questions by recording rather than
+      # asserting, and captured output would discard the answer.
       - name: cargo test
-        run: cargo test -p seedling-spikes --all-targets --locked
+        run: cargo test -p seedling-spikes --all-targets --locked -- --nocapture
 
   rust-pass:
     name: Rust pass
