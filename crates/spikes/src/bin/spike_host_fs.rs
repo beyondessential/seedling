@@ -405,4 +405,127 @@ mod imp {
         let _ = fs::remove_dir_all(&segments);
         Ok(())
     }
+
+    /// The experiments that need no container, so they can run on a hosted
+    /// Windows CI runner rather than waiting for a real host. Containers are
+    /// not available on hosted runners at all, so everything in Q1 from
+    /// experiment 3 on stays in the binary.
+    ///
+    /// These assert only the properties the design actually rests on, and
+    /// merely record the rest: a spike's job is to discover, but once a
+    /// discovery is load-bearing it is worth a test that fails loudly when a
+    /// future Windows release changes it.
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn test_dir(name: &str) -> PathBuf {
+            let dir = std::env::temp_dir().join(format!("seedling-spike-test-{name}"));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).expect("create test dir");
+            dir
+        }
+
+        /// wlog[retain.rollover] puts segment rollover in the log writer
+        /// because another process cannot take an actively written segment
+        /// away from it. If this ever passes, seedlingd could own rollover
+        /// too and the writer gets simpler.
+        #[test]
+        fn active_segment_resists_external_rename_and_delete() {
+            let dir = test_dir("no-share-delete");
+            let seg = dir.join("0001.jsonl");
+            let renamed = dir.join("0001.renamed.jsonl");
+
+            let mut w = open_writer(&seg, FILE_SHARE_READ | FILE_SHARE_WRITE).expect("open writer");
+            writeln!(w, "{{\"seq\":1}}").expect("append");
+            w.flush().expect("flush");
+
+            let (rename_ok, delete_ok) = try_external_ops(&seg, &renamed);
+            assert!(
+                !rename_ok && !delete_ok,
+                "an active segment was renamed ({rename_ok}) or deleted ({delete_ok}) by another \
+                 opener without FILE_SHARE_DELETE — wlog[retain.rollover] assumes neither is \
+                 possible, so the rotation split can be revisited"
+            );
+
+            drop(w);
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        /// wlog[read.follow] requires that following a segment never blocks
+        /// the producer appending to it.
+        #[test]
+        fn follow_reader_does_not_block_appends() {
+            let dir = test_dir("follow");
+            let seg = dir.join("0003.jsonl");
+
+            let mut w = open_writer(&seg, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .expect("open writer");
+            writeln!(w, "{{\"seq\":1}}").expect("first append");
+            w.flush().expect("flush");
+
+            let mut reader = File::open(&seg).expect("a reader must be able to open the segment");
+            let mut buf = String::new();
+            reader.read_to_string(&mut buf).expect("read");
+            assert!(buf.contains("\"seq\":1"), "reader saw no records");
+
+            writeln!(w, "{{\"seq\":2}}").expect(
+                "appending while a reader holds the segment failed — wlog[read.follow] needs \
+                 revisiting before the log store is built on it",
+            );
+            w.flush().expect("flush after read");
+
+            buf.clear();
+            reader.read_to_string(&mut buf).expect("read again");
+            assert!(
+                buf.contains("\"seq\":2"),
+                "a follow reader did not see a record appended after it opened the segment"
+            );
+
+            drop(w);
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        /// wcr[identity.workload] states that a container's account is not a
+        /// host principal. If the name ever resolves, the reasoning behind
+        /// wcr[volume.boundary] and wcr[volume.host-exposure] changes.
+        #[test]
+        fn container_account_name_does_not_resolve_on_the_host() {
+            let dir = test_dir("sid-resolve");
+            let path = dir.to_string_lossy().into_owned();
+
+            let (by_name, out) =
+                sh("icacls", &[&path, "/grant", "ContainerUser:(R)"]).expect("run icacls");
+            assert!(
+                !by_name,
+                "the host resolved the container account by name ({}) — wcr[identity.workload] \
+                 says it cannot, and the volume boundary rules depend on that",
+                first_line(&out)
+            );
+
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        /// Whether a literal container SID is accepted in a host ACL is the
+        /// open half of Q1. It is recorded rather than asserted: the answer
+        /// only matters together with the container-side access test, which
+        /// cannot run on a hosted runner.
+        #[test]
+        fn literal_container_sid_in_a_host_acl_is_recorded() {
+            let dir = test_dir("sid-literal");
+            let path = dir.to_string_lossy().into_owned();
+
+            let grant = format!("*{CONTAINER_USER_SID}:(OI)(CI)(M)");
+            let (accepted, out) = sh("icacls", &[&path, "/grant", &grant]).expect("run icacls");
+            record("literal container SID accepted by icacls", accepted);
+            observe(first_line(&out));
+
+            if accepted {
+                let (_, listing) = sh("icacls", &[&path]).expect("read back");
+                record("ACE persisted", listing.contains(CONTAINER_USER_SID));
+            }
+
+            let _ = fs::remove_dir_all(&dir);
+        }
+    }
 }

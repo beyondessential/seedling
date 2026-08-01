@@ -4,6 +4,14 @@ Two questions about how the host filesystem behaves at the container boundary. T
 
 Environment: a Windows Server 2019+ host with the Containers feature, containerd and `ctr` installed, and a base image matching the host build. Run elevated — `icacls` and `ctr` both need it. Harness: `spike-host-fs`.
 
+## What CI already answers
+
+Containers cannot run on a hosted Windows runner — container operations are supported only on Linux runners, and a hosted Windows runner can build a Windows image but not pull or run one. So every experiment below that needs a container waits for a real host.
+
+The rest does not need one. Q2 is pure filesystem, and Q1's first two experiments are `icacls` against a temporary directory, so both run as tests in the Windows CI job on every push. Three of them assert, because the design rests on their answers and a future Windows release changing one should fail loudly rather than be discovered during implementation: that an actively written segment resists an external rename and delete, that a reader following a segment cannot block an append, and that a container account name does not resolve on the host. The fourth — whether a literal container SID is accepted in a host ACL — only records, because its answer is meaningful only alongside the container-side access test that CI cannot run.
+
+That leaves the genuinely host-dependent part small: whether a container process is granted access by an ACE naming its SID, and whether two containers are indistinguishable to it.
+
 ## Q1: can a host ACL name a container account?
 
 `wcr[volume.boundary]` states that a volume's host permissions cannot distinguish one instance from another, because a container's account is not a host principal. That follows from Microsoft's guidance, which is to grant a well-known group such as `Authenticated Users` on a bind-mounted directory since the container identities "exist only within the container context, not on the host machine".
