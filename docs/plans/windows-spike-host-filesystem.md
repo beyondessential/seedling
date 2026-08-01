@@ -12,6 +12,16 @@ The rest does not need one. Q2 is pure filesystem, and Q1's first two experiment
 
 That leaves the genuinely host-dependent part small: whether a container process is granted access by an ACE naming its SID, and whether two containers are indistinguishable to it.
 
+### First run, Windows Server 2022 runner
+
+All four passed. The three assertions held, so the premises they guard are confirmed rather than assumed: an actively written segment resists an external rename and delete, a follow reader does not block an append, and a container account name does not resolve on the host.
+
+The recorded one came back **`literal container SID accepted by icacls: false`** — "Successfully processed 0 files; Failed processing 1 files".
+
+That is a real result but a narrower one than Q1 asks for, and the narrowness is this harness's fault. `icacls` was chosen over the Win32 ACL API to avoid writing binding code that could not be compiled anywhere at the time; the cost is that a refusal cannot be attributed. It may mean the host rejects an ACE for a principal it cannot resolve, which would answer Q1 negatively — or it may mean only that `icacls` will not take an unresolvable SID while `SetNamedSecurityInfo` would, or that the container SIDs are not registered on a runner without the Containers feature, or that the SID constants are wrong.
+
+So Q1's first half is not settled, and its next attempt should go through the ACL API with an explicit SID rather than through `icacls`, on a host with the Containers feature present. Until then the lean stands where the spec already puts it: `wcr[volume.host-exposure]` concedes the broad grant, and nothing yet shows it can be narrowed.
+
 ## Q1: can a host ACL name a container account?
 
 `wcr[volume.boundary]` states that a volume's host permissions cannot distinguish one instance from another, because a container's account is not a host principal. That follows from Microsoft's guidance, which is to grant a well-known group such as `Authenticated Users` on a bind-mounted directory since the container identities "exist only within the container context, not on the host machine".
