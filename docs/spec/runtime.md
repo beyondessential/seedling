@@ -822,6 +822,23 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > journal field that identifies the infrastructure component so that log queries can
 > target infrastructure logs independently of workload logs.
 
+> r[actuate.breadcrumb]
+> The runtime must record its own action breadcrumbs into the same log sink that
+> carries container output, tagged with the same app, resource kind, resource, and
+> instance fields. A breadcrumb names the `rt.*` primitive it records — or a synthetic
+> kind for runtime events such as unit creation and replay boundaries — and, where the
+> script surfaced one, the call site.
+>
+> Sharing the sink and the tagging scheme is the requirement, not an implementation
+> convenience: a log query at any granularity must return breadcrumbs and container
+> output interleaved in time order, so that an operator reading an app's logs sees the
+> closure's call sequence against the output it produced.
+
+> r[actuate.breadcrumb.replay]
+> A breadcrumb is emitted on a call's first fresh execution and not on replays of that
+> call, so a barrier-suspended operation does not flood the log with each pass. Each
+> replay pass instead surfaces a single boundary breadcrumb.
+
 > r[actuate.ingress.warm-certs]
 > When an action closure invokes [`rt.warm_certs`](#l--rt.warm-certs) with a selection that contains TLS-terminating ingresses, the runtime must initiate certificate acquisition for those ingresses' hostnames without exposing the ingresses to live traffic.
 > A typical implementation pushes a partial proxy configuration that requests certificate acquisition while not routing requests to any backend; once the certificate is `valid`, it is served from the proxy's cache when the same ingress is later started for real.
