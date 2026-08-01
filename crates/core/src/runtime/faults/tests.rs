@@ -311,16 +311,14 @@ fn clear_fault_emits_fault_cleared_event() {
     clear_fault(&db, &id, &app("myapp")).expect("clear");
 
     // Drain again looking for our FaultCleared, skipping any interleaved
-    // events from other parallel tests. The id guard is load-bearing: the
-    // sender is global, several sibling tests clear faults of their own, and
-    // without it the first FaultCleared from any of them is asserted against
-    // this test's id.
+    // events from other parallel tests.
     let mut found = false;
     loop {
         match rx.try_recv() {
             Ok(seedling_protocol::events::OiEvent::FaultCleared {
                 id: eid, app, kind, ..
-            }) if eid == id => {
+            }) => {
+                assert_eq!(eid, id);
                 assert_eq!(app, "myapp");
                 assert_eq!(kind, "script_error");
                 found = true;
