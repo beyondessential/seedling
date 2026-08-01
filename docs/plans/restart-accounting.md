@@ -45,10 +45,10 @@ Reading two extra properties per pod instance per tick is one additional D-Bus r
 
 | Area | File |
 |---|---|
-| Migration | `crates/core/src/runtime/db.rs`, `db/migrations/v54.sql` |
-| Service proxy, unit properties | `crates/core/src/system/systemd.rs`, `system/types.rs` (`UnitState`) |
+| Migration | `crates/core/src/runtime/db.rs`, `crates/core/src/runtime/db/migrations/v54.sql` |
+| Service proxy, unit properties | `crates/core/src/system/systemd.rs`, `crates/core/src/system/types.rs` (`UnitState`) |
 | Observation | `crates/core/src/system/observer.rs` (`observe_pod_instance`) |
-| Crash-loop detection | `crates/core/src/system/reconcile/pods.rs`, `reconcile/faults.rs` |
+| Crash-loop detection | `crates/core/src/system/reconcile/pods.rs`, `crates/core/src/system/reconcile/faults.rs` |
 | Operator interface | `docs/spec/interface.md`, `crates/protocol`, `crates/core/src/oi/` |
 | CLI and web | `crates/ctl`, `crates/web` — the restart history needs a CLI command, not only a UI panel |
 
@@ -61,6 +61,8 @@ Reading two extra properties per pod instance per tick is one additional D-Bus r
 - Per-instance cap holds under a sustained crash loop.
 
 ## What Windows inherits
+
+The Windows container runtime is specified in `docs/spec/runtime-windows-containers.md`, not yet in-tree — it lands with #107, and the `wcr[...]` rule below is unresolvable until then.
 
 `wcr[shim.ownership]` drops its restart clause; the reconciler owns restart, pacing, and the start limit, and records each attempt at the point it actions one — no counter inference needed. Two Windows-specific requirements come with it: the exit observation must be folded into history before the exited task is reaped (containerd requires deletion before the container ID is reusable), and the daemon-down gap — a workload that crashes while seedlingd is down stays down until it returns, bounded by SCM restart — is stated as a property rather than left to be discovered.
 
