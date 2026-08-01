@@ -1,6 +1,6 @@
 # Windows Container Runtime: Plan, Open Questions, Spikes
 
-Companion to the draft `runtime-windows-containers.md`. It records the implementation approach, the artifact format, the open questions, and the spikes. The spec stays at behaviour altitude; the choices here are how that behaviour is realised.
+Companion to `runtime-windows-containers.md`. It records the implementation approach, the artifact format, the open questions, and the spikes. The spec stays at behaviour altitude; the choices here are how that behaviour is realised.
 
 ## Shared tracks (not restated here)
 
@@ -11,16 +11,16 @@ Companion to the draft `runtime-windows-containers.md`. It records the implement
 
 A workload ships as an ordinary OCI image whose layers carry only the workload's own filesystem — no OS base baked in. The runtime completes it for execution by stacking its single [base](../spec/runtime-windows-containers.md) beneath the artifact's layers, exactly as a container platform stacks a base under app layers.
 
-Why this over shipping a filesystem blob (e.g. a VHDX):
+The format's properties:
 
-- **Content-addressed layers** give layer dedup and incremental pulls — successive workload versions transfer only their diff, which matters over constrained field links. A monolithic blob re-transfers in full every version.
-- It is an **ordinary OCI image**, so build, push, signing, replication, and GC are standard registry tooling rather than a bespoke pack pipeline.
-- **Composition is the platform-native layer-stack operation**, not a blob-to-layer materialisation step.
-- A base-less image carries no OS, so "stack the runtime's base beneath it" is the natural completion and no base is redundantly shipped. Files land at real paths, so there is no root-directory indirection.
+- **Content-addressed layers** give layer dedup and incremental pulls — successive workload versions transfer only their diff, which matters over constrained field links.
+- It is an **ordinary OCI image**, so build, push, signing, replication, and GC are standard registry tooling.
+- **Composition is the platform-native layer-stack operation.**
+- Files land at real paths, and the runtime supplies the OS base, so the artifact carries no base and needs no path indirection.
 
-The correctness constraint is **base-independence**: restacking is sound when the layers only add the workload's own files and assume nothing about the base build (no mutation of system files, registry, COM, or services). `FROM scratch` enforces this; it also matches the target workloads (a directory of self-contained files, e.g. a bundled Node app). Workloads needing OS-level install steps do not fit and are out of scope for the format.
+The correctness constraint is **base-independence**: restacking is sound when the layers only add the workload's own files and assume nothing about the base build (no mutation of system files, registry, COM, or services). `FROM scratch` enforces this, and matches the target workloads (a directory of self-contained files, e.g. a bundled Node app). Workloads needing OS-level install steps do not fit and are out of scope.
 
-The producer builds the image **base-less** (`FROM scratch`), emitting the workload's files as Windows-format layers (Windows file metadata: ACLs, attributes). A tempting shortcut — build `FROM mcr/...` normally and rely on the push omitting the base as a non-distributable foreign layer — does not hold: MCR now publishes the nanoserver and servercore layers as ordinary distributable layers (`application/vnd.docker.image.rootfs.diff.tar.gzip`, no `urls`), so a push uploads the base too and the runtime would stack its base under an image that already carries one. Building base-less avoids that, and drops any host-build↔base-tag coupling from the build: a `FROM scratch` layer is a diff over nothing, so it names no base version to match against the host.
+The producer builds the image **base-less** (`FROM scratch`), emitting the workload's files as Windows-format layers (Windows file metadata: ACLs, attributes). A `FROM scratch` layer is a diff over nothing, so it names no base version; the runtime supplies the single build-matched base at composition.
 
 ## Implementation approach: containerd + runhcs shim + Windows snapshotter
 
@@ -74,7 +74,7 @@ Whatever a field host runs today is migrated by packaging it as an ordinary arti
 
 ## Cost ledger
 
-- **Footprint** — the second-daemon objection is dissolved: containerd is a seedling-managed infra dependency, absent on idle hosts and restartable without workload loss, so idle steady-state is still one daemon.
+- **Footprint** — containerd is a seedling-managed infra dependency, absent on idle hosts and restartable without workload loss, so idle steady-state is one daemon.
 - **Seam** — Rust↔containerd is gRPC (mature-enough client) rather than in-process.
 - **Compatibility matrix** — containerd × hcsshim × host build must be tracked fleet-wide, but it is a Microsoft-supported matrix surfaced by doctor.
 - **Glue** — restack via synthesised merged descriptor (Q2) and seedling-owned HNS networking are ours to build; the latter is unavoidable in any option.
