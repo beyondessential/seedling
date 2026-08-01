@@ -19,3 +19,11 @@ windows = { version = "0.62.2", features = [
 [[bin]]
 name = "spike-containerd"
 path = "src/bin/spike_containerd.rs"
+
+# No `windows` dependency: the sharing mode goes through
+# OpenOptionsExt::share_mode, which is the same dwShareMode CreateFileW takes,
+# and the ACL and container work is icacls/ctr because the questions are about
+# platform behaviour rather than an API binding.
+[[bin]]
+name = "spike-host-fs"
+path = "src/bin/spike_host_fs.rs"

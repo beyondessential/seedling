@@ -65,6 +65,7 @@ The `io.containerd.runhcs.v1` shim is the per-instance supervisor — it *is* th
 - **S3. Networking on a worst-case image** (field disk image) — per-instance compartment and endpoint; service addresses; mount graph compiled to compartment-boundary enforcement with default-deny; ingress host public-port publishing; per-compartment resolver DNS; coexistence with field AV/EDR. Decides Q3.
 - **S4. Exec + ConPTY + volume shells** — run an action process inside a running container; ConPTY shell attach and resize; volume shells via a container with volumes mapped.
 - **S5. Stop delivery** — console-control-event and named-event delivery to a workload inside its container; exit-code recording.
+- **S6. Host filesystem behaviour under containers** — whether a host ACL can name a container account's SID even though the name does not resolve (which sets the floor for `wcr[volume.host-exposure]`), and what a second process can do to a file a writer holds open (which is what puts rollover in the log writer). See `windows-spike-host-filesystem.md`; harness `spike-host-fs`.
 
 ## Rollout
 
