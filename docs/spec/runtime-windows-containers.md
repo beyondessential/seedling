@@ -1,5 +1,9 @@
 The Seedling Windows Container Runtime is an implementation of the Seedling runtime for Windows Server hosts. It runs each workload as a process-isolated Windows container, composed at image-preparation time from a single OS base and the workload's artifact. It conforms to the operator interface spec and the language spec, and to the portable runtime spec (reconciliation, generations, lifecycle operations, barriers, history, faults, scheduling); this document defines the Windows infrastructure those portable semantics run on. Rule IDs use the `wcr[...]` namespace.
 
+Where this document is silent, the portable runtime spec applies unchanged. Where a portable rule (`r[...]`) is cited as replaced, the replacement here is normative for this runtime and the cited rule does not apply to it.
+
+Rules marked `[spike]` name a mechanism not yet confirmed on the platform; the companion plan records which spike settles each one, and what the fallback is if it does not hold.
+
 # Platform
 
 > wcr[platform.floor]
@@ -11,21 +15,21 @@ The Seedling Windows Container Runtime is an implementation of the Seedling runt
 > The runtime uses a single OS base image for all workloads, pulled from Microsoft's container registry and cached in the image store. The base pulled matches the host's OS build, so process isolation applies. When a host update changes the build, the runtime pulls the matching base for the new build.
 
 > wcr[compose.chain]
-> When an app image is prepared into the store, the runtime composes a runnable layer chain by stacking the [base](#wcr--base.image) layers beneath the artifact's layers. Starting an instance stacks a discardable scratch layer over the chain; the composed chain is shared across every instance and generation of that image.
+> When an app image is prepared into the store, the runtime composes a runnable layer chain by stacking the [base](#wcr--base.image) layers beneath the artifact's layers. Starting an instance stacks a discardable scratch layer over the chain; the composed chain is shared across every instance and generation of that image. `[spike]`
 
 # Containers
 
 > wcr[engine.lifecycle]
-> The runtime runs each instance as a process-isolated container through containerd and its runhcs shim. containerd is a runtime-managed infrastructure dependency: seedlingd starts it ahead of the workloads and infrastructure that need it, and stops it once no workload remains, so an idle host runs only seedlingd.
+> The runtime runs each instance as a process-isolated container through containerd and its runhcs shim. containerd is a runtime-managed infrastructure dependency: seedlingd starts it ahead of the workloads and infrastructure that need it, and stops it once no workload remains, so an idle host runs only seedlingd. `[spike]`
 
 > wcr[container.model]
 > Each instance runs as one process-isolated container enclosing the workload's process tree, its [network compartment](#wcr--net.compartment), its mapped volumes, and its scratch layer. Stopping the container stops everything within it.
 
 > wcr[shim.ownership]
-> Each container is supervised by its runhcs shim, which owns the container and restarts the workload per policy on exit. The shim runs independently of containerd and seedlingd: a workload keeps running while either restarts, and a restarting containerd re-attaches to its shims. A shim's death stops its container, which seedlingd reconciles as an observed exit.
+> Each container is supervised by its runhcs shim, which owns the container and restarts the workload per policy on exit. The shim runs independently of containerd and seedlingd: a workload keeps running while either restarts, and a restarting containerd re-attaches to its shims. A shim's death stops its container, which seedlingd reconciles as an observed exit. `[spike]`
 
 > wcr[daemon.reconnect]
-> On restart, seedlingd reconnects to containerd and folds the container state and the exit events it reports into the observation history.
+> On restart, seedlingd reconnects to containerd and folds the container state and the exit events it reports into the observation history. `[spike]`
 
 # Networking
 
@@ -33,7 +37,7 @@ The Seedling Windows Container Runtime is an implementation of the Seedling runt
 > Each instance's container has its own network compartment on the Seedling network, satisfying `r[infra.pod.network]`. The workload binds its listeners on all interfaces within its compartment, as a container conventionally does.
 
 > wcr[net.dataplane]
-> Service-address and mount-graph reachability (`r[infra.dataplane.service-dnat]`, `r[infra.dataplane.mount-dnat]`, `r[infra.dataplane.forward-policy]`) is realised at the compartment boundary: an instance's service address routes to its container's endpoint, a mount from A to B admits traffic from A's compartment to B's service address, and traffic outside the compiled mount graph is refused. Because the policy is attached to the compartment from the host side, the workload cannot alter its own reachability. The service address routes to the ready backing instance, so a replacement generation receives traffic once ready (`r[update.rolling]`, `r[autonomous.healthcheck-replace]`).
+> Service-address and mount-graph reachability (`r[infra.dataplane.service-dnat]`, `r[infra.dataplane.mount-dnat]`, `r[infra.dataplane.forward-policy]`) is realised at the compartment boundary: an instance's service address routes to its container's endpoint, a mount from A to B admits traffic from A's compartment to B's service address, and traffic outside the compiled mount graph is refused. Because the policy is attached to the compartment from the host side, the workload cannot alter its own reachability. The service address routes to the ready backing instance, so a replacement generation receives traffic once ready (`r[update.rolling]`, `r[autonomous.healthcheck-replace]`). `[spike]`
 
 > wcr[net.dns]
 > Each compartment resolves the Seedling zone through the [resolver](#wcr--infra.resolver) (`r[infra.pod.dns]`); other resolution follows the host's configuration.
@@ -62,6 +66,8 @@ The Seedling Windows Container Runtime is an implementation of the Seedling runt
 > - `ctrl_break` / `ctrl_c`: the shim delivers a console control event to the workload's process group.
 > - `named_event`: the shim passes an event name in the environment and signals that event; a sibling reload event may be declared for reload.
 > - `terminate`: the container is terminated directly.
+>
+> `[spike]` for `ctrl_break` / `ctrl_c` and `named_event`: both deliver across the container boundary, and a container has its own object namespace. Where delivery cannot be made to work, the method degrades to `terminate` and the divergence is reported, rather than a stop request being silently dropped.
 
 > wcr[stop.ladder]
 > The stop sequence delivers the declared [stop method](#wcr--stop.methods), waits `stop_timeout` (`l[container.stop-signal]`, `l[container.stop-timeout]`), then terminates the container.
@@ -87,7 +93,7 @@ The Seedling Windows Container Runtime is an implementation of the Seedling runt
 > An `Executed` command runs as a new process inside the target instance's container, under the workload's account, environment, and working directory. It shares the container's lifetime: stopping the instance ends the command.
 
 > wcr[shell.session]
-> A shell session runs a process inside the target's container under a ConPTY pseudoconsole (`i[stream.shell]`): operator input drives the console input, console output drives the session's output stream, and resize requests resize the console. ConPTY merges the streams, so the session's stderr may carry nothing; clients must not block on it.
+> A shell session runs a process inside the target's container under a ConPTY pseudoconsole (`i[stream.shell]`): operator input drives the console input, console output drives the session's output stream, and resize requests resize the console. ConPTY merges the streams, so the session's stderr may carry nothing; clients must not block on it. `[spike]`
 
 > wcr[shell.volume]
 > A volume shell runs a container with the selected volumes mapped in, named by display name, launched with that directory as its working directory (`i[volumes.shell]`). Read-only and read-write sessions differ only in how the volumes are mapped.
