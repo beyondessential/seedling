@@ -89,6 +89,12 @@ Absent specification bugs, anything that is not defined here is either defined i
 > If that object contains a `"method"` key it is dispatched as a control request per [stream.control](#i--stream.control).
 > If it contains a `"forward"` key it is dispatched as a port forward data stream per [stream.forward](#i--stream.forward).
 
+> i[stream.subscribe]
+> A subscription-style request — one whose success causes the server to open a server-initiated unidirectional stream carrying the subscribed data — is answered on the bidirectional stream exactly as any other control request, before any unidirectional stream is opened.
+> A response carrying an error terminates the request: the server opens no unidirectional stream, and the connection remains usable for further requests.
+> Clients must therefore read and classify the response envelope before waiting for the unidirectional stream, must treat closure of the bidirectional stream without a response envelope as an error, must surface the error envelope's `code` and `message` to their caller rather than discarding them, and must not wait indefinitely for a unidirectional stream that a server which answered successfully may still fail to open.
+> The subscription-style requests are [events.subscribe](#i--event.subscribe) and [logs.stream](#i--logs.stream).
+
 > i[stream.events]
 > After a client sends a `/events/subscribe` request, the server opens one server-initiated unidirectional QUIC stream per connection and pushes events as newline-delimited JSON objects for the duration of the connection.
 
