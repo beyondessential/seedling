@@ -33,6 +33,38 @@ export interface ResourceInstance {
   display_name: string;
   lifecycle: string;
   transition_time?: string;
+  restarts?: RestartSummary | null;
+}
+
+export type RestartInitiator = "supervisor" | "runtime";
+
+export type RestartExitKind = "exited" | "signalled" | "dumped";
+
+export interface RestartRecord {
+  id: number;
+  app: string;
+  instance_id: string;
+  resource_type?: string | null;
+  resource_name?: string | null;
+  generation?: number | null;
+  timestamp: string;
+  initiator: RestartInitiator;
+  exit_code?: number | null;
+  exit_kind?: RestartExitKind | null;
+}
+
+export interface RestartSettings {
+  threshold: number;
+  window_secs: number;
+}
+
+export interface RestartSummary {
+  recent: number;
+  window_secs: number;
+  total: number;
+  last_at?: string | null;
+  last_exit_code?: number | null;
+  last_exit_kind?: RestartExitKind | null;
 }
 
 export interface ScaleBounds {

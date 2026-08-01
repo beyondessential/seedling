@@ -10,6 +10,7 @@ import PauseIcon from "@mui/icons-material/Pause";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import RemoveIcon from "@mui/icons-material/Remove";
+import RestartAltIcon from "@mui/icons-material/RestartAlt";
 import RestoreIcon from "@mui/icons-material/Restore";
 import TerminalIcon from "@mui/icons-material/Terminal";
 import VisibilityIcon from "@mui/icons-material/Visibility";
@@ -89,9 +90,44 @@ import type {
   ImageSummary,
   InstallRequirement,
   ResourceDef,
+  RestartSummary,
   SeedlingEvent,
   SiteVolume,
 } from "../lib/types";
+
+/** Restart count for an instance, linking through to its full history. The
+ *  count shown is the one the crash-loop rate is measured against, so it goes
+ *  warning-coloured as soon as any supervisor restart lands in the window. */
+// w[impl routes.restarts]
+function RestartIndicator({
+  instanceId,
+  restarts,
+}: {
+  instanceId: string;
+  restarts: RestartSummary;
+}) {
+  const title =
+    `${restarts.recent} supervisor restart${restarts.recent === 1 ? "" : "s"} ` +
+    `in the last ${restarts.window_secs / 60} minutes · ` +
+    `${restarts.total} recorded in total` +
+    (restarts.last_at
+      ? ` · last ${new Date(restarts.last_at).toLocaleString()}`
+      : "");
+  return (
+    <Tooltip title={title}>
+      <Chip
+        icon={<RestartAltIcon sx={{ fontSize: 14 }} />}
+        label={restarts.recent}
+        size="small"
+        variant="outlined"
+        color={restarts.recent > 0 ? "warning" : "default"}
+        component={Link}
+        to={`/restarts?instance=${instanceId}`}
+        clickable
+      />
+    </Tooltip>
+  );
+}
 
 function lifecycleColor(
   state: string,
@@ -725,6 +761,12 @@ function ResourcesSection({
                               lifecycle={inst.lifecycle}
                               instanceId={inst.id}
                               faults={r.faults}
+                            />
+                          )}
+                          {inst.restarts && (
+                            <RestartIndicator
+                              instanceId={inst.id}
+                              restarts={inst.restarts}
                             />
                           )}
                           <Chip
