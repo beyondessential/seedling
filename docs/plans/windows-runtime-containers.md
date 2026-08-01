@@ -9,7 +9,7 @@ Companion to `runtime-windows-containers.md`. It records the implementation appr
 
 ## Artifact format: base-less OCI image, composed onto the runtime's base
 
-A workload ships as an ordinary OCI image whose layers carry only the workload's own filesystem — no OS base baked in. The runtime completes it for execution by stacking its single [base](../spec/runtime-windows-containers.md) beneath the artifact's layers, exactly as a container platform stacks a base under app layers.
+A workload ships as an ordinary OCI image whose layers carry only the workload's own filesystem — no OS base baked in. The runtime completes it for execution by stacking its single [base](../spec/runtime-windows-containers.md#wcr--base.image) beneath the artifact's layers, exactly as a container platform stacks a base under app layers.
 
 The format's properties:
 
@@ -21,6 +21,11 @@ The format's properties:
 The correctness constraint is **base-independence**: restacking is sound when the layers only add the workload's own files and assume nothing about the base build (no mutation of system files, registry, COM, or services). `FROM scratch` enforces this, and matches the target workloads (a directory of self-contained files, e.g. a bundled Node app). Workloads needing OS-level install steps do not fit and are out of scope.
 
 The producer builds the image **base-less** (`FROM scratch`), emitting the workload's files as Windows-format layers (Windows file metadata: ACLs, attributes). A `FROM scratch` layer is a diff over nothing, so it names no base version; the runtime supplies the single build-matched base at composition.
+
+Two things this format is chosen over, recorded so they are not re-proposed:
+
+- **A filesystem blob (a VHDX in an OCI artifact).** A monolithic blob re-transfers in full every version, where content-addressed layers transfer only the diff — the constraint that matters over field links. It also needs a bespoke pack pipeline for build, signing, and replication, and a blob-to-layer materialisation step at prepare time, where composition is the platform-native operation.
+- **A stock `FROM mcr/...` build relying on the push to omit the base.** This looked like the zero-tooling path, on the assumption that Windows base layers are foreign and non-distributable so a push uploads app layers only. That no longer holds: MCR publishes the nanoserver and servercore layers as ordinary distributable layers (`application/vnd.docker.image.rootfs.diff.tar.gzip`, no `urls`), so the push uploads the base and the runtime would stack its base under an image that already carries one. Re-verify before reopening; this is a registry-side behaviour that has changed once already.
 
 ## Implementation approach: containerd + runhcs shim + Windows snapshotter
 
