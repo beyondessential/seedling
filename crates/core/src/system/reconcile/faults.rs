@@ -1,7 +1,7 @@
 use seedling_protocol::names::AppName;
 
 use super::{Reconciler, pods, volumes};
-use crate::runtime::{faults, identity::ResourceInstance};
+use crate::runtime::{db::Db, faults, identity::ResourceInstance};
 
 impl Reconciler {
     /// File a fault scoped to a specific resource instance, if no active fault
@@ -380,66 +380,8 @@ impl Reconciler {
         let app = app.clone();
         let crash_loops: Vec<pods::CrashLoop> = update.crash_loops.to_vec();
         let unit_healthy: Vec<ResourceInstance> = update.unit_healthy.to_vec();
-        self.db.call(move |db| {
-            for crash_loop in &crash_loops {
-                let instance = &crash_loop.instance;
-                let inst_hex = instance.id.to_hex();
-                let kind_str = format!("{:?}", instance.kind).to_lowercase();
-                let already_filed = faults::list_active_faults(db, Some(&app))
-                    .unwrap_or_default()
-                    .iter()
-                    .any(|f| {
-                        f.kind == "crash_loop" && f.instance_id.as_deref() == Some(&inst_hex)
-                    });
-                if !already_filed {
-                    // The description names which trigger fired: a
-                    // rate-derived crash loop and one systemd has already
-                    // given up on need different operator responses.
-                    let desc = match crash_loop.cause {
-                        pods::CrashLoopCause::RestartRate { count, window_secs } => format!(
-                            "{} restarted {count} times in the last {} minutes. \
-                             Auto-recovery is paused until this fault is cleared.",
-                            instance.display_name,
-                            window_secs / 60,
-                        ),
-                        pods::CrashLoopCause::StartLimitHit => format!(
-                            "systemd hit start-limit for {}: too many restarts in window. \
-                             Auto-recovery is paused until this fault is cleared.",
-                            instance.display_name
-                        ),
-                    };
-                    if let Err(e) = faults::file_fault(
-                        db,
-                        &app,
-                        Some(&kind_str),
-                        instance.name.as_deref(),
-                        Some(&inst_hex),
-                        "crash_loop",
-                        &desc,
-                    ) {
-                        tracing::warn!(app = %app, instance = %inst_hex, "failed to file crash_loop fault: {e}");
-                    }
-                }
-            }
-            // Once the unit is back up healthy, clear any prior crash_loop
-            // fault — operator clearing the fault and the unit recovering
-            // are both valid paths out of this state.
-            for instance in &unit_healthy {
-                let inst_hex = instance.id.to_hex();
-                let cleared: Vec<_> = faults::list_active_faults(db, Some(&app))
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|f| {
-                        f.kind == "crash_loop" && f.instance_id.as_deref() == Some(&inst_hex)
-                    })
-                    .collect();
-                for f in cleared {
-                    if let Err(e) = faults::clear_fault(db, &f.id, &app) {
-                        tracing::warn!(app = %app, fault_id = %f.id, "failed to clear crash_loop fault: {e}");
-                    }
-                }
-            }
-        });
+        self.db
+            .call(move |db| apply_crash_loop_faults(db, &app, &crash_loops, &unit_healthy));
     }
 
     // r[impl fault.external-volume-unmapped]
@@ -1142,3 +1084,72 @@ impl Reconciler {
         }
     }
 }
+
+// r[impl fault.crash-loop]
+/// The database side of [`Reconciler::file_crash_loop_faults`], split out so
+/// the filing and clearing policy can be exercised against a database without
+/// standing up a reconciliation tick.
+pub(super) fn apply_crash_loop_faults(
+    db: &Db,
+    app: &AppName,
+    crash_loops: &[pods::CrashLoop],
+    unit_healthy: &[ResourceInstance],
+) {
+    for crash_loop in crash_loops {
+        let instance = &crash_loop.instance;
+        let inst_hex = instance.id.to_hex();
+        let kind_str = format!("{:?}", instance.kind).to_lowercase();
+        let already_filed = faults::list_active_faults(db, Some(app))
+            .unwrap_or_default()
+            .iter()
+            .any(|f| f.kind == "crash_loop" && f.instance_id.as_deref() == Some(&inst_hex));
+        if !already_filed {
+            // The description names which trigger fired: a rate-derived crash
+            // loop and one systemd has already given up on need different
+            // operator responses.
+            let desc = match crash_loop.cause {
+                pods::CrashLoopCause::RestartRate { count, window_secs } => format!(
+                    "{} restarted {count} times in the last {} minutes. \
+                     Auto-recovery is paused until this fault is cleared.",
+                    instance.display_name,
+                    window_secs / 60,
+                ),
+                pods::CrashLoopCause::StartLimitHit => format!(
+                    "systemd hit start-limit for {}: too many restarts in window. \
+                     Auto-recovery is paused until this fault is cleared.",
+                    instance.display_name
+                ),
+            };
+            if let Err(e) = faults::file_fault(
+                db,
+                app,
+                Some(&kind_str),
+                instance.name.as_deref(),
+                Some(&inst_hex),
+                "crash_loop",
+                &desc,
+            ) {
+                tracing::warn!(app = %app, instance = %inst_hex, "failed to file crash_loop fault: {e}");
+            }
+        }
+    }
+    // Once the unit is back up healthy, clear any prior crash_loop fault —
+    // operator clearing the fault and the unit recovering are both valid paths
+    // out of this state.
+    for instance in unit_healthy {
+        let inst_hex = instance.id.to_hex();
+        let cleared: Vec<_> = faults::list_active_faults(db, Some(app))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|f| f.kind == "crash_loop" && f.instance_id.as_deref() == Some(&inst_hex))
+            .collect();
+        for f in cleared {
+            if let Err(e) = faults::clear_fault(db, &f.id, app) {
+                tracing::warn!(app = %app, fault_id = %f.id, "failed to clear crash_loop fault: {e}");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod crash_loop_tests;
