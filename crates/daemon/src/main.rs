@@ -1020,6 +1020,19 @@ async fn main() {
     // OI server
     // ---------------------------------------------------------------------------
 
+    // r[impl canopy.settings.enabled] — the database is the source of truth
+    // across restarts; the in-memory mirror is what the relay's hot path reads.
+    let canopy_state = Arc::new(seedling_core::oi::canopy::CanopyState::new());
+    match db.call(seedling_core::runtime::canopy::get_settings) {
+        Ok(settings) => canopy_state.set_enabled(settings.enabled),
+        Err(e) => {
+            // Default to enabled rather than off: an unreadable setting must not
+            // silently stop a host reporting, which would look like the host
+            // being down rather than like a local fault.
+            tracing::warn!("cannot read the Canopy settings, assuming enabled: {e}");
+        }
+    }
+
     let oi_state = Arc::new(OiState {
         registry: Arc::clone(&registry),
         spki_fingerprint: std::sync::OnceLock::new(),
@@ -1031,6 +1044,7 @@ async fn main() {
         trusted_keys: seedling_core::oi::auth::new_trusted_keys(),
         shells,
         forwards: seedling_core::oi::forwards::ForwardRegistry::new(),
+        canopy: canopy_state,
         container_runtime: Arc::clone(&driver.container),
         driver: Arc::clone(&driver),
         node_prefix,
@@ -1141,6 +1155,10 @@ async fn main() {
             }
         });
     }
+
+    // r[impl canopy.report.schedule] — reports go quiet on their own when no
+    // client is offering to carry them, so this runs unconditionally.
+    let _canopy_report_handle = seedling_core::runtime::canopy::spawn(Arc::clone(&oi_state));
 
     // Spawn the reconciler + schedule ticker now that OiState is available.
     {

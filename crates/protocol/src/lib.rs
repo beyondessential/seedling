@@ -1,5 +1,6 @@
 pub mod actor;
 pub mod backup_actions;
+pub mod canopy;
 pub mod client;
 pub mod env;
 pub mod error;

@@ -142,23 +142,47 @@ jobs:
 
           DATA_DIR=/var/lib/seedling
           LOG_DIR=/var/log/seedling
+          BESTOOL_KEY=/etc/bestool/seedling.key
 
           mkdir -p "$DATA_DIR" "$LOG_DIR"
           chmod 750 "$DATA_DIR" "$LOG_DIR"
 
-          # Bootstrap the seedling-web identity on first install so enabling the
-          # web unit later needs no manual fingerprint exchange. Idempotent:
-          # only acts when the key is absent and never duplicates the entry.
-          if [ "$1" = configure ] && [ ! -f "$DATA_DIR/web.key" ]; then
-            if fp="$(seedling-ctl --key-file "$DATA_DIR/web.key" client fingerprint 2>/dev/null)"; then
-              if [ -n "$fp" ]; then
-                touch "$DATA_DIR/authorized_keys"
-                if ! grep -q "^$fp " "$DATA_DIR/authorized_keys" 2>/dev/null; then
-                  echo "$fp seedling-web" >> "$DATA_DIR/authorized_keys"
-                fi
-                chmod 600 "$DATA_DIR/authorized_keys"
-              fi
+          # Add a fingerprint to the daemon's bootstrap authorized keys file,
+          # which it imports on start. Never writes an entry twice.
+          authorize() {
+            touch "$DATA_DIR/authorized_keys"
+            if ! grep -q "^$1 " "$DATA_DIR/authorized_keys" 2>/dev/null; then
+              echo "$1 $2" >> "$DATA_DIR/authorized_keys"
             fi
+            chmod 600 "$DATA_DIR/authorized_keys"
+          }
+
+          # Generate a client key at $1 and authorize it under the label $2, so
+          # the client it belongs to needs no manual fingerprint exchange.
+          # seedling-ctl generates the key, keeping its format and its
+          # owner-only mode in one place. Idempotent: an existing key is left
+          # alone, and a failure here is never fatal to the install.
+          bootstrap_identity() {
+            if [ -f "$1" ]; then
+              return 0
+            fi
+            mkdir -p "$(dirname "$1")"
+            fp="$(seedling-ctl --key-file "$1" client fingerprint 2>/dev/null)" || return 0
+            if [ -n "$fp" ]; then
+              authorize "$fp" "$2"
+            fi
+          }
+
+          if [ "$1" = configure ]; then
+            # The web interface, so enabling its unit later needs no exchange.
+            bootstrap_identity "$DATA_DIR/web.key" seedling-web
+
+            # bestool, which drives Tamanu on a Seedling host through the
+            # daemon rather than through the host service manager. The key is
+            # root-only, so it grants no authority root does not already have
+            # over this data directory, and `sudo bestool tamanu ...` works on
+            # a freshly provisioned host with no operator step.
+            bootstrap_identity "$BESTOOL_KEY" bestool
           fi
 
           if [ -d /run/systemd/system ]; then
@@ -205,6 +229,9 @@ jobs:
           if [ "$1" = purge ]; then
             rm -rf /var/lib/seedling /var/log/seedling
             rmdir /etc/seedling 2>/dev/null || true
+            # The identity we generated for bestool; /etc/bestool itself
+            # belongs to the bestool package, so it stays.
+            rm -f /etc/bestool/seedling.key
           fi
           exit 0
           EOF
@@ -216,7 +243,7 @@ jobs:
           Section: admin
           Priority: optional
           Architecture: $arch
-          Depends: libc6 (>= 2.39), libgcc-s1, libsystemd0, podman (>= 5.0), podman (<< 6), nftables, iproute2, kmod
+          Depends: libc6 (>= 2.39), libgcc-s1, libsystemd0, podman (>= 5.0), podman (<< 6), nftables, iproute2, kmod, bestool
           Recommends: btrfs-progs, jool-dkms, jool-tools
           Suggests: tailscale
           Maintainer: BES Developers <support@bes.au>
@@ -300,3 +327,34 @@ jobs:
             sleep 5
           done
           gh release upload "v${version}" "${files[@]}" --clobber
+
+  # seedling-protocol is the one crate on a registry: external tools speak the
+  # operator interface against it instead of driving seedling-ctl. The rest of
+  # the workspace stays unpublished, so this publishes that crate alone.
+  #
+  # Authentication is crates.io trusted publishing: the OIDC token below is
+  # exchanged for a short-lived registry token, so no long-lived secret is held
+  # here. It requires the crate to exist and to name this repository as a
+  # trusted publisher, both of which follow a first manual publish.
+  publish-protocol:
+    name: Publish seedling-protocol
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      - name: Publish unless this version is already on the registry
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          version=$(cargo metadata --format-version 1 --no-deps \
+            | jq -r '.packages[] | select(.name=="seedling-protocol") | .version')
+          if curl -fsSL -H 'User-Agent: seedling-release' \
+              "https://crates.io/api/v1/crates/seedling-protocol/${version}" >/dev/null 2>&1; then
+            echo "seedling-protocol ${version} is already published"
+            exit 0
+          fi
+          cargo publish -p seedling-protocol --locked

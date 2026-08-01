@@ -11,6 +11,8 @@ pub(super) enum VolumesCommand {
         #[command(subcommand)]
         command: HeldCommand,
     },
+    /// List exported volumes, with where each lives on the host
+    Exported,
     /// Site volume management
     Site {
         #[command(subcommand)]
@@ -142,6 +144,13 @@ pub(super) async fn dispatch(client: &OiClient, cmd: VolumesCommand) {
             };
             let exit = open_volume_shell(client, refs, read_only).await;
             std::process::exit(exit);
+        }
+        VolumesCommand::Exported => {
+            print_result(
+                client
+                    .request("/volumes/exported/list", serde_json::json!({}))
+                    .await,
+            );
         }
         VolumesCommand::Held { command } => match command {
             HeldCommand::List => {

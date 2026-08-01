@@ -10,6 +10,7 @@ pub mod backup_apps;
 pub mod backup_execution;
 pub mod backup_strategies;
 pub mod barrier;
+pub mod canopy;
 pub mod db;
 pub mod desired;
 pub mod external_service_mappings;

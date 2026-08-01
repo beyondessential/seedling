@@ -107,6 +107,7 @@ app.deployment("worker")
     .cpus(0.5)
     .pids_limit(128)
     .workdir("/app")
+    .user("999:999")                  // run as a non-root uid:gid
     .writable_rootfs()                // opt out of read-only root
     .cap_add("NET_BIND_SERVICE")
     .stop_signal("SIGINT")            // signal sent on stop (default SIGTERM)

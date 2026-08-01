@@ -2,7 +2,13 @@
 name = "seedling-protocol"
 version.workspace = true
 edition.workspace = true
-publish.workspace = true
+description = "Wire protocol and client for the Seedling operator interface"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/beyondessential/seedling"
+# Published, unlike the rest of the workspace, so tools outside it can speak the
+# operator interface against this contract rather than driving seedling-ctl and
+# depending on how a human-facing CLI renders its output.
+publish = true
 
 [dependencies]
 compact_str = { version = "0.9.1", features = ["serde"] }

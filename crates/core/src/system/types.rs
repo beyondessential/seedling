@@ -135,6 +135,7 @@ pub struct ContainerSpec {
     pub writable_rootfs: bool,
     pub pids_limit: u32,
     pub workdir: Option<String>,
+    pub user: Option<String>,
     pub stop_signal: Option<String>,
     pub stop_timeout_secs: Option<u32>,
 }

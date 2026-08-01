@@ -129,6 +129,11 @@ pub fn podman_args(spec: &ContainerSpec) -> Vec<String> {
     if let Some(workdir) = &spec.workdir {
         args.push(format!("--workdir={workdir}"));
     }
+    // r[impl actuate.container.user]
+    if let Some(user) = &spec.user {
+        args.push("--user".to_string());
+        args.push(user.clone());
+    }
 
     args.push("--name".to_string());
     args.push(spec.name.clone());
@@ -392,6 +397,7 @@ fn spec_from_pod(
         writable_rootfs: container.writable_rootfs,
         pids_limit: container.pids_limit.unwrap_or(256),
         workdir: container.workdir.clone(),
+        user: container.user.clone(),
         stop_signal: container.stop_signal.clone(),
         stop_timeout_secs: container.stop_timeout_secs,
     };
