@@ -2,11 +2,11 @@ use serde_json::json;
 
 use crate::{
     oi::test_support::TestOi,
-    runtime::restarts::{ExitKind, ExitStatus, Initiator, RestartSubject, record},
+    runtime::restarts::{Cause, ExitKind, ExitStatus, RestartSubject, record},
 };
 use seedling_protocol::names::AppName;
 
-fn seed(oi: &TestOi, app: &str, instance: &str, initiator: Initiator, exit: Option<ExitStatus>) {
+fn seed(oi: &TestOi, app: &str, instance: &str, cause: Cause, exit: Option<ExitStatus>) {
     let subject = RestartSubject {
         app: AppName::new(app).unwrap(),
         instance_id: instance.to_owned(),
@@ -17,20 +17,20 @@ fn seed(oi: &TestOi, app: &str, instance: &str, initiator: Initiator, exit: Opti
     let at = jiff::Timestamp::now().as_millisecond();
     oi.state
         .db
-        .call(move |db| record(db, &subject, initiator, exit, at))
+        .call(move |db| record(db, &subject, cause, exit, at))
         .expect("record");
 }
 
 // i[verify restart.list]
 // i[verify restart.record]
 #[test]
-fn list_returns_records_with_their_exit_and_initiator() {
+fn list_returns_records_with_their_exit_and_cause() {
     let oi = TestOi::new();
     seed(
         &oi,
         "demo",
         "aa",
-        Initiator::Supervisor,
+        Cause::Recovery,
         Some(ExitStatus {
             kind: ExitKind::Signalled,
             code: 9,
@@ -45,7 +45,7 @@ fn list_returns_records_with_their_exit_and_initiator() {
     assert_eq!(rows[0]["resource_type"], "deployment");
     assert_eq!(rows[0]["resource_name"], "web");
     assert_eq!(rows[0]["generation"], 1);
-    assert_eq!(rows[0]["initiator"], "supervisor");
+    assert_eq!(rows[0]["cause"], "recovery");
     assert_eq!(rows[0]["exit_code"], 9);
     assert_eq!(rows[0]["exit_kind"], "signalled");
     assert!(!rows[0]["timestamp"].as_str().unwrap().is_empty());
@@ -55,11 +55,11 @@ fn list_returns_records_with_their_exit_and_initiator() {
 #[test]
 fn an_unknown_exit_is_reported_as_null_rather_than_invented() {
     let oi = TestOi::new();
-    seed(&oi, "demo", "aa", Initiator::Runtime, None);
+    seed(&oi, "demo", "aa", Cause::Deliberate, None);
 
     let rows = oi.call("/restarts/list", json!({})).unwrap();
     let rows = rows.as_array().unwrap();
-    assert_eq!(rows[0]["initiator"], "runtime");
+    assert_eq!(rows[0]["cause"], "deliberate");
     assert!(rows[0]["exit_code"].is_null());
     assert!(rows[0]["exit_kind"].is_null());
 }
@@ -68,9 +68,9 @@ fn an_unknown_exit_is_reported_as_null_rather_than_invented() {
 #[test]
 fn list_filters_by_app_and_instance_and_honours_limit() {
     let oi = TestOi::new();
-    seed(&oi, "demo", "aa", Initiator::Supervisor, None);
-    seed(&oi, "demo", "aa", Initiator::Supervisor, None);
-    seed(&oi, "other", "bb", Initiator::Supervisor, None);
+    seed(&oi, "demo", "aa", Cause::Recovery, None);
+    seed(&oi, "demo", "aa", Cause::Recovery, None);
+    seed(&oi, "other", "bb", Cause::Recovery, None);
 
     let by_app = oi.call("/restarts/list", json!({ "app": "demo" })).unwrap();
     assert_eq!(by_app.as_array().unwrap().len(), 2);

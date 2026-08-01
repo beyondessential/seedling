@@ -17,8 +17,7 @@ use crate::{
         generations,
         identity::ResourceInstance,
         restarts::{
-            self, ExitKind, ExitStatus, Initiator, RETAIN_PER_INSTANCE, RestartSettings,
-            RestartSubject,
+            self, Cause, ExitKind, ExitStatus, RETAIN_PER_INSTANCE, RestartSettings, RestartSubject,
         },
     },
     system::types::{UnitExit, UnitExitKind},
@@ -73,8 +72,8 @@ pub(super) fn reconcile_counters(
 
     // r[impl autonomous.restart.record]
     // A start the reconciler issued for an instance it has already run is a
-    // restart it initiated. The fresh transient unit's counter begins at zero,
-    // so re-baseline here rather than reading the drop as a reset next tick.
+    // deliberate restart. The fresh transient unit's counter begins at zero, so
+    // re-baseline here rather than reading the drop as a reset next tick.
     for instance in started {
         let hex = instance.id.to_hex();
         match restarts::baseline(db, &hex) {
@@ -82,11 +81,11 @@ pub(super) fn reconcile_counters(
                 if let Err(e) = restarts::record(
                     db,
                     &subject(instance, generation),
-                    Initiator::Runtime,
+                    Cause::Deliberate,
                     None,
                     Timestamp::now().as_millisecond(),
                 ) {
-                    warn!(app = %app, instance = %hex, "failed to record runtime restart: {e}");
+                    warn!(app = %app, instance = %hex, "failed to record deliberate restart: {e}");
                 }
             }
             // No baseline: the reconciler has never seen this instance's unit,
@@ -155,13 +154,13 @@ pub(super) fn reconcile_counters(
             };
             // Stamp a burst apart so its ordering survives.
             let at = now - (new_restarts - 1 - n);
-            if let Err(e) = restarts::record(db, &subject, Initiator::Supervisor, exit, at) {
+            if let Err(e) = restarts::record(db, &subject, Cause::Recovery, exit, at) {
                 warn!(app = %app, instance = %hex, "failed to record restart: {e}");
             }
         }
 
         // r[impl autonomous.restart.rate]
-        match restarts::recent_supervisor_count(db, &hex, settings.window_secs) {
+        match restarts::recent_recovery_count(db, &hex, settings.window_secs) {
             Ok(count) if count >= settings.threshold => rate_loops.push(CrashLoop {
                 instance: instance.clone(),
                 cause: CrashLoopCause::RestartRate {

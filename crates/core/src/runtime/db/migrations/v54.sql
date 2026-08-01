@@ -1,10 +1,15 @@
 -- r[impl autonomous.restart.record]
 -- One row per observed or performed restart of a container instance.
 --
--- `initiator` is 'supervisor' when the platform's service supervisor actioned
--- the restart, and 'runtime' when seedling itself did (rolling update, health
--- check replacement, operator-requested restart). Only supervisor rows count
--- towards the crash-loop rate.
+-- `cause` is 'recovery' when the restart followed an unexpected exit, and
+-- 'deliberate' when the runtime restarted the workload on purpose (rolling
+-- update, health check replacement, operator-requested restart). Only recovery
+-- rows count towards the crash-loop rate.
+--
+-- The split is on why, not on who: on Linux systemd actions recovery restarts
+-- and seedling actions deliberate ones, but on a platform with no service
+-- supervisor seedling actions both, and a column recording the actor would
+-- classify every restart there identically.
 --
 -- `exit_kind` is 'exited', 'signalled' or 'dumped'; `exit_code` is the exit
 -- status for 'exited' and the signal number otherwise. Both are NULL when the
@@ -17,7 +22,7 @@ CREATE TABLE IF NOT EXISTS instance_restarts (
     resource_name TEXT,
     generation    INTEGER,
     recorded_at   INTEGER NOT NULL,
-    initiator     TEXT    NOT NULL,
+    cause         TEXT    NOT NULL,
     exit_code     INTEGER,
     exit_kind     TEXT
 );

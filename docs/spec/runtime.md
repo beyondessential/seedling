@@ -693,14 +693,16 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > When a container resource in the desired state reaches the Terminated lifecycle state and its `on_exit` or `on_terminate` policy requires recreation, the reconciler must start a replacement.
 
 > r[autonomous.restart.record]
-> The runtime must keep a durable, per-instance record of container restarts. Each record identifies the instance it belongs to, the app generation in force when it was recorded, when the restart happened, the exit status of the run that ended where the platform reports one, and whether the restart was actioned by the platform's supervisor or initiated by the runtime itself.
+> The runtime must keep a durable, per-instance record of container restarts. Each record identifies the instance it belongs to, the app generation in force when it was recorded, when the restart happened, the exit status of the run that ended where the platform reports one, and the restart's cause: whether it was recovery from an unexpected exit, or a restart the runtime performed deliberately.
+>
+> The cause is a statement about why the restart happened, not about which component performed it. Who actions a restart is a platform detail — a platform with a service supervisor leaves recovery to it, and one without leaves the runtime to perform both kinds — so recording the actor would make the record mean different things on different platforms.
 >
 > Recording must not depend on catching a state transition. A container that restarts and returns to running between two observations must still be recorded, so the count of restarts the runtime holds does not depend on how often it looks.
 >
-> Restarts the runtime initiates — rolling updates, [replacements](#r--autonomous.healthcheck-replace), operator-requested restarts — are recorded with the runtime as initiator and are excluded from the crash-loop rate. Otherwise every rolling update reads as a crash burst.
+> Rolling updates, [replacements](#r--autonomous.healthcheck-replace) and operator-requested restarts are recorded as deliberate and excluded from the crash-loop rate. Otherwise every rolling update reads as a crash burst.
 
 > r[autonomous.restart.rate]
-> Crash-loop detection is a function of the recorded restart rate: when the number of supervisor-actioned restarts recorded for an instance within the configured window reaches the configured threshold, the reconciler must file a `crash_loop` fault against that instance (see [fault.crash-loop](#r--fault.crash-loop)).
+> Crash-loop detection is a function of the recorded restart rate: when the number of recovery restarts recorded for an instance within the configured window reaches the configured threshold, the reconciler must file a `crash_loop` fault against that instance (see [fault.crash-loop](#r--fault.crash-loop)).
 >
 > This is the primary crash-loop trigger. It catches sub-threshold flapping — a container that crashes a few times a day forever, never exhausting the supervisor's own start limit inside its window — which is otherwise invisible to an operator.
 

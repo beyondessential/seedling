@@ -29,8 +29,8 @@ pub(super) enum RestartsCommand {
     /// Change the crash-loop rate threshold and/or window.
     ///
     /// A `crash_loop` fault is filed once an instance records this many
-    /// supervisor-actioned restarts inside the window. Restarts seedling
-    /// itself initiates (rolling updates, replacements) do not count.
+    /// recovery restarts inside the window. Restarts seedling performs
+    /// deliberately (rolling updates, replacements) do not count.
     SetSettings {
         /// Restarts within the window that file the fault (minimum 2)
         #[arg(long)]

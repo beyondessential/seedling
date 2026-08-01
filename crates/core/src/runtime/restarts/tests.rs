@@ -25,10 +25,10 @@ fn exited(code: i32) -> Option<ExitStatus> {
 // r[verify autonomous.restart.record]
 // i[verify restart.record]
 #[test]
-fn records_carry_identity_exit_and_initiator() {
+fn records_carry_identity_exit_and_cause() {
     let db = Db::open_in_memory().expect("open");
     let now = now_ms();
-    record(&db, &subject("aa"), Initiator::Supervisor, exited(137), now).expect("record");
+    record(&db, &subject("aa"), Cause::Recovery, exited(137), now).expect("record");
 
     let rows = list(&db, None, None, 10).expect("list");
     assert_eq!(rows.len(), 1);
@@ -38,7 +38,7 @@ fn records_carry_identity_exit_and_initiator() {
     assert_eq!(r.resource_type.as_deref(), Some("deployment"));
     assert_eq!(r.resource_name.as_deref(), Some("web"));
     assert_eq!(r.generation, Some(3));
-    assert_eq!(r.initiator, Initiator::Supervisor);
+    assert_eq!(r.cause, Cause::Recovery);
     assert_eq!(r.exit_code, Some(137));
     assert_eq!(r.exit_kind, Some(ExitKind::Exited));
 }
@@ -48,9 +48,9 @@ fn records_carry_identity_exit_and_initiator() {
 fn list_is_most_recent_first_and_filters() {
     let db = Db::open_in_memory().expect("open");
     let now = now_ms();
-    record(&db, &subject("aa"), Initiator::Supervisor, None, now - 2000).expect("record");
-    record(&db, &subject("aa"), Initiator::Supervisor, None, now - 1000).expect("record");
-    record(&db, &subject("bb"), Initiator::Runtime, None, now).expect("record");
+    record(&db, &subject("aa"), Cause::Recovery, None, now - 2000).expect("record");
+    record(&db, &subject("aa"), Cause::Recovery, None, now - 1000).expect("record");
+    record(&db, &subject("bb"), Cause::Deliberate, None, now).expect("record");
 
     let all = list(&db, None, None, 10).expect("list");
     assert_eq!(all.len(), 3);
@@ -68,16 +68,16 @@ fn list_is_most_recent_first_and_filters() {
 
 // r[verify autonomous.restart.rate]
 #[test]
-fn runtime_initiated_restarts_are_excluded_from_the_rate() {
+fn deliberate_restarts_are_excluded_from_the_rate() {
     let db = Db::open_in_memory().expect("open");
     let now = now_ms();
     for i in 0..4 {
-        record(&db, &subject("aa"), Initiator::Runtime, None, now - i * 100).expect("record");
+        record(&db, &subject("aa"), Cause::Deliberate, None, now - i * 100).expect("record");
     }
-    assert_eq!(recent_supervisor_count(&db, "aa", 1800).expect("count"), 0);
+    assert_eq!(recent_recovery_count(&db, "aa", 1800).expect("count"), 0);
 
-    record(&db, &subject("aa"), Initiator::Supervisor, None, now).expect("record");
-    assert_eq!(recent_supervisor_count(&db, "aa", 1800).expect("count"), 1);
+    record(&db, &subject("aa"), Cause::Recovery, None, now).expect("record");
+    assert_eq!(recent_recovery_count(&db, "aa", 1800).expect("count"), 1);
 }
 
 // r[verify autonomous.restart.rate]
@@ -85,18 +85,11 @@ fn runtime_initiated_restarts_are_excluded_from_the_rate() {
 fn restarts_outside_the_window_do_not_count() {
     let db = Db::open_in_memory().expect("open");
     let now = now_ms();
-    record(
-        &db,
-        &subject("aa"),
-        Initiator::Supervisor,
-        None,
-        now - 3_600_000,
-    )
-    .expect("record");
-    record(&db, &subject("aa"), Initiator::Supervisor, None, now).expect("record");
+    record(&db, &subject("aa"), Cause::Recovery, None, now - 3_600_000).expect("record");
+    record(&db, &subject("aa"), Cause::Recovery, None, now).expect("record");
 
-    assert_eq!(recent_supervisor_count(&db, "aa", 1800).expect("count"), 1);
-    assert_eq!(recent_supervisor_count(&db, "aa", 7200).expect("count"), 2);
+    assert_eq!(recent_recovery_count(&db, "aa", 1800).expect("count"), 1);
+    assert_eq!(recent_recovery_count(&db, "aa", 7200).expect("count"), 2);
 }
 
 // r[verify gc.restarts]
@@ -105,17 +98,10 @@ fn per_instance_cap_holds_under_a_sustained_crash_loop() {
     let db = Db::open_in_memory().expect("open");
     let now = now_ms();
     for i in 0..(RETAIN_PER_INSTANCE as i64 * 3) {
-        record(
-            &db,
-            &subject("aa"),
-            Initiator::Supervisor,
-            exited(1),
-            now + i,
-        )
-        .expect("record");
+        record(&db, &subject("aa"), Cause::Recovery, exited(1), now + i).expect("record");
     }
     // A second instance's history must not be pruned by the first's churn.
-    record(&db, &subject("bb"), Initiator::Supervisor, None, now).expect("record");
+    record(&db, &subject("bb"), Cause::Recovery, None, now).expect("record");
 
     let kept = list(&db, None, Some("aa"), 1000).expect("list");
     assert_eq!(kept.len(), RETAIN_PER_INSTANCE);
@@ -134,8 +120,8 @@ fn summary_is_absent_until_there_is_history() {
     assert!(summary(&db, "aa", settings).expect("summary").is_none());
 
     let now = now_ms();
-    record(&db, &subject("aa"), Initiator::Runtime, None, now - 1000).expect("record");
-    record(&db, &subject("aa"), Initiator::Supervisor, exited(2), now).expect("record");
+    record(&db, &subject("aa"), Cause::Deliberate, None, now - 1000).expect("record");
+    record(&db, &subject("aa"), Cause::Recovery, exited(2), now).expect("record");
 
     let s = summary(&db, "aa", settings)
         .expect("summary")

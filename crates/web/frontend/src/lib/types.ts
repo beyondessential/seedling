@@ -36,7 +36,7 @@ export interface ResourceInstance {
   restarts?: RestartSummary | null;
 }
 
-export type RestartInitiator = "supervisor" | "runtime";
+export type RestartCause = "recovery" | "deliberate";
 
 export type RestartExitKind = "exited" | "signalled" | "dumped";
 
@@ -48,7 +48,7 @@ export interface RestartRecord {
   resource_name?: string | null;
   generation?: number | null;
   timestamp: string;
-  initiator: RestartInitiator;
+  cause: RestartCause;
   exit_code?: number | null;
   exit_kind?: RestartExitKind | null;
 }

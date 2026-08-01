@@ -44,7 +44,7 @@ pub(crate) fn list_restarts(state: &OiState, params: ListRestartsParams) -> Hand
                 "resource_name": r.resource_name,
                 "generation": r.generation,
                 "timestamp": r.timestamp.to_string(),
-                "initiator": r.initiator,
+                "cause": r.cause,
                 "exit_code": r.exit_code,
                 "exit_kind": r.exit_kind,
             })

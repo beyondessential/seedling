@@ -99,10 +99,10 @@ export default function Restarts() {
         </IconActionButton>
       </Box>
       <Typography variant="body2" sx={{ color: "text.secondary", mb: 2 }}>
-        Every container restart Seedling observes or performs. Restarts the
-        supervisor actioned count towards the crash-loop rate; ones Seedling
-        itself initiated — rolling updates, replacements — are recorded but do
-        not, so a rollout never reads as a crash burst.
+        Every container restart Seedling observes or performs. Recovery from an
+        unexpected exit counts towards the crash-loop rate; restarts Seedling
+        performed deliberately — rolling updates, replacements — are recorded
+        but do not, so a rollout never reads as a crash burst.
       </Typography>
 
       {settingsError && <OiErrorAlert error={settingsError} />}
@@ -112,7 +112,7 @@ export default function Restarts() {
         <Typography variant="subtitle1">Crash-loop rate</Typography>
         <Typography variant="body2" sx={{ color: "text.secondary", mb: 2 }}>
           {settings
-            ? `A crash_loop fault is filed once an instance records ${settings.threshold} supervisor restarts within ${settings.window_secs / 60} minutes.`
+            ? `A crash_loop fault is filed once an instance records ${settings.threshold} recovery restarts within ${settings.window_secs / 60} minutes.`
             : "Loading…"}
         </Typography>
         <Stack
@@ -200,7 +200,7 @@ export default function Restarts() {
               <TableCell>App</TableCell>
               <TableCell>Resource</TableCell>
               <TableCell>Instance</TableCell>
-              <TableCell>Initiator</TableCell>
+              <TableCell>Cause</TableCell>
               <TableCell>Exit</TableCell>
               <TableCell align="right">Gen</TableCell>
             </TableRow>
@@ -226,12 +226,12 @@ export default function Restarts() {
                 </TableCell>
                 <TableCell>
                   {/* The distinction is the whole point of recording the
-                      initiator: only supervisor rows move the rate. */}
+                      cause: only recovery rows move the rate. */}
                   <Chip
                     size="small"
-                    label={r.initiator}
-                    color={r.initiator === "supervisor" ? "warning" : "default"}
-                    variant={r.initiator === "supervisor" ? "filled" : "outlined"}
+                    label={r.cause}
+                    color={r.cause === "recovery" ? "warning" : "default"}
+                    variant={r.cause === "recovery" ? "filled" : "outlined"}
                   />
                 </TableCell>
                 <TableCell sx={{ fontFamily: "monospace" }}>

@@ -242,7 +242,7 @@ Absent specification bugs, anything not defined here is either defined in anothe
 
 > w[routes.restarts]
 > The web interface must expose container restart history at `/restarts`, listing [restart records](interface.md#i--restart.record) most recent first with their app, instance, time, initiator, and exit status.
-> The list must be filterable by app, and records the runtime initiated must be visually distinguishable from ones the supervisor actioned, since only the latter count towards the crash-loop rate.
+> The list must be filterable by app, and deliberate restarts must be visually distinguishable from recovery ones, since only recovery restarts count towards the crash-loop rate.
 > The route must also present the crash-loop rate threshold and window, and allow an operator to change them.
 
 > w[routes.certificates]

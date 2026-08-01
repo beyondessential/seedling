@@ -22,24 +22,32 @@ use crate::runtime::db::Db;
 // r[impl gc.restarts]
 pub const RETAIN_PER_INSTANCE: usize = 50;
 
-/// Who actioned a restart.
+/// Why a restart happened.
+///
+/// Deliberately not "who performed it". On Linux systemd actions recovery
+/// restarts and seedling actions deliberate ones, so the two splits coincide —
+/// but only because of how this platform is put together. Where there is no
+/// service supervisor the runtime performs both kinds, and a field recording
+/// the actor would put every restart in one bucket and leave the crash-loop
+/// rate permanently at zero.
 // r[impl autonomous.restart.record]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Initiator {
-    /// The platform's service supervisor (systemd on Linux). Counts towards
+pub enum Cause {
+    /// The workload exited unexpectedly and was brought back. Counts towards
     /// the crash-loop rate.
-    Supervisor,
-    /// Seedling itself: a rolling update, a health-check replacement, an
-    /// operator-requested restart. Recorded but excluded from the rate.
-    Runtime,
+    Recovery,
+    /// The runtime restarted the workload on purpose: a rolling update, a
+    /// health-check replacement, an operator-requested restart. Recorded but
+    /// excluded from the rate.
+    Deliberate,
 }
 
-impl Initiator {
+impl Cause {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Supervisor => "supervisor",
-            Self::Runtime => "runtime",
+            Self::Recovery => "recovery",
+            Self::Deliberate => "deliberate",
         }
     }
 }
@@ -92,7 +100,7 @@ pub struct RestartRecord {
     pub resource_name: Option<String>,
     pub generation: Option<i64>,
     pub timestamp: Timestamp,
-    pub initiator: Initiator,
+    pub cause: Cause,
     pub exit_code: Option<i32>,
     pub exit_kind: Option<ExitKind>,
 }
@@ -117,10 +125,10 @@ pub const MIN_WINDOW_SECS: i64 = 60;
 // i[impl app.describe]
 #[derive(Debug, Clone, Serialize)]
 pub struct RestartSummary {
-    /// Supervisor-actioned restarts inside the current rate window.
+    /// Recovery restarts inside the current rate window.
     pub recent: i64,
     pub window_secs: i64,
-    /// All retained records for the instance, both initiators.
+    /// All retained records for the instance, of either cause.
     pub total: i64,
     pub last_at: Option<String>,
     pub last_exit_code: Option<i32>,
@@ -152,14 +160,14 @@ pub struct RestartSubject {
 pub fn record(
     db: &Db,
     subject: &RestartSubject,
-    initiator: Initiator,
+    cause: Cause,
     exit: Option<ExitStatus>,
     at_ms: i64,
 ) -> rusqlite::Result<i64> {
     db.conn.execute(
         "INSERT INTO instance_restarts
             (instance_id, app, resource_type, resource_name, generation,
-             recorded_at, initiator, exit_code, exit_kind)
+             recorded_at, cause, exit_code, exit_kind)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         rusqlite::params![
             subject.instance_id,
@@ -168,7 +176,7 @@ pub fn record(
             subject.resource_name,
             subject.generation,
             at_ms,
-            initiator.as_str(),
+            cause.as_str(),
             exit.map(|e| e.code),
             exit.map(|e| e.kind.as_str()),
         ],
@@ -200,7 +208,7 @@ pub fn prune_instance(db: &Db, instance_id: &str, retain: usize) -> rusqlite::Re
 
 fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<RestartRecord> {
     let recorded_at: i64 = row.get(6)?;
-    let initiator: String = row.get(7)?;
+    let cause: String = row.get(7)?;
     let exit_kind: Option<String> = row.get(9)?;
     Ok(RestartRecord {
         id: row.get(0)?,
@@ -210,10 +218,10 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<RestartRecord> {
         resource_name: row.get(4)?,
         generation: row.get(5)?,
         timestamp: Timestamp::from_millisecond(recorded_at).unwrap_or_default(),
-        initiator: if initiator == "runtime" {
-            Initiator::Runtime
+        cause: if cause == "deliberate" {
+            Cause::Deliberate
         } else {
-            Initiator::Supervisor
+            Cause::Recovery
         },
         exit_code: row.get(8)?,
         exit_kind: exit_kind.as_deref().and_then(ExitKind::from_str),
@@ -221,7 +229,7 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<RestartRecord> {
 }
 
 const SELECT_COLS: &str = "id, instance_id, app, resource_type, resource_name, generation, \
-                           recorded_at, initiator, exit_code, exit_kind";
+                           recorded_at, cause, exit_code, exit_kind";
 
 // i[impl restart.list]
 /// Restart records, most recent first, optionally narrowed to one app and/or
@@ -248,10 +256,10 @@ pub fn list(
 }
 
 // r[impl autonomous.restart.rate]
-/// Supervisor-actioned restarts recorded for an instance within the last
-/// `window_secs`. Runtime-initiated restarts are excluded: a rolling update
-/// must not read as a crash burst.
-pub fn recent_supervisor_count(
+/// Recovery restarts recorded for an instance within the last `window_secs`.
+/// Deliberate restarts are excluded: a rolling update must not read as a crash
+/// burst.
+pub fn recent_recovery_count(
     db: &Db,
     instance_id: &str,
     window_secs: i64,
@@ -259,7 +267,7 @@ pub fn recent_supervisor_count(
     let cutoff = now_ms() - window_secs * 1000;
     db.conn.query_row(
         "SELECT COUNT(*) FROM instance_restarts
-         WHERE instance_id = ?1 AND initiator = 'supervisor' AND recorded_at >= ?2",
+         WHERE instance_id = ?1 AND cause = 'recovery' AND recorded_at >= ?2",
         rusqlite::params![instance_id, cutoff],
         |r| r.get(0),
     )
@@ -281,7 +289,7 @@ pub fn summary(
     if total == 0 {
         return Ok(None);
     }
-    let recent = recent_supervisor_count(db, instance_id, settings.window_secs)?;
+    let recent = recent_recovery_count(db, instance_id, settings.window_secs)?;
     let last: Option<(i64, Option<i32>, Option<String>)> = db
         .conn
         .query_row(

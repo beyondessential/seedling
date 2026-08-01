@@ -4,7 +4,7 @@ import { renderWithSession } from "../test/harness";
 import type { RestartRecord } from "../lib/types";
 import Restarts from "./Restarts";
 
-const supervisor: RestartRecord = {
+const recovery: RestartRecord = {
   id: 2,
   app: "shop",
   instance_id: "0123456789abcdef0123",
@@ -12,12 +12,12 @@ const supervisor: RestartRecord = {
   resource_name: "web",
   generation: 4,
   timestamp: "2026-07-09T10:00:00Z",
-  initiator: "supervisor",
+  cause: "recovery",
   exit_code: 137,
   exit_kind: "exited",
 };
 
-const runtime: RestartRecord = {
+const deliberate: RestartRecord = {
   id: 1,
   app: "shop",
   instance_id: "0123456789abcdef0123",
@@ -25,7 +25,7 @@ const runtime: RestartRecord = {
   resource_name: "web",
   generation: 4,
   timestamp: "2026-07-09T09:00:00Z",
-  initiator: "runtime",
+  cause: "deliberate",
   exit_code: null,
   exit_kind: null,
 };
@@ -44,7 +44,7 @@ describe("Restarts", () => {
   it("lists records with their exit status and app link", async () => {
     renderWithSession(<Restarts />, {
       fixtures: {
-        "/restarts/list": [supervisor, runtime],
+        "/restarts/list": [recovery, deliberate],
         "/restarts/settings/get": settings,
       },
     });
@@ -57,15 +57,15 @@ describe("Restarts", () => {
   });
 
   // w[verify routes.restarts]
-  it("distinguishes runtime-initiated restarts from supervisor ones", async () => {
+  it("distinguishes deliberate restarts from recovery ones", async () => {
     renderWithSession(<Restarts />, {
       fixtures: {
-        "/restarts/list": [supervisor, runtime],
+        "/restarts/list": [recovery, deliberate],
         "/restarts/settings/get": settings,
       },
     });
-    expect(await screen.findByText("supervisor")).toBeTruthy();
-    expect(screen.getByText("runtime")).toBeTruthy();
+    expect(await screen.findByText("recovery")).toBeTruthy();
+    expect(screen.getByText("deliberate")).toBeTruthy();
   });
 
   // w[verify routes.restarts]
@@ -75,7 +75,7 @@ describe("Restarts", () => {
     });
     expect(
       await screen.findByText(
-        /5 supervisor restarts within 30 minutes/,
+        /5 recovery restarts within 30 minutes/,
       ),
     ).toBeTruthy();
   });

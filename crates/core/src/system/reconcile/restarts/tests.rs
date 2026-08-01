@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     defs::resource::ResourceKind,
-    runtime::restarts::{self, Initiator},
+    runtime::restarts::{self, Cause},
     system::types::{UnitExit, UnitExitKind},
 };
 
@@ -64,7 +64,7 @@ fn counter_delta_across_a_restart_is_recorded_with_its_exit() {
 
     let rows = records(&db, &inst);
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].initiator, Initiator::Supervisor);
+    assert_eq!(rows[0].cause, Cause::Recovery);
     assert_eq!(rows[0].exit_code, Some(137));
     assert_eq!(rows[0].exit_kind, Some(restarts::ExitKind::Exited));
     assert_eq!(rows[0].resource_name.as_deref(), Some("web"));
@@ -147,7 +147,7 @@ fn restarts_after_a_reset_are_recorded_not_dropped() {
 
 // r[verify autonomous.restart.record]
 #[test]
-fn a_runtime_start_is_recorded_as_runtime_initiated_and_rebaselines() {
+fn a_runtime_start_is_recorded_as_deliberate_and_rebaselines() {
     let db = Db::open_in_memory().expect("open");
     let inst = instance();
     tick(&db, &inst, 0, None);
@@ -159,7 +159,7 @@ fn a_runtime_start_is_recorded_as_runtime_initiated_and_rebaselines() {
 
     let rows = records(&db, &inst);
     assert_eq!(rows.len(), 4);
-    assert_eq!(rows[0].initiator, Initiator::Runtime);
+    assert_eq!(rows[0].cause, Cause::Deliberate);
     assert_eq!(
         restarts::baseline(&db, &inst.id.to_hex()).expect("baseline"),
         Some(0)
@@ -238,7 +238,7 @@ fn a_rolling_update_does_not_read_as_a_crash_burst() {
 
     assert_eq!(records(&db, &inst).len(), 10);
     assert_eq!(
-        restarts::recent_supervisor_count(&db, &inst.id.to_hex(), 1800).expect("count"),
+        restarts::recent_recovery_count(&db, &inst.id.to_hex(), 1800).expect("count"),
         0
     );
 }

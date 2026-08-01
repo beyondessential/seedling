@@ -97,7 +97,7 @@ import type {
 
 /** Restart count for an instance, linking through to its full history. The
  *  count shown is the one the crash-loop rate is measured against, so it goes
- *  warning-coloured as soon as any supervisor restart lands in the window. */
+ *  warning-coloured as soon as any recovery restart lands in the window. */
 // w[impl routes.restarts]
 function RestartIndicator({
   instanceId,
@@ -107,7 +107,7 @@ function RestartIndicator({
   restarts: RestartSummary;
 }) {
   const title =
-    `${restarts.recent} supervisor restart${restarts.recent === 1 ? "" : "s"} ` +
+    `${restarts.recent} recovery restart${restarts.recent === 1 ? "" : "s"} ` +
     `in the last ${restarts.window_secs / 60} minutes · ` +
     `${restarts.total} recorded in total` +
     (restarts.last_at

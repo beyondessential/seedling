@@ -251,7 +251,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - `faults`: array of app-level [fault records](#i--fault.record) not associated with a specific resource instance (e.g. script evaluation errors). Empty when there are no active app-level faults.
 > - `resources`: array of objects with fields `name`, `type`, `instances`, `faults`, `def`, and for Deployment resources, `scale`.
 >   Each instance has fields `id`, `display_name`, `lifecycle`, `transition_time` (RFC 3339, optional), and `restarts`.
->   `restarts` summarises the instance's [restart history](#i--restart.record): `{ recent, window_secs, total, last_at, last_exit_code, last_exit_kind }`, where `recent` counts supervisor-actioned restarts within the current rate window, `total` counts all retained records for the instance, and the `last_*` fields describe the most recent record (null when there is none). It is omitted for resource kinds that have no backing container.
+>   `restarts` summarises the instance's [restart history](#i--restart.record): `{ recent, window_secs, total, last_at, last_exit_code, last_exit_kind }`, where `recent` counts recovery restarts within the current rate window, `total` counts all retained records for the instance, and the `last_*` fields describe the most recent record (null when there is none). It is omitted for resource kinds that have no backing container.
 >   Each fault entry is a [fault record](#i--fault.record).
 >   `def` is an object describing the resource's configuration. The shape varies by `type`:
 >   for `ingress`: `{ hostname, port, tls, dtls, http_terminate, redirect }`;
@@ -700,7 +700,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 # Restart Surface
 
 > i[restart.record]
-> A restart record contains the following fields: `id` (monotonically increasing integer), `app`, `instance_id`, `resource_type`, `resource_name`, `generation` (integer, null when the app had no current generation at the time), `timestamp` (RFC 3339), `initiator` (`"supervisor"` or `"runtime"`), `exit_code` (integer, null when unknown), and `exit_kind` (`"exited"`, `"signalled"`, `"dumped"`, or null when unknown).
+> A restart record contains the following fields: `id` (monotonically increasing integer), `app`, `instance_id`, `resource_type`, `resource_name`, `generation` (integer, null when the app had no current generation at the time), `timestamp` (RFC 3339), `cause` (`"recovery"` or `"deliberate"`), `exit_code` (integer, null when unknown), and `exit_kind` (`"exited"`, `"signalled"`, `"dumped"`, or null when unknown).
+> `cause` distinguishes recovery from an unexpected exit from a restart the runtime performed on purpose. It describes why the restart happened, not who performed it: which component actions a restart is a platform detail, and on a platform with no service supervisor the runtime performs both kinds.
 > For `exit_kind: "exited"`, `exit_code` is the process's exit status; for `"signalled"` and `"dumped"` it is the signal number that terminated it.
 
 > i[restart.list]
@@ -708,7 +709,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > `app` restricts the result to one app and `instance` to one instance id; both may be given. `limit` caps the number of records returned, defaulting to 100 and capped at 1000.
 
 > i[restart.settings]
-> `/restarts/settings/get` returns `{ threshold, window_secs }` — the number of supervisor-actioned restarts within `window_secs` seconds that files a `crash_loop` fault (see [autonomous.restart.rate](runtime.md#r--autonomous.restart.rate)).
+> `/restarts/settings/get` returns `{ threshold, window_secs }` — the number of recovery restarts within `window_secs` seconds that files a `crash_loop` fault (see [autonomous.restart.rate](runtime.md#r--autonomous.restart.rate)).
 > `/restarts/settings/set { threshold?, window_secs? }` updates either or both and returns the full settings object. Omitted fields are left unchanged. `threshold` must be at least 2 and `window_secs` at least 60; values outside those bounds are rejected.
 
 # Event Feed

@@ -54,16 +54,18 @@ This log enables:
 
 ### Restart History
 
-A record of every container restart, one row per attempt: which instance, when, the exit status of the run that ended where the platform reports one, and whether the platform's supervisor actioned the restart or the runtime initiated it.
+A record of every container restart, one row per attempt: which instance, when, the exit status of the run that ended where the platform reports one, and the cause — recovery from an unexpected exit, or a restart the runtime performed deliberately.
+
+The cause records why, not who. On Linux systemd actions recovery restarts and seedling actions deliberate ones, so the two coincide; on a platform with no service supervisor seedling actions both, and a field naming the actor would classify every restart there identically.
 
 Restarts cannot be counted by watching container state. A container that goes down and comes back between two observation ticks looks running at both ends. On Linux the runtime instead reads systemd's own restart counter and records the difference, so what is recorded does not depend on how often the runtime looks.
 
 This log enables:
-- **Crash-loop detection**: a `crash_loop` fault is filed once an instance's supervisor-actioned restarts within the configured window reach the configured threshold. That threshold and window are operator-settable, because the judgement of what counts as flapping is an operational one.
+- **Crash-loop detection**: a `crash_loop` fault is filed once an instance's recovery restarts within the configured window reach the configured threshold. That threshold and window are operator-settable, because the judgement of what counts as flapping is an operational one.
 - **Seeing sub-threshold flapping**: a container that crashes twice a day forever never exhausts systemd's own start limit, so before this history existed it was silent — no fault, no record, nothing to query.
 - **Diagnosis**: the per-attempt exit statuses say whether a workload is being OOM-killed, exiting on a config error, or dying on a signal.
 
-Restarts the runtime initiates — rolling updates, health-check replacements — are recorded but excluded from the rate, so a rollout never reads as a crash burst. Records are bounded per instance rather than globally: a hard crash loop produces rows fastest exactly when they are most wanted.
+Deliberate restarts — rolling updates, health-check replacements — are recorded but excluded from the rate, so a rollout never reads as a crash burst. Records are bounded per instance rather than globally: a hard crash loop produces rows fastest exactly when they are most wanted.
 
 ### Action Execution Log
 
