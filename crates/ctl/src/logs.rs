@@ -31,45 +31,10 @@ async fn run_log_session(
     json_mode: bool,
     follow: bool,
 ) -> Result<(), String> {
-    let req_bytes = serde_json::to_vec(&serde_json::json!({
-        "method": "/logs/stream",
-        "params": params,
-    }))
-    .expect("serialisation");
-
-    let (mut send, mut recv) = client
-        .open_bi()
-        .await
-        .map_err(|e| format!("open_bi: {e}"))?;
-
-    send.write_all(&req_bytes)
-        .await
-        .map_err(|e| format!("write: {e}"))?;
-    let _ = send.finish();
-
-    let resp = recv
-        .read_to_end(64 * 1024)
-        .await
-        .map_err(|e| format!("read response: {e}"))?;
-
-    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&resp)
-        && let Some(err) = v.get("error")
-    {
-        let code = err
-            .get("code")
-            .and_then(|c| c.as_str())
-            .unwrap_or("unknown");
-        let msg = err
-            .get("message")
-            .and_then(|m| m.as_str())
-            .unwrap_or("unknown error");
-        return Err(format!("[{code}] {msg}"));
-    }
-
     let mut log_stream = client
-        .accept_uni()
+        .open_subscription("/logs/stream", params)
         .await
-        .map_err(|e| format!("accept_uni: {e}"))?;
+        .map_err(|e| e.to_string())?;
 
     let mut buf = Vec::new();
     let mut tmp = [0u8; 4096];

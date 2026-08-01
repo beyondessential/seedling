@@ -37,6 +37,8 @@ jobs:
         run: cargo fmt --all --check
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: No hand-rolled subscription handshakes
+        run: etc/ci/check-accept-uni.sh
 
   test:
     name: Test
