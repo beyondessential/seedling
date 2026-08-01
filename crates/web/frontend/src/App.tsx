@@ -19,6 +19,7 @@ import Keys from "./routes/Keys";
 import Login from "./routes/Login";
 import Logs from "./routes/Logs";
 import Registries from "./routes/Registries";
+import Restarts from "./routes/Restarts";
 import Services from "./routes/Services";
 import Shell from "./routes/Shell";
 import TemplateDetail from "./routes/TemplateDetail";
@@ -39,6 +40,7 @@ const router = createBrowserRouter([
       { path: "templates/:name", element: <TemplateDetail /> },
       { path: "templates/:name/edit", element: <EditTemplate /> },
       { path: "faults", element: <Faults /> },
+      { path: "restarts", element: <Restarts /> },
       { path: "volumes", element: <Volumes /> },
       { path: "services", element: <Services /> },
       { path: "ingresses", element: <Ingresses /> },

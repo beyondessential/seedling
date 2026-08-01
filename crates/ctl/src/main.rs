@@ -17,6 +17,7 @@ mod ingresses;
 mod known_hosts;
 mod logs;
 mod op;
+mod restarts;
 mod services;
 mod shell;
 mod subscribe;
@@ -152,6 +153,11 @@ enum Command {
     },
     /// Clear all active faults for an app
     ClearFaults { app: String },
+    /// Container restart history and the crash-loop rate derived from it
+    Restarts {
+        #[command(subcommand)]
+        command: restarts::RestartsCommand,
+    },
     /// Subscribe to event feed (streams JSON to stdout)
     Events,
     /// Client info (fingerprint)
@@ -413,6 +419,7 @@ async fn main() {
                     .await,
             );
         }
+        Command::Restarts { command } => restarts::dispatch(&client, command).await,
         Command::Events => {
             op::dispatch_events(
                 endpoint_addr,

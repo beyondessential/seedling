@@ -20,7 +20,7 @@ use crate::{
         history::{find_instances_for_group, query_observations},
         identity::{InstanceId, InstanceVariant, ResourceInstance},
         lifecycle::LifecycleState,
-        restart_gens, scaling,
+        restart_gens, restarts, scaling,
         stopped::{self, kind_str, parse_kind},
         transition_phase,
     },
@@ -651,6 +651,10 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     let all_faults_clone = all_faults_for_app.clone();
     let stopped_set_clone = stopped_set.clone();
     let resources_json: Vec<Value> = state.db.call(move |db| {
+        // i[impl app.describe]
+        // Read the rate settings once per describe: every instance summary
+        // reports its recent count over the same window.
+        let restart_settings = restarts::settings(db).ok();
         resource_infos
             .into_iter()
             .map(|info| {
@@ -662,6 +666,14 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                             let observations = query_observations(db, inst).unwrap_or_default();
                             let (lifecycle, transition_time) =
                                 derive_state_with_transition_time(inst, &observations);
+                            // i[impl app.describe]
+                            // Omitted entirely for an instance with no
+                            // restart history, so a resource that has never
+                            // restarted does not read as one that restarted
+                            // zero times just now.
+                            let restart_summary = restart_settings.and_then(|s| {
+                                restarts::summary(db, &inst.id.to_hex(), s).ok().flatten()
+                            });
                             json!({
                                 "id": inst.id.to_hex(),
                                 "display_name": inst.display_name,
@@ -669,6 +681,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                                 "transition_time": transition_time.and_then(|t| {
                                     jiff::Timestamp::try_from(t).ok().map(|ts| ts.to_string())
                                 }),
+                                "restarts": restart_summary,
                             })
                         })
                         .collect()
