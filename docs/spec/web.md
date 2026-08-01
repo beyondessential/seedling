@@ -240,6 +240,11 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > w[routes.volumes.held-count]
 > The navbar's held-volumes badge must reflect the current count of held volumes without requiring a page reload, both when new held volumes are created and when the operator confirms their deletion.
 
+> w[routes.restarts]
+> The web interface must expose container restart history at `/restarts`, listing [restart records](interface.md#i--restart.record) most recent first with their app, instance, time, initiator, and exit status.
+> The list must be filterable by app, and deliberate restarts must be visually distinguishable from recovery ones, since only recovery restarts count towards the crash-loop rate.
+> The route must also present the crash-loop rate threshold and window, and allow an operator to change them.
+
 > w[routes.certificates]
 > The web interface must expose TLS certificate management at `/certificates`, with the following sections:
 >

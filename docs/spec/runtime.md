@@ -377,6 +377,11 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[gc.autonomous-operations]
 > Completed autonomous operation records must be deleted after a configurable retention period (default: 7 days).
 
+> r[gc.restarts]
+> [Restart records](#r--autonomous.restart.record) must be bounded per instance: only a configurable number of the most recent records for an instance are retained (default: 50), and older records for that instance are deleted.
+> The bound is per instance rather than global, and applies to storage rather than to recording: a crash loop produces records fastest exactly when the per-attempt exit statuses are the diagnostic, so no restart may go unrecorded merely because the instance is restarting quickly.
+> Restart records whose instance identity no longer appears in the resource instance registry must be deleted.
+
 > r[gc.instances]
 > Resource instance records that have remained in the Unscheduled lifecycle state for longer than a configurable retention period (default: 10 minutes) must be deleted, along with their associated world observation rows.
 > Instances that are part of the active desired state (i.e. in the `keep` set of a scaled group or a singleton) must never be deleted regardless of their lifecycle state.
@@ -687,18 +692,37 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > r[autonomous.restart]
 > When a container resource in the desired state reaches the Terminated lifecycle state and its `on_exit` or `on_terminate` policy requires recreation, the reconciler must start a replacement.
 
+> r[autonomous.restart.record]
+> The runtime must keep a durable, per-instance record of container restarts. Each record identifies the instance it belongs to, the app generation in force when it was recorded, when the restart happened, the exit status of the run that ended where the platform reports one, and the restart's cause: whether it was recovery from an unexpected exit, or a restart the runtime performed deliberately.
+>
+> The cause is a statement about why the restart happened, not about which component performed it. Who actions a restart is a platform detail — a platform with a service supervisor leaves recovery to it, and one without leaves the runtime to perform both kinds — so recording the actor would make the record mean different things on different platforms.
+>
+> Recording must not depend on catching a state transition. A container that restarts and returns to running between two observations must still be recorded, so the count of restarts the runtime holds does not depend on how often it looks.
+>
+> Rolling updates, [replacements](#r--autonomous.healthcheck-replace) and operator-requested restarts are recorded as deliberate and excluded from the crash-loop rate. Otherwise every rolling update reads as a crash burst.
+
+> r[autonomous.restart.rate]
+> Crash-loop detection is a function of the recorded restart rate: when the number of recovery restarts recorded for an instance within the configured window reaches the configured threshold, the reconciler must file a `crash_loop` fault against that instance (see [fault.crash-loop](#r--fault.crash-loop)).
+>
+> This is the primary crash-loop trigger. It catches sub-threshold flapping — a container that crashes a few times a day forever, never exhausting the supervisor's own start limit inside its window — which is otherwise invisible to an operator.
+
+> r[autonomous.restart.rate.settings]
+> The restart-rate threshold and window must be operator-visible and operator-settable, and must take effect without restarting the runtime.
+>
+> The default must be loose enough that a slow-failing container (one that takes seconds to crash) gets several chances, and tight enough to catch flapping on a human-meaningful timescale.
+
 > r[autonomous.restart.backoff]
-> Per-unit restarts must be paced so that a crash-looping container does not exhaust systemd's start-rate limit before the reconciler has a chance to detect the problem. Container units must specify:
+> Where the platform's supervisor actions restarts, per-unit restarts must be paced so that a crash-looping container does not exhaust the supervisor's start-rate limit before the reconciler has a chance to detect the problem. On Linux, container units must specify:
 >
 > - A non-default `RestartSec` (no shorter than several seconds) so the unit does not retry at the systemd default cadence (~100ms).
 > - A `StartLimitIntervalSec` and `StartLimitBurst` that allow several attempts within a window measured in minutes, not seconds, before systemd gives up.
 >
-> The exact values are an implementation concern — they need only be loose enough that a slow-failing container (one that takes seconds to crash) gets multiple chances, and tight enough that a permanently broken container reaches the start limit on a human-meaningful timescale.
+> The exact values are an implementation concern — they need only be loose enough that a slow-failing container gets multiple chances, and tight enough that a permanently broken container reaches the start limit on a human-meaningful timescale. These are pacing parameters, not the definition of a crash loop; that is [autonomous.restart.rate](#r--autonomous.restart.rate).
 
 > r[autonomous.restart.start-limit-hit]
 > When a container unit reaches `failed/start-limit-hit` (systemd has refused further restarts because the unit exhausted [`StartLimitBurst`](#r--autonomous.restart.backoff)) the reconciler must:
 >
-> - File a `crash_loop` fault scoped to the offending instance, distinct from `container_start_failed`.
+> - File a `crash_loop` fault scoped to the offending instance, distinct from `container_start_failed`. This is a secondary trigger: a unit the supervisor has given up on must produce the fault even when the recorded rate has not reached its threshold.
 > - Stop attempting to auto-recover the instance (no `reset_failed_unit` + restart cycle) until the fault is cleared. The expected recovery path is operator intervention — fixing the underlying cause, redeploying with new config, or explicitly clearing the fault.
 > - Clear the fault automatically if the instance is later observed healthy.
 
@@ -821,6 +845,23 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > to the system journal. Each infrastructure container must be tagged with a structured
 > journal field that identifies the infrastructure component so that log queries can
 > target infrastructure logs independently of workload logs.
+
+> r[actuate.breadcrumb]
+> The runtime must record its own action breadcrumbs into the same log sink that
+> carries container output, tagged with the same app, resource kind, resource, and
+> instance fields. A breadcrumb names the `rt.*` primitive it records — or a synthetic
+> kind for runtime events such as unit creation and replay boundaries — and, where the
+> script surfaced one, the call site.
+>
+> Sharing the sink and the tagging scheme is the requirement, not an implementation
+> convenience: a log query at any granularity must return breadcrumbs and container
+> output interleaved in time order, so that an operator reading an app's logs sees the
+> closure's call sequence against the output it produced.
+
+> r[actuate.breadcrumb.replay]
+> A breadcrumb is emitted on a call's first fresh execution and not on replays of that
+> call, so a barrier-suspended operation does not flood the log with each pass. Each
+> replay pass instead surfaces a single boundary breadcrumb.
 
 > r[actuate.ingress.warm-certs]
 > When an action closure invokes [`rt.warm_certs`](#l--rt.warm-certs) with a selection that contains TLS-terminating ingresses, the runtime must initiate certificate acquisition for those ingresses' hostnames without exposing the ingresses to live traffic.
@@ -1085,7 +1126,12 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > The fault is cleared automatically when the unit is subsequently observed in an active or activating state.
 
 > r[fault.crash-loop]
-> When the reconciler observes that a resource instance's backing unit has reached the start-limit-hit terminal state (per [autonomous.restart.start-limit-hit](#r--autonomous.restart.start-limit-hit)), it must file a fault of kind `crash_loop` associated with that instance, distinct from `container_start_failed`.
+> The reconciler must file a fault of kind `crash_loop` associated with a resource instance, distinct from `container_start_failed`, when either:
+>
+> - the instance's recorded restart rate reaches the configured threshold (per [autonomous.restart.rate](#r--autonomous.restart.rate)), or
+> - its backing unit has reached the start-limit-hit terminal state (per [autonomous.restart.start-limit-hit](#r--autonomous.restart.start-limit-hit)).
+>
+> The fault must identify which of the two conditions filed it, so that an operator can tell a rate-derived crash loop from one the supervisor has already given up on.
 > The fault is cleared automatically when the instance is subsequently observed healthy. While the fault is active, the reconciler must not auto-restart the affected instance.
 
 > r[fault.external-volume-unmapped]

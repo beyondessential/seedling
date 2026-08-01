@@ -21,6 +21,7 @@ mod ingresses;
 mod key_mgmt;
 mod params;
 mod registries;
+mod restarts;
 mod services;
 mod status;
 mod templates;
@@ -196,6 +197,12 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/faults/list" => faults::list_faults(state, parse_params(req.params)?),
         // i[fault.clear-app]
         "/faults/clear" => faults::clear_app_faults(state, parse_params(req.params)?),
+        // i[restart.list]
+        "/restarts/list" => restarts::list_restarts(state, parse_params(req.params)?),
+        // i[restart.settings]
+        "/restarts/settings/get" => restarts::get_settings(state),
+        // i[restart.settings]
+        "/restarts/settings/set" => restarts::set_settings(state, parse_params(req.params)?),
         // i[canopy.status]
         "/canopy/status" => canopy::status(state),
         // i[canopy.settings]

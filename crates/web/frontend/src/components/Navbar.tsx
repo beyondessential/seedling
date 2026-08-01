@@ -9,6 +9,7 @@ import InventoryIcon from "@mui/icons-material/Inventory2";
 import KeyIcon from "@mui/icons-material/Key";
 import ParkIcon from "@mui/icons-material/Park";
 import PeopleAltIcon from "@mui/icons-material/PeopleAlt";
+import RestartAltIcon from "@mui/icons-material/RestartAlt";
 import StorageIcon from "@mui/icons-material/Storage";
 import { AppBar, Badge, Box, Chip, IconButton, Toolbar, Tooltip, Typography } from "@mui/material";
 import { useCallback, useEffect, useMemo } from "react";
@@ -286,6 +287,16 @@ export function Navbar() {
             sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
           >
             <DescriptionIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Container restart history">
+          <IconButton
+            size="small"
+            component={Link}
+            to="/restarts"
+            sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
+          >
+            <RestartAltIcon fontSize="small" />
           </IconButton>
         </Tooltip>
         <Box sx={{ flexGrow: 1 }} />
