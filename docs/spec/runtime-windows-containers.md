@@ -58,6 +58,11 @@ Rules marked `[spike]` name a mechanism not yet confirmed on the platform; the c
 > wcr[volume.model]
 > A volume is a runtime-owned host directory mapped into the consuming instance's container at a rendered path, read-only or read-write per the consuming declaration. An instance reaches only the volumes mapped into its own container.
 
+# Logs
+
+> wcr[logs.sink]
+> Workload and infrastructure output, and the runtime's own action records, are captured into the Windows log store, which serves the operator interface's log surface in place of the system journal the Linux runtime uses. Its contract — capture independent of the control plane, filtering, ordering, retention — is specified separately in the [Windows log store spec](runtime-windows-logs.md), so the log engine can be replaced without disturbing this document.
+
 # Shutdown and Signals
 
 > wcr[stop.methods]
