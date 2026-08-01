@@ -1,6 +1,6 @@
 # Windows backend — research notes
 
-> **Superseded (2026-07).** These notes predate the Windows runtime design sessions. The recommendation below (daemon-in-WSL2) was rejected; the chosen direction — a native second runtime — is specified in `docs/spec/runtime-windows.md`, with plan and rationale in `windows-runtime.md` and `windows-runtime-rationale.md`.
+> **Superseded (2026-07).** These notes predate the Windows runtime design sessions. The recommendation below (daemon-in-WSL2) was rejected; the chosen direction — a second runtime running workloads as Windows containers — is specified in `docs/spec/runtime-windows-containers.md`, with the plan in `windows-runtime-containers.md`.
 
 ## Three framings considered
 

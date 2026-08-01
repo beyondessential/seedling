@@ -3,7 +3,7 @@ The Seedling Windows Container Runtime is an implementation of the Seedling runt
 # Platform
 
 > wcr[platform.floor]
-> The runtime runs on Windows Server hosts providing the Host Compute Service and Host Networking Service. Workloads run as process-isolated containers sharing the host kernel.
+> The runtime runs on Windows Server 2019 or later, x64, providing the Host Compute Service and Host Networking Service. Workloads run as process-isolated containers sharing the host kernel.
 
 # Base Image and Composition
 
@@ -87,7 +87,7 @@ The Seedling Windows Container Runtime is an implementation of the Seedling runt
 > An `Executed` command runs as a new process inside the target instance's container, under the workload's account, environment, and working directory. It shares the container's lifetime: stopping the instance ends the command.
 
 > wcr[shell.session]
-> A shell session runs a process inside the target's container under a ConPTY pseudoconsole (`i[stream.shell]`): operator input drives the console input, console output drives the session's output stream, and resize requests resize the console.
+> A shell session runs a process inside the target's container under a ConPTY pseudoconsole (`i[stream.shell]`): operator input drives the console input, console output drives the session's output stream, and resize requests resize the console. ConPTY merges the streams, so the session's stderr may carry nothing; clients must not block on it.
 
 > wcr[shell.volume]
 > A volume shell runs a container with the selected volumes mapped in, named by display name, launched with that directory as its working directory (`i[volumes.shell]`). Read-only and read-write sessions differ only in how the volumes are mapped.
