@@ -9,8 +9,16 @@ specs (
             {
                 name main
                 include (
-                    crates/*/src/*.rs
-                    crates/*/src/**/*.rs
+                    crates/core/src/*.rs
+                    crates/core/src/**/*.rs
+                    crates/ctl/src/*.rs
+                    crates/ctl/src/**/*.rs
+                    crates/daemon/src/*.rs
+                    crates/daemon/src/**/*.rs
+                    crates/protocol/src/*.rs
+                    crates/protocol/src/**/*.rs
+                    crates/web/src/*.rs
+                    crates/web/src/**/*.rs
                 )
             }
         )
@@ -23,8 +31,16 @@ specs (
             {
                 name main
                 include (
-                    crates/*/src/*.rs
-                    crates/*/src/**/*.rs
+                    crates/core/src/*.rs
+                    crates/core/src/**/*.rs
+                    crates/ctl/src/*.rs
+                    crates/ctl/src/**/*.rs
+                    crates/daemon/src/*.rs
+                    crates/daemon/src/**/*.rs
+                    crates/protocol/src/*.rs
+                    crates/protocol/src/**/*.rs
+                    crates/web/src/*.rs
+                    crates/web/src/**/*.rs
                 )
             }
         )
@@ -37,8 +53,16 @@ specs (
             {
                 name main
                 include (
-                    crates/*/src/*.rs
-                    crates/*/src/**/*.rs
+                    crates/core/src/*.rs
+                    crates/core/src/**/*.rs
+                    crates/ctl/src/*.rs
+                    crates/ctl/src/**/*.rs
+                    crates/daemon/src/*.rs
+                    crates/daemon/src/**/*.rs
+                    crates/protocol/src/*.rs
+                    crates/protocol/src/**/*.rs
+                    crates/web/src/*.rs
+                    crates/web/src/**/*.rs
                 )
             }
         )
@@ -51,8 +75,16 @@ specs (
             {
                 name main
                 include (
-                    crates/*/src/*.rs
-                    crates/*/src/**/*.rs
+                    crates/core/src/*.rs
+                    crates/core/src/**/*.rs
+                    crates/ctl/src/*.rs
+                    crates/ctl/src/**/*.rs
+                    crates/daemon/src/*.rs
+                    crates/daemon/src/**/*.rs
+                    crates/protocol/src/*.rs
+                    crates/protocol/src/**/*.rs
+                    crates/web/src/*.rs
+                    crates/web/src/**/*.rs
                 )
             }
         )
@@ -65,8 +97,16 @@ specs (
             {
                 name main
                 include (
-                    crates/*/src/*.rs
-                    crates/*/src/**/*.rs
+                    crates/core/src/*.rs
+                    crates/core/src/**/*.rs
+                    crates/ctl/src/*.rs
+                    crates/ctl/src/**/*.rs
+                    crates/daemon/src/*.rs
+                    crates/daemon/src/**/*.rs
+                    crates/protocol/src/*.rs
+                    crates/protocol/src/**/*.rs
+                    crates/web/src/*.rs
+                    crates/web/src/**/*.rs
                 )
             }
         )
