@@ -26,10 +26,24 @@ Rules marked `[spike]` name a mechanism not yet confirmed on the platform; the c
 > Each instance runs as one process-isolated container enclosing the workload's process tree, its [network compartment](#wcr--net.compartment), its mapped volumes, and its scratch layer. Stopping the container stops everything within it.
 
 > wcr[shim.ownership]
-> Each container is supervised by its runhcs shim, which owns the container and restarts the workload per policy on exit. The shim runs independently of containerd and seedlingd: a workload keeps running while either restarts, and a restarting containerd re-attaches to its shims. A shim's death stops its container, which seedlingd reconciles as an observed exit. `[spike]`
+> Each container is supervised by its runhcs shim, which owns the container for its lifetime. The shim runs independently of containerd and seedlingd: a workload keeps running while either restarts, and a restarting containerd re-attaches to its shims. A shim's death stops its container, which seedlingd reconciles as an observed exit. `[spike]`
 
 > wcr[daemon.reconnect]
 > On restart, seedlingd reconnects to containerd and folds the container state and the exit events it reports into the observation history. `[spike]`
+
+# Restarts
+
+> wcr[restart.ownership]
+> The reconciler owns restart. Nothing beneath it restarts a workload on its behalf: it observes an exited container, decides from desired state whether a replacement is due, and starts one. The supervisor pacing requirements of `r[autonomous.restart.backoff]` bind only where a platform supervisor actions restarts, so they do not apply here; the reconciler paces its own attempts, and stops retrying at the crash-loop threshold rather than at a supervisor's start limit (`r[autonomous.restart.rate]`).
+
+> wcr[restart.record]
+> Each restart is recorded at the point the reconciler actions it (`r[autonomous.restart.record]`), so no counter inference is needed. Its cause distinguishes recovery from an unexpected exit from a deliberate action — a deploy, a replacement, an operator request — even though the reconciler performs both kinds. Only recovery restarts count toward the crash-loop rate; a rolling update must not read as a crash burst.
+
+> wcr[restart.exit-capture]
+> A terminated container's exit status is folded into the observation history before the container's record is reaped. The platform frees a container's identity only when its record is deleted, so an exit status not read before deletion is unrecoverable, and a restart record missing it is a tally rather than a diagnosis.
+
+> wcr[restart.daemon-gap]
+> A workload that exits while seedlingd is down stays down until seedlingd returns and reconciles, because nothing else will restart it. The exposure is bounded by seedlingd's own restart, and the runtime is installed so that the host's service manager restarts it promptly. This is a stated property of owning restart in the control plane, not an oversight: on a platform whose supervisor actions restarts, the gap does not exist.
 
 # Networking
 
