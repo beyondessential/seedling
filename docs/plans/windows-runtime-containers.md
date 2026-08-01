@@ -43,28 +43,28 @@ The `io.containerd.runhcs.v1` shim is the per-instance supervisor — it *is* th
 
 **Networking stays seedling-owned.** containerd's CNI is bypassed; seedlingd drives HNS directly for the fabric, per-compartment endpoints, mount-graph enforcement, ingress host-port publishing, and resolver DNS. This mirrors the Linux runtime, where seedling uses an engine for compute but owns the dataplane (nftables) itself.
 
-**Rust ↔ containerd is gRPC** via the `containerd-client` crate. The fallback, if a spike disqualifies containerd (see Spike A), is to hand-roll the compute plane directly on the Compute\* flat-C APIs (`computecore` / `computestorage` / `computenetwork`) through the `windows` crate already used by the spikes — no second language, but seedlingd then owns the supervisor, reattach, and layer sequencing itself.
+**Rust ↔ containerd is gRPC** via the `containerd-client` crate. The fallback, if a spike disqualifies containerd (see S1), is to hand-roll the compute plane directly on the Compute\* flat-C APIs (`computecore` / `computestorage` / `computenetwork`) through the `windows` crate already used by the spikes — no second language, but seedlingd then owns the supervisor, reattach, and layer sequencing itself.
 
 ## Open questions (owner: spec sessions)
 
 | # | Question | Current lean |
 |---|----------|--------------|
-| Q1 | Tooling to emit base-less (`FROM scratch`) Windows-format layers: `ociwclayer` export from an app directory vs a Windows builder that supports `FROM scratch` | Validate in Spike B that the emitted layers compose under the runtime's base and run. |
-| Q2 | Merged-descriptor restack: does the Windows snapshotter accept a synthesised base-plus-app chain and run it unmodified | Prototype in Spike B; if the snapshotter resists a synthesised chain, a thin custom snapshotter that always inserts the base is the fallback. |
-| Q3 | HNS network mode giving per-instance compartment, routable service address, endpoint-scoped mount enforcement, and host public-port publishing for ingress | Evaluate in Spike C against a worst-case field image; the mode must express the mount graph without a host-firewall fallback. |
-| Q4 | containerd lifecycle management: demand-start service vs seedlingd child; content-store and image GC ownership | Demand-start service driven by seedlingd; align image GC with the `/images` surface. Settled during Spike A. |
+| Q1 | Tooling to emit base-less (`FROM scratch`) Windows-format layers: `ociwclayer` export from an app directory vs a Windows builder that supports `FROM scratch` | Validate in S2 that the emitted layers compose under the runtime's base and run. |
+| Q2 | Merged-descriptor restack: does the Windows snapshotter accept a synthesised base-plus-app chain and run it unmodified | Prototype in S2; if the snapshotter resists a synthesised chain, a thin custom snapshotter that always inserts the base is the fallback. |
+| Q3 | HNS network mode giving per-instance compartment, routable service address, endpoint-scoped mount enforcement, and host public-port publishing for ingress | Evaluate in S3 against a worst-case field image; the mode must express the mount graph without a host-firewall fallback. |
+| Q4 | containerd lifecycle management: demand-start service vs seedlingd child; content-store and image GC ownership | Demand-start service driven by seedlingd; align image GC with the `/images` surface. Settled during S1. |
 
 ## Spikes
 
-- **A. containerd survival + control (the decider)** — the load-bearing spike; its outcome chooses containerd (B) or the hand-rolled fallback (A). See `windows-spike-containerd.md`; harness `spike-containerd`. Exit criteria:
+- **S1. containerd survival + control (the decider)** — the load-bearing spike; its outcome chooses the containerd option or the hand-rolled fallback. See `windows-spike-containerd.md`; harness `spike-containerd`. Exit criteria:
   1. A process-isolated Windows container keeps running across a full containerd service stop/start, and containerd re-attaches to the shim and resumes reporting task state. *(This is the make-or-break; if it fails, fall back to hand-rolling the supervisor.)*
   2. seedlingd drives containerd from Rust over gRPC: create, start, stop, exec, and receive exit events.
   3. On-demand lifecycle: seedlingd starts containerd on first workload and stops it when the world empties, without disturbing the content store or pulled images.
-  4. If (1) fails, measure the thickness of the fallback: supervisor + reattach + layer sequencing directly on the Compute\* APIs, to price option A.
-- **B. Composition + base store** — pull a build-matching base; synthesise a merged base-plus-app descriptor (Q2); run it; measure per-composition cost and layer cache/dedup behaviour; base pull-once-per-build and pre-staging.
-- **C. Networking on a worst-case image** (field disk image) — per-instance compartment and endpoint; service addresses; mount graph compiled to compartment-boundary enforcement with default-deny; ingress host public-port publishing; per-compartment resolver DNS; coexistence with field AV/EDR. Decides Q3.
-- **D. Exec + ConPTY + volume shells** — run an action process inside a running container; ConPTY shell attach and resize; volume shells via a container with volumes mapped.
-- **E. Stop delivery** — console-control-event and named-event delivery to a workload inside its container; exit-code recording.
+  4. If (1) fails, measure the thickness of the fallback: supervisor + reattach + layer sequencing directly on the Compute\* APIs, to price the hand-rolled fallback.
+- **S2. Composition + base store** — pull a build-matching base; synthesise a merged base-plus-app descriptor (Q2); run it; measure per-composition cost and layer cache/dedup behaviour; base pull-once-per-build and pre-staging.
+- **S3. Networking on a worst-case image** (field disk image) — per-instance compartment and endpoint; service addresses; mount graph compiled to compartment-boundary enforcement with default-deny; ingress host public-port publishing; per-compartment resolver DNS; coexistence with field AV/EDR. Decides Q3.
+- **S4. Exec + ConPTY + volume shells** — run an action process inside a running container; ConPTY shell attach and resize; volume shells via a container with volumes mapped.
+- **S5. Stop delivery** — console-control-event and named-event delivery to a workload inside its container; exit-code recording.
 
 ## Rollout
 
@@ -83,5 +83,5 @@ Whatever a field host runs today is migrated by packaging it as an ordinary arti
 - **Seam** — Rust↔containerd is gRPC (mature-enough client) rather than in-process.
 - **Compatibility matrix** — containerd × hcsshim × host build must be tracked fleet-wide, but it is a Microsoft-supported matrix surfaced by doctor.
 - **Glue** — restack via synthesised merged descriptor (Q2) and seedling-owned HNS networking are ours to build; the latter is unavoidable in any option.
-- **Gate** — the whole approach rests on Spike A criterion 1 (Windows shim-reconnect across a containerd restart). It holds by design; the spike confirms it on the platform floor, and the hand-rolled fallback is priced in the same spike.
+- **Gate** — the whole approach rests on S1 criterion 1 (Windows shim-reconnect across a containerd restart). It holds by design; the spike confirms it on the platform floor, and the hand-rolled fallback is priced in the same spike.
 - **Payoff** — the compute plane (image service, snapshotter/restack, per-instance supervisor, reattach) is reused and Microsoft-maintained rather than hand-rolled, and the daemon-independence property is delivered by construction.

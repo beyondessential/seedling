@@ -1,9 +1,8 @@
-# Spike: containerd survival + control (the decider)
+# Spike S1: containerd survival + control (the decider)
 
 The load-bearing spike for the container runtime. Its outcome chooses between
-building on containerd (option B) and hand-rolling the compute plane on the
-Compute\* APIs (option A). Everything else in the design composes with whatever
-this spike settles.
+building on containerd and hand-rolling the compute plane on the Compute\*
+APIs. Everything else in the design composes with whatever this spike settles.
 
 Environment: a Windows Server 2019+ host with the Containers feature,
 containerd and `ctr` installed, and a base image whose build matches the host
@@ -66,7 +65,7 @@ requires it.
 
 - If the workload does not survive a containerd restart, containerd cannot be
   treated as a restartable managed dependency, and the daemon-independence
-  property must be built directly: fall back to option A — seedlingd owns the
+  property must be built directly: fall back to hand-rolling — seedlingd owns the
   supervisor, reattach, and layer sequencing on the Compute\* APIs
   (`computecore` / `computestorage` / `computenetwork`) through the `windows`
   crate. Use experiment 3's result to price that work before committing.
