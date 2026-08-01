@@ -244,6 +244,23 @@ impl Observer {
         };
         facts.push((unit_fact, now));
 
+        // r[impl autonomous.restart.record]
+        // The counter is reported separately from the unit's state because it
+        // is the only signal that survives a restart the observer never saw:
+        // a unit that went down and came back inside one observe interval
+        // looks `active` at both ends, but its counter has moved.
+        if let Some(s) = unit_state.as_ref()
+            && let Some(count) = s.restarts
+        {
+            facts.push((
+                ObservationFact::UnitRestartCounter {
+                    count,
+                    exit: s.last_exit,
+                },
+                now,
+            ));
+        }
+
         Ok(())
     }
 }
