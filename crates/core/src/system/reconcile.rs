@@ -32,9 +32,12 @@ use crate::{
     },
 };
 
+pub use restarts::gc as gc_restart_records;
+
 mod faults;
 mod images;
 mod phases;
+mod restarts;
 mod site_proxy;
 mod state;
 
@@ -307,6 +310,11 @@ pub struct Reconciler {
     /// Job instance IDs known to have completed during this process lifetime.
     /// If these appear running on a subsequent tick they are stopped immediately.
     completed_jobs: HashSet<InstanceId>,
+    /// Instances with an active `crash_loop` fault. Re-derived from the fault
+    /// table at the top of each tick so the suppression survives a daemon
+    /// restart and lifts as soon as an operator clears the fault.
+    // r[impl fault.crash-loop]
+    crash_looped: HashSet<InstanceId>,
     event_tx: EventSender,
     shells: Arc<ShellRegistry>,
     /// Previous tick's lifecycle states, keyed by (app, instance_id_hex).
@@ -451,6 +459,7 @@ impl Reconciler {
             written_obs,
             started_jobs: HashSet::new(),
             completed_jobs: HashSet::new(),
+            crash_looped: HashSet::new(),
             event_tx,
             prev_states: BTreeMap::new(),
             rolling_updates: HashSet::new(),
@@ -699,6 +708,27 @@ impl Reconciler {
             }
         }
 
+        // r[impl fault.crash-loop]
+        // The auto-restart suppression is in-memory but its truth lives in the
+        // fault table, so re-derive it each tick: the suppression then
+        // survives a daemon restart, and an operator clearing the fault takes
+        // effect on the very next tick.
+        self.crash_looped = self.db.call(|db| {
+            let mut out = HashSet::new();
+            let Ok(active) = crate::runtime::faults::list_active_faults(db, None) else {
+                return out;
+            };
+            for f in active {
+                if f.kind == "crash_loop"
+                    && let Some(hex) = f.instance_id.as_deref()
+                    && let Some(id) = InstanceId::from_hex(hex)
+                {
+                    out.insert(id);
+                }
+            }
+            out
+        });
+
         // r[impl reconciliation.liveness]
         // --- Concurrent phase: pods ∥ volumes ∥ caddy ∥ resolver ---
         let (pod_updates, vol_observations, caddy_result, resolver_result) = tokio::join!(
@@ -716,6 +746,7 @@ impl Reconciler {
                 &self.written_obs,
                 &self.started_jobs,
                 &self.completed_jobs,
+                &self.crash_looped,
             ),
             phases::run_volumes_phase(&self.observer, &self.actuator, &self.db, &apps),
             tokio::time::timeout(
@@ -1196,11 +1227,16 @@ impl Reconciler {
         // Rebuild rolling_updates from scratch each tick so that completed
         // rollouts are automatically cleared.
         self.rolling_updates.clear();
-        for (app_name, pod_update) in pod_updates {
+        for (app_name, mut pod_update) in pod_updates {
             // r[fault.image-pull]
             self.file_image_pull_faults(&app_name, &pod_update);
             // r[fault.container-start]
             self.file_unit_failure_faults(&app_name, &pod_update);
+            // r[autonomous.restart.record]
+            // r[autonomous.restart.rate]
+            // Restart bookkeeping runs first: it appends rate-derived crash
+            // loops to the update so both triggers file through one path.
+            self.record_restarts(&app_name, &mut pod_update);
             // r[fault.crash-loop]
             self.file_crash_loop_faults(&app_name, &pod_update);
             // r[fault.healthcheck]

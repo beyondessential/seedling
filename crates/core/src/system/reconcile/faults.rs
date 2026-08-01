@@ -371,17 +371,18 @@ impl Reconciler {
     }
 
     // r[impl fault.crash-loop]
-    /// File a `crash_loop` fault for each instance whose backing systemd unit
-    /// reached `failed/start-limit-hit`. This is a hard fault: the runtime
-    /// stops auto-recovering until the operator clears it (typically by
-    /// fixing config and reinstalling, which generates a new instance ID and
-    /// therefore a fresh fault scope).
+    /// File a `crash_loop` fault for each instance the restart bookkeeping or
+    /// the start-limit observation has flagged. This is a hard fault: the
+    /// runtime stops auto-recovering until the operator clears it (typically
+    /// by fixing config and reinstalling, which generates a new instance ID
+    /// and therefore a fresh fault scope).
     pub(super) fn file_crash_loop_faults(&self, app: &AppName, update: &pods::PodActuationUpdate) {
         let app = app.clone();
-        let crash_loops: Vec<ResourceInstance> = update.crash_loops.to_vec();
+        let crash_loops: Vec<pods::CrashLoop> = update.crash_loops.to_vec();
         let unit_healthy: Vec<ResourceInstance> = update.unit_healthy.to_vec();
         self.db.call(move |db| {
-            for instance in &crash_loops {
+            for crash_loop in &crash_loops {
+                let instance = &crash_loop.instance;
                 let inst_hex = instance.id.to_hex();
                 let kind_str = format!("{:?}", instance.kind).to_lowercase();
                 let already_filed = faults::list_active_faults(db, Some(&app))
@@ -391,11 +392,22 @@ impl Reconciler {
                         f.kind == "crash_loop" && f.instance_id.as_deref() == Some(&inst_hex)
                     });
                 if !already_filed {
-                    let desc = format!(
-                        "systemd hit start-limit for {}: too many restarts in window. \
-                         Auto-recovery is paused until this fault is cleared.",
-                        instance.display_name
-                    );
+                    // The description names which trigger fired: a
+                    // rate-derived crash loop and one systemd has already
+                    // given up on need different operator responses.
+                    let desc = match crash_loop.cause {
+                        pods::CrashLoopCause::RestartRate { count, window_secs } => format!(
+                            "{} restarted {count} times in the last {} minutes. \
+                             Auto-recovery is paused until this fault is cleared.",
+                            instance.display_name,
+                            window_secs / 60,
+                        ),
+                        pods::CrashLoopCause::StartLimitHit => format!(
+                            "systemd hit start-limit for {}: too many restarts in window. \
+                             Auto-recovery is paused until this fault is cleared.",
+                            instance.display_name
+                        ),
+                    };
                     if let Err(e) = faults::file_fault(
                         db,
                         &app,
