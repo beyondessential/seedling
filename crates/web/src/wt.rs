@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use seedling_protocol::client::ClientError;
 use serde_json::json;
 use tokio::io::AsyncWriteExt as _;
 use tokio::sync::watch;
@@ -250,9 +251,17 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
                     }
                     Err(e) => {
                         tracing::error!("log stream setup failed: {e}");
-                        let msg = serde_json::json!({
-                            "error": { "code": "daemon_unavailable", "message": e.to_string() }
-                        });
+                        // A rejection by the daemon is the daemon's answer, not
+                        // a gateway failure: relay its code and message so the
+                        // browser can tell "no such app" from "daemon down".
+                        let msg = match &e {
+                            ClientError::Api { code, message } => serde_json::json!({
+                                "error": { "code": code, "message": message }
+                            }),
+                            _ => serde_json::json!({
+                                "error": { "code": "daemon_unavailable", "message": e.to_string() }
+                            }),
+                        };
                         let _ = wt_send.write_all((msg.to_string() + "\n").as_bytes()).await;
                         let _ = wt_send.shutdown().await;
                     }
