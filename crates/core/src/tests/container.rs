@@ -865,3 +865,95 @@ fn container_stop_timeout_rejects_zero() {
         r#"app.deployment("web").image("docker.io/library/nginx:latest").stop_timeout(0);"#,
     );
 }
+
+// l[verify bsl.args.strict]
+// l[verify container.pids-limit]
+// The unchecked `as u32` wrapped: pids_limit(4294967297) became 1, and the
+// container could not start a workload.
+#[test]
+fn pids_limit_rejects_values_beyond_u32() {
+    let err = run_test_script_err(
+        r#"
+        app.deployment("web")
+            .image("docker.io/library/nginx:1.29")
+            .pids_limit(4294967297);
+    "#,
+    );
+    let message = err.to_string();
+    assert!(message.contains("`pids_limit`"), "{message}");
+}
+
+// l[verify bsl.args.strict]
+// l[verify container.stop-timeout]
+#[test]
+fn stop_timeout_rejects_values_beyond_u32() {
+    let err = run_test_script_err(
+        r#"
+        app.deployment("web")
+            .image("docker.io/library/nginx:1.29")
+            .stop_timeout(4294967297);
+    "#,
+    );
+    assert!(err.to_string().contains("`stop_timeout`"), "{err}");
+}
+
+// l[verify bsl.args.strict]
+// l[verify container.command]
+#[test]
+fn command_array_rejects_non_string_elements() {
+    let err = run_test_script_err(
+        r#"
+        app.deployment("web")
+            .image("docker.io/library/nginx:1.29")
+            .command(["nginx", 8080]);
+    "#,
+    );
+    let message = err.to_string();
+    assert!(message.contains("`command`"), "{message}");
+    assert!(message.contains("element 1"), "{message}");
+}
+
+// l[verify bsl.args.strict]
+// l[verify container.arg]
+#[test]
+fn arg_array_rejects_non_string_elements() {
+    let err = run_test_script_err(
+        r#"
+        app.deployment("web")
+            .image("docker.io/library/nginx:1.29")
+            .arg(["-c", 3]);
+    "#,
+    );
+    assert!(err.to_string().contains("element 1"), "{err}");
+}
+
+// l[verify bsl.args.strict]
+// l[verify container.env]
+// A non-map entry used to be skipped, so the variable simply did not exist.
+#[test]
+fn env_array_rejects_non_map_entries() {
+    let err = run_test_script_err(
+        r#"
+        app.deployment("web")
+            .image("docker.io/library/nginx:1.29")
+            .env(["DB_HOST=localhost"]);
+    "#,
+    );
+    let message = err.to_string();
+    assert!(message.contains("env entry 0"), "{message}");
+    assert!(message.contains("must be a map"), "{message}");
+}
+
+// l[verify bsl.args.strict]
+// l[verify container.image]
+// `is_ascii_lowercase` accepts g–z, so a digest of g's passed as hex.
+#[test]
+fn image_digest_must_be_hex() {
+    let err = run_test_script_err(
+        r#"
+        app.deployment("web")
+            .image("docker.io/library/nginx@sha256:gggggggggggggggggggggggggggggggg");
+    "#,
+    );
+    assert!(err.to_string().contains("digest hex"), "{err}");
+}

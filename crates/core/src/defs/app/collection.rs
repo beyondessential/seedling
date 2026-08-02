@@ -7,9 +7,12 @@ use super::App;
 
 pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
     // l[impl collection.select]
-    builder.with_fn("select", |this: &mut App, criterion: Map| -> Collection {
-        Collection::from_bag(Rc::new(AppBag(this.clone()))).select(&criterion)
-    });
+    builder.with_fn(
+        "select",
+        |this: &mut App, criterion: Map| -> Result<Collection, Box<rhai::EvalAltResult>> {
+            Collection::from_bag(Rc::new(AppBag(this.clone()))).select(&criterion)
+        },
+    );
 
     // l[impl collection.one]
     builder.with_fn("one", |this: &mut App| -> Dynamic {

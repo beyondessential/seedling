@@ -246,3 +246,20 @@ fn deployment_implements_pod_interface() {
         panic!("expected Deployment");
     }
 }
+
+// l[verify bsl.args.strict]
+// l[verify deployment.scale]
+// An inverted range is an empty one: `scale(5..2)` stored bounds no replica
+// count can satisfy rather than naming the mistake.
+#[test]
+fn scale_rejects_an_inverted_range() {
+    let err = run_test_script_err(
+        r#"
+        app.deployment("web")
+            .image("docker.io/library/nginx:1.29")
+            .scale(5..2);
+    "#,
+    );
+    let message = err.to_string();
+    assert!(message.contains("must not exceed"), "{message}");
+}

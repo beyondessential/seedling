@@ -40,7 +40,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
              -> Result<(), Box<EvalAltResult>> {
                 let shell_name = ShellName::new(name)
                     .map_err(|e| -> Box<EvalAltResult> { e.to_string().into() })?;
-                let desc = super::extract_description(&options);
+                let desc = super::extract_description(&options)?;
                 // l[impl action.option-params]
                 let params = parse_shell_params(&options)?;
                 let name_for_insert = shell_name.clone();
