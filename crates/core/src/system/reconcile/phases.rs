@@ -6,7 +6,7 @@ use std::{
 use ipnet::Ipv6Net;
 use seedling_protocol::names::{AppName, SiteServiceName};
 
-use super::{AppSnapshot, RunningPod, pods, proxy, routes, rules, site_proxy, volumes};
+use super::{AppSnapshot, Coverage, RunningPod, pods, proxy, routes, rules, site_proxy, volumes};
 use crate::{
     runtime::{
         AppPhase, InstanceRegistry,
@@ -74,6 +74,18 @@ pub(super) async fn run_volumes_phase(
     futures_util::future::join_all(futures).await
 }
 
+pub(super) struct RoutesBuild {
+    pub routes: Vec<crate::system::types::ServiceRoute>,
+    pub observations: Vec<(
+        crate::runtime::identity::ResourceInstance,
+        &'static str,
+        serde_json::Value,
+    )>,
+    /// `Partial` when an app's routes could not be built. Its service routes
+    /// are absent from `routes`, which replaces the host's whole route set.
+    pub coverage: Coverage,
+}
+
 pub(super) fn compute_routes(
     apps: &[AppSnapshot],
     running_pods_by_app: &HashMap<AppName, Vec<RunningPod>>,
@@ -81,16 +93,10 @@ pub(super) fn compute_routes(
     registry: &dyn InstanceRegistry,
     ext_snapshot: &ExternalServiceSnapshot,
     resolve_ctx: &ResolveCtx<'_>,
-) -> (
-    Vec<crate::system::types::ServiceRoute>,
-    Vec<(
-        crate::runtime::identity::ResourceInstance,
-        &'static str,
-        serde_json::Value,
-    )>,
-) {
+) -> RoutesBuild {
     let mut all_routes = Vec::new();
     let mut all_obs = Vec::new();
+    let mut dropped = 0usize;
     for app in apps {
         if app.phase == AppPhase::Uninstalling {
             continue;
@@ -113,13 +119,18 @@ pub(super) fn compute_routes(
             Ok(pair) => pair,
             Err(e) => {
                 tracing::warn!(app = %app.name, error = %e, "routes: registry lookup failed for app; skipping");
+                dropped += 1;
                 continue;
             }
         };
         all_routes.extend(routes);
         all_obs.extend(obs);
     }
-    (all_routes, all_obs)
+    RoutesBuild {
+        routes: all_routes,
+        observations: all_obs,
+        coverage: Coverage::of(dropped),
+    }
 }
 
 /// Per-tick classification of every site-service endpoint into the kinds of
@@ -183,6 +194,9 @@ pub(super) fn classify_site_service_endpoints(
 pub(super) struct NftablesBuild {
     pub rules: DataPlaneRules,
     pub degraded_services_by_app: HashMap<AppName, std::collections::BTreeSet<String>>,
+    /// `Partial` when an app's rules could not be built. Its DNAT and mount
+    /// rules are absent from `rules`, which is applied wholesale.
+    pub coverage: Coverage,
 }
 
 #[expect(
@@ -205,6 +219,7 @@ pub(super) fn compute_nftables_rules(
     let mut all_mounts = Vec::new();
     let mut all_service_dnat = Vec::new();
     let mut degraded_by_app: HashMap<AppName, std::collections::BTreeSet<String>> = HashMap::new();
+    let mut dropped = 0usize;
     for app in apps {
         if app.phase == AppPhase::Uninstalling {
             continue;
@@ -236,6 +251,7 @@ pub(super) fn compute_nftables_rules(
             }
             Err(e) => {
                 tracing::warn!(app = %app.name, error = %e, "nftables: registry lookup failed for app; skipping");
+                dropped += 1;
                 continue;
             }
         }
@@ -247,11 +263,16 @@ pub(super) fn compute_nftables_rules(
             service_dnat: all_service_dnat,
         },
         degraded_services_by_app: degraded_by_app,
+        coverage: Coverage::of(dropped),
     }
 }
 
 pub(super) struct ProxyBuildResult {
     pub config: crate::system::types::ProxyConfig,
+    /// `Partial` when an app's ingresses could not be built. Its virtual
+    /// hosts and L4 routes are absent from `config`, which replaces the
+    /// proxy's whole configuration.
+    pub coverage: Coverage,
     pub observations: Vec<(
         crate::runtime::identity::ResourceInstance,
         &'static str,
@@ -337,6 +358,7 @@ pub(super) fn compute_proxy_config(
     let mut observations = Vec::new();
     let mut ready_observations = Vec::new();
     let mut all_warm: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut dropped = 0usize;
     for app in apps {
         if app.phase == AppPhase::Uninstalling {
             continue;
@@ -357,6 +379,7 @@ pub(super) fn compute_proxy_config(
             Ok(b) => b,
             Err(e) => {
                 tracing::warn!(app = %app.name, error = %e, "proxy: registry lookup failed for app; skipping");
+                dropped += 1;
                 continue;
             }
         };
@@ -436,6 +459,7 @@ pub(super) fn compute_proxy_config(
 
     ProxyBuildResult {
         config,
+        coverage: Coverage::of(dropped),
         observations,
         ready_observations,
         conflicts,

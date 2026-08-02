@@ -266,6 +266,48 @@ pub(crate) struct RunningPod {
     pub observed_healthy: bool,
 }
 
+/// Whether a tick's view of the installed apps is complete enough to apply as
+/// absolute state.
+///
+/// Routes, nftables rules and the proxy config are rebuilt from the tick's
+/// snapshots and applied wholesale: whatever is not in the computed set is
+/// removed from the host. So an app that fell out of the set because its
+/// desired state or a registry lookup errored is not "an app that contributes
+/// nothing" — it is an app whose DNAT, service routes and vhosts are about to
+/// be withdrawn while its containers keep running.
+///
+/// The reconciler already applies this rule to one failure: a Caddy bring-up
+/// failure skips the nftables and proxy applies for the tick rather than
+/// applying a reduced state. `Partial` extends it to the rest.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Coverage {
+    Complete,
+    Partial,
+}
+
+impl Coverage {
+    fn of(dropped: usize) -> Self {
+        if dropped == 0 {
+            Self::Complete
+        } else {
+            Self::Partial
+        }
+    }
+
+    fn is_complete(self) -> bool {
+        self == Self::Complete
+    }
+
+    /// Weaken to `Partial` if `other` is.
+    fn and(self, other: Self) -> Self {
+        if self.is_complete() && other.is_complete() {
+            Self::Complete
+        } else {
+            Self::Partial
+        }
+    }
+}
+
 /// Point-in-time snapshot of a single app's state, taken at tick start.
 struct AppSnapshot {
     name: AppName,
@@ -480,9 +522,16 @@ impl Reconciler {
     // r[desired-state.definition]
     // r[desired-state.steady]
     // r[desired-state.during-operation]
-    fn snapshot_all_apps(&self) -> Vec<AppSnapshot> {
+    ///
+    /// Returns the snapshots alongside how many installed apps were dropped
+    /// because computing their desired state failed. The count is not
+    /// diagnostic: routes, nftables rules and the proxy config are applied as
+    /// absolute state, so a dropped app is indistinguishable from a deleted
+    /// one unless the tick is told the set is incomplete.
+    fn snapshot_all_apps(&self) -> (Vec<AppSnapshot>, usize) {
         let reg = self.app_registry.read();
         let mut snapshots = Vec::new();
+        let mut skipped = 0usize;
         for (name, status) in reg.list() {
             let entry = match reg.get(name.as_str()) {
                 Some(e) => e,
@@ -558,6 +607,7 @@ impl Reconciler {
                         &name,
                         &format!("failed to compute desired state: {e}"),
                     );
+                    skipped += 1;
                     continue;
                 }
             };
@@ -576,7 +626,7 @@ impl Reconciler {
                 current_generation,
             });
         }
-        snapshots
+        (snapshots, skipped)
     }
 
     /// Build the effective-scale map for every Deployment in an app.
@@ -670,12 +720,26 @@ impl Reconciler {
 
         self.reconcile_stray_shells().await;
 
-        let apps = self.snapshot_all_apps();
+        let (apps, dropped_apps) = self.snapshot_all_apps();
 
         if apps.is_empty() {
-            self.tear_down_idle().await;
+            // r[impl reconciliation.absolute-state] — an empty snapshot list
+            // means "no app is installed" only when nothing was dropped on the
+            // way here. Tearing down on a transient registry error would flush
+            // every rule and remove Caddy, the resolver and NAT64 while the
+            // workloads keep running.
+            if dropped_apps == 0 {
+                self.tear_down_idle().await;
+            } else {
+                warn!(
+                    dropped = dropped_apps,
+                    "every installed app failed to compute its desired state; \
+                     holding the data plane rather than tearing it down"
+                );
+            }
             return false;
         }
+        let app_coverage = Coverage::of(dropped_apps);
 
         // r[impl infra.nat64.translator.lifecycle]
         // Wake-from-idle: ensure NAT64 translator is installed before any
@@ -860,7 +924,11 @@ impl Reconciler {
         };
 
         // --- Compute routes (sync) ---
-        let (all_routes, route_obs) = phases::compute_routes(
+        let phases::RoutesBuild {
+            routes: all_routes,
+            observations: route_obs,
+            coverage: routes_coverage,
+        } = phases::compute_routes(
             &apps,
             &running_pods_by_app,
             &self.node_prefix,
@@ -868,6 +936,7 @@ impl Reconciler {
             &ext_snapshot,
             &make_resolve_ctx(),
         );
+        let routes_coverage = routes_coverage.and(app_coverage);
         self.persist_obs(route_obs);
 
         // --- Classify site-service endpoint outcomes and reconcile the
@@ -933,16 +1002,20 @@ impl Reconciler {
                 let phases::NftablesBuild {
                     rules: dp_rules,
                     degraded_services_by_app,
+                    coverage: rules_coverage,
                 } = nft_build;
+                let rules_coverage = rules_coverage.and(app_coverage);
                 // r[impl fault.service-degraded]
                 self.file_service_degraded_faults(&apps, &degraded_services_by_app);
                 let phases::ProxyBuildResult {
                     config: proxy_config,
+                    coverage: proxy_coverage,
                     observations: proxy_obs,
                     ready_observations: proxy_ready_obs,
                     conflicts: ingress_conflicts,
                     unresolved_site_attachments,
                 } = proxy_build;
+                let proxy_coverage = proxy_coverage.and(app_coverage);
                 // r[impl ingress.site.conflict]
                 self.reconcile_ingress_conflicts(&ingress_conflicts);
                 // r[impl ingress.site.attachment]
@@ -1006,11 +1079,40 @@ impl Reconciler {
 
                 self.persist_obs(proxy_obs);
 
+                // r[impl reconciliation.absolute-state] — each of these three
+                // replaces the host's whole state for its plane, so an
+                // incomplete build must be withheld rather than applied: the
+                // apps missing from it are still running.
+                for (plane, coverage) in [
+                    ("routes", routes_coverage),
+                    ("nftables rules", rules_coverage),
+                    ("proxy config", proxy_coverage),
+                ] {
+                    if !coverage.is_complete() {
+                        warn!(
+                            "an app is missing from this tick's {plane}; \
+                             holding the previous state rather than applying a reduced one"
+                        );
+                    }
+                }
+
                 let (routes_res, rules_res, proxy_res) = tokio::join!(
-                    self.driver.data_plane.apply_routes(&all_routes),
-                    self.driver.data_plane.apply_rules(&dp_rules),
                     async {
-                        if has_proxy_config {
+                        if routes_coverage.is_complete() {
+                            self.driver.data_plane.apply_routes(&all_routes).await
+                        } else {
+                            Ok(())
+                        }
+                    },
+                    async {
+                        if rules_coverage.is_complete() {
+                            self.driver.data_plane.apply_rules(&dp_rules).await
+                        } else {
+                            Ok(())
+                        }
+                    },
+                    async {
+                        if has_proxy_config && proxy_coverage.is_complete() {
                             self.driver.proxy.apply_config(&proxy_config).await
                         } else {
                             Ok(())
@@ -1499,5 +1601,167 @@ impl Reconciler {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use crate::runtime::registry::{RegistryError, ScaledGroup};
+
+    use super::*;
+
+    /// A registry that fails for one named app and succeeds for every other.
+    ///
+    /// The stub `System` cannot make a registry lookup fail, which is why the
+    /// existing tests all passed while the reconciler withdrew a live app's
+    /// data plane on a transient error.
+    struct RegistryFailingFor {
+        broken: AppName,
+        inner: crate::runtime::registry::EphemeralInstanceRegistry,
+    }
+
+    impl InstanceRegistry for RegistryFailingFor {
+        fn get_or_create_singleton(
+            &self,
+            app: &AppName,
+            kind: crate::defs::resource::ResourceKind,
+            name: Option<&str>,
+        ) -> Result<crate::runtime::identity::ResourceInstance, RegistryError> {
+            if app == &self.broken {
+                return Err(RegistryError::message("registry unavailable"));
+            }
+            self.inner.get_or_create_singleton(app, kind, name)
+        }
+
+        fn ensure_scaled_group(
+            &self,
+            app: &AppName,
+            kind: crate::defs::resource::ResourceKind,
+            name: Option<&str>,
+            count: u16,
+        ) -> Result<ScaledGroup, RegistryError> {
+            if app == &self.broken {
+                return Err(RegistryError::message("registry unavailable"));
+            }
+            self.inner.ensure_scaled_group(app, kind, name, count)
+        }
+
+        fn find_all_instances(
+            &self,
+            app: &AppName,
+            kind: crate::defs::resource::ResourceKind,
+            name: Option<&str>,
+        ) -> Result<Vec<crate::runtime::identity::ResourceInstance>, RegistryError> {
+            if app == &self.broken {
+                return Err(RegistryError::message("registry unavailable"));
+            }
+            self.inner.find_all_instances(app, kind, name)
+        }
+    }
+
+    fn snapshot_with_service(name: &str) -> AppSnapshot {
+        let app_name = AppName::new(name).unwrap();
+        let (app, err) = crate::runtime::apps::evaluate_script(
+            &app_name,
+            r#"app.service("api").http(8080);"#,
+            &std::collections::BTreeMap::new(),
+            &crate::ScriptLimits::default(),
+        );
+        assert!(err.is_none(), "test script must evaluate: {err:?}");
+        let app_def = (*app.def.load_full()).clone();
+        AppSnapshot {
+            name: app_name,
+            desired: DesiredState::default(),
+            app_def,
+            phase: AppPhase::Installed,
+            phase_handle: Arc::new(Mutex::new(AppPhase::Installed)),
+            warm_cert_hostnames: Default::default(),
+            current_generation: 1,
+        }
+    }
+
+    // r[verify reconciliation.absolute-state]
+    // Routes are applied wholesale, so an app dropped from the computed set
+    // has its live routes deleted. The tick has to know the set is short.
+    #[test]
+    fn routes_report_partial_coverage_when_an_app_is_dropped() {
+        let apps = vec![
+            snapshot_with_service("healthy"),
+            snapshot_with_service("broken"),
+        ];
+        let registry = RegistryFailingFor {
+            broken: AppName::new("broken").unwrap(),
+            inner: crate::runtime::registry::EphemeralInstanceRegistry::new(),
+        };
+        let empty_lookup = crate::runtime::site_services::resolve::EmptyLookup;
+        let resolve_ctx = ResolveCtx {
+            nat64_active: false,
+            has_ipv6_egress: true,
+            resolver: &empty_lookup,
+        };
+
+        let build = phases::compute_routes(
+            &apps,
+            &HashMap::new(),
+            &"fd5e:ed11:9000::/48".parse().unwrap(),
+            &registry,
+            &crate::runtime::external_service_mappings::ExternalServiceSnapshot::default(),
+            &resolve_ctx,
+        );
+
+        assert_eq!(
+            build.coverage,
+            Coverage::Partial,
+            "a dropped app must not look like a complete route set"
+        );
+        assert_eq!(
+            build.routes.len(),
+            1,
+            "the healthy app still contributes its route"
+        );
+    }
+
+    // r[verify reconciliation.absolute-state]
+    #[test]
+    fn routes_report_complete_coverage_when_every_app_builds() {
+        let apps = vec![
+            snapshot_with_service("healthy"),
+            snapshot_with_service("other"),
+        ];
+        let registry = RegistryFailingFor {
+            broken: AppName::new("nobody").unwrap(),
+            inner: crate::runtime::registry::EphemeralInstanceRegistry::new(),
+        };
+        let empty_lookup = crate::runtime::site_services::resolve::EmptyLookup;
+        let resolve_ctx = ResolveCtx {
+            nat64_active: false,
+            has_ipv6_egress: true,
+            resolver: &empty_lookup,
+        };
+
+        let build = phases::compute_routes(
+            &apps,
+            &HashMap::new(),
+            &"fd5e:ed11:9000::/48".parse().unwrap(),
+            &registry,
+            &crate::runtime::external_service_mappings::ExternalServiceSnapshot::default(),
+            &resolve_ctx,
+        );
+
+        assert_eq!(build.coverage, Coverage::Complete);
+        assert_eq!(build.routes.len(), 2);
+    }
+
+    // r[verify reconciliation.absolute-state]
+    // The whole point of the distinction: an empty app set means "nothing is
+    // installed" only when nothing was dropped getting there.
+    #[test]
+    fn coverage_distinguishes_idle_from_dropped() {
+        assert!(Coverage::of(0).is_complete());
+        assert!(!Coverage::of(1).is_complete());
+        assert!(!Coverage::Complete.and(Coverage::Partial).is_complete());
+        assert!(Coverage::Complete.and(Coverage::Complete).is_complete());
     }
 }
