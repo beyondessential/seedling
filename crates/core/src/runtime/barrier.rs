@@ -160,15 +160,28 @@ impl std::fmt::Display for ReplayMismatch {
                 "replay diverged at call {call_index}: the log records a {found:?} but the \
                  script is making a {expected:?}"
             ),
+            // This message is the whole explanation an operator gets for why
+            // an operation refused to resume, so it prints the recorded
+            // argument itself rather than its `Option` wrapper.
             Self::Extra {
                 call_index,
                 kind,
                 expected,
-                found,
+                found: Some(found),
             } => write!(
                 f,
-                "replay diverged at call {call_index}: the log records a {kind:?} of {found:?} \
-                 but the script is making one of {expected:?}"
+                "replay diverged at call {call_index}: the log records a {kind:?} of `{found}` \
+                 but the script is making one of `{expected}`"
+            ),
+            Self::Extra {
+                call_index,
+                kind,
+                expected,
+                found: None,
+            } => write!(
+                f,
+                "replay diverged at call {call_index}: the log records a {kind:?} with no \
+                 recorded argument but the script is making one of `{expected}`"
             ),
         }
     }

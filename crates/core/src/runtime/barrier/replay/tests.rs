@@ -397,6 +397,10 @@ mod positional {
         let message = err.to_string();
         assert!(message.contains("SIGTERM"), "{message}");
         assert!(message.contains("SIGHUP"), "{message}");
+        assert!(
+            !message.contains("Some("),
+            "the recorded argument is shown, not its Option wrapper: {message}"
+        );
 
         // The recorded name replays cleanly.
         let mut ctx = ctx_with(vec![entry(0, CallKind::Signal, vec![instance("db")])]);
@@ -405,5 +409,20 @@ mod positional {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    // r[verify barrier.replay.positional]
+    #[test]
+    fn a_log_entry_with_no_recorded_argument_says_so() {
+        let mut committed = vec![entry(0, CallKind::Signal, vec![instance("db")])];
+        committed[0].extra = None;
+        let mut ctx = ctx_with(committed);
+        let err = ctx
+            .replay_step(CallKind::Signal, Some("SIGTERM"))
+            .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("no recorded argument"), "{message}");
+        assert!(message.contains("SIGTERM"), "{message}");
+        assert!(!message.contains("None"), "{message}");
     }
 }

@@ -17,21 +17,32 @@
 set -euo pipefail
 
 # Each entry is a file that may use it, with the reason.
-#   history.rs   — action_log's positional overwrite keyed on
-#                  (operation_id, call_index) IS the replay contract: rewriting
-#                  a call's entry in place is the intended semantics.
+#   history.rs       — action_log's positional overwrite keyed on
+#                      (operation_id, call_index) IS the replay contract:
+#                      rewriting a call's entry in place is the intended
+#                      semantics.
+#   history/tests.rs — an assertion message naming the statement it is
+#                      asserting about. Tests are not writers of production
+#                      rows, and the alternative is a prose filter loose
+#                      enough to skip real code.
 allowed=(
     'crates/core/src/runtime/history.rs'
+    'crates/core/src/runtime/history/tests.rs'
 )
 
 violations=()
 while IFS= read -r hit; do
     file="${hit%%:*}"
     [[ "$file" == *"/migrations/"* ]] && continue
-    # Prose mentioning the statement (comments, test assertions) is not a use.
+    # A comment mentioning the statement is not a use of it. Only a genuine
+    # comment line is skipped: an earlier version skipped any line containing a
+    # quote unless `INTO` was on that same line too, which let a statement
+    # whose `INTO` wrapped to the next line through unseen. Everything that is
+    # not a comment must reach the allowlist to be excused.
     line="${hit#*:}"
     line="${line#*:}"
-    [[ "$line" =~ (//|--|\") ]] && [[ ! "$line" =~ INSERT\ OR\ REPLACE\ INTO ]] && continue
+    trimmed="${line#"${line%%[![:space:]]*}"}"
+    [[ "$trimmed" == //* || "$trimmed" == --* ]] && continue
     skip=false
     for ok in "${allowed[@]}"; do
         [[ "$file" == "$ok" ]] && skip=true && break
