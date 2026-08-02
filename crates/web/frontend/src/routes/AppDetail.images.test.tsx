@@ -49,14 +49,20 @@ describe("AppDetail images", () => {
       "/images/pins/list": { pins: [pin] },
     };
     const { request } = mount(fixtures, "write");
+    // The app's deployment renders this same image reference, so waiting on
+    // that text is satisfied by the deployment card while the images table is
+    // still loading. Wait on the state chip, which only the table renders, and
+    // assert the rest against its row.
+    const row = (await screen.findByText("in use")).closest(
+      "tr",
+    ) as HTMLElement;
     expect(
-      await screen.findByText("docker.io/library/nginx:1.27"),
+      within(row).getByText("docker.io/library/nginx:1.27"),
     ).toBeTruthy();
-    expect(screen.getByText("in use")).toBeTruthy();
-    expect(screen.getByText("pinned")).toBeTruthy();
-    expect(screen.getByText("150.0 MiB")).toBeTruthy();
+    expect(within(row).getByText("pinned")).toBeTruthy();
+    expect(within(row).getByText("150.0 MiB")).toBeTruthy();
     // In-use images cannot be removed.
-    const remove = screen.getByRole("button", {
+    const remove = within(row).getByRole("button", {
       name: "Cannot remove: image is in use",
     }) as HTMLButtonElement;
     expect(remove.disabled).toBe(true);
