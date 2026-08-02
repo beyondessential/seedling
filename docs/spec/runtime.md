@@ -31,6 +31,14 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Individual reconciliation operations must not block the loop for an unbounded or long duration.
 > When an operation requires waiting for an external condition (e.g. a process to terminate), the reconciler must release control and re-evaluate the condition on a subsequent iteration rather than polling inline.
 
+> r[reconciliation.absolute-state]
+> Some state the reconciler maintains is *absolute*: it is rebuilt in full each iteration and applied wholesale, so anything absent from what was built is removed from the host.
+> An installed app's contribution to absolute state may be withdrawn only by an explicit [lifecycle](#r--lifecycle.states) transition — never because computing that contribution failed.
+> When an iteration cannot compute the contribution of every installed app, the affected absolute state must not be applied for that iteration; the previously applied state stands until an iteration succeeds.
+> An iteration that withholds an apply must draw no conclusion from having done so: the fault for that state is neither filed nor cleared, and no resource is recorded as ready on the strength of an apply that did not run.
+> Likewise, a full teardown of shared infrastructure occurs only when no app is installed or installing — never when apps are installed but their state could not be computed.
+> This does not constrain per-resource incremental actuation, which acts only on the resources it names.
+
 # Script Engine Limits
 
 > r[engine.limits]
@@ -377,6 +385,11 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[gc.autonomous-operations]
 > Completed autonomous operation records must be deleted after a configurable retention period (default: 7 days).
 
+> r[gc.restarts]
+> [Restart records](#r--autonomous.restart.record) must be bounded per instance: only a configurable number of the most recent records for an instance are retained (default: 50), and older records for that instance are deleted.
+> The bound is per instance rather than global, and applies to storage rather than to recording: a crash loop produces records fastest exactly when the per-attempt exit statuses are the diagnostic, so no restart may go unrecorded merely because the instance is restarting quickly.
+> Restart records whose instance identity no longer appears in the resource instance registry must be deleted.
+
 > r[gc.instances]
 > Resource instance records that have remained in the Unscheduled lifecycle state for longer than a configurable retention period (default: 10 minutes) must be deleted, along with their associated world observation rows.
 > Instances that are part of the active desired state (i.e. in the `keep` set of a scaled group or a singleton) must never be deleted regardless of their lifecycle state.
@@ -687,18 +700,37 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > r[autonomous.restart]
 > When a container resource in the desired state reaches the Terminated lifecycle state and its `on_exit` or `on_terminate` policy requires recreation, the reconciler must start a replacement.
 
+> r[autonomous.restart.record]
+> The runtime must keep a durable, per-instance record of container restarts. Each record identifies the instance it belongs to, the app generation in force when it was recorded, when the restart happened, the exit status of the run that ended where the platform reports one, and the restart's cause: whether it was recovery from an unexpected exit, or a restart the runtime performed deliberately.
+>
+> The cause is a statement about why the restart happened, not about which component performed it. Who actions a restart is a platform detail — a platform with a service supervisor leaves recovery to it, and one without leaves the runtime to perform both kinds — so recording the actor would make the record mean different things on different platforms.
+>
+> Recording must not depend on catching a state transition. A container that restarts and returns to running between two observations must still be recorded, so the count of restarts the runtime holds does not depend on how often it looks.
+>
+> Rolling updates, [replacements](#r--autonomous.healthcheck-replace) and operator-requested restarts are recorded as deliberate and excluded from the crash-loop rate. Otherwise every rolling update reads as a crash burst.
+
+> r[autonomous.restart.rate]
+> Crash-loop detection is a function of the recorded restart rate: when the number of recovery restarts recorded for an instance within the configured window reaches the configured threshold, the reconciler must file a `crash_loop` fault against that instance (see [fault.crash-loop](#r--fault.crash-loop)).
+>
+> This is the primary crash-loop trigger. It catches sub-threshold flapping — a container that crashes a few times a day forever, never exhausting the supervisor's own start limit inside its window — which is otherwise invisible to an operator.
+
+> r[autonomous.restart.rate.settings]
+> The restart-rate threshold and window must be operator-visible and operator-settable, and must take effect without restarting the runtime.
+>
+> The default must be loose enough that a slow-failing container (one that takes seconds to crash) gets several chances, and tight enough to catch flapping on a human-meaningful timescale.
+
 > r[autonomous.restart.backoff]
-> Per-unit restarts must be paced so that a crash-looping container does not exhaust systemd's start-rate limit before the reconciler has a chance to detect the problem. Container units must specify:
+> Where the platform's supervisor actions restarts, per-unit restarts must be paced so that a crash-looping container does not exhaust the supervisor's start-rate limit before the reconciler has a chance to detect the problem. On Linux, container units must specify:
 >
 > - A non-default `RestartSec` (no shorter than several seconds) so the unit does not retry at the systemd default cadence (~100ms).
 > - A `StartLimitIntervalSec` and `StartLimitBurst` that allow several attempts within a window measured in minutes, not seconds, before systemd gives up.
 >
-> The exact values are an implementation concern — they need only be loose enough that a slow-failing container (one that takes seconds to crash) gets multiple chances, and tight enough that a permanently broken container reaches the start limit on a human-meaningful timescale.
+> The exact values are an implementation concern — they need only be loose enough that a slow-failing container gets multiple chances, and tight enough that a permanently broken container reaches the start limit on a human-meaningful timescale. These are pacing parameters, not the definition of a crash loop; that is [autonomous.restart.rate](#r--autonomous.restart.rate).
 
 > r[autonomous.restart.start-limit-hit]
 > When a container unit reaches `failed/start-limit-hit` (systemd has refused further restarts because the unit exhausted [`StartLimitBurst`](#r--autonomous.restart.backoff)) the reconciler must:
 >
-> - File a `crash_loop` fault scoped to the offending instance, distinct from `container_start_failed`.
+> - File a `crash_loop` fault scoped to the offending instance, distinct from `container_start_failed`. This is a secondary trigger: a unit the supervisor has given up on must produce the fault even when the recorded rate has not reached its threshold.
 > - Stop attempting to auto-recover the instance (no `reset_failed_unit` + restart cycle) until the fault is cleared. The expected recovery path is operator intervention — fixing the underlying cause, redeploying with new config, or explicitly clearing the fault.
 > - Clear the fault automatically if the instance is later observed healthy.
 
@@ -821,6 +853,23 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > to the system journal. Each infrastructure container must be tagged with a structured
 > journal field that identifies the infrastructure component so that log queries can
 > target infrastructure logs independently of workload logs.
+
+> r[actuate.breadcrumb]
+> The runtime must record its own action breadcrumbs into the same log sink that
+> carries container output, tagged with the same app, resource kind, resource, and
+> instance fields. A breadcrumb names the `rt.*` primitive it records — or a synthetic
+> kind for runtime events such as unit creation and replay boundaries — and, where the
+> script surfaced one, the call site.
+>
+> Sharing the sink and the tagging scheme is the requirement, not an implementation
+> convenience: a log query at any granularity must return breadcrumbs and container
+> output interleaved in time order, so that an operator reading an app's logs sees the
+> closure's call sequence against the output it produced.
+
+> r[actuate.breadcrumb.replay]
+> A breadcrumb is emitted on a call's first fresh execution and not on replays of that
+> call, so a barrier-suspended operation does not flood the log with each pass. Each
+> replay pass instead surfaces a single boundary breadcrumb.
 
 > r[actuate.ingress.warm-certs]
 > When an action closure invokes [`rt.warm_certs`](#l--rt.warm-certs) with a selection that contains TLS-terminating ingresses, the runtime must initiate certificate acquisition for those ingresses' hostnames without exposing the ingresses to live traffic.
@@ -1085,7 +1134,12 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > The fault is cleared automatically when the unit is subsequently observed in an active or activating state.
 
 > r[fault.crash-loop]
-> When the reconciler observes that a resource instance's backing unit has reached the start-limit-hit terminal state (per [autonomous.restart.start-limit-hit](#r--autonomous.restart.start-limit-hit)), it must file a fault of kind `crash_loop` associated with that instance, distinct from `container_start_failed`.
+> The reconciler must file a fault of kind `crash_loop` associated with a resource instance, distinct from `container_start_failed`, when either:
+>
+> - the instance's recorded restart rate reaches the configured threshold (per [autonomous.restart.rate](#r--autonomous.restart.rate)), or
+> - its backing unit has reached the start-limit-hit terminal state (per [autonomous.restart.start-limit-hit](#r--autonomous.restart.start-limit-hit)).
+>
+> The fault must identify which of the two conditions filed it, so that an operator can tell a rate-derived crash loop from one the supervisor has already given up on.
 > The fault is cleared automatically when the instance is subsequently observed healthy. While the fault is active, the reconciler must not auto-restart the affected instance.
 
 > r[fault.external-volume-unmapped]
@@ -1552,3 +1606,51 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > r[tls.policy.apply]
 > Changes to operator-defined TLS policy (binding a hostname to a strategy, changing its parameters, or clearing it) must take effect on a subsequent reconciliation tick without operator-initiated apply steps.
 > The runtime must rebuild the proxy configuration accordingly.
+
+# Canopy Reporting
+
+Seedling reports its own health to Canopy so that a host is visible in the fleet view, using the relay defined in the interface spec. It reports as a source distinct from any other agent on the host, so that its checks and the issues derived from them are scoped to it alone.
+
+> r[canopy.settings.enabled]
+> Whether Canopy access is enabled is stored durably and survives restarts.
+> A Seedling instance that has never been configured has it enabled: on a host with no client offering Canopy, nothing is registered and nothing runs, so the default costs nothing.
+
+> r[canopy.report.schedule]
+> While Canopy access is enabled and at least one offer is live, the runtime reports its status every sixty seconds.
+> When Canopy access is disabled, or no offer is live, no report is attempted and no fault is filed: the absence of a provider is a deployment choice rather than a malfunction.
+> The runtime never initiates a connection of its own to obtain one.
+
+> r[canopy.report.identity]
+> Reports are addressed to a Canopy server identifier that the runtime resolves through the relay, by asking Canopy which server the offering client's identity is enrolled as.
+> The identifier is cached durably so that the resolution is not repeated on every report, and is re-resolved after any report that fails in a way suggesting the cached value is wrong or absent.
+
+> r[canopy.report.checks]
+> Each report carries a fixed set of named checks, so that the check catalog Canopy maintains does not grow with the set of applications an operator installs:
+>
+> | Check | Passed | Warning | Failed |
+> |---|---|---|---|
+> | `health/apps` | every registered app is running | at least one is degraded | at least one is faulted |
+> | `health/faults` | no active faults | — | at least one active fault |
+> | `health/proxy` | the ingress proxy is running | — | it is stopped |
+> | `health/resolver` | the resolver is running | — | it is stopped |
+>
+> Apps in a transitional state — not installed, installing, deregistering, or running a lifecycle operation — do not make `health/apps` fail or warn.
+> Each check carries the names of the apps or faults responsible for its result, so an operator reading the report can act on it without a second lookup.
+
+> r[canopy.report.checks.undeterminable]
+> A check the runtime cannot evaluate must be reported as broken rather than as failed.
+> Reporting "the proxy is stopped" when the truth is "the runtime could not ask" would open an incident against a component that may be perfectly healthy, and a fleet-wide false alarm is worse than a missing signal.
+> A broken result neither opens nor closes the check's issue, so a known failure keeps its standing while the inability to check is itself surfaced.
+
+> r[canopy.report.extra]
+> Each report also carries the Seedling version, the daemon's own uptime in seconds, the total number of registered apps, a map of app status to count, the number of lifecycle operations in progress, and the number of active faults.
+> It does not carry the hostname, the host's uptime, or the version of any managed application: those describe the host rather than Seedling, and are reported by the agent that owns them.
+
+> r[canopy.report.fault]
+> When a report fails while an offer is live, the runtime files a fault of kind `canopy_report_failed` carrying the failure detail.
+> The fault is cleared automatically when a subsequent report succeeds, and when Canopy access is disabled or the last offer ends — in both of those cases reporting is no longer expected, so a lingering fault would misdescribe the instance.
+
+> r[canopy.report.backup-prompt]
+> A report's response carries instructions for the reporting source, including a list of backups to run immediately.
+> That list is addressed only to the source that owns backups on a host, so a Seedling report never receives a non-empty one and the runtime does not act on it.
+> The runtime must not treat an empty list as a signal of any kind.

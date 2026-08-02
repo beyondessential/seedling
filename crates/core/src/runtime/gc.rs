@@ -66,6 +66,12 @@ fn run_gc_cycle(db: &Db, config: &GcConfig) {
         Err(e) => error!(error = %e, "gc: unscheduled instances cleanup failed"),
         _ => {}
     }
+    // r[impl gc.restarts]
+    match crate::system::reconcile::gc_restart_records(db) {
+        Ok(n) if n > 0 => debug!(rows = n, "gc: pruned restart records"),
+        Err(e) => error!(error = %e, "gc: restart records cleanup failed"),
+        _ => {}
+    }
 }
 
 fn now_ms() -> i64 {

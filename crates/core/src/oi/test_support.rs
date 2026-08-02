@@ -77,6 +77,7 @@ impl TestOi {
             trusted_keys: crate::oi::auth::new_trusted_keys(),
             shells: crate::oi::shells::ShellRegistry::new(),
             forwards: crate::oi::forwards::ForwardRegistry::new(),
+            canopy: Arc::new(crate::oi::canopy::CanopyState::new()),
             container_runtime: Arc::clone(&driver.container),
             driver,
             node_prefix: "fd5e:ed11:9000::/48".parse().expect("valid /48"),
@@ -123,6 +124,16 @@ impl TestOi {
     pub fn install(&self, name: &str) {
         self.call("/apps/install/invoke", json!({ "app": name }))
             .expect("install app");
+    }
+
+    /// Drive a future on the harness's own runtime.
+    ///
+    /// For handlers that must await — those dispatched from the stream path
+    /// rather than the shared sync table. A `#[tokio::test]` cannot be used for
+    /// them instead, because dropping this harness drops the runtime it holds,
+    /// which panics inside an async context.
+    pub fn block_on<F: std::future::Future>(&self, f: F) -> F::Output {
+        self.rt.block_on(f)
     }
 
     /// Dispatch `method` with `params` and return the parsed `result` value,

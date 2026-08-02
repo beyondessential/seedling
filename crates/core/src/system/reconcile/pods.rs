@@ -35,9 +35,14 @@ pub(super) struct PodActuationUpdate {
     pub unit_healthy: Vec<ResourceInstance>,
     /// Instances whose backing unit reached `failed/start-limit-hit` —
     /// systemd has given up restarting and the runtime treats this as a
-    /// hard fault rather than auto-recovering.
+    /// hard fault rather than auto-recovering. The rate-derived crash loops
+    /// are added to this list by the restart bookkeeping step.
     // r[impl autonomous.restart.start-limit-hit]
-    pub crash_loops: Vec<ResourceInstance>,
+    pub crash_loops: Vec<CrashLoop>,
+    /// The supervisor's restart counter as observed this tick, per instance.
+    /// Reconciled against the stored baseline to derive restart records.
+    // r[impl autonomous.restart.record]
+    pub restart_counters: Vec<(ResourceInstance, RestartCounter)>,
     /// Instances whose declared healthcheck was observed as failing this tick.
     pub health_check_failures: Vec<ResourceInstance>,
     /// Instances whose healthcheck was observed as passing this tick.
@@ -64,6 +69,35 @@ pub(super) struct PodActuationUpdate {
     pub completed_job_instances: Vec<InstanceId>,
 }
 
+/// Why an instance is considered to be crash-looping.
+// r[impl fault.crash-loop]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CrashLoopCause {
+    /// The recorded restart rate reached the configured threshold. The
+    /// primary trigger: it catches flapping the supervisor's own start limit
+    /// never notices.
+    // r[impl autonomous.restart.rate]
+    RestartRate { count: i64, window_secs: i64 },
+    /// systemd refused to restart the unit any further. Secondary: it fires
+    /// even when the rate has not reached the threshold.
+    // r[impl autonomous.restart.start-limit-hit]
+    StartLimitHit,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct CrashLoop {
+    pub instance: ResourceInstance,
+    pub cause: CrashLoopCause,
+}
+
+/// The supervisor's restart counter for an instance's unit, as read this tick.
+// r[impl autonomous.restart.record]
+#[derive(Debug, Clone, Copy)]
+pub(super) struct RestartCounter {
+    pub count: u32,
+    pub exit: Option<crate::system::types::UnitExit>,
+}
+
 struct PodInstanceResult {
     running: Option<RunningPod>,
     observations: Vec<(ResourceInstance, &'static str, serde_json::Value)>,
@@ -72,7 +106,9 @@ struct PodInstanceResult {
     unit_failure: Option<ResourceInstance>,
     unit_healthy: Option<ResourceInstance>,
     // r[impl autonomous.restart.start-limit-hit]
-    crash_loop: Option<ResourceInstance>,
+    crash_loop: Option<CrashLoop>,
+    // r[impl autonomous.restart.record]
+    restart_counter: Option<(ResourceInstance, RestartCounter)>,
     health_check_failure: Option<ResourceInstance>,
     health_check_pass: Option<ResourceInstance>,
     registry_failure: Option<ResourceInstance>,
@@ -126,6 +162,7 @@ async fn observe_one_pod<'a>(
         unit_failure: None,
         unit_healthy: None,
         crash_loop: None,
+        restart_counter: None,
         health_check_failure: None,
         health_check_pass: None,
         registry_failure: None,
@@ -234,6 +271,20 @@ async fn observe_one_pod<'a>(
     let network_exists = facts
         .iter()
         .any(|(f, _)| matches!(f, ObservationFact::NetworkPresent));
+    // r[impl autonomous.restart.record]
+    result.restart_counter = facts.iter().find_map(|(f, _)| {
+        if let ObservationFact::UnitRestartCounter { count, exit } = f {
+            Some((
+                dr.instance.clone(),
+                RestartCounter {
+                    count: *count,
+                    exit: *exit,
+                },
+            ))
+        } else {
+            None
+        }
+    });
 
     // Collect running pods from the pre-actuation observation.
     //
@@ -292,6 +343,10 @@ async fn observe_one_pod<'a>(
 // r[fault.non-blocking]
 // r[fault.container-start]
 // r[impl autonomous.job-terminal]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "per-instance actuation reads the same shared tick state as the phase"
+)]
 async fn actuate_one_pod(
     actuator: &Actuator,
     db: &DbHandle,
@@ -300,6 +355,7 @@ async fn actuate_one_pod(
     written_obs: &HashSet<(InstanceId, &'static str)>,
     started_jobs: &HashSet<InstanceId>,
     completed_jobs: &HashSet<InstanceId>,
+    crash_looped: &HashSet<InstanceId>,
 ) -> Option<PodInstanceResult> {
     let dr = obs.dr;
     let result = &mut obs.result;
@@ -381,7 +437,10 @@ async fn actuate_one_pod(
             // Surface as a hard fault separate from the routine
             // container_start_failed signal: the operator needs to know
             // that systemd has stopped trying.
-            result.crash_loop = Some(dr.instance.clone());
+            result.crash_loop = Some(CrashLoop {
+                instance: dr.instance.clone(),
+                cause: CrashLoopCause::StartLimitHit,
+            });
         } else if obs.unit_failed || (obs.unit_active && !obs.is_running) {
             result.unit_failure = Some(dr.instance.clone());
         }
@@ -398,7 +457,13 @@ async fn actuate_one_pod(
     // Skip the auto-recovery path but allow the desired=Unscheduled branch
     // below to run so a stuck unit can still be torn down on uninstall /
     // resource removal.
-    if obs.unit_start_limit_hit && dr.desired == LifecycleState::Ready {
+    // r[impl fault.crash-loop]
+    // The same suppression applies to a crash loop derived from the recorded
+    // restart rate: an instance under an active crash_loop fault is not
+    // auto-restarted, whichever trigger filed the fault.
+    if (obs.unit_start_limit_hit || crash_looped.contains(&dr.instance.id))
+        && dr.desired == LifecycleState::Ready
+    {
         return Some(obs.result);
     }
 
@@ -686,6 +751,7 @@ pub(super) async fn observe_and_actuate(
     written_obs: &HashSet<(InstanceId, &'static str)>,
     started_jobs: &HashSet<InstanceId>,
     completed_jobs: &HashSet<InstanceId>,
+    crash_looped: &HashSet<InstanceId>,
 ) -> PodActuationUpdate {
     // Phase 1: observe all instances concurrently.
     let pod_resources: Vec<&DesiredResource> = desired
@@ -759,6 +825,7 @@ pub(super) async fn observe_and_actuate(
             written_obs,
             started_jobs,
             completed_jobs,
+            crash_looped,
         ));
     }
 
@@ -772,6 +839,7 @@ pub(super) async fn observe_and_actuate(
         unit_failures: Vec::new(),
         unit_healthy: Vec::new(),
         crash_loops: Vec::new(),
+        restart_counters: Vec::new(),
         health_check_failures: Vec::new(),
         health_check_passes: Vec::new(),
         registry_failures: Vec::new(),
@@ -803,6 +871,10 @@ pub(super) async fn observe_and_actuate(
         }
         if let Some(c) = result.crash_loop {
             update.crash_loops.push(c);
+        }
+        // r[impl autonomous.restart.record]
+        if let Some(rc) = result.restart_counter {
+            update.restart_counters.push(rc);
         }
         if let Some(f) = result.health_check_failure {
             update.health_check_failures.push(f);
