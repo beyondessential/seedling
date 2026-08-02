@@ -33,6 +33,33 @@ impl std::fmt::Display for ScriptError {
 
 impl std::error::Error for ScriptError {}
 
+/// What [`AppRegistry::reload`] did to the registry.
+///
+/// `evaluate_script` always returns an `App`, populated up to wherever the
+/// script threw. That contract is right for registration, where there is no
+/// previous definition to lose; it is wrong for reload, where publishing a
+/// partial definition lets every consumer diff live state against a truncated
+/// one. The distinction is in the type so callers have to make it.
+#[derive(Debug)]
+#[must_use]
+pub enum ReloadOutcome {
+    /// The script evaluated cleanly and the registry now holds its definition.
+    Applied,
+    /// Evaluation failed. The previous definition keeps running and the new
+    /// script text and error are recorded; no state derived from the new
+    /// script may be diffed against the registry.
+    KeptPrevious(ScriptError),
+    /// The app is not registered, so nothing was evaluated or stored.
+    NotRegistered,
+}
+
+impl ReloadOutcome {
+    /// Whether the registry now reflects the script that was passed in.
+    pub fn is_applied(&self) -> bool {
+        matches!(self, Self::Applied)
+    }
+}
+
 /// The installation phase of an app. Stored in `registered_apps` and shared
 /// with the reconciler via Arc so the reconciler can transition it on cleanup.
 // i[impl app.status]
@@ -120,8 +147,28 @@ impl AppRegistry {
         tick_notify: Arc<Notify>,
         limits: &crate::ScriptLimits,
     ) -> Result<(), ScriptError> {
-        let (app, raw_error) = evaluate_script(&name, &script, &BTreeMap::new(), limits);
-        let script_error = raw_error.map(|e| {
+        let (app, script_error) = evaluate_script(&name, &script, &BTreeMap::new(), limits);
+        self.insert_registered(name, script, app, script_error, tick_notify, 0);
+        Ok(())
+    }
+
+    // i[impl app.register]
+    /// Make an already-evaluated app observable at `generation`.
+    ///
+    /// Separate from [`Self::register`] so a caller can commit the app's rows
+    /// before the entry exists: a registration whose persistence failed must
+    /// not leave an app that `/apps/list` shows, a restart silently drops,
+    /// and a retried `/apps/create` rejects as already registered.
+    pub fn insert_registered(
+        &mut self,
+        name: AppName,
+        script: String,
+        app: App,
+        script_error: Option<ScriptError>,
+        tick_notify: Arc<Notify>,
+        generation: u64,
+    ) {
+        let script_error = script_error.map(|e| {
             tracing::warn!(app = %name, error = %e, "script has errors at registration; params may need to be set");
             (e.to_string(), Timestamp::now())
         });
@@ -135,10 +182,9 @@ impl AppRegistry {
                 active_progress: Arc::new(RwLock::new(None)),
                 tick_notify,
                 script_error,
-                current_generation: 0,
+                current_generation: generation,
             },
         );
-        Ok(())
     }
 
     pub fn deregister(&mut self, name: &str) -> bool {
@@ -153,18 +199,48 @@ impl AppRegistry {
     /// On success the entry's app and script are updated and any active
     /// script-error fault is cleared. On failure the existing AppDef keeps
     /// running and the fault is recorded — the caller always succeeds.
+    ///
+    /// The returned outcome is what tells a caller whether the registry now
+    /// holds a definition derived from `script`. Anything that diffs the
+    /// registry against previous state — volume holds, scaling bounds,
+    /// forwards, schedules — is only meaningful on [`ReloadOutcome::Applied`].
+    #[must_use = "a KeptPrevious reload must not be followed by state derived from the new script"]
     pub fn reload(
         &mut self,
         name: &AppName,
         script: String,
         params: &BTreeMap<String, String>,
         limits: &crate::ScriptLimits,
-    ) {
+    ) -> ReloadOutcome {
+        // Checked before evaluating: an unregistered app has no definition to
+        // replace, and reporting `Applied` for one would tell a caller the
+        // registry reflects a script it never stored.
+        if !self.entries.contains_key(name.as_str()) {
+            return ReloadOutcome::NotRegistered;
+        }
         let (app, raw_error) = evaluate_script(name, &script, params, limits);
-        if let Some(entry) = self.entries.get_mut(name.as_str()) {
-            entry.script = script;
-            entry.app = app;
-            entry.script_error = raw_error.map(|e| (e.to_string(), Timestamp::now()));
+        let entry = self
+            .entries
+            .get_mut(name.as_str())
+            .expect("checked just above");
+        // The script text follows the new generation either way: /apps/show
+        // must return what the operator submitted, and a later param set has
+        // to re-evaluate that same text rather than resurrect the old one.
+        entry.script = script;
+        match raw_error {
+            None => {
+                entry.app = app;
+                entry.script_error = None;
+                ReloadOutcome::Applied
+            }
+            // i[impl app.update] — `app` here is a partial evaluation: the
+            // builders that ran before the script threw, and none after. It is
+            // dropped rather than published, so the previous good definition
+            // keeps running and nothing downstream can diff against it.
+            Some(e) => {
+                entry.script_error = Some((e.to_string(), Timestamp::now()));
+                ReloadOutcome::KeptPrevious(e)
+            }
         }
     }
 

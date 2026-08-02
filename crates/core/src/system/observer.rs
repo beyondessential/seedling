@@ -82,8 +82,7 @@ impl Observer {
 
         match resource {
             Resource::Deployment(_) | Resource::Job(_) => {
-                self.observe_pod_instance(instance, resource, now, &mut facts)
-                    .await?;
+                self.observe_pod_instance(instance, now, &mut facts).await?;
             }
             Resource::Volume(vol) => {
                 // r[impl observe.volume]
@@ -146,7 +145,6 @@ impl Observer {
     async fn observe_pod_instance(
         &self,
         instance: &ResourceInstance,
-        _resource: &Resource,
         now: SystemTime,
         facts: &mut Vec<(ObservationFact, SystemTime)>,
     ) -> Result<(), ObserveError> {
@@ -254,6 +252,127 @@ impl Observer {
         };
         facts.push((unit_fact, now));
 
+        // r[impl autonomous.restart.record]
+        // The counter is reported separately from the unit's state because it
+        // is the only signal that survives a restart the observer never saw:
+        // a unit that went down and came back inside one observe interval
+        // looks `active` at both ends, but its counter has moved.
+        if let Some(s) = unit_state.as_ref()
+            && let Some(count) = s.restarts
+        {
+            facts.push((
+                ObservationFact::UnitRestartCounter {
+                    count,
+                    exit: s.last_exit,
+                },
+                now,
+            ));
+        }
+
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        defs::resource::ResourceKind,
+        system::{
+            ContainerRuntime, ProcessManager,
+            stub::{StubContainerRuntime, StubDataPlane, StubNetworkProxy, StubProcessManager},
+            types::{TransientRestart, TransientUnitSpec, UnitExit, UnitExitKind},
+            volume_store::VolumeStore,
+        },
+    };
+    use seedling_protocol::names::AppName;
+
+    fn unit_spec(name: &str) -> TransientUnitSpec {
+        TransientUnitSpec {
+            name: name.to_owned(),
+            description: String::new(),
+            exec_start: vec![
+                "podman".to_owned(),
+                "run".to_owned(),
+                "img:latest".to_owned(),
+            ],
+            restart: TransientRestart::Always,
+            log_extra_fields: vec![],
+            kill_signal: None,
+            timeout_stop_secs: None,
+            restart_sec: None,
+            start_limit_interval_sec: None,
+            start_limit_burst: None,
+        }
+    }
+
+    /// A stubbed system whose process manager stays reachable, so a test can
+    /// move the restart counter behind the observer's back — which is exactly
+    /// what a restart completing between two ticks looks like.
+    fn stubbed() -> (Arc<System>, Arc<StubProcessManager>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let volumes = dir.path().join("stub-volumes");
+        std::fs::create_dir_all(&volumes).expect("volumes dir");
+        let container = Arc::new(StubContainerRuntime::new(volumes));
+        let process = Arc::new(StubProcessManager::new(Arc::clone(&container)));
+        let system = Arc::new(System {
+            container: Arc::clone(&container) as Arc<dyn ContainerRuntime>,
+            process: Arc::clone(&process) as Arc<dyn ProcessManager>,
+            proxy: Arc::new(StubNetworkProxy),
+            data_plane: Arc::new(StubDataPlane),
+            volume_store: VolumeStore::new(dir.path(), false).expect("volume store"),
+            degraded: None,
+        });
+        (system, process, dir)
+    }
+
+    async fn observed_counter(
+        observer: &Observer,
+        instance: &ResourceInstance,
+    ) -> Option<(u32, Option<UnitExit>)> {
+        let mut facts = Vec::new();
+        observer
+            .observe_pod_instance(instance, SystemTime::now(), &mut facts)
+            .await
+            .expect("observe");
+        facts.into_iter().find_map(|(f, _)| match f {
+            ObservationFact::UnitRestartCounter { count, exit } => Some((count, exit)),
+            _ => None,
+        })
+    }
+
+    // r[verify autonomous.restart.record]
+    #[tokio::test]
+    async fn observes_the_restart_counter_and_last_exit() {
+        let (system, process, _dir) = stubbed();
+        let instance = ResourceInstance::new_singleton(
+            AppName::new("myapp").unwrap(),
+            ResourceKind::Deployment,
+            "web",
+        );
+        let unit = unit_name(&instance);
+        process
+            .start_transient(unit_spec(&unit))
+            .await
+            .expect("start");
+
+        let observer = Observer::new(Arc::clone(&system));
+        assert_eq!(
+            observed_counter(&observer, &instance).await,
+            Some((0, None))
+        );
+
+        // The unit restarts twice and is running again by the time the next
+        // observation lands; only the counter carries the evidence.
+        let exit = UnitExit {
+            kind: UnitExitKind::Exited,
+            code: 1,
+        };
+        process.simulate_restarts(&unit, 2, Some(exit));
+
+        assert_eq!(
+            observed_counter(&observer, &instance).await,
+            Some((2, Some(exit)))
+        );
     }
 }

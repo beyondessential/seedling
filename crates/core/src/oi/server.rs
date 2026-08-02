@@ -274,6 +274,28 @@ async fn handle_connection(
     for entry in entries {
         let _ = entry.stop_tx.send(true);
     }
+
+    // i[canopy.offer.lifetime] — an offer lives no longer than the connection
+    // that made it. No actor on the event: nobody asked for this, the connection
+    // simply went away.
+    let ended = state.canopy.remove_by_conn(conn_id);
+    for offer in &ended {
+        tracing::info!(
+            offer_id = %offer.offer_id,
+            agent = %offer.agent,
+            "a Canopy offer ended with its connection"
+        );
+        state.event_tx.canopy_withdrawn(
+            offer.offer_id,
+            crate::oi::canopy::WithdrawReason::Disconnected.as_str(),
+            None,
+        );
+    }
+    // r[impl canopy.report.fault] — losing the last offer ends the expectation
+    // to report, so a fault from when it held must not outlive it.
+    if !ended.is_empty() {
+        crate::runtime::canopy::clear_fault_if_not_expected(&state);
+    }
 }
 
 async fn handle_bidi_stream(
@@ -490,6 +512,18 @@ async fn handle_bidi_stream(
     let rest = recv.read_to_end(MAX_REQUEST_SIZE).await.unwrap_or_default();
     let buf = [line, rest].concat();
 
+    // i[canopy.offer] — registering an offer needs the connection it arrived on,
+    // so these are dispatched here rather than through the shared table. Done
+    // after the actor is resolved so their events carry it like every other
+    // request's do.
+    if let Some(response) = super::handler::dispatch_connection_bound(&state, &conn, &buf, &ctx) {
+        if let Err(e) = send.write_all(&response).await {
+            tracing::warn!("stream write error: {e}");
+        }
+        let _ = send.finish();
+        return;
+    }
+
     let response = tokio::task::block_in_place(|| dispatch(&state, &buf, &ctx));
     if let Err(e) = send.write_all(&response).await {
         tracing::warn!("stream write error: {e}");
@@ -558,6 +592,251 @@ async fn event_stream_task(
         }
     }
     let _ = send.finish();
+}
+
+#[cfg(test)]
+mod canopy_tests {
+    //! The offer path over a real connection.
+    //!
+    //! Registering an offer needs the connection it arrived on, and an offer's
+    //! lifetime is that connection's, so neither the accept side nor the
+    //! teardown hook can be exercised without a connection actually existing.
+
+    use std::{net::SocketAddr, sync::Arc, time::Duration};
+
+    use ed25519_dalek::SigningKey;
+    use quinn::Endpoint;
+    use rand_core::OsRng;
+    use seedling_protocol::{
+        actor::Actor,
+        canopy::OfferResult,
+        client::{ClientAuth, OiClient},
+        keys::{self, ClientIdentity},
+    };
+    use serde_json::json;
+
+    use super::{DEFAULT_MAX_STREAMS, build_tls_config, handle_connection};
+    use crate::oi::{state::OiState, test_support::TestOi};
+
+    /// Run the real connection handler against a real endpoint.
+    fn spawn_server(state: Arc<OiState>) -> SocketAddr {
+        let key = SigningKey::generate(&mut OsRng);
+        let spki = keys::spki_der(&key);
+        let tls = build_tls_config(&key, spki, Arc::clone(&state.trusted_keys))
+            .expect("build tls config");
+        let quic = quinn::crypto::rustls::QuicServerConfig::try_from(tls).expect("quic config");
+        let endpoint = Endpoint::server(
+            quinn::ServerConfig::with_crypto(Arc::new(quic)),
+            "127.0.0.1:0".parse().unwrap(),
+        )
+        .expect("endpoint");
+        let addr = endpoint.local_addr().expect("local addr");
+
+        tokio::spawn(async move {
+            let semaphore = Arc::new(tokio::sync::Semaphore::new(DEFAULT_MAX_STREAMS));
+            while let Some(incoming) = endpoint.accept().await {
+                let state = Arc::clone(&state);
+                let semaphore = Arc::clone(&semaphore);
+                tokio::spawn(async move {
+                    if let Ok(conn) = incoming.await {
+                        handle_connection(conn, state, semaphore).await;
+                    }
+                });
+            }
+        });
+        addr
+    }
+
+    /// Wait for the offer count to reach `want`, or give up.
+    ///
+    /// Teardown happens when the handler notices the connection is gone, which
+    /// is not synchronous with the client dropping it.
+    async fn await_offers(state: &Arc<OiState>, want: usize) -> usize {
+        for _ in 0..100 {
+            let count = state.canopy.count();
+            if count == want {
+                return count;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        state.canopy.count()
+    }
+
+    // i[verify canopy.offer]
+    // i[verify canopy.offer.lifetime]
+    #[test]
+    fn an_offer_is_registered_over_a_connection_and_dies_with_it() {
+        let oi = TestOi::new();
+        oi.block_on(async {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+
+            let identity = ClientIdentity::ephemeral();
+            oi.state
+                .trusted_keys
+                .write()
+                .insert(identity.fingerprint.clone());
+            let addr = spawn_server(Arc::clone(&oi.state));
+
+            let client = OiClient::connect(addr, ClientAuth::TrustAny, &identity, Actor::default())
+                .await
+                .expect("connect");
+
+            let result = client
+                .request(
+                    "/canopy/offer",
+                    json!({ "agent": "test 1.0", "endpoint": "https://example.invalid" }),
+                )
+                .await
+                .expect("the offer is accepted");
+            let offer: OfferResult = serde_json::from_value(result).expect("an offer id");
+
+            assert_eq!(oi.state.canopy.count(), 1);
+            let live = oi.state.canopy.current().expect("a live offer");
+            assert_eq!(live.offer_id, offer.offer_id);
+            assert_eq!(live.agent, "test 1.0");
+
+            // Dropping the client closes the connection, which is what ends the
+            // offer: nothing has to ask for it.
+            drop(client);
+            assert_eq!(
+                await_offers(&oi.state, 0).await,
+                0,
+                "an offer must not outlive the connection that made it"
+            );
+        });
+    }
+
+    // r[verify canopy.report.fault]
+    #[test]
+    fn losing_the_last_offer_clears_a_report_fault() {
+        let oi = TestOi::new();
+        oi.block_on(async {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+
+            let identity = ClientIdentity::ephemeral();
+            oi.state
+                .trusted_keys
+                .write()
+                .insert(identity.fingerprint.clone());
+            let addr = spawn_server(Arc::clone(&oi.state));
+
+            let client = OiClient::connect(addr, ClientAuth::TrustAny, &identity, Actor::default())
+                .await
+                .expect("connect");
+            client
+                .request(
+                    "/canopy/offer",
+                    json!({ "agent": "test", "endpoint": "https://example.invalid" }),
+                )
+                .await
+                .expect("the offer is accepted");
+
+            // As a failing report would have left it.
+            oi.state.db.call(|db| {
+                crate::runtime::faults::file_fault(
+                    db,
+                    &seedling_protocol::names::AppName::new_unchecked("seedling"),
+                    None,
+                    None,
+                    None,
+                    "canopy_report_failed",
+                    "canopy said no",
+                )
+                .expect("file a fault");
+            });
+
+            drop(client);
+            assert_eq!(await_offers(&oi.state, 0).await, 0);
+
+            let remaining = oi.state.db.call(|db| {
+                crate::runtime::faults::list_active_faults(db, None)
+                    .unwrap_or_default()
+                    .len()
+            });
+            assert_eq!(
+                remaining, 0,
+                "nothing is expected of an instance with no provider, so the \
+                 fault must go with the connection rather than linger until the \
+                 next scheduled tick"
+            );
+        });
+    }
+
+    // i[verify canopy.withdraw]
+    #[test]
+    fn a_client_can_withdraw_its_own_offer_and_keep_the_connection() {
+        let oi = TestOi::new();
+        oi.block_on(async {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+
+            let identity = ClientIdentity::ephemeral();
+            oi.state
+                .trusted_keys
+                .write()
+                .insert(identity.fingerprint.clone());
+            let addr = spawn_server(Arc::clone(&oi.state));
+
+            let client = OiClient::connect(addr, ClientAuth::TrustAny, &identity, Actor::default())
+                .await
+                .expect("connect");
+
+            let result = client
+                .request(
+                    "/canopy/offer",
+                    json!({ "agent": "test", "endpoint": "https://example.invalid" }),
+                )
+                .await
+                .expect("the offer is accepted");
+            let offer: OfferResult = serde_json::from_value(result).expect("an offer id");
+
+            client
+                .request("/canopy/withdraw", json!({ "offer_id": offer.offer_id }))
+                .await
+                .expect("withdrawing our own offer");
+            assert_eq!(oi.state.canopy.count(), 0);
+
+            // The connection is still usable: withdrawing stops carrying
+            // requests, it does not hang up.
+            client
+                .request("/server/ping", json!({}))
+                .await
+                .expect("the connection outlives the offer");
+        });
+    }
+
+    // i[verify canopy.offer.disabled]
+    #[test]
+    fn a_disabled_instance_refuses_an_offer() {
+        let oi = TestOi::new();
+        oi.state.canopy.set_enabled(false);
+        oi.block_on(async {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+
+            let identity = ClientIdentity::ephemeral();
+            oi.state
+                .trusted_keys
+                .write()
+                .insert(identity.fingerprint.clone());
+            let addr = spawn_server(Arc::clone(&oi.state));
+
+            let client = OiClient::connect(addr, ClientAuth::TrustAny, &identity, Actor::default())
+                .await
+                .expect("connect");
+
+            let err = client
+                .request(
+                    "/canopy/offer",
+                    json!({ "agent": "test", "endpoint": "https://example.invalid" }),
+                )
+                .await
+                .expect_err("a disabled instance accepts no offers");
+            assert!(
+                format!("{err}").contains("canopy_disabled"),
+                "the client must be able to tell a refusal from a breakage: {err}"
+            );
+            assert_eq!(oi.state.canopy.count(), 0);
+        });
+    }
 }
 
 #[cfg(test)]

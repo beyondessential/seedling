@@ -1,6 +1,7 @@
 use std::sync::OnceLock;
 
 use jiff::Timestamp;
+use rusqlite::OptionalExtension as _;
 use seedling_protocol::events::EventSender;
 use seedling_protocol::names::AppName;
 use serde::Serialize;
@@ -182,13 +183,22 @@ fn file_keyed(
         rusqlite::params![id, app, resource_type, resource_name, instance_id, kind, timestamp, description, key.subject],
     )?;
     if inserted == 0 {
-        let existing: String = db.conn.query_row(
-            "SELECT id FROM faults
-             WHERE app = ?1 AND kind = ?2 AND subject = ?3 AND cleared_at IS NULL",
-            rusqlite::params![app, kind, key.subject],
-            |row| row.get(0),
-        )?;
-        return Ok((existing, false));
+        // The row that won the conflict can be cleared before this reads it,
+        // in which case the key is free again and the caller's fault should
+        // be filed rather than reported as a duplicate.
+        let existing: Option<String> = db
+            .conn
+            .query_row(
+                "SELECT id FROM faults
+                 WHERE app = ?1 AND kind = ?2 AND subject = ?3 AND cleared_at IS NULL",
+                rusqlite::params![app, kind, key.subject],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match existing {
+            Some(id) => return Ok((id, false)),
+            None => return file_keyed(db, key, meta, description),
+        }
     }
     warn!(
         app = %app,
@@ -390,10 +400,41 @@ impl FaultScope {
         }
     }
 
-    fn app_filter(&self) -> Option<&AppName> {
+    fn kind(&self) -> &str {
         match self {
-            Self::Kind(_) => None,
-            Self::AppKind(app, _) => Some(app),
+            Self::Kind(kind) | Self::AppKind(_, kind) => kind,
+        }
+    }
+}
+
+/// The active faults a scope owns, filtered in SQL.
+///
+/// A global sweep such as ingress conflicts runs every tick; reading every
+/// active fault in the database and discarding all but one kind would make
+/// that cost grow with the total fault count rather than with the kind's.
+fn list_active_faults_in_scope(
+    db: &crate::runtime::db::Db,
+    scope: &FaultScope,
+) -> rusqlite::Result<Vec<FaultRecord>> {
+    const COLUMNS: &str =
+        "id, app, resource_type, resource_name, instance_id, kind, timestamp, description, subject";
+    match scope {
+        FaultScope::Kind(kind) => {
+            let mut stmt = db.conn.prepare(&format!(
+                "SELECT {COLUMNS} FROM faults
+                 WHERE cleared_at IS NULL AND kind = ?1
+                 ORDER BY timestamp"
+            ))?;
+            stmt.query_map([kind], row_to_record)?.collect()
+        }
+        FaultScope::AppKind(app, kind) => {
+            let mut stmt = db.conn.prepare(&format!(
+                "SELECT {COLUMNS} FROM faults
+                 WHERE cleared_at IS NULL AND app = ?1 AND kind = ?2
+                 ORDER BY timestamp"
+            ))?;
+            stmt.query_map(rusqlite::params![app, kind], row_to_record)?
+                .collect()
         }
     }
 }
@@ -423,10 +464,7 @@ pub fn sync_faults(
     scope: &FaultScope,
     current: &std::collections::BTreeMap<FaultKey, (FaultMeta, String)>,
 ) -> rusqlite::Result<SyncOutcome> {
-    let active: Vec<FaultRecord> = list_active_faults(db, scope.app_filter())?
-        .into_iter()
-        .filter(|f| scope.owns(f))
-        .collect();
+    let active = list_active_faults_in_scope(db, scope)?;
 
     let mut outcome = SyncOutcome::default();
 

@@ -494,15 +494,13 @@ async fn run_volume_backup(
                     "strategy {:?}: failed to snapshot volume {vol_id:?}: {e}",
                     strategy.name
                 );
+                let vol_owned = vol_id.to_owned();
                 tokio::task::block_in_place(|| {
                     state.db.call(move |db| {
-                        let _ = faults::file_fault(
+                        let _ = faults::file_once(
                             db,
-                            &app_owned,
-                            None,
-                            None,
-                            None,
-                            "backup_failed",
+                            &faults::FaultKey::new(&app_owned, "backup_failed", &vol_owned),
+                            &faults::FaultMeta::resource("volume", &vol_owned),
                             &desc,
                         );
                     })
