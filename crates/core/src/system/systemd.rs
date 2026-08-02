@@ -8,7 +8,10 @@ use zbus::{
 
 use crate::system::{
     BoxError, BoxFuture, ProcessManager,
-    types::{ActiveState, TransientRestart, TransientUnitSpec, UnitState, UnitSummary},
+    types::{
+        ActiveState, TransientRestart, TransientUnitSpec, UnitExit, UnitExitKind, UnitState,
+        UnitSummary,
+    },
 };
 
 const UNIT_DIR: &str = "/etc/systemd/system";
@@ -169,6 +172,49 @@ trait Systemd1Unit {
 
     #[zbus(property)]
     fn sub_state(&self) -> zbus::Result<String>;
+}
+
+// ---------------------------------------------------------------------------
+// D-Bus proxy — systemd Service interface (restart accounting)
+// ---------------------------------------------------------------------------
+
+/// Restart accounting lives on the `Service` interface, not the `Unit`
+/// interface above, so it needs its own proxy against the same object path.
+// r[impl autonomous.restart.record]
+#[zbus::proxy(
+    interface = "org.freedesktop.systemd1.Service",
+    default_service = "org.freedesktop.systemd1"
+)]
+trait Systemd1Service {
+    #[zbus(property, name = "NRestarts")]
+    fn n_restarts(&self) -> zbus::Result<u32>;
+
+    /// The main process's exit status, or the signal number that killed it,
+    /// depending on `ExecMainCode`.
+    #[zbus(property, name = "ExecMainStatus")]
+    fn exec_main_status(&self) -> zbus::Result<i32>;
+
+    /// A `siginfo_t` `si_code`: `CLD_EXITED` (1), `CLD_KILLED` (2) or
+    /// `CLD_DUMPED` (3). Zero while the main process has not exited.
+    #[zbus(property, name = "ExecMainCode")]
+    fn exec_main_code(&self) -> zbus::Result<i32>;
+}
+
+/// `si_code` values reported by systemd for a unit's main process.
+const CLD_EXITED: i32 = 1;
+const CLD_KILLED: i32 = 2;
+const CLD_DUMPED: i32 = 3;
+
+fn parse_exec_main(code: i32, status: i32) -> Option<UnitExit> {
+    let kind = match code {
+        CLD_EXITED => UnitExitKind::Exited,
+        CLD_KILLED => UnitExitKind::Signalled,
+        CLD_DUMPED => UnitExitKind::Dumped,
+        // Zero means the main process has not exited; anything else is a
+        // si_code systemd does not use for this property.
+        _ => return None,
+    };
+    Some(UnitExit { kind, code: status })
 }
 
 // ---------------------------------------------------------------------------
@@ -383,7 +429,7 @@ impl SystemdManager {
         let unit_proxy = Systemd1UnitProxy::builder(&self.conn)
             .destination("org.freedesktop.systemd1")
             .context(DBusSnafu)?
-            .path(unit_path)
+            .path(unit_path.clone())
             .context(DBusSnafu)?
             .build()
             .await
@@ -392,10 +438,50 @@ impl SystemdManager {
         let active = unit_proxy.active_state().await.context(DBusSnafu)?;
         let sub = unit_proxy.sub_state().await.context(DBusSnafu)?;
 
+        // r[impl autonomous.restart.record]
+        // Two extra property reads on a path already fetching ActiveState and
+        // SubState per instance. Failures are not fatal: the Service interface
+        // only exists on .service units, and a unit that vanished between the
+        // GetUnit call and here should still report the state we did read.
+        let (restarts, last_exit) = match self.service_accounting(&unit_path).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::debug!(unit = %name, error = %e, "systemd: no restart accounting for unit");
+                (None, None)
+            }
+        };
+
         Ok(Some(UnitState {
             active: parse_active_state(&active),
             sub,
+            restarts,
+            last_exit,
         }))
+    }
+
+    /// Read `NRestarts` and the last exit from the `Service` interface.
+    async fn service_accounting(
+        &self,
+        unit_path: &OwnedObjectPath,
+    ) -> Result<(Option<u32>, Option<UnitExit>), SystemdError> {
+        let proxy = Systemd1ServiceProxy::builder(&self.conn)
+            .destination("org.freedesktop.systemd1")
+            .context(DBusSnafu)?
+            .path(unit_path.clone())
+            .context(DBusSnafu)?
+            .build()
+            .await
+            .context(DBusSnafu)?;
+
+        let restarts = proxy.n_restarts().await.context(DBusSnafu)?;
+        // The exit properties are best-effort on top of the counter: a unit
+        // whose main process has not exited reports ExecMainCode 0, which
+        // parse_exec_main turns into None.
+        let last_exit = match (proxy.exec_main_code().await, proxy.exec_main_status().await) {
+            (Ok(code), Ok(status)) => parse_exec_main(code, status),
+            _ => None,
+        };
+        Ok((Some(restarts), last_exit))
     }
 
     async fn list_units_impl(&self, prefix: &str) -> Result<Vec<UnitSummary>, SystemdError> {
@@ -413,6 +499,9 @@ impl SystemdManager {
                 state: UnitState {
                     active: parse_active_state(&u.active_state),
                     sub: u.sub_state,
+                    // ListUnits carries no per-unit properties; callers that
+                    // need restart accounting go through unit_state.
+                    ..Default::default()
                 },
             })
             .collect();
@@ -653,7 +742,39 @@ impl ProcessManager for SystemdManager {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_unit_name;
+    use super::{UnitExit, UnitExitKind, parse_exec_main, validate_unit_name};
+
+    // r[verify autonomous.restart.record]
+    #[test]
+    fn exec_main_maps_si_codes_to_exit_kinds() {
+        assert_eq!(
+            parse_exec_main(1, 137),
+            Some(UnitExit {
+                kind: UnitExitKind::Exited,
+                code: 137
+            })
+        );
+        assert_eq!(
+            parse_exec_main(2, 9),
+            Some(UnitExit {
+                kind: UnitExitKind::Signalled,
+                code: 9
+            })
+        );
+        assert_eq!(
+            parse_exec_main(3, 11),
+            Some(UnitExit {
+                kind: UnitExitKind::Dumped,
+                code: 11
+            })
+        );
+    }
+
+    // r[verify autonomous.restart.record]
+    #[test]
+    fn exec_main_is_absent_while_the_main_process_lives() {
+        assert_eq!(parse_exec_main(0, 0), None);
+    }
 
     #[test]
     fn accepts_valid_service() {

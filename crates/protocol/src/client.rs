@@ -347,6 +347,21 @@ impl OiClient {
             .map_err(|e| ClientError::Transport(Box::new(e)))
     }
 
+    // i[stream.dispatch.server]
+    /// Accept an incoming server-initiated bidirectional stream.
+    ///
+    /// The server opens these to push work to a client that has offered to do
+    /// it — today, a Canopy relay request. Every such stream opens with a
+    /// newline-terminated JSON object naming its kind, so a client that accepts
+    /// them must dispatch on that object and reset streams whose kind it does
+    /// not recognise.
+    pub async fn accept_bi(&self) -> Result<(quinn::SendStream, quinn::RecvStream), ClientError> {
+        self.conn
+            .accept_bi()
+            .await
+            .map_err(|e| ClientError::Transport(Box::new(e)))
+    }
+
     /// Accept an incoming server-initiated unidirectional stream.
     ///
     /// Used to receive the stdout and stderr streams opened by the server
