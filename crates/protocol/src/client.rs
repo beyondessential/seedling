@@ -388,10 +388,13 @@ impl OiClient {
     ///
     /// Used for UDP port-forward relay; the caller is responsible for prepending
     /// the 2-byte big-endian `forward_key` prefix.
-    pub fn send_datagram(&self, data: Vec<u8>) -> Result<(), ClientError> {
-        self.conn
-            .send_datagram(data.into())
-            .map_err(|e| ClientError::Transport(Box::new(e)))
+    /// Returns quinn's error unboxed, because the caller must distinguish
+    /// `TooLarge` — which concerns one datagram — from `ConnectionLost`,
+    /// which concerns the forward. Flattening them into one opaque error is
+    /// what let a single oversized datagram terminate a forward.
+    // i[impl forward.mtu]
+    pub fn send_datagram(&self, data: Vec<u8>) -> Result<(), quinn::SendDatagramError> {
+        self.conn.send_datagram(data.into())
     }
 
     /// Receive the next QUIC datagram from the server.

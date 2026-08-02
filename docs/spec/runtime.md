@@ -877,6 +877,12 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 >
 > The warm_certs call must be recorded in the [action execution log](#r--history.action-log) and must be idempotent on replay: a subsequent invocation with the same selection observes the existing cert state and returns immediately when `valid`, without re-initiating acquisition.
 
+> r[actuate.image.retry]
+> A failed image pull must be retried, and successive failures for the same reference must be spaced by an increasing delay up to a bounded maximum, so that an unreachable registry is not polled at the reconciliation interval.
+> A transient pull failure must not permanently disable actuation of the workload: however long a reference has been failing, waiting the maximum delay must be sufficient for another attempt.
+> Past a threshold of consecutive failures the condition becomes operator-visible, but that is an escalation and not a terminal state — attempts continue at the maximum interval, which is what allows the fault to clear on a later success.
+> A successful pull resets the count.
+
 > r[actuate.image.warm]
 > When an action closure invokes [`rt.warm_images`](#l--rt.warm-images) with a selection that contains container resources, the runtime must collect the distinct image references from those resources' container definitions and initiate pulls for each image that is not already present locally.
 > For each extracted image reference the runtime must durably record a [pin](#r--image.pin) tying the calling app to the reference, upserted idempotently.

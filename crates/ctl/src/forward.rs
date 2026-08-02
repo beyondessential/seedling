@@ -13,6 +13,11 @@ struct ForwardStats {
     connections_active: AtomicU64,
     datagrams_to_service: AtomicU64,
     datagrams_from_service: AtomicU64,
+    /// Datagrams the connection would not carry — over path MTU. Counted
+    /// rather than fatal: i[forward.mtu] says oversize payloads are dropped
+    /// and reported, and the operator needs to see that it happened.
+    // i[impl ctl.forward.stats]
+    datagrams_dropped: AtomicU64,
 }
 
 impl ForwardStats {
@@ -24,6 +29,7 @@ impl ForwardStats {
             connections_active: AtomicU64::new(0),
             datagrams_to_service: AtomicU64::new(0),
             datagrams_from_service: AtomicU64::new(0),
+            datagrams_dropped: AtomicU64::new(0),
         })
     }
 
@@ -44,9 +50,11 @@ impl ForwardStats {
         let from_svc = self.bytes_from_service.load(Ordering::Relaxed);
         let dg_to = self.datagrams_to_service.load(Ordering::Relaxed);
         let dg_from = self.datagrams_from_service.load(Ordering::Relaxed);
+        let dg_dropped = self.datagrams_dropped.load(Ordering::Relaxed);
         tracing::info!(
             datagrams_to_service = dg_to,
             datagrams_from_service = dg_from,
+            datagrams_dropped = dg_dropped,
             bytes_to_service = %format_bytes(to_svc),
             bytes_from_service = %format_bytes(from_svc),
             "forward stats"
@@ -270,8 +278,26 @@ pub async fn forward_port(
                             let mut pkt = Vec::with_capacity(2 + n);
                             pkt.extend_from_slice(&key_bytes);
                             pkt.extend_from_slice(&buf[..n]);
-                            if client.send_datagram(pkt).is_err() {
-                                break;
+                            // i[impl forward.mtu]
+                            // Only a lost connection ends the forward. An
+                            // oversized datagram — anything past path MTU, so
+                            // EDNS responses and QUIC payloads routinely — is
+                            // dropped and reported, which is what the server
+                            // relay already does. The two ends of one protocol
+                            // disagreed, and this end killed the forward.
+                            match client.send_datagram(pkt) {
+                                Ok(()) => {}
+                                Err(quinn::SendDatagramError::ConnectionLost(e)) => {
+                                    tracing::error!("forward connection lost: {e}");
+                                    break;
+                                }
+                                Err(e) => {
+                                    stats.datagrams_dropped.fetch_add(1, Ordering::Relaxed);
+                                    tracing::warn!(
+                                        size = n + 2,
+                                        "dropping datagram the connection will not carry: {e}"
+                                    );
+                                }
                             }
                         }
                         Err(e) => {
