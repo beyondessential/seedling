@@ -273,3 +273,89 @@ fn db_action_log_sequential_barriers() {
     assert_eq!(entries[0].call_index, 0);
     assert_eq!(entries[1].call_index, 1);
 }
+
+// r[verify barrier.replay.positional]
+// Positional matching, not value matching. Both halves of the old
+// value-scan were wrong: a second identical call matched the first entry
+// and was swallowed, and a call whose arguments resolved differently
+// between passes matched nothing and re-ran.
+mod positional {
+    use crate::runtime::barrier::{ActionLogEntry, CallKind, ReplayContext};
+
+    use super::*;
+
+    fn instance(name: &str) -> ResourceInstance {
+        ResourceInstance {
+            id: crate::runtime::identity::InstanceId::generate(),
+            app: app_name(),
+            kind: ResourceKind::Deployment,
+            name: Some(name.to_owned()),
+            variant: crate::runtime::identity::InstanceVariant::Singleton,
+            display_name: format!("test-app-{name}"),
+        }
+    }
+
+    fn entry(index: usize, kind: CallKind, resources: Vec<ResourceInstance>) -> ActionLogEntry {
+        ActionLogEntry {
+            call_index: index,
+            call_kind: kind,
+            resources,
+            barrier: None,
+            extra: Some("SIGHUP".to_owned()),
+        }
+    }
+
+    fn ctx_with(committed: Vec<ActionLogEntry>) -> ReplayContext {
+        ReplayContext::new(
+            OperationId("op-positional".into()),
+            committed,
+            Arc::new(TestWorldOracle::default()),
+            Arc::new(crate::runtime::barrier::CancelToken::default()),
+        )
+    }
+
+    // r[verify barrier.replay.positional]
+    #[test]
+    fn two_identical_calls_consume_two_entries() {
+        let db = instance("db");
+        let mut ctx = ctx_with(vec![
+            entry(0, CallKind::Signal, vec![db.clone()]),
+            entry(1, CallKind::Signal, vec![db.clone()]),
+        ]);
+
+        // Both are replays of their own position, not one matching twice.
+        assert!(ctx.replay_step(CallKind::Signal).unwrap().is_some());
+        assert!(ctx.replay_step(CallKind::Signal).unwrap().is_some());
+        // A third identical call at a position the log does not cover is new
+        // and must actually run — which is what the value scan swallowed.
+        assert!(ctx.replay_step(CallKind::Signal).unwrap().is_none());
+    }
+
+    // r[verify barrier.replay.positional]
+    // The instance set can differ between passes — a replica added or
+    // retired — and that does not make it a different call. Matching by value
+    // found nothing here and re-delivered a signal already delivered.
+    #[test]
+    fn a_changed_instance_set_is_still_the_same_call() {
+        let before = vec![instance("db")];
+        let after = vec![instance("db"), instance("db")];
+        let mut ctx = ctx_with(vec![entry(0, CallKind::Signal, before)]);
+
+        let replayed = ctx.replay_step(CallKind::Signal).unwrap();
+        assert!(
+            replayed.is_some(),
+            "the call at this position was already made, whatever it resolved to"
+        );
+        assert_ne!(replayed.unwrap().resources, after);
+    }
+
+    // r[verify barrier.replay.positional]
+    #[test]
+    fn a_diverged_log_fails_rather_than_guessing() {
+        let mut ctx = ctx_with(vec![entry(0, CallKind::Exec, vec![instance("db")])]);
+        let err = ctx.replay_step(CallKind::Signal).unwrap_err();
+        assert_eq!(err.call_index, 0);
+        assert_eq!(err.expected, CallKind::Signal);
+        assert_eq!(err.found, CallKind::Exec);
+    }
+}

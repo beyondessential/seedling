@@ -34,8 +34,12 @@ pub fn save_scaling_decision(
 ) -> rusqlite::Result<()> {
     let now = jiff::Timestamp::now().to_string();
     db.conn.execute(
-        "INSERT OR REPLACE INTO scaling_decisions (app, deployment, scale, updated_at)
-         VALUES (?1, ?2, ?3, ?4)",
+        // r[impl history.persist.partial-update]
+        "INSERT INTO scaling_decisions (app, deployment, scale, updated_at)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(app, deployment) DO UPDATE SET
+             scale = excluded.scale,
+             updated_at = excluded.updated_at",
         params![app, deployment, scale as i64, now],
     )?;
     Ok(())

@@ -124,9 +124,15 @@ pub(crate) fn persist_app_fields(
     installing: bool,
 ) -> rusqlite::Result<()> {
     db.conn.execute(
-        "INSERT OR REPLACE INTO registered_apps \
+        // r[impl history.persist.partial-update]
+        "INSERT INTO registered_apps \
              (name, installed, uninstalling, installing, current_generation) \
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+         VALUES (?1, ?2, ?3, ?4, ?5) \
+         ON CONFLICT(name) DO UPDATE SET \
+             installed = excluded.installed, \
+             uninstalling = excluded.uninstalling, \
+             installing = excluded.installing, \
+             current_generation = excluded.current_generation",
         rusqlite::params![
             name,
             installed as i64,

@@ -111,6 +111,29 @@ pub struct BarrierRecord {
 }
 
 // r[impl barrier.replay]
+/// The committed log does not describe the calls the closure is making.
+///
+/// Means the script changed between the crash and the replay, or the engine
+/// took a different branch. Either way the recorded results cannot be
+/// attributed to the calls now being made.
+// r[impl barrier.replay.positional]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplayMismatch {
+    pub call_index: usize,
+    pub expected: CallKind,
+    pub found: CallKind,
+}
+
+impl std::fmt::Display for ReplayMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "replay diverged at call {}: the log records a {:?} but the script is making a {:?}",
+            self.call_index, self.found, self.expected
+        )
+    }
+}
+
 pub struct ReplayContext {
     pub operation_id: OperationId,
     pub call_index: usize,
@@ -290,6 +313,40 @@ impl ReplayContext {
 
     pub fn committed_entry(&self) -> Option<&ActionLogEntry> {
         self.committed.get(self.call_index)
+    }
+
+    /// Consume the committed entry for the call being made *at this position*,
+    /// or `None` when this call is running for the first time.
+    ///
+    /// The action log is positional: `call_index` walks `committed` in the
+    /// order the closure makes its calls. `do_exec` always understood that;
+    /// `do_signal` did not, and scanned the whole log for any entry with the
+    /// same resources and signal. Both halves of that are wrong. A second,
+    /// identical `rt.signal` later in the same closure matched the first
+    /// entry and was swallowed — the signal was never delivered. And when the
+    /// resolved instance set changed between passes, no entry matched, so a
+    /// signal already delivered before the crash was delivered again.
+    ///
+    /// Advancing the index is part of consuming the entry, so a caller cannot
+    /// check without advancing or advance without checking.
+    // r[impl barrier.replay.positional]
+    pub fn replay_step(
+        &mut self,
+        expect: CallKind,
+    ) -> Result<Option<ActionLogEntry>, ReplayMismatch> {
+        if !self.is_replaying() {
+            return Ok(None);
+        }
+        let entry = self.committed[self.call_index].clone();
+        if entry.call_kind != expect {
+            return Err(ReplayMismatch {
+                call_index: self.call_index,
+                expected: expect,
+                found: entry.call_kind,
+            });
+        }
+        self.call_index += 1;
+        Ok(Some(entry))
     }
 
     pub fn take_pending(&mut self) -> Vec<ActionLogEntry> {

@@ -276,9 +276,15 @@ impl AppRegistry {
     pub fn persist_app(db: &Db, entry: &AppEntry) -> rusqlite::Result<()> {
         let (installed, uninstalling, installing) = encode_phase(&entry.phase.lock());
         db.conn.execute(
-            "INSERT OR REPLACE INTO registered_apps \
+            // r[impl history.persist.partial-update]
+            "INSERT INTO registered_apps \
                  (name, installed, uninstalling, installing, current_generation) \
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+             VALUES (?1, ?2, ?3, ?4, ?5) \
+             ON CONFLICT(name) DO UPDATE SET \
+                 installed = excluded.installed, \
+                 uninstalling = excluded.uninstalling, \
+                 installing = excluded.installing, \
+                 current_generation = excluded.current_generation",
             rusqlite::params![
                 entry.name,
                 installed as i64,

@@ -105,19 +105,32 @@ pub fn check_due_schedules(
             let accepted = matches!(result, ScheduleResult::Accepted);
             match result {
                 ScheduleResult::Accepted | ScheduleResult::Queued => {
-                    let fired_at = now.to_string();
-                    if let Err(e) = db::upsert_schedule_fired(
-                        db,
-                        &row.app,
-                        &row.action,
-                        &row.cronexpr,
-                        &fired_at,
-                    ) {
-                        tracing::error!(
-                            app = %row.app,
-                            action = %row.action,
-                            "failed to update last_fired_at: {e}"
-                        );
+                    // r[impl schedule.catch-up]
+                    // Stamp the fire when it happens, not when it is intended.
+                    // A queued fire exists only in the scheduler's in-memory
+                    // VecDeque, so stamping it here lost the operation on a
+                    // restart while the database said it had fired — and
+                    // r[schedule.catch-up] then had nothing to catch up on.
+                    // While it stays queued the next tick's re-fire is
+                    // rejected as SameAppAlreadyQueued and silently dropped,
+                    // so leaving it unstamped cannot double-fire; after a
+                    // restart the unstamped schedule fires again, which is
+                    // the point.
+                    if accepted {
+                        let fired_at = now.to_string();
+                        if let Err(e) = db::upsert_schedule_fired(
+                            db,
+                            &row.app,
+                            &row.action,
+                            &row.cronexpr,
+                            &fired_at,
+                        ) {
+                            tracing::error!(
+                                app = %row.app,
+                                action = %row.action,
+                                "failed to update last_fired_at: {e}"
+                            );
+                        }
                     }
                     let op_id = if accepted {
                         scheduler.active().map(|a| a.operation_id.clone())

@@ -27,6 +27,15 @@ Absent specification bugs, anything that is not defined here is either defined i
 > All operations performed by the reconciler must be idempotent.
 > Performing the same operation twice must not cause errors or duplicate side effects.
 
+> r[barrier.replay.positional]
+> The action execution log is positional: a replayed call is matched to the committed entry at its own position in the closure's call sequence, never to any entry elsewhere in the log that happens to look similar.
+> "At most once" for a call is therefore per call site: two identical calls at different points in a closure are two calls, and a call whose arguments resolve differently between passes is still the same call.
+> A replay whose committed entry does not correspond to the call being made must fail rather than guess.
+
+> r[history.persist.partial-update]
+> A writer that updates a row shared with another writer must not reset columns it does not own.
+> This holds as columns are added: a write that names its own columns explicitly must continue to leave the rest untouched when the row gains a new one.
+
 > r[reconciliation.liveness]
 > Individual reconciliation operations must not block the loop for an unbounded or long duration.
 > When an operation requires waiting for an external condition (e.g. a process to terminate), the reconciler must release control and re-evaluate the condition on a subsequent iteration rather than polling inline.

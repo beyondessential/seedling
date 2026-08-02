@@ -37,6 +37,8 @@ jobs:
         run: cargo fmt --all --check
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: No unscoped row overwrites
+        run: etc/ci/check-insert-or-replace.sh
 
   test:
     name: Test
