@@ -164,6 +164,7 @@ impl TailscaleProvider {
             match self.poll_once().await {
                 Ok(identity) => {
                     consecutive_failures = 0;
+                    self.sync_unreachable_fault(false);
                     self.reconcile_db(identity);
                 }
                 Err(TailscaleError::Unreachable(msg)) => {
@@ -192,6 +193,11 @@ impl TailscaleProvider {
                         // Mark any existing discovered row stale so the
                         // reconciler stops emitting routes for it.
                         self.mark_existing_stale(true);
+                        // r[impl fault.lifecycle] — the fault this threshold
+                        // exists for was documented but never actually filed,
+                        // so a tailnet that had been unreachable for hours
+                        // showed up only as a `warn!` in the log.
+                        self.sync_unreachable_fault(true);
                     }
                 }
             }
@@ -203,6 +209,47 @@ impl TailscaleProvider {
                 }
             }
         }
+    }
+
+    /// Converge the `tailscale_unreachable` system fault to whether the
+    /// provider currently considers tailscaled unreachable.
+    ///
+    /// A condition fault: true exactly while the condition holds. Converging
+    /// rather than filing-and-hoping means the clear is the sweep, so the
+    /// fault cannot outlive the outage — including across a daemon restart,
+    /// where the failure counter starts at zero but the fault is in the
+    /// database.
+    // r[impl fault.lifecycle]
+    fn sync_unreachable_fault(&self, unreachable: bool) {
+        let socket = self.config.socket_path.display().to_string();
+        self.db.call(move |db| {
+            let system = seedling_protocol::names::AppName::new_unchecked("_system");
+            let key = crate::runtime::faults::FaultKey::app_wide(&system, "tailscale_unreachable");
+            let mut current = std::collections::BTreeMap::new();
+            if unreachable {
+                current.insert(
+                    key,
+                    (
+                        crate::runtime::faults::FaultMeta::default(),
+                        format!(
+                            "tailscaled has been unreachable for {FAULT_AFTER_FAILURES} \
+                             consecutive polls via {socket}; the discovered site ingress is \
+                             marked stale and its routes are withdrawn"
+                        ),
+                    ),
+                );
+            }
+            if let Err(e) = crate::runtime::faults::sync_faults(
+                db,
+                &crate::runtime::faults::FaultScope::AppKind(
+                    system.clone(),
+                    "tailscale_unreachable".to_owned(),
+                ),
+                &current,
+            ) {
+                warn!("tailscale: failed to converge tailscale_unreachable fault: {e}");
+            }
+        });
     }
 
     /// Single poll attempt. Returns `Ok(None)` when the backend is reachable
