@@ -316,3 +316,19 @@ fn discovery_status_and_refresh_without_tailscale() {
     assert_eq!(code, "requirements_invalid");
     assert!(msg.contains("not configured"), "{msg}");
 }
+
+// r[verify namespace.reserved]
+// The Tailscale provider disables whatever row holds this name, so a manual
+// ingress created under it was permanently stale.
+#[test]
+fn reserved_site_ingress_name_is_rejected_at_creation() {
+    let oi = TestOi::new();
+    let (code, message) = oi
+        .call(
+            "/ingresses/site/create",
+            json!({ "name": "tailscale", "hostname": "example.com" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+    assert!(message.contains("reserved"), "message: {message}");
+}

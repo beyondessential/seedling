@@ -1115,6 +1115,19 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > When a Service's routing pool contains only unhealthy backends (i.e. the prefer-healthy rule has fallen back to "anything running" per [lifecycle.service.routing-pool](#r--lifecycle.service.routing-pool)), the runtime must file a fault of kind `service_degraded` associated with that Service.
 > The fault is cleared automatically when at least one backend in the pool becomes healthy or when the Service is unscheduled.
 
+> r[namespace.reserved]
+> The runtime grants itself names inside namespaces operators also use: site-volume names beginning `backup-snap-`, and the site-ingress name `tailscale`.
+> Creating a site volume or site ingress under a reserved name is rejected; the restriction applies to creation only, so an object that predates the reservation can still be renamed or removed.
+> Reservation alone is not sufficient: a component that deletes or disables objects it believes are its own must identify them by what the runtime recorded — a registered site volume is never deleted by the snapshot sweep, and a manually created site ingress is never disabled or replaced by a discovery provider — regardless of what the object is named.
+
+> r[app.uninstall.scope]
+> Uninstalling an app affects only resources belonging to that app.
+> Resources are identified by the identities the runtime recorded for them, not by the shape of their names: names are not required to be prefix-free, so one app's name may be a prefix of another's.
+> A scan by name prefix is permitted only to enumerate candidates that are then matched exactly against recorded identity.
+
+> r[infra.pod.subnet]
+> Every concurrently running pod instance has a distinct network prefix.
+
 > r[fault.surfacing]
 > Faults must be surfaced to operators through the operator interface (defined in a separate spec).
 > The runtime must not silently discard faults.

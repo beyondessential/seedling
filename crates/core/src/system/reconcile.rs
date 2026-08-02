@@ -1445,8 +1445,38 @@ impl Reconciler {
             if !running.is_empty() {
                 continue;
             }
-            let unit_prefix = format!("seedling-{}-", app.name);
-            match self.driver.process.list_units(&unit_prefix).await {
+            // r[impl app.uninstall.scope] — match units against the
+            // identities the registry recorded, not against a name prefix.
+            // `seedling-{app}-` is not prefix-free: uninstalling `app` matched
+            // every unit of a sibling called `app-db`, and the retry branch
+            // then reset and stopped that healthy sibling's units every five
+            // seconds while this uninstall never completed.
+            let app_name_for_query = app.name.clone();
+            let expected: HashSet<String> = self
+                .db
+                .call(move |db| {
+                    crate::runtime::history::display_names_for_app(db, &app_name_for_query)
+                })
+                .unwrap_or_else(|e| {
+                    warn!(app = %app.name, "uninstall: failed to load instance names: {e}");
+                    Vec::new()
+                })
+                .into_iter()
+                .map(|display_name| format!("seedling-{display_name}.service"))
+                .collect();
+            // The prefix scan only enumerates candidates; the decision is the
+            // exact match against `expected`.
+            match self
+                .driver
+                .process
+                .list_units("seedling-")
+                .await
+                .map(|units| {
+                    units
+                        .into_iter()
+                        .filter(|u| expected.contains(&u.name))
+                        .collect::<Vec<_>>()
+                }) {
                 Ok(units) if units.is_empty() => {
                     let app_name_owned = app.name.clone();
                     let phase_handle = Arc::clone(&app.phase_handle);

@@ -616,10 +616,46 @@ async fn main() {
         let prefix = seedling_core::runtime::backup_execution::SNAPSHOT_NAME_PREFIX;
         match driver_ref.volume_store.list_sites_with_prefix(prefix) {
             Ok(orphans) if !orphans.is_empty() => {
-                tracing::warn!(
-                    count = orphans.len(),
-                    "found orphaned backup-execution snapshots from a previous run; removing"
-                );
+                // r[impl namespace.reserved] — a DB row is the record that an
+                // operator owns this name. Creation rejects the prefix now,
+                // but that cannot help a volume created before the check
+                // existed, and this sweep deletes on sight.
+                let registered: Vec<String> =
+                    orphans.iter().map(|n| n.as_str().to_owned()).collect();
+                let owned: std::collections::HashSet<String> = db.call(move |conn| {
+                    registered
+                        .into_iter()
+                        .filter(|name| {
+                            seedling_protocol::names::SiteVolumeName::new(name)
+                                .ok()
+                                .and_then(|n| {
+                                    seedling_core::runtime::site_volumes::get(conn, &n).ok()
+                                })
+                                .flatten()
+                                .is_some()
+                        })
+                        .collect()
+                });
+                let orphans: Vec<_> = orphans
+                    .into_iter()
+                    .filter(|name| {
+                        let keep = owned.contains(name.as_str());
+                        if keep {
+                            tracing::info!(
+                                volume = %name,
+                                "a registered site volume uses the backup snapshot prefix; \
+                                 leaving it alone"
+                            );
+                        }
+                        !keep
+                    })
+                    .collect();
+                if !orphans.is_empty() {
+                    tracing::warn!(
+                        count = orphans.len(),
+                        "found orphaned backup-execution snapshots from a previous run; removing"
+                    );
+                }
                 for name in &orphans {
                     tracing::info!(snapshot = %name, "removing orphaned backup snapshot");
                     tokio::task::block_in_place(|| {

@@ -415,3 +415,26 @@ fn declared_external_volumes_guard_unmap() {
     assert_eq!(code, "requirements_invalid");
     assert!(msg.contains("declared by app"), "{msg}");
 }
+
+// r[verify namespace.reserved]
+// The daemon deletes every site volume under `backup-snap-` at startup, so an
+// operator volume created under that prefix was destroyed on the next restart.
+#[test]
+fn reserved_prefix_is_rejected_at_creation() {
+    let oi = TestOi::new();
+    let (code, message) = oi
+        .call(
+            "/volumes/site/create",
+            json!({ "name": "backup-snap-archive", "kind": "managed" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+    assert!(message.contains("reserved"), "message: {message}");
+
+    // A name that merely contains the prefix is the operator's.
+    oi.call(
+        "/volumes/site/create",
+        json!({ "name": "my-backup-snap-thing", "kind": "managed" }),
+    )
+    .expect("only the claimed prefix is reserved");
+}

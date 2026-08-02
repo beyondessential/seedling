@@ -4,6 +4,7 @@ use std::{
 };
 
 use ipnet::Ipv6Net;
+use sha2::{Digest, Sha256};
 
 use crate::{
     defs::ingress::IngressDef,
@@ -77,12 +78,47 @@ pub fn instance_ipv6(node_prefix: &Ipv6Net, instance: &ResourceInstance) -> Ipv6
 
 /// Derives the pod network /64 prefix for a pod instance.
 ///
-/// Prefix layout: `fd5e:edXX:XXXX:KKUU::/64` — identical to `instance_ipv6`
-/// but with the interface ID (bytes 8–15) zeroed.
+/// Prefix layout: `fd5e:edXX:XXXX:KKSS::/64`, where `KK` is the resource kind
+/// and `SS` is derived from the instance's **full** identity.
+///
+/// `SS` used to be `uuid[0]`, which is *zero* for static Jobs — their
+/// `InstanceId` is nil. Every static Job on the node, in every app, therefore
+/// derived the identical /64, and netavark rejects the second network on a
+/// duplicate subnet. Hashing the full identity (app, kind, name, whole UUID)
+/// removes that deterministic collision: two distinct Jobs now differ even
+/// when both their UUIDs are nil.
+///
+/// It does not fix the *probabilistic* half. `SS` is still eight bits, so
+/// scaled replicas of one deployment birthday-collide at the same rate as
+/// before. Widening it means taking byte 6 as well, and byte 6 is the kind
+/// discriminant that keeps pod /64s disjoint from the service /128 space and
+/// from the `fffe` infrastructure addresses — not something to overload
+/// without deciding what those namespaces mean. The real fix is allocation
+/// rather than derivation: an `instance_id → subnet id` table with a unique
+/// index, allocated at first actuation and freed at GC, which needs a
+/// database handle in what is currently a pure translate layer. Left as the
+/// next step rather than half-done.
+///
+/// Changing the derivation re-homes each instance at its next pod recreation,
+/// when its per-instance network is torn down and remade; no flag day.
+// r[impl infra.pod.subnet]
 pub fn pod_network_prefix(node_prefix: &Ipv6Net, instance: &ResourceInstance) -> Ipv6Net {
-    let addr = instance_ipv6(node_prefix, instance);
-    let mut bytes = addr.octets();
-    bytes[8..].fill(0);
+    debug_assert_eq!(node_prefix.prefix_len(), 48, "node prefix must be /48");
+
+    let mut hasher = Sha256::new();
+    hasher.update(instance.app.as_str().as_bytes());
+    hasher.update([0]);
+    hasher.update([instance.kind as u8]);
+    hasher.update([0]);
+    hasher.update(instance.name.as_deref().unwrap_or("").as_bytes());
+    hasher.update([0]);
+    hasher.update(instance.id.0.as_bytes());
+    let digest = hasher.finalize();
+
+    let mut bytes = [0u8; 16];
+    bytes[..6].copy_from_slice(&node_prefix.network().octets()[..6]);
+    bytes[6] = instance.kind as u8;
+    bytes[7] = digest[0];
     Ipv6Net::new(Ipv6Addr::from(bytes), 64).expect("64 is a valid IPv6 prefix length")
 }
 
@@ -309,14 +345,45 @@ mod tests {
         assert_eq!(&octets[8..], &[0u8; 8]);
     }
 
+    // r[verify infra.pod.subnet]
+    // The pod /64 no longer shares its low byte with the instance address —
+    // that byte is a hash of the full identity now — but it keeps the kind
+    // discriminant, which is what holds pod /64s disjoint from the service
+    // /128 space and the `fffe` infrastructure addresses.
     #[test]
-    fn pod_prefix_matches_instance_address_upper_64() {
+    fn pod_prefix_keeps_the_kind_discriminant() {
         let prefix = test_prefix();
         let instance = make_instance(ResourceKind::Job);
-        let addr = instance_ipv6(&prefix, &instance);
         let net = pod_network_prefix(&prefix, &instance);
-        // The /64 network address must match the first 8 bytes of the instance address
-        assert_eq!(&addr.octets()[..8], &net.network().octets()[..8]);
+        let addr = instance_ipv6(&prefix, &instance);
+        assert_eq!(net.network().octets()[6], ResourceKind::Job as u8);
+        assert_eq!(&addr.octets()[..7], &net.network().octets()[..7]);
+    }
+
+    // r[verify infra.pod.subnet]
+    // Static Jobs carry a nil InstanceId, so deriving the subnet from
+    // `uuid[0]` gave every static Job on the node — across every app — the
+    // same /64, and netavark refuses the second network on a duplicate
+    // subnet.
+    #[test]
+    fn static_jobs_with_nil_ids_get_distinct_subnets() {
+        let prefix = test_prefix();
+        let nil = crate::runtime::identity::InstanceId(uuid::Uuid::nil());
+        let job = |app: &str, name: &str| ResourceInstance {
+            id: nil,
+            app: seedling_protocol::names::AppName::new(app).unwrap(),
+            kind: ResourceKind::Job,
+            name: Some(name.to_owned()),
+            variant: crate::runtime::identity::InstanceVariant::Singleton,
+            display_name: format!("{app}-job-{name}"),
+        };
+
+        let a = pod_network_prefix(&prefix, &job("alpha", "migrate"));
+        let b = pod_network_prefix(&prefix, &job("beta", "migrate"));
+        let c = pod_network_prefix(&prefix, &job("alpha", "vacuum"));
+
+        assert_ne!(a, b, "same job name in different apps must not collide");
+        assert_ne!(a, c, "different jobs in one app must not collide");
     }
 
     #[test]
