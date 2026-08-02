@@ -21,6 +21,10 @@ use std::ops::RangeInclusive;
 
 use rhai::{Dynamic, EvalAltResult};
 
+// l[impl bsl.args.strict] — every helper below converts or throws; none
+// coerces, defaults, or drops. Per-builder rules keep their own annotations
+// at the call sites.
+
 /// Convert to a string, or throw naming `what` and the actual type.
 pub fn take_string(what: &str, value: Dynamic) -> Result<String, Box<EvalAltResult>> {
     value
