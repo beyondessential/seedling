@@ -7,7 +7,6 @@ use seedling_protocol::actor::Actor;
 use seedling_protocol::client::{ClientAuth, ClientError, OiClient};
 use seedling_protocol::keys::ClientIdentity;
 use serde_json::json;
-use tokio::io::{AsyncBufReadExt as _, BufReader};
 use tokio::sync::{Mutex, oneshot};
 
 /// Routes incoming daemon uni streams to registered handlers by QUIC stream ID.
@@ -235,33 +234,10 @@ impl DaemonConn {
         request_bytes: &[u8],
     ) -> Result<(OiClient, quinn::RecvStream), ClientError> {
         let client = self.new_events_client().await?;
-        let conn = client.connection().clone();
-
-        let (mut send, recv) = conn
-            .open_bi()
-            .await
-            .map_err(|e| ClientError::Transport(Box::new(e)))?;
-
-        send.write_all(request_bytes)
-            .await
-            .map_err(|e| ClientError::Transport(Box::new(e)))?;
-        send.write_all(b"\n")
-            .await
-            .map_err(|e| ClientError::Transport(Box::new(e)))?;
-        send.finish()
-            .map_err(|e| ClientError::Transport(Box::new(e)))?;
-
-        let mut buf = BufReader::new(recv);
-        let mut line = String::new();
-        buf.read_line(&mut line)
-            .await
-            .map_err(|e| ClientError::Transport(Box::new(e)))?;
-
-        let log_recv = conn
-            .accept_uni()
-            .await
-            .map_err(|e| ClientError::Transport(Box::new(e)))?;
-
+        // The raw variant, not `open_subscription`: the request the gateway
+        // relays already carries the browser session's actor, which must not
+        // be replaced by the web service's own.
+        let log_recv = client.open_subscription_raw(request_bytes).await?;
         Ok((client, log_recv))
     }
 

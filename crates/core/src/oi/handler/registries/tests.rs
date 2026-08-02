@@ -84,3 +84,42 @@ fn disallowed_registry_files_fault_and_removal_reevaluates_apps() {
     let faults = oi.call("/faults/list", json!({ "app": "demo" })).unwrap();
     assert_eq!(faults.as_array().unwrap().len(), 1);
 }
+
+// r[verify fault.lifecycle]
+// i[verify registry.add]
+// `disallowed_registry` is true exactly while an app's images reference a
+// registry outside the allowlist. Adding the registry is the remediation, so
+// it has to re-evaluate — otherwise the fault the operator just fixed stood
+// until something else happened to reload the app.
+#[test]
+fn adding_a_registry_clears_the_fault_it_resolves() {
+    let oi = TestOi::new();
+    let script = r#"
+        app.deployment("web").image("quay.io/acme/web:1.0");
+    "#;
+    oi.call("/apps/create", json!({ "app": "demo", "script": script }))
+        .unwrap();
+
+    let faults = oi.call("/faults/list", json!({ "app": "demo" })).unwrap();
+    assert!(
+        faults
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["kind"] == "disallowed_registry"),
+        "precondition: quay.io is not allowlisted: {faults:#?}"
+    );
+
+    oi.call("/registries/add", json!({ "registry": "quay.io" }))
+        .unwrap();
+
+    let faults = oi.call("/faults/list", json!({ "app": "demo" })).unwrap();
+    assert!(
+        !faults
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["kind"] == "disallowed_registry"),
+        "the fault must clear once the registry is allowed: {faults:#?}"
+    );
+}
