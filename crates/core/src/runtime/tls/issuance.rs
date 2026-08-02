@@ -298,18 +298,6 @@ impl Coordinator {
     async fn run(self: &Arc<Self>, hostname: &str, trigger: AttemptTrigger) -> Result<Issued> {
         let _guard = self.issue_lock.lock().await;
 
-        // r[impl ingress.site.tailscale]
-        // Tailscale-discovered hostnames bypass the ACME state machine
-        // entirely: there's no operator policy to read, no CA to talk
-        // to, and no ARI window. We just hand the request to
-        // tailscale_issuer, which fetches a fresh cert+key pair from
-        // the local tailscaled API, parses + persists it, and the rest
-        // of the runtime serves it via the same get_certificate path
-        // ACME certs flow through.
-        if self.dispatch_to_tailscale(hostname)? {
-            return self.run_tailscale(hostname, trigger).await;
-        }
-
         // Single source of truth for the decision; the OI rollup and the
         // renewal scheduler call the same function over the same DB
         // snapshot. Mutating side-effects (taking force-retry, opening
@@ -337,6 +325,25 @@ impl Coordinator {
                 "cert_issue_failed",
                 "no contact email is configured; set one via /tls/settings/set",
             );
+        }
+
+        // r[impl ingress.site.tailscale]
+        // Tailscale-discovered hostnames bypass the ACME state machine
+        // entirely: there's no operator policy to read, no CA to talk to, and
+        // no ARI window. tailscale_issuer fetches a fresh cert+key pair from
+        // the local tailscaled API, and the rest of the runtime serves it via
+        // the same get_certificate path ACME certs flow through.
+        //
+        // r[impl tls.cert.retry-block] — but the dispatch happens *after* the
+        // decision, not before it. Dispatching first routed around the only
+        // thing that paces issuance: while tailscaled was down, every
+        // reconciler tick opened and finalised a failed attempt row, and the
+        // 1000-row cap on Snapshot::load then evicted other hostnames'
+        // last_attempt — dissolving their debounce too. A subsystem with a
+        // central decision function admits no dispatch before the decision.
+        if self.dispatch_to_tailscale(hostname)? {
+            check_retry_gate(hostname, trigger, &owned)?;
+            return self.run_tailscale(hostname, trigger).await;
         }
 
         let dns_provider_name = match handle_non_issuing(hostname, trigger, &owned)? {
@@ -462,6 +469,36 @@ enum ProceedKind {
     Skip(Issued),
     /// The decision is to issue; continue with the named DNS provider.
     Issue(String),
+}
+
+/// The subset of [`handle_non_issuing`] that paces retries, for providers
+/// that have no ACME policy to consult but must still honour an operator
+/// block and the failure debounce.
+///
+/// `Blocked` and `Debounced` are about *whether to attempt now*, and apply to
+/// any issuer. The remaining decisions are about ACME policy — which DNS
+/// provider, whether a current cert already covers the hostname — and mean
+/// nothing to an issuer that fetches from a local API.
+// r[impl tls.cert.retry-block]
+fn check_retry_gate(hostname: &str, trigger: AttemptTrigger, owned: &OwnedState) -> Result<()> {
+    match &owned.decision {
+        Decision::Blocked { reason } => Err(CoordinatorError::Paused {
+            hostname: hostname.to_owned(),
+            reason: reason
+                .clone()
+                .or_else(|| owned.retry_block_reason.clone())
+                .unwrap_or_else(|| "no reason given".to_owned()),
+        }),
+        // A manual trigger bypasses the debounce, as it does for ACME.
+        Decision::Debounced { until } if trigger != AttemptTrigger::Manual => {
+            let now = jiff::Timestamp::now().as_second();
+            Err(CoordinatorError::Debounced {
+                hostname: hostname.to_owned(),
+                remaining_s: (until - now).max(0),
+            })
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Map a [`Decision`] to either an early return (skip / error) or a

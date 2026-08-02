@@ -26,6 +26,7 @@ pub mod probe;
 pub mod registries;
 pub mod registry;
 pub mod restart_gens;
+pub mod retry;
 pub mod scaling;
 pub mod scheduler;
 pub mod schedules;
