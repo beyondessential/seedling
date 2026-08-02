@@ -802,13 +802,32 @@ fn is_not_found(e: &podman_rest_client::Error) -> bool {
     }
 }
 
+/// Map podman's documented container states.
+///
+/// The list is exhaustive over what podman documents rather than over what
+/// this code happens to have needed: the catch-all used to swallow
+/// `stopping`, `removing` and `initialized`, and three layers away that
+/// became "the container was removed".
+///
+/// r[impl observe.failure-not-absence] — an unrecognised state is logged and
+/// mapped to `Unknown`, which means *present but indeterminate*, never
+/// absent. The next state podman invents then fails loudly in one place.
 fn parse_container_status(s: &str) -> ContainerStatus {
     match s {
-        "created" | "configured" => ContainerStatus::Created,
+        "created" | "configured" | "initialized" => ContainerStatus::Created,
         "running" => ContainerStatus::Running,
         "paused" => ContainerStatus::Paused,
         "exited" | "stopped" | "dead" => ContainerStatus::Exited,
-        _ => ContainerStatus::Unknown,
+        "stopping" | "removing" => ContainerStatus::Stopping,
+        "unknown" => ContainerStatus::Unknown,
+        other => {
+            tracing::error!(
+                state = other,
+                "podman reported a container state this build does not model; \
+                 treating the container as present but indeterminate"
+            );
+            ContainerStatus::Unknown
+        }
     }
 }
 
@@ -1034,5 +1053,63 @@ impl ContainerRuntime for PodmanRuntime {
                 128 + status.signal().unwrap_or(0)
             }))
         })
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    // r[verify observe.failure-not-absence]
+    // The catch-all used to swallow podman's real transitional states, and
+    // three layers away `Unknown` became "the container was removed" — so a
+    // postgres draining through a long stop_timeout_secs was recorded as
+    // removed while it still held its volumes and network.
+    #[test]
+    fn draining_states_are_not_absence() {
+        assert_eq!(
+            parse_container_status("stopping"),
+            ContainerStatus::Stopping
+        );
+        assert_eq!(
+            parse_container_status("removing"),
+            ContainerStatus::Stopping
+        );
+    }
+
+    // r[verify observe.failure-not-absence]
+    #[test]
+    fn initialized_is_created_not_unknown() {
+        assert_eq!(
+            parse_container_status("initialized"),
+            ContainerStatus::Created
+        );
+    }
+
+    // r[verify observe.failure-not-absence]
+    // An unmodelled state means "present, and nothing more can be said" —
+    // never "absent". The next state podman invents fails loudly here rather
+    // than quietly becoming a removal.
+    #[test]
+    fn an_unmodelled_state_is_present_but_indeterminate() {
+        assert_eq!(
+            parse_container_status("some-future-podman-state"),
+            ContainerStatus::Unknown
+        );
+    }
+
+    #[test]
+    fn documented_states_round_trip() {
+        for (input, expected) in [
+            ("created", ContainerStatus::Created),
+            ("configured", ContainerStatus::Created),
+            ("running", ContainerStatus::Running),
+            ("paused", ContainerStatus::Paused),
+            ("exited", ContainerStatus::Exited),
+            ("stopped", ContainerStatus::Exited),
+            ("dead", ContainerStatus::Exited),
+        ] {
+            assert_eq!(parse_container_status(input), expected, "{input}");
+        }
     }
 }

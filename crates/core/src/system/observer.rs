@@ -196,7 +196,17 @@ impl Observer {
                     ContainerStatus::Exited => ObservationFact::ContainerExited {
                         exit_code: s.exit_code.unwrap_or(-1),
                     },
-                    ContainerStatus::Unknown => ObservationFact::ContainerMissing,
+                    // r[impl observe.failure-not-absence] — this arm has
+                    // already proven the container exists: the inspect
+                    // returned it. Mapping either of these to
+                    // ContainerMissing recorded `container_removed`, which
+                    // the oracle reads as the transition to Unscheduled and
+                    // termination_success reads as terminal success — so a
+                    // container still draining through its stop timeout
+                    // released barriers over volumes and networks it held.
+                    ContainerStatus::Stopping | ContainerStatus::Unknown => {
+                        ObservationFact::ContainerPresentIndeterminate
+                    }
                 };
                 facts.push((lifecycle_fact, now));
 
