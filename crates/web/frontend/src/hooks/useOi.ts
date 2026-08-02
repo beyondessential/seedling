@@ -98,6 +98,12 @@ export function useOiQuery<T>(
 ): OiQueryState<T> {
   const { session } = useContext(SessionContext);
   const cacheMs = options?.cacheMs ?? 0;
+  // Params are compared by value, not by identity: callers pass a fresh object
+  // literal on every render, so keying the effect on the object itself would
+  // refetch forever. Keying on the serialisation means a view that narrows its
+  // query (a filter selection, say) refetches, while a constant param object
+  // does not.
+  const paramsKey = stableStringify(params);
   const key = cacheMs > 0 ? cacheKey(method, params) : null;
 
   // Seed state from cache synchronously so reopening a cached view doesn't
@@ -167,7 +173,7 @@ export function useOiQuery<T>(
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session, method, key, force]);
+  }, [session, method, key, paramsKey, force]);
 
   return { data, loading, error, refetch, cachedAt };
 }

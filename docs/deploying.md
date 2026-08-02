@@ -27,7 +27,9 @@ sudo apt-get install seedling
 ```
 
 The package depends on `podman` (5.x — podman 4 is too old and 6 is not yet
-supported), `nftables` and `libsystemd0`, and recommends
+supported), `nftables`, `libsystemd0`, and `bestool` (the BES deployment CLI,
+which drives Tamanu through the daemon on a Seedling host — see
+[Host tooling](#host-tooling-bestool)), and recommends
 `btrfs-progs` (for named-volume snapshots) and `jool-dkms` + `jool-tools` (for
 NAT64). Recommends are installed by default; if you run without NAT64 or on a
 non-btrfs data directory you can skip them with `--no-install-recommends`. It
@@ -43,6 +45,8 @@ it separately if you want that.
 - State: `/var/lib/seedling` (data directory: database, keys, authorized keys)
   and `/var/log/seedling` (audit log, rotated by `/etc/logrotate.d/seedling`).
 - Config: `/etc/seedling/web.toml` (a conffile — your edits survive upgrades).
+- Host tooling credentials: `/etc/bestool/seedling.key`, pre-generated and
+  authorised with the daemon (see [Host tooling](#host-tooling-bestool)).
 
 On first install the daemon starts immediately with sensible defaults
 (`--data-dir /var/lib/seedling`). Workloads keep running while the daemon is
@@ -112,6 +116,83 @@ safe. The unit orders after `tailscaled` and waits (briefly, best-effort) for
 the tailnet address at startup, so a normal boot binds `tailscale0`
 automatically; if you enable Tailscale on an already-running host, `sudo
 systemctl restart seedling.service` to pick it up.
+
+## Host tooling (bestool)
+
+`bestool` is a hard dependency of the package. On a Seedling host it is the
+tool that operates Tamanu — `bestool tamanu start`, `stop`, `restart`,
+`status`, `logs`, `psql`, `doctor` — and it detects the host by the presence of
+`seedling.service`, then acts through the OI instead of through the host
+service manager.
+
+So that it works on a freshly provisioned host with no operator step, the
+package bootstraps a host-wide interface identity for it, the same way it does
+for the web interface:
+
+- `/etc/bestool/seedling.key`, generated on install (and backfilled on upgrade
+  if absent), mode `0600` and owned by root.
+- Its fingerprint authorised in `/var/lib/seedling/authorized_keys` under the
+  label `bestool`.
+
+Because the key is root-only, the host identity is reachable by `sudo bestool
+tamanu ...` and by root-run automation and by nothing else, and grants nothing
+that root does not already have: root can authorise any key it likes by writing
+to the data directory.
+
+Picking the key up is `bestool`'s side of the contract, and is not in every
+release yet. A `bestool` that reads it still prefers an operator's own key where
+they have one, so the daemon's record of who acted names the person; it falls
+back to the host identity otherwise, re-running itself under `sudo` to reach it
+rather than asking the operator to. One that does not read it uses the
+operator's own key only, which has to be authorised as under
+[Operator access](#operator-access-seedling-ctl).
+
+To see the entry, or to revoke it:
+
+```bash
+seedling-ctl user list
+seedling-ctl user remove <fingerprint>
+```
+
+Removing the key file alone does not revoke it — the daemon imports
+`authorized_keys` into its database on start, so revoke through
+`seedling-ctl user remove` (or the web interface). A `dpkg --purge seedling`
+deletes the key file along with the rest of the daemon's state.
+
+### Reaching Canopy through bestool
+
+Seedling has no Canopy identity of its own. Giving it one would mean a second
+enrolment and a second key to rotate on every host, so instead the connected
+`bestool` offers to carry Seedling's Canopy requests: Seedling hands over a whole
+HTTP request on the interface connection, `bestool` issues it under the host's
+device identity, and hands the response back. Seedling uses that channel to
+report its own health to Canopy as the `seedling` source, alongside whatever
+`bestool` reports as its own.
+
+Nothing happens on a host where no client offers one. Seedling never dials out —
+`bestool` initiates both the connection and the offer — so a host without it, or
+without a Canopy auth path, simply has the facility sitting idle: no retry loop,
+no connection timeout, and no fault to explain.
+
+To see the current state, or to turn the facility off on a host that has a
+`bestool` but should not appear in Canopy:
+
+```bash
+seedling-ctl canopy status
+seedling-ctl canopy disable
+seedling-ctl canopy enable
+```
+
+Disabling refuses new offers and revokes any live one immediately, rather than
+waiting for the carrying client to reconnect. The same state and the on/off
+control are on the web interface's Canopy page.
+
+There is deliberately no way to relay an arbitrary request through the OI. The
+relay carries what the runtime itself needs, and an interface for relaying
+anything else would hand every authorised operator the full authority of the
+carrying client's Canopy identity. The path is exercised end to end by the
+status reports the runtime already sends, whose outcome `canopy status`
+reports.
 
 ## The web interface (seedling-web)
 

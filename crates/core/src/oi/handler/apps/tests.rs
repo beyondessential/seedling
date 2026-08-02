@@ -480,3 +480,154 @@ fn unstop_all_clears_every_stopped_resource() {
         .unwrap_err();
     assert_eq!(code, "not_found");
 }
+
+/// An app whose definition carries every kind of state `/apps/update` derives
+/// by diffing the registry: a named volume, a scaled deployment, and a
+/// scheduled action.
+const DERIVED_STATE_SCRIPT: &str = r#"
+    app.volume("data");
+    app.deployment("web")
+        .image("docker.io/library/nginx:1.29")
+        .scale(1..4);
+    app.on_action("vacuum", |rt, _p| {
+        rt.start(app.job().image("docker.io/library/busybox:1.37").command("true"))
+            .terminated();
+    }).on_schedule("H 3 * * *");
+"#;
+
+// i[verify app.update]
+// A script that throws part-way through evaluation used to have its partial
+// result swapped into the registry, after which every post-update diff read
+// the resources declared below the throw as deleted — holding live volume
+// data, wiping scaling decisions, tearing down forwards, and pruning
+// schedules, all from a typo.
+#[test]
+fn failed_update_leaves_derived_state_untouched() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({ "app": "demo", "script": DERIVED_STATE_SCRIPT }),
+    )
+    .unwrap();
+    oi.install("demo");
+    oi.call(
+        "/apps/scale",
+        json!({ "app": "demo", "deployment": "web", "scale": 3 }),
+    )
+    .unwrap();
+
+    let schedules_before = oi
+        .state
+        .db
+        .call(|db| {
+            crate::runtime::db::list_schedules(
+                db,
+                &seedling_protocol::names::AppName::new("demo").unwrap(),
+            )
+        })
+        .unwrap();
+    assert_eq!(schedules_before.len(), 1, "precondition: schedule exists");
+
+    // Declares the deployment, then throws. Everything below the throw —
+    // the volume, the scale bounds, the scheduled action — is absent from
+    // the partial evaluation.
+    let broken = r#"
+        app.deployment("web").image("docker.io/library/nginx:1.29");
+        throw "typo";
+        app.volume("data");
+    "#;
+    // i[verify app.update] — the request still succeeds.
+    oi.call("/apps/update", json!({ "app": "demo", "script": broken }))
+        .unwrap();
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+
+    let resources = desc["resources"].as_array().unwrap();
+    assert!(
+        resources
+            .iter()
+            .any(|r| r["type"] == "volume" && r["name"] == "data"),
+        "the volume must survive a failed update: {resources:#?}"
+    );
+
+    let web = resources
+        .iter()
+        .find(|r| r["name"] == "web")
+        .expect("deployment still present");
+    assert_eq!(
+        web["scale"]["current"], 3,
+        "scaling decisions must not be clamped against a partial definition"
+    );
+
+    let schedules_after = oi
+        .state
+        .db
+        .call(|db| {
+            crate::runtime::db::list_schedules(
+                db,
+                &seedling_protocol::names::AppName::new("demo").unwrap(),
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        schedules_after.len(),
+        1,
+        "the scheduled action must not be pruned"
+    );
+
+    // The operator is still told what went wrong.
+    let faults = desc["faults"].as_array().unwrap();
+    assert!(
+        faults.iter().any(|f| f["kind"] == "script_error"),
+        "a script_error fault must be filed: {faults:#?}"
+    );
+}
+
+// i[verify app.register]
+// A registration that could not be persisted must not be observable: the
+// in-memory entry used to survive the failed DB write, so `/apps/list` showed
+// an app that a restart silently dropped (load_from_db skips generation-0
+// rows) and a retried `/apps/create` was rejected as already registered.
+#[test]
+fn failed_registration_leaves_nothing_behind() {
+    let oi = TestOi::new();
+
+    // Break the generation write specifically: the app row is written first,
+    // so this exercises the half-committed case rather than a total failure.
+    oi.state
+        .db
+        .call(|db| {
+            db.conn
+                .execute("ALTER TABLE generations RENAME TO generations_hidden", [])
+        })
+        .expect("hide generations table");
+
+    let err = oi.call(
+        "/apps/create",
+        json!({ "app": "demo", "script": MINIMAL_SCRIPT }),
+    );
+    assert!(err.is_err(), "registration must fail when persistence does");
+
+    let list = oi.call("/apps/list", json!({})).unwrap();
+    assert!(
+        list.as_array().unwrap().is_empty(),
+        "a failed registration must not appear in listings: {list:#?}"
+    );
+
+    oi.state
+        .db
+        .call(|db| {
+            db.conn
+                .execute("ALTER TABLE generations_hidden RENAME TO generations", [])
+        })
+        .expect("restore generations table");
+
+    // The retry contract: nothing was left to collide with.
+    let result = oi
+        .call(
+            "/apps/create",
+            json!({ "app": "demo", "script": MINIMAL_SCRIPT }),
+        )
+        .expect("retry after a transient persistence failure must succeed");
+    assert_eq!(result["generation"], 1);
+}

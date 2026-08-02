@@ -8,8 +8,8 @@ use crate::{
     actor::Actor,
     names::{
         ActionName, AppName, AppServiceName, ExternalServiceName, ExternalVolumeName, ForwardId,
-        HeldVolumeId, ParamName, ServiceRef, SessionId, ShellName, SiteIngressName, TemplateName,
-        VolumeRef,
+        HeldVolumeId, OfferId, ParamName, ServiceRef, SessionId, ShellName, SiteIngressName,
+        TemplateName, VolumeRef,
     },
 };
 
@@ -181,6 +181,25 @@ pub enum OiEvent {
     ForwardStopped {
         timestamp: Timestamp,
         forward_id: ForwardId,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
+    // i[impl canopy.offer]
+    CanopyOffered {
+        timestamp: Timestamp,
+        offer_id: OfferId,
+        agent: String,
+        endpoint: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
+    // i[impl canopy.offer.lifetime]
+    CanopyWithdrawn {
+        timestamp: Timestamp,
+        offer_id: OfferId,
+        /// Which of connection loss, voluntary withdrawal, or revocation by the
+        /// disabled setting ended the offer.
+        reason: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
@@ -707,6 +726,35 @@ impl EventSender {
             timestamp: now(),
             forward_id,
             actor: None,
+        });
+    }
+
+    // i[impl canopy.offer]
+    pub fn canopy_offered(
+        &self,
+        offer_id: OfferId,
+        agent: &str,
+        endpoint: &str,
+        actor: Option<Arc<Actor>>,
+    ) {
+        self.emit(OiEvent::CanopyOffered {
+            timestamp: now(),
+            offer_id,
+            agent: agent.to_owned(),
+            endpoint: endpoint.to_owned(),
+            actor,
+        });
+    }
+
+    // i[impl canopy.offer.lifetime]
+    /// `actor` is absent when the offer ended without anyone asking — the
+    /// connection was lost — as [event.types] requires of autonomous events.
+    pub fn canopy_withdrawn(&self, offer_id: OfferId, reason: &str, actor: Option<Arc<Actor>>) {
+        self.emit(OiEvent::CanopyWithdrawn {
+            timestamp: now(),
+            offer_id,
+            reason: reason.to_owned(),
+            actor,
         });
     }
 
@@ -1275,6 +1323,18 @@ impl EventSenderWithActor {
     pub fn app_registered(&self, app: &AppName, generation: u64) {
         self.inner
             .app_registered(app, generation, Some(Arc::clone(&self.actor)));
+    }
+
+    // i[impl canopy.offer]
+    pub fn canopy_offered(&self, offer_id: OfferId, agent: &str, endpoint: &str) {
+        self.inner
+            .canopy_offered(offer_id, agent, endpoint, Some(Arc::clone(&self.actor)));
+    }
+
+    // i[impl canopy.offer.lifetime]
+    pub fn canopy_withdrawn(&self, offer_id: OfferId, reason: &str) {
+        self.inner
+            .canopy_withdrawn(offer_id, reason, Some(Arc::clone(&self.actor)));
     }
 
     pub fn app_deregistered(&self, app: &AppName) {
