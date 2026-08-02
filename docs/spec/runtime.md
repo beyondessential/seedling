@@ -1184,6 +1184,22 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > A fault on one resource must not prevent the reconciler from continuing to manage other resources.
 > The faulted resource is excluded from active reconciliation until the fault is resolved.
 
+> r[namespace.reserved]
+> The runtime grants itself names inside namespaces operators also use: site-volume names beginning `backup-snap-`, and the site-ingress name `tailscale`.
+> Creating a site volume or site ingress under a reserved name is rejected; the restriction applies to creation only, so an object that predates the reservation can still be renamed or removed.
+> Reservation alone is not sufficient: a component that deletes or disables objects it believes are its own must identify them by what the runtime recorded — a registered site volume is never deleted by the snapshot sweep, and a manually created site ingress is never disabled or replaced by a discovery provider — regardless of what the object is named.
+
+> r[app.uninstall.scope]
+> Uninstalling an app affects only resources belonging to that app.
+> Resources are identified by the identities the runtime recorded for them, not by the shape of their names: names are not required to be prefix-free, so one app's name may be a prefix of another's.
+> A scan by name prefix is permitted only to enumerate candidates that are then matched exactly against recorded identity.
+> Having no recorded identities is not on its own evidence that teardown has finished: where the runtime cannot rule out that resources of the app are still present, it must not declare the app uninstalled, and must raise a fault that clears when teardown does complete.
+
+> r[infra.pod.subnet]
+> No two concurrently running pod instances may share a network prefix.
+> A prefix must therefore not be derived from a part of an instance's identity that distinct instances can share: in particular, instances carrying no unique identifier of their own must still be distinguished by the rest of their identity.
+> Deriving a prefix, however widely, does not on its own satisfy this requirement — only allocating prefixes and recording the allocation makes it a guarantee rather than a probability.
+
 # Resource Identity
 
 > r[identity.stable]

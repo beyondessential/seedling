@@ -709,3 +709,36 @@ fn delete_instance_clears_observations_and_faults_atomically() {
     assert_eq!(obs_count, 0, "observations deleted");
     assert_eq!(fault_count, 0, "faults deleted");
 }
+
+// r[verify app.uninstall.scope]
+// `seedling-{app}-` is not prefix-free: both app names and resource names may
+// contain hyphens, so uninstalling `app` matched every unit belonging to a
+// sibling called `app-db`, and the retry branch reset and stopped that
+// healthy sibling's units every tick while the uninstall never completed.
+#[test]
+fn display_names_are_scoped_to_their_own_app() {
+    let db = Db::open_in_memory().expect("open");
+
+    let instance = |app: &str, name: &str| ResourceInstance {
+        id: InstanceId::generate(),
+        app: AppName::new(app).unwrap(),
+        kind: ResourceKind::Deployment,
+        name: Some(name.to_owned()),
+        variant: InstanceVariant::Singleton,
+        display_name: format!("{app}-{name}"),
+    };
+
+    let app = instance("app", "web");
+    let sibling = instance("app-db", "web");
+    insert_instance(&db, &app).expect("insert app");
+    insert_instance(&db, &sibling).expect("insert sibling");
+
+    let names = display_names_for_app(&db, &AppName::new("app").unwrap()).expect("query");
+    assert_eq!(names, vec!["app-web".to_owned()]);
+    // The sibling's unit is `seedling-app-db-web.service`, which starts with
+    // `seedling-app-` — the exact match is what excludes it.
+    assert!(
+        format!("seedling-{}.service", sibling.display_name).starts_with("seedling-app-"),
+        "precondition: the sibling really does match the old prefix"
+    );
+}

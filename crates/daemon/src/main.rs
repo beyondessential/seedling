@@ -616,10 +616,83 @@ async fn main() {
         let prefix = seedling_core::runtime::backup_execution::SNAPSHOT_NAME_PREFIX;
         match driver_ref.volume_store.list_sites_with_prefix(prefix) {
             Ok(orphans) if !orphans.is_empty() => {
-                tracing::warn!(
-                    count = orphans.len(),
-                    "found orphaned backup-execution snapshots from a previous run; removing"
-                );
+                // r[impl namespace.reserved] — a DB row is the record that an
+                // operator owns this name. Creation rejects the prefix now,
+                // but that cannot help a volume created before the check
+                // existed, and this sweep deletes on sight.
+                /// Why a snapshot-prefixed volume is not an orphan to remove.
+                /// A definite "the operator owns this" and a "we could not
+                /// tell" both keep the volume, but they are not the same
+                /// answer and must not be reported as one.
+                enum Keep {
+                    Registered,
+                    UnparseableName(String),
+                    OwnershipUnknown(String),
+                }
+
+                let candidates: Vec<String> =
+                    orphans.iter().map(|n| n.as_str().to_owned()).collect();
+                let keeps: std::collections::HashMap<String, Keep> = db.call(move |conn| {
+                    candidates
+                        .into_iter()
+                        .filter_map(|name| {
+                            let reason = match seedling_protocol::names::SiteVolumeName::new(&name)
+                            {
+                                Ok(parsed) => {
+                                    match seedling_core::runtime::site_volumes::get(conn, &parsed) {
+                                        Ok(Some(_)) => Keep::Registered,
+                                        Ok(None) => return None,
+                                        // A destructive sweep must be
+                                        // conservative: "we could not tell" is
+                                        // not "not owned".
+                                        Err(e) => Keep::OwnershipUnknown(e.to_string()),
+                                    }
+                                }
+                                // Also a "could not tell": a name Seedling
+                                // could not have created is not a snapshot of
+                                // ours to delete.
+                                Err(e) => Keep::UnparseableName(e.to_string()),
+                            };
+                            Some((name, reason))
+                        })
+                        .collect()
+                });
+                let orphans: Vec<_> = orphans
+                    .into_iter()
+                    .filter(|name| match keeps.get(name.as_str()) {
+                        None => true,
+                        Some(Keep::Registered) => {
+                            tracing::info!(
+                                volume = %name,
+                                "a registered site volume uses the backup snapshot prefix; \
+                                 leaving it alone"
+                            );
+                            false
+                        }
+                        Some(Keep::UnparseableName(e)) => {
+                            tracing::warn!(
+                                volume = %name,
+                                "a snapshot-prefixed path is not a valid site volume name, so \
+                                 it is not a snapshot of ours; leaving it alone: {e}"
+                            );
+                            false
+                        }
+                        Some(Keep::OwnershipUnknown(e)) => {
+                            tracing::warn!(
+                                volume = %name,
+                                "could not determine ownership of a snapshot-prefixed site \
+                                 volume; leaving it alone: {e}"
+                            );
+                            false
+                        }
+                    })
+                    .collect();
+                if !orphans.is_empty() {
+                    tracing::warn!(
+                        count = orphans.len(),
+                        "found orphaned backup-execution snapshots from a previous run; removing"
+                    );
+                }
                 for name in &orphans {
                     tracing::info!(snapshot = %name, "removing orphaned backup snapshot");
                     tokio::task::block_in_place(|| {
