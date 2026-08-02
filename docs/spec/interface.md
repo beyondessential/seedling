@@ -201,6 +201,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > `/apps/update { app, script }` re-evaluates the provided BSL script source text.
 > If a lifecycle operation is in progress for the app, or one is queued, the request is rejected with `operation_in_progress`.
 > If the script fails to parse or evaluate, a `script_error` app-level fault is filed, the existing AppDef continues running, and the request still succeeds.
+> "Continues running" extends to every piece of state derived from the definition: volume data is not held, scaling decisions are not clamped, port forwards are not torn down, and action schedules are not pruned.
+> A partially-evaluated definition is never observable — an update that failed part-way through must not be distinguishable, in any state derived from the definition, from an update that was never submitted.
 > On success, any previously active `script_error` fault for this app is cleared, and the app's [generation](#r--generation.definition) is bumped with a `ScriptUpdate` history entry.
 
 > i[app.generation]

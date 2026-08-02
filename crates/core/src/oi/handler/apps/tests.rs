@@ -480,3 +480,105 @@ fn unstop_all_clears_every_stopped_resource() {
         .unwrap_err();
     assert_eq!(code, "not_found");
 }
+
+/// An app whose definition carries every kind of state `/apps/update` derives
+/// by diffing the registry: a named volume, a scaled deployment, and a
+/// scheduled action.
+const DERIVED_STATE_SCRIPT: &str = r#"
+    app.volume("data");
+    app.deployment("web")
+        .image("docker.io/library/nginx:1.29")
+        .scale(1..4);
+    app.on_action("vacuum", |rt, _p| {
+        rt.start(app.job().image("docker.io/library/busybox:1.37").command("true"))
+            .terminated();
+    }).on_schedule("H 3 * * *");
+"#;
+
+// i[verify app.update]
+// A script that throws part-way through evaluation used to have its partial
+// result swapped into the registry, after which every post-update diff read
+// the resources declared below the throw as deleted — holding live volume
+// data, wiping scaling decisions, tearing down forwards, and pruning
+// schedules, all from a typo.
+#[test]
+fn failed_update_leaves_derived_state_untouched() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({ "app": "demo", "script": DERIVED_STATE_SCRIPT }),
+    )
+    .unwrap();
+    oi.install("demo");
+    oi.call(
+        "/apps/scale",
+        json!({ "app": "demo", "deployment": "web", "scale": 3 }),
+    )
+    .unwrap();
+
+    let schedules_before = oi
+        .state
+        .db
+        .call(|db| {
+            crate::runtime::db::list_schedules(
+                db,
+                &seedling_protocol::names::AppName::new("demo").unwrap(),
+            )
+        })
+        .unwrap();
+    assert_eq!(schedules_before.len(), 1, "precondition: schedule exists");
+
+    // Declares the deployment, then throws. Everything below the throw —
+    // the volume, the scale bounds, the scheduled action — is absent from
+    // the partial evaluation.
+    let broken = r#"
+        app.deployment("web").image("docker.io/library/nginx:1.29");
+        throw "typo";
+        app.volume("data");
+    "#;
+    // i[verify app.update] — the request still succeeds.
+    oi.call("/apps/update", json!({ "app": "demo", "script": broken }))
+        .unwrap();
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+
+    let resources = desc["resources"].as_array().unwrap();
+    assert!(
+        resources
+            .iter()
+            .any(|r| r["type"] == "volume" && r["name"] == "data"),
+        "the volume must survive a failed update: {resources:#?}"
+    );
+
+    let web = resources
+        .iter()
+        .find(|r| r["name"] == "web")
+        .expect("deployment still present");
+    assert_eq!(
+        web["scale"]["current"], 3,
+        "scaling decisions must not be clamped against a partial definition"
+    );
+
+    let schedules_after = oi
+        .state
+        .db
+        .call(|db| {
+            crate::runtime::db::list_schedules(
+                db,
+                &seedling_protocol::names::AppName::new("demo").unwrap(),
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        schedules_after.len(),
+        1,
+        "the scheduled action must not be pruned"
+    );
+
+    // The operator is still told what went wrong.
+    let faults = desc["faults"].as_array().unwrap();
+    assert!(
+        faults.iter().any(|f| f["kind"] == "script_error"),
+        "a script_error fault must be filed: {faults:#?}"
+    );
+}

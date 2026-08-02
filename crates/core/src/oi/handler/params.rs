@@ -108,7 +108,10 @@ fn reload_and_persist_apperror(
             ))
         })
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
-    state
+    // The outcome needs no gating here: this re-evaluates the app's existing
+    // script under new param values and derives nothing from the result but
+    // the fault state synced below, which is filed on either outcome.
+    let _ = state
         .registry
         .write()
         .reload(app, script, &loaded_params, &state.script_limits);

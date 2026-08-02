@@ -13,7 +13,7 @@ use crate::{
     oi::{handler::RequestCtx, state::OiState},
     runtime::{
         AppPhase,
-        apps::{AppEntry, AppRegistry, AppStatus},
+        apps::{AppEntry, AppRegistry, AppStatus, ReloadOutcome},
         barrier::oracle::{derive_lifecycle_state, derive_state_with_transition_time},
         desired::list_dynamic_resources_for_app,
         faults,
@@ -1558,19 +1558,32 @@ pub(crate) fn update_app(
     let loaded_params = state
         .db
         .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned));
-    state.registry.write().reload(
+    let outcome = state.registry.write().reload(
         &params.app,
         script.to_owned(),
         &loaded_params,
         &state.script_limits,
     );
+    // i[impl app.update] — every diff below compares live state against the
+    // registry's definition. When evaluation failed the registry still holds
+    // the previous good definition, so those diffs would read the operator's
+    // typo as "the script no longer declares this volume / deployment /
+    // service / schedule" and destroy the state behind it.
+    let applied = outcome.is_applied();
+    if let ReloadOutcome::KeptPrevious(e) = &outcome {
+        tracing::warn!(
+            app = %name,
+            error = %e,
+            "script failed to evaluate; keeping the previous definition and its derived state"
+        );
+    }
 
     // r[impl actuate.volume.hold]
     // Diff previous vs current volume resources and hold anything the new
     // script dropped. Runs synchronously with the update so there's no
     // window where the operator sees the old volume as gone but the on-disk
     // data hasn't been relocated yet.
-    {
+    if applied {
         let current_named_volumes: std::collections::HashSet<String> = {
             let reg = state.registry.read();
             reg.get(name)
@@ -1682,7 +1695,7 @@ pub(crate) fn update_app(
         }
     }
     // r[impl scaling.clamp]
-    {
+    if applied {
         let reg = state.registry.read();
         if let Some(entry) = reg.get(name) {
             let def = entry.app.def.load();
@@ -1751,10 +1764,9 @@ pub(crate) fn update_app(
             .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db update generation: {e}")))?;
     }
 
-    let op_in_progress = false;
     // i[forward.script-update] — tear down any forward whose target service is
     // no longer present in the new AppDef.
-    if !op_in_progress {
+    if applied {
         let valid_services: std::collections::HashSet<String> = {
             let reg = state.registry.read();
             if let Some(entry) = reg.get(name) {
@@ -1777,11 +1789,13 @@ pub(crate) fn update_app(
         }
     }
 
-    // r[impl schedule.prune]
-    sync_action_schedules(state, &params.app);
+    if applied {
+        // r[impl schedule.prune]
+        sync_action_schedules(state, &params.app);
 
-    // r[impl image.pin.update-reconcile]
-    super::images::reconcile_pins_post_update(state, &params.app);
+        // r[impl image.pin.update-reconcile]
+        super::images::reconcile_pins_post_update(state, &params.app);
+    }
 
     tracing::info!(app = %name, generation, "updated app");
     ctx.events.app_updated(
