@@ -33,7 +33,9 @@ pub fn upsert_param(
     value: &str,
 ) -> rusqlite::Result<()> {
     db.conn.execute(
-        "INSERT OR REPLACE INTO params (app_name, param_name, value) VALUES (?1, ?2, ?3)",
+        // r[impl history.persist.partial-update]
+        "INSERT INTO params (app_name, param_name, value) VALUES (?1, ?2, ?3) \
+         ON CONFLICT(app_name, param_name) DO UPDATE SET value = excluded.value",
         rusqlite::params![app_name, param_name, value],
     )?;
     Ok(())

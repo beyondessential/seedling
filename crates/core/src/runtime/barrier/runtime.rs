@@ -1064,18 +1064,22 @@ impl RuntimeInstance {
             Some(c) => Arc::clone(c),
         };
 
+        // l[impl rt.signal] r[impl barrier.replay.positional]
+        // At-most-once is per *call site*, not per (resources, signal) value.
+        // Scanning the whole committed log for a matching value got both
+        // halves wrong: a second, identical rt.signal later in the same
+        // closure matched the first entry and was swallowed, so the signal was
+        // never delivered; and when the resolved instance set changed between
+        // passes — a replica added or retired — nothing matched, so a signal
+        // already delivered before the crash was delivered again.
         {
             let mut g = ctx.lock();
-            let already = g.committed.iter().any(|e| {
-                matches!(e.call_kind, CallKind::Signal)
-                    && e.resources == expanded
-                    && e.extra.as_deref() == Some(canonical.as_str())
-            });
-            if already {
-                if g.is_replaying() {
-                    g.call_index += 1;
-                }
-                return Ok(());
+            // The signal name is a literal in the script, so unlike the
+            // resolved instance set it must match the log.
+            match g.replay_step(CallKind::Signal, Some(canonical.as_str())) {
+                Ok(Some(_)) => return Ok(()),
+                Ok(None) => {}
+                Err(mismatch) => return Err(Box::<EvalAltResult>::from(mismatch.to_string())),
             }
         }
 
