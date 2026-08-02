@@ -110,6 +110,34 @@ struct ObservedInstance<'a> {
     result: PodInstanceResult,
 }
 
+/// The outcome of trying to observe one instance this tick.
+///
+/// The observation used to be reported as an `ObservedInstance` with every
+/// flag false, which is byte-for-byte what "confirmed absent" looks like — so
+/// a single failed podman or systemd probe read as "the container is gone".
+/// `actuate_one_pod` then ran its Job terminal-detection predicate
+/// (`!container_exists && !is_running && previously_ran`), stopped the Job and
+/// recorded it in `completed_jobs`, from which `job-terminal.defense`
+/// guarantees it is killed again if it ever reappears. One transient hiccup
+/// permanently destroyed an in-flight batch workload.
+///
+/// Splitting the two makes that coercion unrepresentable: `actuate_one_pod`
+/// takes an `ObservedInstance`, so the compiler forces every caller to route
+/// `Failed` somewhere explicit. Note that *absence* stays inside `Observed` —
+/// a `ContainerMissing` from a successful query is a real observation and must
+/// keep driving teardown and job-terminal detection.
+// r[impl observe.failure-not-absence]
+enum PodObservation<'a> {
+    /// Every probe succeeded; the flags are evidence.
+    Observed(Box<ObservedInstance<'a>>),
+    /// At least one probe failed. Nothing is known about this instance this
+    /// tick — which is not the same as knowing it is gone.
+    Failed {
+        dr: &'a DesiredResource,
+        result: Box<PodInstanceResult>,
+    },
+}
+
 // r[observe.deployment]
 async fn observe_one_pod<'a>(
     observer: &Observer,
@@ -117,7 +145,7 @@ async fn observe_one_pod<'a>(
     driver: &Arc<System>,
     dr: &'a DesiredResource,
     node_prefix: &Ipv6Net,
-) -> Option<ObservedInstance<'a>> {
+) -> PodObservation<'a> {
     let mut result = PodInstanceResult {
         running: None,
         observations: Vec::new(),
@@ -146,20 +174,14 @@ async fn observe_one_pod<'a>(
                 "pods: observe failed, skipping instance"
             );
             result.observe_failure = Some((dr.instance.clone(), e.to_string()));
-            return Some(ObservedInstance {
+            // The per-instance observation is atomic: all three probes or
+            // nothing. Reporting the ones that did succeed would resurrect
+            // the bug in a subtler form — `container_exists: false` because
+            // the inspect failed, while the network probe succeeded.
+            return PodObservation::Failed {
                 dr,
-                is_running: false,
-                spec_stale: false,
-                unit_failed: false,
-                unit_active: false,
-                unit_start_limit_hit: false,
-                container_exists: false,
-                has_exited: false,
-                network_exists: false,
-                observed_unhealthy: false,
-                observed_healthy: false,
-                result,
-            });
+                result: Box::new(result),
+            };
         }
     };
 
@@ -226,6 +248,9 @@ async fn observe_one_pod<'a>(
             ObservationFact::ContainerCreated
                 | ObservationFact::ContainerRunning { .. }
                 | ObservationFact::ContainerExited { .. }
+                // r[impl observe.failure-not-absence] — a draining container
+                // is present. It still holds its volumes and its network.
+                | ObservationFact::ContainerPresentIndeterminate
         )
     });
     let has_exited = facts
@@ -271,7 +296,7 @@ async fn observe_one_pod<'a>(
         }
     }
 
-    Some(ObservedInstance {
+    PodObservation::Observed(Box::new(ObservedInstance {
         dr,
         is_running,
         spec_stale,
@@ -284,7 +309,7 @@ async fn observe_one_pod<'a>(
         observed_unhealthy,
         observed_healthy,
         result,
-    })
+    }))
 }
 
 // r[actuate.deployment.start]
@@ -699,11 +724,26 @@ pub(super) async fn observe_and_actuate(
         .map(|dr| observe_one_pod(observer, actuator, driver, dr, node_prefix))
         .collect();
 
-    let observed: Vec<ObservedInstance<'_>> = join_all(observe_futures)
-        .await
-        .into_iter()
-        .flatten()
-        .collect();
+    // r[impl observe.failure-not-absence] — instances whose observation
+    // failed are routed straight to the results, never into the actuation
+    // phase: no start, no stop, no job-terminal detection. Their
+    // `observe_failure` still reaches the fault path, and because they
+    // emitted no facts, the lifecycle oracle keeps the last state it derived
+    // rather than being told the instance is gone.
+    let mut observed: Vec<ObservedInstance<'_>> = Vec::with_capacity(pod_resources.len());
+    let mut failed_results: Vec<PodInstanceResult> = Vec::new();
+    for observation in join_all(observe_futures).await {
+        match observation {
+            PodObservation::Observed(obs) => observed.push(*obs),
+            PodObservation::Failed { dr, result } => {
+                tracing::warn!(
+                    instance = %dr.instance.display_name,
+                    "pods: observation failed; taking no action on this instance this tick"
+                );
+                failed_results.push(*result);
+            }
+        }
+    }
 
     // Phase 2: group deployments and compute stop inhibitions.
     let mut deployment_groups: HashMap<String, Vec<usize>> = HashMap::new();
@@ -763,6 +803,11 @@ pub(super) async fn observe_and_actuate(
     }
 
     let results = join_all(actuate_futures).await;
+    let results: Vec<PodInstanceResult> = results
+        .into_iter()
+        .flatten()
+        .chain(failed_results)
+        .collect();
 
     let mut update = PodActuationUpdate {
         running: Vec::new(),
@@ -784,7 +829,7 @@ pub(super) async fn observe_and_actuate(
         completed_job_instances: Vec::new(),
     };
 
-    for result in results.into_iter().flatten() {
+    for result in results {
         if let Some(rp) = result.running {
             update.running.push(rp);
         }

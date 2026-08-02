@@ -390,6 +390,11 @@ pub struct Reconciler {
     /// unresolved.
     // r[impl service.site.address]
     site_resolver: Option<Arc<SiteServiceResolver>>,
+    /// Consecutive failed observations per instance, so a single blip logs an
+    /// error without minting an operator-visible fault. In memory beside the
+    /// reconciler's other per-tick state; a restart re-observes anyway.
+    // r[impl observe.failure-not-absence]
+    observe_failure_streaks: HashMap<InstanceId, u32>,
 }
 
 impl Reconciler {
@@ -460,6 +465,7 @@ impl Reconciler {
             tls_coordinator,
             resolver_health_fail_count: std::sync::atomic::AtomicU32::new(0),
             site_resolver,
+            observe_failure_streaks: HashMap::new(),
         }
     }
 
