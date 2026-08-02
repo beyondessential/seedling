@@ -79,7 +79,20 @@ impl RetryGate {
     }
 
     pub fn record_failure(&mut self, now: Instant) {
-        self.failures = self.failures.saturating_add(1);
+        // The same staleness horizon `should_attempt` uses. Without this the
+        // two disagree: a key quiet for longer than the cap is eligible to
+        // attempt as though its history were gone, but its next failure would
+        // continue the old streak — so the delay would jump straight back to
+        // the cap, and a consecutive-failure threshold would fire on what is
+        // really the first failure of a new episode.
+        let stale = self
+            .last_failure
+            .is_some_and(|last| now.saturating_duration_since(last) >= self.cap);
+        self.failures = if stale {
+            1
+        } else {
+            self.failures.saturating_add(1)
+        };
         self.last_failure = Some(now);
     }
 
@@ -220,6 +233,26 @@ mod tests {
             gate.should_attempt(now + CAP),
             "however long it has been failing, waiting the cap must be enough"
         );
+    }
+
+    // r[verify actuate.image.retry]
+    // A quiet period past the cap ends the episode: the next failure is the
+    // first of a new one, not the twenty-first of the old one. Without this
+    // `should_attempt` and `record_failure` disagree about what the history
+    // is, and a consecutive-failure threshold fires far too early.
+    #[test]
+    fn a_failure_after_a_long_gap_starts_a_new_streak() {
+        let now = Instant::now();
+        let mut gate = gate();
+        for _ in 0..20 {
+            gate.record_failure(now);
+        }
+        assert_eq!(gate.delay(), CAP);
+
+        let much_later = now + CAP + Duration::from_secs(1);
+        gate.record_failure(much_later);
+        assert_eq!(gate.failures(), 1, "the old streak is over");
+        assert_eq!(gate.delay(), BASE);
     }
 
     // r[verify actuate.image.retry]
