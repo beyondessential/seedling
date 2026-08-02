@@ -1074,7 +1074,9 @@ impl RuntimeInstance {
         // already delivered before the crash was delivered again.
         {
             let mut g = ctx.lock();
-            match g.replay_step(CallKind::Signal) {
+            // The signal name is a literal in the script, so unlike the
+            // resolved instance set it must match the log.
+            match g.replay_step(CallKind::Signal, Some(canonical.as_str())) {
                 Ok(Some(_)) => return Ok(()),
                 Ok(None) => {}
                 Err(mismatch) => return Err(Box::<EvalAltResult>::from(mismatch.to_string())),

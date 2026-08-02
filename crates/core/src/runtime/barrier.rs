@@ -118,19 +118,59 @@ pub struct BarrierRecord {
 /// attributed to the calls now being made.
 // r[impl barrier.replay.positional]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReplayMismatch {
-    pub call_index: usize,
-    pub expected: CallKind,
-    pub found: CallKind,
+pub enum ReplayMismatch {
+    /// A different kind of call is being made at this position.
+    Kind {
+        call_index: usize,
+        expected: CallKind,
+        found: CallKind,
+    },
+    /// The right kind of call, but its recorded argument differs.
+    ///
+    /// Only for arguments that are stable across passes by construction. The
+    /// resolved instance set is *not* one of those — a replica may be added
+    /// or retired between passes and it is still the same call — but a
+    /// literal like a signal name is: it comes from the script text, so a
+    /// change means the script changed under the log.
+    Extra {
+        call_index: usize,
+        kind: CallKind,
+        expected: String,
+        found: Option<String>,
+    },
+}
+
+impl ReplayMismatch {
+    pub fn call_index(&self) -> usize {
+        match self {
+            Self::Kind { call_index, .. } | Self::Extra { call_index, .. } => *call_index,
+        }
+    }
 }
 
 impl std::fmt::Display for ReplayMismatch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "replay diverged at call {}: the log records a {:?} but the script is making a {:?}",
-            self.call_index, self.found, self.expected
-        )
+        match self {
+            Self::Kind {
+                call_index,
+                expected,
+                found,
+            } => write!(
+                f,
+                "replay diverged at call {call_index}: the log records a {found:?} but the \
+                 script is making a {expected:?}"
+            ),
+            Self::Extra {
+                call_index,
+                kind,
+                expected,
+                found,
+            } => write!(
+                f,
+                "replay diverged at call {call_index}: the log records a {kind:?} of {found:?} \
+                 but the script is making one of {expected:?}"
+            ),
+        }
     }
 }
 
@@ -330,19 +370,35 @@ impl ReplayContext {
     /// Advancing the index is part of consuming the entry, so a caller cannot
     /// check without advancing or advance without checking.
     // r[impl barrier.replay.positional]
+    /// `expect_extra` is checked when the caller's argument is stable across
+    /// passes by construction; pass `None` to skip the check. Positional
+    /// matching alone would treat a script edit that changes the argument at
+    /// this position — `SIGHUP` to `SIGTERM`, say — as already replayed, and
+    /// silently never deliver the new one.
     pub fn replay_step(
         &mut self,
         expect: CallKind,
+        expect_extra: Option<&str>,
     ) -> Result<Option<ActionLogEntry>, ReplayMismatch> {
         if !self.is_replaying() {
             return Ok(None);
         }
         let entry = self.committed[self.call_index].clone();
         if entry.call_kind != expect {
-            return Err(ReplayMismatch {
+            return Err(ReplayMismatch::Kind {
                 call_index: self.call_index,
                 expected: expect,
                 found: entry.call_kind,
+            });
+        }
+        if let Some(expected) = expect_extra
+            && entry.extra.as_deref() != Some(expected)
+        {
+            return Err(ReplayMismatch::Extra {
+                call_index: self.call_index,
+                kind: expect,
+                expected: expected.to_owned(),
+                found: entry.extra.clone(),
             });
         }
         self.call_index += 1;

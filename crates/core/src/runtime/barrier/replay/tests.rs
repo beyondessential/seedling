@@ -324,11 +324,11 @@ mod positional {
         ]);
 
         // Both are replays of their own position, not one matching twice.
-        assert!(ctx.replay_step(CallKind::Signal).unwrap().is_some());
-        assert!(ctx.replay_step(CallKind::Signal).unwrap().is_some());
+        assert!(ctx.replay_step(CallKind::Signal, None).unwrap().is_some());
+        assert!(ctx.replay_step(CallKind::Signal, None).unwrap().is_some());
         // A third identical call at a position the log does not cover is new
         // and must actually run — which is what the value scan swallowed.
-        assert!(ctx.replay_step(CallKind::Signal).unwrap().is_none());
+        assert!(ctx.replay_step(CallKind::Signal, None).unwrap().is_none());
     }
 
     // r[verify barrier.replay.positional]
@@ -341,7 +341,7 @@ mod positional {
         let after = vec![instance("db"), instance("db")];
         let mut ctx = ctx_with(vec![entry(0, CallKind::Signal, before)]);
 
-        let replayed = ctx.replay_step(CallKind::Signal).unwrap();
+        let replayed = ctx.replay_step(CallKind::Signal, None).unwrap();
         assert!(
             replayed.is_some(),
             "the call at this position was already made, whatever it resolved to"
@@ -353,9 +353,48 @@ mod positional {
     #[test]
     fn a_diverged_log_fails_rather_than_guessing() {
         let mut ctx = ctx_with(vec![entry(0, CallKind::Exec, vec![instance("db")])]);
-        let err = ctx.replay_step(CallKind::Signal).unwrap_err();
-        assert_eq!(err.call_index, 0);
-        assert_eq!(err.expected, CallKind::Signal);
-        assert_eq!(err.found, CallKind::Exec);
+        let err = ctx.replay_step(CallKind::Signal, None).unwrap_err();
+        assert_eq!(err.call_index(), 0);
+        assert!(
+            matches!(
+                err,
+                crate::runtime::barrier::ReplayMismatch::Kind {
+                    expected: CallKind::Signal,
+                    found: CallKind::Exec,
+                    ..
+                }
+            ),
+            "{err}"
+        );
+    }
+
+    // r[verify barrier.replay.positional]
+    // Position alone is not enough for an argument that comes from the script
+    // text. A script edited from SIGHUP to SIGTERM at the same position would
+    // otherwise be treated as already replayed, and the new signal never
+    // delivered. The resolved instance set is deliberately *not* checked this
+    // way — it legitimately varies between passes.
+    #[test]
+    fn a_changed_signal_name_is_a_divergence() {
+        let mut ctx = ctx_with(vec![entry(0, CallKind::Signal, vec![instance("db")])]);
+        let err = ctx
+            .replay_step(CallKind::Signal, Some("SIGTERM"))
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                crate::runtime::barrier::ReplayMismatch::Extra { ref expected, .. }
+                    if expected == "SIGTERM"
+            ),
+            "{err}"
+        );
+
+        // The recorded name replays cleanly.
+        let mut ctx = ctx_with(vec![entry(0, CallKind::Signal, vec![instance("db")])]);
+        assert!(
+            ctx.replay_step(CallKind::Signal, Some("SIGHUP"))
+                .unwrap()
+                .is_some()
+        );
     }
 }
