@@ -725,12 +725,16 @@ fn failed_reload_keeps_the_previous_definition() {
 #[test]
 fn reload_of_unknown_app_is_noop() {
     let mut reg = AppRegistry::new();
-    // No panic, no registration.
-    let _ = reg.reload(
+    // No panic, no registration — and not reported as applied, since a caller
+    // gating destructive work on `is_applied` must not be told the registry
+    // holds a definition it never stored.
+    let outcome = reg.reload(
         &app("ghost"),
         trivial_script().to_owned(),
         &BTreeMap::new(),
         &crate::ScriptLimits::default(),
     );
+    assert!(matches!(outcome, ReloadOutcome::NotRegistered));
+    assert!(!outcome.is_applied());
     assert!(!reg.is_registered("ghost"));
 }

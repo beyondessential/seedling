@@ -1096,44 +1096,62 @@ impl Reconciler {
                     }
                 }
 
+                // `None` means the apply was withheld because the build did
+                // not cover every app. It is deliberately not `Ok(())`: no
+                // apply ran, so nothing may be concluded from it — in
+                // particular the plane's fault must neither be filed nor
+                // cleared, and no readiness may be recorded.
                 let (routes_res, rules_res, proxy_res) = tokio::join!(
                     async {
-                        if routes_coverage.is_complete() {
-                            self.driver.data_plane.apply_routes(&all_routes).await
-                        } else {
-                            Ok(())
+                        match routes_coverage.is_complete() {
+                            true => Some(self.driver.data_plane.apply_routes(&all_routes).await),
+                            false => None,
                         }
                     },
                     async {
-                        if rules_coverage.is_complete() {
-                            self.driver.data_plane.apply_rules(&dp_rules).await
-                        } else {
-                            Ok(())
+                        match rules_coverage.is_complete() {
+                            true => Some(self.driver.data_plane.apply_rules(&dp_rules).await),
+                            false => None,
                         }
                     },
                     async {
-                        if has_proxy_config && proxy_coverage.is_complete() {
-                            self.driver.proxy.apply_config(&proxy_config).await
-                        } else {
-                            Ok(())
+                        match proxy_coverage.is_complete() {
+                            true if has_proxy_config => {
+                                Some(self.driver.proxy.apply_config(&proxy_config).await)
+                            }
+                            // An empty config is not applied, as before; that
+                            // is a decision about the config, not a withheld
+                            // apply, so it keeps reporting success.
+                            true => Some(Ok(())),
+                            false => None,
                         }
                     },
                 );
 
-                if let Err(e) = routes_res {
-                    error!(error = %e, "routes: apply_routes failed");
-                    self.file_system_fault("routes_failed", &format!("apply_routes failed: {e}"));
-                } else {
-                    self.clear_system_fault("routes_failed");
+                match routes_res {
+                    Some(Err(e)) => {
+                        error!(error = %e, "routes: apply_routes failed");
+                        self.file_system_fault(
+                            "routes_failed",
+                            &format!("apply_routes failed: {e}"),
+                        );
+                    }
+                    Some(Ok(())) => self.clear_system_fault("routes_failed"),
+                    None => {}
                 }
-                if let Err(e) = rules_res {
-                    error!(error = %e, "rules: apply_rules failed");
-                    self.file_system_fault("nftables_failed", &format!("apply_rules failed: {e}"));
-                } else {
-                    self.clear_system_fault("nftables_failed");
+                match rules_res {
+                    Some(Err(e)) => {
+                        error!(error = %e, "rules: apply_rules failed");
+                        self.file_system_fault(
+                            "nftables_failed",
+                            &format!("apply_rules failed: {e}"),
+                        );
+                    }
+                    Some(Ok(())) => self.clear_system_fault("nftables_failed"),
+                    None => {}
                 }
                 match proxy_res {
-                    Err(e) => {
+                    Some(Err(e)) => {
                         error!(error = ?e, addr = %caddy_ip, "proxy: apply_config failed");
                         self.file_system_fault(
                             "proxy_failed",
@@ -1167,7 +1185,7 @@ impl Reconciler {
                             &format!("apply_config failed: {e}"),
                         );
                     }
-                    Ok(()) if has_proxy_config => {
+                    Some(Ok(())) if has_proxy_config => {
                         self.clear_system_fault("proxy_failed");
                         // r[impl fault.proxy-apply-failed]
                         self.clear_proxy_apply_failed_faults();
@@ -1183,19 +1201,25 @@ impl Reconciler {
                             );
                         }
                     }
-                    Ok(()) => {}
+                    Some(Ok(())) | None => {}
                 }
 
                 // r[impl observe.ingress.certs]
                 self.observe_warm_certs(&apps).await;
             }
             None => {
-                // Caddy unavailable — still apply routes (they don't need caddy).
-                if let Err(e) = self.driver.data_plane.apply_routes(&all_routes).await {
-                    error!(error = %e, "routes: apply_routes failed");
-                    self.file_system_fault("routes_failed", &format!("apply_routes failed: {e}"));
-                } else {
-                    self.clear_system_fault("routes_failed");
+                // Caddy unavailable — still apply routes (they don't need
+                // caddy), unless this tick's route set is missing an app.
+                if routes_coverage.is_complete() {
+                    if let Err(e) = self.driver.data_plane.apply_routes(&all_routes).await {
+                        error!(error = %e, "routes: apply_routes failed");
+                        self.file_system_fault(
+                            "routes_failed",
+                            &format!("apply_routes failed: {e}"),
+                        );
+                    } else {
+                        self.clear_system_fault("routes_failed");
+                    }
                 }
             }
         }

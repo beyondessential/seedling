@@ -49,6 +49,8 @@ pub enum ReloadOutcome {
     /// script text and error are recorded; no state derived from the new
     /// script may be diffed against the registry.
     KeptPrevious(ScriptError),
+    /// The app is not registered, so nothing was evaluated or stored.
+    NotRegistered,
 }
 
 impl ReloadOutcome {
@@ -210,10 +212,17 @@ impl AppRegistry {
         params: &BTreeMap<String, String>,
         limits: &crate::ScriptLimits,
     ) -> ReloadOutcome {
+        // Checked before evaluating: an unregistered app has no definition to
+        // replace, and reporting `Applied` for one would tell a caller the
+        // registry reflects a script it never stored.
+        if !self.entries.contains_key(name.as_str()) {
+            return ReloadOutcome::NotRegistered;
+        }
         let (app, raw_error) = evaluate_script(name, &script, params, limits);
-        let Some(entry) = self.entries.get_mut(name.as_str()) else {
-            return ReloadOutcome::Applied;
-        };
+        let entry = self
+            .entries
+            .get_mut(name.as_str())
+            .expect("checked just above");
         // The script text follows the new generation either way: /apps/show
         // must return what the operator submitted, and a later param set has
         // to re-evaluate that same text rather than resurrect the old one.
