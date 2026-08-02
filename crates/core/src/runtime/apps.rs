@@ -145,8 +145,28 @@ impl AppRegistry {
         tick_notify: Arc<Notify>,
         limits: &crate::ScriptLimits,
     ) -> Result<(), ScriptError> {
-        let (app, raw_error) = evaluate_script(&name, &script, &BTreeMap::new(), limits);
-        let script_error = raw_error.map(|e| {
+        let (app, script_error) = evaluate_script(&name, &script, &BTreeMap::new(), limits);
+        self.insert_registered(name, script, app, script_error, tick_notify, 0);
+        Ok(())
+    }
+
+    // i[impl app.register]
+    /// Make an already-evaluated app observable at `generation`.
+    ///
+    /// Separate from [`Self::register`] so a caller can commit the app's rows
+    /// before the entry exists: a registration whose persistence failed must
+    /// not leave an app that `/apps/list` shows, a restart silently drops,
+    /// and a retried `/apps/create` rejects as already registered.
+    pub fn insert_registered(
+        &mut self,
+        name: AppName,
+        script: String,
+        app: App,
+        script_error: Option<ScriptError>,
+        tick_notify: Arc<Notify>,
+        generation: u64,
+    ) {
+        let script_error = script_error.map(|e| {
             tracing::warn!(app = %name, error = %e, "script has errors at registration; params may need to be set");
             (e.to_string(), Timestamp::now())
         });
@@ -160,10 +180,9 @@ impl AppRegistry {
                 active_progress: Arc::new(RwLock::new(None)),
                 tick_notify,
                 script_error,
-                current_generation: 0,
+                current_generation: generation,
             },
         );
-        Ok(())
     }
 
     pub fn deregister(&mut self, name: &str) -> bool {

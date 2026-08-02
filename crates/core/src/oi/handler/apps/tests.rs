@@ -582,3 +582,52 @@ fn failed_update_leaves_derived_state_untouched() {
         "a script_error fault must be filed: {faults:#?}"
     );
 }
+
+// i[verify app.register]
+// A registration that could not be persisted must not be observable: the
+// in-memory entry used to survive the failed DB write, so `/apps/list` showed
+// an app that a restart silently dropped (load_from_db skips generation-0
+// rows) and a retried `/apps/create` was rejected as already registered.
+#[test]
+fn failed_registration_leaves_nothing_behind() {
+    let oi = TestOi::new();
+
+    // Break the generation write specifically: the app row is written first,
+    // so this exercises the half-committed case rather than a total failure.
+    oi.state
+        .db
+        .call(|db| {
+            db.conn
+                .execute("ALTER TABLE generations RENAME TO generations_hidden", [])
+        })
+        .expect("hide generations table");
+
+    let err = oi.call(
+        "/apps/create",
+        json!({ "app": "demo", "script": MINIMAL_SCRIPT }),
+    );
+    assert!(err.is_err(), "registration must fail when persistence does");
+
+    let list = oi.call("/apps/list", json!({})).unwrap();
+    assert!(
+        list.as_array().unwrap().is_empty(),
+        "a failed registration must not appear in listings: {list:#?}"
+    );
+
+    oi.state
+        .db
+        .call(|db| {
+            db.conn
+                .execute("ALTER TABLE generations_hidden RENAME TO generations", [])
+        })
+        .expect("restore generations table");
+
+    // The retry contract: nothing was left to collide with.
+    let result = oi
+        .call(
+            "/apps/create",
+            json!({ "app": "demo", "script": MINIMAL_SCRIPT }),
+        )
+        .expect("retry after a transient persistence failure must succeed");
+    assert_eq!(result["generation"], 1);
+}

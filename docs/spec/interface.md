@@ -188,6 +188,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > `/apps/create { app, script }` evaluates the provided BSL script source text.
 > On success, the app is added to the managed set in the `NotInstalled` state and an `AppRegistered` event is emitted.
 > On script failure, `script_error` is returned and the app is not registered.
+> A registration that fails for any reason leaves nothing observable behind: the app does not appear in listings, does not survive a restart, and a retried registration of the same name succeeds rather than being rejected as already registered.
 
 > i[app.persist]
 > Registered apps and their BSL scripts are stored durably and reloaded automatically on restart.

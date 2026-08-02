@@ -56,6 +56,19 @@ fn param_is_secret(state: &OiState, app: &AppName, name: &ParamName) -> bool {
         .unwrap_or(false)
 }
 
+/// Exclusive claim on the app's scheduler slot for the duration of a param
+/// change.
+///
+/// The on_change dispatch can only be rejected because an operation for this
+/// app is active or queued — exactly what [`reject_if_op_in_progress`] checks.
+/// Checking at the top of the handler and dispatching after the durable write
+/// leaves a window: an operation lands in between, the dispatch is rejected,
+/// and the caller is told `operation_in_progress` when the value and the
+/// generation are already committed. The spec requires that a rejected
+/// request change neither. Holding the guard from the check to the dispatch
+/// is what makes the two statements consistent.
+type SchedulerClaim<'a> = parking_lot::MutexGuard<'a, crate::runtime::scheduler::Scheduler>;
+
 // i[impl param.set] i[impl param.unset]
 // r[impl operation.lifecycle.param-change]
 // Params cannot be mutated while an operation is in flight for the app:
@@ -64,9 +77,13 @@ fn param_is_secret(state: &OiState, app: &AppName, name: &ParamName) -> bool {
 // phase check covers the narrow window between boot (phase = Installing
 // persisted by a prior process) and the replay path re-registering the
 // operation with the in-memory scheduler.
-fn reject_if_op_in_progress(state: &OiState, app: &AppName) -> Result<(), OiError> {
+fn reject_if_op_in_progress<'a>(
+    state: &'a OiState,
+    app: &AppName,
+) -> Result<SchedulerClaim<'a>, OiError> {
     use crate::runtime::apps::AppPhase;
-    if state.scheduler.lock().has_operation_for(app) {
+    let scheduler = state.scheduler.lock();
+    if scheduler.has_operation_for(app) {
         return Err(OiError::new(
             ErrorCode::OperationInProgress,
             format!("operation in progress for app: {app}"),
@@ -81,7 +98,8 @@ fn reject_if_op_in_progress(state: &OiState, app: &AppName) -> Result<(), OiErro
             format!("install is in progress for app: {app}"),
         ));
     }
-    Ok(())
+    drop(reg);
+    Ok(scheduler)
 }
 
 fn reload_and_persist_apperror(
@@ -151,6 +169,7 @@ fn reload_and_persist_apperror(
 
 fn schedule_on_change(
     state: &OiState,
+    claim: SchedulerClaim<'_>,
     app: &AppName,
     param_name: &ParamName,
     generation: generations::Generation,
@@ -174,7 +193,7 @@ fn schedule_on_change(
     // The on_change handler is dispatched by using the param name itself as an
     // action identifier. Param names follow the same bsl.name rules.
     let param_action = seedling_protocol::names::ActionName::new_unchecked(param_name.as_str());
-    let mut sched = state.scheduler.lock();
+    let mut sched = claim;
     let result = sched.request(
         app,
         &param_action,
@@ -247,7 +266,8 @@ pub(crate) fn set_param(
         }
     }
 
-    reject_if_op_in_progress(state, app)?;
+    // Held until the on_change dispatch: see `SchedulerClaim`.
+    let claim = reject_if_op_in_progress(state, app)?;
 
     let previous_value = current_param_value(state, app, param_name)?;
 
@@ -322,7 +342,7 @@ pub(crate) fn set_param(
     // r[impl image.pin.update-reconcile]
     super::images::reconcile_pins_post_update(state, app);
 
-    let schedule = schedule_on_change(state, app, param_name, generation)?;
+    let schedule = schedule_on_change(state, claim, app, param_name, generation)?;
 
     // i[impl param.store.secret]
     if is_secret {
@@ -357,7 +377,8 @@ pub(crate) fn unset_param(
         }
     }
 
-    reject_if_op_in_progress(state, app)?;
+    // Held until the on_change dispatch: see `SchedulerClaim`.
+    let claim = reject_if_op_in_progress(state, app)?;
 
     let previous_value = current_param_value(state, app, param_name)?;
     let Some(previous_value) = previous_value else {
@@ -412,7 +433,7 @@ pub(crate) fn unset_param(
     // r[impl image.pin.update-reconcile]
     super::images::reconcile_pins_post_update(state, app);
 
-    let schedule = schedule_on_change(state, app, param_name, generation)?;
+    let schedule = schedule_on_change(state, claim, app, param_name, generation)?;
 
     // i[impl param.store.secret]
     if is_secret {

@@ -1225,72 +1225,44 @@ pub(crate) fn register_app(
         }
     }
 
-    // Evaluate script and add to in-memory registry.
-    {
-        let mut reg = state.registry.write();
-        reg.register(
-            params.app.clone(),
-            script.to_owned(),
-            Arc::clone(&state.tick_notify),
-            &state.script_limits,
-        )
-        .map_err(|e| OiError::script_error(e.to_string()))?;
-    }
+    // i[impl app.register] — durable first, observable second. The rows all
+    // commit or none do, and only then does the app appear in the registry,
+    // so a failed persist leaves nothing for `/apps/list` to show, nothing
+    // for a restart to silently drop (load_from_db skips generation-0 rows),
+    // and nothing for a retried `/apps/create` to collide with.
+    let (app, script_error) = crate::runtime::apps::evaluate_script(
+        &params.app,
+        script,
+        &std::collections::BTreeMap::new(),
+        &state.script_limits,
+    );
 
-    // Persist app row first so generations can FK against it.
-    {
-        let reg = state.registry.read();
-        let entry = reg.get(name).expect("just registered");
-        let (app_name, generation_n, installed, uninstalling, installing) =
-            extract_persist_fields(entry);
-        state
-            .db
-            .call(move |db| {
-                persist_app_fields(
-                    db,
-                    &app_name,
-                    generation_n,
-                    installed,
-                    uninstalling,
-                    installing,
-                )
-            })
-            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db persist: {e}")))?;
-    }
-
-    // r[impl generation.bumps] — initial registration creates generation 1.
     let name_owned = params.app.clone();
     let script_owned = script.to_owned();
     let generation = state
         .db
-        .call(move |db| crate::runtime::generations::bump_register(db, &name_owned, &script_owned))
-        .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db generation: {e}")))?;
-    {
-        let mut reg = state.registry.write();
-        if let Some(entry) = reg.get_mut(name) {
-            entry.current_generation = generation;
-        }
-    }
-    // Persist again now that current_generation is set.
-    {
-        let reg = state.registry.read();
-        let entry = reg.get(name).expect("just registered");
-        let (app_name, generation_n, installed, uninstalling, installing) =
-            extract_persist_fields(entry);
-        state
-            .db
-            .call(move |db| {
-                persist_app_fields(
-                    db,
-                    &app_name,
-                    generation_n,
-                    installed,
-                    uninstalling,
-                    installing,
-                )
-            })
-            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db persist: {e}")))?;
-    }
+        .call(move |db| -> rusqlite::Result<u64> {
+            let tx = db.conn.unchecked_transaction()?;
+            // The app row first, so the generation rows can FK against it.
+            persist_app_fields(db, &name_owned, 0, false, false, false)?;
+            // r[impl generation.bumps] — initial registration creates
+            // generation 1.
+            let generation =
+                crate::runtime::generations::bump_register(db, &name_owned, &script_owned)?;
+            persist_app_fields(db, &name_owned, generation, false, false, false)?;
+            tx.commit()?;
+            Ok(generation)
+        })
+        .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db persist: {e}")))?;
+
+    state.registry.write().insert_registered(
+        params.app.clone(),
+        script.to_owned(),
+        app,
+        script_error,
+        Arc::clone(&state.tick_notify),
+        generation,
+    );
 
     {
         let reg = state.registry.read();
