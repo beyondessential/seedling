@@ -1,6 +1,7 @@
 use std::sync::OnceLock;
 
 use jiff::Timestamp;
+use rusqlite::OptionalExtension as _;
 use seedling_protocol::events::EventSender;
 use seedling_protocol::names::AppName;
 use serde::Serialize;
@@ -46,8 +47,73 @@ pub struct FaultRecord {
     pub resource_name: Option<String>,
     pub instance_id: Option<String>,
     pub kind: String,
+    /// The faulty thing; see [`FaultKey`]. Empty for app-wide faults.
+    pub subject: String,
     pub timestamp: Timestamp,
     pub description: String,
+}
+
+/// A fault's identity: the thing that is faulty, and in what way.
+///
+/// Before this existed, every site invented its own notion of sameness —
+/// `(kind, instance_id)` here, `(kind, resource_name)` there, `(kind,
+/// description)` elsewhere, bare `kind` in one place, and nothing at all in
+/// another. Clears were then either too broad (a successful backup of one
+/// volume cleared every volume's `backup_failed`) or too fragile (matching on
+/// a `host:port` substring of the description).
+///
+/// `resource_type`/`resource_name`/`instance_id` remain display metadata.
+/// Matching and clearing use this key alone.
+// r[impl fault.lifecycle]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct FaultKey {
+    pub app: AppName,
+    pub kind: String,
+    /// The faulty thing: a volume id, an image ref, a `host:port`, an
+    /// instance hex. Empty when the fault is about the app as a whole.
+    pub subject: String,
+}
+
+impl FaultKey {
+    pub fn new(app: &AppName, kind: impl Into<String>, subject: impl Into<String>) -> Self {
+        Self {
+            app: app.clone(),
+            kind: kind.into(),
+            subject: subject.into(),
+        }
+    }
+
+    /// A fault about the app itself rather than any one thing within it.
+    pub fn app_wide(app: &AppName, kind: impl Into<String>) -> Self {
+        Self::new(app, kind, "")
+    }
+}
+
+/// The display metadata that rides along with a fault but takes no part in
+/// its identity.
+#[derive(Debug, Clone, Default)]
+pub struct FaultMeta {
+    pub resource_type: Option<String>,
+    pub resource_name: Option<String>,
+    pub instance_id: Option<String>,
+}
+
+impl FaultMeta {
+    pub fn instance(resource_type: &str, resource_name: &str, instance_id: &str) -> Self {
+        Self {
+            resource_type: Some(resource_type.to_owned()),
+            resource_name: Some(resource_name.to_owned()),
+            instance_id: Some(instance_id.to_owned()),
+        }
+    }
+
+    pub fn resource(resource_type: &str, resource_name: &str) -> Self {
+        Self {
+            resource_type: Some(resource_type.to_owned()),
+            resource_name: Some(resource_name.to_owned()),
+            instance_id: None,
+        }
+    }
 }
 
 // i[fault.record]
@@ -60,14 +126,80 @@ pub fn file_fault(
     kind: &str,
     description: &str,
 ) -> rusqlite::Result<String> {
+    // Sites that have not yet been given an explicit subject derive one the
+    // same way migration v53 backfilled the existing rows, so a fault filed
+    // before the migration matches the key its site computes after it.
+    let subject = instance_id.or(resource_name).unwrap_or("");
+    file_keyed(
+        db,
+        &FaultKey::new(app, kind, subject),
+        &FaultMeta {
+            resource_type: resource_type.map(str::to_owned),
+            resource_name: resource_name.map(str::to_owned),
+            instance_id: instance_id.map(str::to_owned),
+        },
+        description,
+    )
+    .map(|(id, _)| id)
+}
+
+/// File `key` unless an active fault already holds it.
+///
+/// Returns the fault's id and whether it was newly filed. This is the dedup
+/// that four sites hand-rolled as an `already_filed` scan of
+/// `list_active_faults`, and that `audit_lag` omitted entirely — so it
+/// duplicated without bound.
+// r[impl fault.lifecycle]
+pub fn file_once(
+    db: &crate::runtime::db::Db,
+    key: &FaultKey,
+    meta: &FaultMeta,
+    description: &str,
+) -> rusqlite::Result<bool> {
+    file_keyed(db, key, meta, description).map(|(_, filed)| filed)
+}
+
+/// Insert the fault, or return the id of the active one already holding the
+/// key. The uniqueness is enforced by a partial unique index rather than by a
+/// read-then-write, so concurrent filers cannot both win.
+fn file_keyed(
+    db: &crate::runtime::db::Db,
+    key: &FaultKey,
+    meta: &FaultMeta,
+    description: &str,
+) -> rusqlite::Result<(String, bool)> {
     let id = uuid::Uuid::new_v4().to_string();
     let now = Timestamp::now();
     let timestamp = now.to_string();
-    db.conn.execute(
-        "INSERT INTO faults (id, app, resource_type, resource_name, instance_id, kind, timestamp, description)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        rusqlite::params![id, app, resource_type, resource_name, instance_id, kind, timestamp, description],
+    let app = &key.app;
+    let kind = key.kind.as_str();
+    let resource_type = meta.resource_type.as_deref();
+    let resource_name = meta.resource_name.as_deref();
+    let instance_id = meta.instance_id.as_deref();
+    let inserted = db.conn.execute(
+        "INSERT INTO faults (id, app, resource_type, resource_name, instance_id, kind, timestamp, description, subject)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT DO NOTHING",
+        rusqlite::params![id, app, resource_type, resource_name, instance_id, kind, timestamp, description, key.subject],
     )?;
+    if inserted == 0 {
+        // The row that won the conflict can be cleared before this reads it,
+        // in which case the key is free again and the caller's fault should
+        // be filed rather than reported as a duplicate.
+        let existing: Option<String> = db
+            .conn
+            .query_row(
+                "SELECT id FROM faults
+                 WHERE app = ?1 AND kind = ?2 AND subject = ?3 AND cleared_at IS NULL",
+                rusqlite::params![app, kind, key.subject],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match existing {
+            Some(id) => return Ok((id, false)),
+            None => return file_keyed(db, key, meta, description),
+        }
+    }
     warn!(
         app = %app,
         kind, resource_type, resource_name, instance_id, "fault filed: {description}",
@@ -79,11 +211,12 @@ pub fn file_fault(
         resource_name: resource_name.map(str::to_owned),
         instance_id: instance_id.map(str::to_owned),
         kind: kind.to_owned(),
+        subject: key.subject.clone(),
         timestamp: now,
         description: description.to_owned(),
     };
     emit_filed(&record);
-    Ok(id)
+    Ok((id, true))
 }
 
 /// Clear a single fault by ID. The `app` is needed for the event broadcast;
@@ -126,7 +259,7 @@ pub fn list_active_faults(
     match app {
         Some(app_name) => {
             let mut stmt = db.conn.prepare(
-                "SELECT id, app, resource_type, resource_name, instance_id, kind, timestamp, description
+                "SELECT id, app, resource_type, resource_name, instance_id, kind, timestamp, description, subject
                  FROM faults WHERE cleared_at IS NULL AND app = ?1
                  ORDER BY timestamp",
             )?;
@@ -137,7 +270,7 @@ pub fn list_active_faults(
         }
         None => {
             let mut stmt = db.conn.prepare(
-                "SELECT id, app, resource_type, resource_name, instance_id, kind, timestamp, description
+                "SELECT id, app, resource_type, resource_name, instance_id, kind, timestamp, description, subject
                  FROM faults WHERE cleared_at IS NULL
                  ORDER BY timestamp",
             )?;
@@ -162,6 +295,7 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<FaultRecord> {
         resource_name: row.get(3)?,
         instance_id: row.get(4)?,
         kind: row.get(5)?,
+        subject: row.get(8)?,
         timestamp,
         description: row.get(7)?,
     })
@@ -240,6 +374,129 @@ pub fn count_active_faults(db: &crate::runtime::db::Db) -> rusqlite::Result<i64>
         [],
         |r| r.get(0),
     )
+}
+
+/// Which active faults a [`sync_faults`] call owns, and may therefore clear.
+///
+/// Scoping is what keeps a converge call from clearing kinds it knows nothing
+/// about: a sweep that computes every currently-conflicting `(host, port)`
+/// must not treat the absence of a `backup_failed` key as a reason to clear
+/// one.
+// r[impl fault.lifecycle]
+#[derive(Debug, Clone)]
+pub enum FaultScope {
+    /// Every active fault of this kind, across all apps. For conditions
+    /// computed globally each tick, such as ingress conflicts.
+    Kind(String),
+    /// Every active fault of this kind belonging to one app.
+    AppKind(AppName, String),
+}
+
+impl FaultScope {
+    fn owns(&self, record: &FaultRecord) -> bool {
+        match self {
+            Self::Kind(kind) => record.kind == *kind,
+            Self::AppKind(app, kind) => record.app == *app && record.kind == *kind,
+        }
+    }
+
+    fn kind(&self) -> &str {
+        match self {
+            Self::Kind(kind) | Self::AppKind(_, kind) => kind,
+        }
+    }
+}
+
+/// The active faults a scope owns, filtered in SQL.
+///
+/// A global sweep such as ingress conflicts runs every tick; reading every
+/// active fault in the database and discarding all but one kind would make
+/// that cost grow with the total fault count rather than with the kind's.
+fn list_active_faults_in_scope(
+    db: &crate::runtime::db::Db,
+    scope: &FaultScope,
+) -> rusqlite::Result<Vec<FaultRecord>> {
+    const COLUMNS: &str =
+        "id, app, resource_type, resource_name, instance_id, kind, timestamp, description, subject";
+    match scope {
+        FaultScope::Kind(kind) => {
+            let mut stmt = db.conn.prepare(&format!(
+                "SELECT {COLUMNS} FROM faults
+                 WHERE cleared_at IS NULL AND kind = ?1
+                 ORDER BY timestamp"
+            ))?;
+            stmt.query_map([kind], row_to_record)?.collect()
+        }
+        FaultScope::AppKind(app, kind) => {
+            let mut stmt = db.conn.prepare(&format!(
+                "SELECT {COLUMNS} FROM faults
+                 WHERE cleared_at IS NULL AND app = ?1 AND kind = ?2
+                 ORDER BY timestamp"
+            ))?;
+            stmt.query_map(rusqlite::params![app, kind], row_to_record)?
+                .collect()
+        }
+    }
+}
+
+/// What a [`sync_faults`] call did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct SyncOutcome {
+    pub filed: usize,
+    pub cleared: usize,
+}
+
+/// Converge the active faults within `scope` to exactly `current`.
+///
+/// Files the keys in `current` that are not active, clears the active ones
+/// that are no longer in `current`. `describe` supplies a description for each
+/// newly-filed key.
+///
+/// This replaces the two in-memory prev-set diffs in the reconciler, which
+/// cleared only `prior \ current` where `prior` was a `Reconciler` field that
+/// starts empty on every daemon start — the faults are in the database, so one
+/// filed before a restart could never clear. Comparing against the persisted
+/// active set instead is restart-safe by construction: there is no warm-up
+/// state to reconstruct and none to forget to persist.
+// r[impl fault.lifecycle]
+pub fn sync_faults(
+    db: &crate::runtime::db::Db,
+    scope: &FaultScope,
+    current: &std::collections::BTreeMap<FaultKey, (FaultMeta, String)>,
+) -> rusqlite::Result<SyncOutcome> {
+    let active = list_active_faults_in_scope(db, scope)?;
+
+    let mut outcome = SyncOutcome::default();
+
+    for record in &active {
+        let key = FaultKey::new(&record.app, record.kind.clone(), record.subject.clone());
+        if !current.contains_key(&key) {
+            clear_fault(db, &record.id, &record.app)?;
+            outcome.cleared += 1;
+        }
+    }
+
+    for (key, (meta, description)) in current {
+        debug_assert!(
+            scope.owns(&FaultRecord {
+                id: String::new(),
+                app: key.app.clone(),
+                resource_type: None,
+                resource_name: None,
+                instance_id: None,
+                kind: key.kind.clone(),
+                subject: key.subject.clone(),
+                timestamp: Timestamp::now(),
+                description: String::new(),
+            }),
+            "sync_faults given a key outside its own scope: {key:?}"
+        );
+        if file_once(db, key, meta, description)? {
+            outcome.filed += 1;
+        }
+    }
+
+    Ok(outcome)
 }
 
 #[cfg(test)]
