@@ -90,7 +90,7 @@ pub fn find_instance(db: &Db, id: InstanceId) -> rusqlite::Result<Option<Resourc
 pub fn display_names_for_app(db: &Db, app: &AppName) -> rusqlite::Result<Vec<String>> {
     let mut stmt = db
         .conn
-        .prepare("SELECT display_name FROM resource_instances WHERE app = ?1")?;
+        .prepare("SELECT DISTINCT display_name FROM resource_instances WHERE app = ?1")?;
     let rows = stmt.query_map(params![app], |row| row.get::<_, String>(0))?;
     rows.collect()
 }
