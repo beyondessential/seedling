@@ -4,6 +4,7 @@ use rhai::{EvalAltResult, FnPtr, Map, TypeBuilder};
 use seedling_protocol::names::ParamName;
 
 use super::super::install::{InstallDef, ParamDef, ParamKind};
+use super::super::take::{take_bool, take_map, take_string};
 use super::App;
 
 pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
@@ -25,7 +26,9 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                 // l[impl action.install.requirements]
                 let params_map = config
                     .get("params")
-                    .and_then(|v| v.read_lock::<Map>().map(|m| m.clone()))
+                    .cloned()
+                    .map(|v| take_map("on_install params", v))
+                    .transpose()?
                     .unwrap_or_default();
                 let reqs = parse_param_defs(&params_map, false)?;
                 this.def.rcu(|d| {
@@ -50,56 +53,67 @@ pub(super) fn parse_param_defs(
 ) -> Result<BTreeMap<ParamName, ParamDef>, Box<EvalAltResult>> {
     let mut reqs = BTreeMap::new();
     for (key, value) in map {
-        if let Some(req_map) = value.read_lock::<Map>() {
-            let kind = match req_map
-                .get("kind")
-                .and_then(|v| v.clone().into_string().ok())
-            {
-                Some(s) => ParamKind::from_str(&s).map_err(|_| {
+        // A non-map entry used to be skipped outright, so the param simply
+        // did not exist — and a non-string `kind` fell back to the default,
+        // quietly installing a `password` param as plain text.
+        let req_map = take_map(&format!("param `{key}`"), value.clone())?;
+
+        let kind = match req_map.get("kind").cloned() {
+            Some(v) => {
+                let s = take_string(&format!("param `{key}` kind"), v)?;
+                ParamKind::from_str(&s).map_err(|_| {
                     Box::<EvalAltResult>::from(format!("unknown param kind: \"{s}\""))
-                })?,
-                None => ParamKind::default(),
-            };
-            if !allow_volume && !kind.allowed_static() {
-                return Err(format!(
-                    "param '{key}' uses kind '{}', which is only valid in action or shell \
-                     param schemas; static params should use external_volume mappings instead",
-                    kind.as_str()
-                )
-                .into());
+                })?
             }
-
-            let required = req_map
-                .get("required")
-                .and_then(|v| v.as_bool().ok())
-                .unwrap_or(true);
-
-            let default_value = req_map
-                .get("default_value")
-                .and_then(|v| v.clone().into_string().ok());
-
-            let description = req_map
-                .get("description")
-                .and_then(|v| v.clone().into_string().ok());
-
-            let secret = req_map
-                .get("secret")
-                .and_then(|v| v.as_bool().ok())
-                .unwrap_or(false);
-
-            let param_name = ParamName::new(key.as_str())
-                .map_err(|e| -> Box<EvalAltResult> { e.to_string().into() })?;
-            reqs.insert(
-                param_name,
-                ParamDef {
-                    kind,
-                    required,
-                    default_value,
-                    description,
-                    secret,
-                },
-            );
+            None => ParamKind::default(),
+        };
+        if !allow_volume && !kind.allowed_static() {
+            return Err(format!(
+                "param '{key}' uses kind '{}', which is only valid in action or shell \
+                 param schemas; static params should use external_volume mappings instead",
+                kind.as_str()
+            )
+            .into());
         }
+
+        let required = req_map
+            .get("required")
+            .cloned()
+            .map(|v| take_bool(&format!("param `{key}` required"), v))
+            .transpose()?
+            .unwrap_or(true);
+
+        let default_value = req_map
+            .get("default_value")
+            .cloned()
+            .map(|v| take_string(&format!("param `{key}` default_value"), v))
+            .transpose()?;
+
+        let description = req_map
+            .get("description")
+            .cloned()
+            .map(|v| take_string(&format!("param `{key}` description"), v))
+            .transpose()?;
+
+        let secret = req_map
+            .get("secret")
+            .cloned()
+            .map(|v| take_bool(&format!("param `{key}` secret"), v))
+            .transpose()?
+            .unwrap_or(false);
+
+        let param_name = ParamName::new(key.as_str())
+            .map_err(|e| -> Box<EvalAltResult> { e.to_string().into() })?;
+        reqs.insert(
+            param_name,
+            ParamDef {
+                kind,
+                required,
+                default_value,
+                description,
+                secret,
+            },
+        );
     }
     Ok(reqs)
 }

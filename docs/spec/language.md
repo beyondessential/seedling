@@ -22,6 +22,12 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > All enums available to BSL are defined in the [Constants](#constants) section.
 
+> l[bsl.args.strict]
+> A builder or function argument whose type or value does not match its documented signature raises a script error at evaluation time.
+> Malformed input is never coerced, defaulted, or silently ignored: an argument of the wrong type does not become an empty string or a default, an element of the wrong type does not disappear from an array, an unrecognised key in an options map is not skipped, and an out-of-range number is not truncated or wrapped into range.
+> The error names the argument as the script author wrote it, what was expected, and what was supplied.
+> This does not apply where the spec defines a coercion, such as [col](#l--collection.col).
+
 > l[bsl.errors]
 > Some methods throw exceptions under some circumstances.
 > The `try..catch` Rhai construct may be used to handle those exceptions and recover.
@@ -474,7 +480,7 @@ This is currently the only value.
 > The `ingress.redirect(port?: number, code?: number)` builder method emits an HTTP redirect on the `port` given if and when the ingress has obtained a TLS certificate.
 >
 > The `port` defaults to 80.
-> The `code` defaults to 307 ([Temporary Redirect](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/307)).
+> The `code` defaults to 307 ([Temporary Redirect](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/307)) and must be a redirection status code in the range 300–399; any other value throws.
 >
 > Calling this on an ingress whose termination is not `Terminate.Https` throws.
 
