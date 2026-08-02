@@ -82,7 +82,18 @@ fn clear_faults_by_kind_clears_matching() {
     let db = Db::open_in_memory().expect("open");
     init_test_events();
     file_fault(&db, &app("myapp"), None, None, None, "script_error", "err1").expect("file1");
-    file_fault(&db, &app("myapp"), None, None, None, "script_error", "err2").expect("file2");
+    // Distinct subjects: one active fault per (app, kind, subject) now, so
+    // two same-subject script errors would be one fault, not two.
+    file_fault(
+        &db,
+        &app("myapp"),
+        None,
+        Some("second"),
+        None,
+        "script_error",
+        "err2",
+    )
+    .expect("file2");
     file_fault(
         &db,
         &app("myapp"),
@@ -227,8 +238,8 @@ fn count_active_faults_for_app_counts_only_uncleared() {
         0
     );
 
-    let id1 = file_fault(&db, &app("myapp"), None, None, None, "err", "1").expect("1");
-    file_fault(&db, &app("myapp"), None, None, None, "err", "2").expect("2");
+    let id1 = file_fault(&db, &app("myapp"), None, Some("one"), None, "err", "1").expect("1");
+    file_fault(&db, &app("myapp"), None, Some("two"), None, "err", "2").expect("2");
     file_fault(&db, &app("other"), None, None, None, "err", "3").expect("3");
     assert_eq!(
         count_active_faults_for_app(&db, &app("myapp")).expect("count"),
@@ -376,4 +387,139 @@ fn clear_faults_for_instance_only_removes_matching_instance() {
     assert!(!kinds.contains(&"image_pull_failed".to_string()));
     assert!(kinds.contains(&"container_start_failed".to_string()));
     assert!(kinds.contains(&"operation_failed".to_string()));
+}
+
+fn meta() -> FaultMeta {
+    FaultMeta::default()
+}
+
+fn desc(key: &FaultKey) -> std::collections::BTreeMap<FaultKey, (FaultMeta, String)> {
+    let mut map = std::collections::BTreeMap::new();
+    map.insert(key.clone(), (meta(), format!("{} is faulty", key.subject)));
+    map
+}
+
+// r[verify fault.lifecycle]
+// At most one active fault per key: `audit_lag` filed one per lag event
+// without bound, and GC prunes only cleared faults.
+#[test]
+fn file_once_does_not_duplicate() {
+    let db = Db::open_in_memory().expect("open");
+    init_test_events();
+    let key = FaultKey::app_wide(&app("seedling"), "audit_lag");
+
+    assert!(file_once(&db, &key, &meta(), "42 events dropped").unwrap());
+    assert!(!file_once(&db, &key, &meta(), "7 more events dropped").unwrap());
+
+    let active = list_active_faults(&db, None).unwrap();
+    assert_eq!(active.len(), 1, "{active:#?}");
+}
+
+// r[verify fault.lifecycle]
+// Clearing keyed no more broadly than filing: this is H8 — a successful
+// backup of one volume cleared every other volume's failure.
+#[test]
+fn faults_for_different_subjects_are_independent() {
+    let db = Db::open_in_memory().expect("open");
+    init_test_events();
+    let app = app("backups");
+    let ok = FaultKey::new(&app, "backup_failed", "site/data");
+    let broken = FaultKey::new(&app, "backup_failed", "site/archive");
+
+    file_once(&db, &ok, &meta(), "data failed").unwrap();
+    file_once(&db, &broken, &meta(), "archive failed").unwrap();
+
+    // "data" succeeds on a later run and clears only its own key.
+    let to_clear: Vec<_> = list_active_faults(&db, Some(&app))
+        .unwrap()
+        .into_iter()
+        .filter(|f| f.kind == "backup_failed" && f.subject == "site/data")
+        .collect();
+    for fault in &to_clear {
+        clear_fault(&db, &fault.id, &app).unwrap();
+    }
+
+    let active = list_active_faults(&db, Some(&app)).unwrap();
+    assert_eq!(active.len(), 1, "{active:#?}");
+    assert_eq!(active[0].subject, "site/archive");
+}
+
+// r[verify fault.lifecycle]
+// A condition fault is active exactly while its condition holds — including
+// when the condition stopped holding before this process started. The
+// reconciler used to diff against an in-memory prior set that empties on
+// every daemon start, so a fault filed before a restart could never clear.
+#[test]
+fn sync_clears_a_fault_filed_by_a_previous_process() {
+    let db = Db::open_in_memory().expect("open");
+    init_test_events();
+    let system = AppName::new_unchecked("_system");
+    let key = FaultKey::new(&system, "ingress_conflict", "example.com:443");
+
+    // Pre-seed as if a previous daemon lifetime filed it.
+    file_once(&db, &key, &meta(), "conflict on example.com:443").unwrap();
+
+    // This tick sees no conflicts at all, with no memory of the previous one.
+    let outcome = sync_faults(
+        &db,
+        &FaultScope::Kind("ingress_conflict".to_owned()),
+        &std::collections::BTreeMap::new(),
+    )
+    .unwrap();
+
+    assert_eq!(outcome.cleared, 1);
+    assert!(list_active_faults(&db, None).unwrap().is_empty());
+}
+
+// r[verify fault.lifecycle]
+#[test]
+fn sync_is_idempotent_and_converges_from_any_state() {
+    let db = Db::open_in_memory().expect("open");
+    init_test_events();
+    let system = AppName::new_unchecked("_system");
+    let key = FaultKey::new(&system, "ingress_conflict", "a.example:443");
+    let scope = FaultScope::Kind("ingress_conflict".to_owned());
+
+    let first = sync_faults(&db, &scope, &desc(&key)).unwrap();
+    assert_eq!(
+        first,
+        SyncOutcome {
+            filed: 1,
+            cleared: 0
+        }
+    );
+
+    let second = sync_faults(&db, &scope, &desc(&key)).unwrap();
+    assert_eq!(
+        second,
+        SyncOutcome {
+            filed: 0,
+            cleared: 0
+        }
+    );
+
+    assert_eq!(list_active_faults(&db, None).unwrap().len(), 1);
+}
+
+// r[verify fault.lifecycle]
+// A sweep may only clear within its declared scope; otherwise converging one
+// kind to empty would wipe every other kind's faults.
+#[test]
+fn sync_never_touches_kinds_outside_its_scope() {
+    let db = Db::open_in_memory().expect("open");
+    init_test_events();
+    let system = AppName::new_unchecked("_system");
+    let other = FaultKey::new(&system, "resolver_failed", "");
+    file_once(&db, &other, &meta(), "resolver down").unwrap();
+
+    sync_faults(
+        &db,
+        &FaultScope::Kind("ingress_conflict".to_owned()),
+        &std::collections::BTreeMap::new(),
+    )
+    .unwrap();
+
+    let active = list_active_faults(&db, None).unwrap();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].kind, "resolver_failed");
 }

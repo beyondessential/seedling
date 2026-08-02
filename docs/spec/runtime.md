@@ -1115,6 +1115,13 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > When a Service's routing pool contains only unhealthy backends (i.e. the prefer-healthy rule has fallen back to "anything running" per [lifecycle.service.routing-pool](#r--lifecycle.service.routing-pool)), the runtime must file a fault of kind `service_degraded` associated with that Service.
 > The fault is cleared automatically when at least one backend in the pool becomes healthy or when the Service is unscheduled.
 
+> r[fault.lifecycle]
+> Every fault kind defines both the condition under which it is filed and the condition under which it clears; a kind with no clearing condition is not permitted.
+> A fault identifies the thing that is faulty, not merely the app it belongs to, and at most one fault is active for a given (app, kind, subject) at a time.
+> Clearing is keyed no more broadly than filing: an event affecting one subject must not clear a fault held by another.
+> A fault whose filing condition is a state of the world ("this is true right now") is active exactly while that condition holds, including across daemon restarts — its clearing must not depend on state held only in memory.
+> A fault that is deliberately retained after its trigger has passed must name the lifecycle event that clears it.
+
 > r[fault.surfacing]
 > Faults must be surfaced to operators through the operator interface (defined in a separate spec).
 > The runtime must not silently discard faults.

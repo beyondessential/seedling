@@ -433,16 +433,14 @@ async fn run_volume_backup(
         Err(e) => {
             tracing::error!(strategy = %strategy.name, vol = %vol_id, "invalid volume id: {e}");
             let app_owned = backing_app_name.clone();
+            let vol_owned = vol_id.to_owned();
             let desc = format!("strategy {:?}: {e}", strategy.name);
             tokio::task::block_in_place(|| {
                 state.db.call(move |db| {
-                    let _ = faults::file_fault(
+                    let _ = faults::file_once(
                         db,
-                        &app_owned,
-                        None,
-                        None,
-                        None,
-                        "backup_source_unavailable",
+                        &faults::FaultKey::new(&app_owned, "backup_source_unavailable", &vol_owned),
+                        &faults::FaultMeta::resource("volume", &vol_owned),
                         &desc,
                     );
                 })
@@ -458,15 +456,13 @@ async fn run_volume_backup(
             "strategy {:?}: volume {vol_id:?} path does not exist",
             strategy.name
         );
+        let vol_owned = vol_id.to_owned();
         tokio::task::block_in_place(|| {
             state.db.call(move |db| {
-                let _ = faults::file_fault(
+                let _ = faults::file_once(
                     db,
-                    &app_owned,
-                    None,
-                    None,
-                    None,
-                    "backup_source_unavailable",
+                    &faults::FaultKey::new(&app_owned, "backup_source_unavailable", &vol_owned),
+                    &faults::FaultMeta::resource("volume", &vol_owned),
                     &desc,
                 );
             })
@@ -571,11 +567,14 @@ async fn run_volume_backup(
         let _ = vol_store.remove_site(&snapshot_name).await;
 
         if success {
+            // r[impl backup.execution] — clear only this volume's faults. A
+            // kind-wide clear meant the second volume of a strategy erased the
+            // first one's failure, so a partially-failing backup looked clean.
             let app_owned = backing_app_name.clone();
+            let vol_owned = vol_id.to_owned();
             tokio::task::block_in_place(|| {
                 state.db.call(move |db| {
-                    faults::clear_faults_by_kind(db, &app_owned, "backup_failed").ok();
-                    faults::clear_faults_by_kind(db, &app_owned, "backup_source_unavailable").ok();
+                    clear_backup_faults_for_volume(db, &app_owned, &vol_owned);
                 })
             });
             return;
@@ -605,13 +604,40 @@ async fn run_volume_backup(
             "strategy {:?}: save-snapshot failed for volume {vol_id:?}",
             strategy.name
         );
+        let vol_owned = vol_id.to_owned();
         tokio::task::block_in_place(|| {
             state.db.call(move |db| {
-                let _ =
-                    faults::file_fault(db, &app_owned, None, None, None, "backup_failed", &desc);
+                let _ = faults::file_once(
+                    db,
+                    &faults::FaultKey::new(&app_owned, "backup_failed", &vol_owned),
+                    &faults::FaultMeta::resource("volume", &vol_owned),
+                    &desc,
+                );
             })
         });
         return;
+    }
+}
+
+/// Clear the backup faults belonging to one volume.
+///
+/// `backup_failed` and `backup_source_unavailable` are condition faults about
+/// a specific volume: true until that volume backs up successfully. Keying
+/// them by volume is what lets a success clear its own without touching the
+/// other volumes in the same strategy.
+// r[impl fault.lifecycle]
+fn clear_backup_faults_for_volume(db: &crate::runtime::db::Db, app: &AppName, vol_id: &str) {
+    for kind in ["backup_failed", "backup_source_unavailable"] {
+        let active: Vec<_> = faults::list_active_faults(db, Some(app))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|f| f.kind == kind && f.subject == vol_id)
+            .collect();
+        for fault in &active {
+            if let Err(e) = faults::clear_fault(db, &fault.id, app) {
+                tracing::warn!(app = %app, vol = %vol_id, "failed to clear {kind} fault: {e}");
+            }
+        }
     }
 }
 
