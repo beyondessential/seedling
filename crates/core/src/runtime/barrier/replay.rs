@@ -326,6 +326,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     // call_index 0 each pass; without this marker the duplicated
     // breadcrumbs after a barrier wake up look like the script ran
     // twice.
+    // r[impl actuate.breadcrumb.replay]
     if !committed.is_empty() {
         crate::system::breadcrumb::Breadcrumb {
             app: Some(&app.def.load().name),

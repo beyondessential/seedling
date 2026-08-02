@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod canopy;
 pub mod forwards;
 pub mod handler;
 pub mod logs;

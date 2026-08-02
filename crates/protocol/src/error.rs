@@ -19,6 +19,11 @@ pub enum ErrorCode {
     Internal,
     // i[impl backup.app.deregister]
     BackupAppInUse,
+    // i[impl canopy.offer.disabled]
+    // i[impl canopy.unavailable]
+    CanopyDisabled,
+    // i[impl canopy.unavailable]
+    CanopyUnavailable,
 }
 
 #[derive(Debug)]

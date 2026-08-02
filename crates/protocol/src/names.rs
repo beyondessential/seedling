@@ -396,6 +396,13 @@ uuid_newtype! {
 }
 
 uuid_newtype! {
+    /// Identifier for a registration by a client offering to carry Canopy
+    /// requests. Ephemeral: it lives no longer than the connection that made it.
+    // i[canopy.offer]
+    OfferId
+}
+
+uuid_newtype! {
     /// Identifier for a volume that has been removed from service and held
     /// for operator review. The id becomes the directory name under the
     /// `held-volumes` store and the stem of the sidecar `{id}.meta.json`
