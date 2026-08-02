@@ -406,19 +406,15 @@ fn upsert_discovered_row(
     // operator's. Falling through to `create` collided on the primary key
     // every poll, so the provider livelocked and the operator's row stayed
     // stale forever.
-    if let Some(existing) = site_ingresses::get(db, &name)?
-        && !existing.source.is_discovered()
-    {
-        warn!(
-            "tailscale: a manually-created site ingress holds the name \
-             {TAILSCALE_INGRESS_NAME:?}; not creating the discovered one. Rename or remove \
-             it to let discovery take over."
-        );
-        return Ok(());
-    }
-    if let Some(existing) = site_ingresses::get(db, &name)?
-        && existing.source.is_discovered()
-    {
+    if let Some(existing) = site_ingresses::get(db, &name)? {
+        if !existing.source.is_discovered() {
+            warn!(
+                "tailscale: a manually-created site ingress holds the name \
+                 {TAILSCALE_INGRESS_NAME:?}; not creating the discovered one. Rename or remove \
+                 it to let discovery take over."
+            );
+            return Ok(());
+        }
         site_ingresses::delete(db, &name)?;
         info!(
             stale_node_id = ?match &existing.source {

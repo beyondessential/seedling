@@ -626,9 +626,19 @@ async fn main() {
                     registered
                         .into_iter()
                         .filter(|name| {
-                            let Ok(parsed) = seedling_protocol::names::SiteVolumeName::new(name)
-                            else {
-                                return false;
+                            let parsed = match seedling_protocol::names::SiteVolumeName::new(name) {
+                                Ok(parsed) => parsed,
+                                // Also a "could not tell": a name Seedling
+                                // could not have created is not a snapshot of
+                                // ours to delete.
+                                Err(e) => {
+                                    tracing::warn!(
+                                        volume = %name,
+                                        "a snapshot-prefixed path is not a valid site volume \
+                                         name; keeping it: {e}"
+                                    );
+                                    return true;
+                                }
                             };
                             match seedling_core::runtime::site_volumes::get(conn, &parsed) {
                                 Ok(row) => row.is_some(),
