@@ -2,7 +2,9 @@
 
 Recurring ways this codebase has gone wrong, and the rule that prevents each.
 
-These come from the [July 2026 logic-bug audit](logic-bug-audit-2026-07.md), which found
+These come from the July 2026 logic-bug audit
+([PR](https://github.com/beyondessential/seedling/pull/115); once merged, also
+[in tree](logic-bug-audit-2026-07.md)), which found
 the same handful of mistakes repeated across unrelated subsystems. They are grouped by the
 shape of the mistake rather than by subsystem, because that is how they recur: the next
 instance will be in a file none of these examples touch.
