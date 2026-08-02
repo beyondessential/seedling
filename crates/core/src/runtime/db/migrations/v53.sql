@@ -12,12 +12,15 @@
 -- identity is (app, kind, subject).
 ALTER TABLE faults ADD COLUMN subject TEXT NOT NULL DEFAULT '';
 
--- Backfill the existing active faults from whichever column carried their
--- subject, so a fault filed before this migration still matches the key its
--- site will compute after it and can be cleared rather than stranded.
+-- Backfill from whichever column carried the subject, so a fault filed before
+-- this migration still matches the key its site computes after it and can be
+-- cleared rather than stranded. Cleared rows are backfilled too: this table is
+-- also the fault history the operator interface reads, and leaving historical
+-- rows without a subject would make past faults ambiguous in exactly the way
+-- the column exists to prevent.
 UPDATE faults
 SET subject = COALESCE(instance_id, resource_name, '')
-WHERE cleared_at IS NULL AND subject = '';
+WHERE subject = '';
 
 -- Duplicate active faults for one key already exist (audit_lag files without
 -- any dedup at all), and the index below would refuse to build over them.
