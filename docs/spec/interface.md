@@ -104,6 +104,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[stream.subscribe]
 > A subscription-style request — one whose success causes the server to open a server-initiated unidirectional stream carrying the subscribed data — is answered on the bidirectional stream exactly as any other control request, before any unidirectional stream is opened.
 > A response carrying an error terminates the request: the server opens no unidirectional stream, and the connection remains usable for further requests.
+> The response is bounded by the close of the bidirectional stream, as for any other control request per [stream.control](#i--stream.control), and not by a newline: a client must read the bidirectional stream to its end before parsing, and the subsequent data arrives on the unidirectional stream rather than on this one.
 > Clients must therefore read and classify the response envelope before waiting for the unidirectional stream, must treat closure of the bidirectional stream without a response envelope as an error, must surface the error envelope's `code` and `message` to their caller rather than discarding them, and must not wait indefinitely for a unidirectional stream that a server which answered successfully may still fail to open.
 > The subscription-style requests are [events.subscribe](#i--event.subscribe) and [logs.stream](#i--logs.stream).
 
