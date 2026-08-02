@@ -472,12 +472,13 @@ fn reload_replaces_script_on_existing_entry() {
     .unwrap();
 
     let new_script = r#"app.deployment("api").image("ghcr.io/acme/api:1.0");"#;
-    reg.reload(
+    let outcome = reg.reload(
         &app("myapp"),
         new_script.to_owned(),
         &BTreeMap::new(),
         &crate::ScriptLimits::default(),
     );
+    assert!(outcome.is_applied());
     let entry = reg.get("myapp").unwrap();
     assert_eq!(entry.script, new_script);
     assert!(entry.script_error.is_none());
@@ -667,15 +668,73 @@ fn script_at_nonexistent_generation_is_none() {
 }
 
 // i[verify app.update]
+// A script that throws part-way leaves a partially-populated App behind.
+// Publishing it would tell every downstream diff — volume hold, scaling
+// bounds, forwards, schedules — that the resources declared after the throw
+// were deleted from the app.
+#[test]
+fn failed_reload_keeps_the_previous_definition() {
+    let mut reg = AppRegistry::new();
+    let notify = Arc::new(Notify::new());
+    let original = r#"
+        app.deployment("api").image("ghcr.io/acme/api:1.0");
+        app.volume("data");
+    "#;
+    reg.register(
+        app("myapp"),
+        original.to_owned(),
+        notify,
+        &crate::ScriptLimits::default(),
+    )
+    .unwrap();
+
+    // Declares the deployment, then throws before reaching the volume: the
+    // partial evaluation looks exactly like "the operator removed the volume".
+    let broken = r#"
+        app.deployment("api").image("ghcr.io/acme/api:1.0");
+        throw "boom";
+        app.volume("data");
+    "#;
+    let outcome = reg.reload(
+        &app("myapp"),
+        broken.to_owned(),
+        &BTreeMap::new(),
+        &crate::ScriptLimits::default(),
+    );
+
+    assert!(
+        matches!(outcome, ReloadOutcome::KeptPrevious(_)),
+        "a throwing script must not be reported as applied"
+    );
+    let entry = reg.get("myapp").unwrap();
+    let def = entry.app.def.load();
+    assert!(
+        def.resources
+            .keys()
+            .any(|id| id.kind == crate::defs::resource::ResourceKind::Volume
+                && id.name.as_str() == "data"),
+        "the previous definition's volume must still be present"
+    );
+    // The submitted text and the fault are both recorded: the operator sees
+    // what they sent and why it did not take effect.
+    assert_eq!(entry.script, broken);
+    assert!(entry.script_error.is_some());
+}
+
+// i[verify app.update]
 #[test]
 fn reload_of_unknown_app_is_noop() {
     let mut reg = AppRegistry::new();
-    // No panic, no registration.
-    reg.reload(
+    // No panic, no registration — and not reported as applied, since a caller
+    // gating destructive work on `is_applied` must not be told the registry
+    // holds a definition it never stored.
+    let outcome = reg.reload(
         &app("ghost"),
         trivial_script().to_owned(),
         &BTreeMap::new(),
         &crate::ScriptLimits::default(),
     );
+    assert!(matches!(outcome, ReloadOutcome::NotRegistered));
+    assert!(!outcome.is_applied());
     assert!(!reg.is_registered("ghost"));
 }

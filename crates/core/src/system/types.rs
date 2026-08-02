@@ -249,10 +249,39 @@ pub enum TransientRestart {
 // ---------------------------------------------------------------------------
 
 /// `unit_state` returns `None` when the unit does not exist or is masked.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct UnitState {
     pub active: ActiveState,
     pub sub: String,
+    /// The supervisor's own count of how many times it has restarted this
+    /// unit. Monotonic while the unit lives, but reset when the unit is
+    /// recreated or its failed state is cleared, so a decrease is a reset
+    /// rather than a negative delta.
+    ///
+    /// `None` when the supervisor does not report one (a non-service unit, or
+    /// a listing that does not carry per-unit properties).
+    // r[impl autonomous.restart.record]
+    pub restarts: Option<u32>,
+    /// How the unit's main process last exited, where the supervisor reports
+    /// it. This is what makes a restart record diagnostic rather than a tally.
+    // r[impl autonomous.restart.record]
+    pub last_exit: Option<UnitExit>,
+}
+
+/// The exit status of a unit's main process on its most recent run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnitExit {
+    pub kind: UnitExitKind,
+    /// The exit status for [`UnitExitKind::Exited`], the signal number
+    /// otherwise.
+    pub code: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnitExitKind {
+    Exited,
+    Signalled,
+    Dumped,
 }
 
 #[derive(Debug, Clone)]
@@ -261,11 +290,12 @@ pub struct UnitSummary {
     pub state: UnitState,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ActiveState {
     Active,
     Activating,
     Deactivating,
+    #[default]
     Inactive,
     Failed,
 }
@@ -504,6 +534,16 @@ pub enum ObservationFact {
     UnitStartLimitHit,
     /// The unit is not loaded by systemd at all (unit_state returned None).
     UnitGone,
+    /// The supervisor's restart counter for this unit, plus how the main
+    /// process last exited. The reconciler diffs the counter against the
+    /// baseline it recorded on the previous tick, so a restart that completed
+    /// between two observations is still counted — polling container state
+    /// alone would miss it entirely.
+    // r[impl autonomous.restart.record]
+    UnitRestartCounter {
+        count: u32,
+        exit: Option<UnitExit>,
+    },
 
     // Proxy
     ProxyReachable,
@@ -572,7 +612,10 @@ impl ObservationFact {
             | ObservationFact::RouteAbsent { .. }
             | ObservationFact::UnitActive
             | ObservationFact::UnitInactive
-            | ObservationFact::UnitGone => vec![],
+            | ObservationFact::UnitGone
+            // Restart counters are reconciled against a stored baseline and
+            // written to instance_restarts, not to the observation oracle.
+            | ObservationFact::UnitRestartCounter { .. } => vec![],
         }
     }
 }

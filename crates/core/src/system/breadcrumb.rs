@@ -101,6 +101,7 @@ pub struct Breadcrumb<'a> {
 impl Breadcrumb<'_> {
     /// Send the breadcrumb to journald. Silently no-ops if journald is
     /// unavailable (dev runs outside systemd).
+    // r[impl actuate.breadcrumb]
     pub fn emit(&self) {
         // Build the per-target record set. Each target produces one
         // journal entry with its SEEDLING_RESOURCE / SEEDLING_INSTANCE

@@ -105,6 +105,46 @@ describe("AppDetail params", () => {
   });
 });
 
+describe("AppDetail restarts", () => {
+  // w[verify routes.restarts]
+  it("shows the instance's restart count and links to its history", async () => {
+    mount(
+      baseFixtures(
+        makeDetail({
+          resources: [
+            makeWebDeployment({
+              instances: [
+                {
+                  id: "inst-web-0",
+                  display_name: "web-0",
+                  lifecycle: "ready",
+                  restarts: {
+                    recent: 3,
+                    window_secs: 1800,
+                    total: 7,
+                    last_at: "2026-07-09T10:00:00Z",
+                    last_exit_code: 137,
+                    last_exit_kind: "exited",
+                  },
+                },
+              ],
+            }),
+          ],
+        }),
+      ),
+    );
+    const chip = await screen.findByRole("link", { name: /3/ });
+    expect(chip.getAttribute("href")).toBe("/restarts?instance=inst-web-0");
+  });
+
+  // w[verify routes.restarts]
+  it("shows no restart chip for an instance with no history", async () => {
+    mount(baseFixtures(makeDetail()));
+    expect(await screen.findByText("web-0")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: /restarts/ })).toBeNull();
+  });
+});
+
 describe("AppDetail resources", () => {
   // w[verify routes.apps]
   it("scales a deployment up and down", async () => {

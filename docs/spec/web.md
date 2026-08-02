@@ -173,6 +173,16 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > w[routes.registries]
 > The web interface exposes the container registry allowlist: listing, adding, and removing registry hostnames.
 
+> w[routes.canopy]
+> The web interface provides a Canopy page at `/canopy` showing:
+>
+> - Whether Canopy access is enabled, with a control to turn it on or off.
+> - The offer that would serve the next request — the offering agent, the endpoint it reaches, and when it was offered — or an indication that no client is currently offering one.
+> - The outcome and time of the most recent status report, including the error when the last one failed.
+>
+> Registering and withdrawing offers is not exposed: those are made by the client that carries the requests, not by an operator.
+> Nor is relaying a request or forcing a report: the relay carries what the runtime itself needs, and a control for relaying an arbitrary request would grant any operator the full authority of the carrying client's Canopy identity.
+
 > w[routes.images]
 > The web interface provides a dedicated Images page at `/images` showing:
 >
@@ -229,6 +239,11 @@ Absent specification bugs, anything not defined here is either defined in anothe
 
 > w[routes.volumes.held-count]
 > The navbar's held-volumes badge must reflect the current count of held volumes without requiring a page reload, both when new held volumes are created and when the operator confirms their deletion.
+
+> w[routes.restarts]
+> The web interface must expose container restart history at `/restarts`, listing [restart records](interface.md#i--restart.record) most recent first with their app, instance, time, initiator, and exit status.
+> The list must be filterable by app, and deliberate restarts must be visually distinguishable from recovery ones, since only recovery restarts count towards the crash-loop rate.
+> The route must also present the crash-loop rate threshold and window, and allow an operator to change them.
 
 > w[routes.certificates]
 > The web interface must expose TLS certificate management at `/certificates`, with the following sections:

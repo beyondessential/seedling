@@ -126,7 +126,13 @@ const SQL_V50: &str = include_str!("db/migrations/v50.sql");
 const SQL_V51: &str = include_str!("db/migrations/v51.sql");
 // r[impl infra.proxy.upgrade.cache]
 const SQL_V52: &str = include_str!("db/migrations/v52.sql");
+// r[impl canopy.settings.enabled]
+// r[impl canopy.report.identity]
 const SQL_V53: &str = include_str!("db/migrations/v53.sql");
+// r[impl autonomous.restart.record]
+// r[impl autonomous.restart.rate.settings]
+const SQL_V54: &str = include_str!("db/migrations/v54.sql");
+const SQL_V55: &str = include_str!("db/migrations/v55.sql");
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -387,6 +393,16 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 53,
         sql: SQL_V53,
+        custom_run: None,
+    },
+    Migration {
+        version: 54,
+        sql: SQL_V54,
+        custom_run: None,
+    },
+    Migration {
+        version: 55,
+        sql: SQL_V55,
         custom_run: None,
     },
 ];

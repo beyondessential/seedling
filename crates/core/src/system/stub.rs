@@ -23,7 +23,8 @@ use super::{
     BoxError, BoxFuture, ContainerFilter, ContainerHealth, ContainerRuntime, ContainerSpec,
     ContainerState, ContainerStatus, ContainerSummary, DataPlane, DataPlaneRules, ExecHandle,
     ImageSummary, NetworkProxy, NetworkSummary, ProcessManager, ProxyConfig, ServiceRoute,
-    TransientUnitSpec, UnitState, UnitSummary, types::ActiveState,
+    TransientUnitSpec, UnitState, UnitSummary,
+    types::{ActiveState, UnitExit},
 };
 
 /// Stub `ContainerRuntime`. Pretends every started container is healthy and
@@ -437,6 +438,10 @@ struct UnitState_ {
 struct UnitRecord {
     state: ActiveState,
     sub: String,
+    /// Mirrors systemd's `NRestarts`: monotonic while the unit lives, reset
+    /// when the unit is recreated. Driven directly by tests.
+    restarts: u32,
+    last_exit: Option<UnitExit>,
 }
 
 impl StubProcessManager {
@@ -444,6 +449,25 @@ impl StubProcessManager {
         Self {
             state: Mutex::new(UnitState_::default()),
             container,
+        }
+    }
+
+    /// Simulate the supervisor restarting a unit `times` times, the last run
+    /// having ended with `exit`. The container keeps running throughout, as it
+    /// does on a real host when the restart completes between two observe
+    /// ticks — the only trace is the counter.
+    pub fn simulate_restarts(&self, unit: &str, times: u32, exit: Option<UnitExit>) {
+        if let Some(u) = self.state.lock().units.get_mut(unit) {
+            u.restarts += times;
+            u.last_exit = exit;
+        }
+    }
+
+    /// Set the counter directly, for the reset case: systemd zeroes
+    /// `NRestarts` when a unit is recreated or its failed state is cleared.
+    pub fn set_restart_counter(&self, unit: &str, count: u32) {
+        if let Some(u) = self.state.lock().units.get_mut(unit) {
+            u.restarts = count;
         }
     }
 }
@@ -514,11 +538,15 @@ impl ProcessManager for StubProcessManager {
                 );
             }
 
+            // A fresh transient unit starts its restart counter at zero,
+            // exactly as systemd does.
             self.state.lock().units.insert(
                 spec.name.clone(),
                 UnitRecord {
                     state: ActiveState::Active,
                     sub: "running".to_owned(),
+                    restarts: 0,
+                    last_exit: None,
                 },
             );
             drop(spec);
@@ -551,6 +579,9 @@ impl ProcessManager for StubProcessManager {
             {
                 u.state = ActiveState::Inactive;
                 u.sub = "dead".to_owned();
+                // `systemctl reset-failed` zeroes NRestarts along with the
+                // failed state.
+                u.restarts = 0;
             }
             Ok(())
         }
@@ -565,6 +596,8 @@ impl ProcessManager for StubProcessManager {
             Ok(self.state.lock().units.get(name).map(|u| UnitState {
                 active: u.state,
                 sub: u.sub.clone(),
+                restarts: Some(u.restarts),
+                last_exit: u.last_exit,
             }))
         }
         .boxed()
@@ -586,6 +619,7 @@ impl ProcessManager for StubProcessManager {
                     state: UnitState {
                         active: u.state,
                         sub: u.sub.clone(),
+                        ..Default::default()
                     },
                 })
                 .collect())
@@ -626,6 +660,8 @@ impl ProcessManager for StubProcessManager {
             s.units.entry(name.to_owned()).or_insert(UnitRecord {
                 state: ActiveState::Active,
                 sub: "running".to_owned(),
+                restarts: 0,
+                last_exit: None,
             });
             Ok(())
         }
