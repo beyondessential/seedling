@@ -1193,6 +1193,7 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > Uninstalling an app affects only resources belonging to that app.
 > Resources are identified by the identities the runtime recorded for them, not by the shape of their names: names are not required to be prefix-free, so one app's name may be a prefix of another's.
 > A scan by name prefix is permitted only to enumerate candidates that are then matched exactly against recorded identity.
+> Having no recorded identities is not on its own evidence that teardown has finished: where the runtime cannot rule out that resources of the app are still present, it must not declare the app uninstalled, and must raise a fault that clears when teardown does complete.
 
 > r[infra.pod.subnet]
 > No two concurrently running pod instances may share a network prefix.

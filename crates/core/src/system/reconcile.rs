@@ -28,7 +28,12 @@ use crate::{
         stopped,
     },
     system::{
-        System, actuator::Actuator, caddy, observer::Observer, resolver, types::DataPlaneRules,
+        System,
+        actuator::Actuator,
+        caddy,
+        observer::Observer,
+        resolver,
+        types::{DataPlaneRules, UnitSummary},
     },
 };
 
@@ -440,6 +445,21 @@ pub struct Reconciler {
     /// unresolved.
     // r[impl service.site.address]
     site_resolver: Option<Arc<SiteServiceResolver>>,
+}
+
+/// Units that could belong to `app`, judged only by the shape of their names.
+///
+/// This is a candidate enumeration and never a decision — `seedling-{app}-` is
+/// not prefix-free, so `app-db`'s units land here too. It exists for the one
+/// question the recorded identities cannot answer when there are none of them:
+/// is there anything at all that might still be this app's?
+// r[impl app.uninstall.scope]
+fn units_possibly_of<'a>(units: &'a [UnitSummary], app: &AppName) -> Vec<&'a UnitSummary> {
+    let prefix = format!("seedling-{app}-");
+    units
+        .iter()
+        .filter(|u| u.name.starts_with(&prefix))
+        .collect()
 }
 
 impl Reconciler {
@@ -1620,6 +1640,52 @@ impl Reconciler {
                     continue;
                 }
             };
+            // An empty recorded set is ambiguous in exactly the way this
+            // change is about. It is the truth for an app that was registered
+            // but never scheduled, and it is also what a GC sweep leaves
+            // behind if it reaps the rows while units are still loaded — and
+            // an empty `expected` filters every unit away, which the branch
+            // below reads as "teardown finished". Distinguish the two by
+            // asking whether anything that could be ours is still loaded.
+            // `seedling-{app}-` is not prefix-free, so it may over-match a
+            // sibling; over-matching only makes this refuse to conclude,
+            // which is the safe direction.
+            if expected.is_empty() {
+                match self.driver.process.list_units("seedling-").await {
+                    Ok(units) if !units_possibly_of(&units, &app.name).is_empty() => {
+                        tracing::error!(
+                            app = %app.name,
+                            "uninstall: units may still be loaded for this app but no recorded \
+                             identities remain to match them against; not advancing teardown"
+                        );
+                        let app_name_owned = app.name.clone();
+                        self.db.call(move |db| {
+                            let _ = crate::runtime::faults::file_once(
+                                db,
+                                &crate::runtime::faults::FaultKey::new(
+                                    &app_name_owned,
+                                    "uninstall_unidentifiable_units",
+                                    "",
+                                ),
+                                &crate::runtime::faults::FaultMeta::default(),
+                                "units remain under this app's prefix but no recorded instance \
+                                 identities remain to match them against, so teardown cannot be \
+                                 safely completed",
+                            );
+                        });
+                        continue;
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        warn!(
+                            app = %app.name,
+                            "uninstall: could not list units to corroborate an empty recorded \
+                             set; not advancing teardown this tick: {e}"
+                        );
+                        continue;
+                    }
+                }
+            }
             // The prefix scan only enumerates candidates; the decision is the
             // exact match against `expected`.
             match self
@@ -1650,6 +1716,14 @@ impl Reconciler {
                         ) {
                             warn!(app = %app_name_owned, "failed to clean up resource instances during uninstall: {e}");
                         }
+                        // The other half of `uninstall_unidentifiable_units`:
+                        // teardown finishing is the only thing that resolves
+                        // it, and it must not outlive the app it describes.
+                        let _ = crate::runtime::faults::clear_faults_by_kind(
+                            db,
+                            &app_name_owned,
+                            "uninstall_unidentifiable_units",
+                        );
                     });
                     // i[impl event.types]
                     // Uninstall is reconciler-driven and therefore emits no
@@ -1690,6 +1764,54 @@ impl Reconciler {
 
 #[cfg(test)]
 mod tests {
+
+    fn unit(name: &str) -> UnitSummary {
+        UnitSummary {
+            name: name.to_owned(),
+            state: Default::default(),
+        }
+    }
+
+    // r[verify app.uninstall.scope]
+    #[test]
+    fn no_recorded_identities_with_units_still_loaded_is_not_teardown_finished() {
+        let units = [
+            unit("seedling-app-web.service"),
+            unit("seedling-other-web.service"),
+        ];
+        let app = AppName::new_unchecked("app");
+        assert!(
+            !units_possibly_of(&units, &app).is_empty(),
+            "with no recorded identities left, a loaded unit under the app's own prefix is the \
+             only remaining evidence that teardown has not finished; treating the empty record \
+             set as completion deletes the rows while the unit is still loaded"
+        );
+    }
+
+    // r[verify app.uninstall.scope]
+    #[test]
+    fn no_recorded_identities_and_no_units_is_genuinely_nothing_to_tear_down() {
+        let units = [unit("seedling-other-web.service")];
+        let app = AppName::new_unchecked("app");
+        assert!(
+            units_possibly_of(&units, &app).is_empty(),
+            "an app registered but never scheduled has no rows and no units, and must still be \
+             able to finish uninstalling"
+        );
+    }
+
+    // r[verify app.uninstall.scope]
+    #[test]
+    fn the_candidate_scan_may_over_match_a_sibling_but_only_towards_caution() {
+        let units = [unit("seedling-app-db-web.service")];
+        let app = AppName::new_unchecked("app");
+        assert!(
+            !units_possibly_of(&units, &app).is_empty(),
+            "`seedling-app-` also matches `app-db`; over-matching here only withholds a \
+             completion, never stops a sibling's unit — the decision itself is still the exact \
+             match against recorded identity"
+        );
+    }
     use std::collections::HashMap;
 
     use crate::runtime::registry::{RegistryError, ScaledGroup};
