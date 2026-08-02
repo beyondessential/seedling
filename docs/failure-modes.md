@@ -2,22 +2,19 @@
 
 Recurring ways this codebase has gone wrong, and the rule that prevents each.
 
-These come from the July 2026 logic-bug audit
-([PR](https://github.com/beyondessential/seedling/pull/115); once that merges,
-in tree at `docs/logic-bug-audit-2026-07.md`), which found
-the same handful of mistakes repeated across unrelated subsystems. They are grouped by the
-shape of the mistake rather than by subsystem, because that is how they recur: the next
-instance will be in a file none of these examples touch.
+The first eight came from a whole-codebase logic-bug audit, which found the same handful of
+mistakes repeated across unrelated subsystems. They are grouped by the shape of the mistake
+rather than by subsystem, because that is how they recur: the next instance will be in a
+file none of these examples touch.
 
 Each entry gives the rule, the concrete failure that motivated it, and what to look for
 while writing or reviewing. Where a rule is mechanically checkable there is a script under
 `etc/ci/` and a spec item under `docs/spec/`.
 
-> The helpers, guard scripts and spec items named below (`reserved.rs`, `defs::take`,
-> `runtime::retry`, `file_once`/`sync_faults`, `etc/ci/check-*.sh`, and the `r[…]` / `i[…]` /
-> `l[…]` references) land with the eight theme pull requests that close the audit, and with
-> the audit itself. Until those merge, treat the references as the intended destination
-> rather than as things you will find in the tree. The rules hold either way.
+Add to this document when a mistake turns out to be a class rather than a one-off — when
+the same shape shows up in a second unrelated subsystem, or when a fix for one instance
+reintroduces it somewhere else. A rule earns its place by naming what to look for, not by
+recounting what went wrong.
 
 ---
 
@@ -26,9 +23,8 @@ while writing or reviewing. Where a rule is mechanically checkable there is a sc
 **Never let a failed query, an unreadable row, an unparseable value, or a skipped action
 become a definite result.**
 
-This is the single most repeated defect in the audit, and it kept reappearing *in the fixes
-for it* during review. Every instance looks locally reasonable and is destructive in
-aggregate:
+This is the most repeated defect of the lot, and the one that most readily reappears *in the
+fixes for it*. Every instance looks locally reasonable and is destructive in aggregate:
 
 - A failed podman/systemd probe returned an observation with every flag false — byte-for-byte
   what "confirmed absent" looks like. The Job terminal-detection predicate read that as
@@ -127,11 +123,12 @@ Spec: `r[fault.lifecycle]`.
 **A loop containing a fallible await names three things: its back-off, its transient/fatal
 classification, and its exit-reporting path.**
 
-Each audited site had at most one. Image pulls retried on every 5 s tick and then set an
-`exhausted` flag nothing could clear, because entries were removed only on a success that could
-no longer be attempted — a briefly-unreachable registry disabled the workload until the daemon
-restarted. A UDP relay treated a legal zero-length datagram and an ICMP port-unreachable as
-fatal and exited silently, leaving the forward listed as healthy with nothing behind it.
+Every site that got this wrong named at most one. Image pulls retried on every 5 s tick and
+then set an `exhausted` flag nothing could clear, because entries were removed only on a
+success that could no longer be attempted — a briefly-unreachable registry disabled the
+workload until the daemon restarted. A UDP relay treated a legal zero-length datagram and an
+ICMP port-unreachable as fatal and exited silently, leaving the forward listed as healthy
+with nothing behind it.
 
 **Check:**
 
