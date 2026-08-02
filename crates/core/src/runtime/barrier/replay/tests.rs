@@ -366,6 +366,12 @@ mod positional {
             ),
             "{err}"
         );
+        // The message is the operator's only account of why an operation
+        // refused to resume, so it has to name the position and both kinds.
+        let message = err.to_string();
+        assert!(message.contains("call 0"), "{message}");
+        assert!(message.contains("Exec"), "{message}");
+        assert!(message.contains("Signal"), "{message}");
     }
 
     // r[verify barrier.replay.positional]
@@ -388,6 +394,9 @@ mod positional {
             ),
             "{err}"
         );
+        let message = err.to_string();
+        assert!(message.contains("SIGTERM"), "{message}");
+        assert!(message.contains("SIGHUP"), "{message}");
 
         // The recorded name replays cleanly.
         let mut ctx = ctx_with(vec![entry(0, CallKind::Signal, vec![instance("db")])]);
