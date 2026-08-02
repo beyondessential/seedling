@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use seedling_protocol::names::AppName;
 
 use super::{Reconciler, pods, volumes};
@@ -464,11 +466,22 @@ impl Reconciler {
             .iter()
             .map(|(i, s)| (i.clone(), s.clone()))
             .collect();
+        // r[impl fault.lifecycle] — the file set and the clear set must be
+        // disjoint per instance. `stop_sent` is recorded before the stop is
+        // attempted, so an instance whose stop just failed appears in both:
+        // its `stop_failed` fault was filed and then cleared in the same tick,
+        // and the operator never saw a stop that keeps failing.
+        let failed_stops: std::collections::HashSet<String> = update
+            .stop_failures
+            .iter()
+            .map(|(inst, _)| inst.id.to_hex())
+            .collect();
         let stopped_instances: Vec<String> = update
             .observations
             .iter()
             .filter(|(_, kind, _)| *kind == "stop_sent")
             .map(|(inst, _, _)| inst.id.to_hex())
+            .filter(|hex| !failed_stops.contains(hex))
             .collect();
         self.db.call(move |db| {
             Self::file_instance_faults(db, &app, &start_failures, "start_failed");
@@ -558,25 +571,28 @@ impl Reconciler {
         });
     }
 
-    /// Reconcile `ingress_conflict` faults against the current
-    /// `(hostname, port)` collision set. New conflicts get one fault per
-    /// involved app and one against `_system` for each site ingress;
-    /// resolved conflicts (in the prior set but not the current) are
-    /// auto-cleared.
+    /// Converge `ingress_conflict` faults to the current `(hostname, port)`
+    /// collision set: one fault per involved app ingress and one against
+    /// `_system` per involved site ingress, and nothing else.
+    ///
+    /// This used to clear only `prior \\ current`, where `prior` was a
+    /// `Reconciler` field that starts empty on every daemon start — so a
+    /// conflict fault filed before a restart could never clear, however long
+    /// the conflict had been resolved. Comparing against the persisted active
+    /// set instead needs no warm-up state and is restart-safe by construction.
     // r[impl ingress.site.conflict]
+    // r[impl fault.lifecycle]
     pub(super) fn reconcile_ingress_conflicts(
         &mut self,
         report: &super::site_proxy::ConflictReport,
     ) {
-        // Snapshot the parties for the closure.
         let parties = report.parties.clone();
-        let current = report.conflicts.clone();
-        let prior = std::mem::take(&mut self.prev_ingress_conflicts);
-
-        // 1. File faults for current conflicts (idempotent).
-        let parties_for_file = parties.clone();
         self.db.call(move |db| {
-            for party in &parties_for_file {
+            let system = AppName::new_unchecked("_system");
+            let mut current: BTreeMap<faults::FaultKey, (faults::FaultMeta, String)> =
+                BTreeMap::new();
+
+            for party in &parties {
                 let app_summary: Vec<String> = party
                     .apps
                     .iter()
@@ -585,104 +601,45 @@ impl Reconciler {
                 let site_summary: Vec<String> = party.site.clone();
                 let host_port = format!("{}:{}", party.hostname, party.port);
 
-                // App side: one fault per involved app+ingress.
                 for (app, ingress_name) in &party.apps {
-                    let already = faults::list_active_faults(db, Some(app))
-                        .unwrap_or_default()
-                        .iter()
-                        .any(|f| {
-                            f.kind == "ingress_conflict"
-                                && f.resource_name.as_deref() == Some(ingress_name.as_str())
-                        });
-                    if already {
-                        continue;
-                    }
-                    let desc = format!(
-                        "ingress conflict on ({host_port}) with site ingress(es) {site_summary:?}; \
-                         both sides are dropped from the proxy until resolved"
+                    // Subject is the party's own ingress, so one app's fault
+                    // clearing cannot depend on another app's still standing.
+                    current.insert(
+                        faults::FaultKey::new(app, "ingress_conflict", ingress_name.as_str()),
+                        (
+                            faults::FaultMeta::resource("ingress", ingress_name.as_str()),
+                            format!(
+                                "ingress conflict on ({host_port}) with site ingress(es) \
+                                 {site_summary:?}; both sides are dropped from the proxy until \
+                                 resolved"
+                            ),
+                        ),
                     );
-                    if let Err(e) = faults::file_fault(
-                        db,
-                        app,
-                        Some("ingress"),
-                        Some(ingress_name.as_str()),
-                        None,
-                        "ingress_conflict",
-                        &desc,
-                    ) {
-                        tracing::warn!(app = %app, ingress = %ingress_name, "failed to file ingress_conflict fault: {e}");
-                    }
                 }
 
-                // Site side: one fault per involved site ingress, scoped
-                // to the `_system` sentinel app per the existing system
-                // fault pattern.
-                let system = AppName::new_unchecked("_system");
                 for site_name in &party.site {
-                    let already = faults::list_active_faults(db, Some(&system))
-                        .unwrap_or_default()
-                        .iter()
-                        .any(|f| {
-                            f.kind == "ingress_conflict"
-                                && f.resource_type.as_deref() == Some("site_ingress")
-                                && f.resource_name.as_deref() == Some(site_name.as_str())
-                        });
-                    if already {
-                        continue;
-                    }
-                    let desc = format!(
-                        "ingress conflict on ({host_port}) with app ingress(es) {app_summary:?}; \
-                         both sides are dropped from the proxy until resolved"
+                    current.insert(
+                        faults::FaultKey::new(&system, "ingress_conflict", site_name.as_str()),
+                        (
+                            faults::FaultMeta::resource("site_ingress", site_name.as_str()),
+                            format!(
+                                "ingress conflict on ({host_port}) with app ingress(es) \
+                                 {app_summary:?}; both sides are dropped from the proxy until \
+                                 resolved"
+                            ),
+                        ),
                     );
-                    if let Err(e) = faults::file_fault(
-                        db,
-                        &system,
-                        Some("site_ingress"),
-                        Some(site_name.as_str()),
-                        None,
-                        "ingress_conflict",
-                        &desc,
-                    ) {
-                        tracing::warn!(site_ingress = %site_name, "failed to file ingress_conflict fault: {e}");
-                    }
                 }
             }
+
+            if let Err(e) = faults::sync_faults(
+                db,
+                &faults::FaultScope::Kind("ingress_conflict".to_owned()),
+                &current,
+            ) {
+                tracing::warn!("failed to converge ingress_conflict faults: {e}");
+            }
         });
-
-        // 2. Clear faults for resolved conflicts (in prior \ current).
-        let resolved: Vec<(String, u16)> = prior.difference(&current).cloned().collect();
-        if !resolved.is_empty() {
-            self.db.call(move |db| {
-                let system = AppName::new_unchecked("_system");
-                for (host, port) in &resolved {
-                    let host_port = format!("{host}:{port}");
-                    // Sweep both `_system` and any other app whose
-                    // ingress_conflict fault description references the
-                    // resolved tuple. Description match keeps the surface
-                    // narrow without needing to remember which apps were
-                    // involved last tick.
-                    let active = faults::list_active_faults(db, None).unwrap_or_default();
-                    for f in active {
-                        if f.kind != "ingress_conflict" {
-                            continue;
-                        }
-                        if !f.description.contains(&host_port) {
-                            continue;
-                        }
-                        let owner = if f.resource_type.as_deref() == Some("site_ingress") {
-                            system.clone()
-                        } else {
-                            f.app.clone()
-                        };
-                        if let Err(e) = faults::clear_fault(db, &f.id, &owner) {
-                            tracing::warn!(fault_id = %f.id, "failed to clear ingress_conflict fault: {e}");
-                        }
-                    }
-                }
-            });
-        }
-
-        self.prev_ingress_conflicts = current;
     }
 
     /// File a `site_ingress_target_missing` fault for each unresolved
@@ -767,12 +724,15 @@ impl Reconciler {
         });
     }
 
-    /// Reconcile `site_service_endpoint_unresolvable` and
-    /// `site_service_endpoint_unroutable` faults against the current
-    /// per-service classification. New faults are filed with the failing
-    /// hosts in the description; stale faults (for services that no
-    /// longer have any failing endpoint of that kind) auto-clear.
+    /// Converge `site_service_endpoint_unresolvable` and
+    /// `site_service_endpoint_unroutable` faults to the current per-service
+    /// classification, with the failing hosts in the description.
+    ///
+    /// Like the ingress-conflict sweep, this used to clear only
+    /// `prior \\ current` from an in-memory field that empties on restart, so
+    /// a fault outlived the condition across a daemon restart.
     // r[impl service.site.address]
+    // r[impl fault.lifecycle]
     pub(super) fn reconcile_site_service_faults(
         &mut self,
         set: super::phases::SiteServiceFaultSet,
@@ -780,111 +740,53 @@ impl Reconciler {
         const KIND_UNRESOLVABLE: &str = "site_service_endpoint_unresolvable";
         const KIND_UNROUTABLE: &str = "site_service_endpoint_unroutable";
 
-        let mut current: std::collections::BTreeSet<(
-            seedling_protocol::names::SiteServiceName,
-            &'static str,
-        )> = std::collections::BTreeSet::new();
-        for name in set.unresolvable.keys() {
-            current.insert((name.clone(), KIND_UNRESOLVABLE));
-        }
-        for name in set.unroutable.keys() {
-            current.insert((name.clone(), KIND_UNROUTABLE));
-        }
-
-        let prior = std::mem::take(&mut self.prev_site_service_faults);
-
-        // 1. File faults for current entries (idempotent).
         let unresolvable = set.unresolvable.clone();
         let unroutable = set.unroutable.clone();
         self.db.call(move |db| {
             let system = AppName::new_unchecked("_system");
+            let mut by_kind: BTreeMap<&'static str, BTreeMap<faults::FaultKey, (faults::FaultMeta, String)>> =
+                BTreeMap::new();
+
             for (name, hosts) in &unresolvable {
-                let already = faults::list_active_faults(db, Some(&system))
-                    .unwrap_or_default()
-                    .iter()
-                    .any(|f| {
-                        f.kind == KIND_UNRESOLVABLE
-                            && f.resource_type.as_deref() == Some("site_service")
-                            && f.resource_name.as_deref() == Some(name.as_str())
-                    });
-                if already {
-                    continue;
-                }
-                let desc = format!(
-                    "site service {:?} has DNS-named endpoint(s) that failed to resolve: {}",
-                    name.as_str(),
-                    hosts.join(", "),
+                by_kind.entry(KIND_UNRESOLVABLE).or_default().insert(
+                    faults::FaultKey::new(&system, KIND_UNRESOLVABLE, name.as_str()),
+                    (
+                        faults::FaultMeta::resource("site_service", name.as_str()),
+                        format!(
+                            "site service {:?} has DNS-named endpoint(s) that failed to resolve: {}",
+                            name.as_str(),
+                            hosts.join(", "),
+                        ),
+                    ),
                 );
-                if let Err(e) = faults::file_fault(
-                    db,
-                    &system,
-                    Some("site_service"),
-                    Some(name.as_str()),
-                    None,
-                    KIND_UNRESOLVABLE,
-                    &desc,
-                ) {
-                    tracing::warn!(site_service = %name.as_str(), "failed to file site_service_endpoint_unresolvable: {e}");
-                }
             }
             for (name, hosts) in &unroutable {
-                let already = faults::list_active_faults(db, Some(&system))
-                    .unwrap_or_default()
-                    .iter()
-                    .any(|f| {
-                        f.kind == KIND_UNROUTABLE
-                            && f.resource_type.as_deref() == Some("site_service")
-                            && f.resource_name.as_deref() == Some(name.as_str())
-                    });
-                if already {
-                    continue;
-                }
-                let desc = format!(
-                    "site service {:?} has endpoint(s) that require NAT64 but NAT64 is not active: {}",
-                    name.as_str(),
-                    hosts.join(", "),
+                by_kind.entry(KIND_UNROUTABLE).or_default().insert(
+                    faults::FaultKey::new(&system, KIND_UNROUTABLE, name.as_str()),
+                    (
+                        faults::FaultMeta::resource("site_service", name.as_str()),
+                        format!(
+                            "site service {:?} has endpoint(s) that require NAT64 but NAT64 is not active: {}",
+                            name.as_str(),
+                            hosts.join(", "),
+                        ),
+                    ),
                 );
-                if let Err(e) = faults::file_fault(
+            }
+
+            // Each kind converges within its own scope, so an empty set for
+            // one kind clears that kind without touching the other.
+            for kind in [KIND_UNRESOLVABLE, KIND_UNROUTABLE] {
+                let current = by_kind.remove(kind).unwrap_or_default();
+                if let Err(e) = faults::sync_faults(
                     db,
-                    &system,
-                    Some("site_service"),
-                    Some(name.as_str()),
-                    None,
-                    KIND_UNROUTABLE,
-                    &desc,
+                    &faults::FaultScope::AppKind(system.clone(), kind.to_owned()),
+                    &current,
                 ) {
-                    tracing::warn!(site_service = %name.as_str(), "failed to file site_service_endpoint_unroutable: {e}");
+                    tracing::warn!("failed to converge {kind} faults: {e}");
                 }
             }
         });
-
-        // 2. Clear faults that were in the prior set but not the current.
-        let resolved: Vec<(seedling_protocol::names::SiteServiceName, &'static str)> =
-            prior.difference(&current).cloned().collect();
-        if !resolved.is_empty() {
-            self.db.call(move |db| {
-                let system = AppName::new_unchecked("_system");
-                let active = faults::list_active_faults(db, Some(&system)).unwrap_or_default();
-                for (name, kind) in &resolved {
-                    for f in &active {
-                        if f.kind != *kind {
-                            continue;
-                        }
-                        if f.resource_type.as_deref() != Some("site_service") {
-                            continue;
-                        }
-                        if f.resource_name.as_deref() != Some(name.as_str()) {
-                            continue;
-                        }
-                        if let Err(e) = faults::clear_fault(db, &f.id, &system) {
-                            tracing::warn!(fault_id = %f.id, "failed to clear site_service fault: {e}");
-                        }
-                    }
-                }
-            });
-        }
-
-        self.prev_site_service_faults = current;
     }
 
     pub(super) fn clear_system_fault(&self, fault_kind: &str) {

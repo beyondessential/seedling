@@ -433,12 +433,6 @@ pub struct Reconciler {
     /// debounce transient probe misses across ticks instead of bouncing
     /// the container on the first 2-second timeout.
     resolver_health_fail_count: std::sync::atomic::AtomicU32,
-    /// Last tick's set of (hostname, port) tuples that were in an
-    /// app-vs-site-ingress conflict. Used to clear the corresponding
-    /// `ingress_conflict` faults on the first tick where the conflict
-    /// no longer appears.
-    // r[impl ingress.site.conflict]
-    prev_ingress_conflicts: std::collections::BTreeSet<(String, u16)>,
     /// DNS resolver feeding `site_service_endpoints.remote_host` lookups
     /// into the data plane. Optional only because the daemon's startup
     /// path may have failed to read system DNS config; in that case the
@@ -446,12 +440,6 @@ pub struct Reconciler {
     /// unresolved.
     // r[impl service.site.address]
     site_resolver: Option<Arc<SiteServiceResolver>>,
-    /// Set of `(site_service_name, kind)` faults filed last tick. `kind`
-    /// is the fault kind string. The reconciler diffs this against the
-    /// current tick's set to clear faults that no longer apply.
-    // r[impl service.site.address]
-    prev_site_service_faults:
-        std::collections::BTreeSet<(seedling_protocol::names::SiteServiceName, &'static str)>,
 }
 
 impl Reconciler {
@@ -522,9 +510,7 @@ impl Reconciler {
             cert_endpoint_url,
             tls_coordinator,
             resolver_health_fail_count: std::sync::atomic::AtomicU32::new(0),
-            prev_ingress_conflicts: std::collections::BTreeSet::new(),
             site_resolver,
-            prev_site_service_faults: std::collections::BTreeSet::new(),
         }
     }
 

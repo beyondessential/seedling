@@ -1169,6 +1169,21 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > When a Service's routing pool contains only unhealthy backends (i.e. the prefer-healthy rule has fallen back to "anything running" per [lifecycle.service.routing-pool](#r--lifecycle.service.routing-pool)), the runtime must file a fault of kind `service_degraded` associated with that Service.
 > The fault is cleared automatically when at least one backend in the pool becomes healthy or when the Service is unscheduled.
 
+> r[fault.lifecycle]
+> Every fault kind defines both the condition under which it is filed and the condition under which it clears; a kind with no clearing condition is not permitted.
+> A fault identifies the thing that is faulty, not merely the app it belongs to, and at most one fault is active for a given (app, kind, subject) at a time.
+> Clearing is keyed no more broadly than filing: an event affecting one subject must not clear a fault held by another.
+> A fault whose filing condition is a state of the world ("this is true right now") is active exactly while that condition holds, including across daemon restarts — its clearing must not depend on state held only in memory.
+> A fault that is deliberately retained after its trigger has passed must name the lifecycle event that clears it.
+
+> r[fault.surfacing]
+> Faults must be surfaced to operators through the operator interface (defined in a separate spec).
+> The runtime must not silently discard faults.
+
+> r[fault.non-blocking]
+> A fault on one resource must not prevent the reconciler from continuing to manage other resources.
+> The faulted resource is excluded from active reconciliation until the fault is resolved.
+
 > r[namespace.reserved]
 > The runtime grants itself names inside namespaces operators also use: site-volume names beginning `backup-snap-`, and the site-ingress name `tailscale`.
 > Creating a site volume or site ingress under a reserved name is rejected; the restriction applies to creation only, so an object that predates the reservation can still be renamed or removed.
@@ -1183,14 +1198,6 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > No two concurrently running pod instances may share a network prefix.
 > A prefix must therefore not be derived from a part of an instance's identity that distinct instances can share: in particular, instances carrying no unique identifier of their own must still be distinguished by the rest of their identity.
 > Deriving a prefix, however widely, does not on its own satisfy this requirement — only allocating prefixes and recording the allocation makes it a guarantee rather than a probability.
-
-> r[fault.surfacing]
-> Faults must be surfaced to operators through the operator interface (defined in a separate spec).
-> The runtime must not silently discard faults.
-
-> r[fault.non-blocking]
-> A fault on one resource must not prevent the reconciler from continuing to manage other resources.
-> The faulted resource is excluded from active reconciliation until the fault is resolved.
 
 # Resource Identity
 
