@@ -26,6 +26,9 @@ pub struct OiState {
     pub trusted_keys: Arc<parking_lot::RwLock<HashSet<String>>>,
     pub shells: Arc<crate::oi::shells::ShellRegistry>,
     pub forwards: Arc<parking_lot::Mutex<ForwardRegistry>>,
+    /// Live offers to carry Canopy requests, and the settings governing them.
+    // i[impl canopy.offer]
+    pub canopy: Arc<crate::oi::canopy::CanopyState>,
     pub container_runtime: Arc<dyn crate::system::ContainerRuntime>,
     pub driver: Arc<crate::system::System>,
     /// Node-wide /48 IPv6 prefix, used to derive pod network addresses for

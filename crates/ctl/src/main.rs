@@ -10,12 +10,14 @@ use seedling_protocol::{
 
 mod apps;
 mod backups;
+mod canopy;
 mod client;
 mod forward;
 mod ingresses;
 mod known_hosts;
 mod logs;
 mod op;
+mod restarts;
 mod services;
 mod shell;
 mod subscribe;
@@ -127,6 +129,11 @@ enum Command {
         #[command(subcommand)]
         command: templates::TemplatesCommand,
     },
+    /// Canopy access: whether it is on, which client carries requests, and reporting
+    Canopy {
+        #[command(subcommand)]
+        command: canopy::CanopyCommand,
+    },
     /// TLS certificate management (DNS providers, policies, certs)
     Tls {
         #[command(subcommand)]
@@ -146,6 +153,11 @@ enum Command {
     },
     /// Clear all active faults for an app
     ClearFaults { app: String },
+    /// Container restart history and the crash-loop rate derived from it
+    Restarts {
+        #[command(subcommand)]
+        command: restarts::RestartsCommand,
+    },
     /// Subscribe to event feed (streams JSON to stdout)
     Events,
     /// Client info (fingerprint)
@@ -383,6 +395,7 @@ async fn main() {
         Command::Images { command } => op::dispatch_images(&client, command).await,
         Command::Backups { command } => backups::dispatch(&client, command).await,
         Command::Templates { command } => templates::dispatch(&client, command).await,
+        Command::Canopy { command } => canopy::dispatch(&client, command).await,
         Command::Tls { command } => tls::dispatch(&client, command).await,
         Command::User { command } => op::dispatch_user(&client, command).await,
         Command::Status => {
@@ -406,6 +419,7 @@ async fn main() {
                     .await,
             );
         }
+        Command::Restarts { command } => restarts::dispatch(&client, command).await,
         Command::Events => {
             op::dispatch_events(
                 endpoint_addr,
