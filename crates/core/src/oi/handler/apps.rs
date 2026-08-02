@@ -13,7 +13,7 @@ use crate::{
     oi::{handler::RequestCtx, state::OiState},
     runtime::{
         AppPhase,
-        apps::{AppEntry, AppRegistry, AppStatus},
+        apps::{AppEntry, AppRegistry, AppStatus, ReloadOutcome},
         barrier::oracle::{derive_lifecycle_state, derive_state_with_transition_time},
         desired::list_dynamic_resources_for_app,
         faults,
@@ -1238,72 +1238,44 @@ pub(crate) fn register_app(
         }
     }
 
-    // Evaluate script and add to in-memory registry.
-    {
-        let mut reg = state.registry.write();
-        reg.register(
-            params.app.clone(),
-            script.to_owned(),
-            Arc::clone(&state.tick_notify),
-            &state.script_limits,
-        )
-        .map_err(|e| OiError::script_error(e.to_string()))?;
-    }
+    // i[impl app.register] — durable first, observable second. The rows all
+    // commit or none do, and only then does the app appear in the registry,
+    // so a failed persist leaves nothing for `/apps/list` to show, nothing
+    // for a restart to silently drop (load_from_db skips generation-0 rows),
+    // and nothing for a retried `/apps/create` to collide with.
+    let (app, script_error) = crate::runtime::apps::evaluate_script(
+        &params.app,
+        script,
+        &std::collections::BTreeMap::new(),
+        &state.script_limits,
+    );
 
-    // Persist app row first so generations can FK against it.
-    {
-        let reg = state.registry.read();
-        let entry = reg.get(name).expect("just registered");
-        let (app_name, generation_n, installed, uninstalling, installing) =
-            extract_persist_fields(entry);
-        state
-            .db
-            .call(move |db| {
-                persist_app_fields(
-                    db,
-                    &app_name,
-                    generation_n,
-                    installed,
-                    uninstalling,
-                    installing,
-                )
-            })
-            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db persist: {e}")))?;
-    }
-
-    // r[impl generation.bumps] — initial registration creates generation 1.
     let name_owned = params.app.clone();
     let script_owned = script.to_owned();
     let generation = state
         .db
-        .call(move |db| crate::runtime::generations::bump_register(db, &name_owned, &script_owned))
-        .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db generation: {e}")))?;
-    {
-        let mut reg = state.registry.write();
-        if let Some(entry) = reg.get_mut(name) {
-            entry.current_generation = generation;
-        }
-    }
-    // Persist again now that current_generation is set.
-    {
-        let reg = state.registry.read();
-        let entry = reg.get(name).expect("just registered");
-        let (app_name, generation_n, installed, uninstalling, installing) =
-            extract_persist_fields(entry);
-        state
-            .db
-            .call(move |db| {
-                persist_app_fields(
-                    db,
-                    &app_name,
-                    generation_n,
-                    installed,
-                    uninstalling,
-                    installing,
-                )
-            })
-            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db persist: {e}")))?;
-    }
+        .call(move |db| -> rusqlite::Result<u64> {
+            let tx = db.conn.unchecked_transaction()?;
+            // The app row first, so the generation rows can FK against it.
+            persist_app_fields(db, &name_owned, 0, false, false, false)?;
+            // r[impl generation.bumps] — initial registration creates
+            // generation 1.
+            let generation =
+                crate::runtime::generations::bump_register(db, &name_owned, &script_owned)?;
+            persist_app_fields(db, &name_owned, generation, false, false, false)?;
+            tx.commit()?;
+            Ok(generation)
+        })
+        .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db persist: {e}")))?;
+
+    state.registry.write().insert_registered(
+        params.app.clone(),
+        script.to_owned(),
+        app,
+        script_error,
+        Arc::clone(&state.tick_notify),
+        generation,
+    );
 
     {
         let reg = state.registry.read();
@@ -1571,19 +1543,32 @@ pub(crate) fn update_app(
     let loaded_params = state
         .db
         .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned));
-    state.registry.write().reload(
+    let outcome = state.registry.write().reload(
         &params.app,
         script.to_owned(),
         &loaded_params,
         &state.script_limits,
     );
+    // i[impl app.update] — every diff below compares live state against the
+    // registry's definition. When evaluation failed the registry still holds
+    // the previous good definition, so those diffs would read the operator's
+    // typo as "the script no longer declares this volume / deployment /
+    // service / schedule" and destroy the state behind it.
+    let applied = outcome.is_applied();
+    if let ReloadOutcome::KeptPrevious(e) = &outcome {
+        tracing::warn!(
+            app = %name,
+            error = %e,
+            "script failed to evaluate; keeping the previous definition and its derived state"
+        );
+    }
 
     // r[impl actuate.volume.hold]
     // Diff previous vs current volume resources and hold anything the new
     // script dropped. Runs synchronously with the update so there's no
     // window where the operator sees the old volume as gone but the on-disk
     // data hasn't been relocated yet.
-    {
+    if applied {
         let current_named_volumes: std::collections::HashSet<String> = {
             let reg = state.registry.read();
             reg.get(name)
@@ -1695,7 +1680,7 @@ pub(crate) fn update_app(
         }
     }
     // r[impl scaling.clamp]
-    {
+    if applied {
         let reg = state.registry.read();
         if let Some(entry) = reg.get(name) {
             let def = entry.app.def.load();
@@ -1764,10 +1749,9 @@ pub(crate) fn update_app(
             .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db update generation: {e}")))?;
     }
 
-    let op_in_progress = false;
     // i[forward.script-update] — tear down any forward whose target service is
     // no longer present in the new AppDef.
-    if !op_in_progress {
+    if applied {
         let valid_services: std::collections::HashSet<String> = {
             let reg = state.registry.read();
             if let Some(entry) = reg.get(name) {
@@ -1790,11 +1774,13 @@ pub(crate) fn update_app(
         }
     }
 
-    // r[impl schedule.prune]
-    sync_action_schedules(state, &params.app);
+    if applied {
+        // r[impl schedule.prune]
+        sync_action_schedules(state, &params.app);
 
-    // r[impl image.pin.update-reconcile]
-    super::images::reconcile_pins_post_update(state, &params.app);
+        // r[impl image.pin.update-reconcile]
+        super::images::reconcile_pins_post_update(state, &params.app);
+    }
 
     tracing::info!(app = %name, generation, "updated app");
     ctx.events.app_updated(

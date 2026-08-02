@@ -31,6 +31,14 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Individual reconciliation operations must not block the loop for an unbounded or long duration.
 > When an operation requires waiting for an external condition (e.g. a process to terminate), the reconciler must release control and re-evaluate the condition on a subsequent iteration rather than polling inline.
 
+> r[reconciliation.absolute-state]
+> Some state the reconciler maintains is *absolute*: it is rebuilt in full each iteration and applied wholesale, so anything absent from what was built is removed from the host.
+> An installed app's contribution to absolute state may be withdrawn only by an explicit [lifecycle](#r--lifecycle.states) transition — never because computing that contribution failed.
+> When an iteration cannot compute the contribution of every installed app, the affected absolute state must not be applied for that iteration; the previously applied state stands until an iteration succeeds.
+> An iteration that withholds an apply must draw no conclusion from having done so: the fault for that state is neither filed nor cleared, and no resource is recorded as ready on the strength of an apply that did not run.
+> Likewise, a full teardown of shared infrastructure occurs only when no app is installed or installing — never when apps are installed but their state could not be computed.
+> This does not constrain per-resource incremental actuation, which acts only on the resources it names.
+
 # Script Engine Limits
 
 > r[engine.limits]
