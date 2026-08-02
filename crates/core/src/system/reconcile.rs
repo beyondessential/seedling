@@ -1452,18 +1452,26 @@ impl Reconciler {
             // then reset and stopped that healthy sibling's units every five
             // seconds while this uninstall never completed.
             let app_name_for_query = app.name.clone();
-            let expected: HashSet<String> = self
-                .db
-                .call(move |db| {
-                    crate::runtime::history::display_names_for_app(db, &app_name_for_query)
-                })
-                .unwrap_or_else(|e| {
-                    warn!(app = %app.name, "uninstall: failed to load instance names: {e}");
-                    Vec::new()
-                })
-                .into_iter()
-                .map(|display_name| format!("seedling-{display_name}.service"))
-                .collect();
+            let expected: HashSet<String> = match self.db.call(move |db| {
+                crate::runtime::history::display_names_for_app(db, &app_name_for_query)
+            }) {
+                Ok(names) => names
+                    .into_iter()
+                    .map(|display_name| format!("seedling-{display_name}.service"))
+                    .collect(),
+                // Fail safe: an empty expected set makes every unit invisible,
+                // which would read as "teardown finished" and delete the
+                // registry rows while the units are still loaded. Wait for a
+                // tick where the identities can actually be read.
+                Err(e) => {
+                    warn!(
+                        app = %app.name,
+                        "uninstall: could not load recorded instance names; \
+                         not advancing teardown this tick: {e}"
+                    );
+                    continue;
+                }
+            };
             // The prefix scan only enumerates candidates; the decision is the
             // exact match against `expected`.
             match self

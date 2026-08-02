@@ -1126,7 +1126,9 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > A scan by name prefix is permitted only to enumerate candidates that are then matched exactly against recorded identity.
 
 > r[infra.pod.subnet]
-> Every concurrently running pod instance has a distinct network prefix.
+> No two concurrently running pod instances may share a network prefix.
+> A prefix must therefore not be derived from a part of an instance's identity that distinct instances can share: in particular, instances carrying no unique identifier of their own must still be distinguished by the rest of their identity.
+> Deriving a prefix, however widely, does not on its own satisfy this requirement — only allocating prefixes and recording the allocation makes it a guarantee rather than a probability.
 
 > r[fault.surfacing]
 > Faults must be surfaced to operators through the operator interface (defined in a separate spec).

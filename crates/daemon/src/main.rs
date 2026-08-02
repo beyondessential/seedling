@@ -626,13 +626,23 @@ async fn main() {
                     registered
                         .into_iter()
                         .filter(|name| {
-                            seedling_protocol::names::SiteVolumeName::new(name)
-                                .ok()
-                                .and_then(|n| {
-                                    seedling_core::runtime::site_volumes::get(conn, &n).ok()
-                                })
-                                .flatten()
-                                .is_some()
+                            let Ok(parsed) = seedling_protocol::names::SiteVolumeName::new(name)
+                            else {
+                                return false;
+                            };
+                            match seedling_core::runtime::site_volumes::get(conn, &parsed) {
+                                Ok(row) => row.is_some(),
+                                // A destructive sweep must be conservative:
+                                // "we could not tell" is not "not owned".
+                                Err(e) => {
+                                    tracing::warn!(
+                                        volume = %name,
+                                        "could not determine ownership of a snapshot-prefixed \
+                                         site volume; keeping it: {e}"
+                                    );
+                                    true
+                                }
+                            }
                         })
                         .collect()
                 });
