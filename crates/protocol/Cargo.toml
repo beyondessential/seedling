@@ -11,7 +11,7 @@ repository = "https://github.com/beyondessential/seedling"
 publish = true
 
 [dependencies]
-compact_str = { version = "0.9.1", features = ["serde"] }
+compact_str = { version = "0.10.0", features = ["serde"] }
 dirs.workspace = true
 ed25519-dalek.workspace = true
 futures-util.workspace = true
