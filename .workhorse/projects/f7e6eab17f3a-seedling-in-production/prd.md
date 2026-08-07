@@ -50,7 +50,8 @@ traffic, which is why stage 1 does not wait on any of this work.
 ### A. Tamanu app definitions
 
 Everything in `apps/` was written to exercise the runtime, not to serve the fleet. These are
-our definitions to own and rewrite, not asks of another team.
+our definitions to own and rewrite, not asks of another team. Some definitions exist only as
+untracked dev drafts outside the repo, so start from the draft rather than from scratch.
 
 The bigger change is regime, not delta. Tamanu is dropping json5 config: proxy trust,
 localisation, timezone, disk thresholds, status reporting, auth and refresh secrets, sync
@@ -68,7 +69,7 @@ credentials. Both have to be lifted off the running host during adoption.
 | A2 | `DATABASE_URL` carries a password. The host cluster authenticates the `tamanu` role with `scram-sha-256`, so socket-trust assumptions cannot connect. Retired once Postgres moves into Seedling, whose generated `pg_hba.conf` is `local all all trust` | All hosts |
 | A3 | Central: bind `/api` and `/v1` on `portal_svc` to the API deployment. `tamanu-central.seed.rhai:229` binds them on `web_svc` only, so a migrated portal serves its frontend and then fails every API call | All central hosts |
 | A4 | The facility app must not force an HTTPS ingress. `tamanu-facility.seed.rhai:30` marks `public-hostname` `.required(true)` and declares the ingress from it, while central guards on `is_set()`. Plaintext `.local` hosts need the app to declare no ingress so the site ingress can carry traffic | The `.local` class, 15 hosts |
-| A5 | mSupply app definition in `apps/`, carrying the `/etc/msupply/local.yaml` content, the arch-selected image, and the persistent volume. No `msupply.seed.rhai` exists in this repo or its history, so this is authoring, not promotion | `fsm-prod`, `tokelau-prod` |
+| A5 | mSupply app promoted into `apps/` from the existing dev draft, carrying the `/etc/msupply/local.yaml` content, the arch-selected image, and the persistent volume | `fsm-prod`, `tokelau-prod` |
 
 `tamanu_extra_certs` (host CA mount and `NODE_EXTRA_CA_CERTS`) is set by no inventory host.
 Recorded, not built.
