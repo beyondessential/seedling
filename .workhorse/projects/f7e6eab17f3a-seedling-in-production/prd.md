@@ -226,11 +226,18 @@ operation-scoped volume bindings through reserved `_volume` and `_filename` para
 `apps/kopia-s3.seed.rhai` is the reference provider.
 
 That is roughly 2,800 lines across the OI handlers, the runtime, ctl and the web interface,
-plus its spec sections, the `backup-snap-` reserved volume namespace, and the operation-scoped
-binding machinery entangled with action invocation.
+plus its spec sections and the `backup-snap-` reserved volume namespace.
 
-It goes. Backups become something Canopy drives and Seedling performs, rather than a framework
-Seedling hosts. The shape is already written down: a report's response carries a list of
+The framework goes. Backups become something Canopy drives and Seedling performs, rather than
+a framework Seedling hosts.
+
+**Operation-scoped volume bindings stay.** The mechanism is already specified as a general
+one: any internal operation can hand a path to an action closure under a runtime-generated
+name, so nothing collides with operator-configured volumes or with another operation. Backups
+are its only consumer today, not its reason for existing, and it is the right primitive for
+the next operation that needs to give a closure a path without inventing a name for it.
+Removing the framework should leave it standing, along with the reservation on `_volume` and
+`_filename` param keys that makes it safe. The shape is already written down: a report's response carries a list of
 backups to run immediately, addressed to whichever source owns backups on that host. Seedling
 is never that source today and so never receives a non-empty list. Becoming one is the
 integration, and it lands on the same channel as F's control work.
