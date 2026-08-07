@@ -23,6 +23,10 @@ Seedling comes out of this project owning **ingress and workloads** on a product
 routing, TLS and certificates, and the Tamanu, patient portal and mSupply containers along
 with their config, lifecycle and upgrades.
 
+App definitions are owned by the apps they describe. The Seedling repo keeps the common ones,
+Postgres and kopia, and gains the ability to take a definition from the app's own repo at the
+version that app is running (E).
+
 PostgreSQL moves in a later project, and that ordering is a design decision rather than a
 deferral. Serving traffic is the recoverable thing to trust Seedling with first: the Seedling
 app and the host's existing stack share one database, so a host can move onto Seedling and
@@ -56,6 +60,9 @@ traffic, which is why stage 1 does not wait on any of this work.
 Everything in `apps/` was written to exercise the runtime, not to serve the fleet. These are
 our definitions to own and rewrite, not asks of another team. Some definitions exist only as
 untracked dev drafts outside the repo, so start from the draft rather than from scratch.
+
+These definitions are headed for the repos of the apps they describe (see E). The rewrite
+below is the same work either way, so it does not wait on that move.
 
 The bigger change is regime, not delta. Tamanu is dropping json5 config: proxy trust,
 localisation, timezone, disk thresholds, status reporting, auth and refresh secrets, sync
@@ -151,6 +158,36 @@ verifies nothing new.
 HTTP-01 is permanently out of scope for this mode. It cannot work while another process owns
 `:80`, and the point of the mode is that Seedling does not own `:80` yet.
 
+### E. Where definitions live, and how they stay current
+
+An app's definition describes that app, so it belongs with that app. The Tamanu definition
+lives in the Tamanu repo, released on Tamanu's cycle, changing in the same commit as the thing
+it describes. The Seedling repo keeps definitions for what is genuinely common and owned by no
+single app: Postgres, kopia.
+
+Nothing supports that today. `/apps/create` and `/apps/update` take BSL source text and
+nothing else, and ctl reads a file and posts its contents. Seedling stores the script durably
+but records no provenance, so a registered app cannot say which repo or release its definition
+came from, and Seedling has no way to fetch a newer one. The definition and the app it
+describes are versioned independently, with nothing holding them in step.
+
+The json5 removal is the live example. A Tamanu release changes what its definition must say,
+but the definition sits in a different repo on a different cadence, so setting the `version`
+param to a release whose definition has not been updated to match produces a running app
+configured for the wrong regime. Section A only fixes the current instance of that; it is the
+distribution model that stops it recurring on every release.
+
+What this needs, in outline:
+
+- A definition carries provenance: where it came from, and at which version
+- Seedling can fetch a definition from that source, rather than only accepting pushed text
+- The definition and the app version move together, so upgrading an app takes the definition
+  that release expects
+
+The mechanism is open. Whatever it is, it has to hold the property that makes `/apps/update`
+safe today: a definition that fails to evaluate leaves the previous one running and observable
+state unchanged.
+
 ### Existing behaviour the migration depends on
 
 Verified, no work required, but load-bearing enough that changing it would break the plan:
@@ -193,6 +230,13 @@ term; a staged takeover removes most of the rest.
 - **Which of the three certificate paths do we build for?** They are not equivalent in effort
   or in what they leave behind. The warm-cert fix is common to all three, but committing to
   one changes what stage 3 looks like.
+- **How does a definition reach Seedling from the app's repo, and does it gate the
+  migration?** Candidates differ a lot in cost and in what they assume about host
+  connectivity: pulling from a release artefact, carrying the definition in the app's own
+  container image, or relaying through an existing connection. A migrating host is often on a
+  poor link, so anything requiring the host to reach a new external service needs care. The
+  migration can ship with definitions still in `apps/` and pick this up after, so the question
+  is whether it is a blocker or a follow-on.
 - **What shape does the staged takeover take?** A per-app flag, a site-level mode, or an
   explicit `ingresses takeover` operation. This changes the ops stages 2 and 3 enough that
   their step lists get rewritten against what ships rather than adapted to it.
