@@ -38,21 +38,6 @@ site volume gives containers the host cluster's socket, and `DATABASE_URL` passw
 (A2) is needed only because the host cluster authenticates with `scram-sha-256` where
 Seedling's own generated `pg_hba.conf` trusts the local socket.
 
-## Constraints that shape the design
-
-**The `:80`/`:443` flip is atomic per host.** Seedling routes ingress by DNAT-ing
-locally-destined traffic to its Caddy container, and site-ingress attachments can only target
-app services, never a host process. There is no per-vhost phasing. Everything sharing `:443`
-on a host moves in one step.
-
-**HTTP-01 is structurally unavailable during a cutover.** Host Caddy owns `:80` right up to
-the flip, so a Seedling app that needs a certificate cannot get one by HTTP-01 first. This is
-forced ordering, not inconvenience.
-
-**Seedling with no apps registered is inert.** The reconciler idles: no Caddy container, no
-nftables rules, no resolver. Installing the package fleet-wide changes nothing that serves
-traffic, which is why stage 1 does not wait on any of this work.
-
 ## Components
 
 ### A. Tamanu app definitions
@@ -109,9 +94,13 @@ the host healthy, so a tier 2 gap is survivable there. On-prem has none of that.
 | B9 | Path-level redirect within an ingress, for `redir /v1/login /api/login 308`. Redirects today exist at vhost level and as site-ingress `attach-redirect`, not per path | 2 |
 | B10 | HTTP/1.1 keep-alive response headers | 2 |
 
-### C. Certificates without `:80`
+### C. Certificates for a hostname Seedling does not yet serve
 
-A cutover host with a public hostname needs a certificate in Seedling's store before the flip.
+Seedling can obtain a certificate for a hostname whose traffic it already receives. It needs
+to be able to obtain one for a hostname it does not, because a host being adopted still has
+another process on `:80` and will until the moment it hands over. HTTP-01 is unavailable by
+construction for as long as that is true, so the certificate has to arrive some other way.
+
 Three candidate paths, any one of which satisfies the requirement:
 
 - Canopy off-site issuance
@@ -139,8 +128,14 @@ install and should be made deliberate either way.
 
 ### D. Staged ingress takeover
 
-A capability request rather than a parity gap, and the most valuable thing to come out of
+A new capability rather than a parity gap, and the most valuable thing to come out of
 investigating smoother cutovers.
+
+Ingress today is all or nothing. DNAT rules are emitted for an app's scheduled ingresses, so
+an ingress is either unscheduled and untested or scheduled and carrying every request that
+arrives on the port. There is no state in between, and no way to exercise the ingress path
+(TLS, routing, prefix matching, upstream health) before it is load-bearing. Unscheduling an
+ingress gets you an app you can verify everywhere *except* the part being introduced.
 
 **Ask:** a mode where an app is fully installed and running (containers up, ingresses
 declared, TLS provisioned, routing live) but Seedling has not installed the host DNAT rules
@@ -148,15 +143,11 @@ and so receives no host traffic. Everything is verifiable in that state on an ad
 manages. A separate explicit operator action then says "take over": the DNAT rules go in and
 traffic moves.
 
-**Why it is worth building.** It splits one irreversible-feeling step into a long verifiable
-phase and a short mechanical one. Today the ops plan approximates this by leaving the app's
-ingress unscheduled through stage 2, which works, but means the ingress path itself (TLS,
-routing, prefix matching, upstream health) is first exercised at the moment it starts carrying
-production traffic. Under a staged takeover the whole pathway is proven first and the flip
-verifies nothing new.
+This is worth building beyond adoption. It is the difference between proving an ingress change
+and hoping for one, and it applies to any host where routing changes under live traffic.
 
-HTTP-01 is permanently out of scope for this mode. It cannot work while another process owns
-`:80`, and the point of the mode is that Seedling does not own `:80` yet.
+HTTP-01 is out of scope for this mode by construction: it needs `:80`, and the premise is that
+Seedling does not have it yet.
 
 ### E. Where definitions live, and how they stay current
 
