@@ -179,24 +179,29 @@ The mechanism is open. Whatever it is, it has to hold the property that makes `/
 safe today: a definition that fails to evaluate leaves the previous one running and observable
 state unchanged.
 
-### Existing behaviour the migration depends on
+### Invariants not to regress
 
-Verified, no work required, but load-bearing enough that changing it would break the plan:
+Three behaviours hold today, are relied on by everything above, and are not obviously
+load-bearing from the code. Each deserves a test that fails loudly if it changes.
 
-- **The flip drains rather than cutting over.** The DNAT chains are NAT-type, which netfilter
-  traverses only for `NEW`-state packets; the apply is a single atomic batch that rebuilds the
-  table with no conntrack flush; every chain is `policy: Accept` with an established-accept
-  rule first. Established connections finish against host Caddy while new ones go to Seedling,
-  and no packets are dropped in between.
-- **A site ingress with no attachments emits no DNAT rules**, so it can be created in advance
-  during adoption without moving any traffic.
-- **`apps stop-resource <app> ingress <name>` unschedules an app ingress**, which is what lets
-  registration, params, image pulls and `apps plan` all happen while `:443` still belongs to
-  host Caddy.
+- **Applying a data plane drains rather than cuts.** The DNAT chains are NAT-type, which
+  netfilter traverses only for `NEW`-state packets; the apply is a single atomic batch that
+  rebuilds the table with no conntrack flush; every chain is `policy: Accept` with an
+  established-accept rule first. Connections in flight when routing changes finish against
+  wherever they started, and no packets are dropped in between. Adding a conntrack flush, or
+  splitting the apply into more than one batch, silently turns every routing change into a
+  reset for anyone mid-request.
+- **A site ingress with no attachments emits no DNAT rules.** This is what makes an ingress
+  declarable ahead of the traffic it will carry.
+- **An unscheduled app ingress emits no DNAT rules**, so registration, params, image pulls and
+  `apps plan` all work on an app that is not yet receiving anything.
 
-Because the flip drains, downtime is `apps install` (warm certs, then `rt.start(app).ready(300)`,
-plus the DB provision and migrate jobs), not the flip itself. Pre-pulling images removes one
-term; a staged takeover removes most of the rest.
+The second and third are the primitives D generalises. Whatever shape the staged takeover
+takes, it should not be a fourth mechanism sitting beside them.
+
+Because applying drains, the disruption in a takeover is `apps install` (warm certs, then
+`rt.start(app).ready(300)`, plus any provision and migrate jobs), not the routing change.
+Warming images ahead of time removes one term, and D removes most of the rest.
 
 ## Success criteria
 
