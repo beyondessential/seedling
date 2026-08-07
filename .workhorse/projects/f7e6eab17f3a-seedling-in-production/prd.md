@@ -24,8 +24,12 @@ routing, TLS and certificates, and the Tamanu, patient portal and mSupply contai
 with their config, lifecycle and upgrades.
 
 App definitions are owned by the apps they describe. The Seedling repo keeps the common ones,
-Postgres and kopia, and gains the ability to take a definition from the app's own repo at the
-version that app is running (E).
+and gains the ability to take a definition from the app's own repo at the version that app is
+running (E).
+
+Seedling is also operable from Canopy rather than only from the host: reporting health worth
+acting on, accepting direction for work it should do, and performing backups Canopy asks for
+rather than hosting a backup framework of its own (F, G).
 
 PostgreSQL moves in a later project, and that ordering is a design decision rather than a
 deferral. Serving traffic is the recoverable thing to trust Seedling with first: the Seedling
@@ -179,6 +183,63 @@ The mechanism is open. Whatever it is, it has to hold the property that makes `/
 safe today: a definition that fails to evaluate leaves the previous one running and observable
 state unchanged.
 
+### F. Canopy: control at a distance, and reporting worth reading
+
+The base integration exists. Seedling has no Canopy identity of its own; a connected client
+(in practice bestool) offers to carry its requests under its own identity, and the relay is a
+generic outbound HTTP conduit over that connection. On top of it, the runtime reports every
+sixty seconds while an offer is live, carrying four fixed checks (`health/apps`,
+`health/faults`, `health/proxy`, `health/resolver`) plus version, daemon uptime, app counts by
+status, operations in progress, and active fault count. Enable and disable are on ctl and the
+web interface.
+
+Two directions of further work.
+
+**Control.** Canopy should be able to act on a host: set a param value for an app it can see,
+and thereby drive real work. Bumping Tamanu's `version` is the motivating case, because
+`version.on_change` already runs the upgrade closure, so one param set is a whole upgrade.
+
+The seam for this already exists and is unused. `r[canopy.report.backup-prompt]` specifies
+that a report's response carries instructions for the reporting source, and that Seedling
+receives an empty list and does not act on it. That response is the natural inbound channel:
+it is poll-driven, bounded to the report cadence, needs no new listener, and requires no
+inbound authority through the relay. Worth preserving in whatever shape this takes, because
+the relay is deliberately outbound-only and the OI deliberately refuses to relay arbitrary
+requests: an inbound path would hand the carrying client's Canopy authority in the other
+direction.
+
+**Reporting.** The check catalogue is fixed on purpose, so that what Canopy has to maintain
+does not grow with the set of apps an operator installs. That constraint bounds what richer
+reporting can mean: more useful checks, not per-app checks. Checks already name the apps and
+faults responsible for their result, so an operator can act without a second lookup, which is
+the pattern to extend.
+
+Both directions are polish on something that works rather than new subsystems.
+
+### G. Backups through Canopy rather than through apps
+
+Seedling currently ships a backup framework of its own. An app can be registered as a backup
+provider if it declares `save-snapshot`, `list-snapshots` and `restore-snapshot`; named
+strategies bind a provider to a schedule and a list of volumes; the runtime schedules them
+with a random delay, executes with retries, files `backup_failed`, and injects
+operation-scoped volume bindings through reserved `_volume` and `_filename` params.
+`apps/kopia-s3.seed.rhai` is the reference provider.
+
+That is roughly 2,800 lines across the OI handlers, the runtime, ctl and the web interface,
+plus its spec sections, the `backup-snap-` reserved volume namespace, and the operation-scoped
+binding machinery entangled with action invocation.
+
+It goes. Backups become something Canopy drives and Seedling performs, rather than a framework
+Seedling hosts. The shape is already written down: a report's response carries a list of
+backups to run immediately, addressed to whichever source owns backups on that host. Seedling
+is never that source today and so never receives a non-empty list. Becoming one is the
+integration, and it lands on the same channel as F's control work.
+
+One principle from the fleet's backup arrangement constrains this and should survive it:
+Seedling's own state is backed up by something that is not Seedling, so that recoverability
+never depends on Seedling being healthy. Whatever Seedling comes to back up, `/var/lib/seedling`
+is not it.
+
 ### Invariants not to regress
 
 Three behaviours hold today, are relied on by everything above, and are not obviously
@@ -236,6 +297,19 @@ Warming images ahead of time removes one term, and D removes most of the rest.
 - **What shape does the staged takeover take?** A per-app flag, a site-level mode, or an
   explicit `ingresses takeover` operation. This changes the ops stages 2 and 3 enough that
   their step lists get rewritten against what ships rather than adapted to it.
+- **What is Canopy allowed to change, and what stops it?** A param set is not a small write:
+  `on_change` runs arbitrary script, so "set a param" and "run an upgrade" are the same
+  operation. Needs a decision on which params are remotely settable, whether the host can
+  refuse, and how this interacts with `operation_in_progress` when Canopy asks for something
+  during a lifecycle operation. An operator watching the host should be able to see what
+  Canopy asked for and what it caused.
+- **Does volume snapshotting survive the backup framework?** Backups rest on point-in-time
+  volume snapshots. If the framework goes but Canopy-driven backups still need a consistent
+  source, snapshotting is a primitive to keep rather than part of the removal. Settle before
+  the removal starts, not during.
+- **Is anything depending on backup apps today, and does the removal need a migration?** The
+  fleet's app-data backups are not Seedling's yet, which suggests the answer is no and the
+  removal can be clean. Worth confirming rather than assuming.
 - **How does `bestool-alertd` health-check a Seedling-run Postgres?** Not needed for this
   project, but one of the options is "move the checks inside Seedling and have it report
   them", which overlaps Canopy reporting. Worth knowing before Canopy work is scheduled.
