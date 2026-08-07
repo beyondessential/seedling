@@ -2,33 +2,37 @@
 
 ## Problem
 
-Seedling runs BES workloads internally but has never taken over a live production host. The
-fleet of ad-hoc Linux hosts (built by `base-install.yml` + `tamanu-install.yml`, driven by
-`tamanu-upgrade.yml`) serves Tamanu today through host Caddy, podman quadlets in
-`/etc/containers/systemd`, json5 config under `/etc/tamanu`, and `tamanu-boot.service`.
-Seedling is meant to replace all of that.
+Seedling runs BES workloads internally, but it has never taken over a host that was already
+serving production traffic. Three capabilities stand between it and that: an ingress proxy
+configured richly enough to serve Tamanu the way Tamanu is served today, app definitions that
+describe the real fleet rather than exercise the runtime, and a way to bring an app fully up
+and prove it before it starts carrying traffic.
 
-The ops side has a four-stage migration planned (install, adopt, cutover, decommission) and
-is blocked on Seedling. This project is the Seedling half: the proxy features, app
-definitions, and ingress-takeover capability the migration needs before a single production
-host can move.
+The impetus is the Linux fleet. Every Tamanu host is a candidate to move onto Seedling, and
+the migration starts as soon as Seedling can take one. Each requirement below traces to
+something a production host does today and that Seedling would otherwise stop doing:
+compressing and rate-limiting at the edge, serving the API on the patient portal hostname,
+obtaining a certificate while another process still holds `:80`.
 
-Ops-side plan of record: `adhoc-to-seedling-migration.md` in the deploy repo. This PRD tracks
-the Seedling-side asks from its sections A, B, C1 and D, verified against the code in this
-repo.
+Requirements are drawn from the ops-side migration plan
+(`adhoc-to-seedling-migration.md`, deploy repo) and verified against the code here.
 
-## What is not in scope
+## Scope
 
-PostgreSQL stays a host package throughout. The workloads move first because that ordering is
-the only reversible one: both stacks share one database, so rolling back the flip strands no
-writes. Moving Postgres into `apps/postgres.seed.rhai` is a later plan, and it carries its own
-problems (glibc collation compatibility on adopted clusters, a recursive chown over ~108 GiB,
-and `bestool-alertd` losing peer auth to the socket). Recorded here only because the ordering
-argument constrains what we build now: the `pg-socket` bind-volume seam and the `DATABASE_URL`
-password requirement are both deliberately throwaway.
+Seedling comes out of this project owning **ingress and workloads** on a production host: HTTP
+routing, TLS and certificates, and the Tamanu, patient portal and mSupply containers along
+with their config, lifecycle and upgrades.
 
-Also out of scope: the OS baseline, Tailscale, podman itself, munin, elastic-agent, ufw, and
-the `bestool-alertd` reporting path.
+PostgreSQL moves in a later project, and that ordering is a design decision rather than a
+deferral. Serving traffic is the recoverable thing to trust Seedling with first: the Seedling
+app and the host's existing stack share one database, so a host can move onto Seedling and
+back without stranding a write. Taking the database first would put writes into a new cluster
+immediately and make the same reversal lossy.
+
+Two items in this project exist to buy that property and retire with it. The `pg-socket` bind
+site volume gives containers the host cluster's socket, and `DATABASE_URL` password support
+(A2) is needed only because the host cluster authenticates with `scram-sha-256` where
+Seedling's own generated `pg_hba.conf` trusts the local socket.
 
 ## Constraints that shape the design
 
