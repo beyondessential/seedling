@@ -580,6 +580,13 @@ Absent specification bugs, anything that is not defined here is either defined i
 > `max_udp_payload` is the maximum UDP payload the server can forward from the service back to the client, as defined in [forward.mtu](#i--forward.mtu); it is `null` for TCP forwards.
 > The control stream that carried the request is kept open for the lifetime of the forward; closing it tears down the forward.
 
+> i[forward.relay.resilience]
+> A forward's relay must distinguish a condition affecting one datagram from one affecting the forward.
+> A datagram that cannot be carried — because it exceeds the path MTU — is dropped and reported; a zero-length datagram is legal and is relayed; a transient socket error, including an ICMP port-unreachable surfacing on a connected socket, is reported and relaying continues.
+> Only the loss of the underlying connection ends the relay.
+> Both ends of a forward apply this classification identically.
+> A relay that has ended must not continue to be reported as active: its termination is surfaced to the party that opened the forward.
+
 > i[forward.mtu]
 > For UDP forwards, `max_udp_payload` is the server's own `max_datagram_size() - 2` — the maximum payload the server can send toward the client (i.e. service responses).
 > The client already has its own send limit for the client-to-server direction available locally from its QUIC connection.
