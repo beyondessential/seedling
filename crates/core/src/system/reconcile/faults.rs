@@ -445,8 +445,43 @@ impl Reconciler {
         });
     }
 
+    /// How many consecutive ticks an instance's observation must fail before
+    /// it becomes an operator-visible fault.
+    ///
+    /// A single failed probe is a blip — podman or systemd momentarily busy —
+    /// and minting a fault for it trains operators to ignore the fault list.
+    /// The failure is logged on the first tick regardless; the threshold gates
+    /// only the fault.
+    // r[impl observe.failure-not-absence]
+    const OBSERVE_FAULT_AFTER_FAILURES: u32 = 3;
+
+    /// Advance the consecutive-observation-failure counters and return the
+    /// instances that have now failed often enough to fault.
+    // r[impl observe.failure-not-absence]
+    fn escalate_observe_failures(
+        &mut self,
+        failures: &[(ResourceInstance, String)],
+    ) -> Vec<(ResourceInstance, String)> {
+        let failing: std::collections::HashSet<crate::runtime::identity::InstanceId> =
+            failures.iter().map(|(inst, _)| inst.id).collect();
+        // Any instance not failing this tick observed successfully, so its
+        // streak resets — a flapping probe never accumulates to a fault.
+        self.observe_failure_streaks
+            .retain(|id, _| failing.contains(id));
+
+        let mut escalated = Vec::new();
+        for (instance, error) in failures {
+            let streak = self.observe_failure_streaks.entry(instance.id).or_insert(0);
+            *streak += 1;
+            if *streak >= Self::OBSERVE_FAULT_AFTER_FAILURES {
+                escalated.push((instance.clone(), error.clone()));
+            }
+        }
+        escalated
+    }
+
     pub(super) fn file_pod_actuation_faults(
-        &self,
+        &mut self,
         app: &AppName,
         update: &pods::PodActuationUpdate,
     ) {
@@ -461,11 +496,7 @@ impl Reconciler {
             .iter()
             .map(|(i, s)| (i.clone(), s.clone()))
             .collect();
-        let observe_failures: Vec<(ResourceInstance, String)> = update
-            .observe_failures
-            .iter()
-            .map(|(i, s)| (i.clone(), s.clone()))
-            .collect();
+        let observe_failures = self.escalate_observe_failures(&update.observe_failures);
         // r[impl fault.lifecycle] — the file set and the clear set must be
         // disjoint per instance. `stop_sent` is recorded before the stop is
         // attempted, so an instance whose stop just failed appears in both:

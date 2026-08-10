@@ -789,7 +789,15 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > The runtime must collect timestamped observation facts for each resource instance by inspecting the backing system primitives.
 
 > r[observe.deployment]
-> For Deployment and Job resource instances, the runtime must observe pod network presence, container lifecycle state (missing, created, running, or exited), and systemd unit state.
+> For Deployment and Job resource instances, the runtime must observe pod network presence, container lifecycle state, and systemd unit state.
+> The container lifecycle states are: missing, created, running, exited, and present-but-indeterminate — the last covering a container that exists but whose reported state corresponds to no lifecycle transition, such as one still shutting down.
+
+> r[observe.failure-not-absence]
+> A failed observation attempt yields no facts.
+> The runtime must not treat a failed observation as evidence of absence: no destructive actuation — stopping, terminal-state detection, or teardown — may be based on an instance whose observation failed this iteration, and lifecycle derivation must retain the last successfully observed state.
+> An observation attempt for one instance either succeeds in full or fails in full; partial results must not be reported as fact.
+> Likewise, a state that is observed but not recognised is evidence that the thing exists, never that it is absent.
+> A single failed observation must not by itself raise an operator-visible fault; a persistent one must.
 
 > r[observe.volume]
 > For Volume resource instances, the runtime must observe whether the named volume exists.
