@@ -62,9 +62,37 @@ jobs:
       - name: cargo test
         run: cargo test --workspace --all-targets --locked
 
+  spikes-windows:
+    name: Spikes (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - name: Configure toolchain
+        run: |
+          rustup toolchain install --profile minimal --no-self-update stable
+          rustup default stable
+          rustup component add rustfmt clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: spikes-windows
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Scoped to the spikes crate: the daemon/core crates are Linux-only
+      # (systemd), so a full workspace build is not attempted on Windows.
+      - name: cargo fmt
+        run: cargo fmt -p seedling-spikes --check
+      - name: cargo clippy
+        run: cargo clippy -p seedling-spikes --all-targets --locked -- -D warnings
+      # --nocapture so the harnesses' recorded observations reach the log: some
+      # of the S6 tests answer open spike questions by recording rather than
+      # asserting, and captured output would discard the answer.
+      - name: cargo test
+        run: cargo test -p seedling-spikes --all-targets --locked -- --nocapture
+
   rust-pass:
     name: Rust pass
     if: always()
+    # spikes-windows is deliberately not required: it builds throwaway spike
+    # harnesses, and a Windows runner outage should not block every PR.
     needs: [lint, test]
     runs-on: ubuntu-latest
     steps:
