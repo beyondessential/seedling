@@ -19,9 +19,9 @@ how a host is operated once Seedling owns it: Seedling should be answerable to C
 reporting and taking direction, and should perform backups Canopy asks for rather than
 hosting a backup framework of its own.
 
-Requirements labelled `A*` and `B*` are drawn from the ops-side migration plan
-(`adhoc-to-seedling-migration.md`, deploy repo), keeping its labels, and verified against the
-code here.
+The requirements in sections 1 and 2 are drawn from the ops-side migration plan
+(`adhoc-to-seedling-migration.md`, deploy repo) and verified against the code here. Each is a
+card in this project, named in the tables below.
 
 ## Scope
 
@@ -44,7 +44,7 @@ immediately and make the same reversal lossy.
 
 Two items in this project exist to buy that property and retire with it. The `pg-socket` bind
 site volume gives containers the host cluster's socket, and `DATABASE_URL` password support
-(A2) is needed only because the host cluster authenticates with `scram-sha-256` where
+(L1) is needed only because the host cluster authenticates with `scram-sha-256` where
 Seedling's own generated `pg_hba.conf` trusts the local socket.
 
 ## 1. Serving what the fleet serves
@@ -59,18 +59,21 @@ Tier 1 blocks every production cutover. Tier 2 blocks non-AWS hosts only: AWS de
 behind a stack-wide security group, AWS Backup snapshots, and recovery paths that do not need
 the host healthy, so a tier 2 gap is survivable there. On-prem has none of that.
 
-| # | Requirement | Tier |
+| Card | Requirement | Tier |
 | --- | --- | --- |
 | B1 | Response compression (`encode zstd gzip`). Losing asset compression hurts most where connectivity is worst | 1 |
-| B2 | Upstream retries and load-balancing policy (`lb_retries 2`, `lb_try_duration 5s`, `lb_policy least_conn`). Without retries, requests hitting a draining container 502 on every rolling restart | 1 |
-| B3 | Per-route rate limiting (1000/s per IP on `/api/*`, 10/s on `/api/login`). Dropping this removes brute-force protection on login | 1 |
-| B7 | `Cache-Control` rules: `no-cache` on `/` and `/manifest.json`, `no-store` on API responses, immutable on `/env.js` | 1 |
-| B8 | WAF hook equivalent to `import waf*`. `caddy_waf_enforce` is false fleet-wide, so the hook is the requirement, not enforcement | 1 |
-| B4 | Upstream `Host` header override. The frontend upstream currently receives `Host: localhost` | 2 |
-| B5 | Systemd slice and `OOMScoreAdjust` control from BSL (`critical.slice` at `-500` for API, `elevated.slice` for sync and fhir workers) | 2 |
-| B6 | Custom error pages served from the container's `/resources/errors/` | 2 |
-| B9 | Path-level redirect within an ingress, for `redir /v1/login /api/login 308`. Redirects today exist at vhost level and as site-ingress `attach-redirect`, not per path | 2 |
-| B10 | HTTP/1.1 keep-alive response headers | 2 |
+| B1 | Upstream retries and load-balancing policy (`lb_retries 2`, `lb_try_duration 5s`, `lb_policy least_conn`). Without retries, requests hitting a draining container 502 on every rolling restart | 1 |
+| E1 | Per-route rate limiting (1000/s per IP on `/api/*`, 10/s on `/api/login`). Dropping this removes brute-force protection on login | 1 |
+| C1 | `Cache-Control` rules: `no-cache` on `/` and `/manifest.json`, `no-store` on API responses, immutable on `/env.js` | 1 |
+| F1 | WAF hook equivalent to `import waf*`. `caddy_waf_enforce` is false fleet-wide, so the hook is the requirement, not enforcement | 1 |
+| G1 | Upstream `Host` header override. The frontend upstream currently receives `Host: localhost` | 2 |
+| G1 | HTTP/1.1 keep-alive response headers | 2 |
+| H1 | Systemd slice and `OOMScoreAdjust` control from BSL (`critical.slice` at `-500` for API, `elevated.slice` for sync and fhir workers) | 2 |
+| J1 | Custom error pages served from the container's `/resources/errors/` | 2 |
+| K1 | Path-level redirect within an ingress, for `redir /v1/login /api/login 308`. Redirects today exist at vhost level and as site-ingress `attach-redirect`, not per path | 2 |
+
+Rate limiting and the WAF hook both want modules the pinned Caddy image does not carry: it is
+built with `caddy-l4` alone. Card D1 covers adding them and moving the pin.
 
 ## 2. Definitions that describe the real fleet, and stay in step with it
 
@@ -90,13 +93,13 @@ database, where they cross a cutover untouched. The current definitions still re
 Two pieces of per-host state survive, and only two: the per-server crypto key and the database
 credentials. Both have to be lifted off the running host during adoption.
 
-| # | Requirement | Blocks |
+| Card | Requirement | Blocks |
 | --- | --- | --- |
-| A1 | Per-server config key as a `secret(true)` param, written into a tmpfs volume by static `Volume.write` so it reapplies on container restart, with the env var pointing at the mount path | All hosts |
-| A2 | `DATABASE_URL` carries a password. The host cluster authenticates the `tamanu` role with `scram-sha-256`, so socket-trust assumptions cannot connect. Retired once Postgres moves into Seedling, whose generated `pg_hba.conf` is `local all all trust` | All hosts |
-| A3 | Central: bind `/api` and `/v1` on `portal_svc` to the API deployment. `tamanu-central.seed.rhai:229` binds them on `web_svc` only, so a migrated portal serves its frontend and then fails every API call | All central hosts |
-| A4 | The facility app must not force an HTTPS ingress. `tamanu-facility.seed.rhai:30` marks `public-hostname` `.required(true)` and declares the ingress from it, while central guards on `is_set()`. Plaintext `.local` hosts need the app to declare no ingress so the site ingress can carry traffic | The `.local` class, 15 hosts |
-| A5 | mSupply app promoted into `apps/` from the existing dev draft, carrying the `/etc/msupply/local.yaml` content, the arch-selected image, and the persistent volume | `fsm-prod`, `tokelau-prod` |
+| L1 | Per-server config key as a `secret(true)` param, written into a tmpfs volume by static `Volume.write` so it reapplies on container restart, with the env var pointing at the mount path | All hosts |
+| L1 | `DATABASE_URL` carries a password. The host cluster authenticates the `tamanu` role with `scram-sha-256`, so socket-trust assumptions cannot connect. Retired once Postgres moves into Seedling, whose generated `pg_hba.conf` is `local all all trust` | All hosts |
+| M1 | Central: bind `/api` and `/v1` on `portal_svc` to the API deployment. `tamanu-central.seed.rhai:229` binds them on `web_svc` only, so a migrated portal serves its frontend and then fails every API call | All central hosts |
+| N1 | The facility app must not force an HTTPS ingress. `tamanu-facility.seed.rhai:30` marks `public-hostname` `.required(true)` and declares the ingress from it, while central guards on `is_set()`. Plaintext `.local` hosts need the app to declare no ingress so the site ingress can carry traffic | The `.local` class, 15 hosts |
+| P1 | mSupply app promoted into `apps/` from the existing dev draft, carrying the `/etc/msupply/local.yaml` content, the arch-selected image, and the persistent volume | `fsm-prod`, `tokelau-prod` |
 
 `tamanu_extra_certs` (host CA mount and `NODE_EXTRA_CA_CERTS`) is set by no inventory host.
 Recorded, not built.
@@ -121,7 +124,7 @@ not been updated to match produces a running app configured for the wrong regime
 rewrite above fixes the current instance; the distribution model is what stops it recurring on
 every release.
 
-What this needs, in outline:
+What this needs, in outline, on card Q1:
 
 - A definition carries provenance: where it came from, and at which version
 - Seedling can fetch a definition from that source, rather than only accepting pushed text
