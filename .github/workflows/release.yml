@@ -278,18 +278,18 @@ jobs:
           done
 
       - name: Attest tarball provenance
-        uses: actions/attest-build-provenance@v4.1.0
+        uses: actions/attest-build-provenance@v4.2.2
         with:
           subject-path: "*.tar.zst"
 
       - name: Attest deb provenance
         if: matrix.deb
-        uses: actions/attest-build-provenance@v4.1.0
+        uses: actions/attest-build-provenance@v4.2.2
         with:
           subject-path: "*.deb"
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6.2.0
+        uses: aws-actions/configure-aws-credentials@v6.2.3
         with:
           aws-region: ap-southeast-2
           role-to-assume: arn:aws:iam::143295493206:role/gha-tamanu-tools-upload
