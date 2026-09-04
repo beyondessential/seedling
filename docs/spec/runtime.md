@@ -871,6 +871,17 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > call, so a barrier-suspended operation does not flood the log with each pass. Each
 > replay pass instead surfaces a single boundary breadcrumb.
 
+> r[actuate.ingress.plaintext]
+> Whether an ingress terminates TLS is a property of its own termination, independent of whether it terminates HTTP.
+> An ingress may terminate HTTP as plaintext, as a site-ingress attachment does when its parent's TLS provisioning mode is `none`.
+>
+> An ingress that does not terminate TLS must be served as plaintext on its port: the proxy must listen for HTTP on that port and route matching requests to the ingress's target.
+> The runtime must not request or provision a certificate for such an ingress's hostname, must not create a QUIC listener for it, and must not answer its requests with a redirect unless the ingress itself declares one.
+> Forwarding rules for an ingress must cover only the transport protocols it serves, so a plaintext HTTP ingress must not cause UDP traffic on its port to be forwarded.
+>
+> A hostname may carry both plaintext and TLS-terminating ingresses on different ports.
+> Each must be served from the listener matching its own termination, and the presence of a TLS-terminating ingress must not cause a plaintext ingress on the same hostname to be dropped or served only over TLS.
+
 > r[actuate.ingress.warm-certs]
 > When an action closure invokes [`rt.warm_certs`](#l--rt.warm-certs) with a selection that contains TLS-terminating ingresses, the runtime must initiate certificate acquisition for those ingresses' hostnames without exposing the ingresses to live traffic.
 > A typical implementation pushes a partial proxy configuration that requests certificate acquisition while not routing requests to any backend; once the certificate is `valid`, it is served from the proxy's cache when the same ingress is later started for real.
@@ -1055,6 +1066,8 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > - **Redirect**: requests for the attachment's `(port, protocol)` are answered with an HTTP redirect response to a configured target URL, using a configured response code, optionally preserving the request path.
 >
 > The set of supported protocols matches that of app-declared ingresses. The hostname and TLS provisioning mode are inherited from the parent site ingress; the attachment chooses only the listening `(port, protocol)` and the target. Multiple attachments differing in `(port, protocol)` may coexist on the same site ingress.
+>
+> A parent site ingress whose TLS provisioning mode is `none` yields plaintext attachments, served per [actuate.ingress.plaintext](#r--actuate.ingress.plaintext).
 
 > r[ingress.site.tailscale]
 > The Tailscale discovery provider creates a single discovered site ingress representing the host's Tailscale identity. The site ingress's hostname is the host's tailnet DNS name; its provider key is the host's stable Tailscale node identity. When the operator renames the node, the site ingress's hostname must be updated in place and its existing attachments preserved. When the underlying node identity changes (e.g. the node is re-created on the tailnet), the existing discovered site ingress is removed and a fresh one created.
