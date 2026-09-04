@@ -117,7 +117,7 @@ pub fn build_proxy_config(
     redirects: &[(IngressDef, RedirectTarget)],
 ) -> ProxyConfig {
     let mut listener_set: BTreeSet<ProxyListener> = BTreeSet::new();
-    let mut vhosts: BTreeMap<String, VirtualHost> = BTreeMap::new();
+    let mut vhosts: BTreeMap<(String, bool), VirtualHost> = BTreeMap::new();
 
     for (ingress, upstream) in forwards {
         register_listeners(&mut listener_set, ingress);
@@ -177,8 +177,13 @@ pub fn build_proxy_config(
     }
 }
 
+// r[impl actuate.ingress.plaintext]
 fn register_listeners(set: &mut BTreeSet<ProxyListener>, ingress: &IngressDef) {
-    let is_https = ingress.http_terminate.is_some();
+    // An ingress serves HTTPS only when it terminates TLS *and* HTTP. HTTP
+    // termination alone does not imply TLS: a site-ingress attachment whose
+    // parent's TLS provisioning mode is `none` terminates HTTP as plaintext,
+    // and so listens for HTTP and takes no QUIC listener (HTTP/3 is TLS-only).
+    let is_https = ingress.tls && ingress.http_terminate.is_some();
 
     set.insert(ProxyListener {
         port: ingress.port.get(),
@@ -204,22 +209,25 @@ fn register_listeners(set: &mut BTreeSet<ProxyListener>, ingress: &IngressDef) {
     }
 }
 
+// r[impl actuate.ingress.plaintext]
+// Vhosts are keyed by `(hostname, tls)`, not by hostname alone: one hostname
+// may carry a plaintext ingress on one port and a TLS-terminating one on
+// another, and each has to reach the listener matching its own termination.
+// Keying by hostname alone would merge them into a single vhost whose
+// `tls_acme` is the OR of both, serving the plaintext routes from the HTTPS
+// server and dropping them from the HTTP one.
 fn ensure_vhost<'a>(
-    vhosts: &'a mut BTreeMap<String, VirtualHost>,
+    vhosts: &'a mut BTreeMap<(String, bool), VirtualHost>,
     ingress: &IngressDef,
 ) -> &'a mut VirtualHost {
     let vhost = vhosts
-        .entry(ingress.hostname.clone())
+        .entry((ingress.hostname.clone(), ingress.tls))
         .or_insert_with(|| VirtualHost {
             hostname: ingress.hostname.clone(),
-            tls_acme: false,
+            tls_acme: ingress.tls,
             redirect: None,
             routes: vec![],
         });
-
-    if ingress.tls {
-        vhost.tls_acme = true;
-    }
 
     if let Some(redirect) = &ingress.redirect {
         vhost.redirect = Some(HttpRedirect {
@@ -336,5 +344,113 @@ mod tests {
         let node: Ipv6Net = "fd5e:ed12:3456::/48".parse().unwrap();
         let pod: Ipv6Net = "fd5e:ed12:3456:0500::/64".parse().unwrap();
         assert_eq!(node_mount_addr(&node), node_mount_addr(&pod));
+    }
+
+    fn ing(hostname: &str, port: u16, tls: bool, http: bool) -> IngressDef {
+        use crate::defs::Port;
+        use crate::defs::ingress::HttpTermination;
+        IngressDef {
+            hostname: hostname.to_string(),
+            port: Port::new(i64::from(port)).unwrap(),
+            tls,
+            dtls: false,
+            http_terminate: http.then_some(HttpTermination::Http1),
+            redirect: None,
+            description: None,
+        }
+    }
+
+    fn upstream(port: u16) -> ServiceUpstream {
+        ServiceUpstream {
+            routes: vec![],
+            service_ip: "fd5e:ed12:3456:200::1".parse().unwrap(),
+            service_port: port,
+        }
+    }
+
+    fn has(cfg: &ProxyConfig, port: u16, proto: ProxyListenerProto) -> bool {
+        cfg.listeners
+            .iter()
+            .any(|l| l.port == port && l.proto == proto)
+    }
+
+    // r[verify actuate.ingress.plaintext]
+    #[test]
+    fn plaintext_http_ingress_listens_for_http() {
+        // The shape a site-ingress attachment produces when its parent's TLS
+        // provisioning mode is `none`: terminates HTTP, terminates no TLS.
+        let cfg = build_proxy_config(&[(ing("clinic.local", 80, false, true), upstream(80))], &[]);
+
+        assert!(
+            has(&cfg, 80, ProxyListenerProto::Http),
+            "plaintext HTTP ingress must listen for HTTP, got {:?}",
+            cfg.listeners
+        );
+        assert!(
+            !has(&cfg, 80, ProxyListenerProto::Https),
+            "plaintext HTTP ingress must not listen for HTTPS"
+        );
+    }
+
+    // r[verify actuate.ingress.plaintext]
+    #[test]
+    fn plaintext_http_ingress_takes_no_quic_listener() {
+        let cfg = build_proxy_config(&[(ing("clinic.local", 80, false, true), upstream(80))], &[]);
+        assert!(
+            !has(&cfg, 80, ProxyListenerProto::Quic),
+            "HTTP/3 is TLS-only, so a plaintext ingress must take no QUIC listener"
+        );
+    }
+
+    // r[verify actuate.ingress.plaintext]
+    #[test]
+    fn tls_http_ingress_still_listens_for_https_and_quic() {
+        let cfg = build_proxy_config(
+            &[(ing("clinic.example.com", 443, true, true), upstream(80))],
+            &[],
+        );
+        assert!(has(&cfg, 443, ProxyListenerProto::Https));
+        assert!(has(&cfg, 443, ProxyListenerProto::Quic));
+        assert!(!has(&cfg, 443, ProxyListenerProto::Http));
+    }
+
+    // r[verify actuate.ingress.plaintext]
+    #[test]
+    fn tls_passthrough_ingress_takes_no_quic_listener() {
+        // `Terminate.Tls + Output.Tcp`: terminates TLS but not HTTP, so it
+        // serves no HTTP/3 and must be unaffected by the plaintext handling.
+        let cfg = build_proxy_config(
+            &[(ing("db.example.com", 5432, true, false), upstream(5432))],
+            &[],
+        );
+        assert!(!has(&cfg, 5432, ProxyListenerProto::Quic));
+    }
+
+    // r[verify actuate.ingress.plaintext]
+    #[test]
+    fn plaintext_and_tls_ingresses_on_one_hostname_stay_separate() {
+        // One hostname, plaintext on :80 and TLS-terminating on :443. Keying
+        // vhosts by hostname alone would merge these and serve the plaintext
+        // routes from the HTTPS server.
+        let cfg = build_proxy_config(
+            &[
+                (ing("clinic.local", 80, false, true), upstream(80)),
+                (ing("clinic.local", 443, true, true), upstream(80)),
+            ],
+            &[],
+        );
+
+        assert_eq!(cfg.virtual_hosts.len(), 2, "got {:?}", cfg.virtual_hosts);
+        let plain = cfg.virtual_hosts.iter().filter(|v| !v.tls_acme).count();
+        let secure = cfg.virtual_hosts.iter().filter(|v| v.tls_acme).count();
+        assert_eq!((plain, secure), (1, 1));
+        assert!(
+            cfg.virtual_hosts
+                .iter()
+                .all(|v| v.hostname == "clinic.local"),
+            "both vhosts describe the same hostname"
+        );
+        assert!(has(&cfg, 80, ProxyListenerProto::Http));
+        assert!(has(&cfg, 443, ProxyListenerProto::Https));
     }
 }

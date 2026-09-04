@@ -100,17 +100,33 @@ hostname is set, and invoking `canonical` with both unset throws the intended me
 - [x] Add `r[actuate.ingress.plaintext]` to `docs/spec/runtime.md` and cross-reference it from
       `r[ingress.site.attachment]`
 - [x] Make `public-hostname` optional in both demo definitions, with the `canonical` guard
-- [ ] `register_listeners`: derive the listener protocol from `ingress.tls`, not from
+- [x] `register_listeners`: derive the listener protocol from `ingress.tls`, not from
       `http_terminate`. A plaintext HTTP ingress registers an HTTP listener on its port and no
       QUIC listener
-- [ ] `rules.rs`: derive `ForwardProto` from what the ingress actually serves, so a plaintext
+- [x] `rules.rs`: derive `ForwardProto` from what the ingress actually serves, so a plaintext
       HTTP ingress forwards TCP only
-- [ ] Key `VirtualHost` by `(hostname, tls)` in `ensure_vhost`, so a plaintext and a
-      TLS-terminating vhost for one hostname stay separate
-- [ ] Check the downstream consumers of `ProxyConfig.virtual_hosts` still hold once a hostname
-      can appear twice: `routed_subjects` and `augment_with_warm_certs` both filter on
-      `tls_acme`, so neither should need changing, but confirm
-- [ ] Annotate the implementation with tracey `r[impl actuate.ingress.plaintext]` references
-- [ ] Regression tests per the test cases, generic BSL and site-ingress shapes only, with the
-      Tamanu topology as sample data at most
-- [ ] `cargo clippy`, `cargo fmt`, `tracey query status`
+- [x] Key `VirtualHost` by `(hostname, tls)` in `ensure_vhost`, so a plaintext and a
+      TLS-terminating vhost for one hostname stay separate. `tls_acme` is now set from the key
+      at construction, so the previous OR-in-place became redundant and was removed
+- [x] Check the downstream consumers of `ProxyConfig.virtual_hosts` still hold once a hostname
+      can appear twice. Confirmed: the only consumers are the two route loops and
+      `routed_subjects` in `caddy/config.rs`, `augment_with_warm_certs` in `translate/proxy.rs`,
+      and an `is_empty` check in `reconcile.rs`. Every one of them filters on `tls_acme`, so none
+      needed changing
+- [x] Annotate the implementation with tracey `r[impl actuate.ingress.plaintext]` references
+- [x] Regression tests per the test cases, generic BSL and site-ingress shapes only. Two
+      scenarios remain unticked and are genuine outstanding coverage: an install-level test that
+      an app declaring no ingress installs behind a site ingress, and the manual check on a real
+      `.local` host
+- [x] `cargo clippy`, `cargo fmt`, `tracey query status`
+
+## Outcome
+
+`actuate.ingress.plaintext` is covered by four implementation references and eleven verification
+references. The scenario the card exists for now works: translating a plaintext site-ingress
+attachment and rendering it yields a `seedling_http` server carrying the host matcher and the
+upstream, with no `apps.tls` block, where it previously yielded an empty config.
+
+Note that a plaintext `.local` host also needs a site ingress with `tls_provider: none` and an
+HTTP attachment pointing at the app's exported service. Nothing in that operator-side flow was
+changed by this card; only the translation of it was broken.

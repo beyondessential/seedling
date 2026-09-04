@@ -58,6 +58,10 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
     if !http_listens.is_empty() {
         let mut http_routes: Vec<Value> = Vec::new();
 
+        // r[impl actuate.ingress.plaintext]
+        // A vhost that terminates no TLS is served here, as plaintext, and is
+        // absent from the TLS automation subjects below so no certificate is
+        // requested for its hostname.
         for vh in &config.virtual_hosts {
             if let Some(redirect) = &vh.redirect {
                 http_routes.push(redirect_route(&vh.hostname, redirect.code, &https_ports));
