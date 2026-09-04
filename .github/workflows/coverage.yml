@@ -50,7 +50,7 @@ jobs:
         run: mkdir -p crates/web/frontend/dist
       - name: cargo llvm-cov
         run: cargo llvm-cov --workspace --locked --cobertura --output-path cobertura-rust.xml
-      - uses: actions/upload-code-coverage@v1.3.0
+      - uses: actions/upload-code-coverage@v1.4.2
         with:
           file: cobertura-rust.xml
           language: Rust
@@ -73,7 +73,7 @@ jobs:
         run: npm ci
       - name: Vitest coverage
         run: npx --no-install vitest run --coverage
-      - uses: actions/upload-code-coverage@v1.3.0
+      - uses: actions/upload-code-coverage@v1.4.2
         # `uses` steps run from the workspace root, not the job's
         # working-directory, so give the full path to the report.
         with:
