@@ -15,6 +15,19 @@ described. At the default 250ms interval a 5s budget is roughly twenty attempts,
 not two. The BSL surface therefore exposes `try_duration` and `interval`, which
 between them actually determine the attempt count, and no count field.
 
+## Why round-robin stays the default
+
+The PRD names `lb_policy least_conn`. The spec keeps `round_robin` as the default
+and offers `least_conn` as one selectable policy, which is deliberate rather than
+an oversight.
+
+This project's remit is to give Seedling the surface a production Tamanu needs, not
+to adopt Tamanu's own configuration choices as Seedling's defaults. Round-robin is
+already Seedling's defined behaviour in `l[service.routing]`; the card owes Tamanu
+the *ability* to select least-conn, and nothing more. Values quoted in the PRD's
+requirement table should be read the same way throughout this project: as
+capabilities to expose, not defaults to change.
+
 ## What a retry does and does not cover
 
 Caddy always allows a retry when the connection to an upstream could not be
