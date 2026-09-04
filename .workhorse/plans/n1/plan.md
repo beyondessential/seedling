@@ -3,15 +3,14 @@
 ## What the card turned out to be
 
 The card as written asked for a change to `apps/tamanu-facility.seed.rhai`: make
-`public-hostname` optional and guard the ingress declaration the way central does. That is not
-the work.
+`public-hostname` optional and guard the ingress declaration the way central does. That is only a
+small part of the work.
 
-The facility definition **already** guards its ingress on `is_set()`
-(`apps/tamanu-facility.seed.rhai:222`), mirroring central at
-`apps/tamanu-central.seed.rhai:211`. Only `.required(true)` on the param remains, and the
-definitions here are demo artefacts anyway; the production Tamanu definition is separate and
-pending. So the real question is the one behind the card: **does anything in Seedling prevent a
-plaintext `.local` host being served by a site ingress with no app ingress?**
+The facility definition **already** guarded its ingress on `is_set()`, mirroring central. Only
+`.required(true)` on the param remained, and the definitions here are demo artefacts; the
+production Tamanu definition is separate and pending. So the real question is the one behind the
+card: **does anything in Seedling prevent a plaintext `.local` host being served by a site
+ingress with no app ingress?**
 
 Answer: yes, one thing, and it is decisive.
 
@@ -77,10 +76,30 @@ Conflict detection does not catch this because it keys on `(hostname, port)` and
 differ. Decision: key vhosts by `(hostname, tls)` so each is served from the listener matching
 its own termination.
 
+## Demo definitions
+
+Both Tamanu definitions now demonstrate the no-ingress deployment, so the possibility is visible
+in the demo even before the proxy fix lands. These files illustrate; they are not the production
+definition and are not covered by the test suite.
+
+- `public-hostname` is `.required(false)` in both, with the description saying that leaving it
+  unset declares no ingress so a site ingress carries the traffic
+- The `canonical` closure throws a legible message when neither `public-hostname` nor
+  `canonical-url` is set, since with no public hostname there is no HTTPS ingress to derive an
+  advertised URL from. The check sits inside the closure, not at the top level: the closure only
+  runs from `render_config` (install and `on_change`), by which point params are supplied, whereas
+  a top-level throw would fire during first registration and leave the script unloadable
+- `canonical-url`'s description records that it is required when `public-hostname` is unset
+
+Verified by evaluating both files through `evaluate_script` across all four param combinations
+(probe since removed): each evaluates without error, an ingress resource is declared only when the
+hostname is set, and invoking `canonical` with both unset throws the intended message.
+
 ## Build steps
 
-- [ ] Add `r[actuate.ingress.plaintext]` to `docs/spec/runtime.md` and cross-reference it from
+- [x] Add `r[actuate.ingress.plaintext]` to `docs/spec/runtime.md` and cross-reference it from
       `r[ingress.site.attachment]`
+- [x] Make `public-hostname` optional in both demo definitions, with the `canonical` guard
 - [ ] `register_listeners`: derive the listener protocol from `ingress.tls`, not from
       `http_terminate`. A plaintext HTTP ingress registers an HTTP listener on its port and no
       QUIC listener
