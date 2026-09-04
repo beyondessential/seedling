@@ -21,7 +21,9 @@ pub(crate) fn cert_present(caddy_data_path: &Path, hostname: &str) -> bool {
 
 /// Locate the on-disk cert file for `hostname` under any issuer subdir.
 fn cert_path_for(caddy_data_path: &Path, hostname: &str) -> Option<(String, std::path::PathBuf)> {
-    let cert_root = caddy_data_path.join("caddy").join("certificates");
+    let cert_root = caddy_data_path
+        .join(super::image::CERT_CACHE_DIR)
+        .join("certificates");
     let issuers = std::fs::read_dir(&cert_root).ok()?;
     for entry in issuers.flatten() {
         let issuer_dir = entry.path();

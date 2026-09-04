@@ -4,9 +4,9 @@ Coverage this card owes. An unticked box is a scenario not yet covered, not one 
 
 ## The image provides what the runtime emits
 
-- [ ] Every module id the emitted proxy configuration can carry is in the runtime's declared required set, asserted from a fixture exercising every feature `build_caddy_config` supports (verifies spec: `infra.proxy.image.modules`)
+- [x] Every module id the emitted proxy configuration can carry is in the runtime's declared required set, asserted from a fixture exercising every feature `build_caddy_config` supports (verifies spec: `infra.proxy.image.modules`)
 - [ ] The built image registers every module in the required set, checked before publication rather than after (verifies spec: `infra.proxy.image.modules`)
-- [ ] Adding a handler to the emitted configuration without declaring its module fails the test suite (verifies spec: `infra.proxy.image.modules`)
+- [x] Adding a handler to the emitted configuration without declaring its module fails the test suite (verifies spec: `infra.proxy.image.modules`)
 - [ ] A configuration naming `http.handlers.rate_limit` is accepted by the pinned image
 - [ ] Dropping a `--with` from the build fails the image check rather than producing a publishable image
 
@@ -14,7 +14,7 @@ Coverage this card owes. An unticked box is a scenario not yet covered, not one 
 
 The base change is the one part of this card that can regress silently: the proxy keeps serving and keeps obtaining certificates while the runtime stops seeing them.
 
-- [ ] Certificates obtained by the proxy land where the runtime observes them, so `cert_valid` observations are emitted after the base-image change (verifies spec: `infra.proxy.image.cert-cache`)
+- [x] Certificates obtained by the proxy land where the runtime observes them, so `cert_valid` observations are emitted after the base-image change (verifies spec: `infra.proxy.image.cert-cache`)
 - [ ] An `rt.warm_certs` barrier resolves against a certificate obtained by the new image (verifies spec: `infra.proxy.image.cert-cache`)
 - [ ] Default-strategy certificate metadata, issuer and expiry, is still derived from the proxy's cache (verifies spec: `tls.cert.metadata`)
 - [ ] The proxy can complete an ACME issuance from the new base, which requires a CA bundle in the final stage

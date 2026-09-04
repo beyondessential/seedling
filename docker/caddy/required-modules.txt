@@ -1,0 +1,20 @@
+# Caddy modules the proxy image must provide, one id per line.
+#
+# Read by two checks that must not disagree:
+#   - the runtime, which asserts every module id its emitted configuration can
+#     reference appears here (crates/core/src/system/caddy/image.rs)
+#   - the image workflow, which asserts the built image registers every id here
+#     before it is published (.github/workflows/caddy-image.yml)
+#
+# Stock modules are listed alongside plugin-provided ones, because the check is
+# against the image rather than against the plugin set: a base-image change
+# that drops a module is caught the same way a dropped --with is.
+#
+# A module goes in this list in the same change that adds it to the build, so
+# the list always describes a contract the image satisfies rather than one it
+# is expected to grow into.
+
+http.handlers.reverse_proxy
+http.handlers.static_response
+layer4
+layer4.handlers.proxy
