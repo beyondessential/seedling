@@ -99,7 +99,8 @@ pub(crate) enum CaddyStartupError {
     // r[impl infra.proxy.upgrade.rollback]
     #[snafu(display("upgraded Caddy rejected the replayed proxy config: {source}"))]
     ConfigRejected {
-        source: super::proxy::CaddyError,
+        #[snafu(source(from(super::proxy::CaddyError, Box::new)))]
+        source: Box<super::proxy::CaddyError>,
         backtrace: snafu::Backtrace,
     },
 }
