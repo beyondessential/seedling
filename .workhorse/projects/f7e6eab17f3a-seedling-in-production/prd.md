@@ -47,6 +47,8 @@ site volume gives containers the host cluster's socket, and `DATABASE_URL` passw
 (A2) is needed only because the host cluster authenticates with `scram-sha-256` where
 Seedling's own generated `pg_hba.conf` trusts the local socket.
 
+An important guiding principle: This project is to bring to seedling surface to *support* a production Tamanu in seedling. It is not to *align* seedling with every choice that tamanu has made. Seedling must support running Tamanu, but its defaults and choices are its own. Also, the definitions in the seedling repo are for seedling demo purposes, and are not expected to become the Tamanu production definition, so there's no need to change them or build them into any testing processes or specs.
+
 ## 1. Serving what the fleet serves
 
 Verified against `crates/core/src/system/caddy/config.rs`. `build_caddy_config` emits routing
