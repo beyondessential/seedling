@@ -32,19 +32,19 @@ Expected result is about 21.7 MB compressed against 41.5 MB today.
 
 ## Build steps
 
-- [ ] Move `docker/caddy/Containerfile` to Caddy 2.11.4 and `caddy-l4` to v0.1.2
-- [ ] Add `--with github.com/mholt/caddy-ratelimit@v0.1.0`, and `http.handlers.rate_limit` to `required-modules.txt` in the same change: the list describes a contract the image satisfies, not one it is expected to grow into
-- [ ] Replace the final stage with one that does not already contain a Caddy, carrying `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, a CA bundle, and `/etc/caddy`
-- [ ] Update the Containerfile header: it currently describes one plugin and the version discipline in prose
+- [x] Move `docker/caddy/Containerfile` to Caddy 2.11.4 and `caddy-l4` to v0.1.2
+- [x] Add `--with github.com/mholt/caddy-ratelimit@v0.1.0`, and `http.handlers.rate_limit` to `required-modules.txt` in the same change: the list describes a contract the image satisfies, not one it is expected to grow into
+- [x] Replace the final stage with one that does not already contain a Caddy, carrying `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, a CA bundle, and `/etc/caddy`
+- [x] Update the Containerfile header: it currently describes one plugin and the version discipline in prose
 - [x] Declare the required module set, in `docker/caddy/required-modules.txt`, read by the runtime and by the image check so the two cannot disagree
 - [x] Declare the certificate cache directory once, in `crates/core/src/system/caddy/image.rs`, and have `cert_observation.rs` read it from there rather than hardcoding it
 - [x] Add the Rust test: build an everything-on `ProxyConfig`, walk the emitted JSON for module ids, assert each is declared. The fixture is maximal by intent and says so, because a feature it does not exercise contributes no module id
-- [ ] Add the image check to `caddy-image.yml`: assert the built image registers the required set, and reports the expected Caddy version, before the push
-- [ ] Assert the image's Caddy version matches the BES build's
-- [ ] Adopt the `2.11.4-N` tag in the workflow and in `CADDY_IMAGE`
-- [ ] Add a pull-request job that builds on changes to `docker/caddy/**`, pushes only when the head repository is this repository (a fork PR gets a read-only `GITHUB_TOKEN`), and fails when the Containerfile moved but `TAG` did not
-- [ ] Attest the published image, as `third-party-builds` does for its artefacts
-- [ ] Bump `CADDY_IMAGE` at `crates/core/src/system/caddy/startup.rs:22`
+- [x] Add the image check to `caddy-image.yml`, via `etc/ci/check-caddy-image.sh`,: assert the built image registers the required set, and reports the expected Caddy version, before the push
+- [x] Assert the image's Caddy version matches the BES build's. This warns rather than fails: parity is a check, not a dependency, so another repository's bump must not break this build
+- [x] Adopt the `2.11.4-1` tag in the workflow and in `CADDY_IMAGE`
+- [x] Add a pull-request job that builds on changes to `docker/caddy/**`, pushes only when the head repository is this repository (a fork PR gets a read-only `GITHUB_TOKEN`), and fails when the Containerfile moved but `TAG` did not
+- [x] Attest the published image, as `third-party-builds` does for its artefacts
+- [x] Bump `CADDY_IMAGE` at `crates/core/src/system/caddy/startup.rs:22`
 
 ## Not in this card
 

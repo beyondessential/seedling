@@ -1,17 +1,58 @@
-# Custom Caddy image with the caddy-l4 plugin (L4 proxying for raw TCP/UDP
-# ingress, which stock Caddy can't do).
+# Custom Caddy image: Caddy plus the plugins Seedling's emitted config needs.
+#
+#   caddy-l4        L4 proxying for raw TCP/UDP ingress, which stock Caddy
+#                   cannot do.
+#   caddy-ratelimit Per-route rate limiting.
 #
 # Built and published to ghcr.io/beyondessential/seedling-caddy by
 # .github/workflows/caddy-image.yml. The daemon PULLS this image at runtime
 # (see crates/core/src/system/caddy/startup.rs) — it does not build it.
 #
-# The Caddy base version and the caddy-l4 version must stay compatible:
-# caddy-l4 declares a minimum Caddy version, so an unpinned plugin can float to
-# a release that demands a newer Caddy than the builder provides and fail the
-# build. Bump both together, and update the tag in the workflow AND in
-# startup.rs (CADDY_IMAGE).
-FROM docker.io/library/caddy:2.11.3-builder AS builder
-RUN xcaddy build --with github.com/mholt/caddy-l4@v0.1.1
+# ## Versions
+#
+# The Caddy version is fixed by the builder image's tag, not by the xcaddy
+# command line: the official builder sets CADDY_VERSION, and xcaddy reads it.
+# Both FROM tags must therefore move together, and must match the Caddy version
+# the plugins accept — each plugin declares a minimum, so an unpinned plugin can
+# float to a release demanding a newer Caddy than the builder provides and fail
+# the build. Every --with is pinned to an exact tag for that reason.
+#
+# The image tag is the Caddy version plus a build serial: bump the serial in
+# .github/workflows/caddy-image.yml whenever this file changes without the Caddy
+# version changing. A pull request that changes this file without moving the tag
+# fails.
+#
+# What the image must provide is declared in required-modules.txt, and checked
+# against the built image before it is published.
 
-FROM docker.io/library/caddy:2.11.3
+FROM docker.io/library/caddy:2.11.4-builder AS builder
+RUN xcaddy build \
+      --with github.com/mholt/caddy-l4@v0.1.2 \
+      --with github.com/mholt/caddy-ratelimit@v0.1.0
+
+# The final stage deliberately does NOT derive from the caddy image: layering
+# our binary over that one leaves its ~48 MB Caddy in a lower layer, still
+# pulled on every host, for a binary nothing runs. Starting from alpine halves
+# the image. Alpine rather than scratch because the binary is static and needs
+# no libc, but a shell is worth 4 MB when someone has to exec into the proxy.
+FROM docker.io/library/alpine:3.23
+
+# Carried over from the caddy image, and load-bearing:
+#
+#   ca-certificates  ACME talks TLS to the issuer.
+#   XDG_DATA_HOME    Puts certmagic's storage at /data/caddy, which is where
+#                    the runtime looks for certificates. If this moves, Caddy
+#                    still serves and still obtains certificates while the
+#                    runtime reports that none exist, stalling every
+#                    rt.warm_certs barrier. See required-modules.txt's sibling
+#                    declaration in crates/core/src/system/caddy/image.rs.
+#   XDG_CONFIG_HOME  Where Caddy writes its autosave; mounted as a tmpfs.
+RUN apk add --no-cache ca-certificates \
+    && mkdir -p /data /config /etc/caddy
+
+ENV XDG_CONFIG_HOME=/config \
+    XDG_DATA_HOME=/data
+
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
+
+# No ENTRYPOINT: the daemon passes its own command ("caddy run --config ...").

@@ -16,5 +16,6 @@
 
 http.handlers.reverse_proxy
 http.handlers.static_response
+http.handlers.rate_limit
 layer4
 layer4.handlers.proxy

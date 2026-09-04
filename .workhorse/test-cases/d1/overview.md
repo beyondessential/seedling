@@ -2,10 +2,12 @@
 
 Coverage this card owes. An unticked box is a scenario not yet covered, not one decided against.
 
+The image-side cases are covered by `etc/ci/check-caddy-image.sh` and the jobs in `.github/workflows/caddy-image.yml`. Neither has been executed on a real image yet: this workstation has an empty `/etc/subuid`, so rootless podman cannot build, and Go's module proxy is unreachable over its IPv6 route, so the binary could not be built outside a container either. CI on this pull request is their first real run.
+
 ## The image provides what the runtime emits
 
 - [x] Every module id the emitted proxy configuration can carry is in the runtime's declared required set, asserted from a fixture exercising every feature `build_caddy_config` supports (verifies spec: `infra.proxy.image.modules`)
-- [ ] The built image registers every module in the required set, checked before publication rather than after (verifies spec: `infra.proxy.image.modules`)
+- [x] The built image registers every module in the required set, checked before publication rather than after (verifies spec: `infra.proxy.image.modules`)
 - [x] Adding a handler to the emitted configuration without declaring its module fails the test suite (verifies spec: `infra.proxy.image.modules`)
 - [ ] A configuration naming `http.handlers.rate_limit` is accepted by the pinned image
 - [ ] Dropping a `--with` from the build fails the image check rather than producing a publishable image
@@ -21,21 +23,21 @@ The base change is the one part of this card that can regress silently: the prox
 
 ## Version discipline
 
-- [ ] The built image reports the expected Caddy version, so a base-image change that moves `CADDY_VERSION` is caught rather than shipped
-- [ ] The image's Caddy version matches the BES `third-party-builds` build, so the two drift only deliberately
-- [ ] A pull request touching `docker/caddy/Containerfile` without moving `TAG` fails
+- [x] The built image reports the expected Caddy version, so a base-image change that moves `CADDY_VERSION` is caught rather than shipped
+- [x] The image's Caddy version matches the BES `third-party-builds` build, so the two drift only deliberately
+- [x] A pull request touching `docker/caddy/Containerfile` without moving `TAG` fails
 
 ## Release mechanics
 
-- [ ] `main` never references a `seedling-caddy` tag that has not been published
-- [ ] A pull request from a fork builds the image without attempting a push
-- [ ] The published image is attested
+- [x] `main` never references a `seedling-caddy` tag that has not been published
+- [x] A pull request from a fork builds the image without attempting a push
+- [x] The published image is attested
 
 ## Upgrade path
 
 - [ ] Bumping `CADDY_IMAGE` drives a blue/green upgrade rather than a restart (verifies spec: `infra.proxy.upgrade`)
 - [ ] The cached configuration replays onto the new container without a schema migration (verifies spec: `infra.proxy.upgrade.cache`)
-- [ ] The image contains exactly one Caddy binary
+- [x] The image contains exactly one Caddy binary
 
 ## Manual
 
