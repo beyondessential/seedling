@@ -29,12 +29,36 @@ rather than failed requests generally:
   is covered, including for POST. Nothing reached the pod, so nothing can have
   been acted on twice.
 - A 502 from a *reachable* upstream is not retried by this mechanism at all.
-  Steering traffic away from a backend that answers with errors is passive
-  health checking (`fail_duration`, `unhealthy_status`), which was deliberately
-  left out of this card's scope.
+  That is by design, and passive health checking in the proxy is not the answer
+  to it. See below.
 
 Do not widen `lb_retry_match` to pick up the 502 case without revisiting the
 idempotency question first.
+
+## Why no passive health checks in the proxy
+
+Caddy's passive health checking (`fail_duration`, `max_fails`,
+`unhealthy_status`) must not be enabled, and this is a correctness constraint
+rather than a scoping decision.
+
+`r[lifecycle.service.routing-pool]` removes an unhealthy backend from the pool
+only when another backend is currently healthy. When none is, every running
+backend stays in the pool in degraded mode and a `service_degraded` fault is
+filed, on the principle that a single-server platform should never reduce
+serving capacity below what is actually available.
+
+Caddy cannot see that rule. It would mark the last backend down after
+`max_fails` and then have no upstream at all, answering 502 itself, which is the
+precise outcome degraded mode exists to avoid. The runtime's healthchecks are
+the mechanism that decides eligibility, and they already do so before the
+emitter sees an upstream list.
+
+The two mechanisms compose instead of overlapping:
+
+- The routing pool decides *which* backends Caddy is given.
+- Dial-failure retries cover the window between a backend becoming unusable and
+  the pool being recomputed on a later reconciliation tick, where Caddy still
+  holds an upstream that has since gone away.
 
 ## Emitter mapping
 
