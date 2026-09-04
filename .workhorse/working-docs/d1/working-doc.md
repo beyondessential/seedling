@@ -11,6 +11,11 @@ Prerequisite for B3 (per-route rate limiting): add the rate-limit module to the 
 - **The WAF module is deferred.** BES builds coraza but has it enabled nowhere, because of application compatibility problems. Rather than carry a module the fleet cannot switch on, re-evaluate separately, possibly as an external WAF: Seedling controls the network path far better than the ad-hoc hosts do, so the enforcement point need not be in Caddy at all. This card therefore ships rate limiting only, and B8's hook is settled on that card rather than here.
 - **Caddy base moves to 2.11.3 -> 2.11.4.** Lines up with what BES already builds, and 2.11.4 is what `caddy-l4@v0.1.2` requires.
 
+- **The build stays in Seedling.** Seedling has to control its own Caddy version: it is compiled into the daemon and a bump drives a blue/green swap on every host, so the main thing consolidating into third-party-builds would buy is the thing Seedling cannot hand over. The cost, a second place to bump on a Caddy CVE, is real and is mitigated by asserting version parity with the BES build rather than by depending on it. Reasoning in Build strategy below.
+- **Both adjacent defects are fixed on this card.** The double-shipped Caddy binary and the window where `main` references an unpublished tag. Both are in the two files this card already edits.
+- **The capability check reads its required-module set from the Rust source**, so there is one place that says what the image must provide.
+- **The tag becomes the Caddy version plus a build serial** (`2.11.4-2`), with a check that the serial cannot be forgotten when the build changes.
+
 ## What the code already settles
 
 - **The image is pinned in three places that must move together.** `CADDY_IMAGE` at `crates/core/src/system/caddy/startup.rs:22`, the two `FROM` lines plus the `xcaddy build` line in `docker/caddy/Containerfile`, and `env.TAG` in `.github/workflows/caddy-image.yml`. Current tag `2.11.3-l4.0.1.1`, one plugin, `caddy-l4@v0.1.1`.
@@ -78,33 +83,74 @@ An earlier pass overstated this. certmagic#380 is about listening on passed file
 
 Keep the build in Seedling, and close the two gaps that make the split look worse than it is: attest the image, and assert version parity with the BES build in the capability check. Revisit consolidation if ops ever needs L4, which is the point where the two builds genuinely converge.
 
-## Adjacent defects found
+## Adjacent defects found, both fixed here
 
-Neither is caused by this card, both are made slightly worse by it, and both are cheap to fix while the files are open.
+Neither is caused by this card. Both are made slightly worse by it, and both are in the files it already touches.
 
-- **The image ships two Caddy binaries.** `docker/caddy/Containerfile` layers `COPY --from=builder /usr/bin/caddy` over `FROM docker.io/library/caddy:2.11.3`, whose own 48.3 MB caddy stays in the lower layer and is still pulled. That is 34.7 MB compressed of Caddy binary per pull, about half of it dead. A final stage that does not already contain a Caddy would halve it, which matters on the poor links the PRD describes.
-- **Merging a Containerfile change leaves `main` pointing at an image tag that does not exist yet.** `caddy-image.yml` triggers on push to `main`, and recent runs take 16 to 19 minutes (multi-arch, arm64 under qemu). `CADDY_IMAGE` lives under `crates/`, which is not in the workflow's `paths`, so it cannot trigger the build itself. In that window a daemon built from `main` fails in `ensure_caddy_running` when `pull_image` cannot find the tag. Same-repo does not avoid the ordering constraint that a cross-repo build would impose, it just hides it.
+### The image ships two Caddy binaries
+
+`docker/caddy/Containerfile` layers `COPY --from=builder /usr/bin/caddy` over `FROM docker.io/library/caddy:2.11.3`, whose own 48.3 MB binary stays in the lower layer and is still pulled. Measured, the published image is 41.5 MB compressed, roughly half of it a Caddy nobody runs. On the poor links the PRD describes, that is the single cheapest win available here.
+
+The fix is a final stage that does not already contain a Caddy. Two things make that safe, and one makes it dangerous:
+
+- **The binary is statically linked**, so the final stage does not need a matching libc. `scratch` is viable; `alpine` costs 3.84 MB and keeps a shell for the times someone needs to `podman exec` into the proxy.
+- **A CA bundle has to be carried over explicitly.** ACME talks TLS to the issuer, and a `scratch` or bare-`alpine` stage has no roots.
+- **`XDG_DATA_HOME=/data` is set by the official base image, and it is load-bearing.** It is what puts certmagic's storage at `/data/caddy`, which is exactly the path `cert_observation.rs` globs for `cert_valid` observations. Dropping the official base without carrying that env forward relocates every certificate to the process's home directory, and the failure is silent: Caddy still serves, certificates are still obtained, and Seedling simply stops seeing them. The PRD calls warm-cert observation the highest-leverage fix in the project, so this is the one line in the change that must not be missed.
+
+`XDG_CONFIG_HOME=/config` should come across for the same reason, since the container mounts a tmpfs there. `/etc/caddy` should exist in the image, because the admin config is bind-mounted to `/etc/caddy/admin.json` into a read-only rootfs.
+
+Estimated result: about 21.7 MB compressed against 41.5 MB today.
+
+### `main` can reference an image tag that does not exist
+
+`caddy-image.yml` triggers on push to `main`, and recent runs take 16 to 19 minutes (multi-arch, arm64 under qemu). `CADDY_IMAGE` lives under `crates/`, which is not in the workflow's `paths`, so it cannot trigger the build itself. Between merging a Containerfile change and the build finishing, a daemon built from `main` fails in `ensure_caddy_running` when `pull_image` cannot find the tag.
+
+The fix is to publish the tag before `main` references it: build and push on pull requests that touch `docker/caddy/**`, so the image exists by the time the PR merges. Publishing an image for a PR that never merges is harmless, since the tag is the one that PR was claiming.
+
+One wrinkle to handle rather than discover: a `pull_request` from a fork gets a read-only `GITHUB_TOKEN`, so the push would fail. The job should push only when the head repository is this repository, and build without pushing otherwise.
+
+## Implementation shape
+
+### The capability check
+
+One required-module set, living in the Rust source next to the code that emits module ids, consumed by both halves:
+
+- **A Rust test** builds a `ProxyConfig` exercising every feature `build_caddy_config` can emit, walks the emitted JSON for module ids, and asserts each one is in the required set. This derives the check from real emission rather than from a hand-kept list, so adding a handler without declaring it fails in the test suite.
+- **A step in `caddy-image.yml`** runs `caddy list-modules` against the built image and asserts the required set is present, before the push. This is what catches a dropped `--with`, a plugin renaming its module id, and a base-image change that quietly moves `CADDY_VERSION`.
+
+Composing the two gives the invariant worth having: everything the code can emit is in the image `CADDY_IMAGE` names.
+
+The known limit is fixture coverage. A feature the fixture does not exercise contributes no module id, so the fixture has to be the everything-on config, and it is worth saying so where it lives.
+
+The CI half needs the required set without building the workspace, which the image workflow does not otherwise do. Keeping the set in a small declarative form that Rust reads (rather than scraping Rust source text from a shell script) keeps one source of truth without putting a `cargo build` in the image workflow.
+
+### The tag serial
+
+`2.11.4-2`: Caddy version, then a serial bumped whenever the build changes without the Caddy version changing. The Containerfile stays the record of what is in the build.
+
+The serial is forgettable by construction, so a pull-request check should assert that a diff touching `docker/caddy/Containerfile` also moves `TAG`. Same job as the fork-aware build above, and it fails on the PR rather than after merge.
 
 ## Open questions
 
-- [ ] **Confirm the recommendation: keep the build in Seedling.** The measured deltas and the version-control argument are in Build strategy above.
-- [ ] **Scope of the two adjacent defects.** Fix the double-shipped binary and the missing-tag window here, or split them out. Both touch the same two files this card already edits.
-- [ ] **Shape of the capability check.** Where it runs, and whether the required-module list is derived from the code or hand-maintained. See Testing notes.
-- [ ] **Tag scheme.** `2.11.3-l4.0.1.1` names its one plugin. With two plugins that becomes unwieldy, and it gets worse with each one. Options: keep extending it (`2.11.4-l4.0.1.2-rl0.1.0`), drop to the Caddy version plus a build serial (`2.11.4-2`), or use the Caddy version plus a content hash of the build line.
+None blocking. All four decisions above are settled; what remains is drafting.
 
 ## Trade-offs
 
-- **Deferring the WAF costs a second image bump later.** Accepted. Measured, coraza and the rest of the BES plugin set cost 11.7 MB of binary, for a capability enabled nowhere and which may end up enforced outside Caddy entirely. Tracked on S1.
-- **Keeping the build in Seedling costs a second place to bump on a Caddy CVE.** Accepted, but it is the real cost of the split and worth naming rather than arguing away. Version parity with the BES build, asserted in the capability check, is what keeps the two from drifting silently.
+- **Deferring the WAF costs a second image bump later.** Accepted. Measured, the BES plugin set costs 11.7 MB of binary, dominated by coraza carrying the OWASP CRS, for a capability enabled nowhere and which may end up enforced outside Caddy entirely. Tracked on S1.
+- **Keeping the build in Seedling costs a second place to bump on a Caddy CVE.** Accepted, and worth naming rather than arguing away: it is the real cost of the split. Version parity with the BES build, asserted in the capability check, is what keeps the two from drifting silently.
 - **Version parity is a check, not a dependency.** One Caddy version on a migrating host, two binaries with different plugin sets. Gets the migration-skew benefit of consolidation without ceding a version Seedling has to control.
+- **A build serial is forgettable where a plugin-naming tag is not.** Accepted because the tag stops scaling once there is more than one plugin, and the forgetting is mechanically checkable where the unwieldiness is not fixable.
+- **Fixing both adjacent defects here widens the card.** Accepted: both live in the two files this card already edits, and the missing-tag window gets worse as the build grows.
 
 ## Testing notes
 
-- The image `CADDY_IMAGE` names registers every module Seedling's emitted JSON can reference, asserted against a required set rather than a snapshot so adding a module does not fail the check.
-- Every module id `build_caddy_config` can emit appears in that required set, so the two halves cannot drift apart in the repo.
+- Every module id the emitted config can carry is declared in the required set, asserted from a fixture that exercises every feature `build_caddy_config` supports.
+- The image `CADDY_IMAGE` names registers every module in the required set, asserted before publication rather than after.
 - The built image reports the expected Caddy version, so a base-image change that moves `CADDY_VERSION` is caught rather than shipped.
 - The image's Caddy version matches the BES build's, so the two drift only deliberately.
 - An emitted config naming the rate-limit module is accepted by the pinned image.
-- Bumping `CADDY_IMAGE` drives a blue/green upgrade rather than a restart, and the cached config replays without a migration.
 - The image contains exactly one Caddy binary.
+- Certificates land where `cert_observation.rs` looks for them after the base-image change, so `cert_valid` observations survive it. This is the regression the base change could cause silently, and it deserves a test that fails loudly rather than a manual check.
+- A pull request touching `docker/caddy/Containerfile` without moving `TAG` fails.
 - `main` never references a `seedling-caddy` tag that has not been published.
+- Bumping `CADDY_IMAGE` drives a blue/green upgrade rather than a restart, and the cached config replays without a migration.
