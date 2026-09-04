@@ -228,6 +228,11 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > A request that did reach an upstream and then failed must be attempted again only when it is a `GET`, which alone can be repeated without risk of acting twice.
 > An error response produced by a reachable upstream is that upstream's answer, and must be returned to the client rather than retried.
+>
+> The proxy must not form its own opinion of upstream health.
+> The upstream list it is given is authoritative: which backends are eligible is decided by the [routing pool](#r--lifecycle.service.routing-pool), from the runtime's own [healthchecks](language.md#l--deployment.healthcheck).
+> Health checking in the proxy would contradict that pool, which deliberately keeps every running backend in service when no healthy alternative exists rather than reducing capacity to nothing.
+> Retrying an unreachable upstream covers the interval between a backend becoming unusable and the pool being recomputed on a subsequent tick; it is not a substitute for the pool.
 
 > r[service.http.route.proxy-settings.visibility]
 > The compression and balancing settings in force on each route, after resolution, must be readable when inspecting a service through the operator interface and the CLI.
