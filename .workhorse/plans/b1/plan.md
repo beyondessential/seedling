@@ -2,9 +2,10 @@
 
 Notes from the spec interview. The acceptance criteria live in
 `docs/spec/language.md` (`l[service.http.compress]`, `l[service.http.balance]`,
-`l[service.http.proxy-settings.resolution]`) and `docs/spec/runtime.md`
+`l[service.http.proxy-settings.resolution]`), `docs/spec/runtime.md`
 (`r[service.http.route.compression]`, `r[service.http.route.balancing]`,
-`r[service.http.route.proxy-settings.visibility]`).
+`r[service.http.route.proxy-settings.visibility]`), and `docs/spec/interface.md`
+(`i[app.describe.proxy-settings]`).
 
 ## Why the retry knobs are duration + interval, not a count
 
@@ -72,6 +73,25 @@ The two mechanisms compose instead of overlapping:
 - Dial-failure retries cover the window between a backend becoming unusable and
   the pool being recomputed on a later reconciliation tick, where Caddy still
   holds an upstream that has since gone away.
+
+## Where the resolved settings surface
+
+`r[service.http.route.proxy-settings.visibility]` is discharged by the `routes`
+array on the `http_service` def in `/apps/show`, not by a new endpoint. Routes hang
+off the HttpService because that is where `compress` and `balance` are declared and
+where `http.route(prefix)` creates the route.
+
+Two things the emitter and the summary must agree on:
+
+- The array reports *resolved* values, so a field the app never set is reported at
+  its default rather than omitted. An operator reading the response should not need
+  to know the defaults to interpret it.
+- The synthesised `/` route for a service with no `http_bindings` appears in the
+  array like any other, so the array is never empty for an HTTP service. This is the
+  same fallback route `r[service.http.route.routing]` describes.
+
+`ServiceSummary`/`HttpServiceSummary` in `crates/core/src/defs/summary.rs` are where
+this lands; `compress` serialises as `null` when compression is off for the route.
 
 ## Emitter mapping
 

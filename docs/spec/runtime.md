@@ -235,7 +235,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Retrying an unreachable upstream covers the interval between a backend becoming unusable and the pool being recomputed on a subsequent tick; it is not a substitute for the pool.
 
 > r[service.http.route.proxy-settings.visibility]
-> The compression and balancing settings in force on each route, after resolution, must be readable when inspecting a service through the operator interface and the CLI.
+> The compression and balancing settings in force on each route, after resolution, must be readable when inspecting the app that declares the service, as [app.describe.proxy-settings](interface.md#i--app.describe.proxy-settings) defines.
 > An operator diagnosing an uncompressed response or a failed request can then establish what the proxy was told to do without reading the app's script.
 >
 > These settings are declared by the app. The runtime provides no means to change them on a running app.
