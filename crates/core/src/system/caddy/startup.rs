@@ -16,10 +16,12 @@ use crate::system::{
 
 pub(crate) const CADDY_BLUE: &str = "seedling-caddy-blue";
 pub(crate) const CADDY_GREEN: &str = "seedling-caddy-green";
-// Prebuilt Caddy image (Caddy + caddy-l4), published to GHCR by the
-// caddy-image workflow and pulled at runtime — the daemon does not build it.
-// Keep this tag in sync with docker/caddy/Containerfile and the workflow.
-pub(crate) const CADDY_IMAGE: &str = "ghcr.io/beyondessential/seedling-caddy:2.11.3-l4.0.1.1";
+// Prebuilt Caddy image, published to GHCR by the caddy-image workflow and
+// pulled at runtime — the daemon does not build it. The tag is the Caddy
+// version plus a build serial; keep it in sync with TAG in that workflow.
+// What the image must provide is declared in docker/caddy/required-modules.txt
+// and checked against the built image before it is published.
+pub(crate) const CADDY_IMAGE: &str = "ghcr.io/beyondessential/seedling-caddy:2.11.4-1";
 pub(crate) const CADDY_DATA_VOLUME: &str = "seedling-caddy-data";
 pub(crate) const PROXY_NETWORK: &str = "seedling-proxy";
 

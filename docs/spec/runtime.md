@@ -1276,6 +1276,24 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > control plane. When the initial bring-up fails the runtime files a system fault and the
 > reconciliation loop retries on subsequent ticks, clearing the fault once the proxy is healthy.
 
+> r[infra.proxy.image.modules]
+> The proxy image the runtime pulls must provide every proxy module that the configuration
+> the runtime emits can reference. The proxy rejects a configuration that names a module it
+> does not provide, so a missing module does not degrade a single route: it makes the whole
+> configuration unappliable, aborting the upgrade under
+> [infra.proxy.upgrade.rollback](#r--infra.proxy.upgrade.rollback) and leaving the proxy
+> serving its previous configuration indefinitely.
+> The runtime must declare the set of modules it requires, so that an image can be checked
+> against what the runtime actually emits rather than against a separately maintained list.
+
+> r[infra.proxy.image.cert-cache]
+> The proxy image must store its certificate cache at the location the runtime observes it
+> at. The certificate status in [observe.ingress.certs](#r--observe.ingress.certs) and the
+> default-strategy metadata in [tls.cert.metadata](#r--tls.cert.metadata) are both derived
+> from that cache, and a proxy that obtains certificates but writes them elsewhere satisfies
+> neither: it serves traffic correctly while the runtime reports that no certificate exists,
+> which in turn stalls every [`rt.warm_certs`](#l--rt.warm-certs) barrier waiting on it.
+
 > r[infra.proxy.upgrade]
 > When the configured proxy image digest differs from the running container's image digest,
 > the runtime must upgrade the proxy using a blue/green strategy: the replacement container
