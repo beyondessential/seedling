@@ -1,4 +1,5 @@
 use super::config::build_caddy_config;
+use crate::system::translate::proxy::build_proxy_config;
 use crate::system::types::{
     HttpRedirect, ProxyConfig, ProxyListener, ProxyListenerProto, ProxyRoute, ProxyRouteHandler,
     VirtualHost,
@@ -569,5 +570,143 @@ fn http_to_https_redirect_targets_nonstandard_https_port() {
     assert_eq!(
         redirect["headers"]["Location"][0],
         "https://{http.request.host}:8443{http.request.uri}"
+    );
+}
+
+// ── Plaintext ingress serving ────────────────────────────────────────────────
+
+fn plaintext_ingress(hostname: &str, port: u16) -> crate::defs::ingress::IngressDef {
+    use crate::defs::{Port, ingress::HttpTermination};
+    // The shape reconcile::site_proxy builds for an HTTP attachment on a site
+    // ingress whose TLS provisioning mode is `none`.
+    crate::defs::ingress::IngressDef {
+        hostname: hostname.to_string(),
+        port: Port::new(i64::from(port)).unwrap(),
+        tls: false,
+        dtls: false,
+        http_terminate: Some(HttpTermination::Http1),
+        redirect: None,
+        description: None,
+    }
+}
+
+fn service_upstream(port: u16) -> crate::system::translate::proxy::ServiceUpstream {
+    crate::system::translate::proxy::ServiceUpstream {
+        routes: vec![],
+        service_ip: "fd5e:ed12:3456:200::1".parse().unwrap(),
+        service_port: port,
+    }
+}
+
+// r[verify actuate.ingress.plaintext]
+#[test]
+fn plaintext_only_config_requests_no_certificate() {
+    let config = ProxyConfig {
+        listeners: vec![ProxyListener {
+            port: 80,
+            proto: ProxyListenerProto::Http,
+        }],
+        virtual_hosts: vec![http_vhost("clinic.local", "[fd5e::1]:80")],
+        l4_routes: vec![],
+        warm_cert_hostnames: Default::default(),
+        cert_endpoint_url: None,
+    };
+    let json = build_caddy_config(&config);
+
+    assert!(
+        json["apps"]["tls"].is_null(),
+        "a plaintext-only config must request no certificate, got {}",
+        json["apps"]["tls"]
+    );
+}
+
+// r[verify actuate.ingress.plaintext]
+#[test]
+fn plaintext_vhost_gets_no_redirect_route() {
+    let config = ProxyConfig {
+        listeners: vec![ProxyListener {
+            port: 80,
+            proto: ProxyListenerProto::Http,
+        }],
+        virtual_hosts: vec![http_vhost("clinic.local", "[fd5e::1]:80")],
+        l4_routes: vec![],
+        warm_cert_hostnames: Default::default(),
+        cert_endpoint_url: None,
+    };
+    let json = build_caddy_config(&config);
+    let routes = json["apps"]["http"]["servers"]["seedling_http"]["routes"].to_string();
+
+    assert!(
+        !routes.contains("static_response") && !routes.contains("Location"),
+        "plaintext vhost declares no redirect, so none should be emitted: {routes}"
+    );
+}
+
+// r[verify actuate.ingress.plaintext]
+#[test]
+fn plaintext_ingress_is_served_end_to_end() {
+    // Translate then render, so this covers the whole path a `.local` host
+    // takes: site ingress with no TLS, HTTP attachment on :80, forwarding to
+    // an app service. Previously this produced an empty Caddy config.
+    let proxy = build_proxy_config(
+        &[(plaintext_ingress("clinic.local", 80), service_upstream(80))],
+        &[],
+    );
+    let json = build_caddy_config(&proxy);
+    let servers = &json["apps"]["http"]["servers"];
+
+    assert!(
+        servers["seedling_http"].is_object(),
+        "plaintext host must be served over HTTP, got {}",
+        serde_json::to_string(&json).unwrap()
+    );
+    assert_eq!(servers["seedling_http"]["listen"][0], ":80");
+    let routes = servers["seedling_http"]["routes"].to_string();
+    assert!(
+        routes.contains("clinic.local"),
+        "host matcher missing: {routes}"
+    );
+    assert!(
+        routes.contains("fd5e:ed12:3456:200::1"),
+        "upstream missing: {routes}"
+    );
+    assert!(
+        json["apps"]["tls"].is_null(),
+        "no certificate should be requested for a plaintext host"
+    );
+}
+
+// r[verify actuate.ingress.plaintext]
+#[test]
+fn mixed_termination_on_one_hostname_serves_each_from_its_own_listener() {
+    let mut secure = plaintext_ingress("clinic.local", 443);
+    secure.tls = true;
+
+    let proxy = build_proxy_config(
+        &[
+            (plaintext_ingress("clinic.local", 80), service_upstream(80)),
+            (secure, service_upstream(80)),
+        ],
+        &[],
+    );
+    let json = build_caddy_config(&proxy);
+    let servers = &json["apps"]["http"]["servers"];
+
+    assert!(
+        servers["seedling_http"].is_object(),
+        "the plaintext route must still be served over HTTP: {}",
+        serde_json::to_string(&json).unwrap()
+    );
+    assert!(
+        servers["seedling_https"].is_object(),
+        "the TLS route must be served over HTTPS"
+    );
+    assert_eq!(servers["seedling_http"]["listen"][0], ":80");
+    assert_eq!(
+        servers["seedling_https"]["routes"]
+            .as_array()
+            .map(|r| r.len()),
+        Some(1),
+        "only the TLS-terminating vhost belongs in the HTTPS server"
     );
 }
