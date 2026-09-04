@@ -1,5 +1,5 @@
 ---
-status: draft
+status: complete
 ---
 
 # Caddy image: add the rate-limit module
