@@ -266,17 +266,27 @@ Absent specification bugs, anything that is not defined here is either defined i
 >   `def` is an object describing the resource's configuration. The shape varies by `type`:
 >   for `ingress`: `{ hostname, port, tls, dtls, http_terminate, redirect }`;
 >   for `service`: `{ http }`;
->   for `http_service`: `{ service, port }`;
+>   for `http_service`: `{ service, port, routes }`;
 >   for `deployment`: `{ container, pod, scale, on_update, on_terminate }`;
 >   for `job`: `{ container, pod, deadline }`;
 >   for `volume`: `{ readonly, tmpfs, writes, exported, export_description }`.
 >   `container` has fields `image`, `command`, `args`, `env`, `volume_mounts`, `on_exit`, `memory`, `cpus`, `extra_caps`, `writable_rootfs`, `pids_limit`.
 >   `pod` has fields `service_mounts`, `http_bindings`, `tcp_bindings`, `udp_bindings` (each an array of strings).
+>   `routes` is an array of objects with fields `prefix`, `compress`, and `balance`, one per HTTP route the service is served through, sorted by `prefix` for stable diffing.
 > - `params`: array of objects with fields `name`, `value`, `is_set`, `secret`, `kind`, `required`, `description`, and `default_value`.
 >   `is_set` is `true` when the parameter has a stored value.
 >   `value` is the string value if the parameter is set and not secret; `null` if the parameter is unset or if it is secret.
 >   `secret` is `true` when the parameter's effective secret flag is `true` (see [param.schema.secret](#l--param.schema.secret) and [param.schema.secret-from-kind](#l--param.schema.secret-from-kind)).
 >   The schema fields (`kind`, `required`, `description`, `default_value`) reflect any metadata set via the BSL param builder methods.
+
+> i[app.describe.proxy-settings]
+> Each entry in an `http_service` def's `routes` array reports the proxy settings in force on that route, after the resolution defined in [service.http.proxy-settings.resolution](language.md#l--service.http.proxy-settings.resolution).
+> Values are fully resolved: a field the app set at neither route nor service level is reported at its default rather than as null or absent, so a reader never has to know the defaults to interpret the response.
+>
+> `compress` is `null` when compression is disabled for the route, and otherwise an object with fields `encodings` (array of strings), `minimum_length` (integer), and `content_types` (array of strings).
+> `balance` is an object with fields `policy` (string), `try_duration`, and `interval` (the latter two in seconds).
+>
+> A service whose backing pods declare no HTTP route bindings reports the single `/` route it is served through, so the array is never empty for an HTTP service.
 
 > i[app.describe.param-secret]
 > When a param's effective `secret` flag is `true`, its `value` must be `null` in the response regardless of whether a value is stored. Clients must use `is_set` to distinguish an unset secret from a set-but-redacted secret.
