@@ -1,0 +1,227 @@
+<!-- spec: interface.md i[app.describe.proxy-settings] -->
+<!DOCTYPE html>
+<html lang="en-NZ">
+<head>
+<meta charset="utf-8">
+<title>Routes on the service def</title>
+<style>
+  :root {
+    --text: rgba(0,0,0,0.87);
+    --text2: rgba(0,0,0,0.6);
+    --line: rgba(0,0,0,0.12);
+    --chip: rgba(0,0,0,0.23);
+    --green: #2e7d32;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px;
+    background: #fafafa;
+    color: var(--text);
+    font-family: "Roboto", "Helvetica", "Arial", sans-serif;
+    font-size: 16px;
+    line-height: 1.5;
+  }
+  .page { max-width: 940px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; font-weight: 400; margin: 0 0 4px; }
+  .lede { color: var(--text2); font-size: 0.875rem; margin: 0 0 28px; }
+  h2 { font-size: 1.25rem; font-weight: 500; line-height: 1.6; margin: 0 0 8px; }
+  .panel { margin-bottom: 28px; }
+  .paper {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 16px;
+  }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  pre {
+    margin: 0;
+    font-size: 0.8125rem;
+    line-height: 1.7;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  .k { color: #0b7285; }
+  .s { color: #2b8a3e; }
+  .n { color: #a04000; }
+  .c { color: var(--text2); font-style: italic; }
+  .kw { color: var(--green); }
+
+  /* Resource row, matching AppDetail's ResourcesSection */
+  .res-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .res-name { font-size: 0.875rem; font-weight: 500; }
+  .res-type { font-size: 0.75rem; color: var(--text2); }
+  .chips { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    height: 24px;
+    padding: 0 8px;
+    border: 1px solid var(--chip);
+    border-radius: 16px;
+    font-size: 0.8125rem;
+    white-space: nowrap;
+  }
+  .chip.off { color: var(--text2); }
+  .mono-cap { font-size: 0.75rem; font-family: ui-monospace, Menlo, Consolas, monospace; }
+
+  /* the new bit: per-route lines */
+  .routes { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+  .route { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .route .prefix {
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 0.75rem;
+    min-width: 44px;
+  }
+
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 0.875rem; font-weight: 500; padding: 6px 16px; border-bottom: 1px solid var(--line); }
+  td { font-size: 0.875rem; padding: 6px 16px; }
+  td.inst { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.8rem; }
+  td.state { text-align: right; }
+  .outlined { border: 1px solid var(--line); border-radius: 4px; margin-top: 4px; overflow: hidden; background: #fff; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--green); margin-right: 6px; }
+
+  .note {
+    background: #e5f6fd;
+    color: #014361;
+    border-radius: 4px;
+    padding: 10px 14px;
+    font-size: 0.875rem;
+    margin-top: 12px;
+  }
+  .stack > * + * { margin-top: 16px; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <h1>Routes on the service def</h1>
+  <p class="lede">Resolved compression and balancing hang off the existing <code>service</code> resource. No new resource kind.</p>
+
+  <div class="panel">
+    <h2>Declared in BSL</h2>
+    <div class="paper">
+<pre><span class="kw">let</span> web_svc = app.service(<span class="s">"web"</span>).exported().http(<span class="n">80</span>)
+    .compress(#{ minimum_length: <span class="n">1024</span> })
+    .balance(#{ policy: <span class="s">"least_conn"</span> });
+
+web_svc.route(<span class="s">"/api"</span>).balance(#{ try_duration: <span class="n">10</span> });
+web_svc.route(<span class="s">"/v1"</span>).compress(<span class="kw">false</span>);</pre>
+    </div>
+    <div class="note">
+      Three routes come from the deployments' bindings (<code>/</code> frontend, <code>/api</code> and <code>/v1</code> api).
+      Each field resolves on its own: <code>/api</code> keeps the service's <code>least_conn</code> and its own try duration.
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>ctl apps show</h2>
+    <div class="paper">
+<pre><span class="c">// resources[] entry for the service, other resources omitted</span>
+{
+  <span class="k">"name"</span>: <span class="s">"web"</span>,
+  <span class="k">"type"</span>: <span class="s">"service"</span>,
+  <span class="k">"def"</span>: {
+    <span class="k">"kind"</span>: <span class="s">"service"</span>,
+    <span class="k">"http"</span>: <span class="kw">true</span>,
+    <span class="k">"exported"</span>: <span class="kw">true</span>,
+    <span class="k">"export_description"</span>: <span class="kw">null</span>,
+    <span class="k">"description"</span>: <span class="kw">null</span>,
+    <span class="k">"routes"</span>: [
+      {
+        <span class="k">"prefix"</span>: <span class="s">"/"</span>,
+        <span class="k">"compress"</span>: {
+          <span class="k">"encodings"</span>: [<span class="s">"zstd"</span>, <span class="s">"gzip"</span>],
+          <span class="k">"minimum_length"</span>: <span class="n">1024</span>,
+          <span class="k">"content_types"</span>: [<span class="s">"text/*"</span>, <span class="s">"application/json"</span>, <span class="c">/* proxy default set */</span>]
+        },
+        <span class="k">"balance"</span>: { <span class="k">"policy"</span>: <span class="s">"least_conn"</span>, <span class="k">"try_duration"</span>: <span class="n">5.0</span>, <span class="k">"interval"</span>: <span class="n">0.25</span> }
+      },
+      {
+        <span class="k">"prefix"</span>: <span class="s">"/api"</span>,
+        <span class="k">"compress"</span>: { <span class="k">"encodings"</span>: [<span class="s">"zstd"</span>, <span class="s">"gzip"</span>], <span class="k">"minimum_length"</span>: <span class="n">1024</span>, <span class="k">"content_types"</span>: [<span class="c">/* … */</span>] },
+        <span class="k">"balance"</span>: { <span class="k">"policy"</span>: <span class="s">"least_conn"</span>, <span class="k">"try_duration"</span>: <span class="n">10.0</span>, <span class="k">"interval"</span>: <span class="n">0.25</span> }
+      },
+      {
+        <span class="k">"prefix"</span>: <span class="s">"/v1"</span>,
+        <span class="k">"compress"</span>: <span class="kw">null</span>,
+        <span class="k">"balance"</span>: { <span class="k">"policy"</span>: <span class="s">"least_conn"</span>, <span class="k">"try_duration"</span>: <span class="n">5.0</span>, <span class="k">"interval"</span>: <span class="n">0.25</span> }
+      }
+    ]
+  },
+  <span class="k">"instances"</span>: [ <span class="c">/* … */</span> ],
+  <span class="k">"faults"</span>: [],
+  <span class="k">"stopped"</span>: <span class="kw">false</span>
+}</pre>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Web UI</h2>
+    <div class="paper stack">
+
+      <div>
+        <div class="res-head">
+          <span class="res-name">web</span>
+          <span class="res-type">service</span>
+        </div>
+        <div class="chips"><span class="chip">http</span></div>
+        <div class="routes">
+          <div class="route">
+            <span class="prefix">/</span>
+            <span class="chip">compress: zstd gzip</span>
+            <span class="chip">lb: least_conn</span>
+            <span class="chip">try: 5s</span>
+          </div>
+          <div class="route">
+            <span class="prefix">/api</span>
+            <span class="chip">compress: zstd gzip</span>
+            <span class="chip">lb: least_conn</span>
+            <span class="chip">try: 10s</span>
+          </div>
+          <div class="route">
+            <span class="prefix">/v1</span>
+            <span class="chip off">compress: off</span>
+            <span class="chip">lb: least_conn</span>
+            <span class="chip">try: 5s</span>
+          </div>
+        </div>
+        <div class="outlined">
+          <table>
+            <thead><tr><th>Instance</th><th style="width:120px;text-align:right">State</th><th style="width:40px"></th></tr></thead>
+            <tbody><tr><td class="inst">web</td><td class="state"><span class="dot"></span>Ready</td><td></td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div>
+        <div class="res-head">
+          <span class="res-name">api</span>
+          <span class="res-type">deployment</span>
+        </div>
+        <div class="chips">
+          <span class="mono-cap" style="opacity:0.8">ghcr.io/beyondessential/tamanu-central:2.42.1</span>
+          <span class="chip">http: 3000 -&gt; web /api</span>
+          <span class="chip">http: 3000 -&gt; web /v1</span>
+        </div>
+        <div class="outlined">
+          <table>
+            <thead><tr><th>Instance</th><th style="width:120px;text-align:right">State</th><th style="width:40px"></th></tr></thead>
+            <tbody>
+              <tr><td class="inst">api-0</td><td class="state"><span class="dot"></span>Ready</td><td></td></tr>
+              <tr><td class="inst">api-1</td><td class="state"><span class="dot"></span>Ready</td><td></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+    <div class="note">
+      The route lines are the only new markup. The <code>http</code> chip, the deployment row and the instance tables are unchanged.
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
