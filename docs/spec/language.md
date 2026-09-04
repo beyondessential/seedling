@@ -393,7 +393,7 @@ This is currently the only value.
 > `compress(enabled: bool)` and `compress(config: map)` are builder methods declaring compression of responses served through the proxy.
 > Both are available on an [HTTP Service](#l--service.http) and on an [HTTP Service Route](#l--service.http.route).
 >
-> `compress(false)` disables compression. `compress(true)` enables it with the default settings below, as does the map form, which additionally sets one or more fields.
+> `compress(false)` disables compression. `compress(true)` enables it with the default settings below, as does the map form, which additionally sets whichever fields it names.
 >
 > Compression is a property of responses proxied to the service's pods. [Redirect](#l--ingress.redirect) responses are never compressed.
 
@@ -417,7 +417,7 @@ This is currently the only value.
 > - `interval`: seconds to wait between successive attempts to find one. Default 0.25.
 >
 > Both timing fields must be non-negative, and an unrecognised `policy` must throw.
-> A `try_duration` of zero disables retrying, so a request that cannot reach its first-chosen upstream fails immediately.
+> A `try_duration` of zero disables retrying, so a request that cannot reach its first-chosen upstream fails immediately and `interval` is not consulted.
 > An `interval` of zero combined with a non-zero `try_duration` must throw, because it would spin without pause whenever every upstream is unreachable.
 
 > l[service.http.proxy-settings.resolution]
