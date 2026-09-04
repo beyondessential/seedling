@@ -369,6 +369,7 @@ This is currently the only value.
 > Services accept TCP and UDP traffic as long as they have places to route it to.
 > If there is no target for some traffic, it is dropped or rejected (implementation-defined).
 > If there are multiple targets for the same traffic, it is distributed round-robin.
+> HTTP traffic reaching the Service through an Ingress is distributed by the proxy under the route's [balancing policy](#l--service.http.balance), which is round-robin unless the app selects otherwise.
 
 ## HTTP Service
 
@@ -387,6 +388,45 @@ This is currently the only value.
 > The URL prefix is _not_ stripped for the pod: `GET /api/books` routed through a `route("/api")` will appear as `GET /api/books` to the container.
 >
 > Prefix-matching is done by length: for any given URL, the longest matching prefix is selected. If more complicated logic is required, an application should embed an HTTP "reverse proxy" container of its choice.
+
+> l[service.http.compress]
+> `compress(enabled: bool)` and `compress(config: map)` are builder methods declaring compression of responses served through the proxy.
+> Both are available on an [HTTP Service](#l--service.http) and on an [HTTP Service Route](#l--service.http.route).
+>
+> `compress(false)` disables compression. `compress(true)` enables it with the default settings below, as does the map form, which additionally sets one or more fields.
+>
+> Compression is a property of responses proxied to the service's pods. [Redirect](#l--ingress.redirect) responses are never compressed.
+
+> l[service.http.compress.fields]
+> All fields of the `config` map are optional:
+>
+> - `encodings`: the content encodings offered, in descending order of preference. Accepted values are `"zstd"` and `"gzip"`. Default `["zstd", "gzip"]`.
+> - `minimum_length`: responses shorter than this many bytes are served uncompressed, because compressing them costs more than it saves. Default 512.
+> - `content_types`: the content types eligible for compression. An entry ending in `*` matches any content type with that prefix. Default is a set covering text and text-like formats: markup, stylesheets, scripts, JSON and other structured text, SVG, and fonts.
+>
+> `minimum_length` must be a non-negative integer. An unrecognised encoding, an empty `encodings` list, and an empty `content_types` list must each throw.
+
+> l[service.http.balance]
+> `balance(config: map)` is a builder method controlling how a request is matched to one of the upstreams backing an HTTP route, and how long the proxy may keep trying.
+> It is available on an [HTTP Service](#l--service.http) and on an [HTTP Service Route](#l--service.http.route).
+>
+> All fields of the `config` map are optional:
+>
+> - `policy`: how an upstream is chosen for a request. One of `"round_robin"`, `"least_conn"`, `"random"`, `"first"`. Default `"round_robin"`.
+> - `try_duration`: seconds the proxy may spend finding a usable upstream for a single request before giving up. Default 5.
+> - `interval`: seconds to wait between successive attempts to find one. Default 0.25.
+>
+> Both timing fields must be non-negative, and an unrecognised `policy` must throw.
+> A `try_duration` of zero disables retrying, so a request that cannot reach its first-chosen upstream fails immediately.
+> An `interval` of zero combined with a non-zero `try_duration` must throw, because it would spin without pause whenever every upstream is unreachable.
+
+> l[service.http.proxy-settings.resolution]
+> `compress` and `balance` may each be set on an HTTP Service and on its individual HTTP Service Routes.
+>
+> Every field resolves on its own: the route's value if the route set that field, otherwise the service's value if the service set it, otherwise the field's default.
+> A route setting some fields therefore keeps the service's values for the fields it left unset, and setting `compress` never disturbs `balance` or the reverse.
+>
+> A Service with no HTTP Service Routes is served through a single `/` route, which takes the service's values.
 
 > l[service.exported]
 > `service.exported(options?: #{ description?: string })` is a builder method which marks the service as exported. Exported services are advertised to the control plane and operators.
