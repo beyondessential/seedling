@@ -124,3 +124,85 @@ defaults rather than spelling them out.
 round-robin" without qualification. Now that an app can select `least_conn`,
 that item has been scoped: round-robin remains the default and the L4 behaviour,
 with HTTP traffic through an ingress following the route's policy.
+
+## Verified Caddy shapes (v2.11.3, the pinned image)
+
+Read from the Go struct tags at the pinned tag rather than the docs site, whose
+field lists render client-side and come back empty.
+
+`encode` (`modules/caddyhttp/encode/encode.go`):
+
+- `encodings` is a module map, so `#{ "zstd": {}, "gzip": {} }`, not an array.
+- `prefer` is the array that carries preference order.
+- `minimum_length` defaults to 512, confirming the spec's default.
+- `match` is a ResponseMatcher: `#{ "headers": #{ "Content-Type": [...] } }`.
+  Its default is a 31-entry list Caddy derives from Cloudflare's compressible
+  set, covering `text/*`, the `application/*json` family, xml, wasm, fonts,
+  `image/svg+xml` and icons. `l[service.http.compress.fields]` describes exactly
+  this set, so the emitter omits the field when it is unchanged.
+
+`load_balancing` (`modules/caddyhttp/reverseproxy/reverseproxy.go`):
+
+- `selection_policy` is `#{ "policy": "<name>" }`. All four names the spec
+  offers exist as modules: `round_robin`, `least_conn`, `random`, `first`.
+- `try_duration` and `try_interval` are `caddy.Duration`, which unmarshals from
+  either a string or a number of nanoseconds. Emit integer nanoseconds: exact
+  for fractional seconds, no formatting edge cases.
+- `try_interval` defaults to 250ms when a try duration is set, matching the
+  spec's 0.25.
+- Caddy's own comment warns that a zero interval with a non-zero try duration
+  "can cause the CPU to spin if all backends are down", which is the hazard
+  `l[service.http.balance]` throws on.
+
+Note `retries` and `try_duration` interact rather than one plainly winning, so
+the decision to expose duration and interval instead of a count stands.
+
+## Emitter ordering
+
+`encode` is response middleware and must precede `reverse_proxy` in the route's
+`handle` array. That shifts the proxy handler to `handle[1]`, so the existing
+assertions in `crates/core/src/system/caddy/tests.rs` that read
+`handle[0]["upstreams"]` need updating as part of the change.
+
+## Build checklist
+
+Six of the eight new rules are independent of the open visibility question and
+can be built now. Two cannot.
+
+- [ ] `defs/service/proxy.rs`: policy and encoding enums, declared settings with
+      per-field `Option`s, a tri-state for compress (unset / disabled / enabled),
+      defaults, and rhai map parsing with the spec's validation
+      (`l[impl service.http.compress.fields]`)
+- [ ] Per-field resolution across route then service then default, with the
+      fallback `/` route taking the service's values
+      (`l[impl service.http.proxy-settings.resolution]`)
+- [ ] `compress` and `balance` builders on `HttpService` and `HttpServiceRoute`,
+      writing through to the backing def; route settings keyed by prefix
+      (`l[impl service.http.compress]`, `l[impl service.http.balance]`)
+- [ ] Carry resolved settings on `ProxyRoute`'s reverse-proxy handler through
+      `HttpForwardRoute` and `build_proxy_config`
+- [ ] Resolve per prefix in `collect_http_routes`, covering both upstream shapes
+- [ ] Emit `encode` and `load_balancing`, leaving redirect and layer4 handlers
+      bare (`r[impl service.http.route.compression]`,
+      `r[impl service.http.route.balancing]`)
+- [ ] Update the `handle[0]` assertions in the caddy tests
+
+Blocked on the visibility decision, see the two mockups under
+`.workhorse/design/mockups/b1/`:
+
+- [ ] Report resolved settings on the app description
+      (`i[impl app.describe.proxy-settings]`,
+      `r[impl service.http.route.proxy-settings.visibility]`)
+
+## Why the visibility rules cannot be built as written
+
+`i[app.describe.proxy-settings]` hangs the `routes` array off an `http_service`
+def, but no such resource is ever emitted. `App::service()` only ever inserts
+`Resource::Service`, and `svc.http()` returns a per-call view that registers
+nothing, so `Resource::HttpService` and `HttpServiceSummary` are unreachable
+today and `/apps/show` never produces a `http_service` entry. The interface spec
+has listed that def shape all along; this card's edit extended a shape that was
+already phantom.
+
+Either the settings move onto the `service` def, or `http_service` becomes a
+real resource. The mockups show both against the same BSL.
