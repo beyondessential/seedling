@@ -262,6 +262,7 @@ fn service_summary_flags_http_and_export() {
     let service = Service {
         name: std::sync::Arc::new("db".to_owned()),
         def: std::sync::Arc::new(parking_lot::Mutex::new(ServiceDef {
+            balance: Default::default(),
             http: None,
             exported: Some(ExportOptions {
                 description: Some("database".to_owned()),

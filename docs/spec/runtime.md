@@ -210,6 +210,41 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > When the backing service has no `http_bindings` at all (e.g. an HTTPS-fronted TCP-only service), the runtime falls back to a single `/` route through the Service's general routing pool.
 
+> r[service.http.route.compression]
+> Every reverse-proxy route the runtime emits must compress the responses it serves, according to that route's resolved [compression settings](language.md#l--service.http.compress).
+> Compression is applied by the proxy, so a pod need not implement it to benefit from it.
+>
+> Compression applies to reverse-proxy routes alone.
+> Redirect responses, whether from an app-declared [ingress redirect](language.md#l--ingress.redirect)
+> or a [site ingress redirect attachment](#r--ingress.site.attachment), and non-HTTP forwarding must be emitted without it.
+>
+> A response that already carries a content encoding chosen by the upstream must be forwarded as it stands, rather than compressed a second time.
+
+> r[service.http.route.balancing]
+> Every reverse-proxy route the runtime emits must distribute requests across its upstreams according to that route's resolved [balancing settings](language.md#l--service.balance).
+>
+> Balancing applies to reverse-proxy routes alone.
+> Redirect responses and non-HTTP forwarding have no pool of upstreams to choose from, and must be emitted without it.
+> A route with a single upstream has no choice to make either, so its policy has no observable effect there; this is the case for the fallback `/` route of a service with no HTTP route bindings, whose try duration and interval still apply.
+>
+> Within the route's try duration, a request whose connection to an upstream cannot be established must be attempted against another upstream from the route's pool, pausing for the route's interval between attempts.
+> This must happen whatever the request method, because no part of a request that never connected can have been acted on.
+> The effect is that a request arriving while an instance is shutting down is served by a surviving instance instead of failing, so a [rolling update](#r--update.rolling) does not surface as errors to clients.
+>
+> A request whose connection was established but which then yielded no response, because the upstream closed the connection or fell silent, must be attempted again only when it is a `GET`, which alone can be repeated without risk of acting twice.
+> A response that does arrive carrying an error status is the upstream's answer rather than a failure to reach it, and must be returned to the client whatever that status.
+>
+> The proxy must not form its own opinion of upstream health.
+> The upstream list it is given is authoritative: which backends are eligible is decided by the [routing pool](#r--lifecycle.service.routing-pool), from the runtime's own [healthchecks](language.md#l--deployment.healthcheck).
+> Health checking in the proxy would contradict that pool, which deliberately keeps every running backend in service when no healthy alternative exists rather than reducing capacity to nothing.
+> Retrying an unreachable upstream covers the interval between a backend becoming unusable and the pool being recomputed on a subsequent tick; it is not a substitute for the pool.
+
+> r[service.http.route.proxy-settings.visibility]
+> The compression and balancing settings in force on a service and on each of its routes, after resolution, must be readable when inspecting the app that declares the service, as [app.describe.proxy-settings](interface.md#i--app.describe.proxy-settings) defines.
+> An operator diagnosing an uncompressed response or a failed request can then establish what the proxy was told to do without reading the app's script.
+>
+> These settings are declared by the app. The runtime provides no means to change them on a running app.
+
 > r[lifecycle.service.routing-pool]
 > The routing pool for a Service is the set of backend pod instances eligible to receive traffic. The runtime selects the pool from the running backends as follows:
 >

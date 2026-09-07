@@ -1894,7 +1894,6 @@ fn resource_kind_from_debug_str(s: &str) -> Option<ResourceKind> {
         "Deployment" => Some(ResourceKind::Deployment),
         "Job" => Some(ResourceKind::Job),
         "Service" => Some(ResourceKind::Service),
-        "HttpService" => Some(ResourceKind::HttpService),
         "Volume" => Some(ResourceKind::Volume),
         "ExternalVolume" => Some(ResourceKind::ExternalVolume),
         _ => None,

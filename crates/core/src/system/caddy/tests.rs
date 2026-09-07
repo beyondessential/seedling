@@ -5,6 +5,10 @@ use crate::system::types::{
     VirtualHost,
 };
 
+fn default_proxy() -> crate::system::types::RouteProxy {
+    crate::defs::service::ResolvedRouteProxy::default().into()
+}
+
 fn http_vhost(hostname: &str, upstream: &str) -> VirtualHost {
     VirtualHost {
         hostname: hostname.to_string(),
@@ -14,6 +18,7 @@ fn http_vhost(hostname: &str, upstream: &str) -> VirtualHost {
             prefix: "/".to_string(),
             handler: ProxyRouteHandler::ReverseProxy {
                 upstreams: vec![format!("http://{upstream}")],
+                proxy: default_proxy(),
             },
         }],
     }
@@ -31,6 +36,7 @@ fn https_vhost(hostname: &str, upstream: &str) -> VirtualHost {
             prefix: "/".to_string(),
             handler: ProxyRouteHandler::ReverseProxy {
                 upstreams: vec![format!("http://{upstream}")],
+                proxy: default_proxy(),
             },
         }],
     }
@@ -116,6 +122,7 @@ fn tls_acme_subjects_appear_in_automation() {
                 prefix: "/".to_string(),
                 handler: ProxyRouteHandler::ReverseProxy {
                     upstreams: vec!["http://[fd5e::1]:3000".to_string()],
+                    proxy: default_proxy(),
                 },
             }],
         }],
@@ -167,6 +174,7 @@ fn warm_cert_skipped_when_already_routed() {
                 prefix: "/".to_string(),
                 handler: ProxyRouteHandler::ReverseProxy {
                     upstreams: vec!["http://[fd5e::1]:3000".to_string()],
+                    proxy: default_proxy(),
                 },
             }],
         }],
@@ -213,6 +221,7 @@ fn dial_strips_http_scheme() {
                 prefix: "/".to_string(),
                 handler: ProxyRouteHandler::ReverseProxy {
                     upstreams: vec!["http://[fd5e:ed12:3456:0100::3]:3000".to_string()],
+                    proxy: default_proxy(),
                 },
             }],
         }],
@@ -221,7 +230,7 @@ fn dial_strips_http_scheme() {
         cert_endpoint_url: None,
     };
     let json = build_caddy_config(&config);
-    let dial = &json["apps"]["http"]["servers"]["seedling_https"]["routes"][0]["handle"][0]["upstreams"]
+    let dial = &json["apps"]["http"]["servers"]["seedling_https"]["routes"][0]["handle"][1]["upstreams"]
         [0]["dial"];
     assert_eq!(dial, "[fd5e:ed12:3456:0100::3]:3000");
 }
@@ -247,6 +256,7 @@ fn https_server_includes_quic_listener() {
                 prefix: "/".to_string(),
                 handler: ProxyRouteHandler::ReverseProxy {
                     upstreams: vec!["http://[fd5e::1]:3000".to_string()],
+                    proxy: default_proxy(),
                 },
             }],
         }],
@@ -397,12 +407,14 @@ fn vhost_with_multiple_prefixes_emits_per_prefix_routes_longest_first() {
                     prefix: "/".to_string(),
                     handler: ProxyRouteHandler::ReverseProxy {
                         upstreams: vec!["http://[fd5e::1]:3000".to_string()],
+                        proxy: default_proxy(),
                     },
                 },
                 ProxyRoute {
                     prefix: "/api".to_string(),
                     handler: ProxyRouteHandler::ReverseProxy {
                         upstreams: vec!["http://[fd5e::2]:3000".to_string()],
+                        proxy: default_proxy(),
                     },
                 },
             ],
@@ -595,6 +607,7 @@ fn service_upstream(port: u16) -> crate::system::translate::proxy::ServiceUpstre
         routes: vec![],
         service_ip: "fd5e:ed12:3456:200::1".parse().unwrap(),
         service_port: port,
+        proxy: default_proxy(),
     }
 }
 
@@ -708,5 +721,129 @@ fn mixed_termination_on_one_hostname_serves_each_from_its_own_listener() {
             .map(|r| r.len()),
         Some(1),
         "only the TLS-terminating vhost belongs in the HTTPS server"
+    );
+}
+
+// r[verify service.http.route.compression]
+#[test]
+fn reverse_proxy_routes_compress_ahead_of_the_proxy() {
+    let config = ProxyConfig {
+        listeners: vec![ProxyListener {
+            port: 80,
+            proto: ProxyListenerProto::Http,
+        }],
+        virtual_hosts: vec![http_vhost("app.example.com", "http://[fd5e::1]:3000")],
+        ..Default::default()
+    };
+    let json = build_caddy_config(&config);
+    let handle = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"];
+
+    // encode must wrap the proxy, so it comes first in the chain.
+    assert_eq!(handle[0]["handler"], "encode");
+    assert_eq!(handle[1]["handler"], "reverse_proxy");
+
+    assert!(handle[0]["encodings"]["zstd"].is_object());
+    assert!(handle[0]["encodings"]["gzip"].is_object());
+    assert_eq!(handle[0]["prefer"][0], "zstd");
+    assert_eq!(handle[0]["minimum_length"], 512);
+    // Left out so the proxy applies its own text-like content-type matcher.
+    assert!(handle[0]["match"].is_null());
+}
+
+// r[verify service.http.route.balancing]
+#[test]
+fn reverse_proxy_routes_carry_balancing_defaults() {
+    let config = ProxyConfig {
+        listeners: vec![ProxyListener {
+            port: 80,
+            proto: ProxyListenerProto::Http,
+        }],
+        virtual_hosts: vec![http_vhost("app.example.com", "http://[fd5e::1]:3000")],
+        ..Default::default()
+    };
+    let json = build_caddy_config(&config);
+    let lb = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"][1]["load_balancing"];
+
+    assert_eq!(lb["selection_policy"]["policy"], "round_robin");
+    // Caddy durations as nanoseconds: 5s and 250ms.
+    assert_eq!(lb["try_duration"], 5_000_000_000i64);
+    assert_eq!(lb["try_interval"], 250_000_000i64);
+}
+
+// r[verify service.http.route.compression]
+// r[verify service.http.route.balancing]
+#[test]
+fn redirect_routes_are_emitted_bare() {
+    let config = ProxyConfig {
+        listeners: vec![ProxyListener {
+            port: 80,
+            proto: ProxyListenerProto::Http,
+        }],
+        virtual_hosts: vec![VirtualHost {
+            hostname: "old.example.com".to_string(),
+            tls_acme: false,
+            redirect: None,
+            routes: vec![ProxyRoute {
+                prefix: "/".to_string(),
+                handler: ProxyRouteHandler::Redirect {
+                    url: "https://new.example.com".to_string(),
+                    code: 308,
+                    preserve_path: true,
+                },
+            }],
+        }],
+        ..Default::default()
+    };
+    let json = build_caddy_config(&config);
+    let handle = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"];
+
+    // A redirect has nothing to compress and no pool to balance across.
+    assert_eq!(handle[0]["handler"], "static_response");
+    assert!(handle[1].is_null());
+}
+
+// r[verify service.http.route.compression]
+#[test]
+fn compression_can_be_switched_off_for_a_route() {
+    use crate::system::types::{RouteBalance, RouteProxy};
+
+    let proxy = RouteProxy {
+        compress: None,
+        balance: RouteBalance {
+            policy: "least_conn".to_string(),
+            try_duration_secs: 10.0,
+            interval_secs: 0.25,
+        },
+    };
+    let config = ProxyConfig {
+        listeners: vec![ProxyListener {
+            port: 80,
+            proto: ProxyListenerProto::Http,
+        }],
+        virtual_hosts: vec![VirtualHost {
+            hostname: "app.example.com".to_string(),
+            tls_acme: false,
+            redirect: None,
+            routes: vec![ProxyRoute {
+                prefix: "/".to_string(),
+                handler: ProxyRouteHandler::ReverseProxy {
+                    upstreams: vec!["http://[fd5e::1]:3000".to_string()],
+                    proxy,
+                },
+            }],
+        }],
+        ..Default::default()
+    };
+    let json = build_caddy_config(&config);
+    let handle = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"];
+
+    assert_eq!(handle[0]["handler"], "reverse_proxy");
+    assert_eq!(
+        handle[0]["load_balancing"]["selection_policy"]["policy"],
+        "least_conn"
+    );
+    assert_eq!(
+        handle[0]["load_balancing"]["try_duration"],
+        10_000_000_000i64
     );
 }

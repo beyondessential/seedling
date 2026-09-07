@@ -10,7 +10,7 @@ use crate::{
     runtime::identity::ResourceInstance,
     system::types::{
         HttpRedirect, ProxyConfig, ProxyListener, ProxyListenerProto, ProxyRoute,
-        ProxyRouteHandler, VirtualHost,
+        ProxyRouteHandler, RouteProxy, VirtualHost,
     },
 };
 
@@ -31,6 +31,9 @@ pub struct ServiceUpstream {
     pub routes: Vec<HttpForwardRoute>,
     pub service_ip: Ipv6Addr,
     pub service_port: u16,
+    /// Settings for the synthesised `/` route used when `routes` is empty.
+    /// These are the service's own values, which is what that route takes.
+    pub proxy: RouteProxy,
 }
 
 /// One HTTP route on a service: the URL prefix declared in BSL, plus the
@@ -41,6 +44,8 @@ pub struct HttpForwardRoute {
     pub prefix: String,
     /// `ip:port` upstreams, one per backing pod observed running this tick.
     pub upstreams: Vec<String>,
+    /// Compression and balancing resolved for this prefix.
+    pub proxy: RouteProxy,
 }
 
 /// Resolved redirect target for a site-ingress attachment. Used in place of
@@ -136,6 +141,7 @@ pub fn build_proxy_config(
                 prefix: "/".to_string(),
                 handler: ProxyRouteHandler::ReverseProxy {
                     upstreams: vec![upstream_url],
+                    proxy: upstream.proxy.clone(),
                 },
             });
         } else {
@@ -149,6 +155,7 @@ pub fn build_proxy_config(
                     prefix: route.prefix.clone(),
                     handler: ProxyRouteHandler::ReverseProxy {
                         upstreams: upstream_urls,
+                        proxy: route.proxy.clone(),
                     },
                 });
             }
@@ -365,6 +372,7 @@ mod tests {
             routes: vec![],
             service_ip: "fd5e:ed12:3456:200::1".parse().unwrap(),
             service_port: port,
+            proxy: crate::defs::service::ResolvedRouteProxy::default().into(),
         }
     }
 

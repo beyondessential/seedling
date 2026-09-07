@@ -130,10 +130,7 @@ impl Observer {
                     now,
                 ));
             }
-            Resource::Service(_)
-            | Resource::HttpService(_)
-            | Resource::ExternalVolume(_)
-            | Resource::ExternalService(_) => {
+            Resource::Service(_) | Resource::ExternalVolume(_) | Resource::ExternalService(_) => {
                 // No directly observable system primitives via the current trait interfaces.
             }
         }

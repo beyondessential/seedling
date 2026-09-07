@@ -17,5 +17,18 @@
 http.handlers.reverse_proxy
 http.handlers.static_response
 http.handlers.rate_limit
+http.handlers.encode
+
+# Response encodings offered by the compression handler.
+http.encoders.zstd
+http.encoders.gzip
+
+# Every balancing policy an app can select, not only the default: the module
+# is chosen by the app's declaration, so the image must carry all of them.
+http.reverse_proxy.selection_policies.round_robin
+http.reverse_proxy.selection_policies.least_conn
+http.reverse_proxy.selection_policies.random
+http.reverse_proxy.selection_policies.first
+
 layer4
 layer4.handlers.proxy

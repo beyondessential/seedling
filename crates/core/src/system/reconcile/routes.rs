@@ -52,7 +52,6 @@ pub(super) fn build(
     for (id, resource) in &snapshot.resources {
         let svc_name = match resource {
             Resource::Service(s) => s.name.as_str(),
-            Resource::HttpService(h) => h.service.name().as_str(),
             _ => continue,
         };
 
@@ -166,52 +165,27 @@ pub(super) fn build(
 
     // Emit termination observations for services desired at Unscheduled.
     for dr in &desired.resources {
-        match &dr.definition {
-            Resource::Service(s) => {
-                if dr.desired != LifecycleState::Unscheduled {
-                    continue;
-                }
-                let svc_name = s.name.as_str();
-                let svc_instance = registry.get_or_create_singleton(
-                    app_name,
-                    ResourceKind::Service,
-                    Some(svc_name),
-                )?;
-                observations.push((svc_instance.clone(), "stop_sent", serde_json::json!({})));
-                observations.push((
-                    svc_instance.clone(),
-                    "network_removed",
-                    serde_json::json!({}),
-                ));
-                observations.push((
-                    svc_instance.clone(),
-                    "network_cleaned_up",
-                    serde_json::json!({}),
-                ));
+        if let Resource::Service(s) = &dr.definition {
+            if dr.desired != LifecycleState::Unscheduled {
+                continue;
             }
-            Resource::HttpService(h) => {
-                if dr.desired != LifecycleState::Unscheduled {
-                    continue;
-                }
-                let svc_name = h.service.name().as_str();
-                let svc_instance = registry.get_or_create_singleton(
-                    app_name,
-                    ResourceKind::Service,
-                    Some(svc_name),
-                )?;
-                observations.push((svc_instance.clone(), "stop_sent", serde_json::json!({})));
-                observations.push((
-                    svc_instance.clone(),
-                    "network_removed",
-                    serde_json::json!({}),
-                ));
-                observations.push((
-                    svc_instance.clone(),
-                    "network_cleaned_up",
-                    serde_json::json!({}),
-                ));
-            }
-            _ => {}
+            let svc_name = s.name.as_str();
+            let svc_instance = registry.get_or_create_singleton(
+                app_name,
+                ResourceKind::Service,
+                Some(svc_name),
+            )?;
+            observations.push((svc_instance.clone(), "stop_sent", serde_json::json!({})));
+            observations.push((
+                svc_instance.clone(),
+                "network_removed",
+                serde_json::json!({}),
+            ));
+            observations.push((
+                svc_instance.clone(),
+                "network_cleaned_up",
+                serde_json::json!({}),
+            ));
         }
     }
 
