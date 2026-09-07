@@ -206,12 +206,12 @@ This is currently the only value.
 >
 > - `Parameter`
 > - `Service`
-> - `HttpService`
 > - `Ingress`
 > - `Deployment`
 > - `Job`
 > - `Volume`
 > - `ExternalVolume`
+> - `ExternalService`
 > - `Action`
 >
 > Actions are invocable handles, not resources: `ResourceType.Action` exists for action-log identity, but resource collections such as `col(app)` and `app.select(...)` do not include actions, so selecting by `ResourceType.Action` yields an empty collection. Action invocation goes through [`Action.invoke`](#l--action.call).

@@ -24,7 +24,6 @@ pub struct ResourceId {
 pub enum ResourceKind {
     Parameter,
     Service,
-    HttpService,
     Ingress,
     Deployment,
     Job,
@@ -39,7 +38,6 @@ impl ResourceKind {
         let mut map = Map::new();
         map.insert("Parameter".into(), Dynamic::from(Self::Parameter));
         map.insert("Service".into(), Dynamic::from(Self::Service));
-        map.insert("HttpService".into(), Dynamic::from(Self::HttpService));
         map.insert("Ingress".into(), Dynamic::from(Self::Ingress));
         map.insert("Deployment".into(), Dynamic::from(Self::Deployment));
         map.insert("Job".into(), Dynamic::from(Self::Job));

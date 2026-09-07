@@ -194,6 +194,7 @@ can be built now. Two cannot.
 - [x] Move `balance` off the HTTP surface onto the Service, keeping the
       per-route override (`l[impl service.balance]`)
 - [x] Remove the dead `Resource::HttpService` and `HttpServiceSummary`
+- [x] Remove `ResourceKind::HttpService`, renumbering the kind byte
 
 ## Where the resolved settings surface
 
@@ -204,11 +205,21 @@ registers nothing. The interface spec had listed that phantom def shape all
 along. The settings now hang off the `service` def, and the dead
 `Resource::HttpService` and `HttpServiceSummary` are gone with it.
 
-`ResourceKind::HttpService` stays. Its discriminant is byte 6 of every instance
-address via `instance.kind as u8`, so dropping it would renumber `Ingress`
-onward and change the address of every service and pod on a live node. It is
-also persisted as a string in the history and stopped-resource tables and
-exposed to scripts as `ResourceType.HttpService`.
+`ResourceKind::HttpService` goes too. Its discriminant is byte 6 of every
+instance address via `instance.kind as u8`, so removing it renumbers `Ingress`
+onward and changes the address of every service and pod. That is only
+acceptable because no production node exists yet; once one does, this enum is
+append-only.
+
+`HttpService` remains as a BSL type, since it is still the per-call view a
+script gets from `service.http()`. What it loses is a `ResourceKind` of its
+own: `col(svc.http())` now takes the identity of the service it views, and
+`ResourceType.HttpService` no longer exists.
+
+The kind-byte table in `docs/networking.md` was already wrong before this,
+omitting `ExternalService` and so numbering `Action` 8 when it was 9. Corrected
+along with the renumbering. `l[const.resource-type.enum]` was missing
+`ExternalService` for the same reason.
 
 ## Why balancing is not on the HTTP surface
 

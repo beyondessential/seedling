@@ -79,12 +79,12 @@ fn referenced_modules(config: &serde_json::Value) -> std::collections::BTreeSet<
                 }
                 // A selection policy is named by the inline `policy` key of
                 // the `selection_policy` object.
-                if let Some(serde_json::Value::Object(policy)) = map.get("selection_policy") {
-                    if let Some(serde_json::Value::String(name)) = policy.get("policy") {
-                        out.insert(format!(
-                            "{namespace}.reverse_proxy.selection_policies.{name}"
-                        ));
-                    }
+                if let Some(serde_json::Value::Object(policy)) = map.get("selection_policy")
+                    && let Some(serde_json::Value::String(name)) = policy.get("policy")
+                {
+                    out.insert(format!(
+                        "{namespace}.reverse_proxy.selection_policies.{name}"
+                    ));
                 }
                 for value in map.values() {
                     handlers(value, namespace, out);

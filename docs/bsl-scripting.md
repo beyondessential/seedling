@@ -232,7 +232,7 @@ col.select(#{ name_patterns: ["worker-*"] })
 - `Output.Udp`: Hand plaintext UDP to the Service
 - `Output.Http1`: Hand plaintext HTTP/1.1 to the Service
 - `Output.Http2`: Hand plaintext HTTP/2 (h2c) to the Service
-- `ResourceType.{Parameter,Service,HttpService,Ingress,Deployment,Job,Volume,ExternalVolume,Action}`: For use with `col.select()`
+- `ResourceType.{Parameter,Service,Ingress,Deployment,Job,Volume,ExternalVolume,ExternalService,Action}`: For use with `col.select()`
 
 ## Annotated example
 
