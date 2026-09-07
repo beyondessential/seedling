@@ -7,7 +7,7 @@ use crate::{
         ingress::IngressDef,
         pod::PodDef,
         resource::{Resource, ResourceKind},
-        service::{HttpServiceDef, resolve},
+        service::{HttpServiceDef, ProxySettings, resolve},
     },
     runtime::{
         InstanceRegistry, desired::DesiredState, identity::ResourceInstance,
@@ -215,14 +215,34 @@ fn scan_pod_for_port(pod: &PodDef, service_name: &str) -> Option<u16> {
 
 /// The `HttpServiceDef` an app declared for `service_name`, if any. Both the
 /// app's own services and external-service slots can back an HTTP route.
-fn http_def_for(snapshot: &AppDef, service_name: &str) -> Option<HttpServiceDef> {
-    snapshot.resources.values().find_map(|r| match r {
-        Resource::Service(s) if s.name.as_str() == service_name => s.def.lock().http.clone(),
-        Resource::ExternalService(e) if e.name.as_str() == service_name => {
-            e.def.lock().http.clone()
-        }
-        _ => None,
-    })
+fn proxy_settings_for(snapshot: &AppDef, service_name: &str) -> (ProxySettings, RouteMap) {
+    snapshot
+        .resources
+        .values()
+        .find_map(|r| match r {
+            Resource::Service(s) if s.name.as_str() == service_name => {
+                let def = s.def.lock();
+                Some((def.proxy_settings(), routes_of(def.http.as_ref())))
+            }
+            Resource::ExternalService(e) if e.name.as_str() == service_name => {
+                let def = e.def.lock();
+                Some((
+                    ProxySettings {
+                        compress: def.http.as_ref().and_then(|h| h.compress.clone()),
+                        balance: def.balance.clone(),
+                    },
+                    routes_of(def.http.as_ref()),
+                ))
+            }
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+type RouteMap = std::collections::BTreeMap<String, ProxySettings>;
+
+fn routes_of(http: Option<&HttpServiceDef>) -> RouteMap {
+    http.map(|h| h.routes.clone()).unwrap_or_default()
 }
 
 /// Settings for a route the service declares nothing specific about, which is
@@ -230,8 +250,8 @@ fn http_def_for(snapshot: &AppDef, service_name: &str) -> Option<HttpServiceDef>
 // r[impl service.http.route.compression]
 // r[impl service.http.route.balancing]
 pub(super) fn service_level_proxy(snapshot: &AppDef, service_name: &str) -> RouteProxy {
-    let http = http_def_for(snapshot, service_name).unwrap_or_default();
-    resolve(&http.proxy, None).into()
+    let (service, _) = proxy_settings_for(snapshot, service_name);
+    resolve(&service, None).into()
 }
 
 /// Build per-prefix HTTP routes for an ingress backed by `service_name`
@@ -315,11 +335,11 @@ pub(super) fn collect_http_routes(
     // r[impl service.http.route.balancing]
     // Every emitted route carries settings, so a service that declared none
     // still gets the defaults rather than a bare proxy handler.
-    let http = http_def_for(snapshot, service_name).unwrap_or_default();
+    let (service, routes) = proxy_settings_for(snapshot, service_name);
     by_prefix
         .into_iter()
         .map(|(prefix, upstreams)| {
-            let proxy = resolve(&http.proxy, http.routes.get(&prefix)).into();
+            let proxy = resolve(&service, routes.get(&prefix)).into();
             HttpForwardRoute {
                 prefix,
                 upstreams,

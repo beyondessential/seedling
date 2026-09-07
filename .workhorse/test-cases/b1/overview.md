@@ -9,10 +9,10 @@ retries an upstream it cannot reach.
 - [x] `compress(map)` accepts `encodings`, `minimum_length` and `content_types` (verifies spec: service.http.compress.fields)
 - [x] An unrecognised encoding, an empty `encodings` list and an empty `content_types` list each throw (verifies spec: service.http.compress.fields)
 - [x] A negative `minimum_length` throws (verifies spec: service.http.compress.fields)
-- [x] `balance(map)` accepts `policy`, `try_duration` and `interval`, as whole numbers or fractions (verifies spec: service.http.balance)
-- [x] An unrecognised policy throws (verifies spec: service.http.balance)
-- [x] A zero interval against a non-zero try duration throws (verifies spec: service.http.balance)
-- [x] A zero interval is allowed when the try duration is also zero (verifies spec: service.http.balance)
+- [x] `balance(map)` accepts `policy`, `try_duration` and `interval`, as whole numbers or fractions (verifies spec: service.balance)
+- [x] An unrecognised policy throws (verifies spec: service.balance)
+- [x] A zero interval against a non-zero try duration throws (verifies spec: service.balance)
+- [x] A zero interval is allowed when the try duration is also zero (verifies spec: service.balance)
 
 ## Resolution
 
@@ -20,7 +20,7 @@ retries an upstream it cannot reach.
 - [x] A route overrides only the fields it names, keeping the service's values for the rest (verifies spec: service.http.proxy-settings.resolution)
 - [x] Setting `compress` leaves `balance` alone, and the reverse (verifies spec: service.http.proxy-settings.resolution)
 - [x] A route can switch compression off over an enabling service, and back on over a disabling one (verifies spec: service.http.compress)
-- [x] A zero interval meeting a non-zero try duration across two levels is never emitted (verifies spec: service.http.balance)
+- [x] A zero interval meeting a non-zero try duration across two levels is never emitted (verifies spec: service.balance)
 
 ## Emitted proxy config
 
@@ -46,7 +46,14 @@ retries an upstream it cannot reach.
 
 ## Reporting
 
-Blocked on the visibility decision, see `.workhorse/design/mockups/b1/`.
+- [x] Resolved settings are readable per route on the service def (verifies spec: app.describe.proxy-settings, service.http.route.proxy-settings.visibility)
+- [x] A service with no HTTP route bindings reports its single `/` route (verifies spec: app.describe.proxy-settings)
+- [x] Defaults are reported in full rather than omitted, including the content-type set (verifies spec: app.describe.proxy-settings)
+- [x] A route with compression off reports `compress` as null (verifies spec: app.describe.proxy-settings)
+- [x] A service with no HTTP surface reports no routes but still reports its balance (verifies spec: app.describe.proxy-settings)
 
-- [ ] Resolved settings are readable per route when inspecting the app (verifies spec: app.describe.proxy-settings, service.http.route.proxy-settings.visibility)
-- [ ] A service with no HTTP route bindings reports its single `/` route (verifies spec: app.describe.proxy-settings)
+## Balancing as a service-wide setting
+
+- [x] `balance` is accepted on a Service, an External Service, an HTTP Service and a route (verifies spec: service.balance)
+- [x] A TCP-only service records its policy (verifies spec: service.balance)
+- [ ] A policy set on a service with non-HTTP ingress traffic governs that traffic too (card U1)

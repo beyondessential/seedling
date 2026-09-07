@@ -74,10 +74,9 @@ impl PodDef {
             move |this: &mut T, port: i64, service: HttpService| -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
                 let port = Port::new(port)?;
-                let route = HttpServiceRoute {
-                    http: service,
-                    prefix: "/".into(),
-                };
+                // Binding a bare service is binding it at "/", so the service
+                // must learn about that route the same as an explicit one.
+                let route = service.root_route();
                 ext(this).lock().http_bindings.push(HttpBinding {
                     pod_port: port,
                     route,

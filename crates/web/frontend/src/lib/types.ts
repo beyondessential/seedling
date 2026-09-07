@@ -106,9 +106,27 @@ export interface PodSummary {
   udp_bindings: string[];
 }
 
+export interface BalanceSummary {
+  policy: string;
+  try_duration: number;
+  interval: number;
+}
+
+export interface CompressSummary {
+  encodings: string[];
+  minimum_length: number;
+  content_types: string[];
+}
+
+export interface RouteSummary {
+  prefix: string;
+  /** Null when compression is off for this route. */
+  compress: CompressSummary | null;
+  balance: BalanceSummary;
+}
+
 export type ResourceDef =
-  | { kind: "service"; http: boolean; description?: string | null }
-  | { kind: "http_service"; service: string; port: number }
+  | { kind: "service"; http: boolean; description?: string | null; balance: BalanceSummary; routes: RouteSummary[] | null }
   | { kind: "ingress"; service: string; hostname: string; port: number; tls: boolean; dtls: boolean; http_terminate: "http1" | "http2" | null; redirect: { port: number; code: number } | null; description?: string | null }
   | { kind: "deployment"; container: ContainerSummary; pod: PodSummary; scale: { low: number; high: number }; on_update: string; on_terminate: string; description?: string | null }
   | { kind: "job"; container: ContainerSummary; pod: PodSummary; deadline: number | null; description?: string | null }

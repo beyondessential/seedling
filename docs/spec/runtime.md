@@ -221,7 +221,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > A response that already carries a content encoding chosen by the upstream must be forwarded as it stands, rather than compressed a second time.
 
 > r[service.http.route.balancing]
-> Every reverse-proxy route the runtime emits must distribute requests across its upstreams according to that route's resolved [balancing settings](language.md#l--service.http.balance).
+> Every reverse-proxy route the runtime emits must distribute requests across its upstreams according to that route's resolved [balancing settings](language.md#l--service.balance).
 >
 > Balancing applies to reverse-proxy routes alone.
 > Redirect responses and non-HTTP forwarding have no pool of upstreams to choose from, and must be emitted without it.
@@ -240,7 +240,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Retrying an unreachable upstream covers the interval between a backend becoming unusable and the pool being recomputed on a subsequent tick; it is not a substitute for the pool.
 
 > r[service.http.route.proxy-settings.visibility]
-> The compression and balancing settings in force on each route, after resolution, must be readable when inspecting the app that declares the service, as [app.describe.proxy-settings](interface.md#i--app.describe.proxy-settings) defines.
+> The compression and balancing settings in force on a service and on each of its routes, after resolution, must be readable when inspecting the app that declares the service, as [app.describe.proxy-settings](interface.md#i--app.describe.proxy-settings) defines.
 > An operator diagnosing an uncompressed response or a failed request can then establish what the proxy was told to do without reading the app's script.
 >
 > These settings are declared by the app. The runtime provides no means to change them on a running app.

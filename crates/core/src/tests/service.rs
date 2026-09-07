@@ -172,7 +172,7 @@ fn external_service_rejects_invalid_name() {
 }
 
 // l[verify service.http.compress]
-// l[verify service.http.balance]
+// l[verify service.balance]
 #[test]
 fn http_service_accepts_compress_and_balance() {
     let app = run_test_script_app(
@@ -193,13 +193,16 @@ fn http_service_accepts_compress_and_balance() {
             _ => None,
         })
         .expect("web service");
-    let http = svc.def.lock().http.clone().expect("http def");
+    let service_def = svc.def.lock().clone();
+    let http = service_def.http.clone().expect("http def");
+    let service_level = service_def.proxy_settings();
 
+    // Balancing is service-wide, not part of the HTTP surface.
     assert_eq!(
-        http.proxy.balance.policy,
+        service_def.balance.policy,
         Some(defs::service::LbPolicy::LeastConn)
     );
-    assert!(http.proxy.compress.is_some());
+    assert!(http.compress.is_some());
     assert_eq!(
         http.routes
             .get("/api")
@@ -212,13 +215,13 @@ fn http_service_accepts_compress_and_balance() {
     );
 
     // The route that named only a try duration keeps the service's policy.
-    let api = defs::service::resolve(&http.proxy, http.routes.get("/api"));
+    let api = defs::service::resolve(&service_level, http.routes.get("/api"));
     assert_eq!(api.balance.policy, defs::service::LbPolicy::LeastConn);
     assert_eq!(api.balance.try_duration_secs, 10.0);
     assert_eq!(api.compress.expect("on").minimum_length, 1024);
 
     // The route that switched compression off keeps the service's policy too.
-    let v1 = defs::service::resolve(&http.proxy, http.routes.get("/v1"));
+    let v1 = defs::service::resolve(&service_level, http.routes.get("/v1"));
     assert!(v1.compress.is_none());
     assert_eq!(v1.balance.policy, defs::service::LbPolicy::LeastConn);
 }
@@ -229,14 +232,101 @@ fn compress_rejects_unknown_encoding() {
     let _ = run_test_script_err(r#"app.service("web").http(80).compress(#{ encodings: ["br"] });"#);
 }
 
-// l[verify service.http.balance]
+// l[verify service.balance]
 #[test]
 fn balance_rejects_unknown_policy() {
     let _ = run_test_script_err(r#"app.service("web").http(80).balance(#{ policy: "sticky" });"#);
 }
 
-// l[verify service.http.balance]
+// l[verify service.balance]
 #[test]
 fn balance_rejects_spinning_interval() {
     let _ = run_test_script_err(r#"app.service("web").http(80).balance(#{ interval: 0 });"#);
+}
+
+// i[verify app.describe.proxy-settings]
+// r[verify service.http.route.proxy-settings.visibility]
+#[test]
+fn service_summary_reports_resolved_routes() {
+    let app = run_test_script_app(
+        r#"
+        let web = app.service("web").http(80)
+            .compress(#{ minimum_length: 1024 })
+            .balance(#{ policy: "least_conn" });
+        web.route("/");
+        web.route("/api").balance(#{ try_duration: 10 });
+        web.route("/v1").compress(false);
+    "#,
+    );
+    let def = app.def.load();
+    let summary = def
+        .resources
+        .values()
+        .find_map(|r| match r {
+            defs::resource::Resource::Service(s) if &*s.name == "web" => Some(s.summary()),
+            _ => None,
+        })
+        .expect("web service");
+
+    // The service-wide policy is reported on the def itself.
+    assert_eq!(summary.balance.policy, "least_conn");
+
+    let routes = summary.routes.expect("http service reports routes");
+    let prefixes: Vec<&str> = routes.iter().map(|r| r.prefix.as_str()).collect();
+    assert_eq!(prefixes, vec!["/", "/api", "/v1"]);
+
+    // Defaults are reported, not omitted.
+    let root = &routes[0];
+    let compress = root.compress.as_ref().expect("compression on");
+    assert_eq!(compress.encodings, vec!["zstd", "gzip"]);
+    assert_eq!(compress.minimum_length, 1024);
+    assert!(compress.content_types.contains(&"text/*".to_string()));
+    assert_eq!(root.balance.policy, "least_conn");
+    assert_eq!(root.balance.try_duration, 5.0);
+    assert_eq!(root.balance.interval, 0.25);
+
+    // The route that overrode one field reports the resolved result.
+    assert_eq!(routes[1].balance.try_duration, 10.0);
+    assert_eq!(routes[1].balance.policy, "least_conn");
+
+    // Compression off reports as null rather than a default-valued object.
+    assert!(routes[2].compress.is_none());
+    assert_eq!(routes[2].balance.policy, "least_conn");
+}
+
+// i[verify app.describe.proxy-settings]
+#[test]
+fn http_service_without_bindings_reports_a_single_root_route() {
+    let app = run_test_script_app(r#"app.service("web").http(80);"#);
+    let def = app.def.load();
+    let summary = def
+        .resources
+        .values()
+        .find_map(|r| match r {
+            defs::resource::Resource::Service(s) if &*s.name == "web" => Some(s.summary()),
+            _ => None,
+        })
+        .expect("web service");
+    let routes = summary.routes.expect("http service reports routes");
+    assert_eq!(routes.len(), 1);
+    assert_eq!(routes[0].prefix, "/");
+}
+
+// i[verify app.describe.proxy-settings]
+#[test]
+fn non_http_service_reports_no_routes_but_still_reports_balance() {
+    let app = run_test_script_app(r#"app.service("postgres").balance(#{ policy: "least_conn" });"#);
+    let def = app.def.load();
+    let summary = def
+        .resources
+        .values()
+        .find_map(|r| match r {
+            defs::resource::Resource::Service(s) if &*s.name == "postgres" => Some(s.summary()),
+            _ => None,
+        })
+        .expect("postgres service");
+
+    // Balancing is service-wide, so a TCP-only service still reports it.
+    assert_eq!(summary.balance.policy, "least_conn");
+    assert!(summary.routes.is_none());
 }

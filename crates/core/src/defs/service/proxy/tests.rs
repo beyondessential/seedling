@@ -109,7 +109,7 @@ fn service_level_disable_covers_a_silent_route() {
     );
 }
 
-// l[verify service.http.balance]
+// l[verify service.balance]
 #[test]
 fn zero_try_duration_survives_resolution() {
     let service = ProxySettings {
@@ -125,7 +125,7 @@ fn zero_try_duration_survives_resolution() {
     assert_eq!(r.balance.interval_secs, 0.0);
 }
 
-// l[verify service.http.balance]
+// l[verify service.balance]
 #[test]
 fn zero_interval_meeting_a_nonzero_duration_across_levels_is_not_emitted() {
     // Neither level is invalid on its own, so parsing cannot catch this.
@@ -199,7 +199,7 @@ fn compress_rejects_bad_values() {
     assert!(parse_compress(unknown_field).is_err());
 }
 
-// l[verify service.http.balance]
+// l[verify service.balance]
 #[test]
 fn balance_fields_parse_ints_and_floats() {
     let m = map(vec![
@@ -213,7 +213,7 @@ fn balance_fields_parse_ints_and_floats() {
     assert_eq!(parsed.interval_secs, Some(0.5));
 }
 
-// l[verify service.http.balance]
+// l[verify service.balance]
 #[test]
 fn balance_rejects_bad_values() {
     let bad_policy = map(vec![("policy", Dynamic::from("sticky".to_string()))]);
@@ -230,7 +230,7 @@ fn balance_rejects_bad_values() {
     assert!(parse_balance(unknown_field).is_err());
 }
 
-// l[verify service.http.balance]
+// l[verify service.balance]
 #[test]
 fn balance_allows_zero_interval_when_retrying_is_off() {
     let m = map(vec![

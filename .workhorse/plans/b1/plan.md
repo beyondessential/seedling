@@ -136,7 +136,7 @@ field lists render client-side and come back empty.
 - `prefer` is the array that carries preference order.
 - `minimum_length` defaults to 512, confirming the spec's default.
 - `match` is a ResponseMatcher: `#{ "headers": #{ "Content-Type": [...] } }`.
-  Its default is a 31-entry list Caddy derives from Cloudflare's compressible
+  Its default is a 35-entry list Caddy derives from Cloudflare's compressible
   set, covering `text/*`, the `application/*json` family, xml, wasm, fonts,
   `image/svg+xml` and icons. `l[service.http.compress.fields]` describes exactly
   this set, so the emitter omits the field when it is unchanged.
@@ -187,22 +187,40 @@ can be built now. Two cannot.
       `r[impl service.http.route.balancing]`)
 - [x] Update the `handle[0]` assertions in the caddy tests
 
-Blocked on the visibility decision, see the two mockups under
-`.workhorse/design/mockups/b1/`:
-
-- [ ] Report resolved settings on the app description
+- [x] Report resolved settings on the `service` def, the shape chosen from the
+      two mockups under `.workhorse/design/mockups/b1/`
       (`i[impl app.describe.proxy-settings]`,
       `r[impl service.http.route.proxy-settings.visibility]`)
+- [x] Move `balance` off the HTTP surface onto the Service, keeping the
+      per-route override (`l[impl service.balance]`)
+- [x] Remove the dead `Resource::HttpService` and `HttpServiceSummary`
 
-## Why the visibility rules cannot be built as written
+## Where the resolved settings surface
 
-`i[app.describe.proxy-settings]` hangs the `routes` array off an `http_service`
-def, but no such resource is ever emitted. `App::service()` only ever inserts
-`Resource::Service`, and `svc.http()` returns a per-call view that registers
-nothing, so `Resource::HttpService` and `HttpServiceSummary` are unreachable
-today and `/apps/show` never produces a `http_service` entry. The interface spec
-has listed that def shape all along; this card's edit extended a shape that was
-already phantom.
+`i[app.describe.proxy-settings]` originally hung the `routes` array off an
+`http_service` def, but no such resource is ever emitted: `App::service()` only
+inserts `Resource::Service`, and `svc.http()` returns a per-call view that
+registers nothing. The interface spec had listed that phantom def shape all
+along. The settings now hang off the `service` def, and the dead
+`Resource::HttpService` and `HttpServiceSummary` are gone with it.
 
-Either the settings move onto the `service` def, or `http_service` becomes a
-real resource. The mockups show both against the same BSL.
+`ResourceKind::HttpService` stays. Its discriminant is byte 6 of every instance
+address via `instance.kind as u8`, so dropping it would renumber `Ingress`
+onward and change the address of every service and pod on a live node. It is
+also persisted as a string in the history and stopped-resource tables and
+exposed to scripts as `ResourceType.HttpService`.
+
+## Why balancing is not on the HTTP surface
+
+A balancing policy is a property of a pool of backends, and non-HTTP ingress
+traffic has one too. caddy-l4's `proxy` handler supports the same four policies
+plus `try_duration` and `try_interval`, under the key `selection` rather than
+`selection_policy`.
+
+So `balance` sits on the Service, with an HTTP route able to override it and a
+pass-through on the HTTP view for chaining. Compression stays HTTP-only.
+
+Making it *mean* anything for TCP is card U1: an L4 route is currently given one
+upstream, the service IP, and a policy over a one-entry pool has nothing to
+choose between. Fanning those upstreams out to pod addresses is the real work,
+and it changes the L4 data path.

@@ -46,6 +46,53 @@ pub fn default_encodings() -> Vec<Encoding> {
     vec![Encoding::Zstd, Encoding::Gzip]
 }
 
+/// The proxy's own default matcher: markup, stylesheets, scripts, JSON and
+/// other structured text, SVG, icons and fonts. Held here so the resolved
+/// settings can be reported in full, while the emitter leaves the matcher out
+/// whenever the app has not replaced this set.
+pub fn default_content_types() -> Vec<String> {
+    [
+        "application/atom+xml*",
+        "application/eot*",
+        "application/font*",
+        "application/geo+json*",
+        "application/graphql+json*",
+        "application/graphql-response+json*",
+        "application/javascript*",
+        "application/json*",
+        "application/ld+json*",
+        "application/manifest+json*",
+        "application/opentype*",
+        "application/otf*",
+        "application/rss+xml*",
+        "application/truetype*",
+        "application/ttf*",
+        "application/vnd.api+json*",
+        "application/vnd.ms-fontobject*",
+        "application/wasm*",
+        "application/x-httpd-cgi*",
+        "application/x-javascript*",
+        "application/x-opentype*",
+        "application/x-otf*",
+        "application/x-perl*",
+        "application/x-protobuf*",
+        "application/x-ttf*",
+        "application/xhtml+xml*",
+        "application/xml*",
+        "font/ttf*",
+        "font/otf*",
+        "image/svg+xml*",
+        "image/vnd.microsoft.icon*",
+        "image/x-icon*",
+        "multipart/bag*",
+        "multipart/mixed*",
+        "text/*",
+    ]
+    .iter()
+    .map(|s| (*s).to_owned())
+    .collect()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LbPolicy {
     RoundRobin,
@@ -306,7 +353,7 @@ pub(super) fn parse_compress(mut map: Map) -> Result<CompressSettings, Box<EvalA
     })
 }
 
-// l[impl service.http.balance]
+// l[impl service.balance]
 pub(super) fn parse_balance(mut map: Map) -> Result<BalanceSettings, Box<EvalAltResult>> {
     let policy = match map.remove("policy") {
         None => None,

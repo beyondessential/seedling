@@ -356,19 +356,54 @@ function ResourceDefDetail({ def }: { def: ResourceDef }) {
     );
   }
   if (def.kind === "service") {
-    if (!def.http) return null;
     return (
-      <Chip label="http" size="small" variant="outlined" sx={{ mt: 0.5 }} />
-    );
-  }
-  if (def.kind === "http_service") {
-    return (
-      <Typography
-        variant="caption"
-        sx={{ fontFamily: "monospace", display: "block", mt: 0.5 }}
-      >
-        {def.service}:{def.port}
-      </Typography>
+      <Box sx={{ mt: 0.5 }}>
+        <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap" }}>
+          {def.http && <Chip label="http" size="small" variant="outlined" />}
+          <Chip
+            label={`lb: ${def.balance.policy}`}
+            size="small"
+            variant="outlined"
+          />
+          <Chip
+            label={`try: ${def.balance.try_duration}s`}
+            size="small"
+            variant="outlined"
+          />
+        </Box>
+        {def.routes?.map((r) => (
+          <Box
+            key={r.prefix}
+            sx={{ display: "flex", gap: 0.5, mt: 0.5, alignItems: "center" }}
+          >
+            <Typography
+              variant="caption"
+              sx={{ fontFamily: "monospace", minWidth: 44 }}
+            >
+              {r.prefix}
+            </Typography>
+            <Chip
+              label={
+                r.compress
+                  ? `compress: ${r.compress.encodings.join(" ")}`
+                  : "compress: off"
+              }
+              size="small"
+              variant="outlined"
+            />
+            <Chip
+              label={`lb: ${r.balance.policy}`}
+              size="small"
+              variant="outlined"
+            />
+            <Chip
+              label={`try: ${r.balance.try_duration}s`}
+              size="small"
+              variant="outlined"
+            />
+          </Box>
+        ))}
+      </Box>
     );
   }
   if (def.kind === "deployment" || def.kind === "job") {
