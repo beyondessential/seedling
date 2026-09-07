@@ -457,6 +457,50 @@ pub struct HttpRedirect {
     pub code: u16,
 }
 
+/// Wire form of the resolved proxy settings for one route. Mirrors
+/// `defs::service::ResolvedRouteProxy`, which is the BSL-facing type; this
+/// copy is what crosses into the system layer and is persisted with the
+/// proxy config.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RouteProxy {
+    /// `None` when compression is off for this route.
+    pub compress: Option<RouteCompress>,
+    pub balance: RouteBalance,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RouteCompress {
+    /// Content encodings offered, in descending order of preference.
+    pub encodings: Vec<String>,
+    pub minimum_length: u64,
+    /// `None` leaves the proxy's own default set of text-like content types.
+    pub content_types: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RouteBalance {
+    pub policy: String,
+    pub try_duration_secs: f64,
+    pub interval_secs: f64,
+}
+
+impl From<crate::defs::service::ResolvedRouteProxy> for RouteProxy {
+    fn from(r: crate::defs::service::ResolvedRouteProxy) -> Self {
+        Self {
+            compress: r.compress.map(|c| RouteCompress {
+                encodings: c.encodings.iter().map(|e| e.as_str().to_string()).collect(),
+                minimum_length: c.minimum_length,
+                content_types: c.content_types,
+            }),
+            balance: RouteBalance {
+                policy: r.balance.policy.as_str().to_string(),
+                try_duration_secs: r.balance.try_duration_secs,
+                interval_secs: r.balance.interval_secs,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyRoute {
     pub prefix: String,
@@ -470,6 +514,13 @@ pub enum ProxyRouteHandler {
         /// One upstream per service: `"http://[fd5e:ed...]:3000"`.
         /// ECMP at the kernel distributes connections across instances.
         upstreams: Vec<String>,
+        /// Compression and balancing in force on this route, already resolved
+        /// against the service's values. Only reverse-proxy routes carry
+        /// these: a redirect has nothing to compress and no pool to choose
+        /// from.
+        // r[impl service.http.route.compression]
+        // r[impl service.http.route.balancing]
+        proxy: RouteProxy,
     },
     /// Answer with a static HTTP redirect to a fixed URL. Used by
     /// site-ingress redirect attachments to migrate hostnames without

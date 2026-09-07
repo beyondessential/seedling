@@ -170,3 +170,73 @@ fn external_service_rejects_invalid_name() {
     let _ = run_test_script_err(r#"app.external_service("_bad");"#);
     let _ = run_test_script_err(r#"app.external_service("a");"#);
 }
+
+// l[verify service.http.compress]
+// l[verify service.http.balance]
+#[test]
+fn http_service_accepts_compress_and_balance() {
+    let app = run_test_script_app(
+        r#"
+        let web = app.service("web").http(80)
+            .compress(#{ minimum_length: 1024 })
+            .balance(#{ policy: "least_conn" });
+        web.route("/api").balance(#{ try_duration: 10 });
+        web.route("/v1").compress(false);
+    "#,
+    );
+    let def = app.def.load();
+    let svc = def
+        .resources
+        .values()
+        .find_map(|r| match r {
+            defs::resource::Resource::Service(s) if &*s.name == "web" => Some(s.clone()),
+            _ => None,
+        })
+        .expect("web service");
+    let http = svc.def.lock().http.clone().expect("http def");
+
+    assert_eq!(
+        http.proxy.balance.policy,
+        Some(defs::service::LbPolicy::LeastConn)
+    );
+    assert!(http.proxy.compress.is_some());
+    assert_eq!(
+        http.routes
+            .get("/api")
+            .and_then(|r| r.balance.try_duration_secs),
+        Some(10.0)
+    );
+    assert_eq!(
+        http.routes.get("/v1").and_then(|r| r.compress.clone()),
+        Some(defs::service::CompressDecl::Disabled)
+    );
+
+    // The route that named only a try duration keeps the service's policy.
+    let api = defs::service::resolve(&http.proxy, http.routes.get("/api"));
+    assert_eq!(api.balance.policy, defs::service::LbPolicy::LeastConn);
+    assert_eq!(api.balance.try_duration_secs, 10.0);
+    assert_eq!(api.compress.expect("on").minimum_length, 1024);
+
+    // The route that switched compression off keeps the service's policy too.
+    let v1 = defs::service::resolve(&http.proxy, http.routes.get("/v1"));
+    assert!(v1.compress.is_none());
+    assert_eq!(v1.balance.policy, defs::service::LbPolicy::LeastConn);
+}
+
+// l[verify service.http.compress.fields]
+#[test]
+fn compress_rejects_unknown_encoding() {
+    let _ = run_test_script_err(r#"app.service("web").http(80).compress(#{ encodings: ["br"] });"#);
+}
+
+// l[verify service.http.balance]
+#[test]
+fn balance_rejects_unknown_policy() {
+    let _ = run_test_script_err(r#"app.service("web").http(80).balance(#{ policy: "sticky" });"#);
+}
+
+// l[verify service.http.balance]
+#[test]
+fn balance_rejects_spinning_interval() {
+    let _ = run_test_script_err(r#"app.service("web").http(80).balance(#{ interval: 0 });"#);
+}

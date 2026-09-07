@@ -11,6 +11,12 @@ use super::{
     ingress::Ingress,
     resource::{Resource, ResourceId, ResourceKind, ResourceName},
 };
+pub use proxy::{
+    BalanceSettings, CompressDecl, CompressSettings, Encoding, LbPolicy, ProxySettings,
+    ResolvedBalance, ResolvedCompress, ResolvedRouteProxy, resolve,
+};
+
+mod proxy;
 
 // l[impl service.type]
 #[derive(Debug, Default, Clone)]
@@ -216,6 +222,27 @@ impl BoundService {
     }
 }
 
+impl BoundService {
+    /// Mutate the `HttpServiceDef` of whichever service backs this view,
+    /// creating it if the app has not called `.http()` yet.
+    fn with_http_def<R>(
+        &mut self,
+        f: impl FnOnce(&mut HttpServiceDef) -> R,
+    ) -> Result<R, Box<EvalAltResult>> {
+        match self {
+            Self::App(s) => {
+                s.ensure_unfrozen()?;
+                let mut def = s.def.lock();
+                Ok(f(def.http.get_or_insert_default()))
+            }
+            Self::External(e) => {
+                let mut def = e.def.lock();
+                Ok(f(def.http.get_or_insert_default()))
+            }
+        }
+    }
+}
+
 impl From<Service> for BoundService {
     fn from(s: Service) -> Self {
         Self::App(s)
@@ -243,7 +270,13 @@ impl CustomType for ServicePort {
 
 // l[impl service.http]
 #[derive(Debug, Default, Clone)]
-pub struct HttpServiceDef {}
+pub struct HttpServiceDef {
+    /// Service-level proxy settings, inherited by every route that does not
+    /// name the field itself.
+    pub proxy: ProxySettings,
+    /// Route-level proxy settings, keyed by URL prefix.
+    pub routes: std::collections::BTreeMap<String, ProxySettings>,
+}
 
 #[derive(Debug, Clone)]
 pub struct HttpService {
@@ -280,6 +313,36 @@ impl CustomType for HttpService {
                     })
                 },
             )
+            // l[impl service.http.compress]
+            .with_fn(
+                "compress",
+                |this: &mut Self, enabled: bool| -> Result<Self, Box<EvalAltResult>> {
+                    let decl = compress_decl(enabled);
+                    this.service
+                        .with_http_def(|d| d.proxy.compress = Some(decl))?;
+                    Ok(this.clone())
+                },
+            )
+            // l[impl service.http.compress]
+            .with_fn(
+                "compress",
+                |this: &mut Self, config: Map| -> Result<Self, Box<EvalAltResult>> {
+                    let settings = proxy::parse_compress(config)?;
+                    this.service.with_http_def(|d| {
+                        d.proxy.compress = Some(CompressDecl::Enabled(settings))
+                    })?;
+                    Ok(this.clone())
+                },
+            )
+            // l[impl service.http.balance]
+            .with_fn(
+                "balance",
+                |this: &mut Self, config: Map| -> Result<Self, Box<EvalAltResult>> {
+                    let settings = proxy::parse_balance(config)?;
+                    this.service.with_http_def(|d| d.proxy.balance = settings)?;
+                    Ok(this.clone())
+                },
+            )
             // l[impl ingress.type]
             // Pass-through to the underlying Service: declaring an
             // ingress on `svc.http()` is just a chaining-friendly way
@@ -312,7 +375,59 @@ pub struct HttpServiceRoute {
 
 impl CustomType for HttpServiceRoute {
     fn build(mut builder: TypeBuilder<Self>) {
-        builder.with_name("HttpServiceRoute");
+        builder
+            .with_name("HttpServiceRoute")
+            // l[impl service.http.compress]
+            .with_fn(
+                "compress",
+                |this: &mut Self, enabled: bool| -> Result<Self, Box<EvalAltResult>> {
+                    let decl = compress_decl(enabled);
+                    this.with_route_settings(|s| s.compress = Some(decl))?;
+                    Ok(this.clone())
+                },
+            )
+            // l[impl service.http.compress]
+            .with_fn(
+                "compress",
+                |this: &mut Self, config: Map| -> Result<Self, Box<EvalAltResult>> {
+                    let settings = proxy::parse_compress(config)?;
+                    this.with_route_settings(|s| {
+                        s.compress = Some(CompressDecl::Enabled(settings))
+                    })?;
+                    Ok(this.clone())
+                },
+            )
+            // l[impl service.http.balance]
+            .with_fn(
+                "balance",
+                |this: &mut Self, config: Map| -> Result<Self, Box<EvalAltResult>> {
+                    let settings = proxy::parse_balance(config)?;
+                    this.with_route_settings(|s| s.balance = settings)?;
+                    Ok(this.clone())
+                },
+            );
+    }
+}
+
+/// `compress(true)` means the defaults, which is an enabled declaration that
+/// names no fields; `compress(false)` switches it off.
+fn compress_decl(enabled: bool) -> CompressDecl {
+    if enabled {
+        CompressDecl::Enabled(CompressSettings::default())
+    } else {
+        CompressDecl::Disabled
+    }
+}
+
+impl HttpServiceRoute {
+    fn with_route_settings<R>(
+        &mut self,
+        f: impl FnOnce(&mut ProxySettings) -> R,
+    ) -> Result<R, Box<EvalAltResult>> {
+        let prefix = self.prefix.clone();
+        self.http
+            .service
+            .with_http_def(|d| f(d.routes.entry(prefix).or_default()))
     }
 }
 
@@ -321,6 +436,7 @@ impl CustomType for HttpServiceRoute {
 pub struct ExternalServiceDef {
     // l[impl bsl.resource.description]
     pub description: Option<String>,
+    pub http: Option<HttpServiceDef>,
 }
 
 // l[impl service.external]
@@ -352,6 +468,7 @@ impl CustomType for ExternalService {
             .with_fn(
                 "http",
                 |this: &mut Self| -> Result<HttpService, Box<EvalAltResult>> {
+                    this.def.lock().http.get_or_insert_default();
                     Ok(HttpService {
                         service: this.clone().into(),
                         port: Port::from_u16(80),
@@ -362,6 +479,7 @@ impl CustomType for ExternalService {
                 "http",
                 |this: &mut Self, port: i64| -> Result<HttpService, Box<EvalAltResult>> {
                     let port = Port::new(port)?;
+                    this.def.lock().http.get_or_insert_default();
                     Ok(HttpService {
                         service: this.clone().into(),
                         port,

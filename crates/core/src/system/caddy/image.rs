@@ -70,6 +70,22 @@ fn referenced_modules(config: &serde_json::Value) -> std::collections::BTreeSet<
                 if let Some(serde_json::Value::String(name)) = map.get("handler") {
                     out.insert(format!("{namespace}.handlers.{name}"));
                 }
+                // An encoder is named by its key in the `encodings` map, not
+                // by a `handler` field.
+                if let Some(serde_json::Value::Object(encodings)) = map.get("encodings") {
+                    for name in encodings.keys() {
+                        out.insert(format!("{namespace}.encoders.{name}"));
+                    }
+                }
+                // A selection policy is named by the inline `policy` key of
+                // the `selection_policy` object.
+                if let Some(serde_json::Value::Object(policy)) = map.get("selection_policy") {
+                    if let Some(serde_json::Value::String(name)) = policy.get("policy") {
+                        out.insert(format!(
+                            "{namespace}.reverse_proxy.selection_policies.{name}"
+                        ));
+                    }
+                }
                 for value in map.values() {
                     handlers(value, namespace, out);
                 }
@@ -144,6 +160,7 @@ mod tests {
                         prefix: "/".to_owned(),
                         handler: ProxyRouteHandler::ReverseProxy {
                             upstreams: vec!["http://[fd5e::1]:3000".to_owned()],
+                            proxy: crate::defs::service::ResolvedRouteProxy::default().into(),
                         },
                     }],
                 },

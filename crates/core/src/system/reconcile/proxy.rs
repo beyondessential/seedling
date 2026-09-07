@@ -7,6 +7,7 @@ use crate::{
         ingress::IngressDef,
         pod::PodDef,
         resource::{Resource, ResourceKind},
+        service::{HttpServiceDef, resolve},
     },
     runtime::{
         InstanceRegistry, desired::DesiredState, identity::ResourceInstance,
@@ -14,7 +15,7 @@ use crate::{
     },
     system::{
         translate::proxy::{HttpForwardRoute, ServiceUpstream, instance_ipv6},
-        types::{L4Proto, L4Route},
+        types::{L4Proto, L4Route, RouteProxy},
     },
 };
 
@@ -124,6 +125,7 @@ pub(super) fn collect(
                 routes,
                 service_ip,
                 service_port: upstream_port,
+                proxy: service_level_proxy(snapshot, svc_name),
             },
         ));
     }
@@ -211,6 +213,27 @@ fn scan_pod_for_port(pod: &PodDef, service_name: &str) -> Option<u16> {
     None
 }
 
+/// The `HttpServiceDef` an app declared for `service_name`, if any. Both the
+/// app's own services and external-service slots can back an HTTP route.
+fn http_def_for(snapshot: &AppDef, service_name: &str) -> Option<HttpServiceDef> {
+    snapshot.resources.values().find_map(|r| match r {
+        Resource::Service(s) if s.name.as_str() == service_name => s.def.lock().http.clone(),
+        Resource::ExternalService(e) if e.name.as_str() == service_name => {
+            e.def.lock().http.clone()
+        }
+        _ => None,
+    })
+}
+
+/// Settings for a route the service declares nothing specific about, which is
+/// also what the synthesised `/` route of a binding-less service takes.
+// r[impl service.http.route.compression]
+// r[impl service.http.route.balancing]
+pub(super) fn service_level_proxy(snapshot: &AppDef, service_name: &str) -> RouteProxy {
+    let http = http_def_for(snapshot, service_name).unwrap_or_default();
+    resolve(&http.proxy, None).into()
+}
+
 /// Build per-prefix HTTP routes for an ingress backed by `service_name`
 /// declared in `snapshot` (the AppDef of the app that owns the service).
 ///
@@ -288,8 +311,20 @@ pub(super) fn collect_http_routes(
         }
     }
 
+    // r[impl service.http.route.compression]
+    // r[impl service.http.route.balancing]
+    // Every emitted route carries settings, so a service that declared none
+    // still gets the defaults rather than a bare proxy handler.
+    let http = http_def_for(snapshot, service_name).unwrap_or_default();
     by_prefix
         .into_iter()
-        .map(|(prefix, upstreams)| HttpForwardRoute { prefix, upstreams })
+        .map(|(prefix, upstreams)| {
+            let proxy = resolve(&http.proxy, http.routes.get(&prefix)).into();
+            HttpForwardRoute {
+                prefix,
+                upstreams,
+                proxy,
+            }
+        })
         .collect()
 }

@@ -1,7 +1,9 @@
 use serde_json::{Value, json};
 
 use crate::runtime::tls::state::is_caddy_internal;
-use crate::system::types::{L4Proto, ProxyConfig, ProxyListenerProto, VirtualHost};
+use crate::system::types::{
+    L4Proto, ProxyConfig, ProxyListenerProto, RouteBalance, RouteCompress, VirtualHost,
+};
 
 pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
     let http_ports: Vec<u16> = config
@@ -237,7 +239,7 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
             };
 
             let handle = match &route.handler {
-                crate::system::types::ProxyRouteHandler::ReverseProxy { upstreams } => {
+                crate::system::types::ProxyRouteHandler::ReverseProxy { upstreams, proxy } => {
                     let upstreams: Vec<Value> = upstreams
                         .iter()
                         .map(|u| {
@@ -245,10 +247,24 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
                             json!({ "dial": dial })
                         })
                         .collect();
-                    json!([{
+
+                    let mut chain: Vec<Value> = Vec::with_capacity(2);
+                    // r[impl service.http.route.compression]
+                    // `encode` wraps the response writer, so it has to sit
+                    // ahead of the proxy in the chain to see what comes back.
+                    // Caddy skips a response that already carries a
+                    // Content-Encoding, so an upstream that compressed for
+                    // itself is passed through untouched.
+                    if let Some(compress) = &proxy.compress {
+                        chain.push(encode_handler(compress));
+                    }
+                    chain.push(json!({
                         "handler": "reverse_proxy",
                         "upstreams": upstreams,
-                    }])
+                        // r[impl service.http.route.balancing]
+                        "load_balancing": load_balancing(&proxy.balance),
+                    }));
+                    Value::Array(chain)
                 }
                 // r[impl ingress.site.attachment]
                 crate::system::types::ProxyRouteHandler::Redirect {
@@ -281,6 +297,47 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
             })
         })
         .collect()
+}
+
+// r[impl service.http.route.compression]
+fn encode_handler(compress: &RouteCompress) -> Value {
+    // `encodings` is a module map keyed by encoder name; `prefer` is what
+    // carries the order when the client expresses no preference.
+    let encodings: serde_json::Map<String, Value> = compress
+        .encodings
+        .iter()
+        .map(|e| (e.clone(), json!({})))
+        .collect();
+
+    let mut handler = serde_json::Map::new();
+    handler.insert("handler".to_string(), json!("encode"));
+    handler.insert("encodings".to_string(), Value::Object(encodings));
+    handler.insert("prefer".to_string(), json!(compress.encodings));
+    handler.insert("minimum_length".to_string(), json!(compress.minimum_length));
+    // Left out unless the app named its own set, so the proxy applies its
+    // default matcher of text-like content types.
+    if let Some(types) = &compress.content_types {
+        handler.insert(
+            "match".to_string(),
+            json!({ "headers": { "Content-Type": types } }),
+        );
+    }
+    Value::Object(handler)
+}
+
+// r[impl service.http.route.balancing]
+fn load_balancing(balance: &RouteBalance) -> Value {
+    json!({
+        "selection_policy": { "policy": balance.policy },
+        "try_duration": secs_to_nanos(balance.try_duration_secs),
+        "try_interval": secs_to_nanos(balance.interval_secs),
+    })
+}
+
+/// Caddy durations accept a JSON number of nanoseconds, which is exact for the
+/// fractional-second intervals the BSL allows.
+fn secs_to_nanos(secs: f64) -> i64 {
+    (secs * 1_000_000_000.0).round() as i64
 }
 
 fn redirect_route(hostname: &str, code: u16, https_ports: &[u16]) -> Value {

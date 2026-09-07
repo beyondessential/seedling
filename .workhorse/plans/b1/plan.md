@@ -169,23 +169,23 @@ assertions in `crates/core/src/system/caddy/tests.rs` that read
 Six of the eight new rules are independent of the open visibility question and
 can be built now. Two cannot.
 
-- [ ] `defs/service/proxy.rs`: policy and encoding enums, declared settings with
+- [x] `defs/service/proxy.rs`: policy and encoding enums, declared settings with
       per-field `Option`s, a tri-state for compress (unset / disabled / enabled),
       defaults, and rhai map parsing with the spec's validation
       (`l[impl service.http.compress.fields]`)
-- [ ] Per-field resolution across route then service then default, with the
+- [x] Per-field resolution across route then service then default, with the
       fallback `/` route taking the service's values
       (`l[impl service.http.proxy-settings.resolution]`)
-- [ ] `compress` and `balance` builders on `HttpService` and `HttpServiceRoute`,
+- [x] `compress` and `balance` builders on `HttpService` and `HttpServiceRoute`,
       writing through to the backing def; route settings keyed by prefix
       (`l[impl service.http.compress]`, `l[impl service.http.balance]`)
-- [ ] Carry resolved settings on `ProxyRoute`'s reverse-proxy handler through
+- [x] Carry resolved settings on `ProxyRoute`'s reverse-proxy handler through
       `HttpForwardRoute` and `build_proxy_config`
-- [ ] Resolve per prefix in `collect_http_routes`, covering both upstream shapes
-- [ ] Emit `encode` and `load_balancing`, leaving redirect and layer4 handlers
+- [x] Resolve per prefix in `collect_http_routes`, covering both upstream shapes
+- [x] Emit `encode` and `load_balancing`, leaving redirect and layer4 handlers
       bare (`r[impl service.http.route.compression]`,
       `r[impl service.http.route.balancing]`)
-- [ ] Update the `handle[0]` assertions in the caddy tests
+- [x] Update the `handle[0]` assertions in the caddy tests
 
 Blocked on the visibility decision, see the two mockups under
 `.workhorse/design/mockups/b1/`:
