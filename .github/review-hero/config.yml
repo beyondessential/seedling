@@ -1,0 +1,9 @@
+# Project metadata — included in the agent system prompt for context.
+project: Seedling
+description: a lightweight, high-level, container-based app management system for single Linux servers, written in Rust with a rhai app-definition language
+
+# Extra file patterns to exclude from the diff (added to built-in defaults).
+# Committed lockfiles are noise for review; everything else generated is gitignored.
+ignore_patterns:
+  - "Cargo.lock"
+  - "**/package-lock.json"
