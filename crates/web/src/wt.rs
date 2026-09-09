@@ -375,7 +375,7 @@ pub async fn run_cert_rotation(
     rotation_tx: watch::Sender<()>,
 ) {
     loop {
-        tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+        tokio::time::sleep(crate::wt_cert::ROTATION_TICK).await;
         let rotated = cert_store.write().rotate_if_needed();
         if rotated {
             let _ = rotation_tx.send(());
