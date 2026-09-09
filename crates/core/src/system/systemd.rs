@@ -24,7 +24,8 @@ const UNIT_DIR: &str = "/etc/systemd/system";
 pub(crate) enum SystemdError {
     #[snafu(display("D-Bus error: {source}"))]
     DBus {
-        source: zbus::Error,
+        #[snafu(source(from(zbus::Error, Box::new)))]
+        source: Box<zbus::Error>,
         backtrace: snafu::Backtrace,
     },
     #[snafu(display("I/O error: {source}"))]
