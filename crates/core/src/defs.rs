@@ -102,6 +102,7 @@ pub mod pod;
 pub mod resource;
 pub mod service;
 pub mod summary;
+pub mod take;
 pub mod volume;
 
 // l[impl bsl.syntax]

@@ -10,6 +10,7 @@ use super::{
     enums::{OnTerminate, OnUpdate},
     pod::PodDef,
     resource::{ResourceId, ResourceKind, ResourceName},
+    take::take_int_in_range,
 };
 
 // l[impl deployment.type]
@@ -96,6 +97,15 @@ impl CustomType for Deployment {
                     if max == 0 {
                         return Err("scale upper bound must be non-zero".into());
                     }
+                    // l[impl deployment.scale] — an inverted range is an empty
+                    // one, so `scale(5..2)` stored bounds no replica count can
+                    // satisfy instead of naming the mistake.
+                    if min > max {
+                        return Err(format!(
+                            "scale lower bound must not exceed the upper bound, got {min}..{max}"
+                        )
+                        .into());
+                    }
                     this.def.lock().scale = min..max;
                     Ok(this.clone())
                 },
@@ -135,23 +145,11 @@ impl CustomType for Deployment {
 const MAX_SCALE_LOWER_BOUND: u16 = 10;
 
 fn validate_scale(n: i64) -> Result<u16, Box<EvalAltResult>> {
-    if n <= 0 {
-        return Err(format!("scale must be a positive non-zero integer, got {n}").into());
-    }
-    if n > u16::MAX as i64 {
-        return Err(format!("scale {n} exceeds maximum of {}", u16::MAX).into());
-    }
-    Ok(n as u16)
+    take_int_in_range::<u16>("scale", n, 1..=i64::from(u16::MAX))
 }
 
 fn validate_scale_lower(n: i64) -> Result<u16, Box<EvalAltResult>> {
-    if n < 0 {
-        return Err(format!("scale lower bound must not be negative, got {n}").into());
-    }
-    if n > u16::MAX as i64 {
-        return Err(format!("scale {n} exceeds maximum of {}", u16::MAX).into());
-    }
-    Ok(n as u16)
+    take_int_in_range::<u16>("scale lower bound", n, 0..=i64::from(u16::MAX))
 }
 
 fn check_lower_bound(n: u16) -> Result<(), Box<EvalAltResult>> {

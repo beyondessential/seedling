@@ -72,11 +72,11 @@ impl Collection {
     }
 
     // l[impl collection.select]
-    pub fn select(self, criterion: &Map) -> Self {
-        Self(Rc::new(Select {
+    pub fn select(self, criterion: &Map) -> Result<Self, Box<rhai::EvalAltResult>> {
+        Ok(Self(Rc::new(Select {
             inner: self,
-            selector: Selector::from_map(criterion),
-        }))
+            selector: Selector::from_map(criterion)?,
+        })))
     }
 }
 
@@ -95,9 +95,12 @@ impl CustomType for Collection {
                 this.clone().except(other)
             })
             // l[impl collection.select]
-            .with_fn("select", |this: &mut Self, criterion: Map| -> Collection {
-                this.clone().select(&criterion)
-            });
+            .with_fn(
+                "select",
+                |this: &mut Self, criterion: Map| -> Result<Collection, Box<rhai::EvalAltResult>> {
+                    this.clone().select(&criterion)
+                },
+            );
     }
 }
 

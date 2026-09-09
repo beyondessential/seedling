@@ -3,7 +3,7 @@ use std::{
     path::{Component, PathBuf},
 };
 
-use rhai::{Array, Dynamic, EvalAltResult, TypeBuilder};
+use rhai::{Array, EvalAltResult, TypeBuilder};
 use seedling_protocol::env::EnvVar;
 
 const FORBIDDEN_MOUNTPOINTS: &[&str] = &[
@@ -66,10 +66,11 @@ fn validate_image_ref(image: &str) -> Result<(), Box<EvalAltResult>> {
         {
             return Err(format!("invalid digest algorithm: '{algo}'").into());
         }
+        // `is_ascii_lowercase` accepts g–z, so "sha256:gggg…" passed as hex.
         if hex.len() < 32
             || !hex
                 .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
         {
             return Err(format!(
                 "invalid digest hex (must be at least 32 lowercase hex characters): '{hex}'"
@@ -145,6 +146,7 @@ use super::{
     Freezable, Holder,
     enums::OnExit,
     resource::ResourceId,
+    take::{take_int_in_range, take_map, take_string, take_string_array},
     volume::{ExternalVolume, Volume},
 };
 
@@ -245,13 +247,7 @@ fn take_retries(map: &mut rhai::Map) -> Result<u32, Box<EvalAltResult>> {
     let n = value.as_int().map_err(|t| -> Box<EvalAltResult> {
         format!("healthcheck `retries` must be a positive integer, got {t}").into()
     })?;
-    if n <= 0 {
-        return Err(format!("healthcheck `retries` must be positive, got {n}").into());
-    }
-    if n > u32::MAX as i64 {
-        return Err(format!("healthcheck `retries` exceeds maximum {}", u32::MAX).into());
-    }
-    Ok(n as u32)
+    take_int_in_range::<u32>("healthcheck retries", n, 1..=i64::from(u32::MAX))
 }
 
 fn take_on_failure(map: &mut rhai::Map) -> Result<HealthcheckOnFailure, Box<EvalAltResult>> {
@@ -280,11 +276,8 @@ fn take_command_cmd(map: &mut rhai::Map) -> Result<Vec<String>, Box<EvalAltResul
             return Err("healthcheck `cmd` must not be empty".into());
         }
         vec!["CMD-SHELL".to_string(), s]
-    } else if let Some(arr) = value.try_cast::<rhai::Array>() {
-        let parts: Vec<String> = arr
-            .into_iter()
-            .map(|v| v.into_string().unwrap_or_default())
-            .collect();
+    } else if value.is_array() {
+        let parts = take_string_array("healthcheck cmd", value)?;
         if parts.is_empty() || parts.iter().all(String::is_empty) {
             return Err("healthcheck `cmd` must not be empty".into());
         }
@@ -467,12 +460,8 @@ impl ContainerDef {
                 "command",
                 move |this: &mut T, entrypoint: Array| -> Result<T, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
-                    ext(this).lock().command = Some(
-                        entrypoint
-                            .into_iter()
-                            .map(|v| v.into_string().unwrap_or_default())
-                            .collect(),
-                    );
+                    ext(this).lock().command =
+                        Some(take_string_array("command", entrypoint.into())?);
                     Ok(this.clone())
                 },
             );
@@ -498,9 +487,7 @@ impl ContainerDef {
                     let holder = ext(this);
                     let mut def = holder.lock();
                     let list = def.args.get_or_insert_default();
-                    for v in args {
-                        list.push(v.into_string().unwrap_or_default());
-                    }
+                    list.extend(take_string_array("arg", args.into())?);
                     Ok(this.clone())
                 },
             );
@@ -529,25 +516,32 @@ impl ContainerDef {
                     this.ensure_unfrozen()?;
                     let holder = ext(this);
                     let mut def = holder.lock();
-                    for item in vars {
-                        if let Some(map) = item.try_cast::<rhai::Map>() {
-                            let name = map
-                                .get("name")
-                                .and_then(|v: &Dynamic| v.clone().into_string().ok())
-                                .unwrap_or_default();
-                            let value = map
-                                .get("value")
-                                .and_then(|v: &Dynamic| v.clone().into_string().ok())
-                                .unwrap_or_default();
-                            let var = EnvVar::new(&name, value)
-                                .map_err(|e| -> Box<EvalAltResult> { e.to_string().into() })?;
-                            if let Some(pos) =
-                                def.env.iter().position(|ev| ev.name == *var.name.as_str())
-                            {
-                                def.env[pos] = var;
-                            } else {
-                                def.env.push(var);
-                            }
+                    for (index, item) in vars.into_iter().enumerate() {
+                        let map = take_map(&format!("env entry {index}"), item)?;
+                        let name = map
+                            .get("name")
+                            .cloned()
+                            .map(|v| take_string("env name", v))
+                            .transpose()?
+                            .ok_or_else(|| -> Box<EvalAltResult> {
+                                format!("env entry {index} is missing `name`").into()
+                            })?;
+                        let value = map
+                            .get("value")
+                            .cloned()
+                            .map(|v| take_string("env value", v))
+                            .transpose()?
+                            .ok_or_else(|| -> Box<EvalAltResult> {
+                                format!("env entry {index} is missing `value`").into()
+                            })?;
+                        let var = EnvVar::new(&name, &value)
+                            .map_err(|e| -> Box<EvalAltResult> { e.to_string().into() })?;
+                        if let Some(pos) =
+                            def.env.iter().position(|ev| ev.name == *var.name.as_str())
+                        {
+                            def.env[pos] = var;
+                        } else {
+                            def.env.push(var);
                         }
                     }
                     Ok(this.clone())
@@ -648,12 +642,11 @@ impl ContainerDef {
             "pids_limit",
             move |this: &mut T, limit: i64| -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
-                if limit <= 0 {
-                    return Err(
-                        format!("pids_limit must be a positive integer, got {limit}").into(),
-                    );
-                }
-                ext(this).lock().pids_limit = Some(limit as u32);
+                ext(this).lock().pids_limit = Some(take_int_in_range::<u32>(
+                    "pids_limit",
+                    limit,
+                    1..=i64::from(u32::MAX),
+                )?);
                 Ok(this.clone())
             },
         );
@@ -704,12 +697,11 @@ impl ContainerDef {
             "stop_timeout",
             move |this: &mut T, secs: i64| -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
-                if secs <= 0 {
-                    return Err(
-                        format!("stop_timeout must be a positive integer, got {secs}").into(),
-                    );
-                }
-                ext(this).lock().stop_timeout_secs = Some(secs as u32);
+                ext(this).lock().stop_timeout_secs = Some(take_int_in_range::<u32>(
+                    "stop_timeout",
+                    secs,
+                    1..=i64::from(u32::MAX),
+                )?);
                 Ok(this.clone())
             },
         );

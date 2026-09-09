@@ -232,10 +232,12 @@ pub struct AppDef {
     pub param_changes: BTreeSet<ParamName>,
 }
 
-fn extract_description(options: &Map) -> Option<String> {
+fn extract_description(options: &Map) -> Result<Option<String>, Box<rhai::EvalAltResult>> {
     options
         .get("description")
-        .and_then(|v| v.clone().into_string().ok())
+        .cloned()
+        .map(|v| crate::defs::take::take_string("description", v))
+        .transpose()
 }
 
 // ---------------------------------------------------------------------------
