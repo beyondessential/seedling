@@ -203,6 +203,9 @@ pub(crate) fn create_site_ingress(
     ctx: &RequestCtx,
 ) -> HandlerResult {
     validate_hostname(&params.hostname)?;
+    // r[impl namespace.reserved]
+    crate::reserved::check_site_ingress_name(&params.name)
+        .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;
     if matches!(params.tls_provider, TlsProvider::Tailscale) {
         return Err(OiError::new(
             ErrorCode::RequirementsInvalid,

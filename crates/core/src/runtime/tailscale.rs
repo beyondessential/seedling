@@ -27,7 +27,7 @@ pub const DEFAULT_SOCKET_PATH: &str = "/var/run/tailscale/tailscaled.sock";
 
 /// Operator-visible name we use for the discovered Tailscale site ingress.
 /// Matches the provider name so listings read naturally.
-const TAILSCALE_INGRESS_NAME: &str = "tailscale";
+pub(crate) const TAILSCALE_INGRESS_NAME: &str = "tailscale";
 
 /// How often the provider polls tailscaled for the current identity.
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(60);
@@ -334,10 +334,24 @@ impl TailscaleProvider {
     fn mark_existing_stale(&self, stale: bool) {
         self.db.call(move |db| {
             let name = SiteIngressName::new_unchecked(TAILSCALE_INGRESS_NAME);
-            if let Ok(Some(_)) = site_ingresses::get(db, &name)
-                && let Err(e) = site_ingresses::set_stale(db, &name, stale)
-            {
-                warn!(error = %e, "tailscale: failed to update stale flag");
+            // r[impl namespace.reserved] — act on the row this provider owns,
+            // not on whatever holds the name. A manual ingress an operator
+            // created before the name was reserved was disabled here on the
+            // provider's first bad poll, and never re-enabled.
+            match site_ingresses::get(db, &name) {
+                Ok(Some(def)) if !def.source.is_discovered() => {
+                    warn!(
+                        "tailscale: a manually-created site ingress holds the name \
+                         {TAILSCALE_INGRESS_NAME:?}; leaving it alone"
+                    );
+                }
+                Ok(Some(_)) => {
+                    if let Err(e) = site_ingresses::set_stale(db, &name, stale) {
+                        warn!(error = %e, "tailscale: failed to update stale flag");
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => warn!(error = %e, "tailscale: failed to look up the discovered ingress"),
             }
         });
     }
@@ -435,9 +449,19 @@ fn upsert_discovered_row(
     // case, which matches the design intent: a node-id change is "the
     // host identity changed" and attachments shouldn't silently follow.
     let name = SiteIngressName::new_unchecked(TAILSCALE_INGRESS_NAME);
-    if let Some(existing) = site_ingresses::get(db, &name)?
-        && existing.source.is_discovered()
-    {
+    // r[impl namespace.reserved] — a manual row under this name is the
+    // operator's. Falling through to `create` collided on the primary key
+    // every poll, so the provider livelocked and the operator's row stayed
+    // stale forever.
+    if let Some(existing) = site_ingresses::get(db, &name)? {
+        if !existing.source.is_discovered() {
+            warn!(
+                "tailscale: a manually-created site ingress holds the name \
+                 {TAILSCALE_INGRESS_NAME:?}; not creating the discovered one. Rename or remove \
+                 it to let discovery take over."
+            );
+            return Ok(());
+        }
         site_ingresses::delete(db, &name)?;
         info!(
             stale_node_id = ?match &existing.source {
