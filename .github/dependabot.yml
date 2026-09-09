@@ -48,3 +48,8 @@ updates:
         update-types:
           - patch
           - minor
+    ignore:
+      # rhai 1.26 rejects identifiers beginning with an underscore, which the
+      # shipped app definitions rely on. Patch releases of 1.25 still apply.
+      - dependency-name: rhai
+        versions: [">=1.26"]
