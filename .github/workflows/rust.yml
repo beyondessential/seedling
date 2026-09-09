@@ -39,6 +39,8 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: No hand-rolled subscription handshakes
         run: etc/ci/check-accept-uni.sh
+      - name: No unscoped row overwrites
+        run: etc/ci/check-insert-or-replace.sh
 
   test:
     name: Test

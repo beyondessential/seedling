@@ -504,10 +504,26 @@ pub fn save_current_operation(
         .map_err(OperationPersistError::Cipher)?;
     db.conn
         .execute(
-            "INSERT OR REPLACE INTO current_operation
+            // r[impl history.persist.partial-update]
+            // Not INSERT OR REPLACE. That is delete-then-insert, so every
+            // column this statement does not name reverts to its default —
+            // including `cancel_requested`, which a *different* writer owns.
+            // The replay path re-saves this row immediately after the daemon
+            // has read the cancel flag, so a cancellation was silently
+            // dropped while the operation it cancelled was still in flight.
+            // The column was added by a later migration than the statement,
+            // which is exactly how this kind of bug arrives.
+            "INSERT INTO current_operation
                 (singleton, operation_id, app, action_name,
                  source_generation, target_generation, params_ciphertext)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)",
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(singleton) DO UPDATE SET
+                operation_id = excluded.operation_id,
+                app = excluded.app,
+                action_name = excluded.action_name,
+                source_generation = excluded.source_generation,
+                target_generation = excluded.target_generation,
+                params_ciphertext = excluded.params_ciphertext",
             params![
                 op.operation_id.0,
                 op.app,
