@@ -9,5 +9,8 @@ permissions:
 
 jobs:
   review:
+    # A Dependabot-triggered run gets none of the repository secrets, so the
+    # reusable workflow has nothing to authenticate with and fails at setup.
+    if: github.actor != 'dependabot[bot]'
     uses: beyondessential/review-hero/.github/workflows/review.yml@v1
     secrets: inherit
