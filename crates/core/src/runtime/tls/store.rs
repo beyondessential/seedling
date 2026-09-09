@@ -335,7 +335,7 @@ pub fn list_certificates(db: &Db) -> rusqlite::Result<Vec<TlsCertificate>> {
     stmt.query_map([], row_to_certificate)?.collect()
 }
 
-/// Returns the most-recent active cert covering `hostname`, if any.
+/// Returns the most-recent unexpired active cert covering `hostname`, if any.
 ///
 /// Resolution rules:
 ///
@@ -347,11 +347,25 @@ pub fn list_certificates(db: &Db) -> rusqlite::Result<Vec<TlsCertificate>> {
 ///   (literal match or single-label wildcard). This auto-binds manual
 ///   uploads — including wildcard certs — without requiring the
 ///   operator to re-declare the binding per host.
+///
+/// Both paths skip rows whose `not_after` has passed. Without that the
+/// exact-hostname fast path returned an expired row in preference to a
+/// still-valid cert that covered the same hostname by SAN, so the proxy
+/// served the expired one and nothing on the serve path noticed. A row with
+/// no recorded `not_after` is kept: unparsed and expired are not the same
+/// thing, and treating them alike would stop serving a usable cert.
+///
+/// The sibling matcher in [`super::state`] deliberately does *not* filter on
+/// expiry — the renewal scheduler has to see an expiring cert in order to
+/// renew it — so the two are not interchangeable despite the shared rules.
 // r[impl tls.strategy.manual]
+// r[impl tls.cert.serve]
 pub fn find_active_for_hostname(
     db: &Db,
     hostname: &str,
 ) -> rusqlite::Result<Option<TlsCertificate>> {
+    let now = now_secs();
+
     if let Some(cert) = db
         .conn
         .query_row(
@@ -361,8 +375,9 @@ pub fn find_active_for_hostname(
                     ari_polled_at, created_at, updated_at
              FROM tls_certificates
              WHERE hostname = ?1 AND state = 'active'
+               AND (not_after IS NULL OR not_after > ?2)
              ORDER BY id DESC LIMIT 1",
-            [hostname],
+            rusqlite::params![hostname, now],
             row_to_certificate,
         )
         .optional()?
@@ -381,9 +396,10 @@ pub fn find_active_for_hostname(
                 ari_polled_at, created_at, updated_at
          FROM tls_certificates
          WHERE state = 'active'
+           AND (not_after IS NULL OR not_after > ?1)
          ORDER BY created_at DESC, id DESC",
     )?;
-    let mut rows = stmt.query([])?;
+    let mut rows = stmt.query([now])?;
     while let Some(row) = rows.next()? {
         let cert = row_to_certificate(row)?;
         let Some(pem) = cert.cert_pem.as_deref() else {
@@ -1075,6 +1091,31 @@ mod tests {
         assert!(!row.self_signed);
     }
 
+    /// Like [`insert_test_cert`] but with an explicit expiry, so a row can be
+    /// placed either side of "now".
+    fn insert_test_cert_expiring(db: &Db, hostname: &str, not_after: Option<i64>) -> i64 {
+        insert_certificate(
+            db,
+            hostname,
+            TlsCertState::Active,
+            TlsCertOrigin::Manual,
+            Some("-----BEGIN CERTIFICATE-----\nMIIBdummy\n-----END CERTIFICATE-----\n"),
+            None,
+            b"encrypted-key-bytes",
+            KeyType::EcdsaP256,
+            CertMetadata {
+                issuer: Some("CN=Test CA".to_string()),
+                not_before: Some(1_600_000_000),
+                not_after,
+                serial: Some("01".to_string()),
+                self_signed: false,
+            },
+            None,
+            None,
+        )
+        .unwrap()
+    }
+
     #[test]
     fn find_active_for_hostname_returns_latest() {
         let (db, _) = fresh_db();
@@ -1086,6 +1127,51 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(found.id, id2);
+    }
+
+    // r[verify tls.cert.serve]
+    #[test]
+    fn find_active_for_hostname_skips_an_expired_cert() {
+        let (db, _) = fresh_db();
+        insert_test_cert_expiring(&db, "a.example.com", Some(now_secs() - 1));
+
+        assert!(
+            find_active_for_hostname(&db, "a.example.com")
+                .unwrap()
+                .is_none(),
+            "an expired cert must not be served",
+        );
+    }
+
+    // r[verify tls.cert.serve]
+    // The exact-hostname path takes the highest id, so a newer expired row
+    // shadowed an older one that was still valid — and the proxy served the
+    // expired cert with nothing on the path noticing.
+    #[test]
+    fn an_expired_cert_does_not_shadow_a_valid_one_for_the_same_hostname() {
+        let (db, _) = fresh_db();
+        let valid = insert_test_cert_expiring(&db, "a.example.com", Some(now_secs() + 86_400));
+        let expired = insert_test_cert_expiring(&db, "a.example.com", Some(now_secs() - 1));
+        assert!(expired > valid, "the expired row must be the newer one");
+
+        let found = find_active_for_hostname(&db, "a.example.com")
+            .unwrap()
+            .expect("the valid cert is still servable");
+        assert_eq!(found.id, valid);
+    }
+
+    // r[verify tls.cert.serve]
+    // Unparsed and expired are different things; refusing to serve a row whose
+    // expiry was never recorded would withhold a usable cert.
+    #[test]
+    fn a_cert_with_no_recorded_expiry_is_still_served() {
+        let (db, _) = fresh_db();
+        let id = insert_test_cert_expiring(&db, "a.example.com", None);
+
+        let found = find_active_for_hostname(&db, "a.example.com")
+            .unwrap()
+            .expect("an unrecorded expiry is not an expiry");
+        assert_eq!(found.id, id);
     }
 
     #[test]

@@ -1683,6 +1683,8 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > For runtime-managed certificates (ACME DNS-01, manual, and CSR-derived), the runtime must deliver certificate and key material to the ingress proxy through a mechanism that does not require including private key material in the proxy's persistent configuration or its restart-replay cache.
 > The proxy must be able to obtain the appropriate certificate by SNI hostname at TLS handshake time.
 > The serving endpoint must be a pure lookup: a stored cert returns 200 with PEM, an unknown hostname returns 204 (no content), and the runtime must never trigger an issuance flow from this path. Issuance is the issuance coordinator's job (see [tls.cert.eager-issuance](#r--tls.cert.eager-issuance)).
+> A certificate whose `notAfter` has passed must not be served, and must not take precedence over a stored certificate that is still valid and covers the hostname.
+> A stored certificate whose expiry is unrecorded is not treated as expired, since that cannot be distinguished from one that has not been parsed.
 
 > r[tls.cert.validation.san-coverage]
 > Whenever the runtime accepts an operator-supplied certificate (manual upload or CSR cert upload), it must validate that the leaf certificate's Subject Alternative Name DNS entries either contain the target hostname literally or contain a wildcard entry that covers it under RFC 6125.

@@ -48,6 +48,7 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > - `token`: a session token the client must present on subsequent `POST /connect` calls.
 > - `actor`: the resolved actor identity — an object with `kind`, `id`, and `display` string fields.
 > - `wt_url`: a fully-qualified URL the client must use to open the WebTransport session. The URL includes a short-lived single-use token (see [wt.token](#w--wt.token)).
+>   The URL must name a port the WebTransport endpoint is actually bound to, for every supported combination of listen configuration; a default port must not be advertised in place of a configured one.
 > - `cert_hashes`: an array of one or two SHA-256 hashes (hex-encoded) of the WebTransport endpoint's current certificate(s), for use with `serverCertificateHashes`.
 >
 > On failure, the response is HTTP 401 with a JSON body:

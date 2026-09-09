@@ -4,6 +4,16 @@ use wtransport::Identity;
 
 const CERT_VALIDITY_DAYS: u32 = 7;
 const ROTATION_LOOKAHEAD: Duration = Duration::from_secs(6 * 86400);
+/// How often the rotation task reconsiders the store.
+pub const ROTATION_TICK: Duration = Duration::from_secs(3600);
+/// How far ahead of expiry the swap happens.
+///
+/// Must stay larger than [`ROTATION_TICK`] so that some tick always lands
+/// inside the window: browsers enforce the certificate's validity period even
+/// when the hash is supplied through `serverCertificateHashes`, so presenting
+/// an expired certificate fails every new session regardless of which hashes
+/// were advertised.
+const SWAP_LOOKAHEAD: Duration = Duration::from_secs(2 * 3600);
 
 pub struct CertEntry {
     pub identity: Identity,
@@ -66,9 +76,24 @@ impl CertStore {
     pub fn rotate_if_needed(&mut self) -> bool {
         let now = SystemTime::now();
 
-        if self.current.not_after <= now {
+        // Swap ahead of expiry rather than on it. Swapping on expiry left a
+        // window as long as the tick interval in which the endpoint served a
+        // certificate that had already expired, and every new session failed
+        // TLS for as long as it lasted.
+        let swap_at = self
+            .current
+            .not_after
+            .checked_sub(SWAP_LOOKAHEAD)
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+
+        if now >= swap_at {
             let new_current = self.next.take().unwrap_or_else(CertEntry::generate);
-            tracing::info!(hash = %new_current.hash, "rotating WT certificate (current expired)");
+            let expired = self.current.not_after <= now;
+            tracing::info!(
+                hash = %new_current.hash,
+                expired,
+                "rotating WT certificate"
+            );
             self.current = new_current;
             self.next = None;
             return true;
@@ -125,12 +150,12 @@ mod tests {
     #[test]
     fn rotate_if_needed_precomputes_next_when_in_rotation_window() {
         let mut store = CertStore::new();
-        // Force the current cert into the rotation window by setting its
-        // not_after to just inside ROTATION_LOOKAHEAD from now.
-        store.current.not_after = SystemTime::now() + Duration::from_secs(60);
+        // Inside ROTATION_LOOKAHEAD but still clear of SWAP_LOOKAHEAD, so the
+        // next cert is prepared without the current one being retired.
+        store.current.not_after = SystemTime::now() + Duration::from_secs(3 * 3600);
         assert!(
             !store.rotate_if_needed(),
-            "current still valid; should not swap yet",
+            "not yet within the swap window; should only pre-generate",
         );
         assert!(
             store.next.is_some(),
@@ -150,8 +175,8 @@ mod tests {
     #[test]
     fn rotate_if_needed_swaps_expired_current_to_pregenerated_next() {
         let mut store = CertStore::new();
-        // Pre-populate a next cert by forcing the rotation window.
-        store.current.not_after = SystemTime::now() + Duration::from_secs(60);
+        // Pre-populate a next cert without tripping the swap.
+        store.current.not_after = SystemTime::now() + Duration::from_secs(3 * 3600);
         let _ = store.rotate_if_needed();
         let next_hash = store.next.as_ref().unwrap().hash.clone();
 
@@ -163,6 +188,45 @@ mod tests {
         );
         assert_eq!(store.current.hash, next_hash, "next became current");
         assert!(store.next.is_none(), "next slot cleared after promotion");
+    }
+
+    // w[verify wt.cert.rotation]
+    // The spec requires rotating *before* expiry. Swapping on expiry left the
+    // endpoint serving an expired certificate for up to a full tick, and a
+    // browser rejects that however the hash was advertised.
+    #[test]
+    fn rotate_if_needed_swaps_before_the_current_cert_expires() {
+        let mut store = CertStore::new();
+        store.current.not_after = SystemTime::now() + Duration::from_secs(3 * 3600);
+        let _ = store.rotate_if_needed();
+        let next_hash = store.next.as_ref().unwrap().hash.clone();
+
+        // Still valid, but now inside the swap window.
+        store.current.not_after = SystemTime::now() + Duration::from_secs(60);
+        assert!(
+            store.rotate_if_needed(),
+            "must retire a cert that is about to expire, not wait for expiry",
+        );
+        assert_eq!(store.current.hash, next_hash, "next became current");
+        assert!(
+            store.current.not_after > SystemTime::now() + SWAP_LOOKAHEAD,
+            "the promoted cert must itself be clear of the swap window",
+        );
+    }
+
+    // w[verify wt.cert.rotation]
+    // A margin no larger than the tick interval would let a tick straddle
+    // expiry, which is the whole failure being fixed.
+    #[test]
+    fn the_swap_margin_exceeds_the_rotation_tick() {
+        assert!(
+            SWAP_LOOKAHEAD > ROTATION_TICK,
+            "swap margin {SWAP_LOOKAHEAD:?} must exceed tick {ROTATION_TICK:?}",
+        );
+        assert!(
+            ROTATION_LOOKAHEAD > SWAP_LOOKAHEAD,
+            "the next cert must be prepared before the swap window opens",
+        );
     }
 
     // w[verify wt.cert.rotation]
