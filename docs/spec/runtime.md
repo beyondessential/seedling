@@ -254,6 +254,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Rate limiting applies to reverse-proxy routes alone.
 > Redirect responses and non-HTTP forwarding are emitted without it, as is any route whose resolved limit is absent.
 >
+> A limit belongs to the route that declared it, so a client has one budget for that route however many virtual hosts front it: a service reachable through more than one hostname, or through both a plaintext and a TLS ingress, does not thereby grant a client a budget per route of entry.
+>
 > A client is identified by the IP address the proxy attributes to the request.
 > Each client may make the route's `max_events` requests within its `window`, measured as a sliding window; a request beyond that is answered with 429 and a Retry-After indicating when the client may retry.
 > Addresses are counted individually, so a set of addresses one party holds is a corresponding number of budgets to that party rather than one.

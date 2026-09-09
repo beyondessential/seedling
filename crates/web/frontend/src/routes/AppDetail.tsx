@@ -401,6 +401,15 @@ function ResourceDefDetail({ def }: { def: ResourceDef }) {
               size="small"
               variant="outlined"
             />
+            <Chip
+              label={
+                r.rate_limit
+                  ? `limit: ${r.rate_limit.max_events}/${r.rate_limit.window}s`
+                  : "limit: off"
+              }
+              size="small"
+              variant="outlined"
+            />
           </Box>
         ))}
       </Box>

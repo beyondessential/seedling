@@ -16,15 +16,18 @@ pub const DEFAULT_MINIMUM_LENGTH: u64 = 512;
 /// Bounds on a declared rate limit.
 ///
 /// These are sanity ceilings, not tuning. A limit is charged to the proxy
-/// process every app on the host shares: the module preallocates a ring of
-/// `max_events` timestamps per distinct client and holds it for the length of
-/// the window, so an absurd declaration in one app is another app's memory.
+/// process every app on the host shares: the module holds a ring of
+/// `max_events` timestamps per distinct client for the length of the window,
+/// so an absurd declaration in one app is another app's memory. The number of
+/// live rings is decided by whoever sends the traffic, which is why the size
+/// of each is held to something an app could plausibly mean rather than to
+/// the largest number that still fits.
 /// The floor exists because the emitted window is a whole number of
 /// nanoseconds — a smaller one would round to zero, which the module rejects
 /// at provision, failing the entire proxy document rather than the one route.
 pub const MIN_WINDOW_SECS: f64 = 0.001;
 pub const MAX_WINDOW_SECS: f64 = 86_400.0;
-pub const MAX_MAX_EVENTS: u64 = 1_000_000;
+pub const MAX_MAX_EVENTS: u64 = 10_000;
 pub const DEFAULT_TRY_DURATION_SECS: f64 = 5.0;
 pub const DEFAULT_INTERVAL_SECS: f64 = 0.25;
 
@@ -443,7 +446,15 @@ pub(super) fn parse_balance(mut map: Map) -> Result<BalanceSettings, Box<EvalAlt
 
 // l[impl service.http.rate-limit.fields]
 pub(super) fn parse_rate_limit(mut map: Map) -> Result<RateLimitSettings, Box<EvalAltResult>> {
-    let max_events = match map.remove("max_events") {
+    let max_events = map.remove("max_events");
+    let window = map.remove("window");
+
+    // Before the required-field checks: with both known keys already taken,
+    // whatever is left is a key the caller invented. Reporting `max_event: 10`
+    // as a missing `max_events` would name everything except the typo.
+    reject_unknown(&map, "rate_limit")?;
+
+    let max_events = match max_events {
         None => return Err("rate_limit requires `max_events`".into()),
         Some(value) => {
             let n = value.as_int().map_err(|t| -> Box<EvalAltResult> {
@@ -466,16 +477,12 @@ pub(super) fn parse_rate_limit(mut map: Map) -> Result<RateLimitSettings, Box<Ev
         }
     };
 
-    let window_secs = match map.remove("window") {
+    let window_secs = match window {
         None => return Err("rate_limit requires `window`".into()),
         Some(value) => {
+            // The range check rejects NaN and the infinities along with
+            // everything else outside it, so it is the only check needed.
             let n = as_number(value, "rate_limit", "window")?;
-            if !n.is_finite() || n <= 0.0 {
-                return Err(format!(
-                    "rate_limit `window` must be a positive, finite number of seconds, got {n}"
-                )
-                .into());
-            }
             if !(MIN_WINDOW_SECS..=MAX_WINDOW_SECS).contains(&n) {
                 return Err(format!(
                     "rate_limit `window` must be between {MIN_WINDOW_SECS} and \
@@ -486,8 +493,6 @@ pub(super) fn parse_rate_limit(mut map: Map) -> Result<RateLimitSettings, Box<Ev
             n
         }
     };
-
-    reject_unknown(&map, "rate_limit")?;
 
     Ok(RateLimitSettings {
         max_events,

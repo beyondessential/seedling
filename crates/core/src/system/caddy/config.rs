@@ -255,7 +255,7 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
                     // without engaging compression or the proxy, so the
                     // excess costs a backend nothing.
                     if let Some(rate_limit) = &proxy.rate_limit {
-                        chain.push(rate_limit_handler(vh, &route.prefix, rate_limit));
+                        chain.push(rate_limit_handler(rate_limit));
                     }
                     // r[impl service.http.route.compression]
                     // `encode` wraps the response writer, so it has to sit
@@ -308,16 +308,15 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
 }
 
 // r[impl service.http.route.rate-limiting]
-fn rate_limit_handler(vh: &VirtualHost, prefix: &str, limit: &RouteRateLimit) -> Value {
-    // The module keys its zones in a process-wide pool, so two routes sharing
-    // a zone name share one bucket and whichever limit was provisioned first
-    // governs both. Virtual hosts are keyed by hostname *and* termination, so
-    // one hostname can appear as both a TLS and a plaintext vhost in the same
-    // document; the scheme has to be part of the name or those two collide.
-    // The result is injective: a validated hostname holds no `/`, so the
-    // prefix cannot be confused for part of it.
-    let scheme = if vh.tls_acme { "https" } else { "http" };
-    let zone = format!("{scheme}://{}{prefix}", vh.hostname);
+fn rate_limit_handler(limit: &RouteRateLimit) -> Value {
+    // The zone name is the route that declared the limit, carried from the
+    // translate layer — not anything about the vhost serving the request. One
+    // service route can be fronted by several vhosts (two ingresses on one
+    // hostname at different ports, an app's own ingress alongside a site
+    // ingress), and all of them resolve this same limit. The module pools
+    // zones process-wide by name, so naming it after the declaration gives a
+    // client the one budget the app asked for, where naming it after the
+    // vhost would give it one budget per vhost.
 
     // `client_ip` is the address the proxy attributes to the request, which
     // without any trusted-proxy configuration is the peer it is talking to.
@@ -329,7 +328,7 @@ fn rate_limit_handler(vh: &VirtualHost, prefix: &str, limit: &RouteRateLimit) ->
     json!({
         "handler": "rate_limit",
         "rate_limits": {
-            zone: {
+            &limit.zone: {
                 "key": "{http.request.client_ip}",
                 "window": secs_to_nanos(limit.window_secs),
                 "max_events": limit.max_events,

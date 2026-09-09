@@ -399,15 +399,17 @@ fn rate_limit_rejects_out_of_range_values() {
     ]);
     assert!(parse_rate_limit(too_many).is_err());
 
-    // A window this small rounds to zero nanoseconds when emitted, which the
-    // proxy rejects at provision — taking the whole document with it.
+    // Below the floor. The floor is set where it is because a smaller window
+    // rounds to zero nanoseconds when emitted, which the proxy rejects at
+    // provision — taking the whole document with it.
     let vanishing = map(vec![
         ("max_events", Dynamic::from(10_i64)),
         ("window", Dynamic::from(0.000_000_000_1_f64)),
     ]);
     assert!(parse_rate_limit(vanishing).is_err());
 
-    // And one this large saturates the nanosecond conversion.
+    // Above the ceiling, which is set below the point where the nanosecond
+    // conversion would saturate.
     let geological = map(vec![
         ("max_events", Dynamic::from(10_i64)),
         ("window", Dynamic::from(1e12_f64)),
@@ -429,4 +431,19 @@ fn rate_limit_accepts_the_bounds_themselves() {
         ("window", Dynamic::from(MIN_WINDOW_SECS)),
     ]);
     assert!(parse_rate_limit(at_floor).is_ok());
+}
+
+// l[verify service.http.rate-limit.fields]
+#[test]
+fn rate_limit_names_a_misspelled_key_rather_than_the_field_it_displaced() {
+    let typo = map(vec![
+        ("max_event", Dynamic::from(10_i64)),
+        ("window", Dynamic::from(1_i64)),
+    ]);
+    let err = parse_rate_limit(typo).expect_err("a misspelled key must throw");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("max_event") && !msg.contains("requires"),
+        "the error should name the key that was not recognised, got: {msg}"
+    );
 }

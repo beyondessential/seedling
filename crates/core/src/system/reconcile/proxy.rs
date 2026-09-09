@@ -245,7 +245,14 @@ fn routes_of(http: Option<&HttpServiceDef>) -> RouteMap {
 // r[impl service.http.route.balancing]
 pub(super) fn service_level_proxy(snapshot: &AppDef, service_name: &str) -> RouteProxy {
     let (service, _) = proxy_settings_for(snapshot, service_name);
-    resolve(&service, None).into()
+    // These settings are only ever used for the synthesised `/` route, so
+    // that is the prefix the limit is attributed to.
+    RouteProxy::resolved(
+        resolve(&service, None),
+        snapshot.name.as_str(),
+        service_name,
+        "/",
+    )
 }
 
 /// Build per-prefix HTTP routes for an ingress backed by `service_name`
@@ -333,7 +340,12 @@ pub(super) fn collect_http_routes(
     by_prefix
         .into_iter()
         .map(|(prefix, upstreams)| {
-            let proxy = resolve(&service, routes.get(&prefix)).into();
+            let proxy = RouteProxy::resolved(
+                resolve(&service, routes.get(&prefix)),
+                snapshot.name.as_str(),
+                service_name,
+                &prefix,
+            );
             HttpForwardRoute {
                 prefix,
                 upstreams,

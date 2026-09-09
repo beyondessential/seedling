@@ -493,8 +493,19 @@ pub struct RouteCompress {
     pub content_types: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RouteRateLimit {
+    /// Names the budget this limit counts against, as `app/service{prefix}`.
+    ///
+    /// The identity is the route that *declared* the limit, not a vhost that
+    /// fronts it. One service route can be served through several vhosts — two
+    /// ingresses on one hostname at different ports, or an app's own ingress
+    /// alongside a site ingress — and every one of them resolves the same
+    /// limit. Naming the zone after the vhost would give a client one budget
+    /// per vhost, so a limit of ten would admit twenty; naming it after the
+    /// declaration keeps the one budget the app asked for. The module pools
+    /// zones process-wide by name, which is what makes the sharing work.
+    pub zone: String,
     /// Requests one client may make within each window.
     pub max_events: u64,
     /// Length of the sliding window, in seconds.
@@ -508,20 +519,34 @@ pub struct RouteBalance {
     pub interval_secs: f64,
 }
 
-impl From<crate::defs::service::ResolvedRouteProxy> for RouteProxy {
-    fn from(r: crate::defs::service::ResolvedRouteProxy) -> Self {
+impl RouteProxy {
+    /// Wire form of `resolved`, with any rate limit attributed to the route
+    /// that declared it: `app`/`service` at `prefix`.
+    ///
+    /// There is deliberately no `From` conversion. The zone identity cannot be
+    /// derived from the resolved settings, and a conversion that supplied a
+    /// placeholder would put every route that used it in one shared bucket —
+    /// silently, since the emitted document would still be valid. Requiring
+    /// the declaring route here makes the compiler ask for it instead.
+    pub fn resolved(
+        resolved: crate::defs::service::ResolvedRouteProxy,
+        app: &str,
+        service: &str,
+        prefix: &str,
+    ) -> Self {
         Self {
-            compress: r.compress.map(|c| RouteCompress {
+            compress: resolved.compress.map(|c| RouteCompress {
                 encodings: c.encodings.iter().map(|e| e.as_str().to_string()).collect(),
                 minimum_length: c.minimum_length,
                 content_types: c.content_types,
             }),
             balance: RouteBalance {
-                policy: r.balance.policy.as_str().to_string(),
-                try_duration_secs: r.balance.try_duration_secs,
-                interval_secs: r.balance.interval_secs,
+                policy: resolved.balance.policy.as_str().to_string(),
+                try_duration_secs: resolved.balance.try_duration_secs,
+                interval_secs: resolved.balance.interval_secs,
             },
-            rate_limit: r.rate_limit.map(|rl| RouteRateLimit {
+            rate_limit: resolved.rate_limit.map(|rl| RouteRateLimit {
+                zone: format!("{app}/{service}{prefix}"),
                 max_events: rl.max_events,
                 window_secs: rl.window_secs,
             }),

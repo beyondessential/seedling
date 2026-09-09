@@ -118,11 +118,18 @@ export interface CompressSummary {
   content_types: string[];
 }
 
+export interface RateLimitSummary {
+  max_events: number;
+  window: number;
+}
+
 export interface RouteSummary {
   prefix: string;
   /** Null when compression is off for this route. */
   compress: CompressSummary | null;
   balance: BalanceSummary;
+  /** Null when this route is not rate limited. */
+  rate_limit: RateLimitSummary | null;
 }
 
 export type ResourceDef =

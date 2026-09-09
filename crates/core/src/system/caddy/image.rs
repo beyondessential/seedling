@@ -130,13 +130,14 @@ mod tests {
     /// default, so the defaults alone would leave its handler out of the
     /// fixture and its module unchecked.
     fn rate_limited_proxy() -> crate::system::types::RouteProxy {
-        let mut proxy: crate::system::types::RouteProxy =
-            crate::defs::service::ResolvedRouteProxy::default().into();
-        proxy.rate_limit = Some(crate::system::types::RouteRateLimit {
-            max_events: 1000,
-            window_secs: 1.0,
-        });
-        proxy
+        let resolved = crate::defs::service::ResolvedRouteProxy {
+            rate_limit: Some(crate::defs::service::RateLimitSettings {
+                max_events: 1000,
+                window_secs: 1.0,
+            }),
+            ..Default::default()
+        };
+        crate::system::types::RouteProxy::resolved(resolved, "demo", "web", "/")
     }
 
     /// A configuration exercising every feature `build_caddy_config` emits.

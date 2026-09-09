@@ -450,11 +450,11 @@ This is currently the only value.
 > l[service.http.rate-limit.fields]
 > Both fields of the `config` map are required, since a limit has no meaning without either:
 >
-> - `max_events`: the number of requests one client may make within each window. Must be a positive integer, at most one million.
+> - `max_events`: the number of requests one client may make within each window. Must be a positive integer, at most ten thousand.
 > - `window`: the length of the sliding window, in seconds. Must be a finite number between one millisecond and one day.
 >
 > An unrecognised field, and either field outside its range, must each throw.
-> The ranges are sanity bounds rather than tuning: a limit is charged to a proxy every app on the host shares, holding per-client state for the length of the window, so a declaration far outside what an app could mean is refused where the error still names the script that made it.
+> The ranges are sanity bounds rather than tuning: a limit is charged to a proxy every app on the host shares, holding per-client state sized by `max_events` for the length of the window. How many clients are tracked is decided by whoever sends the traffic, so the size of each is held to something an app could plausibly mean, and a declaration outside that is refused where the error still names the script that made it.
 
 > l[service.exported]
 > `service.exported(options?: #{ description?: string })` is a builder method which marks the service as exported. Exported services are advertised to the control plane and operators.

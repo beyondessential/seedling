@@ -6,7 +6,12 @@ use crate::system::types::{
 };
 
 fn default_proxy() -> crate::system::types::RouteProxy {
-    crate::defs::service::ResolvedRouteProxy::default().into()
+    crate::system::types::RouteProxy::resolved(
+        crate::defs::service::ResolvedRouteProxy::default(),
+        "demo",
+        "web",
+        "/",
+    )
 }
 
 fn http_vhost(hostname: &str, upstream: &str) -> VirtualHost {
@@ -894,6 +899,7 @@ fn a_limited_route_carries_the_rate_limit_handler() {
         vec![limited_route(
             "/api",
             Some(RouteRateLimit {
+                zone: "demo/web/api".to_string(),
                 max_events: 1000,
                 window_secs: 1.0,
             }),
@@ -906,7 +912,7 @@ fn a_limited_route_carries_the_rate_limit_handler() {
     assert_eq!(handle[0]["handler"], "rate_limit");
     assert_eq!(handle[1]["handler"], "reverse_proxy");
 
-    let zone = &handle[0]["rate_limits"]["http://app.example.com/api"];
+    let zone = &handle[0]["rate_limits"]["demo/web/api"];
     assert_eq!(zone["max_events"], 1000);
     // Caddy durations as nanoseconds: 1s.
     assert_eq!(zone["window"], 1_000_000_000i64);
@@ -935,6 +941,7 @@ fn emitted_zone_uses_only_fields_the_pinned_module_declares() {
         vec![limited_route(
             "/api",
             Some(RouteRateLimit {
+                zone: "demo/web/api".to_string(),
                 max_events: 10,
                 window_secs: 1.0,
             }),
@@ -942,7 +949,7 @@ fn emitted_zone_uses_only_fields_the_pinned_module_declares() {
     );
     let json = build_caddy_config(&config);
     let zone = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"][0]["rate_limits"]
-        ["http://app.example.com/api"];
+        ["demo/web/api"];
 
     // Caddy decodes module config strictly, so a field the pinned tag does not
     // declare fails the whole document and drops ingress for every vhost on
@@ -972,6 +979,7 @@ fn a_longer_prefix_carries_its_own_zone_ahead_of_the_shorter_one() {
             limited_route(
                 "/api",
                 Some(RouteRateLimit {
+                    zone: "demo/web/api".to_string(),
                     max_events: 1000,
                     window_secs: 1.0,
                 }),
@@ -979,6 +987,7 @@ fn a_longer_prefix_carries_its_own_zone_ahead_of_the_shorter_one() {
             limited_route(
                 "/api/login",
                 Some(RouteRateLimit {
+                    zone: "demo/web/api/login".to_string(),
                     max_events: 10,
                     window_secs: 1.0,
                 }),
@@ -998,30 +1007,43 @@ fn a_longer_prefix_carries_its_own_zone_ahead_of_the_shorter_one() {
     // shared name would put both prefixes in one bucket.
     let tight = &routes[0]["handle"][0]["rate_limits"];
     let loose = &routes[1]["handle"][0]["rate_limits"];
-    assert_eq!(tight["http://app.example.com/api/login"]["max_events"], 10);
-    assert_eq!(loose["http://app.example.com/api"]["max_events"], 1000);
-    assert!(tight["http://app.example.com/api"].is_null());
+    assert_eq!(tight["demo/web/api/login"]["max_events"], 10);
+    assert_eq!(loose["demo/web/api"]["max_events"], 1000);
+    assert!(tight["demo/web/api"].is_null());
 }
 
 // r[verify service.http.route.rate-limiting]
 #[test]
-fn the_same_prefix_on_two_hostnames_gets_distinct_zones() {
-    let limit = Some(RouteRateLimit {
-        max_events: 10,
-        window_secs: 1.0,
-    });
-    let mut config = vhost_with("a.example.com", vec![limited_route("/api", limit)]);
+fn two_hostnames_fronting_one_declaration_share_its_budget() {
+    // An exported service can be reached through its app's own ingress and a
+    // site ingress at once. Both resolve the same declared limit, so both must
+    // count against the same zone: a zone per hostname would hand a client one
+    // budget per hostname and admit twice what the app declared.
+    let limit = || {
+        Some(RouteRateLimit {
+            zone: "demo/web/api".to_string(),
+            max_events: 10,
+            window_secs: 1.0,
+        })
+    };
+    let mut config = vhost_with("a.example.com", vec![limited_route("/api", limit())]);
     config.virtual_hosts.push(VirtualHost {
         hostname: "b.example.com".to_string(),
         tls_acme: false,
         redirect: None,
-        routes: vec![limited_route("/api", limit)],
+        routes: vec![limited_route("/api", limit())],
     });
     let json = build_caddy_config(&config);
     let routes = &json["apps"]["http"]["servers"]["seedling_http"]["routes"];
 
-    assert!(!routes[0]["handle"][0]["rate_limits"]["http://a.example.com/api"].is_null());
-    assert!(!routes[1]["handle"][0]["rate_limits"]["http://b.example.com/api"].is_null());
+    assert_eq!(
+        routes[0]["handle"][0]["rate_limits"]["demo/web/api"]["max_events"],
+        10
+    );
+    assert_eq!(
+        routes[1]["handle"][0]["rate_limits"]["demo/web/api"]["max_events"],
+        10
+    );
 }
 
 // r[verify service.http.route.rate-limiting]
@@ -1081,15 +1103,18 @@ fn old_cached_config_without_rate_limit_still_deserialises() {
 
 // r[verify service.http.route.rate-limiting]
 #[test]
-fn one_hostname_terminating_both_ways_gets_a_zone_per_termination() {
-    let limit = Some(RouteRateLimit {
-        max_events: 10,
-        window_secs: 1.0,
-    });
-    // Vhosts are keyed by hostname and termination, so this is one hostname
-    // appearing twice in the same document. Sharing a zone name here would
-    // put both terminations in one bucket, and whichever the module
-    // provisioned first would silently govern the other.
+fn one_hostname_terminating_both_ways_shares_one_budget() {
+    // Vhosts are keyed by hostname and termination, so two ingresses on one
+    // hostname at different ports put the same declared route in two vhosts.
+    // Naming the zone after the vhost would let a client alternate schemes and
+    // spend both budgets, admitting twice the declared limit.
+    let limit = || {
+        Some(RouteRateLimit {
+            zone: "demo/web/api".to_string(),
+            max_events: 10,
+            window_secs: 1.0,
+        })
+    };
     let config = ProxyConfig {
         listeners: vec![
             ProxyListener {
@@ -1106,13 +1131,13 @@ fn one_hostname_terminating_both_ways_gets_a_zone_per_termination() {
                 hostname: "app.example.com".to_string(),
                 tls_acme: false,
                 redirect: None,
-                routes: vec![limited_route("/api", limit)],
+                routes: vec![limited_route("/api", limit())],
             },
             VirtualHost {
                 hostname: "app.example.com".to_string(),
                 tls_acme: true,
                 redirect: None,
-                routes: vec![limited_route("/api", limit)],
+                routes: vec![limited_route("/api", limit())],
             },
         ],
         ..Default::default()
@@ -1123,7 +1148,6 @@ fn one_hostname_terminating_both_ways_gets_a_zone_per_termination() {
     let tls =
         &json["apps"]["http"]["servers"]["seedling_https"]["routes"][0]["handle"][0]["rate_limits"];
 
-    assert!(!plain["http://app.example.com/api"].is_null());
-    assert!(!tls["https://app.example.com/api"].is_null());
-    assert!(tls["http://app.example.com/api"].is_null());
+    assert!(!plain["demo/web/api"].is_null());
+    assert!(!tls["demo/web/api"].is_null());
 }
