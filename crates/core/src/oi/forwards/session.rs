@@ -380,7 +380,35 @@ async fn udp_relay_task(
             }
             n = socket.recv(&mut buf) => {
                 match n {
-                    Ok(n) if n > 0 => {
+                    // i[impl forward.relay.resilience]
+                    // A zero-length datagram is legal UDP, and an ICMP
+                    // port-unreachable surfaces here as ECONNREFUSED on a
+                    // connected socket. Both used to fall into the same
+                    // `_ => break` arm as a fatal error, killing the relay
+                    // forever while the forward stayed registered and listed
+                    // as healthy.
+                    Ok(0) => {
+                        let mut pkt = Vec::with_capacity(2);
+                        pkt.extend_from_slice(&key_bytes);
+                        match conn.send_datagram(pkt.into()) {
+                            Ok(()) => {}
+                            Err(quinn::SendDatagramError::ConnectionLost(_)) => break,
+                            Err(e) => {
+                                tracing::warn!(key = forward_key, "send_datagram: {e}");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // Transient: the peer may not be listening yet, or at
+                        // all. Report it and keep relaying — the forward is
+                        // not over because one datagram bounced.
+                        tracing::debug!(key = forward_key, "UDP recv failed: {e}");
+                        let _ = status_tx.try_send(StatusMsg {
+                            level: "warn",
+                            message: format!("UDP receive failed: {e}"),
+                        });
+                    }
+                    Ok(n) => {
                         let max_size = conn.max_datagram_size().unwrap_or(0);
                         if n + 2 > max_size {
                             tracing::warn!(
@@ -408,9 +436,17 @@ async fn udp_relay_task(
                             }
                         }
                     }
-                    _ => break,
                 }
             }
         }
     }
+
+    // i[impl forward.relay.resilience] — nothing else observes this task, so
+    // an unannounced exit left the forward in `/forwards/list` looking
+    // healthy with no relay behind it.
+    tracing::info!(key = forward_key, "UDP relay ended");
+    let _ = status_tx.try_send(StatusMsg {
+        level: "warn",
+        message: "UDP relay ended; no further datagrams will be relayed".to_owned(),
+    });
 }
