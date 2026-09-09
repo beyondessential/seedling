@@ -414,9 +414,13 @@ This is currently the only value.
 
 > l[service.http.proxy-settings.resolution]
 > [compression](#l--service.http.compress) is declared on an HTTP Service, [balancing](#l--service.balance) on the Service itself, and either may be overridden on an individual HTTP Service Route.
+> [Rate limiting](#l--service.http.rate-limit) is likewise declared on an HTTP Service or an individual HTTP Service Route.
 >
-> Every field resolves on its own: the route's value if the route set that field, otherwise the service's value if the service set it, otherwise the field's default.
-> A route setting some fields therefore keeps the service's values for the fields it left unset, and setting `compress` never disturbs `balance` or the reverse.
+> Compression and balancing resolve field by field: the route's value if the route set that field, otherwise the service's value if the service set it, otherwise the field's default.
+> A route setting some fields therefore keeps the service's values for the fields it left unset, and setting any one of `compress`, `balance`, or `rate_limit` never disturbs the others.
+>
+> Rate limiting resolves as a whole rather than field by field: the route's declaration if the route made one, otherwise the service's, otherwise no limit.
+> It has no default, so a service and route that both leave it unmentioned are not rate limited, and a route declaring `rate_limit(false)` is not rate limited even where the service declared a limit.
 >
 > A Service with no HTTP Service Routes is served through a single `/` route, which takes the service's values.
 
@@ -434,6 +438,22 @@ This is currently the only value.
 > Both timing fields must be non-negative, and an unrecognised `policy` must throw.
 > A `try_duration` of zero disables retrying, so a request that cannot reach its first-chosen backend fails immediately and `interval` is not consulted.
 > An `interval` of zero combined with a non-zero `try_duration` must throw, because it would spin without pause whenever every backend is unreachable.
+
+> l[service.http.rate-limit]
+> `rate_limit(config: map)` and `rate_limit(false)` are builder methods declaring per-client request rate limiting for a service's routes.
+> Both are available on an [HTTP Service](#l--service.http) and on an [HTTP Service Route](#l--service.http.route).
+>
+> The map form declares a limit carrying the fields below; `rate_limit(false)` declares no limit at this level, which at a route also suppresses a limit the service declared.
+> A limit applies to requests proxied to the service's pods, and is opt-in: a service that never declares one is not rate limited.
+> [Redirect](#l--ingress.redirect) responses and non-HTTP forwarding are never rate limited.
+
+> l[service.http.rate-limit.fields]
+> Both fields of the `config` map are required, since a limit has no meaning without either:
+>
+> - `max_events`: the number of requests one client may make within each window. Must be a positive integer.
+> - `window`: the length of the sliding window, in seconds. Must be a positive, finite number.
+>
+> An unrecognised field, a `max_events` that is not a positive integer, and a `window` that is not positive and finite must each throw.
 
 > l[service.exported]
 > `service.exported(options?: #{ description?: string })` is a builder method which marks the service as exported. Exported services are advertised to the control plane and operators.

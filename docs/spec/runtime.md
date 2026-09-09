@@ -248,9 +248,21 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Health checking in the proxy would contradict that pool, which deliberately keeps every running backend in service when no healthy alternative exists rather than reducing capacity to nothing.
 > Retrying an unreachable upstream covers the interval between a backend becoming unusable and the pool being recomputed on a subsequent tick; it is not a substitute for the pool.
 
+> r[service.http.route.rate-limiting]
+> A reverse-proxy route the runtime emits with a resolved [rate limit](language.md#l--service.http.rate-limit) must reject a client's requests that exceed that limit before they are proxied, so the excess never reaches a backend.
+>
+> Rate limiting applies to reverse-proxy routes alone.
+> Redirect responses and non-HTTP forwarding are emitted without it, as is any route whose resolved limit is absent.
+>
+> A client is identified by the IP address the proxy attributes to the request, with all addresses in a single IPv6 /64 counted as one client, since a client controls its whole /64.
+> Each client may make the route's `max_events` requests within its `window`, measured as a sliding window; a request beyond that is answered with 429 and a Retry-After indicating when the client may retry.
+>
+> Because routes are emitted [longest-prefix-first](#r--service.http.route.routing) and are terminal, each request is limited by exactly one route: a request under a longer, more specific prefix is counted only against that prefix's limit, not also against a shorter prefix that would otherwise match.
+> A tighter limit on a longer prefix therefore governs its own traffic independently of a looser limit on a shorter prefix covering the rest, which is what lets a login prefix carry a stricter limit than the API prefix enclosing it.
+
 > r[service.http.route.proxy-settings.visibility]
-> The compression and balancing settings in force on a service and on each of its routes, after resolution, must be readable when inspecting the app that declares the service, as [app.describe.proxy-settings](interface.md#i--app.describe.proxy-settings) defines.
-> An operator diagnosing an uncompressed response or a failed request can then establish what the proxy was told to do without reading the app's script.
+> The compression, balancing, and rate-limit settings in force on a service and on each of its routes, after resolution, must be readable when inspecting the app that declares the service, as [app.describe.proxy-settings](interface.md#i--app.describe.proxy-settings) defines.
+> An operator diagnosing an uncompressed response, a failed request, or an unexpected 429 can then establish what the proxy was told to do without reading the app's script.
 >
 > These settings are declared by the app. The runtime provides no means to change them on a running app.
 
