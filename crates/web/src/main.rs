@@ -190,6 +190,31 @@ async fn connect_daemon_with_retry(
 /// interfaces/addresses when either is configured, otherwise the shared HTTP
 /// set. Lets a deployment bind WebTransport somewhere an HTTP reverse proxy
 /// can't reach (e.g. the tailnet) while HTTP stays on loopback.
+/// The port to advertise to clients, in `wt_url` and in the CSP's
+/// `connect-src` origin.
+///
+/// Taken from the addresses actually bound rather than from `--wt-port`:
+/// with explicit `--wt-listen` (or `--listen`) addresses that argument is not
+/// the port anything listens on, and substituting the default made every
+/// documented explicit-address combination advertise an unusable endpoint.
+///
+/// One port is advertised, so addresses that disagree on it are rejected
+/// rather than having one of them silently picked.
+// w[impl auth.connect]
+fn advertised_wt_port(addrs: &[SocketAddr]) -> Result<u16, String> {
+    let mut ports = addrs.iter().map(SocketAddr::port);
+    let first = ports
+        .next()
+        .ok_or_else(|| "no WebTransport listen addresses were resolved".to_owned())?;
+    if let Some(other) = ports.find(|p| *p != first) {
+        return Err(format!(
+            "WebTransport listen addresses disagree on the port ({first} and {other}); \
+             a single port is advertised to clients, so they must match"
+        ));
+    }
+    Ok(first)
+}
+
 fn wt_bind_sources<'a>(
     interface: &'a [String],
     listen: &'a [SocketAddr],
@@ -258,12 +283,18 @@ async fn main() {
         &args.wt_interface,
         &args.wt_listen,
     );
-    let wt_port = if wt_listen.is_empty() {
+    // Only interface-derived addresses take this port; explicit addresses
+    // carry their own.
+    let wt_bind_port = if wt_listen.is_empty() {
         args.wt_port
     } else {
         DEFAULT_WT_PORT
     };
-    let wt_addrs = resolve_bind_addrs(wt_interface, wt_listen, wt_port).unwrap_or_else(|e| {
+    let wt_addrs = resolve_bind_addrs(wt_interface, wt_listen, wt_bind_port).unwrap_or_else(|e| {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    });
+    let wt_port = advertised_wt_port(&wt_addrs).unwrap_or_else(|e| {
         eprintln!("error: {e}");
         std::process::exit(1);
     });
@@ -445,5 +476,44 @@ mod daemon_pin_tests {
     fn fixed_pin_returns_its_auth() {
         let pin = DaemonPin::Fixed(ClientAuth::TrustAny);
         assert!(matches!(pin.resolve(), Some(ClientAuth::TrustAny)));
+    }
+
+    // w[verify auth.connect]
+    // With explicit listen addresses the `--wt-port` argument is not the port
+    // anything is bound to; advertising the default in its place made every
+    // documented explicit-address combination hand clients an unusable URL.
+    #[test]
+    fn the_advertised_port_comes_from_the_bound_address() {
+        let addrs: Vec<SocketAddr> = vec!["10.0.0.5:9999".parse().unwrap()];
+        assert_eq!(advertised_wt_port(&addrs), Ok(9999));
+    }
+
+    // w[verify auth.connect]
+    #[test]
+    fn matching_ports_across_several_addresses_are_advertised_once() {
+        let addrs: Vec<SocketAddr> = vec![
+            "10.0.0.5:9999".parse().unwrap(),
+            "[::1]:9999".parse().unwrap(),
+        ];
+        assert_eq!(advertised_wt_port(&addrs), Ok(9999));
+    }
+
+    // w[verify auth.connect]
+    // Only one port reaches the client, so picking one of several would leave
+    // the rest advertised as something they are not.
+    #[test]
+    fn addresses_disagreeing_on_the_port_are_rejected() {
+        let addrs: Vec<SocketAddr> = vec![
+            "10.0.0.5:9999".parse().unwrap(),
+            "[::1]:8888".parse().unwrap(),
+        ];
+        let err = advertised_wt_port(&addrs).expect_err("mixed ports must not resolve");
+        assert!(err.contains("9999") && err.contains("8888"), "{err}");
+    }
+
+    // w[verify auth.connect]
+    #[test]
+    fn an_empty_address_set_has_no_port_to_advertise() {
+        advertised_wt_port(&[]).expect_err("nothing bound means nothing to advertise");
     }
 }
