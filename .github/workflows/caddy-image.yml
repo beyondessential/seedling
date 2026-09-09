@@ -71,13 +71,13 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@v7.0.0
-      - uses: docker/setup-qemu-action@v4.1.0
+      - uses: docker/setup-qemu-action@v4.2.0
       - uses: docker/setup-buildx-action@v4
 
       # Build the native arch first and check it before anything is published,
       # so a missing module fails here rather than on a host.
       - name: Build for checking
-        uses: docker/build-push-action@v7.2.0
+        uses: docker/build-push-action@v7.3.0
         with:
           context: docker/caddy
           file: docker/caddy/Containerfile
@@ -119,7 +119,7 @@ jobs:
             echo "TAGS"
           } >> "$GITHUB_OUTPUT"
 
-      - uses: docker/login-action@v4.2.0
+      - uses: docker/login-action@v4.6.0
         if: steps.publish.outputs.yes == 'true'
         with:
           registry: ghcr.io
@@ -129,7 +129,7 @@ jobs:
       - name: Build and publish
         id: push
         if: steps.publish.outputs.yes == 'true'
-        uses: docker/build-push-action@v7.2.0
+        uses: docker/build-push-action@v7.3.0
         with:
           context: docker/caddy
           file: docker/caddy/Containerfile
