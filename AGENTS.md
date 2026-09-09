@@ -1,3 +1,17 @@
+<!-- BEGIN:workhorse 0.2.0 -->
+# Workhorse framework
+
+This workspace uses [Workhorse](https://github.com/beyondessential/workhorse), a spec-driven development workbench. Workhorse ships skills (invokable prompts) and reference docs into this repo to shape how AI agents work here.
+
+- **Skills** live at `.agents/skills/` — each skill is a folder containing a `SKILL.md` with YAML frontmatter and a prompt body. `.claude/skills/` is a symlink to the same folder so Claude Code picks them up natively
+- **Reference docs** live at `.agents/docs/` — long-form guidance that skill bodies cite by path (spec format conventions and similar)
+- **Specs** live at `.workhorse/specs/` — acceptance criteria for each piece of work, organised into areas by subdirectory
+
+When picking up a task, read the skill whose folder name matches what you're being asked to do — its `SKILL.md` describes how to approach the work and which reference docs to follow.
+
+Workhorse keeps this section, the skills, and the reference docs current automatically: the first agent turn of a session smart-merges the latest release over your local edits, so your deliberate changes survive. Edit or remove it freely.
+<!-- END:workhorse -->
+
 <llm-rules>
 - This repo uses jujutsu. Commit changes incrementally as you work, do not squash changes aggressively to have a "clean" history.
 - The above is NOT a preference for smaller bits of incomplete work. It's better to do a large refactor so the code is RIGHT instead of doing many smaller changes that all have flaws.
@@ -35,4 +49,18 @@
 - NEVER edit or delete an existing migration block in `crates/core/src/runtime/db.rs`. Once a migration has shipped, its schema_version row exists in real databases and that block will never run again. Editing it silently diverges the live schema from what the version number promises. Always add a new `version < N` block at the bottom.
 - Unless explicitly excluded, everything available in the OI and the web UI should have a CLI command.
 - Update docs and guides in docs/ when making changes.
+- docs/failure-modes.md lists the ways this codebase has repeatedly gone wrong, each with the rule that prevents it. Read it before working on the reconciler, the fault store, replay, or anything that retries. The rules below are its short form.
+- Never let "could not determine" become a definite answer. A failed query, an unreadable row, an unparseable name, or an action you deliberately skipped must not be reported as absence, as non-ownership, or as success. If failure and a definite negative produce the same value, split the type so the compiler forces the caller to decide.
+- On any failure path, ask what remains observable. A function returning a value alongside an error must never let that value replace a previous good one; a handler mutating both memory and the database commits durably before the change becomes observable; every early `return Err` leaves both untouched.
+- State that is rebuilt in full and applied wholesale (routes, nftables rules, proxy config) must not be applied when a contributor is missing from it — absent is indistinguishable from deleted. An apply that was withheld must not then clear the fault for what it did not do.
+- Never match a runtime identity by the shape of its name. `starts_with` or SQL `LIKE 'x%'` on a unit, container, network, volume or ingress name is a red flag: names are not prefix-free. Use a prefix scan only to enumerate candidates, then match exactly against recorded identity.
+- Names the daemon grants itself in an operator-shared namespace belong in `crates/core/src/reserved.rs`, are rejected at creation only (never on update or delete), and their destructive consumers additionally check recorded ownership. Derivation is not allocation: if uniqueness matters, allocate and record it.
+- Every fault kind names both when it is filed and when it clears, and which shape it is (condition / event / latched). File through `file_once` or `sync_faults`, key it `(app, kind, subject)` where subject is the faulty thing rather than a substring of the description, and clear no more broadly than you file.
+- Every loop containing a fallible await names its back-off source, its transient/fatal classification, and its exit-reporting path. No terminal give-up state without an expiry or an operator reset — past a threshold, file a fault and keep retrying at the cap. "Retry immediately" and a bare `_ => break` are the tells.
+- A subsystem with a central decision function admits no dispatch before the decision.
+- Values crossing the BSL boundary are converted with `defs::take::*` or an equivalent throw. Never coerce, default, or silently drop malformed script input — it changes what the script means rather than failing.
+- For anything persisted for crash recovery, answer four questions: who else writes this row, which restart path reads it, what happens on every abort branch of that path, and which test severs in-memory state between the write and the read. Replay matches the committed entry at its own position, never a similar-looking one elsewhere.
+- Never `INSERT OR REPLACE` a row another writer touches: it resets every column you do not name, and an `ALTER TABLE ADD COLUMN` can make a correct statement wrong later. Use `ON CONFLICT ... DO UPDATE` naming your own columns.
+- When several call sites implement the same wire contract, that is the bug — extract it. Per-caller variation belongs after the handshake, not inside it.
+- `etc/ci/` holds greps enforcing some of the above. If one fires, fix the code or justify the exception in the script's allowlist with a comment; do not widen the pattern.
 </llm-rules>

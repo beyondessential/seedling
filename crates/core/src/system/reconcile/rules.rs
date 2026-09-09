@@ -175,7 +175,12 @@ pub(super) fn build_ingress_rules(
         let caddy_v6 = SocketAddr::new(IpAddr::V6(caddy_ip), def.port.get());
         let caddy_v4_addr = caddy_v4.map(|ip| SocketAddr::new(IpAddr::V4(ip), def.port.get()));
 
-        let proto = if def.dtls || def.http_terminate.is_some() {
+        // r[impl actuate.ingress.plaintext]
+        // Forward only the transports the ingress actually serves. UDP is
+        // needed for DTLS, and for HTTP/3 on an HTTPS ingress; a plaintext
+        // HTTP ingress serves neither, so it forwards TCP only.
+        let serves_quic = def.tls && def.http_terminate.is_some();
+        let proto = if def.dtls || serves_quic {
             ForwardProto::Both
         } else {
             ForwardProto::Tcp
@@ -712,5 +717,62 @@ mod tests {
             SiteServiceProtocol::Tcp,
             ForwardProto::Both
         ));
+    }
+
+    fn appdef_from(script: &str) -> std::sync::Arc<AppDef> {
+        let name = AppName::new("testapp").unwrap();
+        let (app, err) = crate::runtime::apps::evaluate_script(
+            &name,
+            script,
+            &std::collections::BTreeMap::new(),
+            &crate::ScriptLimits::default(),
+        );
+        assert!(err.is_none(), "script error: {err:?}");
+        app.def.load_full()
+    }
+
+    fn ingress_protos(def: &AppDef) -> Vec<ForwardProto> {
+        build_ingress_rules(def, ipv6("fd5e::ff"), None)
+            .into_iter()
+            .map(|r| r.proto)
+            .collect()
+    }
+
+    // r[verify actuate.ingress.plaintext]
+    #[test]
+    fn tls_http_ingress_forwards_tcp_and_udp() {
+        // HTTPS serves HTTP/3 over UDP, so both transports are forwarded.
+        let def = appdef_from(
+            r#"
+            let svc = app.service("web").http(80);
+            svc.ingress("clinic.example.com", 443).tls(Terminate.Https, Output.Http1);
+        "#,
+        );
+        assert_eq!(ingress_protos(&def), vec![ForwardProto::Both]);
+    }
+
+    // r[verify actuate.ingress.plaintext]
+    #[test]
+    fn plaintext_http_ingress_forwards_tcp_only() {
+        // BSL cannot express plaintext HTTP termination — only a site ingress
+        // whose TLS provisioning mode is `none` produces it — so drop TLS on
+        // the evaluated def to reach that shape.
+        let def = appdef_from(
+            r#"
+            let svc = app.service("web").http(80);
+            svc.ingress("clinic.local", 80).tls(Terminate.Https, Output.Http1);
+        "#,
+        );
+        for resource in def.resources.values() {
+            if let Resource::Ingress(i) = resource {
+                i.def.lock().tls = false;
+            }
+        }
+
+        assert_eq!(
+            ingress_protos(&def),
+            vec![ForwardProto::Tcp],
+            "a plaintext HTTP ingress serves no UDP, so none should be forwarded"
+        );
     }
 }

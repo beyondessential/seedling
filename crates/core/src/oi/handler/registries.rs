@@ -30,6 +30,15 @@ pub(crate) fn add_registry(state: &OiState, params: RegistryParams) -> HandlerRe
         .db
         .call(move |db| registries::add_allowed_registry(db, &registry))
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
+
+    // r[impl fault.lifecycle] — `disallowed_registry` is a condition fault:
+    // true exactly while an app's images reference a registry outside the
+    // allowlist. Adding the registry is the natural remediation, so it has to
+    // re-evaluate for the same reason removing one does — otherwise the fault
+    // the operator just fixed stands until something else happens to reload
+    // the app.
+    re_evaluate_all_apps(state);
+
     Ok(json!({ "ok": true }))
 }
 

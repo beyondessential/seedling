@@ -22,6 +22,12 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > All enums available to BSL are defined in the [Constants](#constants) section.
 
+> l[bsl.args.strict]
+> A builder or function argument whose type or value does not match its documented signature raises a script error at evaluation time.
+> Malformed input is never coerced, defaulted, or silently ignored: an argument of the wrong type does not become an empty string or a default, an element of the wrong type does not disappear from an array, an unrecognised key in an options map is not skipped, and an out-of-range number is not truncated or wrapped into range.
+> The error names the argument as the script author wrote it, what was expected, and what was supplied.
+> This does not apply where the spec defines a coercion, such as [col](#l--collection.col).
+
 > l[bsl.errors]
 > Some methods throw exceptions under some circumstances.
 > The `try..catch` Rhai construct may be used to handle those exceptions and recover.
@@ -206,12 +212,12 @@ This is currently the only value.
 >
 > - `Parameter`
 > - `Service`
-> - `HttpService`
 > - `Ingress`
 > - `Deployment`
 > - `Job`
 > - `Volume`
 > - `ExternalVolume`
+> - `ExternalService`
 > - `Action`
 >
 > Actions are invocable handles, not resources: `ResourceType.Action` exists for action-log identity, but resource collections such as `col(app)` and `app.select(...)` do not include actions, so selecting by `ResourceType.Action` yields an empty collection. Action invocation goes through [`Action.invoke`](#l--action.call).
@@ -369,6 +375,7 @@ This is currently the only value.
 > Services accept TCP and UDP traffic as long as they have places to route it to.
 > If there is no target for some traffic, it is dropped or rejected (implementation-defined).
 > If there are multiple targets for the same traffic, it is distributed round-robin.
+> HTTP traffic reaching the Service through an Ingress is distributed by the proxy under the route's [balancing policy](#l--service.balance), which is round-robin unless the app selects otherwise.
 
 ## HTTP Service
 
@@ -387,6 +394,46 @@ This is currently the only value.
 > The URL prefix is _not_ stripped for the pod: `GET /api/books` routed through a `route("/api")` will appear as `GET /api/books` to the container.
 >
 > Prefix-matching is done by length: for any given URL, the longest matching prefix is selected. If more complicated logic is required, an application should embed an HTTP "reverse proxy" container of its choice.
+
+> l[service.http.compress]
+> `compress(enabled: bool)` and `compress(config: map)` are builder methods declaring compression of responses served through the proxy.
+> Both are available on an [HTTP Service](#l--service.http) and on an [HTTP Service Route](#l--service.http.route).
+>
+> `compress(false)` disables compression. `compress(true)` enables it with the default settings below, as does the map form, which additionally sets whichever fields it names.
+>
+> Compression is a property of responses proxied to the service's pods. [Redirect](#l--ingress.redirect) responses are never compressed.
+
+> l[service.http.compress.fields]
+> All fields of the `config` map are optional:
+>
+> - `encodings`: the content encodings offered, in descending order of preference. Accepted values are `"zstd"` and `"gzip"`. Default `["zstd", "gzip"]`.
+> - `minimum_length`: responses shorter than this many bytes are served uncompressed, because compressing them costs more than it saves. Default 512.
+> - `content_types`: the content types eligible for compression. An entry ending in `*` matches any content type with that prefix. Default is a set covering text and text-like formats: markup, stylesheets, scripts, JSON and other structured text, SVG, and fonts.
+>
+> `minimum_length` must be a non-negative integer. An unrecognised encoding, an empty `encodings` list, and an empty `content_types` list must each throw.
+
+> l[service.http.proxy-settings.resolution]
+> [compression](#l--service.http.compress) is declared on an HTTP Service, [balancing](#l--service.balance) on the Service itself, and either may be overridden on an individual HTTP Service Route.
+>
+> Every field resolves on its own: the route's value if the route set that field, otherwise the service's value if the service set it, otherwise the field's default.
+> A route setting some fields therefore keeps the service's values for the fields it left unset, and setting `compress` never disturbs `balance` or the reverse.
+>
+> A Service with no HTTP Service Routes is served through a single `/` route, which takes the service's values.
+
+> l[service.balance]
+> `balance(config: map)` is a builder method controlling how the proxy chooses among the backends serving a Service, and how long it may keep trying to reach one.
+> It is available on a [Service](#l--service.type), on an [External Service](#l--service.external), on an [HTTP Service](#l--service.http), and on an [HTTP Service Route](#l--service.http.route).
+> The first three set the same service-wide value; the route form overrides it for one route.
+>
+> All fields of the `config` map are optional:
+>
+> - `policy`: how a backend is chosen. One of `"round_robin"`, `"least_conn"`, `"random"`, `"first"`. Default `"round_robin"`.
+> - `try_duration`: seconds the proxy may spend finding a usable backend for a single request or connection before giving up. Default 5.
+> - `interval`: seconds to wait between successive attempts to find one. Default 0.25.
+>
+> Both timing fields must be non-negative, and an unrecognised `policy` must throw.
+> A `try_duration` of zero disables retrying, so a request that cannot reach its first-chosen backend fails immediately and `interval` is not consulted.
+> An `interval` of zero combined with a non-zero `try_duration` must throw, because it would spin without pause whenever every backend is unreachable.
 
 > l[service.exported]
 > `service.exported(options?: #{ description?: string })` is a builder method which marks the service as exported. Exported services are advertised to the control plane and operators.
@@ -474,7 +521,7 @@ This is currently the only value.
 > The `ingress.redirect(port?: number, code?: number)` builder method emits an HTTP redirect on the `port` given if and when the ingress has obtained a TLS certificate.
 >
 > The `port` defaults to 80.
-> The `code` defaults to 307 ([Temporary Redirect](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/307)).
+> The `code` defaults to 307 ([Temporary Redirect](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/307)) and must be a redirection status code in the range 300–399; any other value throws.
 >
 > Calling this on an ingress whose termination is not `Terminate.Https` throws.
 

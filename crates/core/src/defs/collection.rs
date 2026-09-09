@@ -72,11 +72,11 @@ impl Collection {
     }
 
     // l[impl collection.select]
-    pub fn select(self, criterion: &Map) -> Self {
-        Self(Rc::new(Select {
+    pub fn select(self, criterion: &Map) -> Result<Self, Box<rhai::EvalAltResult>> {
+        Ok(Self(Rc::new(Select {
             inner: self,
-            selector: Selector::from_map(criterion),
-        }))
+            selector: Selector::from_map(criterion)?,
+        })))
     }
 }
 
@@ -95,9 +95,12 @@ impl CustomType for Collection {
                 this.clone().except(other)
             })
             // l[impl collection.select]
-            .with_fn("select", |this: &mut Self, criterion: Map| -> Collection {
-                this.clone().select(&criterion)
-            });
+            .with_fn(
+                "select",
+                |this: &mut Self, criterion: Map| -> Result<Collection, Box<rhai::EvalAltResult>> {
+                    this.clone().select(&criterion)
+                },
+            );
     }
 }
 
@@ -137,9 +140,11 @@ pub fn col(val: Dynamic) -> Collection {
         }));
     }
 
+    // An HttpService is a view of a Service, so it takes the identity of the
+    // service it views rather than one of its own.
     if let Some(h) = val.clone().try_cast::<HttpService>() {
         let id = ResourceId {
-            kind: ResourceKind::HttpService,
+            kind: ResourceKind::Service,
             name: h.service.name().clone(),
         };
         return Collection::from_bag(Rc::new(ItemBag {

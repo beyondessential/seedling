@@ -45,7 +45,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                 let action_name: ActionName = ActionName::new(name)
                     .map_err(|e| -> Box<EvalAltResult> { e.to_string().into() })?;
                 let app_name = this.def.load().name.clone();
-                let desc = super::extract_description(&options);
+                let desc = super::extract_description(&options)?;
                 // l[impl action.option-params]
                 let params = parse_action_params(&options)?;
                 let name_for_insert = action_name.clone();
@@ -112,9 +112,9 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
         })
         .with_fn(
             "on_start",
-            |this: &mut App, closure: FnPtr, options: Map| -> Action {
+            |this: &mut App, closure: FnPtr, options: Map| -> Result<Action, Box<EvalAltResult>> {
                 let app_name = this.def.load().name.clone();
-                let desc = super::extract_description(&options);
+                let desc = super::extract_description(&options)?;
                 let start_name = ActionName::new_unchecked("start");
                 let name_for_insert = start_name.clone();
                 this.def.rcu(|d| {
@@ -131,7 +131,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                     d
                 });
                 super::capture_action(start_name.clone(), closure);
-                Action::new(start_name, app_name)
+                Ok(Action::new(start_name, app_name))
             },
         );
 }

@@ -37,12 +37,12 @@ let version = app.param("version")
     .description("Tamanu image tag (e.g. v2.10.0); applied to central, frontend, and patient-portal images");
 
 let public_hostname = app.param("public-hostname")
-    .required(true)
-    .description("Public FQDN for the central server, served over HTTPS");
+    .required(false)
+    .description("Public FQDN for the central server, served over HTTPS. Leave unset to declare no ingress, so a site ingress carries the traffic instead");
 
 let canonical_url = app.param("canonical-url")
     .required(false)
-    .description("URL the central server advertises in API responses; defaults to https://<public-hostname>");
+    .description("URL the central server advertises in API responses; defaults to https://<public-hostname>. Required when public-hostname is unset");
 
 let timezone = app.param("timezone")
     .required(false)
@@ -98,10 +98,20 @@ let portal_image = || `ghcr.io/beyondessential/tamanu-patient-portal:${version.v
 // image. Trust auth on the local socket means no password handling is needed.
 let psql_image = "docker.io/library/postgres:18-alpine";
 
-let canonical = || if canonical_url.is_set() {
-    canonical_url.value()
-} else {
-    `https://${public_hostname.value()}`
+// With no public hostname there is no HTTPS ingress to derive an advertised
+// URL from, so `canonical-url` has to supply one. Checked here rather than at
+// the top level: this closure only runs from `render_config` (install and
+// on_change), by which point params are supplied, whereas a top-level throw
+// would fire during first registration and leave the script unloadable.
+let canonical = || {
+    if !canonical_url.is_set() && !public_hostname.is_set() {
+        throw "set canonical-url when public-hostname is unset: the central server must advertise a URL"
+    }
+    if canonical_url.is_set() {
+        canonical_url.value()
+    } else {
+        `https://${public_hostname.value()}`
+    }
 };
 
 let portal_on = || patient_portal_fqdn.is_set();
@@ -207,6 +217,8 @@ let configure_server = |c| c
     .mount("/config", config_vol)
     .mount("/var/run/postgresql", pg_socket);
 
+// An unset hostname is a supported deployment: the app declares no ingress and
+// the exported `web` service is fronted by a site ingress instead.
 let web_svc = app.service("web").exported().http(80);
 if public_hostname.is_set() {
     web_svc.ingress(public_hostname.value(), 443)

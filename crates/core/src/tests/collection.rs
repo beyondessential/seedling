@@ -168,3 +168,67 @@ fn col_from_unknown_yields_empty() {
     "#,
     );
 }
+
+// l[verify bsl.args.strict]
+// l[verify collection.select.types]
+// A `types` value that is not an array used to drop the criterion, and a
+// select with no surviving criteria matches every resource in the app — so a
+// following rt.stop stopped every workload instead of the services.
+#[test]
+fn select_types_must_be_an_array() {
+    let err = run_test_script_err(
+        r#"
+        app.service("web");
+        app.select(#{ types: ResourceType.Service });
+    "#,
+    );
+    let message = err.to_string();
+    assert!(message.contains("select types"), "{message}");
+    assert!(message.contains("must be an array"), "{message}");
+}
+
+// l[verify bsl.args.strict]
+// l[verify collection.select.types]
+#[test]
+fn select_types_elements_must_be_resource_types() {
+    let err = run_test_script_err(
+        r#"
+        app.service("web");
+        app.select(#{ types: [ResourceType.Service, "deployment"] });
+    "#,
+    );
+    let message = err.to_string();
+    assert!(message.contains("element 1"), "{message}");
+}
+
+// l[verify bsl.args.strict]
+// l[verify collection.select.names]
+#[test]
+fn select_names_elements_must_be_strings() {
+    let err = run_test_script_err(
+        r#"
+        app.service("web");
+        app.select(#{ names: ["web", 42] });
+    "#,
+    );
+    let message = err.to_string();
+    assert!(message.contains("select names"), "{message}");
+    assert!(message.contains("element 1"), "{message}");
+}
+
+// l[verify bsl.args.strict]
+// l[verify collection.select]
+// The spec says all possible keys are defined in it, so a typo'd key is a
+// criterion that silently constrains nothing.
+#[test]
+fn select_rejects_unknown_criteria() {
+    let err = run_test_script_err(
+        r#"
+        app.service("web");
+        app.select(#{ nmaes: ["web"] });
+    "#,
+    );
+    let message = err.to_string();
+    assert!(message.contains("unknown select criterion"), "{message}");
+    assert!(message.contains("nmaes"), "{message}");
+}

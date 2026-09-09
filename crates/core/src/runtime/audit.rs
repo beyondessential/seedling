@@ -95,14 +95,19 @@ pub fn spawn_audit_task(
                     // r[impl audit.log.resilience]
                     warn!(dropped = n, "audit log receiver lagged, events lost");
                     db.call(move |db| {
+                        // r[impl fault.lifecycle] — an event fault: it records
+                        // that lag happened, and there is no "currently
+                        // lagging" set to converge against. Dedup on file, and
+                        // the clear path is the operator's: the fault stands
+                        // until acknowledged, because nothing else can know
+                        // the dropped events have been accounted for. Without
+                        // the dedup, a lagging feed filed one fault per lag
+                        // event without bound and GC prunes only cleared ones.
                         let seedling_app = AppName::new_unchecked("seedling");
-                        let _ = crate::runtime::faults::file_fault(
+                        let _ = crate::runtime::faults::file_once(
                             db,
-                            &seedling_app,
-                            None,
-                            None,
-                            None,
-                            "audit_lag",
+                            &crate::runtime::faults::FaultKey::app_wide(&seedling_app, "audit_lag"),
+                            &crate::runtime::faults::FaultMeta::default(),
                             &format!("audit log receiver lagged, {n} events dropped"),
                         );
                     });

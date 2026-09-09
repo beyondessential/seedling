@@ -122,6 +122,10 @@ pub(crate) fn restore_held(
         })?,
     };
 
+    // r[impl namespace.reserved]
+    crate::reserved::check_site_volume_name(&target_name)
+        .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;
+
     let target_for_lookup = target_name.clone();
     let existing = state
         .db
@@ -276,6 +280,10 @@ pub(crate) fn create_site_volume(
     ctx: &RequestCtx,
 ) -> HandlerResult {
     use crate::runtime::site_volumes::{SiteVolumeDef, SiteVolumeKind};
+
+    // r[impl namespace.reserved]
+    crate::reserved::check_site_volume_name(&params.name)
+        .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;
 
     let kind = match params.kind.as_str() {
         "managed" => SiteVolumeKind::Managed,
@@ -517,6 +525,10 @@ pub(crate) fn snapshot_site_volume(
 ) -> HandlerResult {
     use crate::runtime::site_volumes::{SiteVolumeDef, SiteVolumeKind};
 
+    // r[impl namespace.reserved]
+    crate::reserved::check_site_volume_name(&params.name)
+        .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;
+
     let (source, source_path) = parse_source_vol_id(&params.source, state)
         .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e))?;
 
@@ -575,6 +587,10 @@ pub(crate) fn promote_site_volume(
     ctx: &RequestCtx,
 ) -> HandlerResult {
     use crate::runtime::site_volumes::{SiteVolumeDef, SiteVolumeKind};
+
+    // r[impl namespace.reserved]
+    crate::reserved::check_site_volume_name(&params.name)
+        .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;
 
     let source_name = params.source.clone();
     let source_def = state

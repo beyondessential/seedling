@@ -27,6 +27,15 @@ Absent specification bugs, anything that is not defined here is either defined i
 > All operations performed by the reconciler must be idempotent.
 > Performing the same operation twice must not cause errors or duplicate side effects.
 
+> r[barrier.replay.positional]
+> The action execution log is positional: a replayed call is matched to the committed entry at its own position in the closure's call sequence, never to any entry elsewhere in the log that happens to look similar.
+> "At most once" for a call is therefore per call site: two identical calls at different points in a closure are two calls, and a call whose arguments resolve differently between passes is still the same call.
+> A replay whose committed entry does not correspond to the call being made must fail rather than guess.
+
+> r[history.persist.partial-update]
+> A writer that updates a row shared with another writer must not reset columns it does not own.
+> This holds as columns are added: a write that names its own columns explicitly must continue to leave the rest untouched when the row gains a new one.
+
 > r[reconciliation.liveness]
 > Individual reconciliation operations must not block the loop for an unbounded or long duration.
 > When an operation requires waiting for an external condition (e.g. a process to terminate), the reconciler must release control and re-evaluate the condition on a subsequent iteration rather than polling inline.
@@ -209,6 +218,41 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Concretely: for every `deployment.http(pod_port, svc.route(prefix))` binding on a pod backing the ingress's target service, the runtime emits one ingress route at `prefix` with upstreams set to the running backend pods that hold that binding. The proxy must select the longest matching prefix for each incoming request.
 >
 > When the backing service has no `http_bindings` at all (e.g. an HTTPS-fronted TCP-only service), the runtime falls back to a single `/` route through the Service's general routing pool.
+
+> r[service.http.route.compression]
+> Every reverse-proxy route the runtime emits must compress the responses it serves, according to that route's resolved [compression settings](language.md#l--service.http.compress).
+> Compression is applied by the proxy, so a pod need not implement it to benefit from it.
+>
+> Compression applies to reverse-proxy routes alone.
+> Redirect responses, whether from an app-declared [ingress redirect](language.md#l--ingress.redirect)
+> or a [site ingress redirect attachment](#r--ingress.site.attachment), and non-HTTP forwarding must be emitted without it.
+>
+> A response that already carries a content encoding chosen by the upstream must be forwarded as it stands, rather than compressed a second time.
+
+> r[service.http.route.balancing]
+> Every reverse-proxy route the runtime emits must distribute requests across its upstreams according to that route's resolved [balancing settings](language.md#l--service.balance).
+>
+> Balancing applies to reverse-proxy routes alone.
+> Redirect responses and non-HTTP forwarding have no pool of upstreams to choose from, and must be emitted without it.
+> A route with a single upstream has no choice to make either, so its policy has no observable effect there; this is the case for the fallback `/` route of a service with no HTTP route bindings, whose try duration and interval still apply.
+>
+> Within the route's try duration, a request whose connection to an upstream cannot be established must be attempted against another upstream from the route's pool, pausing for the route's interval between attempts.
+> This must happen whatever the request method, because no part of a request that never connected can have been acted on.
+> The effect is that a request arriving while an instance is shutting down is served by a surviving instance instead of failing, so a [rolling update](#r--update.rolling) does not surface as errors to clients.
+>
+> A request whose connection was established but which then yielded no response, because the upstream closed the connection or fell silent, must be attempted again only when it is a `GET`, which alone can be repeated without risk of acting twice.
+> A response that does arrive carrying an error status is the upstream's answer rather than a failure to reach it, and must be returned to the client whatever that status.
+>
+> The proxy must not form its own opinion of upstream health.
+> The upstream list it is given is authoritative: which backends are eligible is decided by the [routing pool](#r--lifecycle.service.routing-pool), from the runtime's own [healthchecks](language.md#l--deployment.healthcheck).
+> Health checking in the proxy would contradict that pool, which deliberately keeps every running backend in service when no healthy alternative exists rather than reducing capacity to nothing.
+> Retrying an unreachable upstream covers the interval between a backend becoming unusable and the pool being recomputed on a subsequent tick; it is not a substitute for the pool.
+
+> r[service.http.route.proxy-settings.visibility]
+> The compression and balancing settings in force on a service and on each of its routes, after resolution, must be readable when inspecting the app that declares the service, as [app.describe.proxy-settings](interface.md#i--app.describe.proxy-settings) defines.
+> An operator diagnosing an uncompressed response or a failed request can then establish what the proxy was told to do without reading the app's script.
+>
+> These settings are declared by the app. The runtime provides no means to change them on a running app.
 
 > r[lifecycle.service.routing-pool]
 > The routing pool for a Service is the set of backend pod instances eligible to receive traffic. The runtime selects the pool from the running backends as follows:
@@ -789,7 +833,15 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > The runtime must collect timestamped observation facts for each resource instance by inspecting the backing system primitives.
 
 > r[observe.deployment]
-> For Deployment and Job resource instances, the runtime must observe pod network presence, container lifecycle state (missing, created, running, or exited), and systemd unit state.
+> For Deployment and Job resource instances, the runtime must observe pod network presence, container lifecycle state, and systemd unit state.
+> The container lifecycle states are: missing, created, running, exited, and present-but-indeterminate — the last covering a container that exists but whose reported state corresponds to no lifecycle transition, such as one still shutting down.
+
+> r[observe.failure-not-absence]
+> A failed observation attempt yields no facts.
+> The runtime must not treat a failed observation as evidence of absence: no destructive actuation — stopping, terminal-state detection, or teardown — may be based on an instance whose observation failed this iteration, and lifecycle derivation must retain the last successfully observed state.
+> An observation attempt for one instance either succeeds in full or fails in full; partial results must not be reported as fact.
+> Likewise, a state that is observed but not recognised is evidence that the thing exists, never that it is absent.
+> A single failed observation must not by itself raise an operator-visible fault; a persistent one must.
 
 > r[observe.volume]
 > For Volume resource instances, the runtime must observe whether the named volume exists.
@@ -870,6 +922,17 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > A breadcrumb is emitted on a call's first fresh execution and not on replays of that
 > call, so a barrier-suspended operation does not flood the log with each pass. Each
 > replay pass instead surfaces a single boundary breadcrumb.
+
+> r[actuate.ingress.plaintext]
+> Whether an ingress terminates TLS is a property of its own termination, independent of whether it terminates HTTP.
+> An ingress may terminate HTTP as plaintext, as a site-ingress attachment does when its parent's TLS provisioning mode is `none`.
+>
+> An ingress that does not terminate TLS must be served as plaintext on its port: the proxy must listen for HTTP on that port and route matching requests to the ingress's target.
+> The runtime must not request or provision a certificate for such an ingress's hostname, must not create a QUIC listener for it, and must not answer its requests with a redirect unless the ingress itself declares one.
+> Forwarding rules for an ingress must cover only the transport protocols it serves, so a plaintext HTTP ingress must not cause UDP traffic on its port to be forwarded.
+>
+> A hostname may carry both plaintext and TLS-terminating ingresses on different ports.
+> Each must be served from the listener matching its own termination, and the presence of a TLS-terminating ingress must not cause a plaintext ingress on the same hostname to be dropped or served only over TLS.
 
 > r[actuate.ingress.warm-certs]
 > When an action closure invokes [`rt.warm_certs`](#l--rt.warm-certs) with a selection that contains TLS-terminating ingresses, the runtime must initiate certificate acquisition for those ingresses' hostnames without exposing the ingresses to live traffic.
@@ -1061,6 +1124,8 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > - **Redirect**: requests for the attachment's `(port, protocol)` are answered with an HTTP redirect response to a configured target URL, using a configured response code, optionally preserving the request path.
 >
 > The set of supported protocols matches that of app-declared ingresses. The hostname and TLS provisioning mode are inherited from the parent site ingress; the attachment chooses only the listening `(port, protocol)` and the target. Multiple attachments differing in `(port, protocol)` may coexist on the same site ingress.
+>
+> A parent site ingress whose TLS provisioning mode is `none` yields plaintext attachments, served per [actuate.ingress.plaintext](#r--actuate.ingress.plaintext).
 
 > r[ingress.site.tailscale]
 > The Tailscale discovery provider creates a single discovered site ingress representing the host's Tailscale identity. The site ingress's hostname is the host's tailnet DNS name; its provider key is the host's stable Tailscale node identity. When the operator renames the node, the site ingress's hostname must be updated in place and its existing attachments preserved. When the underlying node identity changes (e.g. the node is re-created on the tailnet), the existing discovered site ingress is removed and a fresh one created.
@@ -1175,6 +1240,13 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > When a Service's routing pool contains only unhealthy backends (i.e. the prefer-healthy rule has fallen back to "anything running" per [lifecycle.service.routing-pool](#r--lifecycle.service.routing-pool)), the runtime must file a fault of kind `service_degraded` associated with that Service.
 > The fault is cleared automatically when at least one backend in the pool becomes healthy or when the Service is unscheduled.
 
+> r[fault.lifecycle]
+> Every fault kind defines both the condition under which it is filed and the condition under which it clears; a kind with no clearing condition is not permitted.
+> A fault identifies the thing that is faulty, not merely the app it belongs to, and at most one fault is active for a given (app, kind, subject) at a time.
+> Clearing is keyed no more broadly than filing: an event affecting one subject must not clear a fault held by another.
+> A fault whose filing condition is a state of the world ("this is true right now") is active exactly while that condition holds, including across daemon restarts — its clearing must not depend on state held only in memory.
+> A fault that is deliberately retained after its trigger has passed must name the lifecycle event that clears it.
+
 > r[fault.surfacing]
 > Faults must be surfaced to operators through the operator interface (defined in a separate spec).
 > The runtime must not silently discard faults.
@@ -1182,6 +1254,22 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > r[fault.non-blocking]
 > A fault on one resource must not prevent the reconciler from continuing to manage other resources.
 > The faulted resource is excluded from active reconciliation until the fault is resolved.
+
+> r[namespace.reserved]
+> The runtime grants itself names inside namespaces operators also use: site-volume names beginning `backup-snap-`, and the site-ingress name `tailscale`.
+> Creating a site volume or site ingress under a reserved name is rejected; the restriction applies to creation only, so an object that predates the reservation can still be renamed or removed.
+> Reservation alone is not sufficient: a component that deletes or disables objects it believes are its own must identify them by what the runtime recorded — a registered site volume is never deleted by the snapshot sweep, and a manually created site ingress is never disabled or replaced by a discovery provider — regardless of what the object is named.
+
+> r[app.uninstall.scope]
+> Uninstalling an app affects only resources belonging to that app.
+> Resources are identified by the identities the runtime recorded for them, not by the shape of their names: names are not required to be prefix-free, so one app's name may be a prefix of another's.
+> A scan by name prefix is permitted only to enumerate candidates that are then matched exactly against recorded identity.
+> Having no recorded identities is not on its own evidence that teardown has finished: where the runtime cannot rule out that resources of the app are still present, it must not declare the app uninstalled, and must raise a fault that clears when teardown does complete.
+
+> r[infra.pod.subnet]
+> No two concurrently running pod instances may share a network prefix.
+> A prefix must therefore not be derived from a part of an instance's identity that distinct instances can share: in particular, instances carrying no unique identifier of their own must still be distinguished by the rest of their identity.
+> Deriving a prefix, however widely, does not on its own satisfy this requirement — only allocating prefixes and recording the allocation makes it a guarantee rather than a probability.
 
 # Resource Identity
 
@@ -1274,6 +1362,24 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > proxy is workload-ingress infrastructure; its unavailability degrades ingress but not the
 > control plane. When the initial bring-up fails the runtime files a system fault and the
 > reconciliation loop retries on subsequent ticks, clearing the fault once the proxy is healthy.
+
+> r[infra.proxy.image.modules]
+> The proxy image the runtime pulls must provide every proxy module that the configuration
+> the runtime emits can reference. The proxy rejects a configuration that names a module it
+> does not provide, so a missing module does not degrade a single route: it makes the whole
+> configuration unappliable, aborting the upgrade under
+> [infra.proxy.upgrade.rollback](#r--infra.proxy.upgrade.rollback) and leaving the proxy
+> serving its previous configuration indefinitely.
+> The runtime must declare the set of modules it requires, so that an image can be checked
+> against what the runtime actually emits rather than against a separately maintained list.
+
+> r[infra.proxy.image.cert-cache]
+> The proxy image must store its certificate cache at the location the runtime observes it
+> at. The certificate status in [observe.ingress.certs](#r--observe.ingress.certs) and the
+> default-strategy metadata in [tls.cert.metadata](#r--tls.cert.metadata) are both derived
+> from that cache, and a proxy that obtains certificates but writes them elsewhere satisfies
+> neither: it serves traffic correctly while the runtime reports that no certificate exists,
+> which in turn stalls every [`rt.warm_certs`](#l--rt.warm-certs) barrier waiting on it.
 
 > r[infra.proxy.upgrade]
 > When the configured proxy image digest differs from the running container's image digest,

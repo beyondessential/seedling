@@ -273,3 +273,156 @@ fn db_action_log_sequential_barriers() {
     assert_eq!(entries[0].call_index, 0);
     assert_eq!(entries[1].call_index, 1);
 }
+
+// r[verify barrier.replay.positional]
+// Positional matching, not value matching. Both halves of the old
+// value-scan were wrong: a second identical call matched the first entry
+// and was swallowed, and a call whose arguments resolved differently
+// between passes matched nothing and re-ran.
+mod positional {
+    use crate::runtime::barrier::{ActionLogEntry, CallKind, ReplayContext};
+
+    use super::*;
+
+    fn instance(name: &str) -> ResourceInstance {
+        ResourceInstance {
+            id: crate::runtime::identity::InstanceId::generate(),
+            app: app_name(),
+            kind: ResourceKind::Deployment,
+            name: Some(name.to_owned()),
+            variant: crate::runtime::identity::InstanceVariant::Singleton,
+            display_name: format!("test-app-{name}"),
+        }
+    }
+
+    fn entry(index: usize, kind: CallKind, resources: Vec<ResourceInstance>) -> ActionLogEntry {
+        ActionLogEntry {
+            call_index: index,
+            call_kind: kind,
+            resources,
+            barrier: None,
+            extra: Some("SIGHUP".to_owned()),
+        }
+    }
+
+    fn ctx_with(committed: Vec<ActionLogEntry>) -> ReplayContext {
+        ReplayContext::new(
+            OperationId("op-positional".into()),
+            committed,
+            Arc::new(TestWorldOracle::default()),
+            Arc::new(crate::runtime::barrier::CancelToken::default()),
+        )
+    }
+
+    // r[verify barrier.replay.positional]
+    #[test]
+    fn two_identical_calls_consume_two_entries() {
+        let db = instance("db");
+        let mut ctx = ctx_with(vec![
+            entry(0, CallKind::Signal, vec![db.clone()]),
+            entry(1, CallKind::Signal, vec![db.clone()]),
+        ]);
+
+        // Both are replays of their own position, not one matching twice.
+        assert!(ctx.replay_step(CallKind::Signal, None).unwrap().is_some());
+        assert!(ctx.replay_step(CallKind::Signal, None).unwrap().is_some());
+        // A third identical call at a position the log does not cover is new
+        // and must actually run — which is what the value scan swallowed.
+        assert!(ctx.replay_step(CallKind::Signal, None).unwrap().is_none());
+    }
+
+    // r[verify barrier.replay.positional]
+    // The instance set can differ between passes — a replica added or
+    // retired — and that does not make it a different call. Matching by value
+    // found nothing here and re-delivered a signal already delivered.
+    #[test]
+    fn a_changed_instance_set_is_still_the_same_call() {
+        let before = vec![instance("db")];
+        let after = vec![instance("db"), instance("db")];
+        let mut ctx = ctx_with(vec![entry(0, CallKind::Signal, before)]);
+
+        let replayed = ctx.replay_step(CallKind::Signal, None).unwrap();
+        assert!(
+            replayed.is_some(),
+            "the call at this position was already made, whatever it resolved to"
+        );
+        assert_ne!(replayed.unwrap().resources, after);
+    }
+
+    // r[verify barrier.replay.positional]
+    #[test]
+    fn a_diverged_log_fails_rather_than_guessing() {
+        let mut ctx = ctx_with(vec![entry(0, CallKind::Exec, vec![instance("db")])]);
+        let err = ctx.replay_step(CallKind::Signal, None).unwrap_err();
+        assert_eq!(err.call_index(), 0);
+        assert!(
+            matches!(
+                err,
+                crate::runtime::barrier::ReplayMismatch::Kind {
+                    expected: CallKind::Signal,
+                    found: CallKind::Exec,
+                    ..
+                }
+            ),
+            "{err}"
+        );
+        // The message is the operator's only account of why an operation
+        // refused to resume, so it has to name the position and both kinds.
+        let message = err.to_string();
+        assert!(message.contains("call 0"), "{message}");
+        assert!(message.contains("Exec"), "{message}");
+        assert!(message.contains("Signal"), "{message}");
+    }
+
+    // r[verify barrier.replay.positional]
+    // Position alone is not enough for an argument that comes from the script
+    // text. A script edited from SIGHUP to SIGTERM at the same position would
+    // otherwise be treated as already replayed, and the new signal never
+    // delivered. The resolved instance set is deliberately *not* checked this
+    // way — it legitimately varies between passes.
+    #[test]
+    fn a_changed_signal_name_is_a_divergence() {
+        let mut ctx = ctx_with(vec![entry(0, CallKind::Signal, vec![instance("db")])]);
+        let err = ctx
+            .replay_step(CallKind::Signal, Some("SIGTERM"))
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                crate::runtime::barrier::ReplayMismatch::Extra { ref expected, .. }
+                    if expected == "SIGTERM"
+            ),
+            "{err}"
+        );
+        let message = err.to_string();
+        assert!(message.contains("SIGTERM"), "{message}");
+        assert!(message.contains("SIGHUP"), "{message}");
+        assert!(
+            !message.contains("Some("),
+            "the recorded argument is shown, not its Option wrapper: {message}"
+        );
+
+        // The recorded name replays cleanly.
+        let mut ctx = ctx_with(vec![entry(0, CallKind::Signal, vec![instance("db")])]);
+        assert!(
+            ctx.replay_step(CallKind::Signal, Some("SIGHUP"))
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    // r[verify barrier.replay.positional]
+    #[test]
+    fn a_log_entry_with_no_recorded_argument_says_so() {
+        let mut committed = vec![entry(0, CallKind::Signal, vec![instance("db")])];
+        committed[0].extra = None;
+        let mut ctx = ctx_with(committed);
+        let err = ctx
+            .replay_step(CallKind::Signal, Some("SIGTERM"))
+            .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("no recorded argument"), "{message}");
+        assert!(message.contains("SIGTERM"), "{message}");
+        assert!(!message.contains("None"), "{message}");
+    }
+}

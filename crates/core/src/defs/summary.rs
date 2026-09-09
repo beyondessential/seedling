@@ -22,7 +22,10 @@ use super::{
     job::Job,
     pod::{HttpBinding, PodDef, TcpUdpBinding},
     resource::Resource,
-    service::{ExternalService, HttpService, Service},
+    service::{
+        ExternalService, HttpServiceDef, ProxySettings, ResolvedBalance, Service,
+        default_content_types, resolve,
+    },
     volume::{ExternalVolume, Volume},
 };
 
@@ -30,7 +33,6 @@ use super::{
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ResourceSummary {
     Service(ServiceSummary),
-    HttpService(HttpServiceSummary),
     Ingress(IngressSummary),
     Deployment(DeploymentSummary),
     Job(JobSummary),
@@ -45,12 +47,36 @@ pub struct ServiceSummary {
     pub exported: bool,
     pub export_description: Option<String>,
     pub description: Option<String>,
+    /// How the proxy picks among this service's backends, resolved.
+    // i[impl app.describe.proxy-settings]
+    pub balance: BalanceSummary,
+    /// One entry per HTTP route the service is served through, sorted by
+    /// prefix for stable diffing. `None` for a service with no HTTP surface.
+    // i[impl app.describe.proxy-settings]
+    pub routes: Option<Vec<RouteSummary>>,
+}
+
+// i[impl app.describe.proxy-settings]
+#[derive(Serialize, Debug, PartialEq)]
+pub struct RouteSummary {
+    pub prefix: String,
+    /// `null` when compression is off for this route.
+    pub compress: Option<CompressSummary>,
+    pub balance: BalanceSummary,
 }
 
 #[derive(Serialize, Debug, PartialEq)]
-pub struct HttpServiceSummary {
-    pub service: String,
-    pub port: u16,
+pub struct CompressSummary {
+    pub encodings: Vec<String>,
+    pub minimum_length: u64,
+    pub content_types: Vec<String>,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+pub struct BalanceSummary {
+    pub policy: String,
+    pub try_duration: f64,
+    pub interval: f64,
 }
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -192,7 +218,6 @@ impl Resource {
     pub fn summary(&self) -> ResourceSummary {
         match self {
             Self::Service(s) => ResourceSummary::Service(s.summary()),
-            Self::HttpService(h) => ResourceSummary::HttpService(h.summary()),
             Self::Ingress(i) => ResourceSummary::Ingress(i.summary()),
             Self::Deployment(d) => ResourceSummary::Deployment(d.summary()),
             Self::Job(j) => ResourceSummary::Job(j.summary()),
@@ -206,6 +231,7 @@ impl Resource {
 impl Service {
     pub fn summary(&self) -> ServiceSummary {
         let def = self.def.lock();
+        let service_level = def.proxy_settings();
         ServiceSummary {
             http: def.http.is_some(),
             exported: def.exported.is_some(),
@@ -214,16 +240,50 @@ impl Service {
                 .as_ref()
                 .and_then(|opts| opts.description.clone()),
             description: def.description.clone(),
+            balance: balance_summary(&resolve(&service_level, None).balance),
+            routes: def
+                .http
+                .as_ref()
+                .map(|http| route_summaries(&service_level, http)),
         }
     }
 }
 
-impl HttpService {
-    pub fn summary(&self) -> HttpServiceSummary {
-        HttpServiceSummary {
-            service: self.service.name().as_str().to_owned(),
-            port: self.port.get(),
-        }
+// i[impl app.describe.proxy-settings]
+// r[impl service.http.route.proxy-settings.visibility]
+/// One entry per route the service is served through, each fully resolved so
+/// a reader never has to know the defaults to interpret the answer.
+fn route_summaries(service_level: &ProxySettings, http: &HttpServiceDef) -> Vec<RouteSummary> {
+    // A service whose pods bind no prefix is still served through "/", so the
+    // array is never empty for an HTTP service.
+    let prefixes: Vec<&str> = if http.routes.is_empty() {
+        vec!["/"]
+    } else {
+        http.routes.keys().map(String::as_str).collect()
+    };
+
+    prefixes
+        .into_iter()
+        .map(|prefix| {
+            let resolved = resolve(service_level, http.routes.get(prefix));
+            RouteSummary {
+                prefix: prefix.to_owned(),
+                compress: resolved.compress.map(|c| CompressSummary {
+                    encodings: c.encodings.iter().map(|e| e.as_str().to_owned()).collect(),
+                    content_types: c.content_types.unwrap_or_else(default_content_types),
+                    minimum_length: c.minimum_length,
+                }),
+                balance: balance_summary(&resolved.balance),
+            }
+        })
+        .collect()
+}
+
+fn balance_summary(b: &ResolvedBalance) -> BalanceSummary {
+    BalanceSummary {
+        policy: b.policy.as_str().to_owned(),
+        try_duration: b.try_duration_secs,
+        interval: b.interval_secs,
     }
 }
 

@@ -397,7 +397,7 @@ impl Actuator {
                 Ok(None)
             }
             Resource::ExternalVolume(_) | Resource::ExternalService(_) => Ok(None),
-            Resource::Service(_) | Resource::HttpService(_) => Ok(None),
+            Resource::Service(_) => Ok(None),
             Resource::Ingress(_) => Ok(None),
         }
     }
@@ -504,7 +504,7 @@ impl Actuator {
                 Ok(())
             }
             Resource::ExternalVolume(_) | Resource::ExternalService(_) => Ok(()),
-            Resource::Service(_) | Resource::HttpService(_) => Ok(()),
+            Resource::Service(_) => Ok(()),
             Resource::Ingress(_) => Ok(()),
         }
     }

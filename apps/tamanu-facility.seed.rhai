@@ -27,12 +27,12 @@ let version = app.param("version")
     .description("Tamanu image tag (e.g. v2.10.0); applied to facility and frontend images");
 
 let public_hostname = app.param("public-hostname")
-    .required(true)
-    .description("Public FQDN for the facility server, served over HTTPS");
+    .required(false)
+    .description("Public FQDN for the facility server, served over HTTPS. Leave unset to declare no ingress, so a site ingress carries the traffic instead (e.g. a plaintext `.local` host)");
 
 let canonical_url = app.param("canonical-url")
     .required(false)
-    .description("URL the facility advertises in API responses; defaults to https://<public-hostname>");
+    .description("URL the facility advertises in API responses; defaults to https://<public-hostname>. Required when public-hostname is unset");
 
 let central_url = app.param("central-url")
     .required(true)
@@ -101,10 +101,20 @@ let frontend_image = || `ghcr.io/beyondessential/tamanu-frontend:${version.value
 // image. Trust auth on the local socket means no password handling is needed.
 let psql_image = "docker.io/library/postgres:18-alpine";
 
-let canonical = || if canonical_url.is_set() {
-    canonical_url.value()
-} else {
-    `https://${public_hostname.value()}`
+// With no public hostname there is no HTTPS ingress to derive an advertised
+// URL from, so `canonical-url` has to supply one. Checked here rather than at
+// the top level: this closure only runs from `render_config` (install and
+// on_change), by which point params are supplied, whereas a top-level throw
+// would fire during first registration and leave the script unloadable.
+let canonical = || {
+    if !canonical_url.is_set() && !public_hostname.is_set() {
+        throw "set canonical-url when public-hostname is unset: the facility must advertise a URL"
+    }
+    if canonical_url.is_set() {
+        canonical_url.value()
+    } else {
+        `https://${public_hostname.value()}`
+    }
 };
 
 // Rhai's `String.replace(from, to)` mutates the receiver in place and returns
@@ -215,10 +225,12 @@ let web_svc = app.service("web")
     .exported(#{ description: "Tamanu facility HTTPS endpoint (HTTP routing)" })
     .http(80);
 
-// Guard with `is_set()` so the script also evaluates cleanly before the
-// operator has supplied the hostname (e.g. on first registration / preview):
-// `Service.ingress()` validates its hostname argument eagerly, which would
-// otherwise throw on the empty default and leave the script unloadable.
+// An unset hostname is a supported deployment: the app declares no ingress and
+// the exported `web` service is fronted by a site ingress instead, which is how
+// a plaintext `.local` host is served. The guard also keeps the script
+// evaluable before the operator has supplied any params (first registration /
+// preview), since `Service.ingress()` validates its hostname argument eagerly
+// and would otherwise throw on the empty default.
 if public_hostname.is_set() {
     web_svc.ingress(public_hostname.value(), 443)
         .tls(Terminate.Https, Output.Http1)

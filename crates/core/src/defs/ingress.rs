@@ -9,6 +9,7 @@ use super::{
     enums::{Output, Terminate},
     resource::ResourceName,
     service::Service,
+    take::take_int_in_range,
 };
 
 #[derive(Debug, Clone)]
@@ -193,10 +194,11 @@ impl CustomType for Ingress {
                     this.ensure_unfrozen()?;
                     let port = Port::new(port)?;
                     require_https(&this.def.lock())?;
-                    this.def.lock().redirect = Some(RedirectDef {
-                        port,
-                        code: code as u16,
-                    });
+                    // l[impl ingress.redirect] — a redirect to a non-3xx code
+                    // is not a redirect, and the unchecked cast turned 65843
+                    // into a 307 rather than an error.
+                    let code = take_int_in_range::<u16>("redirect code", code, 300..=399)?;
+                    this.def.lock().redirect = Some(RedirectDef { port, code });
                     Ok(this.clone())
                 },
             )

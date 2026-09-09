@@ -322,3 +322,21 @@ fn ingress_same_hostname_different_port_does_not_conflict() {
         .count();
     assert_eq!(count, 2);
 }
+
+// l[verify bsl.args.strict]
+// l[verify ingress.redirect]
+// The unchecked `as u16` wrapped, so 65843 became 307 — a redirect to a
+// status code that is not a redirect at all.
+#[test]
+fn redirect_code_must_be_a_redirection_status() {
+    let err = run_test_script_err(
+        r#"
+        app.service("web").ingress("example.com", 443)
+            .tls(Terminate.Https, Output.Http1)
+            .redirect(80, 200);
+    "#,
+    );
+    let message = err.to_string();
+    assert!(message.contains("`redirect code`"), "{message}");
+    assert!(message.contains("300"), "{message}");
+}

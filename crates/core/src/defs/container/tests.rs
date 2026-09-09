@@ -186,7 +186,9 @@ fn parse_zero_retries_is_rejected() {
         ("retries", Dynamic::from(0_i64)),
     ]);
     let err = parse_healthcheck(m).expect_err("zero retries");
-    assert!(err.to_string().contains("positive"));
+    let message = err.to_string();
+    assert!(message.contains("healthcheck retries"), "{message}");
+    assert!(message.contains("must be between 1"), "{message}");
 }
 
 #[test]

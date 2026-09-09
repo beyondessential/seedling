@@ -309,9 +309,17 @@ pub fn insert_dynamic_resource(
     description: Option<&str>,
 ) -> rusqlite::Result<()> {
     db.conn.execute(
-        "INSERT OR REPLACE INTO dynamic_resources
+        // r[impl history.persist.partial-update]
+        "INSERT INTO dynamic_resources
              (instance_id, app, operation_id, kind, display_name, resource_name, description)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(instance_id) DO UPDATE SET
+             app = excluded.app,
+             operation_id = excluded.operation_id,
+             kind = excluded.kind,
+             display_name = excluded.display_name,
+             resource_name = excluded.resource_name,
+             description = excluded.description",
         rusqlite::params![
             instance.id.to_hex(),
             instance.app,

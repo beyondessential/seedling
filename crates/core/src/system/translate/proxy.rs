@@ -4,13 +4,14 @@ use std::{
 };
 
 use ipnet::Ipv6Net;
+use sha2::{Digest, Sha256};
 
 use crate::{
     defs::ingress::IngressDef,
     runtime::identity::ResourceInstance,
     system::types::{
         HttpRedirect, ProxyConfig, ProxyListener, ProxyListenerProto, ProxyRoute,
-        ProxyRouteHandler, VirtualHost,
+        ProxyRouteHandler, RouteProxy, VirtualHost,
     },
 };
 
@@ -31,6 +32,9 @@ pub struct ServiceUpstream {
     pub routes: Vec<HttpForwardRoute>,
     pub service_ip: Ipv6Addr,
     pub service_port: u16,
+    /// Settings for the synthesised `/` route used when `routes` is empty.
+    /// These are the service's own values, which is what that route takes.
+    pub proxy: RouteProxy,
 }
 
 /// One HTTP route on a service: the URL prefix declared in BSL, plus the
@@ -41,6 +45,8 @@ pub struct HttpForwardRoute {
     pub prefix: String,
     /// `ip:port` upstreams, one per backing pod observed running this tick.
     pub upstreams: Vec<String>,
+    /// Compression and balancing resolved for this prefix.
+    pub proxy: RouteProxy,
 }
 
 /// Resolved redirect target for a site-ingress attachment. Used in place of
@@ -77,12 +83,47 @@ pub fn instance_ipv6(node_prefix: &Ipv6Net, instance: &ResourceInstance) -> Ipv6
 
 /// Derives the pod network /64 prefix for a pod instance.
 ///
-/// Prefix layout: `fd5e:edXX:XXXX:KKUU::/64` — identical to `instance_ipv6`
-/// but with the interface ID (bytes 8–15) zeroed.
+/// Prefix layout: `fd5e:edXX:XXXX:KKSS::/64`, where `KK` is the resource kind
+/// and `SS` is derived from the instance's **full** identity.
+///
+/// `SS` used to be `uuid[0]`, which is *zero* for static Jobs — their
+/// `InstanceId` is nil. Every static Job on the node, in every app, therefore
+/// derived the identical /64, and netavark rejects the second network on a
+/// duplicate subnet. Hashing the full identity (app, kind, name, whole UUID)
+/// removes that deterministic collision: two distinct Jobs now differ even
+/// when both their UUIDs are nil.
+///
+/// It does not fix the *probabilistic* half. `SS` is still eight bits, so
+/// scaled replicas of one deployment birthday-collide at the same rate as
+/// before. Widening it means taking byte 6 as well, and byte 6 is the kind
+/// discriminant that keeps pod /64s disjoint from the service /128 space and
+/// from the `fffe` infrastructure addresses — not something to overload
+/// without deciding what those namespaces mean. The real fix is allocation
+/// rather than derivation: an `instance_id → subnet id` table with a unique
+/// index, allocated at first actuation and freed at GC, which needs a
+/// database handle in what is currently a pure translate layer. Left as the
+/// next step rather than half-done.
+///
+/// Changing the derivation re-homes each instance at its next pod recreation,
+/// when its per-instance network is torn down and remade; no flag day.
+// r[impl infra.pod.subnet]
 pub fn pod_network_prefix(node_prefix: &Ipv6Net, instance: &ResourceInstance) -> Ipv6Net {
-    let addr = instance_ipv6(node_prefix, instance);
-    let mut bytes = addr.octets();
-    bytes[8..].fill(0);
+    debug_assert_eq!(node_prefix.prefix_len(), 48, "node prefix must be /48");
+
+    let mut hasher = Sha256::new();
+    hasher.update(instance.app.as_str().as_bytes());
+    hasher.update([0]);
+    hasher.update([instance.kind as u8]);
+    hasher.update([0]);
+    hasher.update(instance.name.as_deref().unwrap_or("").as_bytes());
+    hasher.update([0]);
+    hasher.update(instance.id.0.as_bytes());
+    let digest = hasher.finalize();
+
+    let mut bytes = [0u8; 16];
+    bytes[..6].copy_from_slice(&node_prefix.network().octets()[..6]);
+    bytes[6] = instance.kind as u8;
+    bytes[7] = digest[0];
     Ipv6Net::new(Ipv6Addr::from(bytes), 64).expect("64 is a valid IPv6 prefix length")
 }
 
@@ -117,7 +158,7 @@ pub fn build_proxy_config(
     redirects: &[(IngressDef, RedirectTarget)],
 ) -> ProxyConfig {
     let mut listener_set: BTreeSet<ProxyListener> = BTreeSet::new();
-    let mut vhosts: BTreeMap<String, VirtualHost> = BTreeMap::new();
+    let mut vhosts: BTreeMap<(String, bool), VirtualHost> = BTreeMap::new();
 
     for (ingress, upstream) in forwards {
         register_listeners(&mut listener_set, ingress);
@@ -136,6 +177,7 @@ pub fn build_proxy_config(
                 prefix: "/".to_string(),
                 handler: ProxyRouteHandler::ReverseProxy {
                     upstreams: vec![upstream_url],
+                    proxy: upstream.proxy.clone(),
                 },
             });
         } else {
@@ -149,6 +191,7 @@ pub fn build_proxy_config(
                     prefix: route.prefix.clone(),
                     handler: ProxyRouteHandler::ReverseProxy {
                         upstreams: upstream_urls,
+                        proxy: route.proxy.clone(),
                     },
                 });
             }
@@ -177,8 +220,13 @@ pub fn build_proxy_config(
     }
 }
 
+// r[impl actuate.ingress.plaintext]
 fn register_listeners(set: &mut BTreeSet<ProxyListener>, ingress: &IngressDef) {
-    let is_https = ingress.http_terminate.is_some();
+    // An ingress serves HTTPS only when it terminates TLS *and* HTTP. HTTP
+    // termination alone does not imply TLS: a site-ingress attachment whose
+    // parent's TLS provisioning mode is `none` terminates HTTP as plaintext,
+    // and so listens for HTTP and takes no QUIC listener (HTTP/3 is TLS-only).
+    let is_https = ingress.tls && ingress.http_terminate.is_some();
 
     set.insert(ProxyListener {
         port: ingress.port.get(),
@@ -204,22 +252,25 @@ fn register_listeners(set: &mut BTreeSet<ProxyListener>, ingress: &IngressDef) {
     }
 }
 
+// r[impl actuate.ingress.plaintext]
+// Vhosts are keyed by `(hostname, tls)`, not by hostname alone: one hostname
+// may carry a plaintext ingress on one port and a TLS-terminating one on
+// another, and each has to reach the listener matching its own termination.
+// Keying by hostname alone would merge them into a single vhost whose
+// `tls_acme` is the OR of both, serving the plaintext routes from the HTTPS
+// server and dropping them from the HTTP one.
 fn ensure_vhost<'a>(
-    vhosts: &'a mut BTreeMap<String, VirtualHost>,
+    vhosts: &'a mut BTreeMap<(String, bool), VirtualHost>,
     ingress: &IngressDef,
 ) -> &'a mut VirtualHost {
     let vhost = vhosts
-        .entry(ingress.hostname.clone())
+        .entry((ingress.hostname.clone(), ingress.tls))
         .or_insert_with(|| VirtualHost {
             hostname: ingress.hostname.clone(),
-            tls_acme: false,
+            tls_acme: ingress.tls,
             redirect: None,
             routes: vec![],
         });
-
-    if ingress.tls {
-        vhost.tls_acme = true;
-    }
 
     if let Some(redirect) = &ingress.redirect {
         vhost.redirect = Some(HttpRedirect {
@@ -309,14 +360,45 @@ mod tests {
         assert_eq!(&octets[8..], &[0u8; 8]);
     }
 
+    // r[verify infra.pod.subnet]
+    // The pod /64 no longer shares its low byte with the instance address —
+    // that byte is a hash of the full identity now — but it keeps the kind
+    // discriminant, which is what holds pod /64s disjoint from the service
+    // /128 space and the `fffe` infrastructure addresses.
     #[test]
-    fn pod_prefix_matches_instance_address_upper_64() {
+    fn pod_prefix_keeps_the_kind_discriminant() {
         let prefix = test_prefix();
         let instance = make_instance(ResourceKind::Job);
-        let addr = instance_ipv6(&prefix, &instance);
         let net = pod_network_prefix(&prefix, &instance);
-        // The /64 network address must match the first 8 bytes of the instance address
-        assert_eq!(&addr.octets()[..8], &net.network().octets()[..8]);
+        let addr = instance_ipv6(&prefix, &instance);
+        assert_eq!(net.network().octets()[6], ResourceKind::Job as u8);
+        assert_eq!(&addr.octets()[..7], &net.network().octets()[..7]);
+    }
+
+    // r[verify infra.pod.subnet]
+    // Static Jobs carry a nil InstanceId, so deriving the subnet from
+    // `uuid[0]` gave every static Job on the node — across every app — the
+    // same /64, and netavark refuses the second network on a duplicate
+    // subnet.
+    #[test]
+    fn static_jobs_with_nil_ids_get_distinct_subnets() {
+        let prefix = test_prefix();
+        let nil = crate::runtime::identity::InstanceId(uuid::Uuid::nil());
+        let job = |app: &str, name: &str| ResourceInstance {
+            id: nil,
+            app: seedling_protocol::names::AppName::new(app).unwrap(),
+            kind: ResourceKind::Job,
+            name: Some(name.to_owned()),
+            variant: crate::runtime::identity::InstanceVariant::Singleton,
+            display_name: format!("{app}-job-{name}"),
+        };
+
+        let a = pod_network_prefix(&prefix, &job("alpha", "migrate"));
+        let b = pod_network_prefix(&prefix, &job("beta", "migrate"));
+        let c = pod_network_prefix(&prefix, &job("alpha", "vacuum"));
+
+        assert_ne!(a, b, "same job name in different apps must not collide");
+        assert_ne!(a, c, "different jobs in one app must not collide");
     }
 
     #[test]
@@ -336,5 +418,114 @@ mod tests {
         let node: Ipv6Net = "fd5e:ed12:3456::/48".parse().unwrap();
         let pod: Ipv6Net = "fd5e:ed12:3456:0500::/64".parse().unwrap();
         assert_eq!(node_mount_addr(&node), node_mount_addr(&pod));
+    }
+
+    fn ing(hostname: &str, port: u16, tls: bool, http: bool) -> IngressDef {
+        use crate::defs::Port;
+        use crate::defs::ingress::HttpTermination;
+        IngressDef {
+            hostname: hostname.to_string(),
+            port: Port::new(i64::from(port)).unwrap(),
+            tls,
+            dtls: false,
+            http_terminate: http.then_some(HttpTermination::Http1),
+            redirect: None,
+            description: None,
+        }
+    }
+
+    fn upstream(port: u16) -> ServiceUpstream {
+        ServiceUpstream {
+            routes: vec![],
+            service_ip: "fd5e:ed12:3456:200::1".parse().unwrap(),
+            service_port: port,
+            proxy: crate::defs::service::ResolvedRouteProxy::default().into(),
+        }
+    }
+
+    fn has(cfg: &ProxyConfig, port: u16, proto: ProxyListenerProto) -> bool {
+        cfg.listeners
+            .iter()
+            .any(|l| l.port == port && l.proto == proto)
+    }
+
+    // r[verify actuate.ingress.plaintext]
+    #[test]
+    fn plaintext_http_ingress_listens_for_http() {
+        // The shape a site-ingress attachment produces when its parent's TLS
+        // provisioning mode is `none`: terminates HTTP, terminates no TLS.
+        let cfg = build_proxy_config(&[(ing("clinic.local", 80, false, true), upstream(80))], &[]);
+
+        assert!(
+            has(&cfg, 80, ProxyListenerProto::Http),
+            "plaintext HTTP ingress must listen for HTTP, got {:?}",
+            cfg.listeners
+        );
+        assert!(
+            !has(&cfg, 80, ProxyListenerProto::Https),
+            "plaintext HTTP ingress must not listen for HTTPS"
+        );
+    }
+
+    // r[verify actuate.ingress.plaintext]
+    #[test]
+    fn plaintext_http_ingress_takes_no_quic_listener() {
+        let cfg = build_proxy_config(&[(ing("clinic.local", 80, false, true), upstream(80))], &[]);
+        assert!(
+            !has(&cfg, 80, ProxyListenerProto::Quic),
+            "HTTP/3 is TLS-only, so a plaintext ingress must take no QUIC listener"
+        );
+    }
+
+    // r[verify actuate.ingress.plaintext]
+    #[test]
+    fn tls_http_ingress_still_listens_for_https_and_quic() {
+        let cfg = build_proxy_config(
+            &[(ing("clinic.example.com", 443, true, true), upstream(80))],
+            &[],
+        );
+        assert!(has(&cfg, 443, ProxyListenerProto::Https));
+        assert!(has(&cfg, 443, ProxyListenerProto::Quic));
+        assert!(!has(&cfg, 443, ProxyListenerProto::Http));
+    }
+
+    // r[verify actuate.ingress.plaintext]
+    #[test]
+    fn tls_passthrough_ingress_takes_no_quic_listener() {
+        // `Terminate.Tls + Output.Tcp`: terminates TLS but not HTTP, so it
+        // serves no HTTP/3 and must be unaffected by the plaintext handling.
+        let cfg = build_proxy_config(
+            &[(ing("db.example.com", 5432, true, false), upstream(5432))],
+            &[],
+        );
+        assert!(!has(&cfg, 5432, ProxyListenerProto::Quic));
+    }
+
+    // r[verify actuate.ingress.plaintext]
+    #[test]
+    fn plaintext_and_tls_ingresses_on_one_hostname_stay_separate() {
+        // One hostname, plaintext on :80 and TLS-terminating on :443. Keying
+        // vhosts by hostname alone would merge these and serve the plaintext
+        // routes from the HTTPS server.
+        let cfg = build_proxy_config(
+            &[
+                (ing("clinic.local", 80, false, true), upstream(80)),
+                (ing("clinic.local", 443, true, true), upstream(80)),
+            ],
+            &[],
+        );
+
+        assert_eq!(cfg.virtual_hosts.len(), 2, "got {:?}", cfg.virtual_hosts);
+        let plain = cfg.virtual_hosts.iter().filter(|v| !v.tls_acme).count();
+        let secure = cfg.virtual_hosts.iter().filter(|v| v.tls_acme).count();
+        assert_eq!((plain, secure), (1, 1));
+        assert!(
+            cfg.virtual_hosts
+                .iter()
+                .all(|v| v.hostname == "clinic.local"),
+            "both vhosts describe the same hostname"
+        );
+        assert!(has(&cfg, 80, ProxyListenerProto::Http));
+        assert!(has(&cfg, 443, ProxyListenerProto::Https));
     }
 }

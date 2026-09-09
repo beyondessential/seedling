@@ -2,7 +2,7 @@ use std::{net::SocketAddr, time::Duration};
 
 use seedling_protocol::{
     actor::Actor,
-    client::{ClientAuth, OiClient},
+    client::{ClientAuth, ClientError, OiClient},
     keys::ClientIdentity,
 };
 
@@ -45,7 +45,13 @@ pub async fn subscribe(
         backoff = Duration::from_secs(1);
 
         match run_subscribe_session(&client).await {
-            SessionOutcome::GracefulClose => return,
+            // The server refused the subscription — retrying will not change
+            // its mind, and exiting 0 would tell a script the feed was
+            // consumed to its end.
+            SessionOutcome::Rejected(e) => {
+                eprintln!("subscription rejected: {e}");
+                std::process::exit(1);
+            }
             SessionOutcome::Error(e) => {
                 // Reset the deadline when we start reconnecting, not when the
                 // session began — otherwise a long-lived session causes the
@@ -61,45 +67,20 @@ pub async fn subscribe(
 }
 
 enum SessionOutcome {
-    GracefulClose,
+    /// The server answered the subscription request with an error.
+    Rejected(String),
     Error(String),
     Interrupted,
 }
 
 // i[impl ctl.graceful-shutdown]
 async fn run_subscribe_session(client: &OiClient) -> SessionOutcome {
-    let req_bytes = serde_json::to_vec(&serde_json::json!({
-        "method": "/events/subscribe",
-        "actor": client.actor(),
-        "params": {},
-    }))
-    .expect("serialisation");
-
-    let (mut send, mut recv) = match client.open_bi().await {
+    let mut event_stream = match client.subscribe_events().await {
         Ok(s) => s,
-        Err(e) => return SessionOutcome::Error(format!("open_bi: {e}")),
-    };
-
-    if let Err(e) = send.write_all(&req_bytes).await {
-        return SessionOutcome::Error(format!("write: {e}"));
-    }
-    let _ = send.finish();
-
-    let resp = match recv.read_to_end(64 * 1024).await {
-        Ok(r) => r,
-        Err(e) => return SessionOutcome::Error(format!("read response: {e}")),
-    };
-
-    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&resp)
-        && v.get("error").is_some()
-    {
-        eprintln!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
-        return SessionOutcome::GracefulClose;
-    }
-
-    let mut event_stream = match client.accept_uni().await {
-        Ok(s) => s,
-        Err(e) => return SessionOutcome::Error(format!("accept_uni: {e}")),
+        Err(ClientError::Api { code, message }) => {
+            return SessionOutcome::Rejected(format!("[{code}] {message}"));
+        }
+        Err(e) => return SessionOutcome::Error(e.to_string()),
     };
 
     let mut buf = Vec::new();

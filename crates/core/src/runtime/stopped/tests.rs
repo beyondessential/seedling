@@ -77,7 +77,6 @@ fn kind_str_and_parse_kind_round_trip_all_kinds() {
         ResourceKind::ExternalVolume,
         ResourceKind::ExternalService,
         ResourceKind::Parameter,
-        ResourceKind::HttpService,
         ResourceKind::Action,
     ] {
         assert_eq!(parse_kind(kind_str(kind)), Some(kind), "{kind:?}");
