@@ -22,14 +22,14 @@ clap = { version = "4.6.0", features = ["derive"] }
 if-addrs = "0.15.0"
 crossterm = "0.29.0"
 dirs = "6.0.0"
-ed25519-dalek = { version = "2.2.0", features = ["pkcs8", "rand_core"] }
+ed25519-dalek = { version = "3.0.0", features = ["alloc", "pkcs8", "rand_core"] }
 futures-util = { version = "0.3.32", default-features = false, features = ["io", "channel"] }
 ipnet = "2.12.0"
 jiff = { version = "0.2.28", features = ["serde"] }
 lloggs = "1.4.0"
 parking_lot = { version = "0.12.5", features = ["deadlock_detection"] }
 quinn = "0.11.9"
-rand_core = { version = "0.6", features = ["getrandom"] }
+rand = "0.10.2"
 reqwest = { version = "0.13.4", features = ["json"] }
 rfc2047-decoder = "1.1.2"
 rustls = "0.23.40"

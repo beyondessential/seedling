@@ -32,7 +32,7 @@ pub fn schedule_to_cronexpr(schedule: &str) -> Option<&'static str> {
 
 // r[impl backup.schedule.delay]
 pub fn random_delay_secs(schedule: &str) -> u64 {
-    use rand_core::{OsRng, RngCore};
+    use rand::{Rng, rng};
     let interval_secs: u64 = match schedule {
         "every hour" => 3600,
         "twice a day" => 43200,
@@ -43,7 +43,7 @@ pub fn random_delay_secs(schedule: &str) -> u64 {
     if max_delay == 0 {
         return 0;
     }
-    OsRng.next_u64() % (max_delay + 1)
+    rng().next_u64() % (max_delay + 1)
 }
 
 // r[impl backup.execution]

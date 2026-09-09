@@ -20,7 +20,7 @@ nix = { version = "0.31.3", features = ["signal", "term"] }
 parking_lot.workspace = true
 podman-rest-client = { version = "0.13.0", features = ["uds"] }
 quinn.workspace = true
-rand_core.workspace = true
+rand.workspace = true
 reqwest.workspace = true
 rhai = { version = "1.25.1", features = ["metadata"] }
 rtnetlink = "0.23.0"

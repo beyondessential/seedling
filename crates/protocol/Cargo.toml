@@ -17,7 +17,7 @@ ed25519-dalek.workspace = true
 futures-util.workspace = true
 jiff.workspace = true
 quinn.workspace = true
-rand_core.workspace = true
+rand.workspace = true
 rusqlite = { version = "0.40.1", features = ["bundled"], optional = true }
 rustls.workspace = true
 rustls-pki-types.workspace = true
