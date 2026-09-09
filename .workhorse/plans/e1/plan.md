@@ -28,5 +28,5 @@
 
 ## Deferred (own cards)
 
-- **Real client IP behind a front proxy** — PROXY protocol (L4 listener wrapper) *and* X-Forwarded-For trusted_proxies (HTTP). Both wanted. E1 keys on `client_ip` so it consumes the recovered client with no emitter change. Direct-to-host is the norm today, so E1 is correct without it. → card created.
-- **L4 per-source rate limiting** — caddy-ratelimit is HTTP-only; caddy-l4 `throttle` is bandwidth, not connection-rate. The kernel path (nftables `ct count` / `limit rate` per source) is the candidate. Separate mechanism, separate card if wanted.
+- **Real client IP behind a front proxy** — PROXY protocol (L4 listener wrapper) *and* X-Forwarded-For trusted_proxies (HTTP). Both wanted. E1 keys on `client_ip` so it consumes the recovered client with no emitter change. Direct-to-host is the norm today, so E1 is correct without it. → card A2.
+- **L4 per-source rate limiting** — caddy-ratelimit is HTTP-only; caddy-l4 `throttle` is bandwidth, not connection-rate. The kernel path (nftables `ct count` / `limit rate` per source, ahead of the ingress DNAT) is the candidate. → card B2.
