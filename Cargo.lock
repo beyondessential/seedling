@@ -4514,7 +4514,7 @@ dependencies = [
  "proc-macro-error-attr3",
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -5497,7 +5497,7 @@ dependencies = [
  "nix 0.31.3",
  "orion",
  "parking_lot",
- "pem 3.0.6",
+ "pem 4.0.0",
  "podman-rest-client",
  "quinn",
  "rand_core 0.6.4",
