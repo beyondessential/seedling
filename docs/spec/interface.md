@@ -101,6 +101,13 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Both directions carry a newline-terminated JSON header line followed by raw body bytes for the remainder of the stream's lifetime; the stream's end is the body's end, and no additional length framing is used.
 > The server writes the request header and body then half-closes its write-end; the client writes the response header and body then closes the stream.
 
+> i[stream.subscribe]
+> A subscription-style request — one whose success causes the server to open a server-initiated unidirectional stream carrying the subscribed data — is answered on the bidirectional stream exactly as any other control request, before any unidirectional stream is opened.
+> A response carrying an error terminates the request: the server opens no unidirectional stream, and the connection remains usable for further requests.
+> The response is bounded by the close of the bidirectional stream, as for any other control request per [stream.control](#i--stream.control), and not by a newline: a client must read the bidirectional stream to its end before parsing, and the subsequent data arrives on the unidirectional stream rather than on this one.
+> Clients must therefore read and classify the response envelope before waiting for the unidirectional stream, must treat closure of the bidirectional stream without a response envelope as an error, must surface the error envelope's `code` and `message` to their caller rather than discarding them, and must not wait indefinitely for a unidirectional stream that a server which answered successfully may still fail to open.
+> The subscription-style requests are [events.subscribe](#i--event.subscribe) and [logs.stream](#i--logs.stream).
+
 > i[stream.events]
 > After a client sends a `/events/subscribe` request, the server opens one server-initiated unidirectional QUIC stream per connection and pushes events as newline-delimited JSON objects for the duration of the connection.
 
@@ -258,18 +265,30 @@ Absent specification bugs, anything that is not defined here is either defined i
 >   Each fault entry is a [fault record](#i--fault.record).
 >   `def` is an object describing the resource's configuration. The shape varies by `type`:
 >   for `ingress`: `{ hostname, port, tls, dtls, http_terminate, redirect }`;
->   for `service`: `{ http }`;
->   for `http_service`: `{ service, port }`;
+>   for `service`: `{ http, exported, balance, routes }`;
 >   for `deployment`: `{ container, pod, scale, on_update, on_terminate }`;
 >   for `job`: `{ container, pod, deadline }`;
 >   for `volume`: `{ readonly, tmpfs, writes, exported, export_description }`.
 >   `container` has fields `image`, `command`, `args`, `env`, `volume_mounts`, `on_exit`, `memory`, `cpus`, `extra_caps`, `writable_rootfs`, `pids_limit`.
 >   `pod` has fields `service_mounts`, `http_bindings`, `tcp_bindings`, `udp_bindings` (each an array of strings).
+>   `routes` is an array of objects with fields `prefix`, `compress`, and `balance`, one per HTTP route the service is served through, sorted by `prefix` for stable diffing. It is `null` for a service with no HTTP surface.
 > - `params`: array of objects with fields `name`, `value`, `is_set`, `secret`, `kind`, `required`, `description`, and `default_value`.
 >   `is_set` is `true` when the parameter has a stored value.
 >   `value` is the string value if the parameter is set and not secret; `null` if the parameter is unset or if it is secret.
 >   `secret` is `true` when the parameter's effective secret flag is `true` (see [param.schema.secret](#l--param.schema.secret) and [param.schema.secret-from-kind](#l--param.schema.secret-from-kind)).
 >   The schema fields (`kind`, `required`, `description`, `default_value`) reflect any metadata set via the BSL param builder methods.
+
+> i[app.describe.proxy-settings]
+> A `service` def reports the proxy settings in force on it, after the resolution defined in [service.http.proxy-settings.resolution](language.md#l--service.http.proxy-settings.resolution).
+> Values are fully resolved: a field the app set at neither route nor service level is reported at its default rather than as null or absent, so a reader never has to know the defaults to interpret the response.
+>
+> The def's own `balance` reports the service-wide policy, which governs every backend pool the service is served through.
+> Each entry in `routes` reports the settings for one HTTP route, so a route that overrides the service's values reports what it resolved to rather than what the service declared.
+>
+> `compress` is `null` when compression is disabled for the route, and otherwise an object with fields `encodings` (array of strings), `minimum_length` (integer), and `content_types` (array of strings).
+> `balance` is an object with fields `policy` (string), `try_duration`, and `interval` (the latter two in seconds).
+>
+> A service whose backing pods declare no HTTP route bindings reports the single `/` route it is served through, so the array is never empty for an HTTP service.
 
 > i[app.describe.param-secret]
 > When a param's effective `secret` flag is `true`, its `value` must be `null` in the response regardless of whether a value is stored. Clients must use `is_set` to distinguish an unset secret from a set-but-redacted secret.

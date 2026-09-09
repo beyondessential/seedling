@@ -1,5 +1,6 @@
 mod cert_observation;
 mod config;
+mod image;
 mod proxy;
 mod startup;
 

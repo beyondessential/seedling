@@ -326,7 +326,6 @@ impl Actuator {
         let resource_kind_str = match instance.kind {
             ResourceKind::Parameter => "parameter",
             ResourceKind::Service => "service",
-            ResourceKind::HttpService => "http_service",
             ResourceKind::Ingress => "ingress",
             ResourceKind::Deployment => "deployment",
             ResourceKind::Job => "job",

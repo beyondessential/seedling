@@ -1,45 +1,146 @@
 name: Caddy image
 
 on:
+  pull_request:
+    paths:
+      - docker/caddy/**
+      - etc/ci/check-caddy-image.sh
+      - .github/workflows/caddy-image.yml
   push:
     branches:
       - main
     paths:
       - docker/caddy/**
+      - etc/ci/check-caddy-image.sh
       - .github/workflows/caddy-image.yml
   workflow_dispatch:
 
 concurrency:
-  group: caddy-image
+  group: caddy-image-${{ github.ref }}
   cancel-in-progress: false
 
 env:
-  # Keep in sync with the Caddy base + caddy-l4 versions in
-  # docker/caddy/Containerfile and with CADDY_IMAGE in startup.rs.
-  TAG: "2.11.3-l4.0.1.1"
+  # Caddy version plus a build serial. Bump the serial when docker/caddy
+  # changes without the Caddy version changing; the tag-moved job below fails a
+  # pull request that forgets. Keep the Caddy part in sync with the FROM tags in
+  # docker/caddy/Containerfile, and the whole tag in sync with CADDY_IMAGE in
+  # crates/core/src/system/caddy/startup.rs.
+  TAG: "2.11.4-1"
+  IMAGE: ghcr.io/beyondessential/seedling-caddy
 
 jobs:
+  tag-moved:
+    name: Tag moved
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: A Containerfile change must move the image tag
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet "$BASE" "$HEAD" -- docker/caddy/Containerfile; then
+            echo "Containerfile unchanged; nothing to check."
+            exit 0
+          fi
+
+          read_tag() { sed -n 's/^ *TAG: *"\(.*\)"/\1/p' | head -n1; }
+          old="$(git show "$BASE:.github/workflows/caddy-image.yml" | read_tag)"
+          new="$(read_tag < .github/workflows/caddy-image.yml)"
+
+          if [ "$old" = "$new" ]; then
+            echo "::error::docker/caddy/Containerfile changed but TAG is still \"$new\". \
+          A rebuilt image published under an existing tag leaves hosts on whichever \
+          digest they already pulled. Bump the serial."
+            exit 1
+          fi
+          echo "tag moved: $old -> $new"
+
   build:
     name: Build and publish
     runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v7.0.0
       - uses: docker/setup-qemu-action@v4.1.0
       - uses: docker/setup-buildx-action@v4
+
+      # Build the native arch first and check it before anything is published,
+      # so a missing module fails here rather than on a host.
+      - name: Build for checking
+        uses: docker/build-push-action@v7.2.0
+        with:
+          context: docker/caddy
+          file: docker/caddy/Containerfile
+          platforms: linux/amd64
+          load: true
+          tags: seedling-caddy:check
+
+      - name: Check the image provides what the runtime requires
+        run: etc/ci/check-caddy-image.sh seedling-caddy:check
+
+      # A pull request from a fork gets a read-only GITHUB_TOKEN, so it builds
+      # and checks but cannot publish. Everything else publishes: publishing
+      # from a same-repo pull request is what stops `main` referencing a tag
+      # that does not exist yet for the ~18 minutes the multi-arch build takes.
+      - name: Decide whether to publish
+        id: publish
+        env:
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "pull_request" ] || [ "$HEAD_REPO" = "${{ github.repository }}" ]; then
+            echo "yes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "yes=false" >> "$GITHUB_OUTPUT"
+            echo "fork pull request: built and checked, not published"
+          fi
+
+      # `latest` only moves on main; a pull request publishes its own tag so the
+      # tag exists by the time it merges.
+      - name: Assemble tags
+        id: tags
+        if: steps.publish.outputs.yes == 'true'
+        run: |
+          set -euo pipefail
+          {
+            echo "list<<TAGS"
+            echo "$IMAGE:$TAG"
+            [ "${{ github.event_name }}" = "pull_request" ] || echo "$IMAGE:latest"
+            echo "TAGS"
+          } >> "$GITHUB_OUTPUT"
+
       - uses: docker/login-action@v4.2.0
+        if: steps.publish.outputs.yes == 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v7.2.0
+
+      - name: Build and publish
+        id: push
+        if: steps.publish.outputs.yes == 'true'
+        uses: docker/build-push-action@v7.2.0
         with:
           context: docker/caddy
           file: docker/caddy/Containerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/beyondessential/seedling-caddy:${{ env.TAG }}
-            ghcr.io/beyondessential/seedling-caddy:latest
+          tags: ${{ steps.tags.outputs.list }}
+
+      - name: Attest
+        if: steps.publish.outputs.yes == 'true'
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

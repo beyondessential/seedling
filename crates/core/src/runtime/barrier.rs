@@ -111,6 +111,82 @@ pub struct BarrierRecord {
 }
 
 // r[impl barrier.replay]
+/// The committed log does not describe the calls the closure is making.
+///
+/// Means the script changed between the crash and the replay, or the engine
+/// took a different branch. Either way the recorded results cannot be
+/// attributed to the calls now being made.
+// r[impl barrier.replay.positional]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReplayMismatch {
+    /// A different kind of call is being made at this position.
+    Kind {
+        call_index: usize,
+        expected: CallKind,
+        found: CallKind,
+    },
+    /// The right kind of call, but its recorded argument differs.
+    ///
+    /// Only for arguments that are stable across passes by construction. The
+    /// resolved instance set is *not* one of those — a replica may be added
+    /// or retired between passes and it is still the same call — but a
+    /// literal like a signal name is: it comes from the script text, so a
+    /// change means the script changed under the log.
+    Extra {
+        call_index: usize,
+        kind: CallKind,
+        expected: String,
+        found: Option<String>,
+    },
+}
+
+impl ReplayMismatch {
+    pub fn call_index(&self) -> usize {
+        match self {
+            Self::Kind { call_index, .. } | Self::Extra { call_index, .. } => *call_index,
+        }
+    }
+}
+
+impl std::fmt::Display for ReplayMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Kind {
+                call_index,
+                expected,
+                found,
+            } => write!(
+                f,
+                "replay diverged at call {call_index}: the log records a {found:?} but the \
+                 script is making a {expected:?}"
+            ),
+            // This message is the whole explanation an operator gets for why
+            // an operation refused to resume, so it prints the recorded
+            // argument itself rather than its `Option` wrapper.
+            Self::Extra {
+                call_index,
+                kind,
+                expected,
+                found: Some(found),
+            } => write!(
+                f,
+                "replay diverged at call {call_index}: the log records a {kind:?} of `{found}` \
+                 but the script is making one of `{expected}`"
+            ),
+            Self::Extra {
+                call_index,
+                kind,
+                expected,
+                found: None,
+            } => write!(
+                f,
+                "replay diverged at call {call_index}: the log records a {kind:?} with no \
+                 recorded argument but the script is making one of `{expected}`"
+            ),
+        }
+    }
+}
+
 pub struct ReplayContext {
     pub operation_id: OperationId,
     pub call_index: usize,
@@ -290,6 +366,56 @@ impl ReplayContext {
 
     pub fn committed_entry(&self) -> Option<&ActionLogEntry> {
         self.committed.get(self.call_index)
+    }
+
+    /// Consume the committed entry for the call being made *at this position*,
+    /// or `None` when this call is running for the first time.
+    ///
+    /// The action log is positional: `call_index` walks `committed` in the
+    /// order the closure makes its calls. `do_exec` always understood that;
+    /// `do_signal` did not, and scanned the whole log for any entry with the
+    /// same resources and signal. Both halves of that are wrong. A second,
+    /// identical `rt.signal` later in the same closure matched the first
+    /// entry and was swallowed — the signal was never delivered. And when the
+    /// resolved instance set changed between passes, no entry matched, so a
+    /// signal already delivered before the crash was delivered again.
+    ///
+    /// Advancing the index is part of consuming the entry, so a caller cannot
+    /// check without advancing or advance without checking.
+    // r[impl barrier.replay.positional]
+    /// `expect_extra` is checked when the caller's argument is stable across
+    /// passes by construction; pass `None` to skip the check. Positional
+    /// matching alone would treat a script edit that changes the argument at
+    /// this position — `SIGHUP` to `SIGTERM`, say — as already replayed, and
+    /// silently never deliver the new one.
+    pub fn replay_step(
+        &mut self,
+        expect: CallKind,
+        expect_extra: Option<&str>,
+    ) -> Result<Option<ActionLogEntry>, ReplayMismatch> {
+        if !self.is_replaying() {
+            return Ok(None);
+        }
+        let entry = self.committed[self.call_index].clone();
+        if entry.call_kind != expect {
+            return Err(ReplayMismatch::Kind {
+                call_index: self.call_index,
+                expected: expect,
+                found: entry.call_kind,
+            });
+        }
+        if let Some(expected) = expect_extra
+            && entry.extra.as_deref() != Some(expected)
+        {
+            return Err(ReplayMismatch::Extra {
+                call_index: self.call_index,
+                kind: expect,
+                expected: expected.to_owned(),
+                found: entry.extra.clone(),
+            });
+        }
+        self.call_index += 1;
+        Ok(Some(entry))
     }
 
     pub fn take_pending(&mut self) -> Vec<ActionLogEntry> {

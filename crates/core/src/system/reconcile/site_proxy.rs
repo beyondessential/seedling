@@ -328,6 +328,9 @@ fn resolve_forward_upstream(
         routes,
         service_ip,
         service_port: upstream_port,
+        // Resolved against the app that declares the service, not the site,
+        // so an attachment serves a route exactly as its own ingress would.
+        proxy: super::proxy::service_level_proxy(&snapshot.app_def, svc_name_str),
     })
 }
 
@@ -501,6 +504,7 @@ mod tests {
             routes: Vec::new(),
             service_ip: Ipv6Addr::from([0xfd, 0x5e, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
             service_port: 8080,
+            proxy: crate::defs::service::ResolvedRouteProxy::default().into(),
         }
     }
 

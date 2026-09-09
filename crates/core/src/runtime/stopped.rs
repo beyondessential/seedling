@@ -80,7 +80,6 @@ pub fn kind_str(kind: ResourceKind) -> &'static str {
         ResourceKind::ExternalVolume => "externalvolume",
         ResourceKind::ExternalService => "externalservice",
         ResourceKind::Parameter => "parameter",
-        ResourceKind::HttpService => "httpservice",
         ResourceKind::Action => "action",
     }
 }
@@ -95,7 +94,6 @@ pub fn parse_kind(s: &str) -> Option<ResourceKind> {
         "externalvolume" => Some(ResourceKind::ExternalVolume),
         "externalservice" => Some(ResourceKind::ExternalService),
         "parameter" => Some(ResourceKind::Parameter),
-        "httpservice" => Some(ResourceKind::HttpService),
         "action" => Some(ResourceKind::Action),
         _ => None,
     }
