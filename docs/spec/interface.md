@@ -28,6 +28,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > The server may be configured to listen on one or more addresses at startup.
 > All configured addresses share the same server identity (key pair and SPKI fingerprint) and the same authorized key set.
 > When no addresses are explicitly configured, the server listens on a single loopback address on the default port.
+> A configured address that cannot be resolved at startup is a startup failure.
+> The server must not start serving on the subset that did resolve, and must not start with no listeners at all: a management plane that is silently absent is indistinguishable from one that is present but unreachable.
 
 > i[transport.fingerprint-probe]
 > When a client connects to a server whose fingerprint is not yet in its known-hosts store, it must

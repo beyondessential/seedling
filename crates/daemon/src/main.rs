@@ -1639,26 +1639,138 @@ fn resolve_oi_addrs(
     explicit: &[std::net::SocketAddr],
     port: u16,
 ) -> Vec<std::net::SocketAddr> {
+    let available = if interfaces.is_empty() {
+        Vec::new()
+    } else {
+        if_addrs::get_if_addrs()
+            .unwrap_or_else(|e| fatal!("failed to list network interfaces: {e}"))
+    };
+    select_oi_addrs(interfaces, explicit, port, &available)
+        .unwrap_or_else(|e| fatal!("cannot resolve OI listen addresses: {e}"))
+}
+
+/// Decide which addresses the OI server binds, given the interfaces the host
+/// currently reports.
+///
+/// Split from [`resolve_oi_addrs`] so the decision is testable without
+/// touching the host's interface list or exiting the process.
+// i[impl transport.listen]
+fn select_oi_addrs(
+    interfaces: &[String],
+    explicit: &[std::net::SocketAddr],
+    port: u16,
+    available: &[if_addrs::Interface],
+) -> Result<Vec<std::net::SocketAddr>, String> {
     if interfaces.is_empty() && explicit.is_empty() {
-        return vec![format!("[::1]:{port}").parse().unwrap()];
+        return Ok(vec![format!("[::1]:{port}").parse().unwrap()]);
     }
 
     let mut addrs: Vec<std::net::SocketAddr> = explicit.to_vec();
 
     for iface_name in interfaces {
-        let all = if_addrs::get_if_addrs()
-            .unwrap_or_else(|e| fatal!("failed to list network interfaces: {e}"));
-        let iface_addrs: Vec<_> = all
-            .into_iter()
+        let iface_addrs: Vec<_> = available
+            .iter()
             .filter(|i| &i.name == iface_name)
             .map(|i| std::net::SocketAddr::new(i.ip(), port))
             .collect();
+        // An interface that is not up yet looks exactly like one that
+        // resolved to nothing. Continuing here bound the subset that did
+        // resolve — or nothing at all, when this was the only interface — and
+        // the daemon then logged "seedling ready" with no management plane.
         if iface_addrs.is_empty() {
-            tracing::warn!("interface {iface_name:?} not found or has no addresses");
-            continue;
+            return Err(format!(
+                "interface {iface_name:?} not found or has no addresses"
+            ));
         }
         addrs.extend(iface_addrs);
     }
 
-    addrs
+    Ok(addrs)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{Ipv4Addr, SocketAddr};
+
+    use if_addrs::{IfAddr, IfOperStatus, Ifv4Addr, Interface};
+
+    use super::select_oi_addrs;
+
+    fn iface(name: &str, ip: [u8; 4]) -> Interface {
+        Interface {
+            name: name.to_owned(),
+            addr: IfAddr::V4(Ifv4Addr {
+                ip: Ipv4Addr::from(ip),
+                netmask: Ipv4Addr::new(255, 255, 255, 0),
+                prefixlen: 24,
+                broadcast: None,
+            }),
+            index: None,
+            oper_status: IfOperStatus::Up,
+            is_p2p: false,
+            #[cfg(windows)]
+            adapter_name: String::new(),
+        }
+    }
+
+    // i[verify transport.listen]
+    #[test]
+    fn no_configuration_listens_on_loopback() {
+        let addrs = select_oi_addrs(&[], &[], 7891, &[]).expect("default");
+        assert_eq!(addrs, vec!["[::1]:7891".parse::<SocketAddr>().unwrap()]);
+    }
+
+    // i[verify transport.listen]
+    #[test]
+    fn a_named_interface_contributes_its_addresses() {
+        let available = [iface("eth0", [10, 0, 0, 5])];
+        let addrs =
+            select_oi_addrs(&["eth0".to_owned()], &[], 7891, &available).expect("resolve eth0");
+        assert_eq!(addrs, vec!["10.0.0.5:7891".parse::<SocketAddr>().unwrap()]);
+    }
+
+    // i[verify transport.listen]
+    // An interface that has not come up yet is indistinguishable from one that
+    // resolved to nothing, so it must not be silently skipped: doing so left
+    // the daemon reporting ready with no OI listener at all.
+    #[test]
+    fn an_unresolvable_interface_is_an_error_rather_than_no_listener() {
+        let err = select_oi_addrs(&["eth0".to_owned()], &[], 7891, &[])
+            .expect_err("must not resolve to an empty listen set");
+        assert!(
+            err.contains("eth0"),
+            "error should name the interface: {err}"
+        );
+    }
+
+    // i[verify transport.listen]
+    // The same applies when another interface did resolve: binding the subset
+    // silently drops whichever address the operator asked for.
+    #[test]
+    fn one_unresolvable_interface_fails_the_whole_set() {
+        let available = [iface("eth0", [10, 0, 0, 5])];
+        select_oi_addrs(
+            &["eth0".to_owned(), "eth1".to_owned()],
+            &[],
+            7891,
+            &available,
+        )
+        .expect_err("a partial resolution must not bind the subset");
+    }
+
+    // i[verify transport.listen]
+    #[test]
+    fn explicit_addresses_are_kept_alongside_interface_addresses() {
+        let available = [iface("eth0", [10, 0, 0, 5])];
+        let explicit: Vec<SocketAddr> = vec!["127.0.0.1:9000".parse().unwrap()];
+        let addrs = select_oi_addrs(&["eth0".to_owned()], &explicit, 7891, &available)
+            .expect("both sources");
+        assert_eq!(
+            addrs,
+            vec![
+                "127.0.0.1:9000".parse::<SocketAddr>().unwrap(),
+                "10.0.0.5:7891".parse::<SocketAddr>().unwrap(),
+            ]
+        );
+    }
 }
