@@ -906,7 +906,7 @@ fn a_limited_route_carries_the_rate_limit_handler() {
     assert_eq!(handle[0]["handler"], "rate_limit");
     assert_eq!(handle[1]["handler"], "reverse_proxy");
 
-    let zone = &handle[0]["rate_limits"]["app.example.com/api"];
+    let zone = &handle[0]["rate_limits"]["http://app.example.com/api"];
     assert_eq!(zone["max_events"], 1000);
     // Caddy durations as nanoseconds: 1s.
     assert_eq!(zone["window"], 1_000_000_000i64);
@@ -925,8 +925,11 @@ fn an_unlimited_route_carries_no_rate_limit_handler() {
 }
 
 // r[verify service.http.route.rate-limiting]
+// r[verify infra.proxy.image.modules]
 #[test]
-fn ipv6_clients_are_counted_per_64() {
+fn emitted_zone_uses_only_fields_the_pinned_module_declares() {
+    use super::config::RATE_LIMIT_ZONE_FIELDS;
+
     let config = vhost_with(
         "app.example.com",
         vec![limited_route(
@@ -939,12 +942,24 @@ fn ipv6_clients_are_counted_per_64() {
     );
     let json = build_caddy_config(&config);
     let zone = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"][0]["rate_limits"]
-        ["app.example.com/api"];
+        ["http://app.example.com/api"];
 
-    assert_eq!(zone["ipv6_prefix"], 64);
-    // IPv4 is left per exact address: the module leaves an address alone when
-    // the prefix for its version is unset.
-    assert!(zone["ipv4_prefix"].is_null());
+    // Caddy decodes module config strictly, so a field the pinned tag does not
+    // declare fails the whole document and drops ingress for every vhost on
+    // the host, not merely the route that declared the limit. `ipv4_prefix`
+    // and `ipv6_prefix` are the live example: they exist upstream but in no
+    // released version, so emitting them would have been a host-wide outage
+    // that no assertion on our own JSON would have caught.
+    let emitted = zone.as_object().expect("zone is an object");
+    let unknown: Vec<&String> = emitted
+        .keys()
+        .filter(|k| !RATE_LIMIT_ZONE_FIELDS.contains(&k.as_str()))
+        .collect();
+    assert!(
+        unknown.is_empty(),
+        "emitted rate-limit zone fields not declared by the pinned \
+         caddy-ratelimit tag: {unknown:?}"
+    );
 }
 
 // r[verify service.http.route.rate-limiting]
@@ -983,9 +998,9 @@ fn a_longer_prefix_carries_its_own_zone_ahead_of_the_shorter_one() {
     // shared name would put both prefixes in one bucket.
     let tight = &routes[0]["handle"][0]["rate_limits"];
     let loose = &routes[1]["handle"][0]["rate_limits"];
-    assert_eq!(tight["app.example.com/api/login"]["max_events"], 10);
-    assert_eq!(loose["app.example.com/api"]["max_events"], 1000);
-    assert!(tight["app.example.com/api"].is_null());
+    assert_eq!(tight["http://app.example.com/api/login"]["max_events"], 10);
+    assert_eq!(loose["http://app.example.com/api"]["max_events"], 1000);
+    assert!(tight["http://app.example.com/api"].is_null());
 }
 
 // r[verify service.http.route.rate-limiting]
@@ -1005,8 +1020,8 @@ fn the_same_prefix_on_two_hostnames_gets_distinct_zones() {
     let json = build_caddy_config(&config);
     let routes = &json["apps"]["http"]["servers"]["seedling_http"]["routes"];
 
-    assert!(!routes[0]["handle"][0]["rate_limits"]["a.example.com/api"].is_null());
-    assert!(!routes[1]["handle"][0]["rate_limits"]["b.example.com/api"].is_null());
+    assert!(!routes[0]["handle"][0]["rate_limits"]["http://a.example.com/api"].is_null());
+    assert!(!routes[1]["handle"][0]["rate_limits"]["http://b.example.com/api"].is_null());
 }
 
 // r[verify service.http.route.rate-limiting]
@@ -1037,4 +1052,78 @@ fn redirect_routes_are_never_rate_limited() {
 
     assert_eq!(handle[0]["handler"], "static_response");
     assert!(handle[1].is_null());
+}
+// r[verify infra.proxy.upgrade.cache]
+#[test]
+fn old_cached_config_without_rate_limit_still_deserialises() {
+    // The proxy config is cached as JSON and read back on startup, so a
+    // document written by an older build must still load: a field added here
+    // that is not optional on the wire would strand the cache and, with it,
+    // the upgrade path that depends on it.
+    let old = r#"{
+      "listeners":[{"port":80,"proto":"Http"}],
+      "virtual_hosts":[{"hostname":"app.example.com","tls_acme":false,"redirect":null,
+        "routes":[{"prefix":"/","handler":{"ReverseProxy":{
+          "upstreams":["http://[fd5e::1]:3000"],
+          "proxy":{"compress":null,"balance":{"policy":"round_robin","try_duration_secs":5.0,"interval_secs":0.25}}
+        }}}]}],
+      "l4_routes":[],"warm_cert_hostnames":[],"cert_endpoint_url":null
+    }"#;
+    let parsed: Result<crate::system::types::ProxyConfig, _> = serde_json::from_str(old);
+    let cfg = parsed.expect("a cached config from before rate limiting must still load");
+    let crate::system::types::ProxyRouteHandler::ReverseProxy { proxy, .. } =
+        &cfg.virtual_hosts[0].routes[0].handler
+    else {
+        panic!("expected reverse proxy")
+    };
+    assert_eq!(proxy.rate_limit, None);
+}
+
+// r[verify service.http.route.rate-limiting]
+#[test]
+fn one_hostname_terminating_both_ways_gets_a_zone_per_termination() {
+    let limit = Some(RouteRateLimit {
+        max_events: 10,
+        window_secs: 1.0,
+    });
+    // Vhosts are keyed by hostname and termination, so this is one hostname
+    // appearing twice in the same document. Sharing a zone name here would
+    // put both terminations in one bucket, and whichever the module
+    // provisioned first would silently govern the other.
+    let config = ProxyConfig {
+        listeners: vec![
+            ProxyListener {
+                port: 80,
+                proto: ProxyListenerProto::Http,
+            },
+            ProxyListener {
+                port: 443,
+                proto: ProxyListenerProto::Https,
+            },
+        ],
+        virtual_hosts: vec![
+            VirtualHost {
+                hostname: "app.example.com".to_string(),
+                tls_acme: false,
+                redirect: None,
+                routes: vec![limited_route("/api", limit)],
+            },
+            VirtualHost {
+                hostname: "app.example.com".to_string(),
+                tls_acme: true,
+                redirect: None,
+                routes: vec![limited_route("/api", limit)],
+            },
+        ],
+        ..Default::default()
+    };
+    let json = build_caddy_config(&config);
+    let plain =
+        &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"][0]["rate_limits"];
+    let tls =
+        &json["apps"]["http"]["servers"]["seedling_https"]["routes"][0]["handle"][0]["rate_limits"];
+
+    assert!(!plain["http://app.example.com/api"].is_null());
+    assert!(!tls["https://app.example.com/api"].is_null());
+    assert!(tls["http://app.example.com/api"].is_null());
 }

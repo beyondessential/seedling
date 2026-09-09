@@ -255,7 +255,7 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
                     // without engaging compression or the proxy, so the
                     // excess costs a backend nothing.
                     if let Some(rate_limit) = &proxy.rate_limit {
-                        chain.push(rate_limit_handler(&vh.hostname, &route.prefix, rate_limit));
+                        chain.push(rate_limit_handler(vh, &route.prefix, rate_limit));
                     }
                     // r[impl service.http.route.compression]
                     // `encode` wraps the response writer, so it has to sit
@@ -308,22 +308,24 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
 }
 
 // r[impl service.http.route.rate-limiting]
-fn rate_limit_handler(hostname: &str, prefix: &str, limit: &RouteRateLimit) -> Value {
+fn rate_limit_handler(vh: &VirtualHost, prefix: &str, limit: &RouteRateLimit) -> Value {
     // The module keys its zones in a process-wide pool, so two routes sharing
-    // a zone name would share one bucket and the tighter of the two limits
-    // would govern both. Hostname + prefix is unique per route and injective:
-    // a validated hostname holds no `/`, so the prefix cannot be confused for
-    // part of it.
-    let zone = format!("{hostname}{prefix}");
+    // a zone name share one bucket and whichever limit was provisioned first
+    // governs both. Virtual hosts are keyed by hostname *and* termination, so
+    // one hostname can appear as both a TLS and a plaintext vhost in the same
+    // document; the scheme has to be part of the name or those two collide.
+    // The result is injective: a validated hostname holds no `/`, so the
+    // prefix cannot be confused for part of it.
+    let scheme = if vh.tls_acme { "https" } else { "http" };
+    let zone = format!("{scheme}://{}{prefix}", vh.hostname);
 
     // `client_ip` is the address the proxy attributes to the request, which
     // without any trusted-proxy configuration is the peer it is talking to.
     //
-    // Only `ipv6_prefix` is set: the module leaves an address alone when the
-    // prefix for its version is unset, so IPv4 clients are counted per exact
-    // address while IPv6 clients are counted per /64. A client holds its whole
-    // /64, so counting per address there would let it walk past the limit by
-    // moving within a range it already controls.
+    // Every key emitted here must be one the pinned module declares. Caddy
+    // decodes module config strictly, so an unknown field fails the whole
+    // document and takes every vhost on the host down with it, not merely the
+    // route that declared the limit. `RATE_LIMIT_ZONE_FIELDS` pins the set.
     json!({
         "handler": "rate_limit",
         "rate_limits": {
@@ -331,11 +333,19 @@ fn rate_limit_handler(hostname: &str, prefix: &str, limit: &RouteRateLimit) -> V
                 "key": "{http.request.client_ip}",
                 "window": secs_to_nanos(limit.window_secs),
                 "max_events": limit.max_events,
-                "ipv6_prefix": 64,
             }
         }
     })
 }
+
+/// The per-zone keys `caddy-ratelimit` declares at the tag pinned in
+/// `docker/caddy/Containerfile`. Emitting anything outside this set is a
+/// host-wide outage rather than a degraded route, so the emitter is checked
+/// against it. Widen it only after confirming the pinned tag declares the
+/// field: `ipv4_prefix` and `ipv6_prefix`, for instance, exist upstream but
+/// are in no released version.
+#[cfg(test)]
+pub(super) const RATE_LIMIT_ZONE_FIELDS: &[&str] = &["match", "key", "window", "max_events"];
 
 // r[impl service.http.route.compression]
 fn encode_handler(compress: &RouteCompress) -> Value {

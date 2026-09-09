@@ -389,3 +389,44 @@ fn rate_limit_rejects_bad_values() {
     ]);
     assert!(parse_rate_limit(unknown_field).is_err());
 }
+
+// l[verify service.http.rate-limit.fields]
+#[test]
+fn rate_limit_rejects_out_of_range_values() {
+    let too_many = map(vec![
+        ("max_events", Dynamic::from(MAX_MAX_EVENTS as i64 + 1)),
+        ("window", Dynamic::from(1_i64)),
+    ]);
+    assert!(parse_rate_limit(too_many).is_err());
+
+    // A window this small rounds to zero nanoseconds when emitted, which the
+    // proxy rejects at provision — taking the whole document with it.
+    let vanishing = map(vec![
+        ("max_events", Dynamic::from(10_i64)),
+        ("window", Dynamic::from(0.000_000_000_1_f64)),
+    ]);
+    assert!(parse_rate_limit(vanishing).is_err());
+
+    // And one this large saturates the nanosecond conversion.
+    let geological = map(vec![
+        ("max_events", Dynamic::from(10_i64)),
+        ("window", Dynamic::from(1e12_f64)),
+    ]);
+    assert!(parse_rate_limit(geological).is_err());
+}
+
+// l[verify service.http.rate-limit.fields]
+#[test]
+fn rate_limit_accepts_the_bounds_themselves() {
+    let at_bounds = map(vec![
+        ("max_events", Dynamic::from(MAX_MAX_EVENTS as i64)),
+        ("window", Dynamic::from(MAX_WINDOW_SECS)),
+    ]);
+    assert!(parse_rate_limit(at_bounds).is_ok());
+
+    let at_floor = map(vec![
+        ("max_events", Dynamic::from(1_i64)),
+        ("window", Dynamic::from(MIN_WINDOW_SECS)),
+    ]);
+    assert!(parse_rate_limit(at_floor).is_ok());
+}

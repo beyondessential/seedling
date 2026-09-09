@@ -5,7 +5,8 @@
 - **BSL surface, opt-in**, mirroring `compress`/`balance`. `rate_limit(config)` and `rate_limit(false)` on `HttpService` and `HttpServiceRoute`. The 1000/s and 10/s values live in the demo Tamanu def, not the emitter.
 - **Config shape**: `#{ max_events: <int>, window: <seconds> }`. Window as a number of seconds (mirrors `balance`'s seconds convention); the emitter formats it to the module's duration string. Both fields required — no sensible default for either.
 - **Resolution as a whole unit** (not field-by-field): route's declaration, else service's, else no limit. `rate_limit(false)` at a route suppresses an inherited service limit.
-- **Per-IP key** on the client IP the proxy attributes to the request (`{http.request.client_ip}`) — equals the connection peer today with no trust config, and automatically follows the recovered client once the front-proxy card lands. **IPv6 grouped by /64**, IPv4 per exact address.
+- **Per-IP key** on the client IP the proxy attributes to the request (`{http.request.client_ip}`) — equals the connection peer today with no trust config, and automatically follows the recovered client once the front-proxy card lands.
+- **IPv6 /64 grouping is NOT implemented**, though it was the decision at interview. `ipv4_prefix`/`ipv6_prefix` exist only on caddy-ratelimit master; the pinned `v0.1.0` is the sole released tag and declares neither. Caddy decodes module config strictly, so emitting them fails the whole document and drops ingress for every vhost on the host. Addresses are counted individually; restoring /64 needs an unreleased module in the fleet image. See the open question below.
 - **Over-limit**: 429 + Retry-After (emitted automatically by caddy-ratelimit).
 - **Scope**: HTTP reverse-proxy routes only. Redirects, non-HTTP forwarding, and the L4 path carry no limit.
 - Module already present: `caddy-ratelimit@v0.1.0` in `seedling-caddy:2.11.4-1` (D1, complete). Single-instance → local sliding window, no distributed storage.
@@ -25,6 +26,10 @@
 - [x] Demo def: add `rate_limit` to the tamanu def — `/api` at 1000/s, and a `/api/login` route at 10/s to demonstrate the tighter-prefix case (illustrative; demo defs are not canonical)
 - [x] Tests: parse/resolution unit tests (proxy/tests.rs), emitter snapshot showing the handler + /64 masking + terminal ordering, validation-throws cases
 - [x] tracey: annotate impls/tests against the new spec items
+
+## Open question
+
+- **Restore IPv6 /64 grouping?** It needs `caddy-ratelimit` pinned to a master commit rather than a released tag, and the fleet image rebuilt and republished — which the Containerfile's own versioning discipline argues against ("Every `--with` is pinned to an exact tag"). Without it an attacker holding a /64 has 2^64 budgets against the login limit. Options: pin a commit, wait for a release, or accept per-address counting and revisit. Not decided.
 
 ## Deferred (own cards)
 

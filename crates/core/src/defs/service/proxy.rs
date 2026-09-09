@@ -12,6 +12,19 @@ use rhai::{Dynamic, EvalAltResult, Map};
 /// Caddy's own defaults, read from the source of the pinned proxy image so the
 /// emitter can leave a field out whenever it still holds its default.
 pub const DEFAULT_MINIMUM_LENGTH: u64 = 512;
+
+/// Bounds on a declared rate limit.
+///
+/// These are sanity ceilings, not tuning. A limit is charged to the proxy
+/// process every app on the host shares: the module preallocates a ring of
+/// `max_events` timestamps per distinct client and holds it for the length of
+/// the window, so an absurd declaration in one app is another app's memory.
+/// The floor exists because the emitted window is a whole number of
+/// nanoseconds — a smaller one would round to zero, which the module rejects
+/// at provision, failing the entire proxy document rather than the one route.
+pub const MIN_WINDOW_SECS: f64 = 0.001;
+pub const MAX_WINDOW_SECS: f64 = 86_400.0;
+pub const MAX_MAX_EVENTS: u64 = 1_000_000;
 pub const DEFAULT_TRY_DURATION_SECS: f64 = 5.0;
 pub const DEFAULT_INTERVAL_SECS: f64 = 0.25;
 
@@ -191,13 +204,6 @@ pub struct ResolvedBalance {
     pub interval_secs: f64,
 }
 
-/// The limit actually in force on one route.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ResolvedRateLimit {
-    pub max_events: u64,
-    pub window_secs: f64,
-}
-
 /// The settings actually in force on one route. `compress` is `None` when
 /// compression is off for that route, `rate_limit` when the route is not
 /// rate limited.
@@ -205,7 +211,9 @@ pub struct ResolvedRateLimit {
 pub struct ResolvedRouteProxy {
     pub compress: Option<ResolvedCompress>,
     pub balance: ResolvedBalance,
-    pub rate_limit: Option<ResolvedRateLimit>,
+    /// Resolution is whole-unit, so the limit in force is exactly the one a
+    /// level declared; there is no separate resolved form to convert to.
+    pub rate_limit: Option<RateLimitSettings>,
 }
 
 impl Default for ResolvedRouteProxy {
@@ -215,9 +223,12 @@ impl Default for ResolvedRouteProxy {
 }
 
 // l[impl service.http.proxy-settings.resolution]
-/// Resolve one route's settings. Every field is taken from the route if the
-/// route named it, otherwise from the service if the service named it,
-/// otherwise from the field's default.
+/// Resolve one route's settings.
+///
+/// Compression and balancing resolve field by field: each is taken from the
+/// route if the route named it, otherwise from the service if the service
+/// named it, otherwise from the field's default. Rate limiting resolves as a
+/// whole unit and has no default — see [`resolve_rate_limit`].
 ///
 /// Passing `None` for `route` resolves the service's own values, which is what
 /// the synthesised `/` route of a service with no HTTP route bindings takes.
@@ -240,12 +251,9 @@ pub fn resolve(service: &ProxySettings, route: Option<&ProxySettings>) -> Resolv
 fn resolve_rate_limit(
     service: Option<&RateLimitDecl>,
     route: Option<&RateLimitDecl>,
-) -> Option<ResolvedRateLimit> {
+) -> Option<RateLimitSettings> {
     match route.or(service) {
-        Some(RateLimitDecl::Enabled(s)) => Some(ResolvedRateLimit {
-            max_events: s.max_events,
-            window_secs: s.window_secs,
-        }),
+        Some(RateLimitDecl::Enabled(s)) => Some(*s),
         Some(RateLimitDecl::Disabled) | None => None,
     }
 }
@@ -447,7 +455,14 @@ pub(super) fn parse_rate_limit(mut map: Map) -> Result<RateLimitSettings, Box<Ev
                     format!("rate_limit `max_events` must be a positive integer, got {n}").into(),
                 );
             }
-            n as u64
+            let n = n as u64;
+            if n > MAX_MAX_EVENTS {
+                return Err(format!(
+                    "rate_limit `max_events` must be at most {MAX_MAX_EVENTS}, got {n}"
+                )
+                .into());
+            }
+            n
         }
     };
 
@@ -458,6 +473,13 @@ pub(super) fn parse_rate_limit(mut map: Map) -> Result<RateLimitSettings, Box<Ev
             if !n.is_finite() || n <= 0.0 {
                 return Err(format!(
                     "rate_limit `window` must be a positive, finite number of seconds, got {n}"
+                )
+                .into());
+            }
+            if !(MIN_WINDOW_SECS..=MAX_WINDOW_SECS).contains(&n) {
+                return Err(format!(
+                    "rate_limit `window` must be between {MIN_WINDOW_SECS} and \
+                     {MAX_WINDOW_SECS} seconds, got {n}"
                 )
                 .into());
             }

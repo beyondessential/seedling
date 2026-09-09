@@ -16,6 +16,10 @@ Scenarios verifying that an app can declare a per-client request limit on an HTT
 - [x] A `max_events` of zero or negative throws (verifies spec: service.http.rate-limit.fields)
 - [x] A `window` of zero, negative, or non-finite throws (verifies spec: service.http.rate-limit.fields)
 - [x] An unrecognised field throws (verifies spec: service.http.rate-limit.fields)
+- [x] A `max_events` above the ceiling throws (verifies spec: service.http.rate-limit.fields)
+- [x] A `window` small enough to round to zero nanoseconds throws, rather than emitting a document the proxy rejects (verifies spec: service.http.rate-limit.fields)
+- [x] A `window` large enough to saturate the nanosecond conversion throws (verifies spec: service.http.rate-limit.fields)
+- [x] Values exactly at each bound are accepted (verifies spec: service.http.rate-limit.fields)
 - [x] `rate_limit(true)` throws, since a limit has no default to enable (verifies spec: service.http.rate-limit)
 
 ## Emitted proxy configuration
@@ -23,9 +27,11 @@ Scenarios verifying that an app can declare a per-client request limit on an HTT
 - [x] A limited route carries the rate-limit handler ahead of the proxy, so excess costs a backend nothing (verifies spec: service.http.route.rate-limiting)
 - [x] An unlimited route carries no rate-limit handler at all (verifies spec: service.http.route.rate-limiting)
 - [x] A redirect route is never rate limited (verifies spec: service.http.route.rate-limiting)
-- [x] IPv6 clients are counted per /64 while IPv4 clients are counted per exact address (verifies spec: service.http.route.rate-limiting)
+- [x] The emitted zone uses only fields the pinned rate-limit module declares, since an unknown one fails the whole document (verifies spec: service.http.route.rate-limiting, infra.proxy.image.modules)
 - [x] A longer prefix is emitted first and terminal, so its tighter limit governs its own traffic alone (verifies spec: service.http.route.rate-limiting, service.http.route.routing)
 - [x] Routes at the same prefix on different hostnames get distinct zones (verifies spec: service.http.route.rate-limiting)
+- [x] One hostname terminating both TLS and plaintext gets a zone per termination, rather than sharing one bucket (verifies spec: service.http.route.rate-limiting)
+- [x] A cached proxy config written before rate limiting still loads on startup (verifies spec: infra.proxy.upgrade.cache)
 - [x] The emitted rate-limit module is declared in the image's required-modules contract (verifies spec: infra.proxy.image.modules)
 
 ## Visibility
@@ -40,5 +46,6 @@ Scenarios needing a real Caddy rather than the emitted document. Not covered by 
 - [ ] A client exceeding the limit receives 429 with a Retry-After header
 - [ ] Requests under the limit are proxied unaffected
 - [ ] Login requests are counted against the login limit alone, and do not consume the wider API budget
-- [ ] Two clients in different /64s are limited independently, and two addresses within one /64 share a budget
+- [ ] Two clients on different addresses are limited independently
 - [ ] Limiter state survives a proxy config reload, so a reconcile does not reset a client's budget
+- [ ] The emitted document is accepted by the real pinned proxy image, which no assertion on our own JSON can establish

@@ -13,8 +13,8 @@ use super::{
 };
 pub use proxy::{
     BalanceSettings, CompressDecl, CompressSettings, Encoding, LbPolicy, ProxySettings,
-    RateLimitDecl, RateLimitSettings, ResolvedBalance, ResolvedCompress, ResolvedRateLimit,
-    ResolvedRouteProxy, default_content_types, resolve,
+    RateLimitDecl, RateLimitSettings, ResolvedBalance, ResolvedCompress, ResolvedRouteProxy,
+    default_content_types, resolve,
 };
 
 mod proxy;
@@ -580,6 +580,21 @@ pub struct ExternalServiceDef {
     pub http: Option<HttpServiceDef>,
     // l[impl service.balance]
     pub balance: BalanceSettings,
+}
+
+impl ExternalServiceDef {
+    /// The service-level view resolution works against. Mirrors
+    /// [`ServiceDef::proxy_settings`]: an external-service slot carries the
+    /// same HTTP surface, so a setting added to one belongs to both, and
+    /// gathering them in one place per def is what stops the next one being
+    /// added to only half of them.
+    pub fn proxy_settings(&self) -> ProxySettings {
+        ProxySettings {
+            compress: self.http.as_ref().and_then(|h| h.compress.clone()),
+            balance: self.balance.clone(),
+            rate_limit: self.http.as_ref().and_then(|h| h.rate_limit),
+        }
+    }
 }
 
 // l[impl service.external]

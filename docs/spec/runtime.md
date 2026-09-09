@@ -254,8 +254,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Rate limiting applies to reverse-proxy routes alone.
 > Redirect responses and non-HTTP forwarding are emitted without it, as is any route whose resolved limit is absent.
 >
-> A client is identified by the IP address the proxy attributes to the request, with all addresses in a single IPv6 /64 counted as one client, since a client controls its whole /64.
+> A client is identified by the IP address the proxy attributes to the request.
 > Each client may make the route's `max_events` requests within its `window`, measured as a sliding window; a request beyond that is answered with 429 and a Retry-After indicating when the client may retry.
+> Addresses are counted individually, so a set of addresses one party holds is a corresponding number of budgets to that party rather than one.
 >
 > Because routes are emitted [longest-prefix-first](#r--service.http.route.routing) and are terminal, each request is limited by exactly one route: a request under a longer, more specific prefix is counted only against that prefix's limit, not also against a shorter prefix that would otherwise match.
 > A tighter limit on a longer prefix therefore governs its own traffic independently of a looser limit on a shorter prefix covering the rest, which is what lets a login prefix carry a stricter limit than the API prefix enclosing it.
