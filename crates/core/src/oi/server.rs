@@ -606,7 +606,7 @@ mod canopy_tests {
 
     use ed25519_dalek::SigningKey;
     use quinn::Endpoint;
-    use rand_core::OsRng;
+    use rand::rngs::ThreadRng;
     use seedling_protocol::{
         actor::Actor,
         canopy::OfferResult,
@@ -620,7 +620,7 @@ mod canopy_tests {
 
     /// Run the real connection handler against a real endpoint.
     fn spawn_server(state: Arc<OiState>) -> SocketAddr {
-        let key = SigningKey::generate(&mut OsRng);
+        let key = SigningKey::generate(&mut ThreadRng::default());
         let spki = keys::spki_der(&key);
         let tls = build_tls_config(&key, spki, Arc::clone(&state.trusted_keys))
             .expect("build tls config");
@@ -846,7 +846,7 @@ mod auth_tests {
 
     use ed25519_dalek::SigningKey;
     use quinn::Endpoint;
-    use rand_core::OsRng;
+    use rand::rngs::ThreadRng;
 
     use seedling_protocol::{
         actor::Actor,
@@ -879,7 +879,7 @@ mod auth_tests {
     /// ([`build_tls_config`]) and accept connections, holding any that
     /// complete the handshake. Returns the bound address.
     fn spawn_oi_server(trusted: TrustedKeys) -> SocketAddr {
-        let key = SigningKey::generate(&mut OsRng);
+        let key = SigningKey::generate(&mut ThreadRng::default());
         let spki = keys::spki_der(&key);
         let tls = build_tls_config(&key, spki, trusted).expect("build tls config");
         let quic = quinn::crypto::rustls::QuicServerConfig::try_from(tls).expect("quic config");

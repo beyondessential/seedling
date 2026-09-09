@@ -24,7 +24,7 @@ use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use rand_core::{OsRng, RngCore};
+use rand::{Rng, rng};
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use snafu::{ResultExt, Snafu};
@@ -235,7 +235,7 @@ pub fn load_or_create_token(path: &Path) -> std::io::Result<String> {
         return Ok(contents.trim().to_owned());
     }
     let mut bytes = [0u8; 32];
-    OsRng.fill_bytes(&mut bytes);
+    rng().fill_bytes(&mut bytes);
     let token = hex_encode(&bytes);
     std::fs::write(path, &token)?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;

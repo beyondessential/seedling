@@ -7,7 +7,7 @@ use ed25519_dalek::{
     SigningKey,
     pkcs8::{DecodePrivateKey, EncodePrivateKey},
 };
-use rand_core::OsRng;
+use rand::rngs::ThreadRng;
 use rustls::{crypto::ring::sign, sign::CertifiedKey};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use sha2::{Digest, Sha256};
@@ -42,7 +42,7 @@ pub fn load_or_generate(path: &Path) -> io::Result<SigningKey> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let key = SigningKey::generate(&mut OsRng);
+        let key = SigningKey::generate(&mut ThreadRng::default());
         let doc = key.to_pkcs8_der().map_err(io::Error::other)?;
         {
             use std::io::Write;
@@ -112,7 +112,7 @@ impl ClientIdentity {
     /// Used for fingerprint probe connections where the client must present
     /// an RPK client certificate but must not reveal its real identity.
     pub fn ephemeral() -> Self {
-        let key = SigningKey::generate(&mut OsRng);
+        let key = SigningKey::generate(&mut ThreadRng::default());
         let spki = spki_der(&key);
         let fp = fingerprint(&spki);
         Self {
