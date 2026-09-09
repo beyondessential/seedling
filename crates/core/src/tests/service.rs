@@ -330,3 +330,119 @@ fn non_http_service_reports_no_routes_but_still_reports_balance() {
     assert_eq!(summary.balance.policy, "least_conn");
     assert!(summary.routes.is_none());
 }
+
+// l[verify service.http.rate-limit]
+// l[verify service.http.rate-limit.fields]
+#[test]
+fn http_service_and_routes_accept_rate_limit() {
+    // The chained form the app definitions use: a limit declared on the route
+    // returned by `route()`, which must return the route for `.http()` to bind.
+    let app = run_test_script_app(
+        r#"
+        let web = app.service("web").http(80)
+            .rate_limit(#{ max_events: 1000, window: 1 });
+        web.route("/api/login").rate_limit(#{ max_events: 10, window: 1 });
+        web.route("/health").rate_limit(false);
+        web.route("/v1");
+    "#,
+    );
+    let def = app.def.load();
+    let svc = def
+        .resources
+        .values()
+        .find_map(|r| match r {
+            defs::resource::Resource::Service(s) if &*s.name == "web" => Some(s.clone()),
+            _ => None,
+        })
+        .expect("web service");
+    let service_def = svc.def.lock().clone();
+    let http = service_def.http.clone().expect("http def");
+    let service_level = service_def.proxy_settings();
+
+    // The service's limit reaches a route that declared none.
+    let v1 = defs::service::resolve(&service_level, http.routes.get("/v1"));
+    let v1_limit = v1.rate_limit.expect("service limit carries to the route");
+    assert_eq!(v1_limit.max_events, 1000);
+
+    // The tighter route limit replaces it outright.
+    let login = defs::service::resolve(&service_level, http.routes.get("/api/login"));
+    assert_eq!(login.rate_limit.expect("route limit").max_events, 10);
+
+    // And a route can opt out of the service's limit entirely.
+    let health = defs::service::resolve(&service_level, http.routes.get("/health"));
+    assert_eq!(health.rate_limit, None);
+}
+
+// l[verify service.http.rate-limit]
+#[test]
+fn rate_limit_is_off_unless_declared() {
+    let app = run_test_script_app(r#"app.service("web").http(80).route("/api");"#);
+    let def = app.def.load();
+    let svc = def
+        .resources
+        .values()
+        .find_map(|r| match r {
+            defs::resource::Resource::Service(s) if &*s.name == "web" => Some(s.clone()),
+            _ => None,
+        })
+        .expect("web service");
+    let service_def = svc.def.lock().clone();
+    let http = service_def.http.clone().expect("http def");
+    let resolved = defs::service::resolve(&service_def.proxy_settings(), http.routes.get("/api"));
+    assert_eq!(resolved.rate_limit, None);
+}
+
+// l[verify service.http.rate-limit.fields]
+#[test]
+fn rate_limit_rejects_incomplete_and_invalid_declarations() {
+    let _ = run_test_script_err(r#"app.service("web").http(80).rate_limit(#{ max_events: 10 });"#);
+    let _ = run_test_script_err(r#"app.service("web").http(80).rate_limit(#{ window: 1 });"#);
+    let _ = run_test_script_err(
+        r#"app.service("web").http(80).rate_limit(#{ max_events: 0, window: 1 });"#,
+    );
+    let _ = run_test_script_err(
+        r#"app.service("web").http(80).rate_limit(#{ max_events: 10, window: 0 });"#,
+    );
+    // A limit has no default, so there is nothing for `true` to turn on.
+    let _ = run_test_script_err(r#"app.service("web").http(80).rate_limit(true);"#);
+}
+
+// i[verify app.describe.proxy-settings]
+// r[verify service.http.route.proxy-settings.visibility]
+#[test]
+fn service_summary_reports_resolved_rate_limits() {
+    let app = run_test_script_app(
+        r#"
+        let web = app.service("web").http(80)
+            .rate_limit(#{ max_events: 1000, window: 1 });
+        web.route("/api");
+        web.route("/api/login").rate_limit(#{ max_events: 10, window: 60 });
+        web.route("/health").rate_limit(false);
+    "#,
+    );
+    let def = app.def.load();
+    let summary = def
+        .resources
+        .values()
+        .find_map(|r| match r {
+            defs::resource::Resource::Service(s) if &*s.name == "web" => Some(s.summary()),
+            _ => None,
+        })
+        .expect("web service");
+
+    let routes = summary.routes.expect("http service reports routes");
+    let prefixes: Vec<&str> = routes.iter().map(|r| r.prefix.as_str()).collect();
+    assert_eq!(prefixes, vec!["/api", "/api/login", "/health"]);
+
+    // Inherited from the service, reported resolved rather than absent.
+    let api = routes[0].rate_limit.as_ref().expect("inherited limit");
+    assert_eq!(api.max_events, 1000);
+    assert_eq!(api.window, 1.0);
+
+    let login = routes[1].rate_limit.as_ref().expect("route limit");
+    assert_eq!(login.max_events, 10);
+    assert_eq!(login.window, 60.0);
+
+    // Not limited reports as null rather than a zero-valued object.
+    assert!(routes[2].rate_limit.is_none());
+}

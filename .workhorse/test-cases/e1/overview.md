@@ -1,0 +1,44 @@
+# Per-route rate limiting
+
+Scenarios verifying that an app can declare a per-client request limit on an HTTP service or one of its routes, and that the proxy enforces it.
+
+## Declaring a limit
+
+- [x] A service declaring `rate_limit(#{ max_events, window })` applies it to a route that declares none (verifies spec: service.http.proxy-settings.resolution)
+- [x] A route declaring its own limit replaces the service's outright, window included, rather than merging field by field (verifies spec: service.http.proxy-settings.resolution)
+- [x] A route declaring `rate_limit(false)` is not limited even where the service declared one (verifies spec: service.http.proxy-settings.resolution)
+- [x] A service and route that both leave it unmentioned produce no limit (verifies spec: service.http.rate-limit)
+- [x] Declaring a limit disturbs neither compression nor balancing (verifies spec: service.http.proxy-settings.resolution)
+
+## Rejecting bad declarations
+
+- [x] A map missing `max_events` or `window` throws (verifies spec: service.http.rate-limit.fields)
+- [x] A `max_events` of zero or negative throws (verifies spec: service.http.rate-limit.fields)
+- [x] A `window` of zero, negative, or non-finite throws (verifies spec: service.http.rate-limit.fields)
+- [x] An unrecognised field throws (verifies spec: service.http.rate-limit.fields)
+- [x] `rate_limit(true)` throws, since a limit has no default to enable (verifies spec: service.http.rate-limit)
+
+## Emitted proxy configuration
+
+- [x] A limited route carries the rate-limit handler ahead of the proxy, so excess costs a backend nothing (verifies spec: service.http.route.rate-limiting)
+- [x] An unlimited route carries no rate-limit handler at all (verifies spec: service.http.route.rate-limiting)
+- [x] A redirect route is never rate limited (verifies spec: service.http.route.rate-limiting)
+- [x] IPv6 clients are counted per /64 while IPv4 clients are counted per exact address (verifies spec: service.http.route.rate-limiting)
+- [x] A longer prefix is emitted first and terminal, so its tighter limit governs its own traffic alone (verifies spec: service.http.route.rate-limiting, service.http.route.routing)
+- [x] Routes at the same prefix on different hostnames get distinct zones (verifies spec: service.http.route.rate-limiting)
+- [x] The emitted rate-limit module is declared in the image's required-modules contract (verifies spec: infra.proxy.image.modules)
+
+## Visibility
+
+- [x] Describing an app reports each route's resolved limit, inherited limits included (verifies spec: app.describe.proxy-settings)
+- [x] A route that is not limited reports null rather than a zero-valued object (verifies spec: app.describe.proxy-settings)
+
+## Against a running proxy
+
+Scenarios needing a real Caddy rather than the emitted document. Not covered by the automated suite.
+
+- [ ] A client exceeding the limit receives 429 with a Retry-After header
+- [ ] Requests under the limit are proxied unaffected
+- [ ] Login requests are counted against the login limit alone, and do not consume the wider API budget
+- [ ] Two clients in different /64s are limited independently, and two addresses within one /64 share a budget
+- [ ] Limiter state survives a proxy config reload, so a reconcile does not reset a client's budget

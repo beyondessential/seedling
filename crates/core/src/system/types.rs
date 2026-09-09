@@ -478,6 +478,10 @@ pub struct RouteProxy {
     /// `None` when compression is off for this route.
     pub compress: Option<RouteCompress>,
     pub balance: RouteBalance,
+    /// `None` when this route is not rate limited, which is the default: a
+    /// limit exists only where an app declared one.
+    // r[impl service.http.route.rate-limiting]
+    pub rate_limit: Option<RouteRateLimit>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -487,6 +491,14 @@ pub struct RouteCompress {
     pub minimum_length: u64,
     /// `None` leaves the proxy's own default set of text-like content types.
     pub content_types: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct RouteRateLimit {
+    /// Requests one client may make within each window.
+    pub max_events: u64,
+    /// Length of the sliding window, in seconds.
+    pub window_secs: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -509,6 +521,10 @@ impl From<crate::defs::service::ResolvedRouteProxy> for RouteProxy {
                 try_duration_secs: r.balance.try_duration_secs,
                 interval_secs: r.balance.interval_secs,
             },
+            rate_limit: r.rate_limit.map(|rl| RouteRateLimit {
+                max_events: rl.max_events,
+                window_secs: rl.window_secs,
+            }),
         }
     }
 }

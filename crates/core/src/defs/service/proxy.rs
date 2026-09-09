@@ -143,6 +143,23 @@ pub enum CompressDecl {
     Enabled(CompressSettings),
 }
 
+/// A declared rate limit. Both fields are required, so neither is optional:
+/// a limit means nothing without a count and a window to count over.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RateLimitSettings {
+    pub max_events: u64,
+    pub window_secs: f64,
+}
+
+/// Rate limiting is tri-state at each level: unmentioned, switched off, or
+/// switched on carrying the limit. Unlike compression it has no default, so
+/// "unmentioned everywhere" means no limiting rather than a default limit.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RateLimitDecl {
+    Disabled,
+    Enabled(RateLimitSettings),
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct BalanceSettings {
     pub policy: Option<LbPolicy>,
@@ -155,6 +172,7 @@ pub struct BalanceSettings {
 pub struct ProxySettings {
     pub compress: Option<CompressDecl>,
     pub balance: BalanceSettings,
+    pub rate_limit: Option<RateLimitDecl>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,12 +191,21 @@ pub struct ResolvedBalance {
     pub interval_secs: f64,
 }
 
+/// The limit actually in force on one route.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ResolvedRateLimit {
+    pub max_events: u64,
+    pub window_secs: f64,
+}
+
 /// The settings actually in force on one route. `compress` is `None` when
-/// compression is off for that route.
+/// compression is off for that route, `rate_limit` when the route is not
+/// rate limited.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedRouteProxy {
     pub compress: Option<ResolvedCompress>,
     pub balance: ResolvedBalance,
+    pub rate_limit: Option<ResolvedRateLimit>,
 }
 
 impl Default for ResolvedRouteProxy {
@@ -197,10 +224,29 @@ impl Default for ResolvedRouteProxy {
 pub fn resolve(service: &ProxySettings, route: Option<&ProxySettings>) -> ResolvedRouteProxy {
     let route_balance = route.map(|r| &r.balance);
     let route_compress = route.and_then(|r| r.compress.as_ref());
+    let route_rate_limit = route.and_then(|r| r.rate_limit.as_ref());
 
     ResolvedRouteProxy {
         compress: resolve_compress(service.compress.as_ref(), route_compress),
         balance: resolve_balance(&service.balance, route_balance),
+        rate_limit: resolve_rate_limit(service.rate_limit.as_ref(), route_rate_limit),
+    }
+}
+
+/// Rate limiting resolves as a whole rather than field by field: a route
+/// declaring a limit replaces the service's outright, rather than merging with
+/// it, because a count and a window only mean anything together. A route that
+/// switched limiting off is not limited even where the service declared one.
+fn resolve_rate_limit(
+    service: Option<&RateLimitDecl>,
+    route: Option<&RateLimitDecl>,
+) -> Option<ResolvedRateLimit> {
+    match route.or(service) {
+        Some(RateLimitDecl::Enabled(s)) => Some(ResolvedRateLimit {
+            max_events: s.max_events,
+            window_secs: s.window_secs,
+        }),
+        Some(RateLimitDecl::Disabled) | None => None,
     }
 }
 
@@ -387,11 +433,51 @@ pub(super) fn parse_balance(mut map: Map) -> Result<BalanceSettings, Box<EvalAlt
     })
 }
 
+// l[impl service.http.rate-limit.fields]
+pub(super) fn parse_rate_limit(mut map: Map) -> Result<RateLimitSettings, Box<EvalAltResult>> {
+    let max_events = match map.remove("max_events") {
+        None => return Err("rate_limit requires `max_events`".into()),
+        Some(value) => {
+            let n = value.as_int().map_err(|t| -> Box<EvalAltResult> {
+                format!("rate_limit `max_events` must be an integer number of requests, got {t}")
+                    .into()
+            })?;
+            if n <= 0 {
+                return Err(
+                    format!("rate_limit `max_events` must be a positive integer, got {n}").into(),
+                );
+            }
+            n as u64
+        }
+    };
+
+    let window_secs = match map.remove("window") {
+        None => return Err("rate_limit requires `window`".into()),
+        Some(value) => {
+            let n = as_number(value, "rate_limit", "window")?;
+            if !n.is_finite() || n <= 0.0 {
+                return Err(format!(
+                    "rate_limit `window` must be a positive, finite number of seconds, got {n}"
+                )
+                .into());
+            }
+            n
+        }
+    };
+
+    reject_unknown(&map, "rate_limit")?;
+
+    Ok(RateLimitSettings {
+        max_events,
+        window_secs,
+    })
+}
+
 fn take_seconds(map: &mut Map, key: &str) -> Result<Option<f64>, Box<EvalAltResult>> {
     let Some(value) = map.remove(key) else {
         return Ok(None);
     };
-    let n = as_number(value, key)?;
+    let n = as_number(value, "balance", key)?;
     if n < 0.0 {
         return Err(format!("balance `{key}` must not be negative, got {n}").into());
     }
@@ -403,7 +489,7 @@ fn take_seconds(map: &mut Map, key: &str) -> Result<Option<f64>, Box<EvalAltResu
 
 /// Accepts both `10` and `10.0`: a whole number of seconds is the common case
 /// and rhai types that as an integer.
-fn as_number(value: Dynamic, key: &str) -> Result<f64, Box<EvalAltResult>> {
+fn as_number(value: Dynamic, what: &str, key: &str) -> Result<f64, Box<EvalAltResult>> {
     if let Some(f) = value.clone().try_cast::<f64>() {
         return Ok(f);
     }
@@ -411,7 +497,7 @@ fn as_number(value: Dynamic, key: &str) -> Result<f64, Box<EvalAltResult>> {
         return Ok(i as f64);
     }
     Err(format!(
-        "balance `{key}` must be a number of seconds, got {}",
+        "{what} `{key}` must be a number of seconds, got {}",
         value.type_name()
     )
     .into())

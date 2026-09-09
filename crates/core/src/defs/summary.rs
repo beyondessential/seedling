@@ -63,6 +63,14 @@ pub struct RouteSummary {
     /// `null` when compression is off for this route.
     pub compress: Option<CompressSummary>,
     pub balance: BalanceSummary,
+    /// `null` when this route is not rate limited.
+    pub rate_limit: Option<RateLimitSummary>,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+pub struct RateLimitSummary {
+    pub max_events: u64,
+    pub window: f64,
 }
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -274,6 +282,10 @@ fn route_summaries(service_level: &ProxySettings, http: &HttpServiceDef) -> Vec<
                     minimum_length: c.minimum_length,
                 }),
                 balance: balance_summary(&resolved.balance),
+                rate_limit: resolved.rate_limit.map(|rl| RateLimitSummary {
+                    max_events: rl.max_events,
+                    window: rl.window_secs,
+                }),
             }
         })
         .collect()

@@ -2,7 +2,7 @@ use super::config::build_caddy_config;
 use crate::system::translate::proxy::build_proxy_config;
 use crate::system::types::{
     HttpRedirect, ProxyConfig, ProxyListener, ProxyListenerProto, ProxyRoute, ProxyRouteHandler,
-    VirtualHost,
+    RouteRateLimit, VirtualHost,
 };
 
 fn default_proxy() -> crate::system::types::RouteProxy {
@@ -814,6 +814,7 @@ fn compression_can_be_switched_off_for_a_route() {
             try_duration_secs: 10.0,
             interval_secs: 0.25,
         },
+        rate_limit: None,
     };
     let config = ProxyConfig {
         listeners: vec![ProxyListener {
@@ -846,4 +847,194 @@ fn compression_can_be_switched_off_for_a_route() {
         handle[0]["load_balancing"]["try_duration"],
         10_000_000_000i64
     );
+}
+
+/// A reverse-proxy route at `prefix` carrying `rate_limit`.
+fn limited_route(prefix: &str, rate_limit: Option<RouteRateLimit>) -> ProxyRoute {
+    use crate::system::types::{RouteBalance, RouteProxy};
+
+    ProxyRoute {
+        prefix: prefix.to_string(),
+        handler: ProxyRouteHandler::ReverseProxy {
+            upstreams: vec!["http://[fd5e::1]:3000".to_string()],
+            proxy: RouteProxy {
+                compress: None,
+                balance: RouteBalance {
+                    policy: "round_robin".to_string(),
+                    try_duration_secs: 5.0,
+                    interval_secs: 0.25,
+                },
+                rate_limit,
+            },
+        },
+    }
+}
+
+fn vhost_with(hostname: &str, routes: Vec<ProxyRoute>) -> ProxyConfig {
+    ProxyConfig {
+        listeners: vec![ProxyListener {
+            port: 80,
+            proto: ProxyListenerProto::Http,
+        }],
+        virtual_hosts: vec![VirtualHost {
+            hostname: hostname.to_string(),
+            tls_acme: false,
+            redirect: None,
+            routes,
+        }],
+        ..Default::default()
+    }
+}
+
+// r[verify service.http.route.rate-limiting]
+#[test]
+fn a_limited_route_carries_the_rate_limit_handler() {
+    let config = vhost_with(
+        "app.example.com",
+        vec![limited_route(
+            "/api",
+            Some(RouteRateLimit {
+                max_events: 1000,
+                window_secs: 1.0,
+            }),
+        )],
+    );
+    let json = build_caddy_config(&config);
+    let handle = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"];
+
+    // First in the chain, so the excess never reaches the proxy.
+    assert_eq!(handle[0]["handler"], "rate_limit");
+    assert_eq!(handle[1]["handler"], "reverse_proxy");
+
+    let zone = &handle[0]["rate_limits"]["app.example.com/api"];
+    assert_eq!(zone["max_events"], 1000);
+    // Caddy durations as nanoseconds: 1s.
+    assert_eq!(zone["window"], 1_000_000_000i64);
+    assert_eq!(zone["key"], "{http.request.client_ip}");
+}
+
+// r[verify service.http.route.rate-limiting]
+#[test]
+fn an_unlimited_route_carries_no_rate_limit_handler() {
+    let config = vhost_with("app.example.com", vec![limited_route("/api", None)]);
+    let json = build_caddy_config(&config);
+    let handle = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"];
+
+    assert_eq!(handle[0]["handler"], "reverse_proxy");
+    assert!(handle[1].is_null());
+}
+
+// r[verify service.http.route.rate-limiting]
+#[test]
+fn ipv6_clients_are_counted_per_64() {
+    let config = vhost_with(
+        "app.example.com",
+        vec![limited_route(
+            "/api",
+            Some(RouteRateLimit {
+                max_events: 10,
+                window_secs: 1.0,
+            }),
+        )],
+    );
+    let json = build_caddy_config(&config);
+    let zone = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"][0]["rate_limits"]
+        ["app.example.com/api"];
+
+    assert_eq!(zone["ipv6_prefix"], 64);
+    // IPv4 is left per exact address: the module leaves an address alone when
+    // the prefix for its version is unset.
+    assert!(zone["ipv4_prefix"].is_null());
+}
+
+// r[verify service.http.route.rate-limiting]
+// r[verify service.http.route.routing]
+#[test]
+fn a_longer_prefix_carries_its_own_zone_ahead_of_the_shorter_one() {
+    let config = vhost_with(
+        "app.example.com",
+        vec![
+            limited_route(
+                "/api",
+                Some(RouteRateLimit {
+                    max_events: 1000,
+                    window_secs: 1.0,
+                }),
+            ),
+            limited_route(
+                "/api/login",
+                Some(RouteRateLimit {
+                    max_events: 10,
+                    window_secs: 1.0,
+                }),
+            ),
+        ],
+    );
+    let json = build_caddy_config(&config);
+    let routes = &json["apps"]["http"]["servers"]["seedling_http"]["routes"];
+
+    // Longest prefix first, and terminal, so a login request is counted
+    // against the tighter zone alone.
+    assert_eq!(routes[0]["match"][0]["path"][0], "/api/login*");
+    assert_eq!(routes[0]["terminal"], true);
+    assert_eq!(routes[1]["match"][0]["path"][0], "/api*");
+
+    // Distinct zone names: the module pools zones by name process-wide, so a
+    // shared name would put both prefixes in one bucket.
+    let tight = &routes[0]["handle"][0]["rate_limits"];
+    let loose = &routes[1]["handle"][0]["rate_limits"];
+    assert_eq!(tight["app.example.com/api/login"]["max_events"], 10);
+    assert_eq!(loose["app.example.com/api"]["max_events"], 1000);
+    assert!(tight["app.example.com/api"].is_null());
+}
+
+// r[verify service.http.route.rate-limiting]
+#[test]
+fn the_same_prefix_on_two_hostnames_gets_distinct_zones() {
+    let limit = Some(RouteRateLimit {
+        max_events: 10,
+        window_secs: 1.0,
+    });
+    let mut config = vhost_with("a.example.com", vec![limited_route("/api", limit)]);
+    config.virtual_hosts.push(VirtualHost {
+        hostname: "b.example.com".to_string(),
+        tls_acme: false,
+        redirect: None,
+        routes: vec![limited_route("/api", limit)],
+    });
+    let json = build_caddy_config(&config);
+    let routes = &json["apps"]["http"]["servers"]["seedling_http"]["routes"];
+
+    assert!(!routes[0]["handle"][0]["rate_limits"]["a.example.com/api"].is_null());
+    assert!(!routes[1]["handle"][0]["rate_limits"]["b.example.com/api"].is_null());
+}
+
+// r[verify service.http.route.rate-limiting]
+#[test]
+fn redirect_routes_are_never_rate_limited() {
+    let config = ProxyConfig {
+        listeners: vec![ProxyListener {
+            port: 80,
+            proto: ProxyListenerProto::Http,
+        }],
+        virtual_hosts: vec![VirtualHost {
+            hostname: "old.example.com".to_string(),
+            tls_acme: false,
+            redirect: None,
+            routes: vec![ProxyRoute {
+                prefix: "/".to_string(),
+                handler: ProxyRouteHandler::Redirect {
+                    url: "https://new.example.com".to_string(),
+                    code: 308,
+                    preserve_path: true,
+                },
+            }],
+        }],
+        ..Default::default()
+    };
+    let json = build_caddy_config(&config);
+    let handle = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"];
+
+    assert_eq!(handle[0]["handler"], "static_response");
+    assert!(handle[1].is_null());
 }

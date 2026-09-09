@@ -2,7 +2,8 @@ use serde_json::{Value, json};
 
 use crate::runtime::tls::state::is_caddy_internal;
 use crate::system::types::{
-    L4Proto, ProxyConfig, ProxyListenerProto, RouteBalance, RouteCompress, VirtualHost,
+    L4Proto, ProxyConfig, ProxyListenerProto, RouteBalance, RouteCompress, RouteRateLimit,
+    VirtualHost,
 };
 
 pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
@@ -248,7 +249,14 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
                         })
                         .collect();
 
-                    let mut chain: Vec<Value> = Vec::with_capacity(2);
+                    let mut chain: Vec<Value> = Vec::with_capacity(3);
+                    // r[impl service.http.route.rate-limiting]
+                    // First in the chain: an over-limit request is answered
+                    // without engaging compression or the proxy, so the
+                    // excess costs a backend nothing.
+                    if let Some(rate_limit) = &proxy.rate_limit {
+                        chain.push(rate_limit_handler(&vh.hostname, &route.prefix, rate_limit));
+                    }
                     // r[impl service.http.route.compression]
                     // `encode` wraps the response writer, so it has to sit
                     // ahead of the proxy in the chain to see what comes back.
@@ -297,6 +305,36 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
             })
         })
         .collect()
+}
+
+// r[impl service.http.route.rate-limiting]
+fn rate_limit_handler(hostname: &str, prefix: &str, limit: &RouteRateLimit) -> Value {
+    // The module keys its zones in a process-wide pool, so two routes sharing
+    // a zone name would share one bucket and the tighter of the two limits
+    // would govern both. Hostname + prefix is unique per route and injective:
+    // a validated hostname holds no `/`, so the prefix cannot be confused for
+    // part of it.
+    let zone = format!("{hostname}{prefix}");
+
+    // `client_ip` is the address the proxy attributes to the request, which
+    // without any trusted-proxy configuration is the peer it is talking to.
+    //
+    // Only `ipv6_prefix` is set: the module leaves an address alone when the
+    // prefix for its version is unset, so IPv4 clients are counted per exact
+    // address while IPv6 clients are counted per /64. A client holds its whole
+    // /64, so counting per address there would let it walk past the limit by
+    // moving within a range it already controls.
+    json!({
+        "handler": "rate_limit",
+        "rate_limits": {
+            zone: {
+                "key": "{http.request.client_ip}",
+                "window": secs_to_nanos(limit.window_secs),
+                "max_events": limit.max_events,
+                "ipv6_prefix": 64,
+            }
+        }
+    })
 }
 
 // r[impl service.http.route.compression]

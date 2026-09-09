@@ -238,7 +238,11 @@ configure_server.call(app.deployment("api"))
     .description("API servers")
     .scale(1..api_max_replicas.call())
     .arg(["startApi"])
-    .http(3000, web_svc.route("/api"))
+    .http(3000, web_svc.route("/api").rate_limit(#{ max_events: 1000, window: 1 }))
+    // A longer prefix than "/api", so it is matched first and login attempts
+    // are counted against this tighter limit alone. Illustrative values: a
+    // real deployment sets its own.
+    .http(3000, web_svc.route("/api/login").rate_limit(#{ max_events: 10, window: 1 }))
     .http(3000, web_svc.route("/v1"));
 
 configure_server.call(app.deployment("tasks"))

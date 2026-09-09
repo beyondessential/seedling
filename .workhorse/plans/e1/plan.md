@@ -16,15 +16,15 @@
 
 ## Implementation checklist
 
-- [ ] Spec: `service.http.rate-limit` + `.fields` (language.md), `service.http.route.rate-limiting` + visibility (runtime.md), `app.describe.proxy-settings` rate_limit field (interface.md) — **drafted**
-- [ ] BSL parse: `parse_rate_limit` in defs/service/proxy.rs — tri-state decl (`Disabled` / `Enabled{max_events, window_secs}`), reject_unknown, validation (max_events positive int, window positive finite). Wire `rate_limit(false)` and `rate_limit(map)` onto the HttpService and HttpServiceRoute builders alongside compress/balance
-- [ ] Resolve: whole-unit resolution (route decl else service decl else none) → `ResolvedRouteProxy.rate_limit: Option<ResolvedRateLimit>`
-- [ ] Wire type: add `rate_limit` to `RouteProxy` (system/types.rs) and the `From<ResolvedRouteProxy>` impl
-- [ ] Emitter: in `proxy_routes_for_vhost`, prepend a `rate_limit` handler to the reverse-proxy chain (ahead of `encode`) with one zone — key `{http.request.client_ip}`, `ipv6_prefix: 64`, `window` formatted from seconds, `max_events`. Unique zone name per (hostname, prefix)
-- [ ] Describe: include resolved `rate_limit` in `app.describe` proxy-settings output
-- [ ] Demo def: add `rate_limit` to the tamanu def — `/api` at 1000/s, and a `/api/login` route at 10/s to demonstrate the tighter-prefix case (illustrative; demo defs are not canonical)
-- [ ] Tests: parse/resolution unit tests (proxy/tests.rs), emitter snapshot showing the handler + /64 masking + terminal ordering, validation-throws cases
-- [ ] tracey: annotate impls/tests against the new spec items
+- [x] Spec: `service.http.rate-limit` + `.fields` (language.md), `service.http.route.rate-limiting` + visibility (runtime.md), `app.describe.proxy-settings` rate_limit field (interface.md)
+- [x] BSL parse: `parse_rate_limit` in defs/service/proxy.rs — tri-state decl (`Disabled` / `Enabled{max_events, window_secs}`), reject_unknown, validation (max_events positive int, window positive finite). Wire `rate_limit(false)` and `rate_limit(map)` onto the HttpService and HttpServiceRoute builders alongside compress/balance
+- [x] Resolve: whole-unit resolution (route decl else service decl else none) → `ResolvedRouteProxy.rate_limit: Option<ResolvedRateLimit>`
+- [x] Wire type: add `rate_limit` to `RouteProxy` (system/types.rs) and the `From<ResolvedRouteProxy>` impl
+- [x] Emitter: in `proxy_routes_for_vhost`, prepend a `rate_limit` handler to the reverse-proxy chain (ahead of `encode`) with one zone — key `{http.request.client_ip}`, `ipv6_prefix: 64`, `window` formatted from seconds, `max_events`. Unique zone name per (hostname, prefix)
+- [x] Describe: include resolved `rate_limit` in `app.describe` proxy-settings output
+- [x] Demo def: add `rate_limit` to the tamanu def — `/api` at 1000/s, and a `/api/login` route at 10/s to demonstrate the tighter-prefix case (illustrative; demo defs are not canonical)
+- [x] Tests: parse/resolution unit tests (proxy/tests.rs), emitter snapshot showing the handler + /64 masking + terminal ordering, validation-throws cases
+- [x] tracey: annotate impls/tests against the new spec items
 
 ## Deferred (own cards)
 

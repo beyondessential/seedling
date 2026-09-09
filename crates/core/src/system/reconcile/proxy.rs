@@ -230,6 +230,7 @@ fn proxy_settings_for(snapshot: &AppDef, service_name: &str) -> (ProxySettings, 
                     ProxySettings {
                         compress: def.http.as_ref().and_then(|h| h.compress.clone()),
                         balance: def.balance.clone(),
+                        rate_limit: def.http.as_ref().and_then(|h| h.rate_limit),
                     },
                     routes_of(def.http.as_ref()),
                 ))

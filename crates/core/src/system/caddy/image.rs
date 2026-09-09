@@ -160,7 +160,18 @@ mod tests {
                         prefix: "/".to_owned(),
                         handler: ProxyRouteHandler::ReverseProxy {
                             upstreams: vec!["http://[fd5e::1]:3000".to_owned()],
-                            proxy: crate::defs::service::ResolvedRouteProxy::default().into(),
+                            proxy: {
+                                let mut proxy: crate::system::types::RouteProxy =
+                                    crate::defs::service::ResolvedRouteProxy::default().into();
+                                // Rate limiting is off by default, so the
+                                // default settings alone would leave the
+                                // handler out of the fixture entirely.
+                                proxy.rate_limit = Some(crate::system::types::RouteRateLimit {
+                                    max_events: 1000,
+                                    window_secs: 1.0,
+                                });
+                                proxy
+                            },
                         },
                     }],
                 },

@@ -13,7 +13,8 @@ use super::{
 };
 pub use proxy::{
     BalanceSettings, CompressDecl, CompressSettings, Encoding, LbPolicy, ProxySettings,
-    ResolvedBalance, ResolvedCompress, ResolvedRouteProxy, default_content_types, resolve,
+    RateLimitDecl, RateLimitSettings, ResolvedBalance, ResolvedCompress, ResolvedRateLimit,
+    ResolvedRouteProxy, default_content_types, resolve,
 };
 
 mod proxy;
@@ -326,6 +327,11 @@ pub struct HttpServiceDef {
     /// Compression for every route of this service that does not set its own.
     /// Compression is HTTP-shaped, so unlike balancing it lives here.
     pub compress: Option<CompressDecl>,
+    /// The limit every route of this service that does not set its own is
+    /// held to. Rate limiting is applied by the HTTP proxy, so like
+    /// compression it lives here rather than on the Service.
+    // l[impl service.http.rate-limit]
+    pub rate_limit: Option<RateLimitDecl>,
     /// Every URL prefix this service is served through, with whatever
     /// settings the app declared on it. An entry with default settings is
     /// still a route: registering the prefix is how the service knows which
@@ -340,6 +346,7 @@ impl ServiceDef {
         ProxySettings {
             compress: self.http.as_ref().and_then(|h| h.compress.clone()),
             balance: self.balance.clone(),
+            rate_limit: self.http.as_ref().and_then(|h| h.rate_limit),
         }
     }
 }
@@ -408,6 +415,25 @@ impl CustomType for HttpService {
                 |this: &mut Self, config: Map| -> Result<Self, Box<EvalAltResult>> {
                     let settings = proxy::parse_balance(config)?;
                     this.service.with_balance(|b| *b = settings)?;
+                    Ok(this.clone())
+                },
+            )
+            // l[impl service.http.rate-limit]
+            .with_fn(
+                "rate_limit",
+                |this: &mut Self, config: Map| -> Result<Self, Box<EvalAltResult>> {
+                    let settings = proxy::parse_rate_limit(config)?;
+                    this.service
+                        .with_http_def(|d| d.rate_limit = Some(RateLimitDecl::Enabled(settings)))?;
+                    Ok(this.clone())
+                },
+            )
+            // l[impl service.http.rate-limit]
+            .with_fn(
+                "rate_limit",
+                |this: &mut Self, enabled: bool| -> Result<Self, Box<EvalAltResult>> {
+                    let decl = rate_limit_decl(enabled)?;
+                    this.service.with_http_def(|d| d.rate_limit = Some(decl))?;
                     Ok(this.clone())
                 },
             )
@@ -485,8 +511,43 @@ impl CustomType for HttpServiceRoute {
                     this.with_route_settings(|s| s.balance = settings)?;
                     Ok(this.clone())
                 },
+            )
+            // l[impl service.http.rate-limit]
+            .with_fn(
+                "rate_limit",
+                |this: &mut Self, config: Map| -> Result<Self, Box<EvalAltResult>> {
+                    let settings = proxy::parse_rate_limit(config)?;
+                    this.with_route_settings(|s| {
+                        s.rate_limit = Some(RateLimitDecl::Enabled(settings))
+                    })?;
+                    Ok(this.clone())
+                },
+            )
+            // l[impl service.http.rate-limit]
+            .with_fn(
+                "rate_limit",
+                |this: &mut Self, enabled: bool| -> Result<Self, Box<EvalAltResult>> {
+                    let decl = rate_limit_decl(enabled)?;
+                    this.with_route_settings(|s| s.rate_limit = Some(decl))?;
+                    Ok(this.clone())
+                },
             );
     }
+}
+
+/// `rate_limit(false)` switches limiting off. `rate_limit(true)` has nothing to
+/// mean — there is no default limit to enable — so it is refused rather than
+/// silently doing nothing.
+// l[impl service.http.rate-limit]
+fn rate_limit_decl(enabled: bool) -> Result<RateLimitDecl, Box<EvalAltResult>> {
+    if enabled {
+        return Err(
+            "rate_limit(true) is not valid: a rate limit has no default, \
+             so it must be declared as a map with `max_events` and `window`"
+                .into(),
+        );
+    }
+    Ok(RateLimitDecl::Disabled)
 }
 
 /// `compress(true)` means the defaults, which is an enabled declaration that
