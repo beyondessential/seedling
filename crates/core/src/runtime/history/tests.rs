@@ -709,3 +709,36 @@ fn delete_instance_clears_observations_and_faults_atomically() {
     assert_eq!(obs_count, 0, "observations deleted");
     assert_eq!(fault_count, 0, "faults deleted");
 }
+
+// r[verify history.persist.partial-update]
+// The replay path re-saves the operation row immediately after the daemon has
+// read the cancel flag. Under INSERT OR REPLACE — delete-then-insert — that
+// reverted `cancel_requested` to its default, silently dropping a
+// cancellation while the operation it cancelled was still in flight. The
+// column is owned by `set_cancel_requested`, not by this writer.
+#[test]
+fn re_saving_the_operation_preserves_a_cancel_request() {
+    use crate::runtime::secrets::Cipher;
+
+    let db = Db::open_in_memory().unwrap();
+    let cipher = Cipher::for_tests();
+    let op = CurrentOperation {
+        operation_id: OperationId("op-cancel".into()),
+        app: app_name("app"),
+        action_name: action_name("migrate"),
+        source_generation: 1,
+        target_generation: 1,
+    };
+
+    save_current_operation(&db, &cipher, &op, &serde_json::Map::new()).unwrap();
+    assert!(set_cancel_requested(&db, &OperationId("op-cancel".into())).unwrap());
+    assert!(load_cancel_requested(&db).unwrap());
+
+    // The same operation is re-saved, as the replay path does.
+    save_current_operation(&db, &cipher, &op, &serde_json::Map::new()).unwrap();
+
+    assert!(
+        load_cancel_requested(&db).unwrap(),
+        "a writer must not reset a column another writer owns"
+    );
+}

@@ -23,7 +23,6 @@ Resources in BSL are either **static** or **dynamic** depending on where they ar
 | `Deployment` | ✓ create | ✓ reference | ✗ error | ✓ create |
 | `Job` | ✓ create | ✓ reference | ✗ error | ✓ create |
 | `Service` | ✓ create | ✓ reference | ✗ error | ✓ create |
-| `HttpService` | ✓ create | ✓ reference | ✗ error | ✓ create |
 | `Volume` | ✓ create | ✓ reference | ✗ error | ✓ create |
 | `Ingress` | ✓ create | ✓ reference | ✗ error | ✗ error |
 | `ExternalVolume` | ✓ reference | ✓ reference | ✗ error | ✗ error |

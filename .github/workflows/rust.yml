@@ -41,6 +41,8 @@ jobs:
         run: etc/ci/check-accept-uni.sh
       - name: No silent coercion in the defs layer
         run: etc/ci/check-defs-coercion.sh
+      - name: No unscoped row overwrites
+        run: etc/ci/check-insert-or-replace.sh
 
   test:
     name: Test

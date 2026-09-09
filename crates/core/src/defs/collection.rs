@@ -140,9 +140,11 @@ pub fn col(val: Dynamic) -> Collection {
         }));
     }
 
+    // An HttpService is a view of a Service, so it takes the identity of the
+    // service it views rather than one of its own.
     if let Some(h) = val.clone().try_cast::<HttpService>() {
         let id = ResourceId {
-            kind: ResourceKind::HttpService,
+            kind: ResourceKind::Service,
             name: h.service.name().clone(),
         };
         return Collection::from_bag(Rc::new(ItemBag {

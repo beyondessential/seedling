@@ -178,7 +178,6 @@ impl<'a> Target<'a> {
     fn for_instance(inst: &'a ResourceInstance) -> Self {
         let resource_kind = match inst.kind {
             crate::defs::resource::ResourceKind::Service => "service",
-            crate::defs::resource::ResourceKind::HttpService => "http_service",
             crate::defs::resource::ResourceKind::Ingress => "ingress",
             crate::defs::resource::ResourceKind::Deployment => "deployment",
             crate::defs::resource::ResourceKind::Job => "job",

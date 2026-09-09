@@ -127,7 +127,6 @@ impl WorldStateOracle for TestWorldOracle {
                 .get(&(resource.kind, resource.name.clone()))
                 .map(|&code| code == 0),
             ResourceKind::Service
-            | ResourceKind::HttpService
             | ResourceKind::Ingress
             | ResourceKind::Volume
             | ResourceKind::ExternalVolume => {
@@ -259,7 +258,6 @@ impl WorldStateOracle for DbWorldOracle {
                 if terminal_seen { Some(true) } else { None }
             }),
             ResourceKind::Service
-            | ResourceKind::HttpService
             | ResourceKind::Ingress
             | ResourceKind::Volume
             | ResourceKind::ExternalVolume => {
@@ -364,7 +362,7 @@ fn derive_lifecycle_with_ms(
 ) -> (LifecycleState, Option<i64>) {
     match resource.kind {
         ResourceKind::Deployment | ResourceKind::Job => derive_container_lifecycle(observations),
-        ResourceKind::Service | ResourceKind::HttpService => derive_service_lifecycle(observations),
+        ResourceKind::Service => derive_service_lifecycle(observations),
         ResourceKind::Ingress => derive_ingress_lifecycle(observations),
         // r[impl lifecycle.volume]
         ResourceKind::Volume => derive_volume_lifecycle(observations),

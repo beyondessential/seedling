@@ -38,6 +38,18 @@ pub enum ContainerStatus {
     Running,
     Paused,
     Exited,
+    /// Draining: podman's `stopping` / `removing`. The container still exists
+    /// and may still hold its volumes and network — a long `stop_timeout_secs`
+    /// keeps it here for as long as the workload takes to shut down.
+    ///
+    /// Distinct from `Exited` and emphatically not from `Unknown`: this used
+    /// to fall through the catch-all into `Unknown`, which the observer mapped
+    /// to "container missing", so a draining postgres was recorded as removed
+    /// and barriers sequenced after the stop released while it still held its
+    /// volumes.
+    Stopping,
+    /// A state podman reports that this build does not model. The container
+    /// exists — the inspect returned it — but nothing more can be said.
     Unknown,
 }
 
@@ -457,6 +469,50 @@ pub struct HttpRedirect {
     pub code: u16,
 }
 
+/// Wire form of the resolved proxy settings for one route. Mirrors
+/// `defs::service::ResolvedRouteProxy`, which is the BSL-facing type; this
+/// copy is what crosses into the system layer and is persisted with the
+/// proxy config.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RouteProxy {
+    /// `None` when compression is off for this route.
+    pub compress: Option<RouteCompress>,
+    pub balance: RouteBalance,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RouteCompress {
+    /// Content encodings offered, in descending order of preference.
+    pub encodings: Vec<String>,
+    pub minimum_length: u64,
+    /// `None` leaves the proxy's own default set of text-like content types.
+    pub content_types: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RouteBalance {
+    pub policy: String,
+    pub try_duration_secs: f64,
+    pub interval_secs: f64,
+}
+
+impl From<crate::defs::service::ResolvedRouteProxy> for RouteProxy {
+    fn from(r: crate::defs::service::ResolvedRouteProxy) -> Self {
+        Self {
+            compress: r.compress.map(|c| RouteCompress {
+                encodings: c.encodings.iter().map(|e| e.as_str().to_string()).collect(),
+                minimum_length: c.minimum_length,
+                content_types: c.content_types,
+            }),
+            balance: RouteBalance {
+                policy: r.balance.policy.as_str().to_string(),
+                try_duration_secs: r.balance.try_duration_secs,
+                interval_secs: r.balance.interval_secs,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyRoute {
     pub prefix: String,
@@ -470,6 +526,13 @@ pub enum ProxyRouteHandler {
         /// One upstream per service: `"http://[fd5e:ed...]:3000"`.
         /// ECMP at the kernel distributes connections across instances.
         upstreams: Vec<String>,
+        /// Compression and balancing in force on this route, already resolved
+        /// against the service's values. Only reverse-proxy routes carry
+        /// these: a redirect has nothing to compress and no pool to choose
+        /// from.
+        // r[impl service.http.route.compression]
+        // r[impl service.http.route.balancing]
+        proxy: RouteProxy,
     },
     /// Answer with a static HTTP redirect to a fixed URL. Used by
     /// site-ingress redirect attachments to migrate hostnames without
@@ -508,6 +571,15 @@ pub enum ObservationFact {
     },
     ContainerHealthy,
     ContainerUnhealthy,
+    /// The container exists but its state does not correspond to any
+    /// lifecycle transition — it is draining, or podman reported a state this
+    /// build does not model.
+    ///
+    /// In-tick only: it maps to no persisted observation, so the lifecycle
+    /// oracle keeps the last state it did derive rather than being told the
+    /// container went away.
+    // r[impl observe.failure-not-absence]
+    ContainerPresentIndeterminate,
     /// The spec hash label read from the running container.
     ContainerSpecHash(String),
 
@@ -604,6 +676,7 @@ impl ObservationFact {
             // The remaining unit facts are consumed only within a single tick
             // for actuation decisions and have no oracle mapping.
             ObservationFact::ContainerSpecHash(_)
+            | ObservationFact::ContainerPresentIndeterminate
             | ObservationFact::NetworkPresent
             | ObservationFact::NetworkMissing
             | ObservationFact::ProxyReachable
@@ -623,6 +696,31 @@ impl ObservationFact {
 #[cfg(test)]
 mod observation_fact_tests {
     use super::*;
+
+    // r[verify observe.failure-not-absence]
+    // Present-but-indeterminate is in-tick only: it must map to no persisted
+    // observation, so the lifecycle oracle keeps the state it last derived
+    // rather than being told the container went away. Recording it as
+    // `container_removed` is what let a barrier sequenced after a stop release
+    // while the container was still draining and still held its volumes.
+    #[test]
+    fn indeterminate_presence_persists_no_observation() {
+        assert!(
+            ObservationFact::ContainerPresentIndeterminate
+                .to_obs_kinds()
+                .is_empty()
+        );
+    }
+
+    // r[verify observe.failure-not-absence]
+    // By contrast, a container confirmed absent by a successful query is a
+    // real observation and must keep driving teardown.
+    #[test]
+    fn confirmed_absence_still_records_a_removal() {
+        let kinds = ObservationFact::ContainerMissing.to_obs_kinds();
+        assert_eq!(kinds.len(), 1);
+        assert_eq!(kinds[0].0, "container_removed");
+    }
 
     // r[verify lifecycle.container.unhealthy-transition]
     #[test]

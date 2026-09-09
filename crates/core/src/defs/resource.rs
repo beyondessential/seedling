@@ -7,7 +7,7 @@ use super::{
     deployment::Deployment,
     ingress::Ingress,
     job::Job,
-    service::{ExternalService, HttpService, Service},
+    service::{ExternalService, Service},
     volume::{ExternalVolume, Volume},
 };
 
@@ -24,7 +24,6 @@ pub struct ResourceId {
 pub enum ResourceKind {
     Parameter,
     Service,
-    HttpService,
     Ingress,
     Deployment,
     Job,
@@ -39,7 +38,6 @@ impl ResourceKind {
         let mut map = Map::new();
         map.insert("Parameter".into(), Dynamic::from(Self::Parameter));
         map.insert("Service".into(), Dynamic::from(Self::Service));
-        map.insert("HttpService".into(), Dynamic::from(Self::HttpService));
         map.insert("Ingress".into(), Dynamic::from(Self::Ingress));
         map.insert("Deployment".into(), Dynamic::from(Self::Deployment));
         map.insert("Job".into(), Dynamic::from(Self::Job));
@@ -64,7 +62,6 @@ impl ResourceKind {
 #[derive(Debug, Clone)]
 pub enum Resource {
     Service(Service),
-    HttpService(HttpService),
     Ingress(Ingress),
     Deployment(Deployment),
     Job(Job),
@@ -77,7 +74,6 @@ impl Resource {
     pub fn kind(&self) -> ResourceKind {
         match self {
             Self::Service(_) => ResourceKind::Service,
-            Self::HttpService(_) => ResourceKind::HttpService,
             Self::Ingress(_) => ResourceKind::Ingress,
             Self::Deployment(_) => ResourceKind::Deployment,
             Self::Job(_) => ResourceKind::Job,
@@ -90,7 +86,6 @@ impl Resource {
     pub fn name(&self) -> &ResourceName {
         match self {
             Self::Service(s) => &s.name,
-            Self::HttpService(h) => h.service.name(),
             Self::Ingress(i) => &i.name,
             Self::Deployment(d) => &d.name,
             Self::Job(j) => &j.name,
@@ -107,13 +102,6 @@ impl Resource {
     pub fn description(&self) -> Option<String> {
         match self {
             Self::Service(s) => s.def.lock().description.clone(),
-            // HttpService is a per-call view of a Service; defer to the
-            // wrapped Service so chaining `service.http().description(...)`
-            // never silently drops the description on the floor.
-            Self::HttpService(h) => match &h.service {
-                super::service::BoundService::App(s) => s.def.lock().description.clone(),
-                super::service::BoundService::External(e) => e.def.lock().description.clone(),
-            },
             Self::Ingress(i) => i.def.lock().description.clone(),
             Self::Deployment(d) => d.def.lock().description.clone(),
             Self::Job(j) => j.def.lock().description.clone(),
@@ -126,7 +114,6 @@ impl Resource {
     pub fn to_dynamic(&self) -> Dynamic {
         match self {
             Self::Service(s) => Dynamic::from(s.clone()),
-            Self::HttpService(h) => Dynamic::from(h.clone()),
             Self::Ingress(i) => Dynamic::from(i.clone()),
             Self::Deployment(d) => Dynamic::from(d.clone()),
             Self::Job(j) => Dynamic::from(j.clone()),
