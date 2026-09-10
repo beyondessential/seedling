@@ -467,14 +467,36 @@ async fn dispatch_csr(client: &OiClient, cmd: CsrCommand) {
     }
 }
 
+/// Whether stdin has already been read to EOF by [`read_pem_arg`].
+static STDIN_CONSUMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Read a PEM blob from a path, or from stdin when `s` is `-`.
+///
+/// Stdin can only be drained once. `--cert - --key -` used to read
+/// everything on the first call and hand the second an empty string, which
+/// went to the server as an empty `key_pem` with no client-side complaint —
+/// the same trap for `csr upload-cert --cert -` alongside anything else
+/// reading stdin. A second `-` is refused, and so is a `-` that yields
+/// nothing, since an empty PEM is never what was meant.
 fn read_pem_arg(s: &str) -> Result<String, String> {
     if s == "-" {
         use std::io::Read;
+        use std::sync::atomic::Ordering;
+
+        if STDIN_CONSUMED.swap(true, Ordering::SeqCst) {
+            return Err(
+                "stdin can only be read once; pass `-` for at most one argument \
+                 and give the others a path"
+                    .to_owned(),
+            );
+        }
         let mut buf = String::new();
         std::io::stdin()
             .read_to_string(&mut buf)
             .map_err(|e| format!("read stdin: {e}"))?;
+        if buf.trim().is_empty() {
+            return Err("stdin was empty".to_owned());
+        }
         Ok(buf)
     } else {
         std::fs::read_to_string(s).map_err(|e| format!("read {s}: {e}"))
@@ -496,6 +518,27 @@ fn read_config_arg(s: &str) -> Result<Value, String> {
 
 #[cfg(test)]
 mod tests {
+
+    // r[verify tls.csr.flow]
+    // `--cert - --key -` read everything on the first call and sent the
+    // second an empty string, which reached the server as an empty key_pem
+    // with nothing said about it.
+    #[test]
+    fn stdin_can_only_be_claimed_once() {
+        use std::sync::atomic::Ordering;
+
+        super::STDIN_CONSUMED.store(true, Ordering::SeqCst);
+        let err = super::read_pem_arg("-").expect_err("a second `-` must be refused");
+        assert!(err.contains("once"), "should say why: {err}");
+        super::STDIN_CONSUMED.store(false, Ordering::SeqCst);
+    }
+
+    // r[verify tls.csr.flow]
+    #[test]
+    fn a_missing_pem_path_is_reported_with_the_path() {
+        let err = super::read_pem_arg("/nonexistent/cert.pem").expect_err("no such file");
+        assert!(err.contains("/nonexistent/cert.pem"), "{err}");
+    }
     use clap::Parser;
 
     use super::*;
