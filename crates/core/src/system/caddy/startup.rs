@@ -21,7 +21,7 @@ pub(crate) const CADDY_GREEN: &str = "seedling-caddy-green";
 // version plus a build serial; keep it in sync with TAG in that workflow.
 // What the image must provide is declared in docker/caddy/required-modules.txt
 // and checked against the built image before it is published.
-pub(crate) const CADDY_IMAGE: &str = "ghcr.io/beyondessential/seedling-caddy:2.11.4-1";
+pub(crate) const CADDY_IMAGE: &str = "ghcr.io/beyondessential/seedling-caddy:2.11.4-2";
 pub(crate) const CADDY_DATA_VOLUME: &str = "seedling-caddy-data";
 pub(crate) const PROXY_NETWORK: &str = "seedling-proxy";
 

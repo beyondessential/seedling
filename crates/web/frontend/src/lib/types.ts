@@ -127,6 +127,8 @@ export interface RateLimitSummary {
 
 export interface RouteSummary {
   prefix: string;
+  /** Whether a pod binds this prefix, and so whether the proxy serves it. */
+  served: boolean;
   /** Null when compression is off for this route. */
   compress: CompressSummary | null;
   balance: BalanceSummary;

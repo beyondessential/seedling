@@ -17,6 +17,15 @@
 # float to a release demanding a newer Caddy than the builder provides and fail
 # the build. Every --with is pinned to an exact tag for that reason.
 #
+# caddy-ratelimit is pinned to a commit rather than a tag. Its only release,
+# v0.1.0, has no ipv4_prefix/ipv6_prefix, so a rate limit keyed on a client
+# address counts each address separately: a party holding an IPv6 /64 — an
+# ordinary allocation — gets a budget per address and the limit does not bind
+# them. The fields exist on master and nowhere else, and no second release has
+# been cut since. The commit is exact, so this is as reproducible as a tag; it
+# is only unreviewed by an upstream release. It requires Caddy 2.10 or newer,
+# which the builder above satisfies.
+#
 # The image tag is the Caddy version plus a build serial: bump the serial in
 # .github/workflows/caddy-image.yml whenever this file changes without the Caddy
 # version changing. A pull request that changes this file without moving the tag
@@ -28,7 +37,7 @@
 FROM docker.io/library/caddy:2.11.4-builder AS builder
 RUN xcaddy build \
       --with github.com/mholt/caddy-l4@v0.1.2 \
-      --with github.com/mholt/caddy-ratelimit@v0.1.0
+      --with github.com/mholt/caddy-ratelimit@5625512f24f6f59d6f64fb3aafe5eecff0b286db
 
 # The final stage deliberately does NOT derive from the caddy image: layering
 # our binary over that one leaves its ~48 MB Caddy in a lower layer, still

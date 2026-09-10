@@ -263,7 +263,7 @@ fn service_summary_reports_resolved_routes() {
         .resources
         .values()
         .find_map(|r| match r {
-            defs::resource::Resource::Service(s) if &*s.name == "web" => Some(s.summary()),
+            defs::resource::Resource::Service(s) if &*s.name == "web" => Some(s.summary(&def)),
             _ => None,
         })
         .expect("web service");
@@ -303,7 +303,7 @@ fn http_service_without_bindings_reports_a_single_root_route() {
         .resources
         .values()
         .find_map(|r| match r {
-            defs::resource::Resource::Service(s) if &*s.name == "web" => Some(s.summary()),
+            defs::resource::Resource::Service(s) if &*s.name == "web" => Some(s.summary(&def)),
             _ => None,
         })
         .expect("web service");
@@ -321,7 +321,7 @@ fn non_http_service_reports_no_routes_but_still_reports_balance() {
         .resources
         .values()
         .find_map(|r| match r {
-            defs::resource::Resource::Service(s) if &*s.name == "postgres" => Some(s.summary()),
+            defs::resource::Resource::Service(s) if &*s.name == "postgres" => Some(s.summary(&def)),
             _ => None,
         })
         .expect("postgres service");
@@ -428,7 +428,7 @@ fn service_summary_reports_resolved_rate_limits() {
         .resources
         .values()
         .find_map(|r| match r {
-            defs::resource::Resource::Service(s) if &*s.name == "web" => Some(s.summary()),
+            defs::resource::Resource::Service(s) if &*s.name == "web" => Some(s.summary(&def)),
             _ => None,
         })
         .expect("web service");
@@ -454,4 +454,44 @@ fn service_summary_reports_resolved_rate_limits() {
 
     // Not limited reports as null rather than a zero-valued object.
     assert!(routes[2].rate_limit.is_none());
+}
+
+// i[verify app.describe.proxy-settings]
+#[test]
+fn a_route_no_pod_binds_reports_that_it_is_not_served() {
+    let app = run_test_script_app(
+        r#"
+        let web = app.service("web").http(80);
+        app.deployment("api").http(3000, web.route("/api"));
+        // Declared with a limit, but bound by nothing: requests to /api/login
+        // are served by the /api route under its settings, not this one.
+        web.route("/api/login").rate_limit(#{ max_events: 10, window: 1 });
+    "#,
+    );
+    let def = app.def.load();
+    let summary = def
+        .resources
+        .values()
+        .find_map(|r| match r {
+            defs::resource::Resource::Service(s) if &*s.name == "web" => Some(s.summary(&def)),
+            _ => None,
+        })
+        .expect("web service");
+    let routes = summary.routes.expect("http service reports routes");
+
+    let api = routes.iter().find(|r| r.prefix == "/api").expect("/api");
+    assert!(api.served, "a bound prefix is served");
+
+    let login = routes
+        .iter()
+        .find(|r| r.prefix == "/api/login")
+        .expect("/api/login");
+    assert!(
+        !login.served,
+        "a limit on a prefix nothing binds must not read as a control in force"
+    );
+    assert!(
+        login.rate_limit.is_some(),
+        "the declaration is still reported"
+    );
 }

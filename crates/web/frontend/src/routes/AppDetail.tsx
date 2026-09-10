@@ -382,6 +382,14 @@ function ResourceDefDetail({ def }: { def: ResourceDef }) {
             >
               {r.prefix}
             </Typography>
+            {!r.served && (
+              <Chip
+                label="not served"
+                size="small"
+                variant="outlined"
+                title="No pod binds this prefix, so the settings below are declared but not applied"
+              />
+            )}
             <Chip
               label={
                 r.compress

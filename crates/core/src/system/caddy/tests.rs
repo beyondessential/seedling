@@ -1133,3 +1133,30 @@ fn a_zone_reaches_the_emitted_document_unchanged() {
         assert!(zones["demo/web/api"].is_null());
     }
 }
+
+// r[verify service.http.route.rate-limiting]
+#[test]
+fn ipv6_clients_are_counted_per_64_and_ipv4_per_address() {
+    let config = vhost_with(
+        "app.example.com",
+        vec![limited_route(
+            "/api",
+            Some(RouteRateLimit {
+                zone: RouteZone("demo/web/api".to_string()),
+                max_events: 10,
+                window_secs: 1.0,
+            }),
+        )],
+    );
+    let json = build_caddy_config(&config);
+    let zone = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"][0]["rate_limits"]
+        ["demo/web/api"];
+
+    // A party holds its whole /64, so counting addresses within it separately
+    // would give it a budget each and the limit would not bind it.
+    assert_eq!(zone["ipv6_prefix"], 64);
+    // Left unset, which the module reads as "count IPv4 addresses
+    // individually" rather than as a /0 that would put every IPv4 client in
+    // one bucket and let one of them exhaust everyone else's budget.
+    assert!(zone["ipv4_prefix"].is_null());
+}

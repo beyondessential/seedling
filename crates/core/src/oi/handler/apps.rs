@@ -648,7 +648,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         .map(|(id, resource)| ResourceInfo {
             kind: id.kind,
             name_str: id.name.as_str().to_owned(),
-            base_json: resource_static_json(id.kind, id.name.as_str(), resource),
+            base_json: resource_static_json(id.kind, id.name.as_str(), resource, &def),
             scale_bounds: scale_bounds_of(resource),
         })
         .collect();
@@ -1157,8 +1157,8 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams) -> HandlerResult
         if let Some(prop_resource) = prop_def.resources.get(id) {
             // Both present — compare by `ResourceSummary` and only emit a
             // `modified` entry when fields actually differ.
-            let cur_summary = cur_resource.summary();
-            let prop_summary = prop_resource.summary();
+            let cur_summary = cur_resource.summary(&cur_def);
+            let prop_summary = prop_resource.summary(&prop_def);
             let fields = crate::defs::summary::diff_fields(&cur_summary, &prop_summary);
             if !fields.is_empty() {
                 diff.push(json!({

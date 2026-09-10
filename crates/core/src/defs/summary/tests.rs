@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::*;
+use crate::defs::app::AppDef;
 
 fn deployment_summary_with_image(image: Option<&str>, scale: (u16, u16)) -> DeploymentSummary {
     DeploymentSummary {
@@ -141,7 +142,12 @@ fn end_to_end_real_app_diff() {
     let cur_resource = cur.def.load().resources.get(&id).cloned().unwrap();
     let prop_resource = prop.def.load().resources.get(&id).cloned().unwrap();
 
-    let fields = diff_fields(&cur_resource.summary(), &prop_resource.summary());
+    let cur_def = cur.def.load();
+    let prop_def = prop.def.load();
+    let fields = diff_fields(
+        &cur_resource.summary(&cur_def),
+        &prop_resource.summary(&prop_def),
+    );
     assert_eq!(
         fields,
         vec!["container".to_string()],
@@ -273,7 +279,7 @@ fn service_summary_flags_http_and_export() {
         frozen: false,
     };
 
-    let summary = service.summary();
+    let summary = service.summary(&AppDef::default());
     assert!(!summary.http);
     assert!(summary.exported);
     assert_eq!(summary.export_description.as_deref(), Some("database"));

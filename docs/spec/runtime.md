@@ -256,13 +256,15 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > A limit belongs to the route that declared it, so a client has one budget for that route however many virtual hosts front it: a service reachable through more than one hostname, or through both a plaintext and a TLS ingress, does not thereby grant a client a budget per route of entry.
 >
-> A client is identified by the IP address the proxy attributes to the request.
+> A client is identified by the IP address the proxy attributes to the request, with all addresses in a single IPv6 /64 counted as one client, since a party holds its whole /64 and would otherwise hold a budget for every address in it.
+> IPv4 addresses are counted individually.
 > Each client may make the route's `max_events` requests within its `window`, measured as a sliding window; a request beyond that is answered with 429 and a Retry-After indicating when the client may retry.
-> Addresses are counted individually, so a set of addresses one party holds is a corresponding number of budgets to that party rather than one.
 >
 > Because routes are emitted [longest-prefix-first](#r--service.http.route.routing) and are terminal, each request is limited by exactly one route: a request under a longer, more specific prefix is counted only against that prefix's limit, not also against a shorter prefix that would otherwise match.
 > A tighter limit on a longer prefix therefore governs its own traffic independently of a looser limit on a shorter prefix covering the rest, which is what lets a login prefix carry a stricter limit than the API prefix enclosing it.
-> This holds only where the proxy and the backend agree on which requests a prefix covers: a request the backend routes to an endpoint but the proxy matches to a shorter prefix is counted against the looser limit, so a stricter limit placed on a nested prefix is only as tight as that agreement.
+> A prefix is matched against a normalised form of the request path: duplicate separators collapsed, relative segments resolved, letter case folded, and percent-encoding decoded.
+> Requests differing only in those respects are therefore counted against the same route, and a stricter limit on a nested prefix cannot be evaded by varying them.
+> Normalisation is the proxy's own and may be broader than a backend's, so where the two disagree a request is counted against the more specific prefix while the backend treats it as belonging to a less specific one — the direction that over-applies the stricter limit rather than escaping it.
 
 > r[service.http.route.proxy-settings.visibility]
 > The compression, balancing, and rate-limit settings in force on a service and on each of its routes, after resolution, must be readable when inspecting the app that declares the service, as [app.describe.proxy-settings](interface.md#i--app.describe.proxy-settings) defines.

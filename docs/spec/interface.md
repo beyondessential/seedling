@@ -292,7 +292,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > A service whose backing pods declare no HTTP route bindings reports the single `/` route it is served through, so the array is never empty for an HTTP service.
 >
-> The routes reported are those the app declared, which is not necessarily the set the proxy serves: a prefix no pod binds is declared but not served, and requests under it are served by whichever declared prefix does match. A reader diagnosing a setting that appears not to apply should establish that a pod binds the prefix reporting it.
+> Each route reports `served`, whether a pod binds its prefix and the proxy is therefore told to serve it. A declared prefix that nothing binds reports its settings but does not carry them: requests under it are answered by whichever bound prefix matches, under that route's settings. Without this a rate limit on an unbound route would read as a control in force.
 
 > i[app.describe.param-secret]
 > When a param's effective `secret` flag is `true`, its `value` must be `null` in the response regardless of whether a value is stored. Clients must use `is_set` to distinguish an unset secret from a set-but-redacted secret.

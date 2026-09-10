@@ -191,7 +191,7 @@ fn description_is_serialised_in_resource_summary() {
         .find(|(id, _)| id.kind == ResourceKind::Job)
         .map(|(_, r)| r.clone())
         .unwrap();
-    let summary = serde_json::to_value(resource.summary()).unwrap();
+    let summary = serde_json::to_value(resource.summary(&def)).unwrap();
     assert_eq!(
         summary.get("description").and_then(Value::as_str),
         Some("nightly backup runner")

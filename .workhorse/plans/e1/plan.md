@@ -6,10 +6,10 @@
 - **Config shape**: `#{ max_events: <int>, window: <seconds> }`. Window as a number of seconds (mirrors `balance`'s seconds convention); the emitter formats it to the module's duration string. Both fields required — no sensible default for either.
 - **Resolution as a whole unit** (not field-by-field): route's declaration, else service's, else no limit. `rate_limit(false)` at a route suppresses an inherited service limit.
 - **Per-IP key** on the client IP the proxy attributes to the request (`{http.request.client_ip}`) — equals the connection peer today with no trust config, and automatically follows the recovered client once the front-proxy card lands.
-- **IPv6 /64 grouping is NOT implemented**, though it was the decision at interview. `ipv4_prefix`/`ipv6_prefix` exist only on caddy-ratelimit master; the pinned `v0.1.0` is the sole released tag and declares neither. Caddy decodes module config strictly, so emitting them fails the whole document and drops ingress for every vhost on the host. Addresses are counted individually; restoring /64 needs an unreleased module in the fleet image. See the open question below.
+- **IPv6 /64 grouping, IPv4 per address.** `ipv6_prefix: 64` is emitted; `ipv4_prefix` is left unset, which the module reads as "count IPv4 individually" via an explicit guard rather than as a /0 that would bucket every IPv4 client together. Both fields exist only on caddy-ratelimit master, so the Containerfile pins commit `5625512f` rather than `v0.1.0` — the only release ever cut, which has neither. The commit needs Caddy >= 2.10 and we pin 2.11.4. Image tag moved to `2.11.4-2` in the Containerfile, the workflow `TAG`, and `CADDY_IMAGE`.
 - **Over-limit**: 429 + Retry-After (emitted automatically by caddy-ratelimit).
 - **Scope**: HTTP reverse-proxy routes only. Redirects, non-HTTP forwarding, and the L4 path carry no limit.
-- Module already present: `caddy-ratelimit@v0.1.0` in `seedling-caddy:2.11.4-1` (D1, complete). Single-instance → local sliding window, no distributed storage.
+- Module in the image since D1. Single instance → local sliding window, no distributed storage. Reclamation is automatic: the module sweeps every minute by default, with the sweeper started unconditionally, so nothing is emitted to switch it on.
 
 ## Load-bearing existing behaviour
 
@@ -27,15 +27,17 @@
 - [x] Tests: parse/resolution unit tests (proxy/tests.rs), emitter tests covering the handler, terminal ordering, zone sharing across vhosts, the pinned-module field set, and validation-throws cases
 - [x] tracey: annotate impls/tests against the new spec items
 
-## Open question
+- **Path normalisation.** The proxy matches a prefix against a normalised path: duplicate separators collapsed, relative segments resolved, case folded, percent-encoding decoded (Caddy 2.11.4 `MatchPath`). So `/api//login`, `/api/./login` and `/api/Login` all reach a `/api/login` route rather than falling through to `/api` — the nested-prefix bypass does not work. Caddy normalises more than a typical backend router, so residual disagreement over-applies the stricter limit rather than escaping it.
+- **Describe reports whether a route is served.** A prefix no pod binds carries `served: false`, so a limit declared on an unbound route no longer reads as a control in force.
 
-- **Does the card need shipped values at all?** The capability is complete and tested; the demo defs no longer declare limits. If B3 is only satisfied by 1000/s and 10/s existing somewhere in this repo, they need to go back — and then the per-address gap below has to be closed first, because those values read as a security control.
+## Settled
 
-- **Describe reports declarations, not what is served.** A prefix no pod binds still reports its settings, so a limit declared on an unbound route reads as enforced when nothing emits it. The shape is pre-existing (compression and balancing do the same, harmlessly), but an unenforced limit is a false assurance. Fixing it means threading the bound-prefix set into `Resource::summary`, which touches its three callers and the app-diffing path — too wide to land inside a review loop. The spec now states the semantics. Worth its own card.
-
-- **Restore IPv6 /64 grouping?** This is now the load-bearing one. The ceilings bound what each tracked address costs and how long it is held, but not how many addresses are tracked — that is the sender's choice. Counting addresses individually therefore leaves the total decided by the sender, and the proxy fronts every app on the host, so turning a limit on is itself a cost. Reclamation does happen — the pinned module sweeps every minute by default, started unconditionally — so the footprint tracks distinct addresses seen within a window rather than growing forever, but that is a ceiling an attacker picks. Grouping a /64 to one key is what closes it. It needs `caddy-ratelimit` pinned to a master commit rather than a released tag, and the fleet image rebuilt and republished — which the Containerfile's own versioning discipline argues against ("Every `--with` is pinned to an exact tag"). Without it an attacker holding a /64 has 2^64 budgets against the login limit. Options: pin a commit, wait for a release, or accept per-address counting and revisit. Not decided.
+- **Path normalisation.** The proxy matches a prefix against a normalised path: duplicate separators collapsed, relative segments resolved, letter case folded, percent-encoding decoded (Caddy 2.11.4 `MatchPath`). `/api//login`, `/api/./login` and `/api/Login` therefore reach a `/api/login` route rather than falling through to `/api`, so the nested-prefix bypass does not work. Caddy normalises more than a typical backend router, so residual disagreement over-applies the stricter limit rather than escaping it.
+- **Describe reports whether a route is served.** A prefix no pod binds carries `served: false`, so a limit declared on an unbound route no longer reads as a control in force. Threaded the AppDef into `Resource::summary` and its four call sites.
+- **B3 needs no values in this repo.** The requirement is met by the capability; the production Tamanu definition is not this repo, per the project's prime directive.
 
 ## Deferred (own cards)
 
 - **Real client IP behind a front proxy** — PROXY protocol (L4 listener wrapper) *and* X-Forwarded-For trusted_proxies (HTTP). Both wanted. E1 keys on `client_ip` so it consumes the recovered client with no emitter change. Direct-to-host is the norm today, so E1 is correct without it. → card A2.
+- **Validate the emitted config against the real image** — every emitter test asserts our JSON against our own expectations, so a document the running binary rejects passes the suite. That is how the `ipv6_prefix` outage got in. → card P2.
 - **L4 per-source rate limiting** — caddy-ratelimit is HTTP-only; caddy-l4 `throttle` is bandwidth, not connection-rate. The kernel path (nftables `ct count` / `limit rate` per source, ahead of the ingress DNAT) is the candidate. → card B2.

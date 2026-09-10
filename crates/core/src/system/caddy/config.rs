@@ -313,6 +313,10 @@ fn rate_limit_handler(limit: &RouteRateLimit) -> Value {
     // `reconcile::proxy`; see `RouteRateLimit::zone` for why it is not derived
     // from anything here.
     //
+    // `client_ip` is the address the proxy attributes to the request, and
+    // carries no port: the module masks a key only when it parses as a bare
+    // address, and silently leaves anything else whole.
+    //
     // Every key emitted must be one the pinned module declares, or Caddy's
     // strict decoding fails the whole document: see `caddy::image`.
     json!({
@@ -322,6 +326,13 @@ fn rate_limit_handler(limit: &RouteRateLimit) -> Value {
                 "key": "{http.request.client_ip}",
                 "window": secs_to_nanos(limit.window_secs),
                 "max_events": limit.max_events,
+                // Only the v6 prefix is set. The module leaves an address
+                // untouched when the prefix for its version is unset, so IPv4
+                // clients are counted per address while IPv6 clients are
+                // counted per /64. A party holds its whole /64, so counting
+                // those separately would hand it a budget per address and the
+                // limit would not bind it at all.
+                "ipv6_prefix": 64,
             }
         }
     })

@@ -25,7 +25,7 @@ env:
   # pull request that forgets. Keep the Caddy part in sync with the FROM tags in
   # docker/caddy/Containerfile, and the whole tag in sync with CADDY_IMAGE in
   # crates/core/src/system/caddy/startup.rs.
-  TAG: "2.11.4-1"
+  TAG: "2.11.4-2"
   IMAGE: ghcr.io/beyondessential/seedling-caddy
 
 jobs:
