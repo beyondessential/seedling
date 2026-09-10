@@ -5,6 +5,7 @@ on:
     paths:
       - docker/caddy/**
       - etc/ci/check-caddy-image.sh
+      - etc/ci/check-caddy-tag-unused.sh
       - .github/workflows/caddy-image.yml
   push:
     branches:
@@ -12,6 +13,7 @@ on:
     paths:
       - docker/caddy/**
       - etc/ci/check-caddy-image.sh
+      - etc/ci/check-caddy-tag-unused.sh
       - .github/workflows/caddy-image.yml
   workflow_dispatch:
 
@@ -41,16 +43,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: docker/login-action@v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: A Containerfile change must move the image tag to an unused serial
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           if git diff --quiet "$BASE" "$HEAD" -- docker/caddy/Containerfile; then
@@ -70,19 +67,9 @@ jobs:
           fi
           echo "tag moved: $old -> $new"
 
-          # The serial must also be unused. A tag already in the registry belongs
-          # to another build — a sibling pull request that published on merge, or
-          # an earlier one — and this merge's push-to-main run would replace that
-          # published image with this branch's, silently, since the tag string
-          # never changes. Moving relative to the base branch does not see that
-          # collision; the registry does.
-          if docker buildx imagetools inspect "$IMAGE:$new" >/dev/null 2>&1; then
-            echo "::error::$IMAGE:$new already exists in the registry. Another build \
-          already published this serial; bump it again so this pull request gets a \
-          fresh tag."
-            exit 1
-          fi
-          echo "$IMAGE:$new is unused in the registry"
+          # Moving relative to the base branch does not see a serial another
+          # build already claimed; only the registry knows that.
+          etc/ci/check-caddy-tag-unused.sh "$IMAGE" "$new"
 
   build:
     name: Build and publish
