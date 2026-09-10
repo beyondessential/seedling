@@ -320,9 +320,9 @@ pub(super) async fn dispatch_dns(client: &OiClient, cmd: DnsCommand) {
 
 pub(super) async fn dispatch_events(
     endpoint: SocketAddr,
-    fingerprint: String,
+    auth: seedling_protocol::client::ClientAuth,
     identity: &ClientIdentity,
     actor: seedling_protocol::actor::Actor,
 ) {
-    super::subscribe::subscribe(endpoint, fingerprint, identity, actor).await;
+    super::subscribe::subscribe(endpoint, auth, identity, actor).await;
 }

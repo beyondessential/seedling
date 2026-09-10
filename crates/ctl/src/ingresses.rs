@@ -47,7 +47,7 @@ pub(super) enum SiteCommand {
     Update {
         /// Site ingress name
         name: String,
-        /// New description; pass an empty string to clear, or omit to leave unchanged
+        /// New description; omit to leave unchanged, or use --clear-description to clear
         #[arg(long)]
         description: Option<String>,
         /// New TLS provider: `acme`, `internal`, or `none`
@@ -163,8 +163,13 @@ async fn dispatch_site(client: &OiClient, cmd: SiteCommand) {
             clear_description,
         } => {
             let mut body = json!({ "name": name });
-            // Outer Some => operator opted to set description; inner None
-            // means clear it.
+            // Absent, empty and cleared are three different things on the
+            // wire: omitting the key leaves the description alone, a string
+            // sets it, and JSON null clears it. The help used to say an empty
+            // `--description` cleared it, but the server stores `""` as an
+            // empty description — `--clear-description` is the only thing
+            // that sends null, and it is `conflicts_with` the other flag so
+            // the two can never disagree.
             if clear_description {
                 body["description"] = Value::Null;
             } else if let Some(desc) = description {
@@ -290,5 +295,39 @@ mod tests {
     fn parse_app_service_rejects_empty_parts() {
         assert!(parse_app_service("/api").is_err());
         assert!(parse_app_service("api/").is_err());
+    }
+
+    // r[verify ingress.site.lifecycle]
+    // The two flags mean different things on the wire, so they must not both
+    // be accepted — the help used to claim an empty `--description` cleared
+    // the description, which it does not.
+    #[test]
+    fn clear_description_conflicts_with_description() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: IngressesCommand,
+        }
+
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "site",
+                "update",
+                "portal",
+                "--description",
+                "",
+                "--clear-description",
+            ])
+            .is_err(),
+            "the flags must be mutually exclusive"
+        );
+        assert!(
+            TestCli::try_parse_from(["test", "site", "update", "portal", "--clear-description"])
+                .is_ok(),
+            "clearing on its own is fine"
+        );
     }
 }

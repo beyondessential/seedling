@@ -244,7 +244,7 @@ pub async fn forward_port(
                         }
                     }
                 }
-                _ = tokio::signal::ctrl_c() => break,
+                _ = crate::signals::shutdown_requested() => break,
             }
         }
         stats.print_tcp_summary();
@@ -334,7 +334,7 @@ pub async fn forward_port(
                         }
                     }
                 }
-                _ = tokio::signal::ctrl_c() => break,
+                _ = crate::signals::shutdown_requested() => break,
             }
         }
         stats.print_udp_summary();
