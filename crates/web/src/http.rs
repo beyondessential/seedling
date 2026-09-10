@@ -84,12 +84,33 @@ fn security_headers<S: Clone + Send + Sync + 'static>(
 // scheme wildcard. The endpoint shares the page's hostname (the WebTransport
 // URL is built the same way in `auth::handle_connect`) on the dedicated
 // `wt_port`, so reconstruct it from the request Host header.
+/// The host part of a `Host` header, with any port removed.
+///
+/// Splitting on `:` mangles an IPv6 authority: `[::1]:7894` becomes `[`, so
+/// both the advertised WebTransport URL and this CSP origin came out
+/// malformed and WebTransport could not be reached at all over IPv6. A
+/// bracketed literal keeps its brackets, which is what a URL authority needs.
+// w[impl auth.connect]
+// w[impl transport.http.security-headers]
+pub(crate) fn hostname_from_host_header(host: &str) -> &str {
+    if let Some(rest) = host.strip_prefix('[') {
+        return match rest.find(']') {
+            Some(end) => &host[..end + 2],
+            None => host,
+        };
+    }
+    match host.split_once(':') {
+        Some((hostname, _)) => hostname,
+        None => host,
+    }
+}
+
 async fn content_security_policy(State(wt_port): State<u16>, req: Request, next: Next) -> Response {
     let connect_src = req
         .headers()
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
-        .map(|host| host.split(':').next().unwrap_or(host))
+        .map(hostname_from_host_header)
         .map(|hostname| format!("connect-src 'self' https://{hostname}:{wt_port}"))
         .unwrap_or_else(|| "connect-src 'self'".to_owned());
 
@@ -120,6 +141,33 @@ async fn connect(
 
 #[cfg(test)]
 mod tests {
+
+    use super::hostname_from_host_header as hostname;
+
+    // w[verify auth.connect]
+    // Splitting on `:` turned `[::1]:7894` into `[`, so the advertised URL and
+    // the CSP origin were both malformed and WebTransport was unreachable over
+    // IPv6 entirely.
+    #[test]
+    fn an_ipv6_host_header_keeps_its_brackets() {
+        assert_eq!(hostname("[::1]:7894"), "[::1]");
+        assert_eq!(hostname("[::1]"), "[::1]");
+        assert_eq!(hostname("[2001:db8::5]:443"), "[2001:db8::5]");
+    }
+
+    // w[verify auth.connect]
+    #[test]
+    fn a_named_or_ipv4_host_header_drops_only_the_port() {
+        assert_eq!(hostname("example.com:80"), "example.com");
+        assert_eq!(hostname("example.com"), "example.com");
+        assert_eq!(hostname("10.0.0.5:7894"), "10.0.0.5");
+    }
+
+    // w[verify auth.connect]
+    #[test]
+    fn an_unclosed_bracket_is_returned_unchanged_rather_than_sliced() {
+        assert_eq!(hostname("[::1"), "[::1");
+    }
     use axum::body::Body;
     use tower::ServiceExt as _;
 
