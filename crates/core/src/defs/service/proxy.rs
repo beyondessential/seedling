@@ -273,8 +273,10 @@ pub fn service_settings(
 /// named it, otherwise from the field's default. Rate limiting resolves as a
 /// whole unit and has no default — see [`resolve_rate_limit`].
 ///
-/// Passing `None` for `route` resolves the service's own values, which is what
-/// the synthesised `/` route of a service with no HTTP route bindings takes.
+/// Passing `None` for `route` resolves the service's own values. That is not
+/// what the synthesised `/` route takes: a service may declare settings for
+/// `/` without a pod bound to it yet, so its caller resolves against the
+/// declared `/` route where there is one.
 pub fn resolve(service: &ProxySettings, route: Option<&ProxySettings>) -> ResolvedRouteProxy {
     let route_balance = route.map(|r| &r.balance);
     let route_compress = route.and_then(|r| r.compress.as_ref());

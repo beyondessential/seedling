@@ -506,7 +506,7 @@ mod tests {
             service_port: 8080,
             proxy: crate::system::types::RouteProxy::from_resolved(
                 crate::defs::service::ResolvedRouteProxy::default(),
-                crate::system::types::RouteZone("demo/web".to_string()),
+                || crate::system::types::RouteZone("demo/web".to_string()),
             ),
         }
     }

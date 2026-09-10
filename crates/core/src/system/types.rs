@@ -545,7 +545,7 @@ impl RouteProxy {
     /// still emitting a valid document.
     pub fn from_resolved(
         resolved: crate::defs::service::ResolvedRouteProxy,
-        zone: RouteZone,
+        zone: impl FnOnce() -> RouteZone,
     ) -> Self {
         Self {
             compress: resolved.compress.map(|c| RouteCompress {
@@ -558,8 +558,10 @@ impl RouteProxy {
                 try_duration_secs: resolved.balance.try_duration_secs,
                 interval_secs: resolved.balance.interval_secs,
             },
+            // Called only when there is a limit, so the majority of routes —
+            // which declare none — build no zone name at all.
             rate_limit: resolved.rate_limit.map(|rl| RouteRateLimit {
-                zone,
+                zone: zone(),
                 max_events: rl.settings.max_events,
                 window_secs: rl.settings.window_secs,
             }),

@@ -42,6 +42,7 @@ Scenarios verifying that an app can declare a per-client request limit on an HTT
 
 - [x] Describing an app reports each route's resolved limit, inherited limits included (verifies spec: app.describe.proxy-settings)
 - [x] A route that is not limited reports null rather than a zero-valued object (verifies spec: app.describe.proxy-settings)
+- [x] An inherited limit reports as shared and a route's own does not, so two routes showing one number can be told apart (verifies spec: app.describe.proxy-settings)
 
 ## Against a running proxy
 

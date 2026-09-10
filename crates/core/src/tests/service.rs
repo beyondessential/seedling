@@ -441,8 +441,14 @@ fn service_summary_reports_resolved_rate_limits() {
     let api = routes[0].rate_limit.as_ref().expect("inherited limit");
     assert_eq!(api.max_events, 1000);
     assert_eq!(api.window, 1.0);
+    assert!(
+        api.shared,
+        "an inherited limit is the service's budget, and an operator reading \
+         the route needs to know it is shared rather than the route's own"
+    );
 
     let login = routes[1].rate_limit.as_ref().expect("route limit");
+    assert!(!login.shared, "a route's own declaration is its own budget");
     assert_eq!(login.max_events, 10);
     assert_eq!(login.window, 60.0);
 

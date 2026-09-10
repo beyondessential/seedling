@@ -404,7 +404,9 @@ function ResourceDefDetail({ def }: { def: ResourceDef }) {
             <Chip
               label={
                 r.rate_limit
-                  ? `limit: ${r.rate_limit.max_events}/${r.rate_limit.window}s`
+                  ? `limit: ${r.rate_limit.max_events}/${r.rate_limit.window}s${
+                      r.rate_limit.shared ? " shared" : ""
+                    }`
                   : "limit: off"
               }
               size="small"

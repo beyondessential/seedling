@@ -8,7 +8,7 @@ use crate::system::types::{
 fn default_proxy() -> crate::system::types::RouteProxy {
     crate::system::types::RouteProxy::from_resolved(
         crate::defs::service::ResolvedRouteProxy::default(),
-        crate::system::types::RouteZone("demo/web".to_string()),
+        || crate::system::types::RouteZone("demo/web".to_string()),
     )
 }
 
@@ -932,7 +932,7 @@ fn an_unlimited_route_carries_no_rate_limit_handler() {
 // r[verify infra.proxy.image.modules]
 #[test]
 fn emitted_zone_uses_only_fields_the_pinned_module_declares() {
-    use super::image::RATE_LIMIT_ZONE_FIELDS;
+    use super::image::{RATE_LIMIT_HANDLER_FIELDS, RATE_LIMIT_ZONE_FIELDS};
 
     let config = vhost_with(
         "app.example.com",
@@ -946,8 +946,21 @@ fn emitted_zone_uses_only_fields_the_pinned_module_declares() {
         )],
     );
     let json = build_caddy_config(&config);
-    let zone = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"][0]["rate_limits"]
-        ["demo/web/api"];
+    let handler = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"][0];
+    let zone = &handler["rate_limits"]["demo/web/api"];
+
+    // Both levels: an unknown key fails the document wherever it sits.
+    let unknown_at_handler: Vec<&String> = handler
+        .as_object()
+        .expect("handler is an object")
+        .keys()
+        .filter(|k| !RATE_LIMIT_HANDLER_FIELDS.contains(&k.as_str()))
+        .collect();
+    assert!(
+        unknown_at_handler.is_empty(),
+        "emitted rate-limit handler fields not declared by the pinned \
+         caddy-ratelimit tag: {unknown_at_handler:?}"
+    );
 
     // Caddy decodes module config strictly, so a field the pinned tag does not
     // declare fails the whole document and drops ingress for every vhost on

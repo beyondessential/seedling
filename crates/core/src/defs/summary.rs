@@ -23,7 +23,7 @@ use super::{
     pod::{HttpBinding, PodDef, TcpUdpBinding},
     resource::Resource,
     service::{
-        ExternalService, HttpServiceDef, ProxySettings, ResolvedBalance, Service,
+        ExternalService, HttpServiceDef, ProxySettings, RateLimitScope, ResolvedBalance, Service,
         default_content_types, resolve,
     },
     volume::{ExternalVolume, Volume},
@@ -71,6 +71,11 @@ pub struct RouteSummary {
 pub struct RateLimitSummary {
     pub max_events: u64,
     pub window: f64,
+    /// `true` when the limit was declared on the service, so this route counts
+    /// against a budget it shares with every other route inheriting it.
+    /// Without this the reading is ambiguous: two routes each showing the same
+    /// number may be one budget between them or one each.
+    pub shared: bool,
 }
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -285,6 +290,7 @@ fn route_summaries(service_level: &ProxySettings, http: &HttpServiceDef) -> Vec<
                 rate_limit: resolved.rate_limit.map(|rl| RateLimitSummary {
                     max_events: rl.settings.max_events,
                     window: rl.settings.window_secs,
+                    shared: rl.scope == RateLimitScope::Service,
                 }),
             }
         })

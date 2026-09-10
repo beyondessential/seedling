@@ -223,12 +223,7 @@ let config_vol = app.volume("config")
 let web_svc = app.service("web")
     .description("Tamanu facility HTTP service — routes /api, /v1, and / to the API and frontend deployments")
     .exported(#{ description: "Tamanu facility HTTPS endpoint (HTTP routing)" })
-    .http(80)
-    // The baseline limit sits on the service, so every route it serves
-    // inherits it and they share the one budget: a route added later is
-    // covered without raising what the pods can be sent in total.
-    // Illustrative values.
-    .rate_limit(#{ max_events: 1000, window: 1 });
+    .http(80);
 
 // An unset hostname is a supported deployment: the app declares no ingress and
 // the exported `web` service is fronted by a site ingress instead, which is how
@@ -263,9 +258,6 @@ configure_server.call(app.deployment("api")
     .scale(1..api_max_replicas.call())
     .arg(["startApi"])
     .http(3000, web_svc.route("/api"))
-    // A longer prefix than "/api", so it is matched first and login attempts
-    // are counted against this tighter limit alone.
-    .http(3000, web_svc.route("/api/login").rate_limit(#{ max_events: 10, window: 1 }))
     .http(3000, web_svc.route("/v1"))
     .mount(sync_svc.port(3000))
 );

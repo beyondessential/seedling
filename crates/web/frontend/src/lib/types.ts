@@ -121,6 +121,8 @@ export interface CompressSummary {
 export interface RateLimitSummary {
   max_events: number;
   window: number;
+  /** True when the budget is the service's, shared with every route inheriting it. */
+  shared: boolean;
 }
 
 export interface RouteSummary {

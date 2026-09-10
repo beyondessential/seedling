@@ -7,7 +7,7 @@ use crate::{
         ingress::IngressDef,
         pod::PodDef,
         resource::{Resource, ResourceKind},
-        service::{HttpServiceDef, ProxySettings, RateLimitScope, ResolvedRouteProxy, resolve},
+        service::{HttpServiceDef, ProxySettings, RateLimitScope, resolve},
     },
     runtime::{
         InstanceRegistry, desired::DesiredState, identity::ResourceInstance,
@@ -250,8 +250,10 @@ pub(super) fn service_level_proxy(snapshot: &AppDef, service_name: &str) -> Rout
     // bound to it yet. Resolving against `None` would ignore those and, worse,
     // apply a service-level limit to a `/` that opted out of it.
     let resolved = resolve(&service, routes.get("/"));
-    let zone = zone_for(snapshot.name.as_str(), service_name, "/", &resolved);
-    RouteProxy::from_resolved(resolved, zone)
+    let scope = resolved.rate_limit.map(|rl| rl.scope);
+    RouteProxy::from_resolved(resolved, || {
+        zone_for(snapshot.name.as_str(), service_name, "/", scope)
+    })
 }
 
 /// Names the budget a resolved limit counts against.
@@ -260,8 +262,8 @@ pub(super) fn service_level_proxy(snapshot: &AppDef, service_name: &str) -> Rout
 /// declared is one budget for the service however many routes inherit it,
 /// while a limit a route declared is that route's own. See
 /// [`RouteRateLimit::zone`].
-fn zone_for(app: &str, service: &str, prefix: &str, resolved: &ResolvedRouteProxy) -> RouteZone {
-    match resolved.rate_limit.map(|rl| rl.scope) {
+fn zone_for(app: &str, service: &str, prefix: &str, scope: Option<RateLimitScope>) -> RouteZone {
+    match scope {
         Some(RateLimitScope::Route) => RouteZone(format!("{app}/{service}{prefix}")),
         // No prefix: every route inheriting the service's limit names the same
         // budget, which is what makes it one budget rather than one each.
@@ -355,8 +357,10 @@ pub(super) fn collect_http_routes(
         .into_iter()
         .map(|(prefix, upstreams)| {
             let resolved = resolve(&service, routes.get(&prefix));
-            let zone = zone_for(snapshot.name.as_str(), service_name, &prefix, &resolved);
-            let proxy = RouteProxy::from_resolved(resolved, zone);
+            let scope = resolved.rate_limit.map(|rl| rl.scope);
+            let proxy = RouteProxy::from_resolved(resolved, || {
+                zone_for(snapshot.name.as_str(), service_name, &prefix, scope)
+            });
             HttpForwardRoute {
                 prefix,
                 upstreams,
@@ -369,20 +373,6 @@ pub(super) fn collect_http_routes(
 #[cfg(test)]
 mod zone_tests {
     use super::*;
-    use crate::defs::service::{RateLimitSettings, ResolvedRateLimit};
-
-    fn resolved(scope: Option<RateLimitScope>) -> ResolvedRouteProxy {
-        ResolvedRouteProxy {
-            rate_limit: scope.map(|scope| ResolvedRateLimit {
-                settings: RateLimitSettings {
-                    max_events: 10,
-                    window_secs: 1.0,
-                },
-                scope,
-            }),
-            ..Default::default()
-        }
-    }
 
     // r[verify service.http.route.rate-limiting]
     #[test]
@@ -390,10 +380,10 @@ mod zone_tests {
         // The failure this guards is a service declaring one limit and getting
         // one budget per route: three routes would let a client spend the
         // limit three times over, and a fourth route would raise it again.
-        let service = resolved(Some(RateLimitScope::Service));
-        let api = zone_for("demo", "web", "/api", &service);
-        let v1 = zone_for("demo", "web", "/v1", &service);
-        let root = zone_for("demo", "web", "/", &service);
+        let service = Some(RateLimitScope::Service);
+        let api = zone_for("demo", "web", "/api", service);
+        let v1 = zone_for("demo", "web", "/v1", service);
+        let root = zone_for("demo", "web", "/", service);
 
         assert_eq!(api, v1);
         assert_eq!(api, root);
@@ -403,26 +393,26 @@ mod zone_tests {
     // r[verify service.http.route.rate-limiting]
     #[test]
     fn a_route_declared_limit_names_that_routes_own_budget() {
-        let route = resolved(Some(RateLimitScope::Route));
+        let route = Some(RateLimitScope::Route);
         assert_eq!(
-            zone_for("demo", "web", "/api/login", &route),
+            zone_for("demo", "web", "/api/login", route),
             RouteZone("demo/web/api/login".to_string())
         );
         // And is distinct from a sibling's, so a tighter limit on one prefix
         // does not draw on the budget of another.
         assert_ne!(
-            zone_for("demo", "web", "/api/login", &route),
-            zone_for("demo", "web", "/api", &route)
+            zone_for("demo", "web", "/api/login", route),
+            zone_for("demo", "web", "/api", route)
         );
     }
 
     // r[verify service.http.route.rate-limiting]
     #[test]
     fn budgets_of_different_services_and_apps_stay_apart() {
-        let route = resolved(Some(RateLimitScope::Route));
-        let a = zone_for("app-one", "web", "/api", &route);
-        let b = zone_for("app-two", "web", "/api", &route);
-        let c = zone_for("app-one", "portal", "/api", &route);
+        let route = Some(RateLimitScope::Route);
+        let a = zone_for("app-one", "web", "/api", route);
+        let b = zone_for("app-two", "web", "/api", route);
+        let c = zone_for("app-one", "portal", "/api", route);
         assert_ne!(a, b);
         assert_ne!(a, c);
     }
