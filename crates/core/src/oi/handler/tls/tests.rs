@@ -442,3 +442,56 @@ fn hostname_and_attempt_rollups_start_empty() {
         json!([])
     );
 }
+
+// i[verify tls.policy.set-acme-dns]
+// The FK refusal arrived as `not_found: db error: FOREIGN KEY constraint
+// failed`, naming neither the provider nor the remedy, and handing a client
+// the wrong error code to key off.
+#[test]
+fn set_acme_dns_names_an_unknown_provider() {
+    let oi = TestOi::new();
+    let (code, msg) = oi
+        .call(
+            "/tls/policies/set-acme-dns",
+            json!({ "hostname": "a.example.com", "dns_provider": "aws-prd" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+    assert!(msg.contains("aws-prd"), "should name the provider: {msg}");
+    assert!(
+        !msg.contains("FOREIGN KEY"),
+        "should not leak the constraint: {msg}"
+    );
+}
+
+// r[verify tls.policy.wildcard]
+// A pattern that matches nothing stored a policy row indistinguishable in the
+// list from one that works.
+#[test]
+fn set_acme_dns_refuses_a_pattern_that_can_never_match() {
+    let oi = TestOi::new();
+    upsert_route53(&oi, "aws-prod");
+    for bad in ["", "*.", "not a hostname", "-bad.example.com", "12345"] {
+        let (code, _) = oi
+            .call(
+                "/tls/policies/set-acme-dns",
+                json!({ "hostname": bad, "dns_provider": "aws-prod" }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid", "should refuse {bad:?}");
+    }
+}
+
+// r[verify tls.policy.wildcard]
+#[test]
+fn set_acme_dns_accepts_the_shapes_the_spec_defines() {
+    let oi = TestOi::new();
+    upsert_route53(&oi, "aws-prod");
+    for good in ["*", "*.example.com", "host.example.com"] {
+        oi.call(
+            "/tls/policies/set-acme-dns",
+            json!({ "hostname": good, "dns_provider": "aws-prod" }),
+        )
+        .unwrap_or_else(|e| panic!("should accept {good:?}: {e:?}"));
+    }
+}

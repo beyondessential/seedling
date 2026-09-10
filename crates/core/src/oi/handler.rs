@@ -28,6 +28,39 @@ pub(super) fn validate_port(field: &str, port: u16) -> Result<(), OiError> {
     Ok(())
 }
 
+/// Whether `s` is a syntactically valid DNS name.
+///
+/// Shape only: label lengths, permitted characters, no leading or trailing
+/// hyphen, and at least one alphabetic character somewhere so an all-numeric
+/// string is not mistaken for a name. Callers add their own policy on top —
+/// a site-service remote host also rejects `localhost`, a TLS policy pattern
+/// does not, since an exact policy may deliberately name it.
+pub(super) fn is_valid_dns_name(s: &str) -> bool {
+    if s.is_empty() || s.len() > 253 {
+        return false;
+    }
+    let mut any_alpha = false;
+    for label in s.split('.') {
+        if label.is_empty() || label.len() > 63 {
+            return false;
+        }
+        if label.starts_with('-') || label.ends_with('-') {
+            return false;
+        }
+        for c in label.chars() {
+            if !(c.is_ascii_alphanumeric() || c == '-') {
+                return false;
+            }
+            if c.is_ascii_alphabetic() {
+                any_alpha = true;
+            }
+        }
+    }
+    // Reject all-numeric strings (e.g. "12345"); legitimate names always
+    // carry at least one alphabetic character somewhere.
+    any_alpha
+}
+
 pub mod actions;
 mod appdef_json;
 mod apps;

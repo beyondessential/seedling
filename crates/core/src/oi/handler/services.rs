@@ -120,29 +120,9 @@ fn validate_remote_host(host: &str) -> Result<(), OiError> {
 /// underscore labels, and `localhost` (the daemon resolves on the host;
 /// localhost would loop back into the daemon's own networking).
 fn is_valid_dns_name(s: &str) -> bool {
-    if s.is_empty() || s.len() > 253 || s.eq_ignore_ascii_case("localhost") {
-        return false;
-    }
-    let mut any_alpha = false;
-    for label in s.split('.') {
-        if label.is_empty() || label.len() > 63 {
-            return false;
-        }
-        if label.starts_with('-') || label.ends_with('-') {
-            return false;
-        }
-        for c in label.chars() {
-            if !(c.is_ascii_alphanumeric() || c == '-') {
-                return false;
-            }
-            if c.is_ascii_alphabetic() {
-                any_alpha = true;
-            }
-        }
-    }
-    // Reject all-numeric strings (e.g. "12345"); legitimate names always
-    // carry at least one alphabetic character somewhere.
-    any_alpha
+    // A site-service remote host must be reachable from the pod network, and
+    // `localhost` there would name the pod rather than the operator's box.
+    !s.eq_ignore_ascii_case("localhost") && super::is_valid_dns_name(s)
 }
 
 #[derive(Deserialize)]
