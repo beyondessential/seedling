@@ -10,6 +10,24 @@ use seedling_protocol::{
 
 use super::state::OiState;
 
+/// Reject port 0.
+///
+/// These arrive as plain `u16`, so 0 deserialises happily — but it is not a
+/// routable listener or backend port. It reached the site-proxy config as
+/// `listen :0` / dial `:0` semantics instead of being refused at the
+/// interface, where the operator could still be told which field was wrong.
+/// The BSL side has rejected it all along, via `Port::new`.
+// r[impl service.site.address]
+pub(super) fn validate_port(field: &str, port: u16) -> Result<(), OiError> {
+    if port == 0 {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!("{field} must be between 1 and 65535, got 0"),
+        ));
+    }
+    Ok(())
+}
+
 pub mod actions;
 mod appdef_json;
 mod apps;
