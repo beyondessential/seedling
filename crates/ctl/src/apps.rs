@@ -206,6 +206,26 @@ pub(super) enum ParamCommand {
     Unset { app: AppName, name: String },
 }
 
+/// Parse `key=value` install params.
+///
+/// Unlike action and shell params, these carry values typed by the app's
+/// parameter schema rather than free-form JSON, so a bare key has no sensible
+/// reading — `true` is the wrong type and `""` is a guess at intent. It used
+/// to be dropped by a `filter_map` with no warning, so an operator who wrote
+/// `db-pass` instead of `db-pass=secret` got an install missing a parameter
+/// and no indication why.
+// i[impl ctl.install.params]
+fn parse_install_params(args: &[String]) -> Result<HashMap<String, String>, String> {
+    let mut map = HashMap::new();
+    for arg in args {
+        let Some((key, value)) = arg.split_once('=') else {
+            return Err(format!("invalid install param {arg:?}: expected key=value"));
+        };
+        map.insert(key.to_owned(), value.to_owned());
+    }
+    Ok(map)
+}
+
 fn parse_vol_id(vol_id: &str) -> Result<(&str, &str), String> {
     let (prefix, vol) = vol_id.split_once('/').ok_or_else(|| {
         format!("invalid volume ID {vol_id:?}: expected _site/<name> or <app>/<volume>")
@@ -384,13 +404,13 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
             );
         }
         AppsCommand::Install { app, params } => {
-            let submitted: HashMap<String, String> = params
-                .iter()
-                .filter_map(|r| {
-                    let mut parts = r.splitn(2, '=');
-                    Some((parts.next()?.to_owned(), parts.next()?.to_owned()))
-                })
-                .collect();
+            let submitted = match parse_install_params(&params) {
+                Ok(m) => m,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                }
+            };
             print_result(
                 client
                     .request(
@@ -587,6 +607,32 @@ mod tests {
     struct TestCli {
         #[command(subcommand)]
         cmd: AppsCommand,
+    }
+
+    // i[verify ctl.install.params]
+    // A bare key used to be dropped by a `filter_map`, so an operator who
+    // wrote `db-pass` instead of `db-pass=secret` got an install missing a
+    // parameter and nothing said so.
+    #[test]
+    fn install_params_reject_a_bare_key() {
+        let err = parse_install_params(&["db-pass".to_owned()])
+            .expect_err("a bare key has no typed value");
+        assert!(err.contains("db-pass"), "should name the argument: {err}");
+    }
+
+    // i[verify ctl.install.params]
+    #[test]
+    fn install_params_take_pairs_including_empty_values() {
+        let map = parse_install_params(&[
+            "key=value".to_owned(),
+            "empty=".to_owned(),
+            "url=https://x/?a=b".to_owned(),
+        ])
+        .expect("pairs parse");
+        assert_eq!(map["key"], "value");
+        assert_eq!(map["empty"], "");
+        assert_eq!(map["url"], "https://x/?a=b", "only the first = splits");
+        assert!(parse_install_params(&[]).unwrap().is_empty());
     }
 
     // i[verify ctl.action.params]

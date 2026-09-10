@@ -1309,6 +1309,11 @@ Seedling has no Canopy identity of its own. Instead a connected client may offer
 > i[ctl.shell.params]
 > The CLI accepts shell params with the same syntax: `ctl apps shell <app> <name> [key[=value]]...`.
 
+> i[ctl.install.params]
+> The CLI accepts install params as positional arguments: `ctl apps install <app> [key=value]...`.
+> Install params carry values typed by the application's parameter schema rather than free-form JSON, so every argument must be a `key=value` pair.
+> An argument without `=` must be reported as an error naming that argument, and no request may be sent.
+
 > i[ctl.backup.app.hint]
 > When `ctl apps create` evaluates a script that declares actions `save-snapshot`, `list-snapshots`, and `restore-snapshot`, the CLI should print an informational message suggesting backup app registration.
 
