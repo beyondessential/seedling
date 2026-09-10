@@ -9,8 +9,16 @@ specs (
             {
                 name main
                 include (
-                    crates/*/src/*.rs
-                    crates/*/src/**/*.rs
+                    crates/core/src/*.rs
+                    crates/core/src/**/*.rs
+                    crates/ctl/src/*.rs
+                    crates/ctl/src/**/*.rs
+                    crates/daemon/src/*.rs
+                    crates/daemon/src/**/*.rs
+                    crates/protocol/src/*.rs
+                    crates/protocol/src/**/*.rs
+                    crates/web/src/*.rs
+                    crates/web/src/**/*.rs
                 )
             }
         )
@@ -23,8 +31,60 @@ specs (
             {
                 name main
                 include (
-                    crates/*/src/*.rs
-                    crates/*/src/**/*.rs
+                    crates/core/src/*.rs
+                    crates/core/src/**/*.rs
+                    crates/ctl/src/*.rs
+                    crates/ctl/src/**/*.rs
+                    crates/daemon/src/*.rs
+                    crates/daemon/src/**/*.rs
+                    crates/protocol/src/*.rs
+                    crates/protocol/src/**/*.rs
+                    crates/web/src/*.rs
+                    crates/web/src/**/*.rs
+                )
+            }
+        )
+    }
+    {
+        name runtime-windows-containers
+        source_url https://github.com/beyondessential/seedling
+        include (docs/spec/runtime-windows-containers.md)
+        impls (
+            {
+                name main
+                include (
+                    crates/core/src/*.rs
+                    crates/core/src/**/*.rs
+                    crates/ctl/src/*.rs
+                    crates/ctl/src/**/*.rs
+                    crates/daemon/src/*.rs
+                    crates/daemon/src/**/*.rs
+                    crates/protocol/src/*.rs
+                    crates/protocol/src/**/*.rs
+                    crates/web/src/*.rs
+                    crates/web/src/**/*.rs
+                )
+            }
+        )
+    }
+    {
+        name runtime-windows-logs
+        source_url https://github.com/beyondessential/seedling
+        include (docs/spec/runtime-windows-logs.md)
+        impls (
+            {
+                name main
+                include (
+                    crates/core/src/*.rs
+                    crates/core/src/**/*.rs
+                    crates/ctl/src/*.rs
+                    crates/ctl/src/**/*.rs
+                    crates/daemon/src/*.rs
+                    crates/daemon/src/**/*.rs
+                    crates/protocol/src/*.rs
+                    crates/protocol/src/**/*.rs
+                    crates/web/src/*.rs
+                    crates/web/src/**/*.rs
                 )
             }
         )
@@ -37,8 +97,16 @@ specs (
             {
                 name main
                 include (
-                    crates/*/src/*.rs
-                    crates/*/src/**/*.rs
+                    crates/core/src/*.rs
+                    crates/core/src/**/*.rs
+                    crates/ctl/src/*.rs
+                    crates/ctl/src/**/*.rs
+                    crates/daemon/src/*.rs
+                    crates/daemon/src/**/*.rs
+                    crates/protocol/src/*.rs
+                    crates/protocol/src/**/*.rs
+                    crates/web/src/*.rs
+                    crates/web/src/**/*.rs
                 )
             }
         )

@@ -1,0 +1,29 @@
+[package]
+name = "seedling-spikes"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Draft spike harness for the Windows container runtime design
+# (docs/plans/windows-spike-containerd.md). Windows-only: on other platforms the
+# binary compiles to a stub main explaining it must be run on Windows Server.
+# Kept in the workspace so it is format- and clippy-checked everywhere and
+# check/test-run on Windows in CI.
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }
+
+[[bin]]
+name = "spike-containerd"
+path = "src/bin/spike_containerd.rs"
+
+# No `windows` dependency: the sharing mode goes through
+# OpenOptionsExt::share_mode, which is the same dwShareMode CreateFileW takes,
+# and the ACL and container work is icacls/ctr because the questions are about
+# platform behaviour rather than an API binding.
+[[bin]]
+name = "spike-host-fs"
+path = "src/bin/spike_host_fs.rs"

@@ -5636,6 +5636,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "seedling-spikes"
+version = "0.8.0"
+dependencies = [
+ "windows",
+]
+
+[[package]]
 name = "seedling-web"
 version = "0.8.0"
 dependencies = [
