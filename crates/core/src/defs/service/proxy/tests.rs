@@ -400,17 +400,14 @@ fn rate_limit_rejects_out_of_range_values() {
     ]);
     assert!(parse_rate_limit(too_many).is_err());
 
-    // Below the floor. The floor is set where it is because a smaller window
-    // rounds to zero nanoseconds when emitted, which the proxy rejects at
-    // provision — taking the whole document with it.
+    // Below the floor: not a rate limit any app could mean.
     let vanishing = map(vec![
         ("max_events", Dynamic::from(10_i64)),
         ("window", Dynamic::from(0.000_000_000_1_f64)),
     ]);
     assert!(parse_rate_limit(vanishing).is_err());
 
-    // Above the ceiling, which is set below the point where the nanosecond
-    // conversion would saturate.
+    // Above the ceiling.
     let geological = map(vec![
         ("max_events", Dynamic::from(10_i64)),
         ("window", Dynamic::from(1e12_f64)),

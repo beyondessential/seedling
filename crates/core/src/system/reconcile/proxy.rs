@@ -365,3 +365,69 @@ pub(super) fn collect_http_routes(
         })
         .collect()
 }
+
+#[cfg(test)]
+mod zone_tests {
+    use super::*;
+    use crate::defs::service::{RateLimitSettings, ResolvedRateLimit};
+
+    fn resolved(scope: Option<RateLimitScope>) -> ResolvedRouteProxy {
+        ResolvedRouteProxy {
+            rate_limit: scope.map(|scope| ResolvedRateLimit {
+                settings: RateLimitSettings {
+                    max_events: 10,
+                    window_secs: 1.0,
+                },
+                scope,
+            }),
+            ..Default::default()
+        }
+    }
+
+    // r[verify service.http.route.rate-limiting]
+    #[test]
+    fn an_inherited_limit_names_one_budget_whatever_prefix_resolves_it() {
+        // The failure this guards is a service declaring one limit and getting
+        // one budget per route: three routes would let a client spend the
+        // limit three times over, and a fourth route would raise it again.
+        let service = resolved(Some(RateLimitScope::Service));
+        let api = zone_for("demo", "web", "/api", &service);
+        let v1 = zone_for("demo", "web", "/v1", &service);
+        let root = zone_for("demo", "web", "/", &service);
+
+        assert_eq!(api, v1);
+        assert_eq!(api, root);
+        assert_eq!(api, RouteZone("demo/web".to_string()));
+    }
+
+    // r[verify service.http.route.rate-limiting]
+    #[test]
+    fn a_route_declared_limit_names_that_routes_own_budget() {
+        let route = resolved(Some(RateLimitScope::Route));
+        assert_eq!(
+            zone_for("demo", "web", "/api/login", &route),
+            RouteZone("demo/web/api/login".to_string())
+        );
+        // And is distinct from a sibling's, so a tighter limit on one prefix
+        // does not draw on the budget of another.
+        assert_ne!(
+            zone_for("demo", "web", "/api/login", &route),
+            zone_for("demo", "web", "/api", &route)
+        );
+    }
+
+    // r[verify service.http.route.rate-limiting]
+    #[test]
+    fn budgets_of_different_services_and_apps_stay_apart() {
+        let route = resolved(Some(RateLimitScope::Route));
+        let a = zone_for("app-one", "web", "/api", &route);
+        let b = zone_for("app-two", "web", "/api", &route);
+        let c = zone_for("app-one", "portal", "/api", &route);
+        assert_ne!(a, b);
+        assert_ne!(a, c);
+    }
+
+    // The vhost serving a request is not a parameter of `zone_for` at all, so
+    // a budget cannot vary by hostname or termination. That is the structural
+    // form of the guarantee, which no test could state more strongly.
+}

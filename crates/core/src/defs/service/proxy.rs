@@ -27,9 +27,11 @@ pub const DEFAULT_MINIMUM_LENGTH: u64 = 512;
 /// individually therefore leaves the total unbounded, and closing it needs the
 /// prefix grouping the pinned module cannot express. Until then these ceilings
 /// limit the cost of each address, not of an attacker willing to use many.
-/// The floor exists because the emitted window is a whole number of
-/// nanoseconds — a smaller one would round to zero, which the module rejects
-/// at provision, failing the entire proxy document rather than the one route.
+/// The floor is likewise a plausibility bound rather than a technical one: a
+/// window is emitted as a whole number of nanoseconds and only rounds away
+/// below about half a nanosecond, far under anything here, so the floor is set
+/// where a declaration stops being a rate limit rather than where the encoding
+/// gives out.
 pub const MIN_WINDOW_SECS: f64 = 0.001;
 pub const MAX_WINDOW_SECS: f64 = 3_600.0;
 pub const MAX_MAX_EVENTS: u64 = 10_000;

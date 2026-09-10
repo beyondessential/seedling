@@ -1012,11 +1012,12 @@ fn a_longer_prefix_carries_its_own_zone_ahead_of_the_shorter_one() {
 
 // r[verify service.http.route.rate-limiting]
 #[test]
-fn two_hostnames_fronting_one_declaration_share_its_budget() {
-    // An exported service can be reached through its app's own ingress and a
-    // site ingress at once. Both resolve the same declared limit, so both must
-    // count against the same zone: a zone per hostname would hand a client one
-    // budget per hostname and admit twice what the app declared.
+fn routes_in_different_vhosts_emit_the_zone_they_carry() {
+    // Whether two routes *should* share a budget is decided by `zone_for` in
+    // reconcile::proxy and tested there. What this checks is the emitter's
+    // half: a zone travels to the emitted document unchanged, so two routes
+    // carrying one zone still name one zone once emitted, even in separate
+    // vhosts and separate servers.
     let limit = || {
         Some(RouteRateLimit {
             zone: RouteZone("demo/web/api".to_string()),
@@ -1101,11 +1102,11 @@ fn old_cached_config_without_rate_limit_still_deserialises() {
 
 // r[verify service.http.route.rate-limiting]
 #[test]
-fn one_hostname_terminating_both_ways_shares_one_budget() {
-    // Vhosts are keyed by hostname and termination, so two ingresses on one
-    // hostname at different ports put the same declared route in two vhosts.
-    // Naming the zone after the vhost would let a client alternate schemes and
-    // spend both budgets, admitting twice the declared limit.
+fn one_hostname_terminating_both_ways_emits_the_zone_it_carries() {
+    // Vhosts are keyed by hostname and termination, so one hostname can put
+    // the same declared route in two vhosts, landing in two different emitted
+    // servers. The zone must survive that unchanged; which zone it should be
+    // is `zone_for`'s decision, tested in reconcile::proxy.
     let limit = || {
         Some(RouteRateLimit {
             zone: RouteZone("demo/web/api".to_string()),
@@ -1152,10 +1153,10 @@ fn one_hostname_terminating_both_ways_shares_one_budget() {
 
 // r[verify service.http.route.rate-limiting]
 #[test]
-fn routes_inheriting_one_declaration_share_its_budget() {
-    // The zone carries the declaration, so routes that inherited a service's
-    // limit name the same budget. A zone per route would multiply the limit by
-    // the number of routes the service happens to serve.
+fn routes_carrying_one_zone_emit_one_zone() {
+    // The emitter's half of shared budgets: two routes carrying the zone
+    // `zone_for` gives an inherited limit emit that one zone, rather than the
+    // emitter re-deriving anything per route.
     let inherited = || {
         Some(RouteRateLimit {
             zone: RouteZone("demo/web".to_string()),
