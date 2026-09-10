@@ -33,12 +33,21 @@ jobs:
     name: Tag moved
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v7.0.0
         with:
           fetch-depth: 0
 
-      - name: A Containerfile change must move the image tag
+      - uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: A Containerfile change must move the image tag to an unused serial
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
@@ -60,6 +69,20 @@ jobs:
             exit 1
           fi
           echo "tag moved: $old -> $new"
+
+          # The serial must also be unused. A tag already in the registry belongs
+          # to another build — a sibling pull request that published on merge, or
+          # an earlier one — and this merge's push-to-main run would replace that
+          # published image with this branch's, silently, since the tag string
+          # never changes. Moving relative to the base branch does not see that
+          # collision; the registry does.
+          if docker buildx imagetools inspect "$IMAGE:$new" >/dev/null 2>&1; then
+            echo "::error::$IMAGE:$new already exists in the registry. Another build \
+          already published this serial; bump it again so this pull request gets a \
+          fresh tag."
+            exit 1
+          fi
+          echo "$IMAGE:$new is unused in the registry"
 
   build:
     name: Build and publish
@@ -88,39 +111,29 @@ jobs:
       - name: Check the image provides what the runtime requires
         run: etc/ci/check-caddy-image.sh seedling-caddy:check
 
-      # A pull request from a fork gets a read-only GITHUB_TOKEN, so it builds
-      # and checks but cannot publish. Everything else publishes: publishing
-      # from a same-repo pull request is what stops `main` referencing a tag
-      # that does not exist yet for the ~18 minutes the multi-arch build takes.
-      - name: Decide whether to publish
-        id: publish
-        env:
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-        run: |
-          set -euo pipefail
-          if [ "${{ github.event_name }}" != "pull_request" ] || [ "$HEAD_REPO" = "${{ github.repository }}" ]; then
-            echo "yes=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "yes=false" >> "$GITHUB_OUTPUT"
-            echo "fork pull request: built and checked, not published"
-          fi
-
-      # `latest` only moves on main; a pull request publishes its own tag so the
-      # tag exists by the time it merges.
+      # A pull request never publishes: it builds the native arch and runs the
+      # check above, so a bad Containerfile still fails the pull request, but the
+      # image reaches the registry only from the push-to-main run. A released
+      # daemon pins CADDY_IMAGE at a `v*` tag, cut by merging the release PR long
+      # after this merge, so a release never races the build. The only thing that
+      # reads a freshly bumped tag sooner is a daemon built from a `main` checkout
+      # by hand (a dev VM); there the pull just retries until the push-to-main
+      # build lands, which is not worth publishing an unreviewed image to the real
+      # tag from every same-repo branch.
       - name: Assemble tags
         id: tags
-        if: steps.publish.outputs.yes == 'true'
+        if: github.event_name != 'pull_request'
         run: |
           set -euo pipefail
           {
             echo "list<<TAGS"
             echo "$IMAGE:$TAG"
-            [ "${{ github.event_name }}" = "pull_request" ] || echo "$IMAGE:latest"
+            echo "$IMAGE:latest"
             echo "TAGS"
           } >> "$GITHUB_OUTPUT"
 
       - uses: docker/login-action@v4.6.0
-        if: steps.publish.outputs.yes == 'true'
+        if: github.event_name != 'pull_request'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -128,7 +141,7 @@ jobs:
 
       - name: Build and publish
         id: push
-        if: steps.publish.outputs.yes == 'true'
+        if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v7.3.0
         with:
           context: docker/caddy
@@ -138,7 +151,7 @@ jobs:
           tags: ${{ steps.tags.outputs.list }}
 
       - name: Attest
-        if: steps.publish.outputs.yes == 'true'
+        if: github.event_name != 'pull_request'
         uses: actions/attest-build-provenance@v4
         with:
           subject-name: ${{ env.IMAGE }}
