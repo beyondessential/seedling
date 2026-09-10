@@ -107,7 +107,7 @@ async fn run_subscribe_session(client: &OiClient) -> SessionOutcome {
                     Err(e) => return SessionOutcome::Error(format!("event stream: {e}")),
                 }
             }
-            _ = tokio::signal::ctrl_c() => {
+            _ = crate::signals::shutdown_requested() => {
                 return SessionOutcome::Interrupted;
             }
         }

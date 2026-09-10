@@ -46,7 +46,7 @@ async fn run_log_session(
         let result = if follow {
             tokio::select! {
                 r = log_stream.read(&mut tmp) => r,
-                _ = tokio::signal::ctrl_c() => return Ok(()),
+                _ = crate::signals::shutdown_requested() => return Ok(()),
             }
         } else {
             log_stream.read(&mut tmp).await

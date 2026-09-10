@@ -20,6 +20,7 @@ mod op;
 mod restarts;
 mod services;
 mod shell;
+mod signals;
 mod subscribe;
 mod templates;
 mod tls;
