@@ -1029,6 +1029,9 @@ fn rt_write_tmpfs_volume_is_allowed() {
 }
 
 // l[verify rt.write]
+// `/../escape` leaves the volume, so it is still refused — what changed is
+// that the rule is about escaping the root rather than about the `..`
+// component appearing at all, so the message says so.
 #[test]
 fn rt_write_rejects_path_traversal() {
     use crate::runtime::barrier::replay::{InMemoryActionLog, OperationResult};
@@ -1050,8 +1053,8 @@ fn rt_write_rejects_path_traversal() {
         OperationResult::Failed(e) => {
             let msg = e.to_string();
             assert!(
-                msg.contains("'..'"),
-                "error should mention dotdot, got: {msg}"
+                msg.contains("escape the volume root"),
+                "error should say the path escapes the root, got: {msg}"
             );
         }
         other => panic!("expected Failed for path traversal, got {other:?}"),

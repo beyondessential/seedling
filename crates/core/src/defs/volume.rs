@@ -15,20 +15,32 @@ pub(crate) fn validate_volume_write_path(path: &str) -> Result<(), Box<EvalAltRe
         return Err(format!("volume write path must be absolute, got '{path}'").into());
     }
 
+    // The rule is that the path must not *escape* the root once `.` and `..`
+    // are resolved, not that it may not mention `..` at all. Rejecting the
+    // component outright also refused paths that resolve safely inside the
+    // volume, like `/etc/../etc/conf`.
+    //
+    // Resolved textually, without touching the filesystem: this runs at
+    // definition time, where the volume does not exist yet and a symlink
+    // inside it could not be followed anyway.
+    let mut depth: usize = 0;
     for component in PathBuf::from(path).components() {
-        if matches!(component, Component::ParentDir) {
-            return Err(
-                format!("volume write path must not contain '..' components: '{path}'").into(),
-            );
+        match component {
+            Component::Normal(_) => depth += 1,
+            Component::ParentDir => {
+                depth = depth.checked_sub(1).ok_or_else(|| -> Box<EvalAltResult> {
+                    format!("volume write path must not escape the volume root: '{path}'").into()
+                })?;
+            }
+            // `/` and `.` contribute nothing. A Windows prefix cannot appear
+            // in a path that already had to start with `/`.
+            Component::RootDir | Component::CurDir | Component::Prefix(_) => {}
         }
     }
 
-    // After stripping `.` and redundant `/`, the path must have at least one
-    // real segment (i.e. it must not resolve to just `/`).
-    let has_normal = PathBuf::from(path)
-        .components()
-        .any(|c| matches!(c, Component::Normal(_)));
-    if !has_normal {
+    // Having resolved the path, it must still name something inside the
+    // volume rather than the root itself.
+    if depth == 0 {
         return Err("volume write path must not resolve to '/'".into());
     }
 
@@ -270,6 +282,51 @@ impl CustomType for ExternalVolume {
 
 #[cfg(test)]
 mod tests {
+
+    // l[verify volume.write.validation]
+    // The rule is "must not escape the root after canonicalisation", not
+    // "must not mention `..`" — the stricter reading refused paths that
+    // resolve safely inside the volume.
+    #[test]
+    fn a_dotdot_that_stays_inside_the_volume_is_allowed() {
+        for path in [
+            "/etc/../etc/conf",
+            "/a/b/../c",
+            "/./config.toml",
+            "/a/b/../../a/file",
+        ] {
+            validate_volume_write_path(path)
+                .unwrap_or_else(|e| panic!("{path} resolves inside the root: {e}"));
+        }
+    }
+
+    // l[verify volume.write.validation]
+    #[test]
+    fn a_dotdot_that_escapes_the_volume_is_refused() {
+        for path in ["/../etc/passwd", "/a/../../etc/passwd", "/a/b/../../.."] {
+            let err = validate_volume_write_path(path).expect_err("{path} escapes");
+            assert!(
+                err.to_string().contains("escape") || err.to_string().contains("'/'"),
+                "{path}: {err}"
+            );
+        }
+    }
+
+    // l[verify volume.write.validation]
+    #[test]
+    fn a_path_resolving_to_the_root_is_refused() {
+        for path in ["/", "/.", "/a/.."] {
+            let _ = validate_volume_write_path(path).expect_err("resolves to the volume root");
+        }
+    }
+
+    // l[verify volume.write.validation]
+    #[test]
+    fn the_other_rules_still_hold() {
+        let _ = validate_volume_write_path("relative/path").expect_err("must be absolute");
+        let _ = validate_volume_write_path("/nul\0byte").expect_err("no null bytes");
+        validate_volume_write_path("/etc/conf").expect("an ordinary path is fine");
+    }
     use super::*;
 
     // r[impl operation.volume-param] r[impl operation.volume-param.filename]
