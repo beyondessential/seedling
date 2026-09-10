@@ -295,20 +295,24 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
         });
     }
 
-    state.web_sessions.remove(&session_id);
-    // w[impl sessions.events]
-    state
-        .event_broker
-        .publish(Arc::from(
-            json!({
-                "type": "WebSessionStopped",
-                "timestamp": jiff::Timestamp::now().to_string(),
-                "session_id": session_id.to_string(),
-            })
-            .to_string()
-            .as_str(),
-        ))
-        .await;
+    // Only the removal that actually took the session out announces it: the
+    // reaper may already have dropped this session and published its stop,
+    // and a second event for the same id makes a client see two closes.
+    if state.web_sessions.remove(&session_id) {
+        // w[impl sessions.events]
+        state
+            .event_broker
+            .publish(Arc::from(
+                json!({
+                    "type": "WebSessionStopped",
+                    "timestamp": jiff::Timestamp::now().to_string(),
+                    "session_id": session_id.to_string(),
+                })
+                .to_string()
+                .as_str(),
+            ))
+            .await;
+    }
 }
 
 // w[impl sessions.safety-mode]
