@@ -29,7 +29,7 @@
 
 ## Open question
 
-- **Restore IPv6 /64 grouping?** It needs `caddy-ratelimit` pinned to a master commit rather than a released tag, and the fleet image rebuilt and republished — which the Containerfile's own versioning discipline argues against ("Every `--with` is pinned to an exact tag"). Without it an attacker holding a /64 has 2^64 budgets against the login limit. Options: pin a commit, wait for a release, or accept per-address counting and revisit. Not decided.
+- **Restore IPv6 /64 grouping?** This is now the load-bearing one. The ceilings bound what each tracked address costs and how long it is held, but not how many addresses are tracked — that is the sender's choice. Counting addresses individually therefore leaves the proxy's total state unbounded, and the proxy fronts every app on the host, so turning a limit on is itself a cost. Grouping a /64 to one key is what closes it. It needs `caddy-ratelimit` pinned to a master commit rather than a released tag, and the fleet image rebuilt and republished — which the Containerfile's own versioning discipline argues against ("Every `--with` is pinned to an exact tag"). Without it an attacker holding a /64 has 2^64 budgets against the login limit. Options: pin a commit, wait for a release, or accept per-address counting and revisit. Not decided.
 
 ## Deferred (own cards)
 

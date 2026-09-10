@@ -309,26 +309,16 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
 
 // r[impl service.http.route.rate-limiting]
 fn rate_limit_handler(limit: &RouteRateLimit) -> Value {
-    // The zone name is the route that declared the limit, carried from the
-    // translate layer — not anything about the vhost serving the request. One
-    // service route can be fronted by several vhosts (two ingresses on one
-    // hostname at different ports, an app's own ingress alongside a site
-    // ingress), and all of them resolve this same limit. The module pools
-    // zones process-wide by name, so naming it after the declaration gives a
-    // client the one budget the app asked for, where naming it after the
-    // vhost would give it one budget per vhost.
-
-    // `client_ip` is the address the proxy attributes to the request, which
-    // without any trusted-proxy configuration is the peer it is talking to.
+    // The zone name identifies the declaration and is built in
+    // `reconcile::proxy`; see `RouteRateLimit::zone` for why it is not derived
+    // from anything here.
     //
-    // Every key emitted here must be one the pinned module declares. Caddy
-    // decodes module config strictly, so an unknown field fails the whole
-    // document and takes every vhost on the host down with it, not merely the
-    // route that declared the limit. `RATE_LIMIT_ZONE_FIELDS` pins the set.
+    // Every key emitted must be one the pinned module declares, or Caddy's
+    // strict decoding fails the whole document: see `caddy::image`.
     json!({
         "handler": "rate_limit",
         "rate_limits": {
-            &limit.zone: {
+            limit.zone.to_string(): {
                 "key": "{http.request.client_ip}",
                 "window": secs_to_nanos(limit.window_secs),
                 "max_events": limit.max_events,
@@ -336,15 +326,6 @@ fn rate_limit_handler(limit: &RouteRateLimit) -> Value {
         }
     })
 }
-
-/// The per-zone keys `caddy-ratelimit` declares at the tag pinned in
-/// `docker/caddy/Containerfile`. Emitting anything outside this set is a
-/// host-wide outage rather than a degraded route, so the emitter is checked
-/// against it. Widen it only after confirming the pinned tag declares the
-/// field: `ipv4_prefix` and `ipv6_prefix`, for instance, exist upstream but
-/// are in no released version.
-#[cfg(test)]
-pub(super) const RATE_LIMIT_ZONE_FIELDS: &[&str] = &["match", "key", "window", "max_events"];
 
 // r[impl service.http.route.compression]
 fn encode_handler(compress: &RouteCompress) -> Value {

@@ -7,7 +7,7 @@ use crate::{
         ingress::IngressDef,
         pod::PodDef,
         resource::{Resource, ResourceKind},
-        service::{HttpServiceDef, ProxySettings, resolve},
+        service::{HttpServiceDef, ProxySettings, RateLimitScope, ResolvedRouteProxy, resolve},
     },
     runtime::{
         InstanceRegistry, desired::DesiredState, identity::ResourceInstance,
@@ -15,7 +15,7 @@ use crate::{
     },
     system::{
         translate::proxy::{HttpForwardRoute, ServiceUpstream, instance_ipv6},
-        types::{L4Proto, L4Route, RouteProxy},
+        types::{L4Proto, L4Route, RouteProxy, RouteZone},
     },
 };
 
@@ -244,15 +244,29 @@ fn routes_of(http: Option<&HttpServiceDef>) -> RouteMap {
 // r[impl service.http.route.compression]
 // r[impl service.http.route.balancing]
 pub(super) fn service_level_proxy(snapshot: &AppDef, service_name: &str) -> RouteProxy {
-    let (service, _) = proxy_settings_for(snapshot, service_name);
-    // These settings are only ever used for the synthesised `/` route, so
-    // that is the prefix the limit is attributed to.
-    RouteProxy::resolved(
-        resolve(&service, None),
-        snapshot.name.as_str(),
-        service_name,
-        "/",
-    )
+    let (service, routes) = proxy_settings_for(snapshot, service_name);
+    // These settings are used for the synthesised `/` route, which is a real
+    // route the service may have declared settings for even when no pod is
+    // bound to it yet. Resolving against `None` would ignore those and, worse,
+    // apply a service-level limit to a `/` that opted out of it.
+    let resolved = resolve(&service, routes.get("/"));
+    let zone = zone_for(snapshot.name.as_str(), service_name, "/", &resolved);
+    RouteProxy::from_resolved(resolved, zone)
+}
+
+/// Names the budget a resolved limit counts against.
+///
+/// The name is the identity of the declaration, so a limit the service
+/// declared is one budget for the service however many routes inherit it,
+/// while a limit a route declared is that route's own. See
+/// [`RouteRateLimit::zone`].
+fn zone_for(app: &str, service: &str, prefix: &str, resolved: &ResolvedRouteProxy) -> RouteZone {
+    match resolved.rate_limit.map(|rl| rl.scope) {
+        Some(RateLimitScope::Route) => RouteZone(format!("{app}/{service}{prefix}")),
+        // No prefix: every route inheriting the service's limit names the same
+        // budget, which is what makes it one budget rather than one each.
+        Some(RateLimitScope::Service) | None => RouteZone(format!("{app}/{service}")),
+    }
 }
 
 /// Build per-prefix HTTP routes for an ingress backed by `service_name`
@@ -340,12 +354,9 @@ pub(super) fn collect_http_routes(
     by_prefix
         .into_iter()
         .map(|(prefix, upstreams)| {
-            let proxy = RouteProxy::resolved(
-                resolve(&service, routes.get(&prefix)),
-                snapshot.name.as_str(),
-                service_name,
-                &prefix,
-            );
+            let resolved = resolve(&service, routes.get(&prefix));
+            let zone = zone_for(snapshot.name.as_str(), service_name, &prefix, &resolved);
+            let proxy = RouteProxy::from_resolved(resolved, zone);
             HttpForwardRoute {
                 prefix,
                 upstreams,

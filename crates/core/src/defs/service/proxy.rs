@@ -17,16 +17,21 @@ pub const DEFAULT_MINIMUM_LENGTH: u64 = 512;
 ///
 /// These are sanity ceilings, not tuning. A limit is charged to the proxy
 /// process every app on the host shares: the module holds a ring of
-/// `max_events` timestamps per distinct client for the length of the window,
-/// so an absurd declaration in one app is another app's memory. The number of
-/// live rings is decided by whoever sends the traffic, which is why the size
-/// of each is held to something an app could plausibly mean rather than to
-/// the largest number that still fits.
+/// `max_events` timestamps per distinct client and reclaims it only once the
+/// window has elapsed, so one app's declaration sets both how large each ring
+/// is and how long it stays. `max_events` bounds the first and the window the
+/// second, which is why the window ceiling is an hour rather than a day.
+///
+/// What neither bounds is how many rings exist: that is one per client
+/// address, and who sends the traffic decides it. Counting addresses
+/// individually therefore leaves the total unbounded, and closing it needs the
+/// prefix grouping the pinned module cannot express. Until then these ceilings
+/// limit the cost of each address, not of an attacker willing to use many.
 /// The floor exists because the emitted window is a whole number of
 /// nanoseconds — a smaller one would round to zero, which the module rejects
 /// at provision, failing the entire proxy document rather than the one route.
 pub const MIN_WINDOW_SECS: f64 = 0.001;
-pub const MAX_WINDOW_SECS: f64 = 86_400.0;
+pub const MAX_WINDOW_SECS: f64 = 3_600.0;
 pub const MAX_MAX_EVENTS: u64 = 10_000;
 pub const DEFAULT_TRY_DURATION_SECS: f64 = 5.0;
 pub const DEFAULT_INTERVAL_SECS: f64 = 0.25;
@@ -214,14 +219,47 @@ pub struct ResolvedBalance {
 pub struct ResolvedRouteProxy {
     pub compress: Option<ResolvedCompress>,
     pub balance: ResolvedBalance,
-    /// Resolution is whole-unit, so the limit in force is exactly the one a
-    /// level declared; there is no separate resolved form to convert to.
-    pub rate_limit: Option<RateLimitSettings>,
+    pub rate_limit: Option<ResolvedRateLimit>,
+}
+
+/// Which level declared the limit in force.
+///
+/// This decides the budget's identity, not just its provenance: a limit
+/// declared on the service is one budget shared by every route inheriting it,
+/// where the same settings declared on a route are that route's own budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RateLimitScope {
+    Service,
+    Route,
+}
+
+/// The limit in force on a route, and the level that declared it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ResolvedRateLimit {
+    pub settings: RateLimitSettings,
+    pub scope: RateLimitScope,
 }
 
 impl Default for ResolvedRouteProxy {
     fn default() -> Self {
         resolve(&ProxySettings::default(), None)
+    }
+}
+
+/// The service-level view resolution works against, gathered from the two
+/// places a service keeps them: compression and rate limiting on its HTTP
+/// surface, balancing on the service itself.
+///
+/// One body, so a setting added here reaches every kind of service that has
+/// one rather than only the kind whose method was edited.
+pub fn service_settings(
+    http: Option<&crate::defs::service::HttpServiceDef>,
+    balance: &BalanceSettings,
+) -> ProxySettings {
+    ProxySettings {
+        compress: http.and_then(|h| h.compress.clone()),
+        balance: balance.clone(),
+        rate_limit: http.and_then(|h| h.rate_limit),
     }
 }
 
@@ -254,10 +292,18 @@ pub fn resolve(service: &ProxySettings, route: Option<&ProxySettings>) -> Resolv
 fn resolve_rate_limit(
     service: Option<&RateLimitDecl>,
     route: Option<&RateLimitDecl>,
-) -> Option<RateLimitSettings> {
-    match route.or(service) {
-        Some(RateLimitDecl::Enabled(s)) => Some(*s),
-        Some(RateLimitDecl::Disabled) | None => None,
+) -> Option<ResolvedRateLimit> {
+    match (route, service) {
+        (Some(RateLimitDecl::Enabled(s)), _) => Some(ResolvedRateLimit {
+            settings: *s,
+            scope: RateLimitScope::Route,
+        }),
+        (Some(RateLimitDecl::Disabled), _) => None,
+        (None, Some(RateLimitDecl::Enabled(s))) => Some(ResolvedRateLimit {
+            settings: *s,
+            scope: RateLimitScope::Service,
+        }),
+        (None, Some(RateLimitDecl::Disabled) | None) => None,
     }
 }
 

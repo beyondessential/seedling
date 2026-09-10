@@ -115,6 +115,18 @@ fn referenced_modules(config: &serde_json::Value) -> std::collections::BTreeSet<
     found
 }
 
+/// The per-zone keys `caddy-ratelimit` declares at the tag pinned in
+/// `docker/caddy/Containerfile`, alongside the module list that pin is
+/// otherwise checked against.
+///
+/// Caddy decodes module config strictly, so emitting a key the pinned tag does
+/// not declare fails the whole proxy document and drops ingress for every
+/// vhost on the host — not merely the route that declared the limit. Widen
+/// this only after confirming the pinned tag declares the key: `ipv4_prefix`
+/// and `ipv6_prefix` exist upstream but are in no released version.
+#[cfg(test)]
+pub(super) const RATE_LIMIT_ZONE_FIELDS: &[&str] = &["match", "key", "window", "max_events"];
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -131,13 +143,19 @@ mod tests {
     /// fixture and its module unchecked.
     fn rate_limited_proxy() -> crate::system::types::RouteProxy {
         let resolved = crate::defs::service::ResolvedRouteProxy {
-            rate_limit: Some(crate::defs::service::RateLimitSettings {
-                max_events: 1000,
-                window_secs: 1.0,
+            rate_limit: Some(crate::defs::service::ResolvedRateLimit {
+                settings: crate::defs::service::RateLimitSettings {
+                    max_events: 1000,
+                    window_secs: 1.0,
+                },
+                scope: crate::defs::service::RateLimitScope::Service,
             }),
             ..Default::default()
         };
-        crate::system::types::RouteProxy::resolved(resolved, "demo", "web", "/")
+        crate::system::types::RouteProxy::from_resolved(
+            resolved,
+            crate::system::types::RouteZone("demo/web".to_string()),
+        )
     }
 
     /// A configuration exercising every feature `build_caddy_config` emits.

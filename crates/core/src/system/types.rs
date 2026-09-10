@@ -495,21 +495,37 @@ pub struct RouteCompress {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RouteRateLimit {
-    /// Names the budget this limit counts against, as `app/service{prefix}`.
+    /// Names the budget this limit counts against.
     ///
-    /// The identity is the route that *declared* the limit, not a vhost that
-    /// fronts it. One service route can be served through several vhosts — two
-    /// ingresses on one hostname at different ports, or an app's own ingress
-    /// alongside a site ingress — and every one of them resolves the same
-    /// limit. Naming the zone after the vhost would give a client one budget
-    /// per vhost, so a limit of ten would admit twenty; naming it after the
-    /// declaration keeps the one budget the app asked for. The module pools
-    /// zones process-wide by name, which is what makes the sharing work.
-    pub zone: String,
+    /// The name is the identity of the *declaration*: its level and scope, not
+    /// the path a request took to arrive. A limit declared on a service is one
+    /// budget shared by every route that inherits it; the same settings
+    /// declared on a route are that route's own budget. Neither depends on
+    /// which virtual host served the request, and one route can be served by
+    /// several — two ingresses on one hostname at different ports, or an app's
+    /// own ingress alongside a site ingress.
+    ///
+    /// The module pools zones process-wide by name, so a name that is too
+    /// specific splits one declared budget into several (a client gets each in
+    /// turn, admitting a multiple of the limit) and one that is too general
+    /// merges budgets that were declared apart. The naming lives in
+    /// `reconcile::proxy`, which knows the declaration.
+    pub zone: RouteZone,
     /// Requests one client may make within each window.
     pub max_events: u64,
     /// Length of the sliding window, in seconds.
     pub window_secs: f64,
+}
+
+/// The name of a rate-limit budget. A newtype so it cannot be transposed with
+/// the other strings that describe a route.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RouteZone(pub String);
+
+impl std::fmt::Display for RouteZone {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -520,19 +536,16 @@ pub struct RouteBalance {
 }
 
 impl RouteProxy {
-    /// Wire form of `resolved`, with any rate limit attributed to the route
-    /// that declared it: `app`/`service` at `prefix`.
+    /// Wire form of `resolved`. The caller supplies the rate limit's zone
+    /// because naming it needs the declaring level, which the reconcile layer
+    /// knows and these settings do not carry.
     ///
-    /// There is deliberately no `From` conversion. The zone identity cannot be
-    /// derived from the resolved settings, and a conversion that supplied a
-    /// placeholder would put every route that used it in one shared bucket —
-    /// silently, since the emitted document would still be valid. Requiring
-    /// the declaring route here makes the compiler ask for it instead.
-    pub fn resolved(
+    /// There is deliberately no `From` conversion: it would have to invent a
+    /// zone, and a placeholder would put unrelated routes in one bucket while
+    /// still emitting a valid document.
+    pub fn from_resolved(
         resolved: crate::defs::service::ResolvedRouteProxy,
-        app: &str,
-        service: &str,
-        prefix: &str,
+        zone: RouteZone,
     ) -> Self {
         Self {
             compress: resolved.compress.map(|c| RouteCompress {
@@ -546,9 +559,9 @@ impl RouteProxy {
                 interval_secs: resolved.balance.interval_secs,
             },
             rate_limit: resolved.rate_limit.map(|rl| RouteRateLimit {
-                zone: format!("{app}/{service}{prefix}"),
-                max_events: rl.max_events,
-                window_secs: rl.window_secs,
+                zone,
+                max_events: rl.settings.max_events,
+                window_secs: rl.settings.window_secs,
             }),
         }
     }

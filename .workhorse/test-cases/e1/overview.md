@@ -5,6 +5,7 @@ Scenarios verifying that an app can declare a per-client request limit on an HTT
 ## Declaring a limit
 
 - [x] A service declaring `rate_limit(#{ max_events, window })` applies it to a route that declares none (verifies spec: service.http.proxy-settings.resolution)
+- [x] Routes inheriting one service-level declaration share a single budget, so serving more routes does not raise what the pods can be sent (verifies spec: service.http.route.rate-limiting)
 - [x] A route declaring its own limit replaces the service's outright, window included, rather than merging field by field (verifies spec: service.http.proxy-settings.resolution)
 - [x] A route declaring `rate_limit(false)` is not limited even where the service declared one (verifies spec: service.http.proxy-settings.resolution)
 - [x] A service and route that both leave it unmentioned produce no limit (verifies spec: service.http.rate-limit)
@@ -49,5 +50,6 @@ Scenarios needing a real Caddy rather than the emitted document. Not covered by 
 - [ ] Requests under the limit are proxied unaffected
 - [ ] Login requests are counted against the login limit alone, and do not consume the wider API budget
 - [ ] Two clients on different addresses are limited independently
+- [ ] A service whose `/` route opts out is not limited on the fallback path taken before any pod has bound
 - [ ] Limiter state survives a proxy config reload, so a reconcile does not reset a client's budget
 - [ ] The emitted document is accepted by the real pinned proxy image, which no assertion on our own JSON can establish

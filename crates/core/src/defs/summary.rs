@@ -283,8 +283,8 @@ fn route_summaries(service_level: &ProxySettings, http: &HttpServiceDef) -> Vec<
                 }),
                 balance: balance_summary(&resolved.balance),
                 rate_limit: resolved.rate_limit.map(|rl| RateLimitSummary {
-                    max_events: rl.max_events,
-                    window: rl.window_secs,
+                    max_events: rl.settings.max_events,
+                    window: rl.settings.window_secs,
                 }),
             }
         })

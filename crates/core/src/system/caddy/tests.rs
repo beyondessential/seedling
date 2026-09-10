@@ -2,15 +2,13 @@ use super::config::build_caddy_config;
 use crate::system::translate::proxy::build_proxy_config;
 use crate::system::types::{
     HttpRedirect, ProxyConfig, ProxyListener, ProxyListenerProto, ProxyRoute, ProxyRouteHandler,
-    RouteRateLimit, VirtualHost,
+    RouteRateLimit, RouteZone, VirtualHost,
 };
 
 fn default_proxy() -> crate::system::types::RouteProxy {
-    crate::system::types::RouteProxy::resolved(
+    crate::system::types::RouteProxy::from_resolved(
         crate::defs::service::ResolvedRouteProxy::default(),
-        "demo",
-        "web",
-        "/",
+        crate::system::types::RouteZone("demo/web".to_string()),
     )
 }
 
@@ -899,7 +897,7 @@ fn a_limited_route_carries_the_rate_limit_handler() {
         vec![limited_route(
             "/api",
             Some(RouteRateLimit {
-                zone: "demo/web/api".to_string(),
+                zone: RouteZone("demo/web/api".to_string()),
                 max_events: 1000,
                 window_secs: 1.0,
             }),
@@ -934,14 +932,14 @@ fn an_unlimited_route_carries_no_rate_limit_handler() {
 // r[verify infra.proxy.image.modules]
 #[test]
 fn emitted_zone_uses_only_fields_the_pinned_module_declares() {
-    use super::config::RATE_LIMIT_ZONE_FIELDS;
+    use super::image::RATE_LIMIT_ZONE_FIELDS;
 
     let config = vhost_with(
         "app.example.com",
         vec![limited_route(
             "/api",
             Some(RouteRateLimit {
-                zone: "demo/web/api".to_string(),
+                zone: RouteZone("demo/web/api".to_string()),
                 max_events: 10,
                 window_secs: 1.0,
             }),
@@ -979,7 +977,7 @@ fn a_longer_prefix_carries_its_own_zone_ahead_of_the_shorter_one() {
             limited_route(
                 "/api",
                 Some(RouteRateLimit {
-                    zone: "demo/web/api".to_string(),
+                    zone: RouteZone("demo/web/api".to_string()),
                     max_events: 1000,
                     window_secs: 1.0,
                 }),
@@ -987,7 +985,7 @@ fn a_longer_prefix_carries_its_own_zone_ahead_of_the_shorter_one() {
             limited_route(
                 "/api/login",
                 Some(RouteRateLimit {
-                    zone: "demo/web/api/login".to_string(),
+                    zone: RouteZone("demo/web/api/login".to_string()),
                     max_events: 10,
                     window_secs: 1.0,
                 }),
@@ -1021,7 +1019,7 @@ fn two_hostnames_fronting_one_declaration_share_its_budget() {
     // budget per hostname and admit twice what the app declared.
     let limit = || {
         Some(RouteRateLimit {
-            zone: "demo/web/api".to_string(),
+            zone: RouteZone("demo/web/api".to_string()),
             max_events: 10,
             window_secs: 1.0,
         })
@@ -1110,7 +1108,7 @@ fn one_hostname_terminating_both_ways_shares_one_budget() {
     // spend both budgets, admitting twice the declared limit.
     let limit = || {
         Some(RouteRateLimit {
-            zone: "demo/web/api".to_string(),
+            zone: RouteZone("demo/web/api".to_string()),
             max_events: 10,
             window_secs: 1.0,
         })
@@ -1150,4 +1148,35 @@ fn one_hostname_terminating_both_ways_shares_one_budget() {
 
     assert!(!plain["demo/web/api"].is_null());
     assert!(!tls["demo/web/api"].is_null());
+}
+
+// r[verify service.http.route.rate-limiting]
+#[test]
+fn routes_inheriting_one_declaration_share_its_budget() {
+    // The zone carries the declaration, so routes that inherited a service's
+    // limit name the same budget. A zone per route would multiply the limit by
+    // the number of routes the service happens to serve.
+    let inherited = || {
+        Some(RouteRateLimit {
+            zone: RouteZone("demo/web".to_string()),
+            max_events: 1000,
+            window_secs: 1.0,
+        })
+    };
+    let config = vhost_with(
+        "app.example.com",
+        vec![
+            limited_route("/api", inherited()),
+            limited_route("/v1", inherited()),
+        ],
+    );
+    let json = build_caddy_config(&config);
+    let routes = &json["apps"]["http"]["servers"]["seedling_http"]["routes"];
+
+    for i in 0..2 {
+        let zones = &routes[i]["handle"][0]["rate_limits"];
+        assert_eq!(zones["demo/web"]["max_events"], 1000);
+        assert!(zones["demo/web/api"].is_null());
+        assert!(zones["demo/web/v1"].is_null());
+    }
 }

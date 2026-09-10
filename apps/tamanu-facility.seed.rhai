@@ -224,9 +224,10 @@ let web_svc = app.service("web")
     .description("Tamanu facility HTTP service — routes /api, /v1, and / to the API and frontend deployments")
     .exported(#{ description: "Tamanu facility HTTPS endpoint (HTTP routing)" })
     .http(80)
-    // The baseline limit sits on the service so every route it serves inherits
-    // it, rather than on individual routes: a route added later would
-    // otherwise reach the same pods with no limit at all. Illustrative values.
+    // The baseline limit sits on the service, so every route it serves
+    // inherits it and they share the one budget: a route added later is
+    // covered without raising what the pods can be sent in total.
+    // Illustrative values.
     .rate_limit(#{ max_events: 1000, window: 1 });
 
 // An unset hostname is a supported deployment: the app declares no ingress and

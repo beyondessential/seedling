@@ -362,11 +362,14 @@ fn http_service_and_routes_accept_rate_limit() {
     // The service's limit reaches a route that declared none.
     let v1 = defs::service::resolve(&service_level, http.routes.get("/v1"));
     let v1_limit = v1.rate_limit.expect("service limit carries to the route");
-    assert_eq!(v1_limit.max_events, 1000);
+    assert_eq!(v1_limit.settings.max_events, 1000);
 
     // The tighter route limit replaces it outright.
     let login = defs::service::resolve(&service_level, http.routes.get("/api/login"));
-    assert_eq!(login.rate_limit.expect("route limit").max_events, 10);
+    assert_eq!(
+        login.rate_limit.expect("route limit").settings.max_events,
+        10
+    );
 
     // And a route can opt out of the service's limit entirely.
     let health = defs::service::resolve(&service_level, http.routes.get("/health"));

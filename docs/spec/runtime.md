@@ -262,6 +262,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > Because routes are emitted [longest-prefix-first](#r--service.http.route.routing) and are terminal, each request is limited by exactly one route: a request under a longer, more specific prefix is counted only against that prefix's limit, not also against a shorter prefix that would otherwise match.
 > A tighter limit on a longer prefix therefore governs its own traffic independently of a looser limit on a shorter prefix covering the rest, which is what lets a login prefix carry a stricter limit than the API prefix enclosing it.
+> This holds only where the proxy and the backend agree on which requests a prefix covers: a request the backend routes to an endpoint but the proxy matches to a shorter prefix is counted against the looser limit, so a stricter limit placed on a nested prefix is only as tight as that agreement.
 
 > r[service.http.route.proxy-settings.visibility]
 > The compression, balancing, and rate-limit settings in force on a service and on each of its routes, after resolution, must be readable when inspecting the app that declares the service, as [app.describe.proxy-settings](interface.md#i--app.describe.proxy-settings) defines.

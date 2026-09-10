@@ -266,8 +266,8 @@ fn service_rate_limit_applies_to_a_route_declaring_none() {
     let rl = r
         .rate_limit
         .expect("the service's limit carries to the route");
-    assert_eq!(rl.max_events, 1000);
-    assert_eq!(rl.window_secs, 1.0);
+    assert_eq!(rl.settings.max_events, 1000);
+    assert_eq!(rl.settings.window_secs, 1.0);
 }
 
 // l[verify service.http.proxy-settings.resolution]
@@ -284,10 +284,11 @@ fn route_rate_limit_replaces_the_services_outright() {
     let rl = resolve(&service, Some(&route))
         .rate_limit
         .expect("the route's limit governs");
+    assert_eq!(rl.scope, RateLimitScope::Route);
     // Whole-unit, not field-by-field: the window comes from the route too,
     // rather than being left at the service's 1s.
-    assert_eq!(rl.max_events, 10);
-    assert_eq!(rl.window_secs, 60.0);
+    assert_eq!(rl.settings.max_events, 10);
+    assert_eq!(rl.settings.window_secs, 60.0);
 }
 
 // l[verify service.http.proxy-settings.resolution]
@@ -446,4 +447,33 @@ fn rate_limit_names_a_misspelled_key_rather_than_the_field_it_displaced() {
         msg.contains("max_event") && !msg.contains("requires"),
         "the error should name the key that was not recognised, got: {msg}"
     );
+}
+
+// l[verify service.http.proxy-settings.resolution]
+#[test]
+fn an_inherited_limit_stays_the_services_however_many_routes_take_it() {
+    let service = ProxySettings {
+        rate_limit: limit(1000, 1.0),
+        ..Default::default()
+    };
+    // Two routes inheriting the same declaration. Both report the service as
+    // the declaring level, which is what names them one budget rather than
+    // one each: were it otherwise, a service declaring 1000/s and serving
+    // three routes would let a client spend 3000/s against its pods, and
+    // adding a fourth route would raise that again.
+    for route in [ProxySettings::default(), ProxySettings::default()] {
+        let rl = resolve(&service, Some(&route))
+            .rate_limit
+            .expect("inherited");
+        assert_eq!(rl.scope, RateLimitScope::Service);
+        assert_eq!(rl.settings.max_events, 1000);
+    }
+
+    // A route declaring its own is that route's budget, so it is scoped to it.
+    let own = ProxySettings {
+        rate_limit: limit(10, 1.0),
+        ..Default::default()
+    };
+    let rl = resolve(&service, Some(&own)).rate_limit.expect("own");
+    assert_eq!(rl.scope, RateLimitScope::Route);
 }

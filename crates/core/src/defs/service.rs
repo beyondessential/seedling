@@ -13,8 +13,8 @@ use super::{
 };
 pub use proxy::{
     BalanceSettings, CompressDecl, CompressSettings, Encoding, LbPolicy, ProxySettings,
-    RateLimitDecl, RateLimitSettings, ResolvedBalance, ResolvedCompress, ResolvedRouteProxy,
-    default_content_types, resolve,
+    RateLimitDecl, RateLimitScope, RateLimitSettings, ResolvedBalance, ResolvedCompress,
+    ResolvedRateLimit, ResolvedRouteProxy, default_content_types, resolve,
 };
 
 mod proxy;
@@ -343,11 +343,7 @@ impl ServiceDef {
     /// The service-level view resolution works against, gathering balancing
     /// from the service and compression from its HTTP surface.
     pub fn proxy_settings(&self) -> ProxySettings {
-        ProxySettings {
-            compress: self.http.as_ref().and_then(|h| h.compress.clone()),
-            balance: self.balance.clone(),
-            rate_limit: self.http.as_ref().and_then(|h| h.rate_limit),
-        }
+        proxy::service_settings(self.http.as_ref(), &self.balance)
     }
 }
 
@@ -589,11 +585,7 @@ impl ExternalServiceDef {
     /// gathering them in one place per def is what stops the next one being
     /// added to only half of them.
     pub fn proxy_settings(&self) -> ProxySettings {
-        ProxySettings {
-            compress: self.http.as_ref().and_then(|h| h.compress.clone()),
-            balance: self.balance.clone(),
-            rate_limit: self.http.as_ref().and_then(|h| h.rate_limit),
-        }
+        proxy::service_settings(self.http.as_ref(), &self.balance)
     }
 }
 

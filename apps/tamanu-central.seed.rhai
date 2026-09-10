@@ -219,9 +219,9 @@ let configure_server = |c| c
 
 // An unset hostname is a supported deployment: the app declares no ingress and
 // the exported `web` service is fronted by a site ingress instead.
-// The baseline limit sits on the service so every route it serves inherits
-// it, rather than on individual routes: a route added later would otherwise
-// reach the same pods with no limit at all. Illustrative values.
+// The baseline limit sits on the service, so every route it serves inherits
+// it and they share the one budget: a route added later is covered without
+// raising what the pods can be sent in total. Illustrative values.
 let web_svc = app.service("web").exported().http(80)
     .rate_limit(#{ max_events: 1000, window: 1 });
 if public_hostname.is_set() {
