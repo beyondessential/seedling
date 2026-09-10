@@ -15,26 +15,20 @@ pub const DEFAULT_MINIMUM_LENGTH: u64 = 512;
 
 /// Bounds on a declared rate limit.
 ///
-/// These are sanity ceilings, not tuning. A limit is charged to the proxy
-/// process every app on the host shares: the module holds a ring of
-/// `max_events` timestamps per distinct client and reclaims it only once the
-/// window has elapsed, so one app's declaration sets both how large each ring
-/// is and how long it stays. `max_events` bounds the first and the window the
-/// second, which is why the window ceiling is an hour rather than a day.
+/// Sanity ceilings, not tuning. The proxy holds a ring of `max_events`
+/// timestamps per distinct client and reclaims it once that client's newest
+/// request has aged past the window, so a declaration sets both how large each
+/// ring is and how long it survives — in a process every app on the host
+/// shares. Reclamation itself is automatic: the pinned module sweeps every
+/// minute by default, with the sweeper started unconditionally, so nothing
+/// needs to be emitted to switch it on.
 ///
-/// What neither bounds is how many rings exist: that is one per client
-/// address, and who sends the traffic decides it. Counting addresses
-/// individually therefore leaves the total unbounded, and closing it needs the
-/// prefix grouping the pinned module cannot express. Until then these ceilings
-/// limit the cost of each address, not of an attacker willing to use many.
-/// The floor is likewise a plausibility bound rather than a technical one: a
-/// window is emitted as a whole number of nanoseconds and only rounds away
-/// below about half a nanosecond, far under anything here, so the floor is set
-/// where a declaration stops being a rate limit rather than where the encoding
-/// gives out.
+/// The floor is a plausibility bound like the rest: a window is emitted as
+/// whole nanoseconds and only rounds away below about half a nanosecond, far
+/// under anything here.
 pub const MIN_WINDOW_SECS: f64 = 0.001;
 pub const MAX_WINDOW_SECS: f64 = 3_600.0;
-pub const MAX_MAX_EVENTS: u64 = 10_000;
+pub const MAX_MAX_EVENTS: u64 = 1_000;
 pub const DEFAULT_TRY_DURATION_SECS: f64 = 5.0;
 pub const DEFAULT_INTERVAL_SECS: f64 = 0.25;
 

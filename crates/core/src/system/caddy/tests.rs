@@ -6,10 +6,7 @@ use crate::system::types::{
 };
 
 fn default_proxy() -> crate::system::types::RouteProxy {
-    crate::system::types::RouteProxy::from_resolved(
-        crate::defs::service::ResolvedRouteProxy::default(),
-        || crate::system::types::RouteZone("demo/web".to_string()),
-    )
+    crate::system::types::RouteProxy::unlimited(crate::defs::service::ResolvedRouteProxy::default())
 }
 
 fn http_vhost(hostname: &str, upstream: &str) -> VirtualHost {
@@ -1025,41 +1022,6 @@ fn a_longer_prefix_carries_its_own_zone_ahead_of_the_shorter_one() {
 
 // r[verify service.http.route.rate-limiting]
 #[test]
-fn routes_in_different_vhosts_emit_the_zone_they_carry() {
-    // Whether two routes *should* share a budget is decided by `zone_for` in
-    // reconcile::proxy and tested there. What this checks is the emitter's
-    // half: a zone travels to the emitted document unchanged, so two routes
-    // carrying one zone still name one zone once emitted, even in separate
-    // vhosts and separate servers.
-    let limit = || {
-        Some(RouteRateLimit {
-            zone: RouteZone("demo/web/api".to_string()),
-            max_events: 10,
-            window_secs: 1.0,
-        })
-    };
-    let mut config = vhost_with("a.example.com", vec![limited_route("/api", limit())]);
-    config.virtual_hosts.push(VirtualHost {
-        hostname: "b.example.com".to_string(),
-        tls_acme: false,
-        redirect: None,
-        routes: vec![limited_route("/api", limit())],
-    });
-    let json = build_caddy_config(&config);
-    let routes = &json["apps"]["http"]["servers"]["seedling_http"]["routes"];
-
-    assert_eq!(
-        routes[0]["handle"][0]["rate_limits"]["demo/web/api"]["max_events"],
-        10
-    );
-    assert_eq!(
-        routes[1]["handle"][0]["rate_limits"]["demo/web/api"]["max_events"],
-        10
-    );
-}
-
-// r[verify service.http.route.rate-limiting]
-#[test]
 fn redirect_routes_are_never_rate_limited() {
     let config = ProxyConfig {
         listeners: vec![ProxyListener {
@@ -1115,17 +1077,21 @@ fn old_cached_config_without_rate_limit_still_deserialises() {
 
 // r[verify service.http.route.rate-limiting]
 #[test]
-fn one_hostname_terminating_both_ways_emits_the_zone_it_carries() {
-    // Vhosts are keyed by hostname and termination, so one hostname can put
-    // the same declared route in two vhosts, landing in two different emitted
-    // servers. The zone must survive that unchanged; which zone it should be
-    // is `zone_for`'s decision, tested in reconcile::proxy.
-    let limit = || {
-        Some(RouteRateLimit {
-            zone: RouteZone("demo/web/api".to_string()),
-            max_events: 10,
-            window_secs: 1.0,
-        })
+fn a_zone_reaches_the_emitted_document_unchanged() {
+    // Which routes should share a budget is `zone_for`'s decision, tested in
+    // reconcile::proxy. This is the emitter's half of it: a zone is carried
+    // through verbatim, so routes given one zone still name one zone once
+    // emitted — including across separate vhosts, which land in separate
+    // servers when their termination differs.
+    let shared = |prefix: &str| {
+        limited_route(
+            prefix,
+            Some(RouteRateLimit {
+                zone: RouteZone("demo/web".to_string()),
+                max_events: 1000,
+                window_secs: 1.0,
+            }),
+        )
     };
     let config = ProxyConfig {
         listeners: vec![
@@ -1143,54 +1109,27 @@ fn one_hostname_terminating_both_ways_emits_the_zone_it_carries() {
                 hostname: "app.example.com".to_string(),
                 tls_acme: false,
                 redirect: None,
-                routes: vec![limited_route("/api", limit())],
+                routes: vec![shared("/api"), shared("/v1")],
             },
             VirtualHost {
                 hostname: "app.example.com".to_string(),
                 tls_acme: true,
                 redirect: None,
-                routes: vec![limited_route("/api", limit())],
+                routes: vec![shared("/api")],
             },
         ],
         ..Default::default()
     };
     let json = build_caddy_config(&config);
-    let plain =
-        &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"][0]["rate_limits"];
-    let tls =
-        &json["apps"]["http"]["servers"]["seedling_https"]["routes"][0]["handle"][0]["rate_limits"];
+    let plain = &json["apps"]["http"]["servers"]["seedling_http"]["routes"];
+    let tls = &json["apps"]["http"]["servers"]["seedling_https"]["routes"];
 
-    assert!(!plain["demo/web/api"].is_null());
-    assert!(!tls["demo/web/api"].is_null());
-}
-
-// r[verify service.http.route.rate-limiting]
-#[test]
-fn routes_carrying_one_zone_emit_one_zone() {
-    // The emitter's half of shared budgets: two routes carrying the zone
-    // `zone_for` gives an inherited limit emit that one zone, rather than the
-    // emitter re-deriving anything per route.
-    let inherited = || {
-        Some(RouteRateLimit {
-            zone: RouteZone("demo/web".to_string()),
-            max_events: 1000,
-            window_secs: 1.0,
-        })
-    };
-    let config = vhost_with(
-        "app.example.com",
-        vec![
-            limited_route("/api", inherited()),
-            limited_route("/v1", inherited()),
-        ],
-    );
-    let json = build_caddy_config(&config);
-    let routes = &json["apps"]["http"]["servers"]["seedling_http"]["routes"];
-
-    for i in 0..2 {
-        let zones = &routes[i]["handle"][0]["rate_limits"];
+    for zones in [
+        &plain[0]["handle"][0]["rate_limits"],
+        &plain[1]["handle"][0]["rate_limits"],
+        &tls[0]["handle"][0]["rate_limits"],
+    ] {
         assert_eq!(zones["demo/web"]["max_events"], 1000);
         assert!(zones["demo/web/api"].is_null());
-        assert!(zones["demo/web/v1"].is_null());
     }
 }

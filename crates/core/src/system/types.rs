@@ -543,6 +543,16 @@ impl RouteProxy {
     /// There is deliberately no `From` conversion: it would have to invent a
     /// zone, and a placeholder would put unrelated routes in one bucket while
     /// still emitting a valid document.
+    /// Wire form of settings that carry no rate limit, so there is no zone to
+    /// name. Panics if they do carry one, rather than dropping it.
+    pub fn unlimited(resolved: crate::defs::service::ResolvedRouteProxy) -> Self {
+        assert!(
+            resolved.rate_limit.is_none(),
+            "a limited route needs a zone; use from_resolved"
+        );
+        Self::from_resolved(resolved, || RouteZone(String::new()))
+    }
+
     pub fn from_resolved(
         resolved: crate::defs::service::ResolvedRouteProxy,
         zone: impl FnOnce() -> RouteZone,

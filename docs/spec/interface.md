@@ -291,6 +291,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > `shared` is true when the limit was declared on the service, so the route counts against a budget common to every route inheriting it; without it two routes reporting the same numbers could not be told apart from two routes holding one budget each.
 >
 > A service whose backing pods declare no HTTP route bindings reports the single `/` route it is served through, so the array is never empty for an HTTP service.
+>
+> The routes reported are those the app declared, which is not necessarily the set the proxy serves: a prefix no pod binds is declared but not served, and requests under it are served by whichever declared prefix does match. A reader diagnosing a setting that appears not to apply should establish that a pod binds the prefix reporting it.
 
 > i[app.describe.param-secret]
 > When a param's effective `secret` flag is `true`, its `value` must be `null` in the response regardless of whether a value is stored. Clients must use `is_set` to distinguish an unset secret from a set-but-redacted secret.

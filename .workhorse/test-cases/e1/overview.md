@@ -44,6 +44,8 @@ Scenarios verifying that an app can declare a per-client request limit on an HTT
 - [x] A route that is not limited reports null rather than a zero-valued object (verifies spec: app.describe.proxy-settings)
 - [x] An inherited limit reports as shared and a route's own does not, so two routes showing one number can be told apart (verifies spec: app.describe.proxy-settings)
 
+- [ ] A limit declared on a prefix no pod binds is reported by describe but not served, so the reported set is read as declarations rather than as enforcement
+
 ## Against a running proxy
 
 Scenarios needing a real Caddy rather than the emitted document. Not covered by the automated suite.
@@ -53,5 +55,6 @@ Scenarios needing a real Caddy rather than the emitted document. Not covered by 
 - [ ] Login requests are counted against the login limit alone, and do not consume the wider API budget
 - [ ] Two clients on different addresses are limited independently
 - [ ] A service whose `/` route opts out is not limited on the fallback path taken before any pod has bound
+- [ ] Idle per-client state is reclaimed by the module's own sweeper, which runs every minute by default and is not configured here
 - [ ] Limiter state survives a proxy config reload, so a reconcile does not reset a client's budget
 - [ ] The emitted document is accepted by the real pinned proxy image, which no assertion on our own JSON can establish

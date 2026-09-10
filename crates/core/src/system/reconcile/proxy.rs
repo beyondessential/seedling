@@ -239,8 +239,9 @@ fn routes_of(http: Option<&HttpServiceDef>) -> RouteMap {
     http.map(|h| h.routes.clone()).unwrap_or_default()
 }
 
-/// Settings for a route the service declares nothing specific about, which is
-/// also what the synthesised `/` route of a binding-less service takes.
+/// Settings for the synthesised `/` route, which a service is served through
+/// when no pod binds a prefix. A service may have declared settings for `/`
+/// even so, and they are what that route takes.
 // r[impl service.http.route.compression]
 // r[impl service.http.route.balancing]
 pub(super) fn service_level_proxy(snapshot: &AppDef, service_name: &str) -> RouteProxy {
@@ -252,7 +253,12 @@ pub(super) fn service_level_proxy(snapshot: &AppDef, service_name: &str) -> Rout
     let resolved = resolve(&service, routes.get("/"));
     let scope = resolved.rate_limit.map(|rl| rl.scope);
     RouteProxy::from_resolved(resolved, || {
-        zone_for(snapshot.name.as_str(), service_name, "/", scope)
+        zone_for(
+            snapshot.name.as_str(),
+            service_name,
+            "/",
+            scope.expect("only called where a limit is in force"),
+        )
     })
 }
 
@@ -262,12 +268,12 @@ pub(super) fn service_level_proxy(snapshot: &AppDef, service_name: &str) -> Rout
 /// declared is one budget for the service however many routes inherit it,
 /// while a limit a route declared is that route's own. See
 /// [`RouteRateLimit::zone`].
-fn zone_for(app: &str, service: &str, prefix: &str, scope: Option<RateLimitScope>) -> RouteZone {
+fn zone_for(app: &str, service: &str, prefix: &str, scope: RateLimitScope) -> RouteZone {
     match scope {
-        Some(RateLimitScope::Route) => RouteZone(format!("{app}/{service}{prefix}")),
+        RateLimitScope::Route => RouteZone(format!("{app}/{service}{prefix}")),
         // No prefix: every route inheriting the service's limit names the same
         // budget, which is what makes it one budget rather than one each.
-        Some(RateLimitScope::Service) | None => RouteZone(format!("{app}/{service}")),
+        RateLimitScope::Service => RouteZone(format!("{app}/{service}")),
     }
 }
 
@@ -359,7 +365,12 @@ pub(super) fn collect_http_routes(
             let resolved = resolve(&service, routes.get(&prefix));
             let scope = resolved.rate_limit.map(|rl| rl.scope);
             let proxy = RouteProxy::from_resolved(resolved, || {
-                zone_for(snapshot.name.as_str(), service_name, &prefix, scope)
+                zone_for(
+                    snapshot.name.as_str(),
+                    service_name,
+                    &prefix,
+                    scope.expect("only called where a limit is in force"),
+                )
             });
             HttpForwardRoute {
                 prefix,
@@ -373,6 +384,47 @@ pub(super) fn collect_http_routes(
 #[cfg(test)]
 mod zone_tests {
     use super::*;
+    use crate::defs::service::{CompressDecl, LbPolicy};
+
+    // r[verify service.http.route.compression]
+    // r[verify service.http.route.balancing]
+    #[test]
+    fn the_fallback_route_takes_what_the_service_declared_for_slash() {
+        // `service_level_proxy` resolves against the declared `/` route, not
+        // against nothing, so a service that said something specific about `/`
+        // is honoured on the synthesised route as well — for compression and
+        // balancing, not only for the limit that motivated the change.
+        let service = ProxySettings {
+            compress: Some(CompressDecl::Enabled(Default::default())),
+            balance: crate::defs::service::BalanceSettings {
+                policy: Some(LbPolicy::LeastConn),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let root = ProxySettings {
+            compress: Some(CompressDecl::Disabled),
+            balance: crate::defs::service::BalanceSettings {
+                policy: Some(LbPolicy::First),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let resolved = resolve(&service, Some(&root));
+        assert!(
+            resolved.compress.is_none(),
+            "a `/` route that switched compression off keeps it off on the \
+             fallback route"
+        );
+        assert_eq!(resolved.balance.policy, LbPolicy::First);
+
+        // Against no route at all the service's own values stand, which is
+        // what the fallback used to take unconditionally.
+        let ignoring_root = resolve(&service, None);
+        assert!(ignoring_root.compress.is_some());
+        assert_eq!(ignoring_root.balance.policy, LbPolicy::LeastConn);
+    }
 
     // r[verify service.http.route.rate-limiting]
     #[test]
@@ -380,7 +432,7 @@ mod zone_tests {
         // The failure this guards is a service declaring one limit and getting
         // one budget per route: three routes would let a client spend the
         // limit three times over, and a fourth route would raise it again.
-        let service = Some(RateLimitScope::Service);
+        let service = RateLimitScope::Service;
         let api = zone_for("demo", "web", "/api", service);
         let v1 = zone_for("demo", "web", "/v1", service);
         let root = zone_for("demo", "web", "/", service);
@@ -393,7 +445,7 @@ mod zone_tests {
     // r[verify service.http.route.rate-limiting]
     #[test]
     fn a_route_declared_limit_names_that_routes_own_budget() {
-        let route = Some(RateLimitScope::Route);
+        let route = RateLimitScope::Route;
         assert_eq!(
             zone_for("demo", "web", "/api/login", route),
             RouteZone("demo/web/api/login".to_string())
@@ -409,7 +461,7 @@ mod zone_tests {
     // r[verify service.http.route.rate-limiting]
     #[test]
     fn budgets_of_different_services_and_apps_stay_apart() {
-        let route = Some(RateLimitScope::Route);
+        let route = RateLimitScope::Route;
         let a = zone_for("app-one", "web", "/api", route);
         let b = zone_for("app-two", "web", "/api", route);
         let c = zone_for("app-one", "portal", "/api", route);

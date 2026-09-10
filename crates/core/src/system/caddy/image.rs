@@ -125,15 +125,16 @@ fn referenced_modules(config: &serde_json::Value) -> std::collections::BTreeSet<
 /// applies at both levels of the handler, so both are listed: the handler
 /// object and each zone within it.
 ///
-/// These are what we emit and have confirmed against the tag, rather than
-/// everything it accepts. Emitting a further key means checking the tag
-/// declares it and adding it here — `ipv4_prefix` and `ipv6_prefix`, for
-/// instance, exist upstream but are in no released version.
+/// These are the keys we emit and have checked the tag against, not everything
+/// it accepts: the list is a whitelist to be widened deliberately. Emitting a
+/// further key means confirming the pinned tag declares it and adding it here
+/// — `ipv4_prefix` and `ipv6_prefix`, for instance, exist upstream but are in
+/// no released version, and emitting one would have been a host-wide outage.
 #[cfg(test)]
 pub(super) const RATE_LIMIT_HANDLER_FIELDS: &[&str] = &["handler", "rate_limits"];
 
 #[cfg(test)]
-pub(super) const RATE_LIMIT_ZONE_FIELDS: &[&str] = &["match", "key", "window", "max_events"];
+pub(super) const RATE_LIMIT_ZONE_FIELDS: &[&str] = &["key", "window", "max_events"];
 
 #[cfg(test)]
 mod tests {

@@ -450,7 +450,7 @@ This is currently the only value.
 > l[service.http.rate-limit.fields]
 > Both fields of the `config` map are required, since a limit has no meaning without either:
 >
-> - `max_events`: the number of requests one client may make within each window. Must be a positive integer, at most ten thousand.
+> - `max_events`: the number of requests one client may make within each window. Must be a positive integer, at most one thousand.
 > - `window`: the length of the sliding window, in seconds. Must be a finite number between one millisecond and one hour.
 >
 > An unrecognised field, and either field outside its range, must each throw.
