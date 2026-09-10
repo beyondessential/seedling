@@ -30,7 +30,7 @@ pub fn insert_instance(db: &Db, instance: &ResourceInstance) -> rusqlite::Result
         params![
             instance.id.to_hex(),
             instance.app,
-            format!("{:?}", instance.kind),
+            resource_kind_str(instance.kind).to_owned(),
             instance.name,
             matches!(instance.variant, InstanceVariant::Scaled) as i64,
             instance.display_name,
@@ -108,7 +108,7 @@ pub fn find_instances_for_group(
          WHERE app = ?1 AND kind = ?2 AND name IS ?3
          ORDER BY created_at ASC",
     )?;
-    let kind_str = format!("{:?}", kind);
+    let kind_str = resource_kind_str(kind).to_owned();
     let rows = stmt.query_map(params![app, kind_str, name], |row| {
         let id_hex: String = row.get(0)?;
         let is_scaled: i64 = row.get(1)?;
@@ -161,7 +161,7 @@ pub fn get_or_create_singleton(
     kind: ResourceKind,
     name: Option<&str>,
 ) -> rusqlite::Result<ResourceInstance> {
-    let kind_str = format!("{:?}", kind);
+    let kind_str = resource_kind_str(kind).to_owned();
 
     // Atomic insert-or-select: the partial unique index (app, kind, name)
     // WHERE is_scaled = 0 guarantees at most one singleton row exists.
@@ -698,6 +698,27 @@ fn parse_lifecycle_state(s: &str) -> Result<LifecycleState, rusqlite::Error> {
     }
 }
 
+/// How a resource kind is spelt in `resource_instances.kind`.
+///
+/// The column was written with `format!("{:?}")` and read by a hand-written
+/// match, so the two could drift — and did: `ExternalService` rows are
+/// persisted by the reconciler but had no arm here, so `find_instance` on one
+/// returned a conversion failure rather than the instance. An exhaustive
+/// match means a new variant stops compiling here instead.
+fn resource_kind_str(kind: ResourceKind) -> &'static str {
+    match kind {
+        ResourceKind::Parameter => "Parameter",
+        ResourceKind::Service => "Service",
+        ResourceKind::Ingress => "Ingress",
+        ResourceKind::Deployment => "Deployment",
+        ResourceKind::Job => "Job",
+        ResourceKind::Volume => "Volume",
+        ResourceKind::ExternalVolume => "ExternalVolume",
+        ResourceKind::ExternalService => "ExternalService",
+        ResourceKind::Action => "Action",
+    }
+}
+
 fn parse_resource_kind(s: &str) -> Result<ResourceKind, rusqlite::Error> {
     match s {
         "Parameter" => Ok(ResourceKind::Parameter),
@@ -707,6 +728,7 @@ fn parse_resource_kind(s: &str) -> Result<ResourceKind, rusqlite::Error> {
         "Job" => Ok(ResourceKind::Job),
         "Volume" => Ok(ResourceKind::Volume),
         "ExternalVolume" => Ok(ResourceKind::ExternalVolume),
+        "ExternalService" => Ok(ResourceKind::ExternalService),
         "Action" => Ok(ResourceKind::Action),
         other => Err(rusqlite::Error::FromSqlConversionFailure(
             0,

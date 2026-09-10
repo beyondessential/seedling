@@ -775,3 +775,36 @@ fn re_saving_the_operation_preserves_a_cancel_request() {
         "a writer must not reset a column another writer owns"
     );
 }
+
+// r[verify history.storage]
+// The kind column is written on one side and parsed on the other, so a
+// variant missing from the parse turns a persisted row into a conversion
+// failure. `ExternalService` was exactly that: the reconciler writes those
+// rows, and `find_instance` could not read them back.
+#[test]
+fn every_resource_kind_round_trips_through_the_kind_column() {
+    use super::{parse_resource_kind, resource_kind_str};
+    use crate::defs::resource::ResourceKind;
+
+    for kind in [
+        ResourceKind::Parameter,
+        ResourceKind::Service,
+        ResourceKind::Ingress,
+        ResourceKind::Deployment,
+        ResourceKind::Job,
+        ResourceKind::Volume,
+        ResourceKind::ExternalVolume,
+        ResourceKind::ExternalService,
+        ResourceKind::Action,
+    ] {
+        let s = resource_kind_str(kind);
+        assert_eq!(
+            parse_resource_kind(s).expect("must parse what we write"),
+            kind,
+            "round trip failed for {kind:?}"
+        );
+        // The column has existing rows written with Debug, so the spelling
+        // must not drift from it.
+        assert_eq!(s, format!("{kind:?}"), "spelling changed for {kind:?}");
+    }
+}
