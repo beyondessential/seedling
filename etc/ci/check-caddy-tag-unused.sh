@@ -26,24 +26,31 @@ case "$image" in
     ;;
 esac
 
-# GHCR issues a pull token even for an anonymous caller on a public package, so
+# GHCR issues a pull token even to an anonymous caller for a public package, so
 # this runs on a workstation as well as in CI. Credentials, where present, widen
-# it to packages the caller can see but nobody else can.
-auth=()
-if [ -n "${GITHUB_TOKEN:-}" ]; then
-  auth=(--user "${GITHUB_ACTOR:-x-access-token}:${GITHUB_TOKEN}")
-fi
-
+# that to a package only the caller can see; a pull request from a fork gets a
+# read-only token, which may be refused the exchange, so a refusal falls back to
+# anonymous rather than failing a check the public package does not need it for.
 token_url="https://ghcr.io/token?service=ghcr.io&scope=repository:${repository}:pull"
-if ! token_json="$(curl -fsSL --max-time 20 "${auth[@]}" "$token_url")"; then
-  echo "::error::could not get a ghcr.io pull token for $repository, so whether \
-$image:$tag is already published is unknown. Failing rather than assuming it is free."
-  exit 2
+
+# Answers with the token, or with nothing if this caller cannot have one. A
+# refusal is not this function's to report: the caller has another way to ask.
+fetch_token() {
+  local json
+  json="$(curl -fsSL --max-time 20 "$@" "$token_url" 2>/dev/null)" || return 0
+  jq -r '.token // empty' <<<"$json"
+}
+
+token=""
+if [ -n "${GITHUB_TOKEN:-}" ]; then
+  token="$(fetch_token --user "${GITHUB_ACTOR:-x-access-token}:${GITHUB_TOKEN}")"
+fi
+if [ -z "$token" ]; then
+  token="$(fetch_token)"
 fi
 
-token="$(jq -r '.token // empty' <<<"$token_json")"
 if [ -z "$token" ]; then
-  echo "::error::ghcr.io returned no pull token for $repository, so whether \
+  echo "::error::could not get a ghcr.io pull token for $repository, so whether \
 $image:$tag is already published is unknown. Failing rather than assuming it is free."
   exit 2
 fi

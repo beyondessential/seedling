@@ -50,7 +50,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          if git diff --quiet "$BASE" "$HEAD" -- docker/caddy/Containerfile; then
+          # Three dots, so this asks what the pull request changed rather than
+          # how the two tips differ. Two dots also reports a Containerfile that
+          # moved on the base branch and not here, which is a change the pull
+          # request does not own and cannot bump a serial for.
+          if git diff --quiet "$BASE...$HEAD" -- docker/caddy/Containerfile; then
             echo "Containerfile unchanged; nothing to check."
             exit 0
           fi
