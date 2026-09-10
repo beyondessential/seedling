@@ -21,6 +21,27 @@ use crate::runtime::{LifecycleState, ResourceInstance, restart_gens};
 /// Default deadline for `.scheduled()` — a pod not scheduled inside this
 /// window almost always indicates a cluster-level problem, not a slow workload.
 // l[impl rt.started.default-deadlines]
+/// Resolve an explicit deadline argument against the state's default.
+///
+/// `l[rt.started.state-methods]` says the argument must be a positive integer
+/// number of seconds, and that zero or absent means the state's default.
+/// Both used to go through `d.max(0) as u64`, so `0` became `Some(0)` — which
+/// the `elapsed >= d` check trips on the very next pass, the exact opposite
+/// of the documented fallback. A script writing `ready(0)` expecting the
+/// default 30s got "Barrier deadline of 0s exceeded" about two seconds later.
+///
+/// A negative is not a deadline at all, and the defs layer's rule is to throw
+/// on malformed input rather than coerce it into something that means
+/// something else.
+// l[impl rt.started.state-methods]
+fn resolve_deadline(d: i64, default_secs: u64) -> Result<u64, Box<EvalAltResult>> {
+    match d {
+        0 => Ok(default_secs),
+        d if d < 0 => Err(format!("deadline must be a positive number of seconds, got {d}").into()),
+        d => Ok(d as u64),
+    }
+}
+
 pub const DEFAULT_SCHEDULED_DEADLINE_SECS: u64 = 30;
 
 /// Default deadline for `.running()` — same reasoning as `.scheduled()`.
@@ -1585,7 +1606,10 @@ impl CustomType for RuntimeInstance {
                         .into_iter()
                         .map(|(r, _)| r)
                         .collect();
-                    this.do_stop(instances, Some(deadline.max(0) as u64))
+                    this.do_stop(
+                        instances,
+                        Some(resolve_deadline(deadline, DEFAULT_STOP_DEADLINE_SECS)?),
+                    )
                 },
             )
             // l[impl rt.query]
@@ -2168,7 +2192,10 @@ impl CustomType for Started {
             .with_fn(
                 "scheduled",
                 |this: &mut Self, d: i64| -> Result<Started, Box<EvalAltResult>> {
-                    this.check_barrier(LifecycleState::Scheduled, Some(d.max(0) as u64))
+                    this.check_barrier(
+                        LifecycleState::Scheduled,
+                        Some(resolve_deadline(d, DEFAULT_SCHEDULED_DEADLINE_SECS)?),
+                    )
                 },
             )
             .with_fn(
@@ -2180,7 +2207,10 @@ impl CustomType for Started {
             .with_fn(
                 "running",
                 |this: &mut Self, d: i64| -> Result<Started, Box<EvalAltResult>> {
-                    this.check_barrier(LifecycleState::Running, Some(d.max(0) as u64))
+                    this.check_barrier(
+                        LifecycleState::Running,
+                        Some(resolve_deadline(d, DEFAULT_RUNNING_DEADLINE_SECS)?),
+                    )
                 },
             )
             .with_fn(
@@ -2192,7 +2222,10 @@ impl CustomType for Started {
             .with_fn(
                 "ready",
                 |this: &mut Self, d: i64| -> Result<Started, Box<EvalAltResult>> {
-                    this.check_barrier(LifecycleState::Ready, Some(d.max(0) as u64))
+                    this.check_barrier(
+                        LifecycleState::Ready,
+                        Some(resolve_deadline(d, DEFAULT_READY_DEADLINE_SECS)?),
+                    )
                 },
             )
             // l[impl rt.started.ready-eventually]
@@ -2216,7 +2249,10 @@ impl CustomType for Started {
             .with_fn(
                 "terminated",
                 |this: &mut Self, d: i64| -> Result<Termination, Box<EvalAltResult>> {
-                    this.check_barrier(LifecycleState::Terminated, Some(d.max(0) as u64))?;
+                    this.check_barrier(
+                        LifecycleState::Terminated,
+                        Some(resolve_deadline(d, DEFAULT_TERMINATED_DEADLINE_SECS)?),
+                    )?;
                     Ok(this.compute_termination())
                 },
             )
@@ -2391,5 +2427,45 @@ mod exit_code_tests {
         assert_eq!(format_exit_code(42), "42");
         assert_eq!(format_exit_code(217), "217");
         assert_eq!(format_exit_code(255), "255");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DEFAULT_READY_DEADLINE_SECS, DEFAULT_TERMINATED_DEADLINE_SECS, resolve_deadline};
+
+    // l[verify rt.started.state-methods]
+    // Zero used to become `Some(0)`, which the `elapsed >= d` check trips on
+    // the very next pass — so `ready(0)`, written expecting the documented
+    // default, failed about two seconds later instead of waiting 30.
+    #[test]
+    fn zero_means_the_states_default() {
+        assert_eq!(
+            resolve_deadline(0, DEFAULT_READY_DEADLINE_SECS).unwrap(),
+            DEFAULT_READY_DEADLINE_SECS
+        );
+        assert_eq!(
+            resolve_deadline(0, DEFAULT_TERMINATED_DEADLINE_SECS).unwrap(),
+            DEFAULT_TERMINATED_DEADLINE_SECS
+        );
+    }
+
+    // l[verify rt.started.state-methods]
+    #[test]
+    fn a_positive_deadline_is_taken_as_given() {
+        assert_eq!(
+            resolve_deadline(45, DEFAULT_READY_DEADLINE_SECS).unwrap(),
+            45
+        );
+    }
+
+    // l[verify rt.started.state-methods]
+    // The spec says the argument must be positive; clamping a negative to
+    // zero would silently mean "fail immediately".
+    #[test]
+    fn a_negative_deadline_is_refused() {
+        let err = resolve_deadline(-5, DEFAULT_READY_DEADLINE_SECS)
+            .expect_err("a negative is not a deadline");
+        assert!(err.to_string().contains("-5"), "should name it: {err}");
     }
 }

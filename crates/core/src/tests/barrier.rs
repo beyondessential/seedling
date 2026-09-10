@@ -402,8 +402,13 @@ fn barrier_succeeds_after_deadline_when_oracle_reached() {
 }
 
 // r[verify barrier.deadline]
+// l[verify rt.started.state-methods]
+// `ready(0)` means "use the default deadline", not "fail immediately".
+// This used to assert the opposite: zero mapped to `Some(0)`, which the
+// `elapsed >= d` check tripped on the very next pass, so a script asking for
+// the documented default got a deadline failure about two seconds later.
 #[test]
-fn barrier_deadline_zero_expires_on_second_pass() {
+fn barrier_deadline_zero_uses_the_state_default() {
     let (engine, mut scope, app, ast) = setup_with_script(
         r#"
         let web = app.deployment("web").image("docker.io/library/nginx:latest");
@@ -448,7 +453,7 @@ fn barrier_deadline_zero_expires_on_second_pass() {
     );
     assert!(matches!(r, OperationResult::Suspended(_)));
 
-    // Pass 2: deadline=0, time has elapsed → Failed
+    // Pass 2: deadline 0 resolved to the 30s default, so still waiting
     let r = run_operation(
         OperationContext {
             engine: &engine,
@@ -476,7 +481,10 @@ fn barrier_deadline_zero_expires_on_second_pass() {
         },
         &mut scope,
     );
-    assert!(matches!(r, OperationResult::Failed(_)));
+    assert!(
+        matches!(r, OperationResult::Suspended(_)),
+        "a zero deadline takes the state default, so this is still waiting: {r:?}",
+    );
 }
 
 // r[verify barrier.replay]
@@ -1079,15 +1087,17 @@ fn dynamic_poll_interval_follows_piecewise_schedule() {
 fn rt_stop_deadline_is_enforced() {
     // Previously rt.stop() stored the deadline in the BarrierRecord but
     // never actually read it; a resource that refused to terminate left the
-    // closure suspended indefinitely. Passing deadline=0 makes the second
-    // pass fail immediately after the first pass records started_at, which
-    // is the same shape as `barrier_deadline_zero_expires_on_second_pass`
-    // uses for .ready().
+    // closure suspended indefinitely.
+    //
+    // This used to force expiry with deadline=0, which `l[rt.stop]` defines
+    // as "use the default" rather than "expire at once" — so it now uses the
+    // smallest real deadline and lets it actually elapse between the pass
+    // that records `started_at` and the pass that checks it.
     let (engine, mut scope, app, ast) = setup_with_script(
         r#"
         let old = app.deployment("old").image("docker.io/library/nginx:latest");
         app.on_start(|rt, _param| {
-            rt.stop(app.deployment("old"), 0);
+            rt.stop(app.deployment("old"), 1);
         });
     "#,
     );
@@ -1127,7 +1137,10 @@ fn rt_stop_deadline_is_enforced() {
     );
     assert!(matches!(r, OperationResult::Suspended(_)));
 
-    // Pass 2: deadline=0 is exceeded immediately → Failed.
+    // Let the 1s deadline actually elapse before the checking pass.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
+    // Pass 2: the 1s deadline has now been exceeded → Failed.
     let r = run_operation(
         OperationContext {
             engine: &engine,
