@@ -167,18 +167,66 @@ pub(crate) struct SetAcmeDnsParams {
 }
 
 // i[tls.policy.set-acme-dns]
+/// Validate a TLS policy hostname pattern.
+///
+/// `r[tls.policy.wildcard]` defines the shapes: the catch-all `*`, a
+/// left-anchored `*.<suffix>`, or an exact hostname. Anything else — an empty
+/// string, a bare `*.`, a name with a stray character — produced a stored
+/// policy that could never match any hostname, indistinguishable in the
+/// policy list from one that works.
+// r[impl tls.policy.wildcard]
+fn validate_policy_hostname(hostname: &str) -> Result<(), OiError> {
+    let ok = if hostname == "*" {
+        true
+    } else if let Some(suffix) = hostname.strip_prefix("*.") {
+        super::is_valid_dns_name(suffix)
+    } else {
+        super::is_valid_dns_name(hostname)
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!("hostname {hostname:?} must be `*`, `*.<suffix>`, or a valid hostname"),
+        ))
+    }
+}
+
 pub(crate) fn set_policy_acme_dns(state: &OiState, params: SetAcmeDnsParams) -> HandlerResult {
     let SetAcmeDnsParams {
         hostname,
         dns_provider,
     } = params;
 
+    // A pattern that matches nothing is a policy row nothing will ever use,
+    // and it looked identical to a working one in the policy list.
+    validate_policy_hostname(&hostname)?;
+
     let hostname_for_db = hostname.clone();
     let dns_provider_for_db = dns_provider.clone();
+    let provider_for_check = dns_provider.clone();
     state
         .db
-        .call(move |db| store::set_policy_acme_dns(db, &hostname_for_db, &dns_provider_for_db))
-        .map_err(db_error)?;
+        .call(move |db| {
+            // Checked here rather than left to the foreign key: the FK refusal
+            // arrived as `not_found: db error: FOREIGN KEY constraint failed`,
+            // which names neither the provider nor what to do about it, and
+            // gave a client the wrong error code to key off. Inside the same
+            // closure, so nothing can delete the provider in between.
+            if store::get_dns_provider_raw(db, &provider_for_check)?.is_none() {
+                return Ok(false);
+            }
+            store::set_policy_acme_dns(db, &hostname_for_db, &dns_provider_for_db).map(|()| true)
+        })
+        .map_err(db_error)?
+        .then_some(())
+        .ok_or_else(|| {
+            OiError::new(
+                ErrorCode::RequirementsInvalid,
+                format!("DNS provider {dns_provider:?} does not exist; add it first"),
+            )
+        })?;
 
     // Issuance for an exact hostname kicks in via the issuance coordinator.
     // For wildcard policies there's no concrete hostname to issue against

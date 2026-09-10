@@ -332,3 +332,33 @@ fn reserved_site_ingress_name_is_rejected_at_creation() {
     assert_eq!(code, "requirements_invalid");
     assert!(message.contains("reserved"), "message: {message}");
 }
+
+// r[verify ingress.site.lifecycle]
+// An attachment on port 0 is not routable; it used to be stored and then
+// reach the proxy config rather than being refused with the field named.
+#[test]
+fn attaching_on_port_zero_is_refused() {
+    let oi = TestOi::new();
+    oi.call(
+        "/ingresses/site/create",
+        json!({ "name": "zero", "hostname": "zero.example.com" }),
+    )
+    .unwrap();
+
+    let (code, msg) = oi
+        .call(
+            "/ingresses/site/attach/redirect",
+            json!({
+                "name": "zero",
+                "port": 0,
+                "protocol": "http",
+                "redirect_url": "https://example.com/",
+            }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+    assert!(
+        msg.contains("got 0"),
+        "message should name the value: {msg}"
+    );
+}

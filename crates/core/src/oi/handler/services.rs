@@ -120,29 +120,9 @@ fn validate_remote_host(host: &str) -> Result<(), OiError> {
 /// underscore labels, and `localhost` (the daemon resolves on the host;
 /// localhost would loop back into the daemon's own networking).
 fn is_valid_dns_name(s: &str) -> bool {
-    if s.is_empty() || s.len() > 253 || s.eq_ignore_ascii_case("localhost") {
-        return false;
-    }
-    let mut any_alpha = false;
-    for label in s.split('.') {
-        if label.is_empty() || label.len() > 63 {
-            return false;
-        }
-        if label.starts_with('-') || label.ends_with('-') {
-            return false;
-        }
-        for c in label.chars() {
-            if !(c.is_ascii_alphanumeric() || c == '-') {
-                return false;
-            }
-            if c.is_ascii_alphabetic() {
-                any_alpha = true;
-            }
-        }
-    }
-    // Reject all-numeric strings (e.g. "12345"); legitimate names always
-    // carry at least one alphabetic character somewhere.
-    any_alpha
+    // A site-service remote host must be reachable from the pod network, and
+    // `localhost` there would name the pod rather than the operator's box.
+    !s.eq_ignore_ascii_case("localhost") && super::is_valid_dns_name(s)
 }
 
 #[derive(Deserialize)]
@@ -162,6 +142,8 @@ pub(crate) fn create_site_service(
 ) -> HandlerResult {
     for ep in &params.endpoints {
         validate_remote_host(&ep.remote_host)?;
+        super::validate_port("service_port", ep.service_port)?;
+        super::validate_port("remote_port", ep.remote_port)?;
     }
     let endpoints: Vec<SiteServiceEndpoint> =
         params.endpoints.into_iter().map(Into::into).collect();
@@ -325,6 +307,8 @@ pub(crate) fn add_site_service_endpoint(
     ctx: &RequestCtx,
 ) -> HandlerResult {
     validate_remote_host(&params.remote_host)?;
+    super::validate_port("service_port", params.service_port)?;
+    super::validate_port("remote_port", params.remote_port)?;
     let name = params.name.clone();
     let ep = SiteServiceEndpoint {
         service_port: params.service_port,
@@ -775,6 +759,57 @@ mod tests {
 
         let (code, _) = oi
             .call("/services/site/delete", json!({ "name": "lab-db" }))
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid");
+    }
+
+    // r[verify service.site.address]
+    // Port 0 deserialises happily into a plain `u16` but is not a routable
+    // listener or backend port; it used to reach the site-proxy config as
+    // `listen :0` / dial `:0` rather than being named as a bad field here.
+    #[test]
+    fn site_service_create_rejects_port_zero() {
+        for (svc, remote) in [(0, 5432), (5432, 0)] {
+            let oi = TestOi::new();
+            let (code, msg) = oi
+                .call(
+                    "/services/site/create",
+                    json!({
+                        "name": "zero-port",
+                        "endpoints": [{
+                            "service_port": svc,
+                            "protocol": "tcp",
+                            "remote_host": "10.0.0.5",
+                            "remote_port": remote,
+                        }],
+                    }),
+                )
+                .unwrap_err();
+            assert_eq!(code, "requirements_invalid", "svc={svc} remote={remote}");
+            assert!(
+                msg.contains("got 0"),
+                "message should name the value: {msg}"
+            );
+        }
+    }
+
+    // r[verify service.site.address]
+    #[test]
+    fn adding_an_endpoint_rejects_port_zero() {
+        let oi = TestOi::new();
+        oi.call("/services/site/create", json!({ "name": "svc" }))
+            .unwrap();
+        let (code, _) = oi
+            .call(
+                "/services/site/endpoint/add",
+                json!({
+                    "name": "svc",
+                    "service_port": 0,
+                    "protocol": "tcp",
+                    "remote_host": "10.0.0.5",
+                    "remote_port": 5432,
+                }),
+            )
             .unwrap_err();
         assert_eq!(code, "requirements_invalid");
     }

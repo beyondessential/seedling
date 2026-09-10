@@ -42,33 +42,43 @@ pub(crate) fn list_keys(state: &OiState) -> HandlerResult {
 
 // i[key.authorize]
 pub(crate) fn authorize_key(state: &OiState, params: AuthorizeKeyParams) -> HandlerResult {
+    // The verifier compares byte-for-byte against a lowercase-hex SHA-256, so
+    // an uppercase, whitespace-padded, `sha256:`-prefixed or wrong-length
+    // value was stored and listed as authorised while never matching any
+    // client. Normalise what can be, and refuse what cannot.
+    let fingerprint = seedling_protocol::keys::parse_fingerprint(&params.fingerprint)
+        .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;
     let trusted_keys = Arc::clone(&state.trusted_keys);
-    let fingerprint = params.fingerprint.clone();
     let label = params.label.clone();
+    let fingerprint_for_db = fingerprint.clone();
     state
         .db
-        .call(move |db| crate::oi::auth::authorize_key(db, &trusted_keys, &fingerprint, &label))
+        .call(move |db| {
+            crate::oi::auth::authorize_key(db, &trusted_keys, &fingerprint_for_db, &label)
+        })
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
-    tracing::info!(fingerprint = %params.fingerprint, label = %params.label, "authorized key");
+    tracing::info!(fingerprint = %fingerprint, label = %params.label, "authorized key");
     Ok(json!({}))
 }
 
 // i[key.revoke]
 pub(crate) fn revoke_key(state: &OiState, params: RevokeKeyParams) -> HandlerResult {
+    // Normalised the same way as on the way in, so a key authorised from a
+    // `sha256:`-prefixed or uppercase paste can be revoked with the string
+    // the operator actually typed.
+    let fingerprint = seedling_protocol::keys::parse_fingerprint(&params.fingerprint)
+        .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;
     let trusted_keys = Arc::clone(&state.trusted_keys);
-    let fingerprint = params.fingerprint.clone();
+    let fingerprint_for_db = fingerprint.clone();
     let removed = state
         .db
-        .call(move |db| crate::oi::auth::revoke_key(db, &trusted_keys, &fingerprint))
+        .call(move |db| crate::oi::auth::revoke_key(db, &trusted_keys, &fingerprint_for_db))
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
     if removed {
-        tracing::info!(fingerprint = %params.fingerprint, "revoked key");
+        tracing::info!(fingerprint = %fingerprint, "revoked key");
         Ok(json!({}))
     } else {
-        Err(OiError::not_found(format!(
-            "key not found: {}",
-            params.fingerprint
-        )))
+        Err(OiError::not_found(format!("key not found: {fingerprint}")))
     }
 }
 

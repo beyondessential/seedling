@@ -86,6 +86,46 @@ pub fn spki_der(key: &SigningKey) -> Vec<u8> {
     out
 }
 
+/// Why an operator-supplied fingerprint was refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InvalidFingerprint {
+    /// Not 64 hex characters once normalised.
+    NotSha256Hex,
+}
+
+impl std::fmt::Display for InvalidFingerprint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotSha256Hex => f.write_str(
+                "fingerprint must be a SHA-256 digest: 64 hex characters, \
+                 optionally prefixed `sha256:`",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for InvalidFingerprint {}
+
+/// Canonicalise an operator-supplied fingerprint into the form
+/// [`fingerprint`] produces, rejecting anything that could never match one.
+///
+/// Fingerprints reach the runtime as free text — a CLI flag, a config file, a
+/// paste from another tool — and comparison against a real client is
+/// byte-for-byte. So a value that is merely *shaped* wrong is not a near
+/// miss: it is a key that will never authenticate, and storing it as
+/// authorised tells an operator they have granted access they have not.
+pub fn parse_fingerprint(s: &str) -> Result<String, InvalidFingerprint> {
+    let trimmed = s.trim();
+    let body = trimmed
+        .strip_prefix("sha256:")
+        .or_else(|| trimmed.strip_prefix("SHA256:"))
+        .unwrap_or(trimmed);
+    if body.len() != 64 || !body.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(InvalidFingerprint::NotSha256Hex);
+    }
+    Ok(body.to_ascii_lowercase())
+}
+
 /// SHA-256 fingerprint of a byte slice, returned as a lowercase hex string.
 pub fn fingerprint(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
@@ -166,6 +206,51 @@ impl ClientIdentity {
 
 #[cfg(all(test, unix))]
 mod tests {
+
+    use super::{InvalidFingerprint, parse_fingerprint};
+
+    // i[verify key.authorize]
+    #[test]
+    fn a_canonical_fingerprint_parses_unchanged() {
+        let fp = "a".repeat(64);
+        assert_eq!(parse_fingerprint(&fp), Ok(fp.clone()));
+    }
+
+    // i[verify key.authorize]
+    // Comparison against a real client is byte-for-byte, so these all had to
+    // be normalised rather than stored as given.
+    #[test]
+    fn case_whitespace_and_a_sha256_prefix_are_normalised() {
+        let fp = "a".repeat(64);
+        assert_eq!(parse_fingerprint(&fp.to_uppercase()), Ok(fp.clone()));
+        assert_eq!(parse_fingerprint(&format!("  {fp}\n")), Ok(fp.clone()));
+        assert_eq!(parse_fingerprint(&format!("sha256:{fp}")), Ok(fp.clone()));
+        assert_eq!(
+            parse_fingerprint(&format!("SHA256:{}", fp.to_uppercase())),
+            Ok(fp)
+        );
+    }
+
+    // i[verify key.authorize]
+    // A wrong-shaped value is not a near miss: it is a key that can never
+    // authenticate, and storing it says access was granted when it was not.
+    #[test]
+    fn a_value_that_could_never_match_is_refused() {
+        for bad in [
+            "",
+            "sha256:",
+            &"a".repeat(63),
+            &"a".repeat(65),
+            &"z".repeat(64),
+            "not a fingerprint",
+        ] {
+            assert_eq!(
+                parse_fingerprint(bad),
+                Err(InvalidFingerprint::NotSha256Hex),
+                "should refuse {bad:?}"
+            );
+        }
+    }
     use std::os::unix::fs::PermissionsExt;
 
     use super::*;

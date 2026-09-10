@@ -10,6 +10,57 @@ use seedling_protocol::{
 
 use super::state::OiState;
 
+/// Reject port 0.
+///
+/// These arrive as plain `u16`, so 0 deserialises happily — but it is not a
+/// routable listener or backend port. It reached the site-proxy config as
+/// `listen :0` / dial `:0` semantics instead of being refused at the
+/// interface, where the operator could still be told which field was wrong.
+/// The BSL side has rejected it all along, via `Port::new`.
+// r[impl service.site.address]
+pub(super) fn validate_port(field: &str, port: u16) -> Result<(), OiError> {
+    if port == 0 {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!("{field} must be between 1 and 65535, got 0"),
+        ));
+    }
+    Ok(())
+}
+
+/// Whether `s` is a syntactically valid DNS name.
+///
+/// Shape only: label lengths, permitted characters, no leading or trailing
+/// hyphen, and at least one alphabetic character somewhere so an all-numeric
+/// string is not mistaken for a name. Callers add their own policy on top —
+/// a site-service remote host also rejects `localhost`, a TLS policy pattern
+/// does not, since an exact policy may deliberately name it.
+pub(super) fn is_valid_dns_name(s: &str) -> bool {
+    if s.is_empty() || s.len() > 253 {
+        return false;
+    }
+    let mut any_alpha = false;
+    for label in s.split('.') {
+        if label.is_empty() || label.len() > 63 {
+            return false;
+        }
+        if label.starts_with('-') || label.ends_with('-') {
+            return false;
+        }
+        for c in label.chars() {
+            if !(c.is_ascii_alphanumeric() || c == '-') {
+                return false;
+            }
+            if c.is_ascii_alphabetic() {
+                any_alpha = true;
+            }
+        }
+    }
+    // Reject all-numeric strings (e.g. "12345"); legitimate names always
+    // carry at least one alphabetic character somewhere.
+    any_alpha
+}
+
 pub mod actions;
 mod appdef_json;
 mod apps;

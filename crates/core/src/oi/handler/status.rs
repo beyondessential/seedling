@@ -57,7 +57,11 @@ pub(crate) fn get_status(state: &OiState) -> HandlerResult {
         "spki_fingerprint": state.spki_fingerprint.get().cloned().unwrap_or_default(),
         "apps_total": apps_total,
         "apps_by_status": apps_by_status,
-        "active_operations": 0,
+        // i[impl status.get] — the literal 0 here reported no operation in
+        // progress however busy the runtime was. One operation is active at a
+        // time; queued ones are waiting, not in progress, so they are not
+        // counted.
+        "active_operations": usize::from(state.scheduler.lock().active().is_some()),
         "active_faults": state.db.call(|db| faults::count_active_faults(db).unwrap_or(0)),
         "active_shells": state.shells.list(None).len(),
         "active_forwards": state.forwards.lock().count(),

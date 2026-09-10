@@ -486,6 +486,7 @@ pub(crate) fn attach_forward(
     ctx: &RequestCtx,
 ) -> HandlerResult {
     let _ = ensure_ingress_exists(state, &params.name)?;
+    super::validate_port("port", params.port)?;
     let att = SiteIngressAttachment {
         site_ingress: params.name.clone(),
         port: params.port,
@@ -529,6 +530,7 @@ pub(crate) fn attach_redirect(
     ctx: &RequestCtx,
 ) -> HandlerResult {
     let _ = ensure_ingress_exists(state, &params.name)?;
+    super::validate_port("port", params.port)?;
     validate_redirect_code(params.redirect_code)?;
     validate_redirect_url(&params.redirect_url)?;
     if matches!(
