@@ -168,13 +168,23 @@ pub(super) async fn dispatch(client: &OiClient, cmd: BackupsCommand) {
                 allow_missing,
             } => {
                 // i[impl ctl.backup.strategy.allow-missing]
-                if !allow_missing
-                    && let Some(missing) = check_missing_volumes(client, &volumes).await
-                {
-                    tracing::error!(
-                        "volumes not found: {missing}; pass --allow-missing to proceed anyway"
-                    );
-                    std::process::exit(1);
+                if !allow_missing {
+                    match check_missing_volumes(client, &volumes).await {
+                        Ok(None) => {}
+                        Ok(Some(missing)) => {
+                            tracing::error!(
+                                "volumes not found: {missing}; pass --allow-missing to proceed anyway"
+                            );
+                            std::process::exit(1);
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                "cannot verify the referenced volumes: {e}; \
+                                 pass --allow-missing to skip the check"
+                            );
+                            std::process::exit(1);
+                        }
+                    }
                 }
                 print_result(
                     client
@@ -218,14 +228,23 @@ pub(super) async fn dispatch(client: &OiClient, cmd: BackupsCommand) {
                 allow_missing,
             } => {
                 // i[impl ctl.backup.strategy.allow-missing]
-                if !allow_missing
-                    && let Some(vols) = &volumes
-                    && let Some(missing) = check_missing_volumes(client, vols).await
-                {
-                    tracing::error!(
-                        "volumes not found: {missing}; pass --allow-missing to proceed anyway"
-                    );
-                    std::process::exit(1);
+                if !allow_missing && let Some(vols) = &volumes {
+                    match check_missing_volumes(client, vols).await {
+                        Ok(None) => {}
+                        Ok(Some(missing)) => {
+                            tracing::error!(
+                                "volumes not found: {missing}; pass --allow-missing to proceed anyway"
+                            );
+                            std::process::exit(1);
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                "cannot verify the referenced volumes: {e}; \
+                                 pass --allow-missing to skip the check"
+                            );
+                            std::process::exit(1);
+                        }
+                    }
                 }
                 let mut body = serde_json::json!({ "name": name });
                 if let Some(v) = via {
@@ -294,17 +313,29 @@ pub(super) async fn dispatch(client: &OiClient, cmd: BackupsCommand) {
     }
 }
 
-/// Check whether any of the given volume identifiers are missing.
-/// Returns a comma-separated list of missing volumes, or `None` if all are found.
-async fn check_missing_volumes(client: &OiClient, volumes: &[String]) -> Option<String> {
+/// Which of the given volume identifiers do not resolve.
+///
+/// `Ok(None)` means every volume was found, `Ok(Some(list))` names the ones
+/// that were not, and `Err` means the check could not be made at all.
+///
+/// The three have to be distinguishable. This used to return `Option<String>`
+/// with `.ok()?` on both list requests, so a failed request produced the same
+/// `None` as a clean bill of health — and `i[ctl.backup.strategy.allow-missing]`
+/// makes this a mandatory abort gate, so a daemon hiccup silently waved
+/// through a strategy referencing volumes that may not exist.
+// i[impl ctl.backup.strategy.allow-missing]
+async fn check_missing_volumes(
+    client: &OiClient,
+    volumes: &[String],
+) -> Result<Option<String>, String> {
     let exported = client
         .request("/volumes/exported/list", serde_json::json!({}))
         .await
-        .ok()?;
+        .map_err(|e| format!("could not list exported volumes: {e}"))?;
     let site = client
         .request("/volumes/site/list", serde_json::json!({}))
         .await
-        .ok()?;
+        .map_err(|e| format!("could not list site volumes: {e}"))?;
 
     let mut missing = Vec::new();
     for vol_id in volumes {
@@ -331,9 +362,9 @@ async fn check_missing_volumes(client: &OiClient, volumes: &[String]) -> Option<
     }
 
     if missing.is_empty() {
-        None
+        Ok(None)
     } else {
-        Some(missing.join(", "))
+        Ok(Some(missing.join(", ")))
     }
 }
 
