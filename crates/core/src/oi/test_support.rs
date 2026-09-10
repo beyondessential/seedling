@@ -183,6 +183,29 @@ mod tests {
         assert_eq!(status["version"], env!("CARGO_PKG_VERSION"));
     }
 
+    // i[verify status.get]
+    // The field was the literal 0, so the summary reported no operation in
+    // progress however busy the runtime was. Driving one through the
+    // scheduler is what distinguishes a derived count from a constant.
+    #[test]
+    fn status_counts_an_operation_in_progress() {
+        use seedling_protocol::names::{ActionName, AppName};
+
+        let oi = TestOi::new();
+        let idle = oi.call("/server/status", json!({})).unwrap();
+        assert_eq!(idle["active_operations"], 0, "idle runtime");
+
+        let app = AppName::new("statusapp").expect("app name");
+        let action = ActionName::new("install").expect("action name");
+        oi.state
+            .scheduler
+            .lock()
+            .request(&app, &action, serde_json::Map::new(), 1, 1, "test");
+
+        let busy = oi.call("/server/status", json!({})).unwrap();
+        assert_eq!(busy["active_operations"], 1, "one operation active");
+    }
+
     // i[verify wire.request]
     #[test]
     fn unknown_method_returns_not_found() {
