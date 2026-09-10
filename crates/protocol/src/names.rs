@@ -20,9 +20,13 @@ impl fmt::Display for InvalidName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::LeadingUnderscore => f.write_str("name must not start with an underscore"),
+            // The middle run is `len - 2`, so a 3-to-63-character name allows
+            // 1 to 61 there. `{1,60}` capped the whole name at 62 and told
+            // anyone who read it that a valid 63-character name was invalid.
             Self::Malformed(n) => write!(
                 f,
-                "invalid name '{n}': must match ^[a-zA-Z][a-zA-Z0-9-]{{1,60}}[a-zA-Z0-9]$"
+                "invalid name '{n}': must be 3 to 63 characters matching \
+                 ^[a-zA-Z][a-zA-Z0-9-]{{1,61}}[a-zA-Z0-9]$"
             ),
         }
     }
@@ -556,6 +560,26 @@ mod tests {
     #[test]
     fn app_new_longest_accepted() {
         AppName::new(format!("a{}", "b".repeat(62))).unwrap();
+    }
+
+    // l[verify bsl.name]
+    // The message is what anyone hitting the rejection reads to work out the
+    // rule, so its bounds have to be the validator's bounds.
+    #[test]
+    fn malformed_message_states_the_bounds_the_validator_enforces() {
+        let longest = "a".repeat(63);
+        assert!(AppName::new(longest.clone()).is_ok(), "63 is accepted");
+        let too_long = "a".repeat(64);
+        let err = AppName::new(too_long).expect_err("64 is rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("3 to 63"),
+            "message must state the real bounds: {msg}"
+        );
+        assert!(
+            msg.contains("{1,61}"),
+            "the middle run is len - 2, so 61 not 60: {msg}"
+        );
     }
 
     #[test]

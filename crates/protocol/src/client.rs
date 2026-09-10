@@ -62,6 +62,18 @@ fn hex_digest(bytes: &[u8]) -> String {
         .collect()
 }
 
+/// Canonicalise an operator-supplied fingerprint for comparison against
+/// [`hex_digest`].
+///
+/// `hex_digest` emits lowercase, and plenty of tools display SHA-256
+/// fingerprints in uppercase, so a correct pin pasted from one of them was
+/// refused as a certificate error. Normalising here rather than at the
+/// comparison keeps that comparison constant-time over equal-length lowercase
+/// hex.
+fn normalise_fingerprint(s: &str) -> String {
+    s.trim().to_ascii_lowercase()
+}
+
 fn ring_verify_tls12(
     message: &[u8],
     cert: &CertificateDer<'_>,
@@ -292,7 +304,9 @@ impl OiClient {
         actor: Actor,
     ) -> Result<Self, ClientError> {
         let verifier: Arc<dyn ServerCertVerifier> = match auth {
-            ClientAuth::Fingerprint(fp) => Arc::new(FingerprintVerifier { expected: fp }),
+            ClientAuth::Fingerprint(fp) => Arc::new(FingerprintVerifier {
+                expected: normalise_fingerprint(&fp),
+            }),
             ClientAuth::TrustAny => Arc::new(TrustAnyVerifier),
         };
 
@@ -630,6 +644,35 @@ fn build_client_cert_resolver(
 
 #[cfg(test)]
 mod tests {
+
+    use super::{FingerprintVerifier, hex_digest, normalise_fingerprint};
+
+    // i[verify transport.fingerprint-probe]
+    // A pin is operator input, and SHA-256 fingerprints are commonly displayed
+    // in uppercase; a correct pin in the wrong case failed closed with a
+    // misleading certificate error.
+    #[test]
+    fn an_uppercase_pin_matches_the_lowercase_digest() {
+        let digest = hex_digest(b"some-spki-bytes");
+        let verifier = FingerprintVerifier {
+            expected: normalise_fingerprint(&digest.to_ascii_uppercase()),
+        };
+        assert_eq!(verifier.expected, digest);
+    }
+
+    // i[verify transport.fingerprint-probe]
+    #[test]
+    fn surrounding_whitespace_in_a_pin_is_ignored() {
+        let digest = hex_digest(b"some-spki-bytes");
+        assert_eq!(normalise_fingerprint(&format!("  {digest}\n")), digest);
+    }
+
+    // i[verify transport.fingerprint-probe]
+    #[test]
+    fn a_wrong_pin_still_does_not_match() {
+        let digest = hex_digest(b"some-spki-bytes");
+        assert_ne!(normalise_fingerprint(&hex_digest(b"other")), digest);
+    }
     use std::time::Duration;
 
     use quinn::{Endpoint, ServerConfig};
