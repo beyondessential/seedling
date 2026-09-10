@@ -278,10 +278,14 @@ async fn main() {
     #[cfg(not(debug_assertions))]
     let trust_any = false;
 
-    let resolved_fingerprint: String;
+    // How the first connection authenticated, so `events` can reconnect on
+    // the same terms. A bare `String` could not express "trust any": the
+    // `--trust-any` path left it empty and every reconnect then pinned
+    // `Fingerprint("")`, which no 64-hex server fingerprint matches.
+    let resolved_auth: ClientAuth;
 
     if trust_any {
-        resolved_fingerprint = String::new();
+        resolved_auth = ClientAuth::TrustAny;
         client = OiClient::connect(
             endpoint_addr,
             ClientAuth::TrustAny,
@@ -305,7 +309,7 @@ async fn main() {
             tracing::error!("{e}");
             std::process::exit(1);
         });
-        resolved_fingerprint = fp;
+        resolved_auth = ClientAuth::Fingerprint(fp);
     } else {
         let kh_path = known_hosts::KnownHosts::default_path();
         let mut kh = known_hosts::KnownHosts::load(&kh_path).unwrap_or_else(|e| {
@@ -379,7 +383,7 @@ async fn main() {
             tracing::error!("{e}");
             std::process::exit(1);
         });
-        resolved_fingerprint = fp;
+        resolved_auth = ClientAuth::Fingerprint(fp);
     }
 
     match top_cmd {
@@ -424,7 +428,7 @@ async fn main() {
         Command::Events => {
             op::dispatch_events(
                 endpoint_addr,
-                resolved_fingerprint,
+                resolved_auth,
                 &identity,
                 client.actor().clone(),
             )

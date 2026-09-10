@@ -10,9 +10,16 @@ const RECONNECT_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
 // i[impl ctl.subscribe.reconnect]
+/// `auth` is how the first connection authenticated, carried through so a
+/// reconnect uses the same terms.
+///
+/// This used to take the resolved fingerprint as a `String`, which cannot
+/// express "trust any": the `--trust-any` path left it empty, and every
+/// reconnect then pinned `Fingerprint("")` against a 64-hex server
+/// fingerprint, so `--trust-any events` could never connect at all.
 pub async fn subscribe(
     endpoint: SocketAddr,
-    fingerprint: String,
+    auth: ClientAuth,
     identity: &ClientIdentity,
     actor: Actor,
 ) {
@@ -20,13 +27,7 @@ pub async fn subscribe(
     let mut backoff = Duration::from_secs(1);
 
     loop {
-        let client = match OiClient::connect(
-            endpoint,
-            ClientAuth::Fingerprint(fingerprint.clone()),
-            identity,
-            actor.clone(),
-        )
-        .await
+        let client = match OiClient::connect(endpoint, auth.clone(), identity, actor.clone()).await
         {
             Ok(c) => c,
             Err(e) => {
