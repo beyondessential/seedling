@@ -2,7 +2,8 @@ use serde_json::{Value, json};
 
 use crate::runtime::tls::state::is_caddy_internal;
 use crate::system::types::{
-    L4Proto, ProxyConfig, ProxyListenerProto, RouteBalance, RouteCompress, VirtualHost,
+    L4Proto, ProxyConfig, ProxyListenerProto, RouteBalance, RouteCompress, RouteRateLimit,
+    VirtualHost,
 };
 
 pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
@@ -248,7 +249,14 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
                         })
                         .collect();
 
-                    let mut chain: Vec<Value> = Vec::with_capacity(2);
+                    let mut chain: Vec<Value> = Vec::with_capacity(3);
+                    // r[impl service.http.route.rate-limiting]
+                    // First in the chain: an over-limit request is answered
+                    // without engaging compression or the proxy, so the
+                    // excess costs a backend nothing.
+                    if let Some(rate_limit) = &proxy.rate_limit {
+                        chain.push(rate_limit_handler(rate_limit));
+                    }
                     // r[impl service.http.route.compression]
                     // `encode` wraps the response writer, so it has to sit
                     // ahead of the proxy in the chain to see what comes back.
@@ -297,6 +305,37 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
             })
         })
         .collect()
+}
+
+// r[impl service.http.route.rate-limiting]
+fn rate_limit_handler(limit: &RouteRateLimit) -> Value {
+    // The zone name identifies the declaration and is built in
+    // `reconcile::proxy`; see `RouteRateLimit::zone` for why it is not derived
+    // from anything here.
+    //
+    // `client_ip` is the address the proxy attributes to the request, and
+    // carries no port: the module masks a key only when it parses as a bare
+    // address, and silently leaves anything else whole.
+    //
+    // Every key emitted must be one the pinned module declares, or Caddy's
+    // strict decoding fails the whole document: see `caddy::image`.
+    json!({
+        "handler": "rate_limit",
+        "rate_limits": {
+            limit.zone.to_string(): {
+                "key": "{http.request.client_ip}",
+                "window": secs_to_nanos(limit.window_secs),
+                "max_events": limit.max_events,
+                // Only the v6 prefix is set. The module leaves an address
+                // untouched when the prefix for its version is unset, so IPv4
+                // clients are counted per address while IPv6 clients are
+                // counted per /64. A party holds its whole /64, so counting
+                // those separately would hand it a budget per address and the
+                // limit would not bind it at all.
+                "ipv6_prefix": 64,
+            }
+        }
+    })
 }
 
 // r[impl service.http.route.compression]

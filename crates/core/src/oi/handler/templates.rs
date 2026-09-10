@@ -254,7 +254,7 @@ pub(crate) fn preview_template(state: &OiState, params: PreviewParams) -> Handle
     let resources_json: Vec<Value> = def
         .resources
         .iter()
-        .map(|(id, resource)| resource_static_json(id.kind, id.name.as_str(), resource))
+        .map(|(id, resource)| resource_static_json(id.kind, id.name.as_str(), resource, &def))
         .collect();
 
     let params_json: Vec<Value> = def

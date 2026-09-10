@@ -12,6 +12,23 @@ use rhai::{Dynamic, EvalAltResult, Map};
 /// Caddy's own defaults, read from the source of the pinned proxy image so the
 /// emitter can leave a field out whenever it still holds its default.
 pub const DEFAULT_MINIMUM_LENGTH: u64 = 512;
+
+/// Bounds on a declared rate limit.
+///
+/// Sanity ceilings, not tuning. The proxy holds a ring of `max_events`
+/// timestamps per distinct client and reclaims it once that client's newest
+/// request has aged past the window, so a declaration sets both how large each
+/// ring is and how long it survives — in a process every app on the host
+/// shares. Reclamation itself is automatic: the pinned module sweeps every
+/// minute by default, with the sweeper started unconditionally, so nothing
+/// needs to be emitted to switch it on.
+///
+/// The floor is a plausibility bound like the rest: a window is emitted as
+/// whole nanoseconds and only rounds away below about half a nanosecond, far
+/// under anything here.
+pub const MIN_WINDOW_SECS: f64 = 0.001;
+pub const MAX_WINDOW_SECS: f64 = 3_600.0;
+pub const MAX_MAX_EVENTS: u64 = 1_000;
 pub const DEFAULT_TRY_DURATION_SECS: f64 = 5.0;
 pub const DEFAULT_INTERVAL_SECS: f64 = 0.25;
 
@@ -143,6 +160,23 @@ pub enum CompressDecl {
     Enabled(CompressSettings),
 }
 
+/// A declared rate limit. Both fields are required, so neither is optional:
+/// a limit means nothing without a count and a window to count over.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RateLimitSettings {
+    pub max_events: u64,
+    pub window_secs: f64,
+}
+
+/// Rate limiting is tri-state at each level: unmentioned, switched off, or
+/// switched on carrying the limit. Unlike compression it has no default, so
+/// "unmentioned everywhere" means no limiting rather than a default limit.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RateLimitDecl {
+    Disabled,
+    Enabled(RateLimitSettings),
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct BalanceSettings {
     pub policy: Option<LbPolicy>,
@@ -155,6 +189,7 @@ pub struct BalanceSettings {
 pub struct ProxySettings {
     pub compress: Option<CompressDecl>,
     pub balance: BalanceSettings,
+    pub rate_limit: Option<RateLimitDecl>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,11 +209,31 @@ pub struct ResolvedBalance {
 }
 
 /// The settings actually in force on one route. `compress` is `None` when
-/// compression is off for that route.
+/// compression is off for that route, `rate_limit` when the route is not
+/// rate limited.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedRouteProxy {
     pub compress: Option<ResolvedCompress>,
     pub balance: ResolvedBalance,
+    pub rate_limit: Option<ResolvedRateLimit>,
+}
+
+/// Which level declared the limit in force.
+///
+/// This decides the budget's identity, not just its provenance: a limit
+/// declared on the service is one budget shared by every route inheriting it,
+/// where the same settings declared on a route are that route's own budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RateLimitScope {
+    Service,
+    Route,
+}
+
+/// The limit in force on a route, and the level that declared it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ResolvedRateLimit {
+    pub settings: RateLimitSettings,
+    pub scope: RateLimitScope,
 }
 
 impl Default for ResolvedRouteProxy {
@@ -187,20 +242,66 @@ impl Default for ResolvedRouteProxy {
     }
 }
 
-// l[impl service.http.proxy-settings.resolution]
-/// Resolve one route's settings. Every field is taken from the route if the
-/// route named it, otherwise from the service if the service named it,
-/// otherwise from the field's default.
+/// The service-level view resolution works against, gathered from the two
+/// places a service keeps them: compression and rate limiting on its HTTP
+/// surface, balancing on the service itself.
 ///
-/// Passing `None` for `route` resolves the service's own values, which is what
-/// the synthesised `/` route of a service with no HTTP route bindings takes.
+/// One body, so a setting added here reaches every kind of service that has
+/// one rather than only the kind whose method was edited.
+pub fn service_settings(
+    http: Option<&crate::defs::service::HttpServiceDef>,
+    balance: &BalanceSettings,
+) -> ProxySettings {
+    ProxySettings {
+        compress: http.and_then(|h| h.compress.clone()),
+        balance: balance.clone(),
+        rate_limit: http.and_then(|h| h.rate_limit),
+    }
+}
+
+// l[impl service.http.proxy-settings.resolution]
+/// Resolve one route's settings.
+///
+/// Compression and balancing resolve field by field: each is taken from the
+/// route if the route named it, otherwise from the service if the service
+/// named it, otherwise from the field's default. Rate limiting resolves as a
+/// whole unit and has no default — see [`resolve_rate_limit`].
+///
+/// Passing `None` for `route` resolves the service's own values. That is not
+/// what the synthesised `/` route takes: a service may declare settings for
+/// `/` without a pod bound to it yet, so its caller resolves against the
+/// declared `/` route where there is one.
 pub fn resolve(service: &ProxySettings, route: Option<&ProxySettings>) -> ResolvedRouteProxy {
     let route_balance = route.map(|r| &r.balance);
     let route_compress = route.and_then(|r| r.compress.as_ref());
+    let route_rate_limit = route.and_then(|r| r.rate_limit.as_ref());
 
     ResolvedRouteProxy {
         compress: resolve_compress(service.compress.as_ref(), route_compress),
         balance: resolve_balance(&service.balance, route_balance),
+        rate_limit: resolve_rate_limit(service.rate_limit.as_ref(), route_rate_limit),
+    }
+}
+
+/// Rate limiting resolves as a whole rather than field by field: a route
+/// declaring a limit replaces the service's outright, rather than merging with
+/// it, because a count and a window only mean anything together. A route that
+/// switched limiting off is not limited even where the service declared one.
+fn resolve_rate_limit(
+    service: Option<&RateLimitDecl>,
+    route: Option<&RateLimitDecl>,
+) -> Option<ResolvedRateLimit> {
+    match (route, service) {
+        (Some(RateLimitDecl::Enabled(s)), _) => Some(ResolvedRateLimit {
+            settings: *s,
+            scope: RateLimitScope::Route,
+        }),
+        (Some(RateLimitDecl::Disabled), _) => None,
+        (None, Some(RateLimitDecl::Enabled(s))) => Some(ResolvedRateLimit {
+            settings: *s,
+            scope: RateLimitScope::Service,
+        }),
+        (None, Some(RateLimitDecl::Disabled) | None) => None,
     }
 }
 
@@ -387,11 +488,67 @@ pub(super) fn parse_balance(mut map: Map) -> Result<BalanceSettings, Box<EvalAlt
     })
 }
 
+// l[impl service.http.rate-limit.fields]
+pub(super) fn parse_rate_limit(mut map: Map) -> Result<RateLimitSettings, Box<EvalAltResult>> {
+    let max_events = map.remove("max_events");
+    let window = map.remove("window");
+
+    // Before the required-field checks: with both known keys already taken,
+    // whatever is left is a key the caller invented. Reporting `max_event: 10`
+    // as a missing `max_events` would name everything except the typo.
+    reject_unknown(&map, "rate_limit")?;
+
+    let max_events = match max_events {
+        None => return Err("rate_limit requires `max_events`".into()),
+        Some(value) => {
+            let n = value.as_int().map_err(|t| -> Box<EvalAltResult> {
+                format!("rate_limit `max_events` must be an integer number of requests, got {t}")
+                    .into()
+            })?;
+            if n <= 0 {
+                return Err(
+                    format!("rate_limit `max_events` must be a positive integer, got {n}").into(),
+                );
+            }
+            let n = n as u64;
+            if n > MAX_MAX_EVENTS {
+                return Err(format!(
+                    "rate_limit `max_events` must be at most {MAX_MAX_EVENTS}, got {n}"
+                )
+                .into());
+            }
+            n
+        }
+    };
+
+    let window_secs = match window {
+        None => return Err("rate_limit requires `window`".into()),
+        Some(value) => {
+            // The range check rejects NaN and the infinities along with
+            // everything else outside it, so it is the only check needed.
+            let n = as_number(value, "rate_limit", "window")?;
+            if !(MIN_WINDOW_SECS..=MAX_WINDOW_SECS).contains(&n) {
+                return Err(format!(
+                    "rate_limit `window` must be between {MIN_WINDOW_SECS} and \
+                     {MAX_WINDOW_SECS} seconds, got {n}"
+                )
+                .into());
+            }
+            n
+        }
+    };
+
+    Ok(RateLimitSettings {
+        max_events,
+        window_secs,
+    })
+}
+
 fn take_seconds(map: &mut Map, key: &str) -> Result<Option<f64>, Box<EvalAltResult>> {
     let Some(value) = map.remove(key) else {
         return Ok(None);
     };
-    let n = as_number(value, key)?;
+    let n = as_number(value, "balance", key)?;
     if n < 0.0 {
         return Err(format!("balance `{key}` must not be negative, got {n}").into());
     }
@@ -403,7 +560,7 @@ fn take_seconds(map: &mut Map, key: &str) -> Result<Option<f64>, Box<EvalAltResu
 
 /// Accepts both `10` and `10.0`: a whole number of seconds is the common case
 /// and rhai types that as an integer.
-fn as_number(value: Dynamic, key: &str) -> Result<f64, Box<EvalAltResult>> {
+fn as_number(value: Dynamic, what: &str, key: &str) -> Result<f64, Box<EvalAltResult>> {
     if let Some(f) = value.clone().try_cast::<f64>() {
         return Ok(f);
     }
@@ -411,7 +568,7 @@ fn as_number(value: Dynamic, key: &str) -> Result<f64, Box<EvalAltResult>> {
         return Ok(i as f64);
     }
     Err(format!(
-        "balance `{key}` must be a number of seconds, got {}",
+        "{what} `{key}` must be a number of seconds, got {}",
         value.type_name()
     )
     .into())

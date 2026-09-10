@@ -289,8 +289,12 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > `compress` is `null` when compression is disabled for the route, and otherwise an object with fields `encodings` (array of strings), `minimum_length` (integer), and `content_types` (array of strings).
 > `balance` is an object with fields `policy` (string), `try_duration`, and `interval` (the latter two in seconds).
+> `rate_limit` is `null` when the route is not rate limited, and otherwise an object with fields `max_events` (integer), `window` (seconds), and `shared` (boolean).
+> `shared` is true when the limit was declared on the service, so the route counts against a budget common to every route inheriting it; without it two routes reporting the same numbers could not be told apart from two routes holding one budget each.
 >
 > A service whose backing pods declare no HTTP route bindings reports the single `/` route it is served through, so the array is never empty for an HTTP service.
+>
+> Each route reports `served`, whether a pod binds its prefix and the proxy is therefore told to serve it. A declared prefix that nothing binds reports its settings but does not carry them: requests under it are answered by whichever bound prefix matches, under that route's settings. Without this a rate limit on an unbound route would read as a control in force.
 
 > i[app.describe.param-secret]
 > When a param's effective `secret` flag is `true`, its `value` must be `null` in the response regardless of whether a value is stored. Clients must use `is_set` to distinguish an unset secret from a set-but-redacted secret.

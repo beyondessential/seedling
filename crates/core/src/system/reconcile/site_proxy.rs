@@ -504,7 +504,9 @@ mod tests {
             routes: Vec::new(),
             service_ip: Ipv6Addr::from([0xfd, 0x5e, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
             service_port: 8080,
-            proxy: crate::defs::service::ResolvedRouteProxy::default().into(),
+            proxy: crate::system::types::RouteProxy::unlimited(
+                crate::defs::service::ResolvedRouteProxy::default(),
+            ),
         }
     }
 

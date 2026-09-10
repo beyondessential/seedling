@@ -382,6 +382,14 @@ function ResourceDefDetail({ def }: { def: ResourceDef }) {
             >
               {r.prefix}
             </Typography>
+            {!r.served && (
+              <Chip
+                label="not served"
+                size="small"
+                variant="outlined"
+                title="No pod binds this prefix, so the settings below are declared but not applied"
+              />
+            )}
             <Chip
               label={
                 r.compress
@@ -398,6 +406,17 @@ function ResourceDefDetail({ def }: { def: ResourceDef }) {
             />
             <Chip
               label={`try: ${r.balance.try_duration}s`}
+              size="small"
+              variant="outlined"
+            />
+            <Chip
+              label={
+                r.rate_limit
+                  ? `limit: ${r.rate_limit.max_events}/${r.rate_limit.window}s${
+                      r.rate_limit.shared ? " shared" : ""
+                    }`
+                  : "limit: off"
+              }
               size="small"
               variant="outlined"
             />

@@ -7,7 +7,7 @@ use crate::{
         ingress::IngressDef,
         pod::PodDef,
         resource::{Resource, ResourceKind},
-        service::{HttpServiceDef, ProxySettings, resolve},
+        service::{HttpServiceDef, ProxySettings, RateLimitScope, resolve},
     },
     runtime::{
         InstanceRegistry, desired::DesiredState, identity::ResourceInstance,
@@ -15,7 +15,7 @@ use crate::{
     },
     system::{
         translate::proxy::{HttpForwardRoute, ServiceUpstream, instance_ipv6},
-        types::{L4Proto, L4Route, RouteProxy},
+        types::{L4Proto, L4Route, RouteProxy, RouteZone},
     },
 };
 
@@ -226,13 +226,7 @@ fn proxy_settings_for(snapshot: &AppDef, service_name: &str) -> (ProxySettings, 
             }
             Resource::ExternalService(e) if e.name.as_str() == service_name => {
                 let def = e.def.lock();
-                Some((
-                    ProxySettings {
-                        compress: def.http.as_ref().and_then(|h| h.compress.clone()),
-                        balance: def.balance.clone(),
-                    },
-                    routes_of(def.http.as_ref()),
-                ))
+                Some((def.proxy_settings(), routes_of(def.http.as_ref())))
             }
             _ => None,
         })
@@ -245,13 +239,42 @@ fn routes_of(http: Option<&HttpServiceDef>) -> RouteMap {
     http.map(|h| h.routes.clone()).unwrap_or_default()
 }
 
-/// Settings for a route the service declares nothing specific about, which is
-/// also what the synthesised `/` route of a binding-less service takes.
+/// Settings for the synthesised `/` route, which a service is served through
+/// when no pod binds a prefix. A service may have declared settings for `/`
+/// even so, and they are what that route takes.
 // r[impl service.http.route.compression]
 // r[impl service.http.route.balancing]
 pub(super) fn service_level_proxy(snapshot: &AppDef, service_name: &str) -> RouteProxy {
-    let (service, _) = proxy_settings_for(snapshot, service_name);
-    resolve(&service, None).into()
+    let (service, routes) = proxy_settings_for(snapshot, service_name);
+    // These settings are used for the synthesised `/` route, which is a real
+    // route the service may have declared settings for even when no pod is
+    // bound to it yet. Resolving against `None` would ignore those and, worse,
+    // apply a service-level limit to a `/` that opted out of it.
+    let resolved = resolve(&service, routes.get("/"));
+    let scope = resolved.rate_limit.map(|rl| rl.scope);
+    RouteProxy::from_resolved(resolved, || {
+        zone_for(
+            snapshot.name.as_str(),
+            service_name,
+            "/",
+            scope.expect("only called where a limit is in force"),
+        )
+    })
+}
+
+/// Names the budget a resolved limit counts against.
+///
+/// The name is the identity of the declaration, so a limit the service
+/// declared is one budget for the service however many routes inherit it,
+/// while a limit a route declared is that route's own. See
+/// [`RouteRateLimit::zone`].
+fn zone_for(app: &str, service: &str, prefix: &str, scope: RateLimitScope) -> RouteZone {
+    match scope {
+        RateLimitScope::Route => RouteZone(format!("{app}/{service}{prefix}")),
+        // No prefix: every route inheriting the service's limit names the same
+        // budget, which is what makes it one budget rather than one each.
+        RateLimitScope::Service => RouteZone(format!("{app}/{service}")),
+    }
 }
 
 /// Build per-prefix HTTP routes for an ingress backed by `service_name`
@@ -339,7 +362,16 @@ pub(super) fn collect_http_routes(
     by_prefix
         .into_iter()
         .map(|(prefix, upstreams)| {
-            let proxy = resolve(&service, routes.get(&prefix)).into();
+            let resolved = resolve(&service, routes.get(&prefix));
+            let scope = resolved.rate_limit.map(|rl| rl.scope);
+            let proxy = RouteProxy::from_resolved(resolved, || {
+                zone_for(
+                    snapshot.name.as_str(),
+                    service_name,
+                    &prefix,
+                    scope.expect("only called where a limit is in force"),
+                )
+            });
             HttpForwardRoute {
                 prefix,
                 upstreams,
@@ -347,4 +379,97 @@ pub(super) fn collect_http_routes(
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod zone_tests {
+    use super::*;
+    use crate::defs::service::{CompressDecl, LbPolicy};
+
+    // r[verify service.http.route.compression]
+    // r[verify service.http.route.balancing]
+    #[test]
+    fn the_fallback_route_takes_what_the_service_declared_for_slash() {
+        // `service_level_proxy` resolves against the declared `/` route, not
+        // against nothing, so a service that said something specific about `/`
+        // is honoured on the synthesised route as well — for compression and
+        // balancing, not only for the limit that motivated the change.
+        let service = ProxySettings {
+            compress: Some(CompressDecl::Enabled(Default::default())),
+            balance: crate::defs::service::BalanceSettings {
+                policy: Some(LbPolicy::LeastConn),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let root = ProxySettings {
+            compress: Some(CompressDecl::Disabled),
+            balance: crate::defs::service::BalanceSettings {
+                policy: Some(LbPolicy::First),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let resolved = resolve(&service, Some(&root));
+        assert!(
+            resolved.compress.is_none(),
+            "a `/` route that switched compression off keeps it off on the \
+             fallback route"
+        );
+        assert_eq!(resolved.balance.policy, LbPolicy::First);
+
+        // Against no route at all the service's own values stand, which is
+        // what the fallback used to take unconditionally.
+        let ignoring_root = resolve(&service, None);
+        assert!(ignoring_root.compress.is_some());
+        assert_eq!(ignoring_root.balance.policy, LbPolicy::LeastConn);
+    }
+
+    // r[verify service.http.route.rate-limiting]
+    #[test]
+    fn an_inherited_limit_names_one_budget_whatever_prefix_resolves_it() {
+        // The failure this guards is a service declaring one limit and getting
+        // one budget per route: three routes would let a client spend the
+        // limit three times over, and a fourth route would raise it again.
+        let service = RateLimitScope::Service;
+        let api = zone_for("demo", "web", "/api", service);
+        let v1 = zone_for("demo", "web", "/v1", service);
+        let root = zone_for("demo", "web", "/", service);
+
+        assert_eq!(api, v1);
+        assert_eq!(api, root);
+        assert_eq!(api, RouteZone("demo/web".to_string()));
+    }
+
+    // r[verify service.http.route.rate-limiting]
+    #[test]
+    fn a_route_declared_limit_names_that_routes_own_budget() {
+        let route = RateLimitScope::Route;
+        assert_eq!(
+            zone_for("demo", "web", "/api/login", route),
+            RouteZone("demo/web/api/login".to_string())
+        );
+        // And is distinct from a sibling's, so a tighter limit on one prefix
+        // does not draw on the budget of another.
+        assert_ne!(
+            zone_for("demo", "web", "/api/login", route),
+            zone_for("demo", "web", "/api", route)
+        );
+    }
+
+    // r[verify service.http.route.rate-limiting]
+    #[test]
+    fn budgets_of_different_services_and_apps_stay_apart() {
+        let route = RateLimitScope::Route;
+        let a = zone_for("app-one", "web", "/api", route);
+        let b = zone_for("app-two", "web", "/api", route);
+        let c = zone_for("app-one", "portal", "/api", route);
+        assert_ne!(a, b);
+        assert_ne!(a, c);
+    }
+
+    // The vhost serving a request is not a parameter of `zone_for` at all, so
+    // a budget cannot vary by hostname or termination. That is the structural
+    // form of the guarantee, which no test could state more strongly.
 }

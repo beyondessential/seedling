@@ -46,12 +46,17 @@ pub(crate) fn scale_bounds_of(resource: &Resource) -> Option<(u16, u16)> {
 ///
 /// Callers building a richer view (/apps/show) augment the returned object
 /// with live `instances`, `faults`, `stopped`, and a `scale.current`.
-pub(crate) fn resource_static_json(kind: ResourceKind, name: &str, resource: &Resource) -> Value {
+pub(crate) fn resource_static_json(
+    kind: ResourceKind,
+    name: &str,
+    resource: &Resource,
+    app: &crate::defs::app::AppDef,
+) -> Value {
     let type_str = format!("{:?}", kind).to_lowercase();
     let mut obj = json!({
         "name": name,
         "type": type_str,
-        "def": to_value(resource.summary()).unwrap_or(Value::Null),
+        "def": to_value(resource.summary(app)).unwrap_or(Value::Null),
     });
     if let Resource::Deployment(deployment) = resource {
         let dep_def = deployment.def.lock();

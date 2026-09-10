@@ -29,6 +29,7 @@ fn route_overrides_only_the_fields_it_names() {
             policy: Some(LbPolicy::LeastConn),
             ..Default::default()
         },
+        rate_limit: None,
     };
     let route = ProxySettings {
         balance: BalanceSettings {
@@ -59,6 +60,7 @@ fn service_values_apply_when_route_declares_nothing() {
             interval_secs: Some(1.0),
             ..Default::default()
         },
+        rate_limit: None,
     };
     let r = resolve(&service, Some(&ProxySettings::default()));
     assert_eq!(r.compress.expect("on").encodings, vec![Encoding::Gzip]);
@@ -238,4 +240,237 @@ fn balance_allows_zero_interval_when_retrying_is_off() {
         ("interval", Dynamic::from(0_i64)),
     ]);
     assert!(parse_balance(m).is_ok());
+}
+
+fn limit(max_events: u64, window_secs: f64) -> Option<RateLimitDecl> {
+    Some(RateLimitDecl::Enabled(RateLimitSettings {
+        max_events,
+        window_secs,
+    }))
+}
+
+// l[verify service.http.rate-limit]
+#[test]
+fn unset_everywhere_is_not_rate_limited() {
+    assert_eq!(resolve(&ProxySettings::default(), None).rate_limit, None);
+}
+
+// l[verify service.http.proxy-settings.resolution]
+#[test]
+fn service_rate_limit_applies_to_a_route_declaring_none() {
+    let service = ProxySettings {
+        rate_limit: limit(1000, 1.0),
+        ..Default::default()
+    };
+    let r = resolve(&service, Some(&ProxySettings::default()));
+    let rl = r
+        .rate_limit
+        .expect("the service's limit carries to the route");
+    assert_eq!(rl.settings.max_events, 1000);
+    assert_eq!(rl.settings.window_secs, 1.0);
+}
+
+// l[verify service.http.proxy-settings.resolution]
+#[test]
+fn route_rate_limit_replaces_the_services_outright() {
+    let service = ProxySettings {
+        rate_limit: limit(1000, 1.0),
+        ..Default::default()
+    };
+    let route = ProxySettings {
+        rate_limit: limit(10, 60.0),
+        ..Default::default()
+    };
+    let rl = resolve(&service, Some(&route))
+        .rate_limit
+        .expect("the route's limit governs");
+    assert_eq!(rl.scope, RateLimitScope::Route);
+    // Whole-unit, not field-by-field: the window comes from the route too,
+    // rather than being left at the service's 1s.
+    assert_eq!(rl.settings.max_events, 10);
+    assert_eq!(rl.settings.window_secs, 60.0);
+}
+
+// l[verify service.http.proxy-settings.resolution]
+#[test]
+fn route_can_switch_off_a_limit_the_service_declared() {
+    let service = ProxySettings {
+        rate_limit: limit(1000, 1.0),
+        ..Default::default()
+    };
+    let route = ProxySettings {
+        rate_limit: Some(RateLimitDecl::Disabled),
+        ..Default::default()
+    };
+    assert_eq!(resolve(&service, Some(&route)).rate_limit, None);
+}
+
+// l[verify service.http.proxy-settings.resolution]
+#[test]
+fn rate_limit_does_not_disturb_compression_or_balancing() {
+    let service = ProxySettings {
+        rate_limit: limit(1000, 1.0),
+        ..Default::default()
+    };
+    let r = resolve(&service, None);
+    assert!(r.compress.is_some(), "compression stays on by default");
+    assert_eq!(r.balance.policy, LbPolicy::RoundRobin);
+}
+
+// l[verify service.http.rate-limit.fields]
+#[test]
+fn rate_limit_parses_ints_and_floats() {
+    let m = map(vec![
+        ("max_events", Dynamic::from(10_i64)),
+        ("window", Dynamic::from(1_i64)),
+    ]);
+    let parsed = parse_rate_limit(m).expect("valid");
+    assert_eq!(parsed.max_events, 10);
+    assert_eq!(parsed.window_secs, 1.0);
+
+    let fractional = map(vec![
+        ("max_events", Dynamic::from(5_i64)),
+        ("window", Dynamic::from(0.5_f64)),
+    ]);
+    assert_eq!(
+        parse_rate_limit(fractional).expect("valid").window_secs,
+        0.5
+    );
+}
+
+// l[verify service.http.rate-limit.fields]
+#[test]
+fn rate_limit_requires_both_fields() {
+    let no_window = map(vec![("max_events", Dynamic::from(10_i64))]);
+    assert!(parse_rate_limit(no_window).is_err());
+
+    let no_max = map(vec![("window", Dynamic::from(1_i64))]);
+    assert!(parse_rate_limit(no_max).is_err());
+
+    assert!(parse_rate_limit(map(vec![])).is_err());
+}
+
+// l[verify service.http.rate-limit.fields]
+#[test]
+fn rate_limit_rejects_bad_values() {
+    let zero_events = map(vec![
+        ("max_events", Dynamic::from(0_i64)),
+        ("window", Dynamic::from(1_i64)),
+    ]);
+    assert!(parse_rate_limit(zero_events).is_err());
+
+    let negative_events = map(vec![
+        ("max_events", Dynamic::from(-1_i64)),
+        ("window", Dynamic::from(1_i64)),
+    ]);
+    assert!(parse_rate_limit(negative_events).is_err());
+
+    let zero_window = map(vec![
+        ("max_events", Dynamic::from(10_i64)),
+        ("window", Dynamic::from(0_i64)),
+    ]);
+    assert!(parse_rate_limit(zero_window).is_err());
+
+    let negative_window = map(vec![
+        ("max_events", Dynamic::from(10_i64)),
+        ("window", Dynamic::from(-1.0_f64)),
+    ]);
+    assert!(parse_rate_limit(negative_window).is_err());
+
+    let infinite_window = map(vec![
+        ("max_events", Dynamic::from(10_i64)),
+        ("window", Dynamic::from(f64::INFINITY)),
+    ]);
+    assert!(parse_rate_limit(infinite_window).is_err());
+
+    let unknown_field = map(vec![
+        ("max_events", Dynamic::from(10_i64)),
+        ("window", Dynamic::from(1_i64)),
+        ("per", Dynamic::from("ip".to_string())),
+    ]);
+    assert!(parse_rate_limit(unknown_field).is_err());
+}
+
+// l[verify service.http.rate-limit.fields]
+#[test]
+fn rate_limit_rejects_out_of_range_values() {
+    let too_many = map(vec![
+        ("max_events", Dynamic::from(MAX_MAX_EVENTS as i64 + 1)),
+        ("window", Dynamic::from(1_i64)),
+    ]);
+    assert!(parse_rate_limit(too_many).is_err());
+
+    // Below the floor: not a rate limit any app could mean.
+    let vanishing = map(vec![
+        ("max_events", Dynamic::from(10_i64)),
+        ("window", Dynamic::from(0.000_000_000_1_f64)),
+    ]);
+    assert!(parse_rate_limit(vanishing).is_err());
+
+    // Above the ceiling.
+    let geological = map(vec![
+        ("max_events", Dynamic::from(10_i64)),
+        ("window", Dynamic::from(1e12_f64)),
+    ]);
+    assert!(parse_rate_limit(geological).is_err());
+}
+
+// l[verify service.http.rate-limit.fields]
+#[test]
+fn rate_limit_accepts_the_bounds_themselves() {
+    let at_bounds = map(vec![
+        ("max_events", Dynamic::from(MAX_MAX_EVENTS as i64)),
+        ("window", Dynamic::from(MAX_WINDOW_SECS)),
+    ]);
+    assert!(parse_rate_limit(at_bounds).is_ok());
+
+    let at_floor = map(vec![
+        ("max_events", Dynamic::from(1_i64)),
+        ("window", Dynamic::from(MIN_WINDOW_SECS)),
+    ]);
+    assert!(parse_rate_limit(at_floor).is_ok());
+}
+
+// l[verify service.http.rate-limit.fields]
+#[test]
+fn rate_limit_names_a_misspelled_key_rather_than_the_field_it_displaced() {
+    let typo = map(vec![
+        ("max_event", Dynamic::from(10_i64)),
+        ("window", Dynamic::from(1_i64)),
+    ]);
+    let err = parse_rate_limit(typo).expect_err("a misspelled key must throw");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("max_event") && !msg.contains("requires"),
+        "the error should name the key that was not recognised, got: {msg}"
+    );
+}
+
+// l[verify service.http.proxy-settings.resolution]
+#[test]
+fn an_inherited_limit_stays_the_services_however_many_routes_take_it() {
+    let service = ProxySettings {
+        rate_limit: limit(1000, 1.0),
+        ..Default::default()
+    };
+    // Two routes inheriting the same declaration. Both report the service as
+    // the declaring level, which is what names them one budget rather than
+    // one each: were it otherwise, a service declaring 1000/s and serving
+    // three routes would let a client spend 3000/s against its pods, and
+    // adding a fourth route would raise that again.
+    for route in [ProxySettings::default(), ProxySettings::default()] {
+        let rl = resolve(&service, Some(&route))
+            .rate_limit
+            .expect("inherited");
+        assert_eq!(rl.scope, RateLimitScope::Service);
+        assert_eq!(rl.settings.max_events, 1000);
+    }
+
+    // A route declaring its own is that route's budget, so it is scoped to it.
+    let own = ProxySettings {
+        rate_limit: limit(10, 1.0),
+        ..Default::default()
+    };
+    let rl = resolve(&service, Some(&own)).rate_limit.expect("own");
+    assert_eq!(rl.scope, RateLimitScope::Route);
 }

@@ -439,7 +439,9 @@ mod tests {
             routes: vec![],
             service_ip: "fd5e:ed12:3456:200::1".parse().unwrap(),
             service_port: port,
-            proxy: crate::defs::service::ResolvedRouteProxy::default().into(),
+            proxy: crate::system::types::RouteProxy::unlimited(
+                crate::defs::service::ResolvedRouteProxy::default(),
+            ),
         }
     }
 

@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use super::{
+    app::AppDef,
     container::{ContainerDef, HealthcheckDef, HealthcheckKind, VolumeMount},
     deployment::Deployment,
     enums::{OnExit, OnTerminate, OnUpdate},
@@ -23,7 +24,7 @@ use super::{
     pod::{HttpBinding, PodDef, TcpUdpBinding},
     resource::Resource,
     service::{
-        ExternalService, HttpServiceDef, ProxySettings, ResolvedBalance, Service,
+        ExternalService, HttpServiceDef, ProxySettings, RateLimitScope, ResolvedBalance, Service,
         default_content_types, resolve,
     },
     volume::{ExternalVolume, Volume},
@@ -60,9 +61,27 @@ pub struct ServiceSummary {
 #[derive(Serialize, Debug, PartialEq)]
 pub struct RouteSummary {
     pub prefix: String,
+    /// Whether a pod binds this prefix, and so whether the proxy is told to
+    /// serve it. A route that is declared but not served carries settings
+    /// nothing applies — harmless for compression, but a rate limit reported
+    /// on one would otherwise read as a control that is in force.
+    pub served: bool,
     /// `null` when compression is off for this route.
     pub compress: Option<CompressSummary>,
     pub balance: BalanceSummary,
+    /// `null` when this route is not rate limited.
+    pub rate_limit: Option<RateLimitSummary>,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+pub struct RateLimitSummary {
+    pub max_events: u64,
+    pub window: f64,
+    /// `true` when the limit was declared on the service, so this route counts
+    /// against a budget it shares with every other route inheriting it.
+    /// Without this the reading is ambiguous: two routes each showing the same
+    /// number may be one budget between them or one each.
+    pub shared: bool,
 }
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -215,9 +234,11 @@ pub struct ExternalServiceSummary {
 // ---------------------------------------------------------------------------
 
 impl Resource {
-    pub fn summary(&self) -> ResourceSummary {
+    /// `app` is the definition this resource belongs to, which a service needs
+    /// in order to report which of its routes a pod actually binds.
+    pub fn summary(&self, app: &AppDef) -> ResourceSummary {
         match self {
-            Self::Service(s) => ResourceSummary::Service(s.summary()),
+            Self::Service(s) => ResourceSummary::Service(s.summary(app)),
             Self::Ingress(i) => ResourceSummary::Ingress(i.summary()),
             Self::Deployment(d) => ResourceSummary::Deployment(d.summary()),
             Self::Job(j) => ResourceSummary::Job(j.summary()),
@@ -229,7 +250,7 @@ impl Resource {
 }
 
 impl Service {
-    pub fn summary(&self) -> ServiceSummary {
+    pub fn summary(&self, app: &AppDef) -> ServiceSummary {
         let def = self.def.lock();
         let service_level = def.proxy_settings();
         ServiceSummary {
@@ -241,19 +262,50 @@ impl Service {
                 .and_then(|opts| opts.description.clone()),
             description: def.description.clone(),
             balance: balance_summary(&resolve(&service_level, None).balance),
-            routes: def
-                .http
-                .as_ref()
-                .map(|http| route_summaries(&service_level, http)),
+            routes: def.http.as_ref().map(|http| {
+                route_summaries(
+                    &service_level,
+                    http,
+                    &bound_prefixes(app, self.name.as_str()),
+                )
+            }),
         }
     }
+}
+
+/// The prefixes of `service_name` that a pod binds, and which the proxy is
+/// therefore told to serve.
+///
+/// A prefix reaches the proxy only by being bound: `route()` registers it on
+/// the service, but the emitted routes are built from pod bindings. A prefix
+/// with no binding is a declaration nothing serves, and requests under it are
+/// answered by whichever declared prefix does match.
+fn bound_prefixes(app: &AppDef, service_name: &str) -> std::collections::BTreeSet<String> {
+    let mut bound = std::collections::BTreeSet::new();
+    for resource in app.resources.values() {
+        let pod = match resource {
+            Resource::Deployment(dep) => dep.def.lock().pod.clone(),
+            Resource::Job(job) => job.def.lock().pod.clone(),
+            _ => continue,
+        };
+        for binding in &pod.lock().http_bindings {
+            if binding.route.http.service.name().as_str() == service_name {
+                bound.insert(binding.route.prefix.clone());
+            }
+        }
+    }
+    bound
 }
 
 // i[impl app.describe.proxy-settings]
 // r[impl service.http.route.proxy-settings.visibility]
 /// One entry per route the service is served through, each fully resolved so
 /// a reader never has to know the defaults to interpret the answer.
-fn route_summaries(service_level: &ProxySettings, http: &HttpServiceDef) -> Vec<RouteSummary> {
+fn route_summaries(
+    service_level: &ProxySettings,
+    http: &HttpServiceDef,
+    bound: &std::collections::BTreeSet<String>,
+) -> Vec<RouteSummary> {
     // A service whose pods bind no prefix is still served through "/", so the
     // array is never empty for an HTTP service.
     let prefixes: Vec<&str> = if http.routes.is_empty() {
@@ -267,6 +319,9 @@ fn route_summaries(service_level: &ProxySettings, http: &HttpServiceDef) -> Vec<
         .map(|prefix| {
             let resolved = resolve(service_level, http.routes.get(prefix));
             RouteSummary {
+                // The synthesised `/` route is served whenever it is the only
+                // one, which is the case exactly when nothing was bound.
+                served: bound.is_empty() || bound.contains(prefix),
                 prefix: prefix.to_owned(),
                 compress: resolved.compress.map(|c| CompressSummary {
                     encodings: c.encodings.iter().map(|e| e.as_str().to_owned()).collect(),
@@ -274,6 +329,11 @@ fn route_summaries(service_level: &ProxySettings, http: &HttpServiceDef) -> Vec<
                     minimum_length: c.minimum_length,
                 }),
                 balance: balance_summary(&resolved.balance),
+                rate_limit: resolved.rate_limit.map(|rl| RateLimitSummary {
+                    max_events: rl.settings.max_events,
+                    window: rl.settings.window_secs,
+                    shared: rl.scope == RateLimitScope::Service,
+                }),
             }
         })
         .collect()
