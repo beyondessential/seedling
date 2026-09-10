@@ -172,10 +172,36 @@ impl From<InvalidEnvName> for InvalidEnvVar {
 ///
 /// The name is a validated [`EnvironmentVarName`]; the value is a free-form
 /// string subject only to the POSIX "no null byte" constraint.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EnvVar {
     pub name: EnvironmentVarName,
     pub value: String,
+}
+
+/// The value side carried its invariant only through [`EnvVar::new`]. A
+/// derived `Deserialize` over a plain `String` let a wire-decoded pair hold an
+/// embedded NUL, which the type's own documentation says cannot happen — the
+/// name side has had a validating impl all along. This is the value side of
+/// that, so the invariant holds however the pair was built.
+// l[impl container.env.validation]
+impl<'de> Deserialize<'de> for EnvVar {
+    fn deserialize<D>(d: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Wire {
+            name: EnvironmentVarName,
+            value: String,
+        }
+        let Wire { name, value } = Wire::deserialize(d)?;
+        if value.contains('\0') {
+            return Err(serde::de::Error::custom(
+                InvalidEnvVar::ValueContainsNull.to_string(),
+            ));
+        }
+        Ok(Self { name, value })
+    }
 }
 
 impl EnvVar {
@@ -270,6 +296,23 @@ mod tests {
     fn deserialize_rejects_invalid_name() {
         let r: Result<EnvironmentVarName, _> = serde_json::from_str("\"9BAD\"");
         assert!(r.is_err());
+    }
+
+    // l[verify container.env.validation]
+    // `EnvVar` is fuzzed as a wire decoder, and the value is the half that had
+    // no validating impl: a NUL arrived intact and only failed later, at
+    // whatever handed it to execve.
+    #[test]
+    fn deserialize_rejects_a_null_byte_in_the_value() {
+        let r: Result<EnvVar, _> = serde_json::from_str(r#"{"name":"OK","value":"a\u0000b"}"#);
+        assert!(r.is_err(), "a NUL in the value must not decode");
+    }
+
+    // l[verify container.env.validation]
+    #[test]
+    fn deserialize_accepts_an_ordinary_value() {
+        let v: EnvVar = serde_json::from_str(r#"{"name":"OK","value":"hello"}"#).expect("decodes");
+        assert_eq!(v.value, "hello");
     }
 
     #[test]
