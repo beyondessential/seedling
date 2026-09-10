@@ -54,7 +54,7 @@ pub async fn handle_connect(
 
     let wt_host = host.unwrap_or_else(|| "localhost".to_owned());
     // Strip any port from the host header to reconstruct with wt_port.
-    let wt_hostname = wt_host.split(':').next().unwrap_or("localhost");
+    let wt_hostname = crate::http::hostname_from_host_header(&wt_host);
     let wt_url = format!("https://{wt_hostname}:{}/wt?t={wt_token}", state.wt_port);
 
     let cert_hashes = state.cert_store.read().cert_hashes();

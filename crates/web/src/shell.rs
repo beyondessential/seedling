@@ -35,6 +35,16 @@ async fn open_prefixed_wt_uni(
     Ok(send)
 }
 
+/// Whether the accumulated bytes are a complete exit frame.
+///
+/// The frame is newline-terminated. The relay used to report a constant
+/// `true`, so `mark_exited` always ran and the guard's `/shells/stop` cleanup
+/// was unreachable — and the case it exists for is precisely the one where no
+/// frame arrived, because `daemon_recv` errored and nothing was accumulated.
+fn is_complete_exit_frame(buf: &[u8]) -> bool {
+    buf.last() == Some(&b'\n')
+}
+
 /// RAII guard: fires `/shells/stop` when dropped if the session did not exit cleanly.
 struct ShellSessionGuard {
     session_id: String,
@@ -222,16 +232,47 @@ pub async fn handle_shell_start(
                 break;
             }
         }
+        // A complete exit frame is newline-terminated. Returning a constant
+        // `true` here made `did_exit` unconditional, so `mark_exited` always
+        // ran and the guard's `/shells/stop` cleanup was unreachable — the
+        // case it exists for is exactly the one where no frame arrived,
+        // because `daemon_recv` errored and `exit_buf` is empty.
+        let saw_exit_frame = is_complete_exit_frame(&exit_buf);
         if !exit_buf.is_empty() {
             let _ = wt_send.write_all(&exit_buf).await;
         }
         let _ = wt_send.shutdown().await;
-        true // did exit
+        saw_exit_frame
     };
 
     let (_, _, _, did_exit) = tokio::join!(stdin_fwd, stdout_fwd, stderr_fwd, exit_relay);
 
     if did_exit {
         guard.mark_exited();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_complete_exit_frame;
+
+    // w[verify shells.exit]
+    #[test]
+    fn a_newline_terminated_frame_counts_as_an_exit() {
+        assert!(is_complete_exit_frame(b"{\"exit_code\":0}\n"));
+    }
+
+    // w[verify shells.exit]
+    // This is the case the cleanup guard exists for: the relay reported a
+    // constant true, so it never fired.
+    #[test]
+    fn no_frame_at_all_does_not_count_as_an_exit() {
+        assert!(!is_complete_exit_frame(b""));
+    }
+
+    // w[verify shells.exit]
+    #[test]
+    fn a_truncated_frame_does_not_count_as_an_exit() {
+        assert!(!is_complete_exit_frame(b"{\"exit_code\":0}"));
     }
 }

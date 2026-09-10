@@ -75,8 +75,14 @@ impl WebSessionRegistry {
         self.sessions.lock().insert(entry.id, entry);
     }
 
-    pub fn remove(&self, id: &Uuid) {
-        self.sessions.lock().remove(id);
+    /// Remove a session, reporting whether it was still registered.
+    ///
+    /// The caller announces a stop only for the removal that actually took
+    /// the session out. The reaper and the connection-close path both run for
+    /// a session the reaper got to first, and publishing unconditionally sent
+    /// two `WebSessionStopped` events for the one session.
+    pub fn remove(&self, id: &Uuid) -> bool {
+        self.sessions.lock().remove(id).is_some()
     }
 
     // w[impl sessions.heartbeat]
@@ -174,6 +180,28 @@ mod tests {
             actor: actor(),
             safety_mode: SafetyMode::Read,
         }
+    }
+
+    // w[verify sessions.events]
+    // The reaper and the connection-close path both run for a session the
+    // reaper got to first, so the caller has to be able to tell which removal
+    // was the real one — publishing on both sent two closes for one session.
+    #[test]
+    fn remove_reports_whether_the_session_was_still_registered() {
+        let reg = WebSessionRegistry::default();
+        let now = Timestamp::now();
+        let id = Uuid::new_v4();
+        reg.insert(entry(id, now));
+
+        assert!(reg.remove(&id), "the first removal took it out");
+        assert!(!reg.remove(&id), "a second removal has nothing to announce");
+    }
+
+    // w[verify sessions.events]
+    #[test]
+    fn removing_an_unknown_session_reports_nothing_removed() {
+        let reg = WebSessionRegistry::default();
+        assert!(!reg.remove(&Uuid::new_v4()));
     }
 
     // w[verify sessions.safety-mode]
