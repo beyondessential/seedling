@@ -27,9 +27,6 @@
 - [x] Tests: parse/resolution unit tests (proxy/tests.rs), emitter tests covering the handler, terminal ordering, zone sharing across vhosts, the pinned-module field set, and validation-throws cases
 - [x] tracey: annotate impls/tests against the new spec items
 
-- **Path normalisation.** The proxy matches a prefix against a normalised path: duplicate separators collapsed, relative segments resolved, case folded, percent-encoding decoded (Caddy 2.11.4 `MatchPath`). So `/api//login`, `/api/./login` and `/api/Login` all reach a `/api/login` route rather than falling through to `/api` — the nested-prefix bypass does not work. Caddy normalises more than a typical backend router, so residual disagreement over-applies the stricter limit rather than escaping it.
-- **Describe reports whether a route is served.** A prefix no pod binds carries `served: false`, so a limit declared on an unbound route no longer reads as a control in force.
-
 ## Settled
 
 - **Path normalisation.** The proxy matches a prefix against a normalised path: duplicate separators collapsed, relative segments resolved, letter case folded, percent-encoding decoded (Caddy 2.11.4 `MatchPath`). `/api//login`, `/api/./login` and `/api/Login` therefore reach a `/api/login` route rather than falling through to `/api`, so the nested-prefix bypass does not work. Caddy normalises more than a typical backend router, so residual disagreement over-applies the stricter limit rather than escaping it.
