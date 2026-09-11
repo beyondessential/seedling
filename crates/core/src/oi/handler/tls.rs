@@ -23,7 +23,7 @@ use super::HandlerResult;
 use crate::oi::state::OiState;
 use crate::runtime::tls::{
     AttemptOutcome, DnsProviderKind, KeyType, RetryBlockSource, TlsCertOrigin, TlsCertState,
-    TlsPolicy, keypair, state, store,
+    TlsPolicy, keypair, parse, state, store,
     store::CertMetadata,
     validate::{self, ValidateError},
 };
@@ -272,9 +272,34 @@ pub(crate) fn list_certificates(state: &OiState) -> HandlerResult {
     let result: Vec<Value> = rows
         .into_iter()
         .map(|c| {
+            // Whether the stored certificate covers the hostname its CSR asked
+            // for. Decided here so the RFC 6125 rule has one implementation
+            // rather than one per client. `null` where there is nothing to
+            // decide — no request, no certificate yet — or where the stored
+            // PEM will not parse, which is not the same as "does not cover".
+            // r[impl tls.csr.flow]
+            let request_covered = match (c.requested_hostname.as_deref(), c.cert_pem.as_deref()) {
+                (Some(requested), Some(pem)) => match parse::cert_covers(pem, requested) {
+                    Ok(covered) => Some(covered),
+                    // Null here reads as "no flag" to the operator, same as a
+                    // met request, so the reason has to be said somewhere.
+                    Err(e) => {
+                        tracing::warn!(
+                            cert_id = c.id,
+                            error = %e,
+                            "stored certificate could not be parsed; cannot report whether it \
+                             covers the hostname its CSR requested"
+                        );
+                        None
+                    }
+                },
+                _ => None,
+            };
             json!({
                 "id": c.id,
                 "hostname": c.hostname,
+                "requested_hostname": c.requested_hostname,
+                "request_covered": request_covered,
                 "state": c.state.as_str(),
                 "origin": c.origin.as_str(),
                 "key_type": c.key_type.as_str(),
@@ -325,6 +350,34 @@ pub(crate) fn issue_acme_dns(state: &OiState, params: IssueAcmeDnsParams) -> Han
     }
 }
 
+/// What a validated operator-supplied certificate becomes in storage.
+///
+/// A certificate binds to hostnames by SAN coverage alone, so its row is
+/// labelled with — and supersedes under — its own primary SAN, never a name
+/// the operator asked for. Both upload paths build this, so neither can
+/// reintroduce a label the certificate does not carry.
+// r[impl tls.cert.validation.san-coverage]
+struct StoredCert {
+    primary_san: String,
+    chain_pem: String,
+    metadata: CertMetadata,
+}
+
+impl StoredCert {
+    fn from_validated(validated: &validate::Validated) -> Self {
+        Self {
+            primary_san: validated
+                .parsed
+                .san_dns_names
+                .first()
+                .cloned()
+                .expect("validate_upload rejects empty SAN lists"),
+            chain_pem: validated.parsed.chain_pem.clone(),
+            metadata: validated.parsed.metadata.clone(),
+        }
+    }
+}
+
 #[derive(Deserialize)]
 pub(crate) struct UploadManualParams {
     pub cert_pem: String,
@@ -354,20 +407,11 @@ pub(crate) fn upload_manual(state: &OiState, params: UploadManualParams) -> Hand
     let validated =
         validate::validate_upload(&cert_pem, &key_secret).map_err(map_validate_error)?;
 
-    let primary_san = validated
-        .parsed
-        .san_dns_names
-        .first()
-        .cloned()
-        .expect("validate_upload rejects empty SAN lists");
-    let chain_pem = validated.parsed.chain_pem.clone();
-    let metadata = CertMetadata {
-        issuer: validated.parsed.metadata.issuer.clone(),
-        not_before: validated.parsed.metadata.not_before,
-        not_after: validated.parsed.metadata.not_after,
-        serial: validated.parsed.metadata.serial.clone(),
-        self_signed: validated.parsed.metadata.self_signed,
-    };
+    let StoredCert {
+        primary_san,
+        chain_pem,
+        metadata,
+    } = StoredCert::from_validated(&validated);
     let key_type = validated.key_type;
 
     let cipher = Arc::clone(&state.cipher);
@@ -383,26 +427,22 @@ pub(crate) fn upload_manual(state: &OiState, params: UploadManualParams) -> Hand
     let id = state
         .db
         .call(move |db| -> rusqlite::Result<i64> {
-            let id = store::insert_certificate(
+            store::insert_and_supersede(
                 db,
-                &label_for_insert,
-                TlsCertState::Active,
-                TlsCertOrigin::Manual,
-                Some(&chain_pem),
-                None,
-                &key_ciphertext,
-                key_type,
-                metadata,
-                note_for_insert.as_deref(),
-                None,
-            )?;
-            // Replace any prior active cert with the same primary SAN
-            // (renewal-of-same-cert flow) so serving picks the new one
-            // up immediately. Other certs with overlapping SAN coverage
-            // stay around; resolution picks the most-recent active row
-            // covering each hostname.
-            store::supersede_other_active_for_hostname(db, &label_for_insert, id)?;
-            Ok(id)
+                store::NewCertificate {
+                    hostname: &label_for_insert,
+                    requested_hostname: None,
+                    state: TlsCertState::Active,
+                    origin: TlsCertOrigin::Manual,
+                    cert_pem: Some(&chain_pem),
+                    csr_pem: None,
+                    key_ciphertext: &key_ciphertext,
+                    key_type,
+                    metadata,
+                    note: note_for_insert.as_deref(),
+                    acme_account_id: None,
+                },
+            )
         })
         .map_err(db_error)?;
 
@@ -510,16 +550,23 @@ pub(crate) fn csr_begin(state: &OiState, params: CsrBeginParams) -> HandlerResul
         .call(move |db| {
             store::insert_certificate(
                 db,
-                &host_for_insert,
-                TlsCertState::CsrPending,
-                TlsCertOrigin::Csr,
-                None,
-                Some(&csr_pem_for_insert),
-                &key_ciphertext,
-                key_type,
-                CertMetadata::default(),
-                None,
-                None,
+                store::NewCertificate {
+                    // Until a certificate arrives the row has no primary SAN
+                    // of its own, so the requested name stands in as its
+                    // label. The upload replaces it with the SAN the signed
+                    // certificate actually carries.
+                    hostname: &host_for_insert,
+                    requested_hostname: Some(&host_for_insert),
+                    state: TlsCertState::CsrPending,
+                    origin: TlsCertOrigin::Csr,
+                    cert_pem: None,
+                    csr_pem: Some(&csr_pem_for_insert),
+                    key_ciphertext: &key_ciphertext,
+                    key_type,
+                    metadata: CertMetadata::default(),
+                    note: None,
+                    acme_account_id: None,
+                },
             )
         })
         .map_err(db_error)?;
@@ -569,10 +616,16 @@ pub(crate) struct CsrUploadCertParams {
 
 /// Upload the externally-signed certificate for a pending CSR. The
 /// runtime decrypts the stored private key, verifies that the leaf
-/// cert's SubjectPublicKeyInfo matches the stored key, runs the
-/// standard SAN-coverage / expiry checks, and on success transitions
-/// the row to `active`. Any prior active certificate for the same
-/// hostname is superseded.
+/// cert's SubjectPublicKeyInfo matches the stored key, runs the same
+/// validation as a manual upload, and on success transitions the row to
+/// `active` under the label the signed certificate carries. Any prior
+/// active certificate under that same label is superseded — never one
+/// serving a hostname the arriving certificate does not cover.
+///
+/// The hostname the CSR was requested for is a record of the request, not
+/// a binding: an issued certificate that does not cover it is still stored
+/// and still serves what it does cover, with `request_not_covered` in the
+/// response warnings.
 // i[tls.cert.csr.upload-cert]
 // r[impl tls.csr.flow]
 pub(crate) fn csr_upload_cert(state: &OiState, params: CsrUploadCertParams) -> HandlerResult {
@@ -602,41 +655,62 @@ pub(crate) fn csr_upload_cert(state: &OiState, params: CsrUploadCertParams) -> H
         )
     })?;
 
-    // Validation reuses the upload rules: SAN-list non-empty, expiry,
-    // and (here against the CSR's stored key) SPKI match. SAN coverage
-    // for the originally-requested hostname is enforced as part of the
-    // SPKI match — the CSR was built with that name as its only SAN.
+    // Validation reuses the manual-upload rules: SAN-list non-empty, expiry,
+    // and (here against the CSR's stored key) SPKI match. The SPKI match
+    // proves the certificate was issued for this CSR's keypair; it says
+    // nothing about which names the CA chose to sign.
     let validated =
         validate::validate_upload(&cert_pem, &stored_key).map_err(map_validate_error)?;
 
-    let chain_pem = validated.parsed.chain_pem.clone();
-    let metadata = CertMetadata {
-        issuer: validated.parsed.metadata.issuer.clone(),
-        not_before: validated.parsed.metadata.not_before,
-        not_after: validated.parsed.metadata.not_after,
-        serial: validated.parsed.metadata.serial.clone(),
-        self_signed: validated.parsed.metadata.self_signed,
-    };
+    let StoredCert {
+        primary_san,
+        chain_pem,
+        metadata,
+    } = StoredCert::from_validated(&validated);
 
-    let host_for_update = cert_row.hostname.clone();
-    state
+    // A CA may sign a name set other than the one requested. The certificate
+    // is still a real one for a key the runtime holds, so it is accepted and
+    // binds to whatever it does cover; what it cannot do is claim the
+    // requested hostname. Report the unmet request instead: the hostname
+    // keeps whichever certificate is already serving it, and goes on showing
+    // as uncovered in the per-hostname rollup until one arrives.
+    // r[impl tls.csr.flow]
+    // r[impl tls.cert.validation.san-coverage]
+    let requested = cert_row
+        .requested_hostname
+        .as_deref()
+        // Rows predating the column were backfilled from `hostname`, which is
+        // where a pending CSR's requested name has always lived.
+        .unwrap_or(cert_row.hostname.as_str());
+    let mut warnings = validated.warnings.clone();
+    if !parse::san_covers(&validated.parsed.san_dns_names, requested) {
+        warnings.push("request_not_covered");
+    }
+
+    let label_for_update = primary_san.clone();
+    let activated = state
         .db
-        .call(move |db| -> rusqlite::Result<()> {
-            store::update_certificate(
-                db,
-                id,
-                TlsCertState::Active,
-                Some(&chain_pem),
-                Some(&metadata),
-            )?;
-            store::supersede_other_active_for_hostname(db, &host_for_update, id)?;
-            Ok(())
+        .call(move |db| {
+            store::activate_pending_csr(db, id, &label_for_update, &chain_pem, &metadata)
         })
         .map_err(db_error)?;
 
+    // The row was read, its key decrypted and the certificate validated before
+    // this point, none of it under a lock. A cancellation landing in that
+    // window means there is nothing to activate, and saying so beats reporting
+    // a certificate stored that was not.
+    if !activated {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!("certificate {id} is no longer awaiting a CSR upload"),
+        ));
+    }
+
     Ok(json!({
         "id": id,
-        "warnings": validated.warnings,
+        "primary_san": primary_san,
+        "san_dns_names": validated.parsed.san_dns_names,
+        "warnings": warnings,
     }))
 }
 
