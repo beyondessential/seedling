@@ -30,6 +30,7 @@ fn route_overrides_only_the_fields_it_names() {
             ..Default::default()
         },
         rate_limit: None,
+        headers: Default::default(),
     };
     let route = ProxySettings {
         balance: BalanceSettings {
@@ -61,6 +62,7 @@ fn service_values_apply_when_route_declares_nothing() {
             ..Default::default()
         },
         rate_limit: None,
+        headers: Default::default(),
     };
     let r = resolve(&service, Some(&ProxySettings::default()));
     assert_eq!(r.compress.expect("on").encodings, vec![Encoding::Gzip]);
@@ -473,4 +475,268 @@ fn an_inherited_limit_stays_the_services_however_many_routes_take_it() {
     };
     let rl = resolve(&service, Some(&own)).rate_limit.expect("own");
     assert_eq!(rl.scope, RateLimitScope::Route);
+}
+
+// ---------------------------------------------------------------------------
+// Header manipulation
+// ---------------------------------------------------------------------------
+
+fn headers(script: &str) -> HeaderSettings {
+    let map: Map = rhai::Engine::new()
+        .eval::<rhai::Dynamic>(script)
+        .expect("script evaluates")
+        .try_cast()
+        .expect("script yields a map");
+    parse_headers(map).expect("declaration is accepted")
+}
+
+fn headers_err(script: &str) -> String {
+    let map: Map = rhai::Engine::new()
+        .eval::<rhai::Dynamic>(script)
+        .expect("script evaluates")
+        .try_cast()
+        .expect("script yields a map");
+    parse_headers(map)
+        .expect_err("declaration is refused")
+        .to_string()
+}
+
+fn op(rules: &HeaderRules, name: &str) -> Option<HeaderOp> {
+    rules
+        .0
+        .iter()
+        .find(|(k, _)| k.as_str().eq_ignore_ascii_case(name))
+        .map(|(_, v)| v.clone())
+}
+
+// l[verify service.http.headers]
+#[test]
+fn both_directions_carry_their_own_operations() {
+    let h = headers(
+        r#"#{
+            request: #{ replace: #{ "Host": "central.internal" } },
+            response: #{ replace: #{ "Cache-Control": "no-store" } },
+        }"#,
+    );
+    assert_eq!(
+        op(&h.request, "host"),
+        Some(HeaderOp::Replace(vec!["central.internal".into()]))
+    );
+    // The directions are independent: an operation declared in one does not
+    // leak into the other.
+    assert_eq!(op(&h.request, "cache-control"), None);
+    assert_eq!(
+        op(&h.response, "cache-control"),
+        Some(HeaderOp::Replace(vec!["no-store".into()]))
+    );
+}
+
+// l[verify service.http.headers]
+#[test]
+fn a_declaration_naming_no_direction_is_refused() {
+    assert!(headers_err(r#"#{}"#).contains("requires `request`"));
+    // A typo is reported as the invented key it is, rather than as a config
+    // that named no direction at all.
+    let e = headers_err(r#"#{ requests: #{ remove: ["Server"] } }"#);
+    assert!(e.contains("unknown") && e.contains("requests"), "{e}");
+}
+
+// l[verify service.http.headers.fields]
+#[test]
+fn a_direction_naming_no_operation_is_refused() {
+    let e = headers_err(r#"#{ response: #{} }"#);
+    assert!(e.contains("requires `replace`, `add`, or `remove`"), "{e}");
+}
+
+// l[verify service.http.headers.fields]
+#[test]
+fn a_value_is_a_string_or_an_array_of_them() {
+    // Several values is the case `Set-Cookie` needs, since several cookies
+    // cannot be folded into one header.
+    let h = headers(
+        r#"#{ response: #{ add: #{
+            "Set-Cookie": ["a=1", "b=2"],
+            "X-One": "just-one",
+        } } }"#,
+    );
+    assert_eq!(
+        op(&h.response, "set-cookie"),
+        Some(HeaderOp::Add(vec!["a=1".into(), "b=2".into()]))
+    );
+    // A bare string is the one-element case of the same thing, so the two
+    // forms produce the same shape rather than two kinds of value.
+    assert_eq!(
+        op(&h.response, "x-one"),
+        Some(HeaderOp::Add(vec!["just-one".into()]))
+    );
+}
+
+// l[verify service.http.headers.fields]
+#[test]
+fn an_empty_array_is_refused_rather_than_read_as_a_removal() {
+    let e = headers_err(r#"#{ response: #{ replace: #{ "X-Thing": [] } } }"#);
+    assert!(e.contains("use `remove`"), "{e}");
+    let e = headers_err(r#"#{ response: #{ remove: [] } }"#);
+    assert!(e.contains("must not be empty"), "{e}");
+}
+
+// l[verify service.http.headers.fields]
+#[test]
+fn a_value_carrying_a_line_ending_is_refused() {
+    // Otherwise the value ends its own header and begins another of the
+    // declaration's choosing, which is header injection by declaration.
+    for value in [r#""a\r\nX-Evil: yes""#, r#""a\nX-Evil: yes""#] {
+        let e = headers_err(&format!(
+            r#"#{{ response: #{{ replace: #{{ "X-Thing": {value} }} }} }}"#
+        ));
+        assert!(e.contains("carriage return or line feed"), "{e}");
+    }
+}
+
+// l[verify service.http.headers.fields]
+#[test]
+fn a_name_outside_the_http_token_characters_is_refused() {
+    for name in ["X Thing", "X:Thing", "X\u{e9}"] {
+        let e = headers_err(&format!(r#"#{{ response: #{{ remove: ["{name}"] }} }}"#));
+        assert!(e.contains("not valid in an HTTP field name"), "{name}: {e}");
+    }
+    assert!(headers_err(r#"#{ response: #{ remove: [""] } }"#).contains("must not be empty"));
+}
+
+// l[verify service.http.headers.fields]
+#[test]
+fn the_headers_the_proxy_owns_are_refused() {
+    // Keep-alive is the one an app would legitimately reach for, and is
+    // served without being asked for; the rest would corrupt the exchange.
+    for name in [
+        "Connection",
+        "keep-alive",
+        "Transfer-Encoding",
+        "Upgrade",
+        "TE",
+        "Trailer",
+        "Proxy-Authenticate",
+        "Proxy-Authorization",
+        "Content-Length",
+    ] {
+        let e = headers_err(&format!(
+            r#"#{{ response: #{{ replace: #{{ "{name}": "x" }} }} }}"#
+        ));
+        assert!(e.contains("belongs to the proxy"), "{name}: {e}");
+    }
+}
+
+// l[verify service.http.headers.fields]
+#[test]
+fn one_name_may_not_carry_two_operations() {
+    let e = headers_err(r#"#{ response: #{ replace: #{ "X-A": "1" }, remove: ["X-A"] } }"#);
+    assert!(e.contains("more than one operation"), "{e}");
+    // Case does not make it a different header, so the contradiction is
+    // caught however each was spelled.
+    let e = headers_err(r#"#{ response: #{ add: #{ "X-A": "1" }, remove: ["x-a"] } }"#);
+    assert!(e.contains("more than one operation"), "{e}");
+}
+
+// l[verify service.http.headers.fields]
+#[test]
+fn a_name_keeps_the_spelling_it_was_given() {
+    let h = headers(r#"#{ response: #{ remove: ["X-Powered-By"] } }"#);
+    assert_eq!(
+        h.response.grouped().remove,
+        vec!["X-Powered-By".to_string()]
+    );
+}
+
+fn with_headers(h: HeaderSettings) -> ProxySettings {
+    ProxySettings {
+        headers: h,
+        ..Default::default()
+    }
+}
+
+// l[verify service.http.proxy-settings.resolution]
+#[test]
+fn a_route_overrides_only_the_headers_it_names() {
+    let service = with_headers(headers(
+        r#"#{ response: #{ replace: #{
+            "Cache-Control": "no-store",
+            "X-Service": "kept",
+        } } }"#,
+    ));
+    let route = with_headers(headers(
+        r#"#{ response: #{ replace: #{
+            "Cache-Control": "public, max-age=31536000",
+        } } }"#,
+    ));
+
+    let r = resolve(&service, Some(&route)).headers;
+    // The header the route named takes the route's value...
+    assert_eq!(
+        op(&r.response, "cache-control"),
+        Some(HeaderOp::Replace(vec!["public, max-age=31536000".into()]))
+    );
+    // ...and the one only the service named is still in force, so a route
+    // does not have to restate the service's headers to add one of its own.
+    assert_eq!(
+        op(&r.response, "x-service"),
+        Some(HeaderOp::Replace(vec!["kept".into()]))
+    );
+}
+
+// l[verify service.http.proxy-settings.resolution]
+#[test]
+fn a_route_may_override_with_a_different_operation() {
+    // The route's operation replaces the service's outright rather than
+    // combining with it: the header ends up removed, not set-then-removed.
+    let service = with_headers(headers(r#"#{ response: #{ add: #{ "X-A": "1" } } }"#));
+    let route = with_headers(headers(r#"#{ response: #{ remove: ["X-A"] } }"#));
+    let r = resolve(&service, Some(&route)).headers;
+    assert_eq!(op(&r.response, "x-a"), Some(HeaderOp::Remove));
+}
+
+// l[verify service.http.proxy-settings.resolution]
+#[test]
+fn an_override_is_recognised_whatever_the_case() {
+    // HTTP field names are case-insensitive, so a route spelling a header
+    // differently from the service must still override it rather than
+    // resolving to two operations for what is one header on the wire.
+    let service = with_headers(headers(r#"#{ request: #{ replace: #{ "Host": "a" } } }"#));
+    let route = with_headers(headers(r#"#{ request: #{ replace: #{ "host": "b" } } }"#));
+    let r = resolve(&service, Some(&route)).headers;
+    assert_eq!(r.request.0.len(), 1);
+    assert_eq!(
+        op(&r.request, "host"),
+        Some(HeaderOp::Replace(vec!["b".into()]))
+    );
+    // The spelling reported is the one that won, not the one it displaced.
+    assert_eq!(r.request.grouped().replace.keys().next().unwrap(), "host");
+}
+
+// l[verify service.http.proxy-settings.resolution]
+#[test]
+fn a_route_declaring_no_headers_inherits_the_services() {
+    let service = with_headers(headers(r#"#{ response: #{ remove: ["Server"] } }"#));
+    let r = resolve(&service, Some(&ProxySettings::default())).headers;
+    assert_eq!(op(&r.response, "server"), Some(HeaderOp::Remove));
+    assert_eq!(resolve(&service, None).headers, service.headers);
+}
+
+// l[verify service.http.proxy-settings.resolution]
+#[test]
+fn headers_do_not_disturb_the_other_settings() {
+    // Each setting resolves on its own: declaring headers on a route must not
+    // reset the compression or limit it inherits.
+    let service = ProxySettings {
+        rate_limit: limit(10, 1.0),
+        compress: enabled(CompressSettings {
+            minimum_length: Some(2048),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let route = with_headers(headers(r#"#{ response: #{ remove: ["Server"] } }"#));
+    let r = resolve(&service, Some(&route));
+    assert_eq!(r.rate_limit.expect("inherited").settings.max_events, 10);
+    assert_eq!(r.compress.expect("inherited").minimum_length, 2048);
+    assert_eq!(op(&r.headers.response, "server"), Some(HeaderOp::Remove));
 }

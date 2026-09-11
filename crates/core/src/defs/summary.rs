@@ -71,6 +71,41 @@ pub struct RouteSummary {
     pub balance: BalanceSummary,
     /// `null` when this route is not rate limited.
     pub rate_limit: Option<RateLimitSummary>,
+    /// The header operations in force, resolved per header name against the
+    /// service's, so a route reports what applies to it whether it or the
+    /// service declared it.
+    pub headers: HeadersSummary,
+}
+
+/// Reported in both directions always, each with its three operations
+/// present. A direction with nothing declared reports them empty rather than
+/// null, so a reader compares like with like across routes instead of telling
+/// "no operations" from "no such field".
+#[derive(Serialize, Debug, PartialEq, Default)]
+pub struct HeadersSummary {
+    pub request: HeaderOpsSummary,
+    pub response: HeaderOpsSummary,
+}
+
+#[derive(Serialize, Debug, PartialEq, Default)]
+pub struct HeaderOpsSummary {
+    /// Header name to the values it is set to. A value declared as a bare
+    /// string is reported as a one-element array, so the shape does not vary
+    /// with how it was written.
+    pub replace: BTreeMap<String, Vec<String>>,
+    pub add: BTreeMap<String, Vec<String>>,
+    pub remove: Vec<String>,
+}
+
+impl From<&crate::defs::service::HeaderRules> for HeaderOpsSummary {
+    fn from(rules: &crate::defs::service::HeaderRules) -> Self {
+        let grouped = rules.grouped();
+        Self {
+            replace: grouped.replace,
+            add: grouped.add,
+            remove: grouped.remove,
+        }
+    }
 }
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -334,6 +369,10 @@ fn route_summaries(
                     window: rl.settings.window_secs,
                     shared: rl.scope == RateLimitScope::Service,
                 }),
+                headers: HeadersSummary {
+                    request: (&resolved.headers.request).into(),
+                    response: (&resolved.headers.response).into(),
+                },
             }
         })
         .collect()

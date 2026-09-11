@@ -177,7 +177,7 @@ pub fn build_proxy_config(
                 prefix: "/".to_string(),
                 handler: ProxyRouteHandler::ReverseProxy {
                     upstreams: vec![upstream_url],
-                    proxy: upstream.proxy.clone(),
+                    proxy: Box::new(upstream.proxy.clone()),
                 },
             });
         } else {
@@ -191,7 +191,7 @@ pub fn build_proxy_config(
                     prefix: route.prefix.clone(),
                     handler: ProxyRouteHandler::ReverseProxy {
                         upstreams: upstream_urls,
-                        proxy: route.proxy.clone(),
+                        proxy: Box::new(route.proxy.clone()),
                     },
                 });
             }

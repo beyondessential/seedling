@@ -482,6 +482,65 @@ pub struct RouteProxy {
     /// limit exists only where an app declared one.
     // r[impl service.http.route.rate-limiting]
     pub rate_limit: Option<RouteRateLimit>,
+    /// Header operations in force on this route, already resolved against the
+    /// service's. Empty for the routes that declare none, which is most.
+    ///
+    /// Defaulted on the wire: the config is cached as JSON and read back on
+    /// startup, so a document written before header manipulation existed must
+    /// still load rather than stranding the cache.
+    // r[impl service.http.route.headers]
+    #[serde(default)]
+    pub headers: RouteHeaders,
+}
+
+/// Header operations for one route, in both directions.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RouteHeaders {
+    pub request: RouteHeaderOps,
+    pub response: RouteHeaderOps,
+}
+
+/// The operations applied in one direction.
+///
+/// Grouped by operation rather than by header because that is the shape the
+/// proxy takes them in, and because each header appears under exactly one
+/// group — resolution leaves one operation per name, so the groups partition
+/// the headers rather than overlapping.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RouteHeaderOps {
+    /// Header name to the values it is set to, discarding whatever the message
+    /// carried.
+    #[serde(default)]
+    pub replace: BTreeMap<String, Vec<String>>,
+    /// Header name to values added alongside whatever the message carried.
+    #[serde(default)]
+    pub add: BTreeMap<String, Vec<String>>,
+    /// Header names discarded entirely.
+    #[serde(default)]
+    pub remove: Vec<String>,
+}
+
+impl RouteHeaders {
+    pub fn is_empty(&self) -> bool {
+        self.request.is_empty() && self.response.is_empty()
+    }
+}
+
+impl RouteHeaderOps {
+    pub fn is_empty(&self) -> bool {
+        self.replace.is_empty() && self.add.is_empty() && self.remove.is_empty()
+    }
+}
+
+impl From<&crate::defs::service::HeaderRules> for RouteHeaderOps {
+    fn from(rules: &crate::defs::service::HeaderRules) -> Self {
+        let grouped = rules.grouped();
+        Self {
+            replace: grouped.replace,
+            add: grouped.add,
+            remove: grouped.remove,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -575,6 +634,10 @@ impl RouteProxy {
                 max_events: rl.settings.max_events,
                 window_secs: rl.settings.window_secs,
             }),
+            headers: RouteHeaders {
+                request: (&resolved.headers.request).into(),
+                response: (&resolved.headers.response).into(),
+            },
         }
     }
 }
@@ -596,9 +659,13 @@ pub enum ProxyRouteHandler {
         /// against the service's values. Only reverse-proxy routes carry
         /// these: a redirect has nothing to compress and no pool to choose
         /// from.
+        // Boxed: the settings are much larger than the redirect variant, and
+        // every route in a config pays the enum's size whichever variant it
+        // is. Serde treats a box transparently, so the cached document is
+        // unchanged by it.
         // r[impl service.http.route.compression]
         // r[impl service.http.route.balancing]
-        proxy: RouteProxy,
+        proxy: Box<RouteProxy>,
     },
     /// Answer with a static HTTP redirect to a fixed URL. Used by
     /// site-ingress redirect attachments to migrate hostnames without

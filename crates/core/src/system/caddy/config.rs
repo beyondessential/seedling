@@ -2,8 +2,8 @@ use serde_json::{Value, json};
 
 use crate::runtime::tls::state::is_caddy_internal;
 use crate::system::types::{
-    L4Proto, ProxyConfig, ProxyListenerProto, RouteBalance, RouteCompress, RouteRateLimit,
-    VirtualHost,
+    L4Proto, ProxyConfig, ProxyListenerProto, RouteBalance, RouteCompress, RouteHeaderOps,
+    RouteHeaders, RouteRateLimit, VirtualHost,
 };
 
 /// Ports declared for both a plaintext and a TLS listener.
@@ -57,6 +57,14 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
         .map(|l| l.port)
         .collect();
 
+    // r[impl ingress.persistent-connections]
+    // Each server below carries its listeners and its routes and nothing
+    // else. That absence is the implementation: the proxy keeps HTTP/1.1
+    // connections alive by default, with an idle timeout it defaults to five
+    // minutes, so a client reusing a connection is what happens when we say
+    // nothing. Adding `idle_timeout`, `keepalive_interval`, `keepalive_idle`,
+    // or `keepalive_count` to a server object here would take that away
+    // silently — a request would still be answered, one connection at a time.
     let mut servers = serde_json::Map::new();
 
     // --- HTTPS server ---
@@ -278,10 +286,20 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
                         })
                         .collect();
 
-                    let mut chain: Vec<Value> = Vec::with_capacity(3);
+                    let mut chain: Vec<Value> = Vec::with_capacity(4);
+                    // r[impl service.http.route.headers]
+                    // Ahead of everything else, because its response
+                    // operations are deferred to when the response headers are
+                    // written. Sitting first is what puts them on a response
+                    // the proxy produced in the upstream's place — a
+                    // rate-limit rejection, or a failure to reach any upstream
+                    // — as well as on one an upstream returned.
+                    if !proxy.headers.is_empty() {
+                        chain.push(headers_handler(&proxy.headers));
+                    }
                     // r[impl service.http.route.rate-limiting]
-                    // First in the chain: an over-limit request is answered
-                    // without engaging compression or the proxy, so the
+                    // Ahead of compression and the proxy: an over-limit
+                    // request is answered without engaging either, so the
                     // excess costs a backend nothing.
                     if let Some(rate_limit) = &proxy.rate_limit {
                         chain.push(rate_limit_handler(rate_limit));
@@ -334,6 +352,45 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
             })
         })
         .collect()
+}
+
+// r[impl service.http.route.headers]
+fn headers_handler(headers: &RouteHeaders) -> Value {
+    let mut handler = serde_json::Map::new();
+    handler.insert("handler".into(), json!("headers"));
+    if !headers.request.is_empty() {
+        handler.insert("request".into(), header_ops(&headers.request));
+    }
+    if !headers.response.is_empty() {
+        let mut response = header_ops(&headers.response);
+        // Applied when the response headers are written rather than on the way
+        // in, so they reach whatever response the route ends up serving rather
+        // than only one that came back from an upstream.
+        response["deferred"] = json!(true);
+        handler.insert("response".into(), response);
+    }
+    Value::Object(handler)
+}
+
+/// One direction's operations in the proxy's own vocabulary.
+///
+/// `replace` is emitted as the proxy's `set`, which is assignment. The proxy
+/// has its own `replace`, but that one is a substring substitution over the
+/// existing value and means something else entirely; emitting it here would
+/// turn every assignment into a search-and-replace that silently does nothing
+/// when the value is not already present.
+fn header_ops(ops: &RouteHeaderOps) -> Value {
+    let mut out = serde_json::Map::new();
+    if !ops.replace.is_empty() {
+        out.insert("set".into(), json!(ops.replace));
+    }
+    if !ops.add.is_empty() {
+        out.insert("add".into(), json!(ops.add));
+    }
+    if !ops.remove.is_empty() {
+        out.insert("delete".into(), json!(ops.remove));
+    }
+    Value::Object(out)
 }
 
 // r[impl service.http.route.rate-limiting]

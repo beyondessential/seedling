@@ -134,6 +134,26 @@ export interface RouteSummary {
   balance: BalanceSummary;
   /** Null when this route is not rate limited. */
   rate_limit: RateLimitSummary | null;
+  /** Header operations in force, resolved against the service's. */
+  headers: HeadersSummary;
+}
+
+export interface HeaderOpsSummary {
+  /** Header name to the values it is set to, discarding what was carried. */
+  replace: Record<string, string[]>;
+  /** Header name to values added alongside what was carried. */
+  add: Record<string, string[]>;
+  /** Header names discarded entirely. */
+  remove: string[];
+}
+
+/**
+ * Both directions are always present, each with its three operations, so a
+ * route with nothing declared reports them empty rather than absent.
+ */
+export interface HeadersSummary {
+  request: HeaderOpsSummary;
+  response: HeaderOpsSummary;
 }
 
 export type ResourceDef =

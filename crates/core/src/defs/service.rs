@@ -12,9 +12,10 @@ use super::{
     resource::{Resource, ResourceId, ResourceKind, ResourceName},
 };
 pub use proxy::{
-    BalanceSettings, CompressDecl, CompressSettings, Encoding, LbPolicy, ProxySettings,
-    RateLimitDecl, RateLimitScope, RateLimitSettings, ResolvedBalance, ResolvedCompress,
-    ResolvedRateLimit, ResolvedRouteProxy, default_content_types, resolve,
+    BalanceSettings, CompressDecl, CompressSettings, Encoding, GroupedHeaderOps, HeaderName,
+    HeaderOp, HeaderRules, HeaderSettings, LbPolicy, ProxySettings, RateLimitDecl, RateLimitScope,
+    RateLimitSettings, ResolvedBalance, ResolvedCompress, ResolvedRateLimit, ResolvedRouteProxy,
+    default_content_types, resolve,
 };
 
 mod proxy;
@@ -332,6 +333,10 @@ pub struct HttpServiceDef {
     /// compression it lives here rather than on the Service.
     // l[impl service.http.rate-limit]
     pub rate_limit: Option<RateLimitDecl>,
+    /// The header operations every route of this service inherits, each of
+    /// which a route may override for the headers it names.
+    // l[impl service.http.headers]
+    pub headers: HeaderSettings,
     /// Every URL prefix this service is served through, with whatever
     /// settings the app declared on it. An entry with default settings is
     /// still a route: registering the prefix is how the service knows which
@@ -433,6 +438,15 @@ impl CustomType for HttpService {
                     Ok(this.clone())
                 },
             )
+            // l[impl service.http.headers]
+            .with_fn(
+                "headers",
+                |this: &mut Self, config: Map| -> Result<Self, Box<EvalAltResult>> {
+                    let settings = proxy::parse_headers(config)?;
+                    this.service.with_http_def(|d| d.headers = settings)?;
+                    Ok(this.clone())
+                },
+            )
             // l[impl ingress.type]
             // Pass-through to the underlying Service: declaring an
             // ingress on `svc.http()` is just a chaining-friendly way
@@ -525,6 +539,15 @@ impl CustomType for HttpServiceRoute {
                 |this: &mut Self, enabled: bool| -> Result<Self, Box<EvalAltResult>> {
                     let decl = rate_limit_decl(enabled)?;
                     this.with_route_settings(|s| s.rate_limit = Some(decl))?;
+                    Ok(this.clone())
+                },
+            )
+            // l[impl service.http.headers]
+            .with_fn(
+                "headers",
+                |this: &mut Self, config: Map| -> Result<Self, Box<EvalAltResult>> {
+                    let settings = proxy::parse_headers(config)?;
+                    this.with_route_settings(|s| s.headers = settings)?;
                     Ok(this.clone())
                 },
             );

@@ -41,12 +41,13 @@ response ops deferred, so a rejection on the way out still passes through it.
 
 The route-settings chain is the one `rate_limit` already walks:
 
-- [ ] `defs/service/proxy.rs` — `HeaderRules` on `ProxySettings`, parser, and the per-header-name resolver into `ResolvedRouteProxy`
-- [ ] `defs/service.rs` — `headers()` builder on `HttpService` and `HttpServiceRoute`
-- [ ] `system/types.rs` — `RouteHeaders` wire struct and `from_resolved` mapping
-- [ ] `system/reconcile/proxy.rs` — carry through `collect_http_routes` / `service_level_proxy`
-- [ ] `system/caddy/config.rs` — emit the headers handler, ordered as above
-- [ ] `app.describe` — report `headers` per route
+- [x] `defs/service/proxy.rs` — `HeaderName`/`HeaderOp`/`HeaderRules`/`HeaderSettings`, `parse_headers`, and the per-header-name resolver
+- [x] `defs/service.rs` — `headers()` builder on `HttpService` and `HttpServiceRoute`
+- [x] `system/types.rs` — `RouteHeaders`/`RouteHeaderOps` wire structs and `from_resolved` mapping
+- [x] `system/reconcile/proxy.rs` — nothing to change: the settings travel inside `RouteProxy`, which reconcile already carries whole
+- [x] `system/caddy/config.rs` — emit the headers handler, ordered as above
+- [x] `app.describe` — report `headers` per route, plus the web UI's route row and its TS type
+- [x] `docker/caddy/required-modules.txt` — declare `http.handlers.headers`, and exercise it in the image fixture
 
 Resolution is per `(direction, header-name)`, case-insensitively. Because each name resolves to
 exactly one operation, the emitted per-route ops can be flattened into a single `HeaderOps` per
@@ -58,3 +59,26 @@ direction with no ordering concerns.
 Caddy's default, so the work is a check that our rendered config does not disable it (no
 `idle_timeout: 0`, no `Connection: close`), plus a test pinning it. `etc/ci/` already holds
 greps of this kind if a static check is the right shape.
+
+## Notes from implementation
+
+`HeaderName` carries the spelling the app used but compares and orders
+case-insensitively, so per-name resolution treats a route's `cache-control` and
+a service's `Cache-Control` as one header. Doing this in the type rather than at
+each call site is what stops the next consumer forgetting it. `HeaderRules::grouped`
+is the single body that groups operations for both the proxy config and
+`app.describe`, so the two cannot describe the headers differently.
+
+Boxing `ProxyRouteHandler::ReverseProxy`'s `proxy` field was forced by the added
+settings: the variant reached 304 bytes against the redirect variant's 27, and
+clippy's `large_enum_variant` fires past a 200-byte spread. Serde treats a box
+transparently, so the cached proxy document is unchanged by it.
+
+`headers()` is a single entry point taking both directions, rather than the two
+methods first sketched. It reads better at the call site and keeps everything
+header-related in one map.
+
+Still unverified: that a rate-limit rejection actually carries the route's
+response headers. The ordering and `deferred` flag are what should deliver it,
+but confirming it needs a running Caddy, which this repo has no harness for. It
+is recorded unticked in the card's test cases.

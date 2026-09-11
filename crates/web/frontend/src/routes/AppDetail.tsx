@@ -85,6 +85,8 @@ import type {
   ExternalMapping,
   FaultRecord,
   HandlerProbe,
+  HeaderOpsSummary,
+  HeadersSummary,
   HealthcheckSummary,
   ImagePin,
   ImageSummary,
@@ -254,6 +256,29 @@ function healthcheckChipLabel(hc: HealthcheckSummary): string {
   }
 }
 
+function headerOpCount(ops: HeaderOpsSummary): number {
+  return (
+    Object.keys(ops.replace).length +
+    Object.keys(ops.add).length +
+    ops.remove.length
+  );
+}
+
+/**
+ * A count per direction rather than the operations themselves: which direction
+ * a header is shaped in is the distinction an operator is scanning for, and
+ * the detail belongs in the app's own description.
+ */
+function headerChipLabel(headers: HeadersSummary): string {
+  const request = headerOpCount(headers.request);
+  const response = headerOpCount(headers.response);
+  if (request === 0 && response === 0) return "headers: none";
+  const parts = [];
+  if (request > 0) parts.push(`${request} req`);
+  if (response > 0) parts.push(`${response} resp`);
+  return `headers: ${parts.join(", ")}`;
+}
+
 function FaultList({
   faults,
   showApp,
@@ -417,6 +442,11 @@ function ResourceDefDetail({ def }: { def: ResourceDef }) {
                     }`
                   : "limit: off"
               }
+              size="small"
+              variant="outlined"
+            />
+            <Chip
+              label={headerChipLabel(r.headers)}
               size="small"
               variant="outlined"
             />

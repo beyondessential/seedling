@@ -152,7 +152,12 @@ mod tests {
     /// Default proxy settings, with a rate limit added: limiting is off by
     /// default, so the defaults alone would leave its handler out of the
     /// fixture and its module unchecked.
-    fn rate_limited_proxy() -> crate::system::types::RouteProxy {
+    fn rate_limited_proxy() -> Box<crate::system::types::RouteProxy> {
+        let mut headers = crate::defs::service::HeaderSettings::default();
+        headers.response.0.insert(
+            crate::defs::service::HeaderName::parse("Cache-Control").expect("a valid header name"),
+            crate::defs::service::HeaderOp::Replace(vec!["no-store".to_string()]),
+        );
         let resolved = crate::defs::service::ResolvedRouteProxy {
             rate_limit: Some(crate::defs::service::ResolvedRateLimit {
                 settings: crate::defs::service::RateLimitSettings {
@@ -161,11 +166,13 @@ mod tests {
                 },
                 scope: crate::defs::service::RateLimitScope::Service,
             }),
+            headers,
             ..Default::default()
         };
-        crate::system::types::RouteProxy::from_resolved(resolved, || {
-            crate::system::types::RouteZone("demo/web".to_string())
-        })
+        Box::new(crate::system::types::RouteProxy::from_resolved(
+            resolved,
+            || crate::system::types::RouteZone("demo/web".to_string()),
+        ))
     }
 
     /// A configuration exercising every feature `build_caddy_config` emits.

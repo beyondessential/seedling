@@ -5,8 +5,10 @@ use crate::system::types::{
     RouteRateLimit, RouteZone, VirtualHost,
 };
 
-fn default_proxy() -> crate::system::types::RouteProxy {
-    crate::system::types::RouteProxy::unlimited(crate::defs::service::ResolvedRouteProxy::default())
+fn default_proxy() -> Box<crate::system::types::RouteProxy> {
+    Box::new(crate::system::types::RouteProxy::unlimited(
+        crate::defs::service::ResolvedRouteProxy::default(),
+    ))
 }
 
 fn http_vhost(hostname: &str, upstream: &str) -> VirtualHost {
@@ -607,7 +609,7 @@ fn service_upstream(port: u16) -> crate::system::translate::proxy::ServiceUpstre
         routes: vec![],
         service_ip: "fd5e:ed12:3456:200::1".parse().unwrap(),
         service_port: port,
-        proxy: default_proxy(),
+        proxy: *default_proxy(),
     }
 }
 
@@ -815,6 +817,7 @@ fn compression_can_be_switched_off_for_a_route() {
             interval_secs: 0.25,
         },
         rate_limit: None,
+        headers: Default::default(),
     };
     let config = ProxyConfig {
         listeners: vec![ProxyListener {
@@ -829,7 +832,7 @@ fn compression_can_be_switched_off_for_a_route() {
                 prefix: "/".to_string(),
                 handler: ProxyRouteHandler::ReverseProxy {
                     upstreams: vec!["http://[fd5e::1]:3000".to_string()],
-                    proxy,
+                    proxy: Box::new(proxy),
                 },
             }],
         }],
@@ -857,7 +860,7 @@ fn limited_route(prefix: &str, rate_limit: Option<RouteRateLimit>) -> ProxyRoute
         prefix: prefix.to_string(),
         handler: ProxyRouteHandler::ReverseProxy {
             upstreams: vec!["http://[fd5e::1]:3000".to_string()],
-            proxy: RouteProxy {
+            proxy: Box::new(RouteProxy {
                 compress: None,
                 balance: RouteBalance {
                     policy: "round_robin".to_string(),
@@ -865,7 +868,8 @@ fn limited_route(prefix: &str, rate_limit: Option<RouteRateLimit>) -> ProxyRoute
                     interval_secs: 0.25,
                 },
                 rate_limit,
-            },
+                headers: Default::default(),
+            }),
         },
     }
 }
@@ -1214,4 +1218,241 @@ fn distinct_ports_per_protocol_do_not_conflict() {
         ..Default::default()
     };
     assert!(conflicting_listener_ports(&config).is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Header manipulation
+// ---------------------------------------------------------------------------
+
+/// A reverse-proxy route at `prefix` carrying `headers`, and optionally a limit.
+fn headed_route(
+    prefix: &str,
+    headers: crate::system::types::RouteHeaders,
+    rate_limit: Option<RouteRateLimit>,
+) -> ProxyRoute {
+    let ProxyRoute { handler, .. } = limited_route(prefix, rate_limit);
+    let ProxyRouteHandler::ReverseProxy { upstreams, proxy } = handler else {
+        unreachable!("limited_route builds a reverse proxy")
+    };
+    ProxyRoute {
+        prefix: prefix.to_string(),
+        handler: ProxyRouteHandler::ReverseProxy {
+            upstreams,
+            proxy: Box::new(crate::system::types::RouteProxy { headers, ..*proxy }),
+        },
+    }
+}
+
+fn ops(
+    replace: &[(&str, &[&str])],
+    add: &[(&str, &[&str])],
+    remove: &[&str],
+) -> crate::system::types::RouteHeaderOps {
+    let collect = |pairs: &[(&str, &[&str])]| {
+        pairs
+            .iter()
+            .map(|(k, vs)| {
+                (
+                    (*k).to_string(),
+                    vs.iter().map(|v| (*v).to_string()).collect(),
+                )
+            })
+            .collect()
+    };
+    crate::system::types::RouteHeaderOps {
+        replace: collect(replace),
+        add: collect(add),
+        remove: remove.iter().map(|r| (*r).to_string()).collect(),
+    }
+}
+
+fn handle_for(config: &ProxyConfig) -> Vec<serde_json::Value> {
+    let json = build_caddy_config(config);
+    json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"]
+        .as_array()
+        .expect("a handler chain")
+        .clone()
+}
+
+// r[verify service.http.route.headers]
+#[test]
+fn each_operation_is_emitted_in_the_proxys_own_vocabulary() {
+    let config = vhost_with(
+        "app.example.com",
+        vec![headed_route(
+            "/",
+            crate::system::types::RouteHeaders {
+                request: ops(&[("Host", &["central.internal"])], &[], &[]),
+                response: ops(
+                    &[("Cache-Control", &["no-store"])],
+                    &[("Set-Cookie", &["a=1", "b=2"])],
+                    &["Server"],
+                ),
+            },
+            None,
+        )],
+    );
+    let handle = handle_for(&config);
+    let headers = &handle[0];
+    assert_eq!(headers["handler"], "headers");
+
+    // `replace` is assignment, which the proxy calls `set`. Its own `replace`
+    // is a substring substitution and would mean something else entirely.
+    assert_eq!(
+        headers["response"]["set"]["Cache-Control"],
+        serde_json::json!(["no-store"])
+    );
+    assert!(headers["response"].get("replace").is_none());
+
+    // Several values reach the other side as several rather than folded.
+    assert_eq!(
+        headers["response"]["add"]["Set-Cookie"],
+        serde_json::json!(["a=1", "b=2"])
+    );
+    assert_eq!(headers["response"]["delete"], serde_json::json!(["Server"]));
+
+    // The upstream `Host` override travels as a request operation, which is
+    // what makes the pods observe the name the route set.
+    assert_eq!(
+        headers["request"]["set"]["Host"],
+        serde_json::json!(["central.internal"])
+    );
+}
+
+// r[verify service.http.route.headers]
+#[test]
+fn response_operations_are_deferred_and_ordered_ahead_of_the_limiter() {
+    // A route declaring that nothing under it may be cached must have that
+    // hold for the responses the proxy produces in the upstream's place —
+    // a rate-limit rejection above all. That needs the handler ahead of the
+    // limiter in the chain, with its response operations applied on the way
+    // out rather than on the way in.
+    let config = vhost_with(
+        "app.example.com",
+        vec![headed_route(
+            "/api",
+            crate::system::types::RouteHeaders {
+                request: Default::default(),
+                response: ops(&[("Cache-Control", &["no-store"])], &[], &[]),
+            },
+            Some(RouteRateLimit {
+                zone: RouteZone("demo/web/api".to_string()),
+                max_events: 10,
+                window_secs: 1.0,
+            }),
+        )],
+    );
+    let handle = handle_for(&config);
+    assert_eq!(handle[0]["handler"], "headers");
+    assert_eq!(handle[1]["handler"], "rate_limit");
+    assert_eq!(handle[0]["response"]["deferred"], serde_json::json!(true));
+}
+
+// r[verify service.http.route.headers]
+#[test]
+fn a_direction_with_no_operations_is_left_out_entirely() {
+    let config = vhost_with(
+        "app.example.com",
+        vec![headed_route(
+            "/",
+            crate::system::types::RouteHeaders {
+                request: ops(&[], &[], &["X-Internal"]),
+                response: Default::default(),
+            },
+            None,
+        )],
+    );
+    let handle = handle_for(&config);
+    assert_eq!(handle[0]["handler"], "headers");
+    assert!(handle[0].get("response").is_none());
+    // Only the operation declared is named, so the emitted document says
+    // nothing about the two that were not.
+    assert!(handle[0]["request"].get("set").is_none());
+    assert!(handle[0]["request"].get("add").is_none());
+}
+
+// r[verify service.http.route.headers]
+#[test]
+fn a_route_declaring_no_headers_carries_no_handler() {
+    let config = vhost_with("app.example.com", vec![limited_route("/", None)]);
+    let handle = handle_for(&config);
+    assert_eq!(handle[0]["handler"], "reverse_proxy");
+}
+
+// r[verify infra.proxy.upgrade.cache]
+#[test]
+fn old_cached_config_without_headers_still_deserialises() {
+    // As for rate limiting: the config is cached as JSON and read back on
+    // startup, so a document written before header manipulation existed must
+    // still load rather than stranding the cache and the upgrade path with it.
+    let old = r#"{
+      "listeners":[{"port":80,"proto":"Http"}],
+      "virtual_hosts":[{"hostname":"app.example.com","tls_acme":false,"redirect":null,
+        "routes":[{"prefix":"/","handler":{"ReverseProxy":{
+          "upstreams":["http://[fd5e::1]:3000"],
+          "proxy":{"compress":null,"balance":{"policy":"round_robin","try_duration_secs":5.0,"interval_secs":0.25}}
+        }}}]}],
+      "l4_routes":[],"warm_cert_hostnames":[],"cert_endpoint_url":null
+    }"#;
+    let cfg: crate::system::types::ProxyConfig = serde_json::from_str(old)
+        .expect("a cached config from before header rules must still load");
+    let crate::system::types::ProxyRouteHandler::ReverseProxy { proxy, .. } =
+        &cfg.virtual_hosts[0].routes[0].handler
+    else {
+        panic!("expected reverse proxy")
+    };
+    assert!(proxy.headers.is_empty());
+}
+
+// r[verify ingress.persistent-connections]
+#[test]
+fn no_server_takes_away_the_proxys_default_keep_alive() {
+    // HTTP/1.1 reuse is reached by saying nothing: the proxy keeps connections
+    // alive by default. Each of these keys would take that away silently, so
+    // a server object naming one is the failure this guards against.
+    let config = ProxyConfig {
+        listeners: vec![
+            ProxyListener {
+                port: 80,
+                proto: ProxyListenerProto::Http,
+            },
+            ProxyListener {
+                port: 443,
+                proto: ProxyListenerProto::Https,
+            },
+        ],
+        virtual_hosts: vec![
+            VirtualHost {
+                hostname: "plain.example.com".to_string(),
+                tls_acme: false,
+                redirect: None,
+                routes: vec![limited_route("/", None)],
+            },
+            VirtualHost {
+                hostname: "tls.example.com".to_string(),
+                tls_acme: true,
+                redirect: None,
+                routes: vec![limited_route("/", None)],
+            },
+        ],
+        ..Default::default()
+    };
+    let json = build_caddy_config(&config);
+    let servers = json["apps"]["http"]["servers"]
+        .as_object()
+        .expect("servers");
+    assert_eq!(servers.len(), 2, "both terminations are exercised");
+    for (name, server) in servers {
+        for key in [
+            "idle_timeout",
+            "keepalive_interval",
+            "keepalive_idle",
+            "keepalive_count",
+        ] {
+            assert!(
+                server.get(key).is_none(),
+                "server {name} sets {key}, which changes connection reuse away from the default"
+            );
+        }
+    }
 }

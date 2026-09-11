@@ -495,3 +495,142 @@ fn a_route_no_pod_binds_reports_that_it_is_not_served() {
         "the declaration is still reported"
     );
 }
+
+// l[verify service.http.headers]
+// l[verify service.http.proxy-settings.resolution]
+#[test]
+fn http_service_and_route_accept_headers() {
+    // The three requirements this surface exists for, as an app would write
+    // them: a `Host` override to the pods, a cache policy on one prefix, and
+    // nothing at all about keep-alive, which is served without being asked.
+    let app = run_test_script_app(
+        r#"
+        let web = app.service("web").http(80)
+            .headers(#{
+                request: #{ replace: #{ "Host": "central.internal" } },
+                response: #{ remove: ["Server"] },
+            });
+        web.route("/assets").headers(#{
+            response: #{ replace: #{ "Cache-Control": "public, max-age=31536000, immutable" } },
+        });
+        web.route("/api");
+    "#,
+    );
+    let def = app.def.load();
+    let svc = def
+        .resources
+        .values()
+        .find_map(|r| match r {
+            defs::resource::Resource::Service(s) if &*s.name == "web" => Some(s.clone()),
+            _ => None,
+        })
+        .expect("web service");
+    let service_def = svc.def.lock().clone();
+    let http = service_def.http.clone().expect("http def");
+    let service_level = service_def.proxy_settings();
+
+    let grouped = |prefix: &str| {
+        let r = defs::service::resolve(&service_level, http.routes.get(prefix));
+        (r.headers.request.grouped(), r.headers.response.grouped())
+    };
+
+    // The prefix with a cache policy of its own keeps the service's `Host`
+    // override and its `Server` removal: a route adds to the service's
+    // headers rather than replacing them.
+    let (request, response) = grouped("/assets");
+    assert_eq!(
+        request.replace.get("Host").map(Vec::as_slice),
+        Some(["central.internal".to_string()].as_slice())
+    );
+    assert_eq!(response.remove, vec!["Server".to_string()]);
+    assert_eq!(
+        response.replace.get("Cache-Control").map(Vec::as_slice),
+        Some(["public, max-age=31536000, immutable".to_string()].as_slice())
+    );
+
+    // The prefix that declared nothing takes the service's headers, and does
+    // not pick up the cache policy the other prefix declared.
+    let (request, response) = grouped("/api");
+    assert!(request.replace.contains_key("Host"));
+    assert_eq!(response.remove, vec!["Server".to_string()]);
+    assert!(response.replace.is_empty());
+}
+
+// l[verify service.http.headers.fields]
+#[test]
+fn http_service_headers_rejects_a_proxy_owned_header() {
+    // Keep-alive is a platform guarantee, so an app asking for it is refused
+    // rather than silently emitting a header that is illegal on HTTP/2.
+    let err = run_test_script_err(
+        r#"
+        app.service("web").http(80).headers(#{
+            response: #{ replace: #{ "Connection": "keep-alive" } },
+        });
+    "#,
+    );
+    assert!(
+        format!("{err}").contains("belongs to the proxy"),
+        "unexpected error: {err}"
+    );
+}
+
+// i[verify app.describe.proxy-settings]
+// r[verify service.http.route.proxy-settings.visibility]
+#[test]
+fn service_summary_reports_resolved_headers() {
+    let app = run_test_script_app(
+        r#"
+        let web = app.service("web").http(80)
+            .headers(#{ response: #{ replace: #{ "Cache-Control": "no-store" } } });
+        web.route("/");
+        web.route("/assets").headers(#{
+            response: #{
+                replace: #{ "cache-control": "public, max-age=600" },
+                add: #{ "Set-Cookie": ["a=1", "b=2"] },
+            },
+        });
+    "#,
+    );
+    let def = app.def.load();
+    let summary = def
+        .resources
+        .values()
+        .find_map(|r| match r {
+            defs::resource::Resource::Service(s) if &*s.name == "web" => Some(s.summary(&def)),
+            _ => None,
+        })
+        .expect("web service");
+    let routes = summary.routes.expect("http service reports routes");
+
+    // The route that declared nothing reports what it inherits, so an
+    // operator reads the headers in force rather than the ones declared here.
+    let root = &routes[0];
+    assert_eq!(
+        root.headers.response.replace.get("Cache-Control"),
+        Some(&vec!["no-store".to_string()])
+    );
+    // A direction with nothing declared reports its operations empty rather
+    // than absent, so routes compare like with like.
+    assert!(root.headers.request.replace.is_empty());
+    assert!(root.headers.request.add.is_empty());
+    assert!(root.headers.request.remove.is_empty());
+
+    // The overriding route reports its own value under its own spelling, and
+    // a value written as a bare string still reads back as an array.
+    let assets = &routes[1];
+    assert_eq!(
+        assets.headers.response.replace.get("cache-control"),
+        Some(&vec!["public, max-age=600".to_string()])
+    );
+    assert!(
+        !assets
+            .headers
+            .response
+            .replace
+            .contains_key("Cache-Control")
+    );
+    assert_eq!(
+        assets.headers.response.add.get("Set-Cookie"),
+        Some(&vec!["a=1".to_string(), "b=2".to_string()])
+    );
+}

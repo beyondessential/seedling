@@ -18,6 +18,7 @@ http.handlers.reverse_proxy
 http.handlers.static_response
 http.handlers.rate_limit
 http.handlers.encode
+http.handlers.headers
 
 # Response encodings offered by the compression handler.
 http.encoders.zstd
