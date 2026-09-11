@@ -85,10 +85,14 @@ pub enum ResolveOutcome {
     Unresolved { reason: UnresolvedReason },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum UnroutableReason {
     /// IPv4 literal or A-only DNS name on a host where NAT64 is not active.
     NeedsNat64ButDisabled,
+    /// AAAA records only, and this host has no IPv6 egress — so there is no
+    /// IPv4 fallback to reach instead. NAT64 is irrelevant here: it
+    /// translates v6 to v4, and the problem is the other direction.
+    NoIpv6Egress,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,10 +150,13 @@ fn resolve_dns(name: &str, ctx: &ResolveCtx<'_>) -> ResolveOutcome {
 
     // No A records, and either no AAAA records at all or none we can reach.
     if !result.aaaa.is_empty() {
-        // We have AAAA but no v6 egress: there is no IPv4 fallback either,
-        // so the endpoint is effectively unroutable.
+        // AAAA records but no v6 egress, and no A records to fall back to.
+        // This used to report `NeedsNat64ButDisabled`, so the operator was
+        // told the endpoint "requires NAT64 but NAT64 is not active" even
+        // when NAT64 was active — it cannot help here, since it translates
+        // v6 to v4 and what is missing is v6 egress.
         return ResolveOutcome::Unroutable {
-            reason: UnroutableReason::NeedsNat64ButDisabled,
+            reason: UnroutableReason::NoIpv6Egress,
         };
     }
 
@@ -340,8 +347,12 @@ mod tests {
         ));
     }
 
+    // r[verify service.site.address]
+    // NAT64 is active in this case and cannot help: it translates v6 to v4,
+    // and what is missing is v6 egress. Reporting `NeedsNat64ButDisabled`
+    // told the operator to check a setting that was already on.
     #[test]
-    fn dns_aaaa_only_without_v6_egress_is_unroutable() {
+    fn dns_aaaa_only_without_v6_egress_blames_the_missing_egress() {
         let mut r = StaticHostnameLookup::new();
         r.insert("db.example.com", &["2001:db8::5"], &[], false);
         // No A fallback and no v6 egress → no path works.
@@ -349,7 +360,7 @@ mod tests {
         assert!(matches!(
             outcome,
             ResolveOutcome::Unroutable {
-                reason: UnroutableReason::NeedsNat64ButDisabled
+                reason: UnroutableReason::NoIpv6Egress
             }
         ));
     }

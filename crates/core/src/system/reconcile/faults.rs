@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use seedling_protocol::names::AppName;
 
 use super::{Reconciler, pods, volumes};
-use crate::runtime::{db::Db, faults, identity::ResourceInstance};
+use crate::runtime::{
+    db::Db, faults, identity::ResourceInstance, site_services::resolve::UnroutableReason,
+};
 
 impl Reconciler {
     /// File a fault scoped to a specific resource instance, if no active fault
@@ -792,15 +794,36 @@ impl Reconciler {
                 );
             }
             for (name, hosts) in &unroutable {
+                // The two reasons need different remedies, so they get
+                // different sentences: reporting an AAAA-only host with no
+                // v6 egress as "NAT64 is not active" sent operators to check
+                // a setting that was already on and could not have helped.
+                let mut needs_nat64: Vec<&str> = Vec::new();
+                let mut needs_v6: Vec<&str> = Vec::new();
+                for (host, reason) in hosts {
+                    match reason {
+                        UnroutableReason::NeedsNat64ButDisabled => needs_nat64.push(host),
+                        UnroutableReason::NoIpv6Egress => needs_v6.push(host),
+                    }
+                }
+                let mut parts: Vec<String> = Vec::new();
+                if !needs_nat64.is_empty() {
+                    parts.push(format!(
+                        "endpoint(s) reachable only over IPv4, but NAT64 is not active: {}",
+                        needs_nat64.join(", ")
+                    ));
+                }
+                if !needs_v6.is_empty() {
+                    parts.push(format!(
+                        "endpoint(s) with only AAAA records, but this host has no IPv6 egress: {}",
+                        needs_v6.join(", ")
+                    ));
+                }
                 by_kind.entry(KIND_UNROUTABLE).or_default().insert(
                     faults::FaultKey::new(&system, KIND_UNROUTABLE, name.as_str()),
                     (
                         faults::FaultMeta::resource("site_service", name.as_str()),
-                        format!(
-                            "site service {:?} has endpoint(s) that require NAT64 but NAT64 is not active: {}",
-                            name.as_str(),
-                            hosts.join(", "),
-                        ),
+                        format!("site service {:?} has {}", name.as_str(), parts.join("; ")),
                     ),
                 );
             }

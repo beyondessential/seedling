@@ -69,16 +69,57 @@ pub fn build_provider(entry: &DnsProviderEntry) -> Result<Box<dyn DnsProvider>, 
 }
 
 /// Returns the FQDN of the TXT record to publish for an ACME DNS-01
-/// challenge against `name`. Always `_acme-challenge.<name>`, with a
-/// trailing dot stripped from the input if present.
+/// challenge against `name`.
+///
+/// `_acme-challenge.<name>`, with a trailing dot stripped from the input if
+/// present, and with a leading `*.` removed: RFC 8555 places a wildcard's
+/// challenge at the record for the base domain, so `*.example.com` is
+/// validated at `_acme-challenge.example.com`. Leaving the `*.` in produced
+/// `_acme-challenge.*.example.com`, which is not a name any zone will hold,
+/// so wildcard issuance could never succeed — and nothing rejects a wildcard
+/// hostname on the way in, since `build_csr` deliberately preserves wildcard
+/// SANs.
+// r[impl tls.strategy.acme-dns]
 pub fn challenge_record_name(name: &str) -> String {
     let stripped = name.strip_suffix('.').unwrap_or(name);
-    format!("_acme-challenge.{stripped}")
+    let base = stripped.strip_prefix("*.").unwrap_or(stripped);
+    format!("_acme-challenge.{base}")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // r[verify tls.strategy.acme-dns]
+    // RFC 8555 validates a wildcard at the base domain's challenge record.
+    // Leaving the `*.` in asked the provider to create
+    // `_acme-challenge.*.example.com`, which no zone will hold, so wildcard
+    // issuance could never complete.
+    #[test]
+    fn a_wildcard_is_validated_at_its_base_domain() {
+        assert_eq!(
+            challenge_record_name("*.example.com"),
+            "_acme-challenge.example.com"
+        );
+        assert_eq!(
+            challenge_record_name("*.example.com."),
+            "_acme-challenge.example.com"
+        );
+        assert_eq!(
+            challenge_record_name("*.sub.example.com"),
+            "_acme-challenge.sub.example.com"
+        );
+    }
+
+    // r[verify tls.strategy.acme-dns]
+    #[test]
+    fn a_literal_star_label_is_not_mistaken_for_a_wildcard_prefix() {
+        // Only a leading `*.` is a wildcard; a `*` elsewhere is not.
+        assert_eq!(
+            challenge_record_name("a.*.example.com"),
+            "_acme-challenge.a.*.example.com"
+        );
+    }
 
     #[test]
     fn challenge_record_name_strips_trailing_dot() {

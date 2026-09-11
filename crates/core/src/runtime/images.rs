@@ -24,10 +24,23 @@ fn now_ms() -> i64 {
 }
 
 // r[impl image.pin]
+// r[impl image.pin.expiry]
+/// Pin `reference` for `app`, clearing any pending expiration.
+///
+/// `r[image.pin.expiry]` says expirations "are cleared whenever a pin's
+/// reference is observed to be valid again for the owning app", and an
+/// explicit re-warm is exactly that observation. `DO NOTHING` left an
+/// `expires_at` stamped by the post-update reconciliation rule in place, so
+/// a re-warmed image was still swept on a later tick as though the app had
+/// stopped referring to it.
+///
+/// `DO UPDATE` names only `expires_at`: `pinned_at` records when the pin was
+/// first taken and belongs to the insert, and a blanket replace would reset
+/// every column this writer does not own.
 pub fn upsert_pin(db: &Db, app: &AppName, reference: &str) -> rusqlite::Result<()> {
     db.conn.execute(
         "INSERT INTO image_pins (app, reference, pinned_at) VALUES (?1, ?2, ?3)
-         ON CONFLICT(app, reference) DO NOTHING",
+         ON CONFLICT(app, reference) DO UPDATE SET expires_at = NULL",
         params![app, reference, now_ms()],
     )?;
     Ok(())
@@ -397,6 +410,37 @@ mod tests {
 
     fn app(s: &str) -> AppName {
         AppName::new(s).unwrap()
+    }
+
+    // r[verify image.pin.expiry]
+    // An expiration is set by the post-update reconciliation rule and must be
+    // cleared once the reference is observed valid again. `DO NOTHING` kept
+    // it, so a re-warmed image was still swept on a later tick.
+    #[test]
+    fn re_pinning_clears_a_pending_expiration() {
+        let db = Db::open_in_memory().unwrap();
+        let a = app("foo");
+        upsert_pin(&db, &a, "ghcr.io/x:1").unwrap();
+
+        db.conn
+            .execute(
+                "UPDATE image_pins SET expires_at = ?1 WHERE app = ?2 AND reference = ?3",
+                params![now_ms() + 60_000, &a, "ghcr.io/x:1"],
+            )
+            .unwrap();
+        assert!(
+            list_pins(&db, Some(&a)).unwrap()[0].expires_at.is_some(),
+            "precondition: the pin is due to expire"
+        );
+
+        upsert_pin(&db, &a, "ghcr.io/x:1").unwrap();
+
+        let pins = list_pins(&db, Some(&a)).unwrap();
+        assert_eq!(pins.len(), 1, "re-pinning must not duplicate the row");
+        assert!(
+            pins[0].expires_at.is_none(),
+            "re-warming the reference clears the expiry",
+        );
     }
 
     // r[verify image.pin]

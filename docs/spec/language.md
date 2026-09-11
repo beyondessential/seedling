@@ -1161,7 +1161,7 @@ This spec defines the semantics of the Runtime Instance as far as BSL is concern
 > - an anonymous `Volume` created earlier in the same action closure, or
 > - an `ExternalVolume`, including those resolved from operation-scoped volume bindings (see `l[action.params.volume]`).
 >
-> The path must be absolute, must not contain `..` components, and must not resolve to the volume root; these are the same validation rules as `l[volume.write.validation]`.
+> The path must be absolute, must not escape the volume root after canonicalisation, and must not resolve to the volume root; these are the same validation rules as `l[volume.write.validation]`.
 >
 > Unlike static `Volume.write`, `rt.write` does NOT reapply on container restart. It is a point-in-time write at action time. For tmpfs volumes that means the contents are erased on the next container start; this is allowed and is the user's responsibility to reason about.
 >

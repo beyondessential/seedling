@@ -13,7 +13,7 @@ use crate::{
         db::DbHandle,
         external_service_mappings::ExternalServiceSnapshot,
         identity::InstanceId,
-        site_services::resolve::{ResolveCtx, ResolveOutcome, resolve_endpoint},
+        site_services::resolve::{ResolveCtx, ResolveOutcome, UnroutableReason, resolve_endpoint},
     },
     system::{
         System, actuator::Actuator, observer::Observer, translate::proxy::build_proxy_config,
@@ -144,9 +144,11 @@ pub(super) struct SiteServiceFaultSet {
     /// failed to resolve past the resolver's failure threshold. Hosts are
     /// stored sorted for deterministic fault descriptions.
     pub unresolvable: BTreeMap<SiteServiceName, Vec<String>>,
-    /// Site services with at least one endpoint that requires NAT64 to
-    /// route but NAT64 is not active on this host.
-    pub unroutable: BTreeMap<SiteServiceName, Vec<String>>,
+    /// Site services with at least one endpoint that cannot be routed from
+    /// this host, each paired with why. The reason has to travel with the
+    /// host: the two cases need different remedies, and reporting them
+    /// alike told operators NAT64 was off when it was on and irrelevant.
+    pub unroutable: BTreeMap<SiteServiceName, Vec<(String, UnroutableReason)>>,
 }
 
 /// Walk every site service endpoint and bucket the outcomes per service
@@ -161,12 +163,12 @@ pub(super) fn classify_site_service_endpoints(
     let mut set = SiteServiceFaultSet::default();
     for (name, endpoints) in &snapshot.site_endpoints {
         let mut unresolvable: BTreeSet<String> = BTreeSet::new();
-        let mut unroutable: BTreeSet<String> = BTreeSet::new();
+        let mut unroutable: BTreeSet<(String, UnroutableReason)> = BTreeSet::new();
         for ep in endpoints {
             match resolve_endpoint(&ep.remote_host, resolve_ctx) {
                 ResolveOutcome::Routable(_) => {}
-                ResolveOutcome::Unroutable { .. } => {
-                    unroutable.insert(ep.remote_host.clone());
+                ResolveOutcome::Unroutable { reason } => {
+                    unroutable.insert((ep.remote_host.clone(), reason));
                 }
                 ResolveOutcome::Unresolved { .. } => {
                     // Only fault when the resolver has actually given up
