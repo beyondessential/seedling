@@ -215,6 +215,18 @@ pub fn compute_state<'a>(snap: &'a Snapshot, hostname: &str) -> HostnameState<'a
     // Coverage-only lookup, the same rule the serving path applies.
     let active_cert = find_active_for_hostname(&snap.certificates, hostname, snap.now);
 
+    // A certificate staged ahead of its `notBefore` is not serving, so it is
+    // not `active_cert` — but it is not absent either, and reporting absence
+    // would have the coordinator issue a replacement on every tick until the
+    // window opened. A successful issuance is never debounced (see
+    // `debounce_until`), so nothing else would stop it.
+    // r[impl tls.cert.serve]
+    let staged_from = if active_cert.is_none() {
+        staged_start_for_hostname(&snap.certificates, hostname, snap.now)
+    } else {
+        None
+    };
+
     let mut last_attempt: Option<&TlsCertAttempt> = None;
     let mut last_success: Option<&TlsCertAttempt> = None;
     for att in &snap.attempts {
@@ -242,6 +254,7 @@ pub fn compute_state<'a>(snap: &'a Snapshot, hostname: &str) -> HostnameState<'a
         snap.now,
         policy.map(|p| &p.policy),
         active_cert,
+        staged_from,
         last_attempt,
         retry_block,
         force_retry_at.is_some(),
@@ -349,9 +362,15 @@ fn find_active_for_hostname<'a>(
                 continue;
             }
         };
-        if let Some(rank) =
-            super::resolve::rank(&sans, hostname, cert.self_signed, cert.created_at, cert.id)
-            && best.as_ref().is_none_or(|(best_rank, _)| rank > *best_rank)
+        if let Some(rank) = super::resolve::rank(
+            &sans,
+            hostname,
+            cert.self_signed,
+            cert.not_after,
+            cert.created_at,
+            cert.id,
+            now,
+        ) && best.as_ref().is_none_or(|(best_rank, _)| rank > *best_rank)
         {
             best = Some((rank, cert));
         }
@@ -359,10 +378,50 @@ fn find_active_for_hostname<'a>(
     best.map(|(_, cert)| cert)
 }
 
+/// When a certificate that covers `hostname` starts serving, if one is stored
+/// but not yet inside its validity window.
+///
+/// Ranked the same way as [`find_active_for_hostname`], so the answer concerns
+/// the certificate that will actually be served once the window opens.
+// r[impl tls.cert.serve]
+fn staged_start_for_hostname(certs: &[TlsCertificate], hostname: &str, now: i64) -> Option<i64> {
+    let mut best: Option<(super::resolve::Rank, i64)> = None;
+    for cert in certs
+        .iter()
+        .filter(|c| c.state == TlsCertState::Active && c.not_before.is_some_and(|nb| nb > now))
+    {
+        let Some(pem) = cert.cert_pem.as_deref() else {
+            continue;
+        };
+        let Ok(sans) = super::parse::leaf_san_dns_names(pem) else {
+            continue;
+        };
+        if let Some(rank) = super::resolve::rank(
+            &sans,
+            hostname,
+            cert.self_signed,
+            cert.not_after,
+            cert.created_at,
+            cert.id,
+            now,
+        ) && best.as_ref().is_none_or(|(best_rank, _)| rank > *best_rank)
+        {
+            best = Some((rank, cert.not_before.unwrap_or(now)));
+        }
+    }
+    best.map(|(_, from)| from)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one decision over the whole per-hostname snapshot; splitting it would \
+              reintroduce the dispatch-before-the-decision this subsystem forbids"
+)]
 fn decide(
     now: i64,
     policy: Option<&TlsPolicy>,
     active_cert: Option<&TlsCertificate>,
+    staged_from: Option<i64>,
     last_attempt: Option<&TlsCertAttempt>,
     retry_block: Option<&TlsCertRetryBlock>,
     force_retry: bool,
@@ -379,6 +438,7 @@ fn decide(
         Some(TlsPolicy::AcmeDns { .. }) => decide_acme_dns(
             now,
             active_cert,
+            staged_from,
             last_attempt,
             retry_block,
             force_retry,
@@ -397,6 +457,7 @@ fn decide(
 fn decide_acme_dns(
     now: i64,
     active_cert: Option<&TlsCertificate>,
+    staged_from: Option<i64>,
     last_attempt: Option<&TlsCertAttempt>,
     retry_block: Option<&TlsCertRetryBlock>,
     force_retry: bool,
@@ -413,6 +474,15 @@ fn decide_acme_dns(
     if force_retry {
         return Decision::IssueNow {
             reason: IssueReason::ForceRetry,
+        };
+    }
+    // A certificate is stored and starts serving at `from`. Nothing to do
+    // until then: issuing now would be issuing against a certificate that
+    // already exists.
+    if let Some(from) = staged_from {
+        return Decision::Scheduled {
+            next_at: from,
+            source: NextSource::Fallback,
         };
     }
 
@@ -739,7 +809,41 @@ mod tests {
         ));
     }
 
+    /// A freshly issued certificate whose `notBefore` has not arrived on this
+    /// host's clock is stored but not serving. Reporting it as absent would
+    /// have the coordinator issue another every tick — a successful issuance
+    /// is never debounced — burning CA rate limits against a certificate that
+    /// already exists.
+    // r[verify tls.cert.serve]
     #[test]
+    fn a_staged_cert_is_scheduled_not_reissued() {
+        let now = 1_000_000;
+        let mut staged = fake_cert("host.example.com", 1, 0, now + 90 * 86_400);
+        staged.not_before = Some(now + 3_600);
+        let s = snap(
+            vec![policy_acme("*", "p")],
+            vec![staged],
+            vec![attempt(
+                "host.example.com",
+                AttemptOutcome::Success,
+                now - 60,
+            )],
+            vec![],
+            vec![],
+            "ops@x",
+            now,
+        );
+        let st = compute_state(&s, "host.example.com");
+        assert!(
+            st.active_cert.is_none(),
+            "a staged cert is not serving, so it is not the active cert",
+        );
+        match st.decision {
+            Decision::Scheduled { next_at, .. } => assert_eq!(next_at, now + 3_600),
+            d => panic!("expected the staged start, got: {d:?}"),
+        }
+    }
+
     fn recent_failure_debounces_first_issuance() {
         let now = 1_000_000;
         let last_failed_at = now - 60; // well within 1h debounce

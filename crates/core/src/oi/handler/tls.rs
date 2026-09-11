@@ -279,7 +279,20 @@ pub(crate) fn list_certificates(state: &OiState) -> HandlerResult {
             // PEM will not parse, which is not the same as "does not cover".
             // r[impl tls.csr.flow]
             let request_covered = match (c.requested_hostname.as_deref(), c.cert_pem.as_deref()) {
-                (Some(requested), Some(pem)) => parse::cert_covers(pem, requested).ok(),
+                (Some(requested), Some(pem)) => match parse::cert_covers(pem, requested) {
+                    Ok(covered) => Some(covered),
+                    // Null here reads as "no flag" to the operator, same as a
+                    // met request, so the reason has to be said somewhere.
+                    Err(e) => {
+                        tracing::warn!(
+                            cert_id = c.id,
+                            error = %e,
+                            "stored certificate could not be parsed; cannot report whether it \
+                             covers the hostname its CSR requested"
+                        );
+                        None
+                    }
+                },
                 _ => None,
             };
             json!({

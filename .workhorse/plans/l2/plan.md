@@ -381,6 +381,64 @@ not mine:
   incumbent. Real chain validation against a trust store is a feature in its own right; the
   alternative is narrowing the spec wording to what is actually enforced.
 
+## Review round 6
+
+Two of the three criticals are items flagged at the end of round 5 as needing a decision; the
+third is a regression from round 5's ranking change. Fixed the regressions and the local items;
+left the two that are still open decisions.
+
+- **Skipping not-yet-valid certificates drove an unbounded ACME re-issuance loop** (critical, and
+  a regression from round 4's fix). `debounce_until` only debounces after a *failed* attempt, so
+  a successful issuance is never debounced: a certificate whose `notBefore` had not arrived on
+  this host's clock read as absent, and the coordinator issued another every tick.
+
+  The round-4 fix was right that the control plane must not report a staged certificate as
+  serving, and wrong to conclude it should report nothing. Staged is a third state, so it is one
+  now: `compute_state` reports the servable certificate as `active_cert` and, when there is none,
+  when a stored certificate starts serving. `decide_acme_dns` returns `Scheduled` at that time
+  rather than issuing. Both round-4's property and this one hold.
+
+- **`Rank` had no notion of expiry** (regression from round 5). Safe in the serving lookup, which
+  pre-filters expired rows, but not in the control-plane matcher, which deliberately keeps them
+  so the renewal scheduler can see them. With `exact` outranking recency, an expired certificate
+  naming the hostname exactly beat the newer valid wildcard actually being served — so the
+  expiry sweep would fault a hostname that was correctly covered. `unexpired` now ranks above
+  everything else; it is a no-op on the serving side.
+
+- **The last silent "could not tell".** `request_covered` discarded its parse error while every
+  other such branch warns, and null reads as "no flag" to the operator — the same as a met
+  request. It warns now.
+
+- **Two queries reading more than they use.** Supersession pulled each candidate's PEM *and*
+  encrypted key to read three fields. Narrowed, as the serving scan already was.
+
+### Still open, and now escalating
+
+Round 5 flagged four items as needing a decision about how much of the TLS resolution path this
+card should own. That question has not been answered, and two of the four came back this round
+as criticals rather than suggestions:
+
+- **The serving lookup is an unfiltered scan on the handshake path.** Now argued with the detail
+  that makes it more than performance: `DbHandle` is a single serialized worker thread, so every
+  lookup blocks reconcile, the OI and issuance for its duration, and unknown SNI — remote
+  attacker-controlled — is the most expensive case, scanning and parsing every active row to
+  return nothing. The reviewer asks for a bound before merge: an indexed pre-filter, a
+  `tls_cert_sans` table making coverage a SQL join, or memoised resolution. Any of the three is a
+  design, and the deferral in round 3 was made when this was still a fallback path rather than
+  the only one.
+
+- **A CSR-signed certificate binds by the CA's chosen SANs.** This is the card's central design
+  decision, taken deliberately at interview: bind by what the certificate carries, report an
+  unmet request as a warning plus the rollup rather than a fault. The reviewer's point is a
+  consequence of it — a CA that returns names outside the request gets those names served, and a
+  substituted name no ingress declares leaves no standing signal, because the rollup only covers
+  ingress-declared hostnames. Reversing it means either rejecting out-of-request SANs or filing
+  a fault, both of which were considered and not chosen. Not something to overturn without the
+  decision being revisited.
+
+Also still open from round 5 and unchanged: `compute_state` parsing per hostname per tick, and
+the self-signed guard not catching a private CA.
+
 ## Noted, not actioned
 
 - `TlsCertState::Failed` is never constructed anywhere in the tree. Its mention in

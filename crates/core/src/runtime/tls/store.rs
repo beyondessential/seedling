@@ -376,7 +376,7 @@ pub fn find_active_for_hostname(
     let mut best: Option<(super::resolve::Rank, i64)> = None;
     {
         let mut stmt = db.conn.prepare(
-            "SELECT id, cert_pem, self_signed, created_at
+            "SELECT id, cert_pem, self_signed, created_at, not_after
              FROM tls_certificates
              WHERE state = 'active'
                AND (not_before IS NULL OR not_before <= ?1)
@@ -390,6 +390,7 @@ pub fn find_active_for_hostname(
             };
             let self_signed: i64 = row.get(2)?;
             let created_at: i64 = row.get(3)?;
+            let not_after: Option<i64> = row.get(4)?;
             let sans = match super::parse::leaf_san_dns_names(&pem) {
                 Ok(sans) => sans,
                 // Unreadable is not "does not cover", and the row is active,
@@ -404,9 +405,15 @@ pub fn find_active_for_hostname(
                     continue;
                 }
             };
-            if let Some(rank) =
-                super::resolve::rank(&sans, hostname, self_signed != 0, created_at, id)
-                && best.as_ref().is_none_or(|(best_rank, _)| rank > *best_rank)
+            if let Some(rank) = super::resolve::rank(
+                &sans,
+                hostname,
+                self_signed != 0,
+                not_after,
+                created_at,
+                id,
+                now,
+            ) && best.as_ref().is_none_or(|(best_rank, _)| rank > *best_rank)
             {
                 best = Some((rank, id));
             }
@@ -624,29 +631,33 @@ pub fn supersede_other_active_for_hostname(db: &Db, keep_id: i64) -> rusqlite::R
         return Ok(0);
     }
 
-    let candidates: Vec<TlsCertificate> = {
-        let mut stmt = db.conn.prepare(&format!(
-            "SELECT {CERT_COLUMNS}
+    // Only what the decision reads — not every candidate's encrypted key.
+    let candidates: Vec<(i64, bool, Option<String>)> = {
+        let mut stmt = db.conn.prepare(
+            "SELECT id, self_signed, cert_pem
              FROM tls_certificates
-             WHERE hostname = ?1 AND state = 'active' AND id != ?2"
-        ))?;
-        stmt.query_map(params![arriving.hostname, keep_id], row_to_certificate)?
-            .collect::<rusqlite::Result<_>>()?
+             WHERE hostname = ?1 AND state = 'active' AND id != ?2",
+        )?;
+        stmt.query_map(params![arriving.hostname, keep_id], |row| {
+            let self_signed: i64 = row.get(1)?;
+            Ok((row.get(0)?, self_signed != 0, row.get(2)?))
+        })?
+        .collect::<rusqlite::Result<_>>()?
     };
 
     let mut retired = 0;
-    for candidate in candidates {
-        if arriving.self_signed && !candidate.self_signed {
+    for (candidate_id, candidate_self_signed, candidate_pem) in candidates {
+        if arriving.self_signed && !candidate_self_signed {
             continue;
         }
-        let Some(pem) = candidate.cert_pem.as_deref() else {
+        let Some(pem) = candidate_pem.as_deref() else {
             continue;
         };
         let served = match super::parse::leaf_san_dns_names(pem) {
             Ok(served) => served,
             Err(e) => {
                 tracing::warn!(
-                    cert_id = candidate.id,
+                    cert_id = candidate_id,
                     error = %e,
                     "stored certificate could not be parsed; leaving it active rather than \
                      retiring it"
@@ -666,7 +677,7 @@ pub fn supersede_other_active_for_hostname(db: &Db, keep_id: i64) -> rusqlite::R
         }
         retired += db.conn.execute(
             "UPDATE tls_certificates SET state = 'superseded', updated_at = ?1 WHERE id = ?2",
-            params![now, candidate.id],
+            params![now, candidate_id],
         )?;
     }
     Ok(retired)

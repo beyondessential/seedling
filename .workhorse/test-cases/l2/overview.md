@@ -77,6 +77,14 @@ separate CA, exactly as a real CA does.
       (verifies spec: `tls.strategy.manual`)
 - [x] With neither distinction in play, the most recently created still wins
 
+## Staged certificates
+
+- [x] A certificate whose `notBefore` has not arrived yields a scheduled decision at that
+      time, not another issuance — a successful issuance is never debounced, so reporting it
+      as absent would re-issue every tick (verifies spec: `tls.cert.serve`)
+- [x] It is still not reported as the hostname's active certificate, so the rollup does not
+      claim a hostname is covered while handshakes for it fail
+
 ## Requested hostname
 
 - [x] `tls.cert.list` reports `requested_hostname` for a CSR-origin row, and it survives the
