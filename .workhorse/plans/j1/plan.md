@@ -4,8 +4,10 @@
 
 The card as written ports a Caddyfile fragment from the Tamanu Linux config. Investigation
 found that fragment does not work anywhere, and that the error page HTML exists in no artefact
-Seedling can reach. The branded page therefore waits on Q1 (definition provenance). A generic
-Seedling page is still deliverable independently.
+Seedling can reach. The branded page needs the Tamanu definition to carry the pages, which is
+possible in today's single-script format as string literals and pleasant only once Q1 lands a
+definition shape that can hold sidecar files. Q1 is therefore a dependency on shape, not a hard
+precondition. A generic Seedling page is deliverable independently of both.
 
 ## What the source fragment actually does
 
@@ -104,12 +106,30 @@ This is a constraint to feed into Q1's undecided mechanism question, where the l
 candidates are a release artefact, the definition carried in the app's container image, or a
 relay through an existing connection. The first two can carry a folder.
 
-## Fallback if Q1 slips
+Q1's other open question, whether it gates the migration, rests on a premise worth correcting
+in the same breath: it cites shipping "with definitions still in `apps/`", and those are demos
+that would never run in prod. The question is really whether a production definition stays in
+today's single-script format, which is a different question with a different answer.
 
-Q1 says explicitly that it may not gate the migration. If it slips, J1 can still ship a
-Seedling-generic error page: no Tamanu change, no provenance mechanism, delivery either
-config-embedded or from `/data`. That covers the everything-down case, which is the case
-already agreed as acceptable to serve generically. Only the branded API-down page waits.
+## If Q1 slips
+
+Q1 offers its own escape hatch: "it can ship with definitions still in `apps/` and pick this up
+after". That premise does not hold. The `apps/*.seed.rhai` definitions are demos, are not
+expected to become the production Tamanu definition, and would never run in prod. There is
+nothing "still in `apps/`" to ship with.
+
+The real escape hatch is the format, not the location: a production definition in today's
+single-script form, maintained wherever it is maintained and pushed through `/apps/create`.
+That form can carry the error page HTML as a rhai string literal, so J1's branded page is
+reachable without Q1 at all. It is merely unpleasant, being 13.5 KB of HTML inside a script.
+
+So Q1 is a dependency on definition *shape*, not a precondition for this card. Waiting on it
+buys a folder holding the pages as files instead of literals, which is a sequencing choice
+rather than a blockage.
+
+Separately, a Seedling-generic error page needs no provenance mechanism and no Tamanu change at
+all, with delivery either config-embedded or from `/data`. It covers the everything-down case
+already agreed as acceptable to serve generically.
 
 ## PRD correction
 
