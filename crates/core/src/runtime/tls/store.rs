@@ -463,7 +463,7 @@ pub fn update_certificate(
 /// came into being — a certificate that arrived today must not lose to one
 /// stored yesterday because its request predates it.
 // r[impl tls.csr.flow]
-// r[impl tls.cert.validation.san-coverage]
+// r[impl tls.cert.supersede]
 pub fn activate_pending_csr(
     db: &Db,
     id: i64,
@@ -506,6 +506,12 @@ pub fn activate_pending_csr(
     Ok(true)
 }
 
+/// A non-SQL failure surfaced through `rusqlite::Error`, as the provider
+/// accessors in this module already do for cipher failures.
+fn unreadable(message: String) -> rusqlite::Error {
+    rusqlite::Error::ToSqlConversionFailure(message.into())
+}
+
 /// Retire the active certificates that the certificate `keep_id` replaces.
 ///
 /// Replacement is a strict improvement or it does not happen. A candidate is
@@ -532,7 +538,7 @@ pub fn activate_pending_csr(
 /// serves is not the same as knowing the arriving certificate replaces it.
 ///
 /// Returns the number of rows retired.
-// r[impl tls.cert.validation.san-coverage]
+// r[impl tls.cert.supersede]
 pub fn supersede_other_active_for_hostname(
     db: &Db,
     hostname: &str,
@@ -541,15 +547,46 @@ pub fn supersede_other_active_for_hostname(
     // Read the arriving certificate back from the row rather than taking its
     // properties as arguments, so what is compared is what was actually
     // stored.
+    //
+    // Both failures below mean the same thing — the certificate that was just
+    // written cannot be read back — and neither may return `Ok(0)`, which is
+    // also what a clean pass that legitimately retired nothing returns. The
+    // caller would carry on reporting success while the certificate it
+    // replaced stayed active beside it.
     let Some(arriving) = get_certificate(db, keep_id)? else {
-        return Ok(0);
+        tracing::warn!(
+            cert_id = keep_id,
+            "certificate vanished before supersession"
+        );
+        return Err(unreadable(format!(
+            "certificate {keep_id} could not be read back for supersession"
+        )));
     };
-    let Some(arriving_sans) = arriving
+    let arriving_sans = match arriving
         .cert_pem
         .as_deref()
-        .and_then(|pem| super::parse::leaf_san_dns_names(pem).ok())
-    else {
-        return Ok(0);
+        .map(super::parse::leaf_san_dns_names)
+    {
+        Some(Ok(sans)) => sans,
+        Some(Err(e)) => {
+            tracing::warn!(
+                cert_id = keep_id,
+                error = %e,
+                "stored certificate could not be parsed; cannot decide what it replaces"
+            );
+            return Err(unreadable(format!(
+                "certificate {keep_id} could not be parsed for supersession: {e}"
+            )));
+        }
+        None => {
+            tracing::warn!(
+                cert_id = keep_id,
+                "certificate has no PEM to supersede with"
+            );
+            return Err(unreadable(format!(
+                "certificate {keep_id} has no stored PEM"
+            )));
+        }
     };
 
     let now = now_secs();
@@ -1192,17 +1229,6 @@ mod tests {
         );
     }
 
-    /// A real self-signed certificate carrying exactly `sans`, so the coverage
-    /// checks have something they can parse.
-    fn real_cert_pem(sans: &[&str]) -> String {
-        let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("keypair");
-        let mut params =
-            rcgen::CertificateParams::new(sans.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>())
-                .expect("params");
-        params.distinguished_name = rcgen::DistinguishedName::new();
-        params.self_signed(&key).expect("self-sign").pem()
-    }
-
     fn insert_test_cert(db: &Db, hostname: &str) -> i64 {
         insert_certificate(
             db,
@@ -1211,7 +1237,7 @@ mod tests {
                 requested_hostname: None,
                 state: TlsCertState::Active,
                 origin: TlsCertOrigin::Manual,
-                cert_pem: Some(&real_cert_pem(&[hostname])),
+                cert_pem: Some(&super::super::test_support::self_signed_pem(&[hostname])),
                 csr_pem: None,
                 key_ciphertext: b"encrypted-key-bytes",
                 key_type: KeyType::EcdsaP256,
@@ -1252,7 +1278,7 @@ mod tests {
                 requested_hostname: None,
                 state: TlsCertState::Active,
                 origin: TlsCertOrigin::Manual,
-                cert_pem: Some(&real_cert_pem(&[hostname])),
+                cert_pem: Some(&super::super::test_support::self_signed_pem(&[hostname])),
                 csr_pem: None,
                 key_ciphertext: b"encrypted-key-bytes",
                 key_type: KeyType::EcdsaP256,
@@ -1308,7 +1334,7 @@ mod tests {
                 requested_hostname: None,
                 state: TlsCertState::Active,
                 origin: TlsCertOrigin::Manual,
-                cert_pem: Some(&real_cert_pem(sans)),
+                cert_pem: Some(&super::super::test_support::self_signed_pem(sans)),
                 csr_pem: None,
                 key_ciphertext: b"key",
                 key_type: KeyType::EcdsaP256,
@@ -1324,7 +1350,7 @@ mod tests {
     /// certificates become supersession candidates is outside the operator's
     /// control. A certificate staged ahead of its validity window is accepted
     /// deliberately, and must not retire one clients accept today.
-    // r[verify tls.cert.validation.san-coverage]
+    // r[verify tls.cert.supersede]
     #[test]
     fn supersede_spares_an_incumbent_when_the_new_cert_is_not_yet_valid() {
         let (db, _) = fresh_db();
@@ -1346,7 +1372,7 @@ mod tests {
 
     /// Nor may a self-signed certificate retire one a CA issued: clients accept
     /// the incumbent and would reject the replacement.
-    // r[verify tls.cert.validation.san-coverage]
+    // r[verify tls.cert.supersede]
     #[test]
     fn supersede_spares_a_ca_issued_incumbent_when_the_new_cert_is_self_signed() {
         let (db, _) = fresh_db();
@@ -1418,7 +1444,7 @@ mod tests {
     /// else. A candidate sharing its label may still carry names it does not
     /// cover; retiring that candidate would leave those names with no active
     /// certificate at all.
-    // r[verify tls.cert.validation.san-coverage]
+    // r[verify tls.cert.supersede]
     #[test]
     fn supersede_spares_a_cert_serving_a_name_the_new_one_does_not_cover() {
         let (db, _) = fresh_db();
@@ -1446,7 +1472,7 @@ mod tests {
 
     /// The renewal case the supersession exists for: the arriving certificate
     /// covers everything the incumbent did, so the incumbent moves to history.
-    // r[verify tls.cert.validation.san-coverage]
+    // r[verify tls.cert.supersede]
     #[test]
     fn supersede_retires_a_cert_the_new_one_fully_covers() {
         let (db, _) = fresh_db();
@@ -1568,7 +1594,7 @@ mod tests {
                 &db,
                 id,
                 "example.com",
-                &real_cert_pem(&["example.com"]),
+                &super::super::test_support::self_signed_pem(&["example.com"]),
                 &metadata,
             )
             .unwrap()
@@ -1589,7 +1615,7 @@ mod tests {
                 &db,
                 id,
                 "example.com",
-                &real_cert_pem(&["example.com"]),
+                &super::super::test_support::self_signed_pem(&["example.com"]),
                 &metadata,
             )
             .unwrap()
@@ -1632,7 +1658,7 @@ mod tests {
                 &db,
                 pending,
                 "example.com",
-                &real_cert_pem(&["example.com"]),
+                &super::super::test_support::self_signed_pem(&["example.com"]),
                 &CertMetadata {
                     not_after: Some(now_secs() + 86_400),
                     ..Default::default()

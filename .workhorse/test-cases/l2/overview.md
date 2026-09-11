@@ -44,6 +44,11 @@ separate CA, exactly as a real CA does.
       `tls.cert.validation.san-coverage`)
 - [x] A certificate whose `notBefore` has not arrived is not served (verifies spec:
       `tls.cert.serve`)
+- [x] Nor is it reported as the hostname's active certificate by the control-plane matcher —
+      otherwise the rollup calls the hostname covered while handshakes for it fail, and
+      nothing schedules a fix (verifies spec: `tls.cert.serve`)
+- [x] A certificate the runtime cannot read back after storing it reports a failure rather
+      than a count of nothing retired (verifies spec: `tls.cert.supersede`)
 
 ## Serving a mislabelled row
 

@@ -212,9 +212,8 @@ impl NextSource {
 pub fn compute_state<'a>(snap: &'a Snapshot, hostname: &str) -> HostnameState<'a> {
     let policy = resolve_policy(&snap.policies, hostname);
 
-    // SAN-aware lookup: matches ACME-DNS certs by hostname column
-    // (fast path) and manual certs by SAN coverage (auto-bind).
-    let active_cert = find_active_for_hostname(&snap.certificates, hostname);
+    // Coverage-only lookup, the same rule the serving path applies.
+    let active_cert = find_active_for_hostname(&snap.certificates, hostname, snap.now);
 
     let mut last_attempt: Option<&TlsCertAttempt> = None;
     let mut last_success: Option<&TlsCertAttempt> = None;
@@ -316,17 +315,24 @@ pub fn is_caddy_internal(hostname: &str) -> bool {
 /// the newest active certificate whose SAN list covers `hostname` per RFC 6125
 /// wins, and a row's label takes no part in it.
 ///
-/// Unlike the store matcher this does not filter on expiry, because the
-/// renewal scheduler has to see an expiring cert in order to renew it.
+/// A certificate staged ahead of its `notBefore` is skipped, because the
+/// serving path will not hand it out either (see [`tls.cert.serve`]) and
+/// reporting it as the hostname's active certificate would say the hostname is
+/// covered while handshakes for it fail — with nothing scheduling a fix.
+///
+/// Expiry is deliberately *not* filtered here, unlike in the store matcher:
+/// the renewal scheduler has to see an expiring cert in order to renew it.
 // r[impl tls.strategy.manual]
 // r[impl tls.cert.validation.san-coverage]
+// r[impl tls.cert.serve]
 fn find_active_for_hostname<'a>(
     certs: &'a [TlsCertificate],
     hostname: &str,
+    now: i64,
 ) -> Option<&'a TlsCertificate> {
     let mut active: Vec<&TlsCertificate> = certs
         .iter()
-        .filter(|c| c.state == TlsCertState::Active)
+        .filter(|c| c.state == TlsCertState::Active && !c.not_before.is_some_and(|nb| nb > now))
         .collect();
     active.sort_by_key(|c| std::cmp::Reverse((c.created_at, c.id)));
     for cert in active {
@@ -477,16 +483,6 @@ mod tests {
         TlsPolicy,
     };
 
-    /// A real self-signed certificate for `hostname`. The matcher confirms a
-    /// row's label against its certificate, so a placeholder PEM would make
-    /// every fixture unservable for the name it is supposed to be about.
-    fn cert_pem_for(hostname: &str) -> String {
-        let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("keypair");
-        let mut params = rcgen::CertificateParams::new(vec![hostname.to_owned()]).expect("params");
-        params.distinguished_name = rcgen::DistinguishedName::new();
-        params.self_signed(&key).expect("self-sign").pem()
-    }
-
     fn fake_cert(hostname: &str, id: i64, not_before: i64, not_after: i64) -> TlsCertificate {
         TlsCertificate {
             id,
@@ -494,7 +490,7 @@ mod tests {
             requested_hostname: None,
             state: TlsCertState::Active,
             origin: TlsCertOrigin::AcmeDns,
-            cert_pem: Some(cert_pem_for(hostname)),
+            cert_pem: Some(super::super::test_support::self_signed_pem(&[hostname])),
             csr_pem: None,
             key_ciphertext: vec![0u8; 32],
             key_type: KeyType::EcdsaP256,
@@ -564,6 +560,35 @@ mod tests {
         }
     }
 
+    /// A certificate staged ahead of its validity window is not what the
+    /// hostname is served, so the control plane must not report it as the
+    /// hostname's active certificate either — otherwise the rollup calls the
+    /// hostname covered, the scheduler concludes there is nothing to do, and
+    /// handshakes fail with no signal anywhere.
+    // r[verify tls.cert.serve]
+    #[test]
+    fn a_not_yet_valid_cert_is_not_the_active_cert() {
+        let now = 1_000;
+        let mut staged = fake_cert("example.com", 1, 0, i64::MAX);
+        staged.not_before = Some(now + 86_400);
+
+        assert!(
+            find_active_for_hostname(&[staged.clone()], "example.com", now).is_none(),
+            "a staged cert must not be reported as serving",
+        );
+
+        // The certificate it was staged to replace is still the active one.
+        let mut incumbent = fake_cert("example.com", 2, 0, i64::MAX);
+        incumbent.created_at = now - 100;
+        let certs = [staged, incumbent];
+        assert_eq!(
+            find_active_for_hostname(&certs, "example.com", now)
+                .expect("the incumbent still covers the hostname")
+                .id,
+            2
+        );
+    }
+
     /// The in-memory matcher shares the store matcher's rules, including the
     /// exact-label fast path. A row written before the label was made to follow
     /// the certificate claims a name its certificate does not carry, and must
@@ -572,15 +597,8 @@ mod tests {
     #[test]
     fn find_active_for_hostname_does_not_hand_out_a_non_covering_cert() {
         fn labelled(id: i64, label: &str, sans: &[&str], created_at: i64) -> TlsCertificate {
-            let key =
-                rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("keypair");
-            let mut params = rcgen::CertificateParams::new(
-                sans.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>(),
-            )
-            .expect("params");
-            params.distinguished_name = rcgen::DistinguishedName::new();
             let mut cert = fake_cert(label, id, 0, i64::MAX);
-            cert.cert_pem = Some(params.self_signed(&key).expect("self-sign").pem());
+            cert.cert_pem = Some(super::super::test_support::self_signed_pem(sans));
             cert.created_at = created_at;
             cert
         }
@@ -588,7 +606,7 @@ mod tests {
         // Labelled www.example.com, carries only example.com.
         let mislabelled = [labelled(1, "www.example.com", &["example.com"], 200)];
         assert!(
-            find_active_for_hostname(&mislabelled, "www.example.com").is_none(),
+            find_active_for_hostname(&mislabelled, "www.example.com", 1_000).is_none(),
             "the label must not stand in for coverage",
         );
 
@@ -598,7 +616,7 @@ mod tests {
             labelled(1, "www.example.com", &["example.com"], 200),
             labelled(2, "example.com", &["www.example.com"], 100),
         ];
-        let found = find_active_for_hostname(&certs, "www.example.com")
+        let found = find_active_for_hostname(&certs, "www.example.com", 1_000)
             .expect("a certificate covers www.example.com");
         assert_eq!(found.id, 2);
     }

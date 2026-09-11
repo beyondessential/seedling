@@ -24,6 +24,8 @@ pub mod serve;
 pub mod state;
 pub mod store;
 pub mod tailscale_issuer;
+#[cfg(test)]
+pub mod test_support;
 pub mod validate;
 
 use secrecy::SecretString;

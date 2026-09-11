@@ -1713,10 +1713,14 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > A wildcard SAN `*.example.com` covers exactly one additional left-most label (it covers `foo.example.com` but not `example.com` and not `a.b.example.com`).
 > Coverage is the only thing that binds a certificate to a hostname.
 > However a certificate reached the runtime — operator upload, externally-signed CSR, or ACME issuance — it must be served for exactly the hostnames its own SAN set covers.
-> A certificate supersedes another only when it is a replacement in full: it covers every hostname the other serves, it is within its own validity window, and it is not self-signed unless the one it replaces already was.
-> On the CSR path the SAN set is chosen by the issuing CA rather than the operator, so which certificates a new one is even a candidate to replace is outside the operator's control; a certificate that does not meet the bar retires nothing, and whatever is serving a hostname goes on serving it.
 > The name an operator asked for is a record of the request, never a binding: a certificate whose SAN set omits it does not acquire that hostname by having been requested under it.
 > A certificate carrying no DNS SANs covers nothing and must be rejected on operator upload.
+
+> r[tls.cert.supersede]
+> A certificate supersedes another only when it replaces it in full: it [covers](#r--tls.cert.validation.san-coverage) every hostname the other serves, it is within its own validity window, and it is not self-signed unless the one it replaces already was.
+> A certificate that does not meet the bar retires nothing, and whatever is serving a hostname goes on serving it.
+> This matters most on the CSR path, where the SAN set is chosen by the issuing CA rather than by the operator, so which certificates a new one is even a candidate to replace is outside the operator's control.
+> Where the runtime cannot read back the certificate it has just stored, it must report the failure rather than a count of nothing retired: the two are not the same outcome, and treating them alike leaves a replaced certificate active alongside its replacement with nothing said.
 
 > r[tls.cert.validation.self-signed]
 > The runtime must accept a self-signed leaf certificate (issuer DN equal to subject DN, no chain) on operator upload, but must annotate the stored certificate so that the operator interface can flag it.

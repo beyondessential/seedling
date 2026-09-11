@@ -175,11 +175,7 @@ mod tests {
     }
 
     fn self_signed_cert_pem(host: &str) -> String {
-        let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
-        let mut params = rcgen::CertificateParams::new(vec![host.to_owned()]).unwrap();
-        params.distinguished_name = rcgen::DistinguishedName::new();
-        let cert = params.self_signed(&key).unwrap();
-        cert.pem()
+        super::super::test_support::self_signed_pem(&[host])
     }
 
     fn target(app: &str, hostname: &str) -> IngressTarget {

@@ -258,6 +258,50 @@ Not actioned: `request_covered` collapsing "nothing to decide" and "could not pa
 The spec added this round already says so explicitly, both mean "no flag" to the operator, and
 the unparseable case now warns in the log where it is actionable.
 
+## Review round 4
+
+Four of the comments describe code round 3 deleted — the exact-label fast path, its
+`unwrap_or(false)`, the scan running only on fast-path misses, and `update_certificate`'s label
+parameter. Reviewed against the previous revision, so not actioned. The rest were real, and the
+critical one was a gap this card opened.
+
+- **The control-plane matcher ignored the validity window the serving path had started
+  enforcing** (critical). Round 2 made serving skip a certificate staged ahead of its
+  `notBefore`; `state::find_active_for_hostname` — which feeds the rollup, `decide`, and the
+  renewal scheduler — was not changed to match. So an operator staging a cutover got a hostname
+  that serving returned 204 for while the control plane reported it covered, scheduled no
+  issuance, and filed no fault. Staged certificates are now skipped there too. Expiry
+  deliberately stays unfiltered in that matcher, because the renewal scheduler has to see an
+  expiring certificate in order to renew it — the two halves of the window are not symmetric
+  here, and the doc comment says why.
+
+- **Supersession returned `Ok(0)` for "cannot tell" and "nothing to retire" alike.** AGENTS.md is
+  explicit: if failure and a definite negative produce the same value, split the type. A stored
+  chain that cannot be read back now warns and errors rather than reporting a clean pass, so a
+  replaced certificate cannot quietly stay active beside its replacement.
+
+- **`r[tls.cert.validation.san-coverage]` had grown four rules under one id** across these
+  rounds. The supersession rule — the one that grew most — moves to its own
+  `r[tls.cert.supersede]`, with the impl and verify annotations following it, and the interface
+  spec's three "supersedes any prior active certificate" sentences now point at it instead of
+  describing a primary-SAN match that no longer decides anything.
+
+- **Six copies of the self-sign test helper**, three added by this PR. Now one
+  `runtime::tls::test_support::self_signed_pem`, used by `store`, `state`, `serve` and
+  `expiring`.
+
+Not actioned:
+
+- *No clock-skew allowance on `not_before`.* Real in principle, but CAs backdate `notBefore`
+  precisely for this (Let's Encrypt by an hour), and a staged upload is deliberate. Inventing a
+  tolerance here would be guessing at a number.
+- *Legacy mislabelled rows still display their old label.* Cosmetic since round 3: the label no
+  longer decides anything, and `request_covered` already flags those rows as "request not
+  covered" in the listing.
+- *`request_covered` parses per CSR row on an unpaginated listing.* Cut substantially in round 2
+  by the leaf-only parse; the rest is the pruning-superseded-history question, which is its own
+  card.
+
 ## Noted, not actioned
 
 - `TlsCertState::Failed` is never constructed anywhere in the tree. Its mention in
